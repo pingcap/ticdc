@@ -762,7 +762,7 @@ func (s *ownerSuite) TestChangefeedApplyDDLJob(c *check.C) {
 				SchemaID: 1,
 				Type:     timodel.ActionCreateTable,
 				State:    timodel.JobStateSynced,
-				Query:    "create table t1 (id int primary key)",
+				Query:    "create table t1 (id int primary key clustered )",
 				BinlogInfo: &timodel.HistoryInfo{
 					SchemaVersion: 2,
 					DBInfo: &timodel.DBInfo{
@@ -784,7 +784,7 @@ func (s *ownerSuite) TestChangefeedApplyDDLJob(c *check.C) {
 				SchemaID: 1,
 				Type:     timodel.ActionCreateTable,
 				State:    timodel.JobStateSynced,
-				Query:    "create table t2 (id int primary key)",
+				Query:    "create table t2 (id int primary key clustered )",
 				BinlogInfo: &timodel.HistoryInfo{
 					SchemaVersion: 2,
 					DBInfo: &timodel.DBInfo{
