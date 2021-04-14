@@ -15,6 +15,7 @@ package cdclog
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"strings"
 	"time"
@@ -221,6 +222,23 @@ func (s *s3Sink) flushLogMeta(ctx context.Context) error {
 	return cerror.WrapError(cerror.ErrS3SinkWriteStorage, s.storage.WriteFile(ctx, logMetaFile, data))
 }
 
+func (s *s3Sink) readLogMeta(ctx context.Context) (*logMeta, error) {
+	metaExist, _ := s.storage.FileExists(ctx, logMetaFile)
+	if !metaExist {
+		return nil, nil
+	}
+
+	fileData, err := s.storage.ReadFile(ctx, logMetaFile)
+	if err != nil {
+		return nil, cerror.WrapError(cerror.ErrS3SinkStorageAPI, err)
+	}
+
+	v := logMeta{}
+	e := json.Unmarshal(fileData, &v)
+
+	return &v, e
+}
+
 func (s *s3Sink) FlushRowChangedEvents(ctx context.Context, resolvedTs uint64) (uint64, error) {
 	// we should flush all events before resolvedTs, there are two kind of flush policy
 	// 1. flush row events to a s3 chunk: if the event size is not enough,
@@ -329,6 +347,29 @@ func (s *s3Sink) EmitDDLEvent(ctx context.Context, ddl *model.DDLEvent) error {
 }
 
 func (s *s3Sink) Initialize(ctx context.Context, tableInfo []*model.SimpleTableInfo) error {
+	oldMeta, e := s.readLogMeta(ctx)
+	log.Info("[OldMetaData] read old meta data from s3", zap.Any("meta", oldMeta),
+		zap.Any("exception", e))
+	if e != nil {
+		return e
+	}
+
+	// try to add to old meta to sinkTableInfo, or any crash or restart will lose
+	// meta info
+	if oldMeta != nil {
+		for id, name := range oldMeta.Names {
+			schemaAndTableName := strings.Split(name, ".")
+
+			info := &model.SimpleTableInfo{TableID: id, Schema: "", Table: ""}
+			if len(schemaAndTableName) != 0 {
+				info.Schema = quotes.UnescapeName(schemaAndTableName[0])
+				info.Table = quotes.UnescapeName(schemaAndTableName[1])
+			}
+
+			tableInfo = append(tableInfo, info)
+		}
+	}
+
 	if tableInfo != nil {
 		for _, table := range tableInfo {
 			if table != nil {
@@ -342,6 +383,9 @@ func (s *s3Sink) Initialize(ctx context.Context, tableInfo []*model.SimpleTableI
 		}
 		// update log meta to record the relationship about tableName and tableID
 		s.logMeta = makeLogMetaContent(tableInfo)
+		if oldMeta != nil && oldMeta.GlobalResolvedTS != 0 {
+			s.logMeta.GlobalResolvedTS = oldMeta.GlobalResolvedTS
+		}
 
 		data, err := s.logMeta.Marshal()
 		if err != nil {
