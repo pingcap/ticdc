@@ -239,6 +239,16 @@ func (r *RowChangedEvent) IsDelete() bool {
 	return len(r.PreColumns) != 0 && len(r.Columns) == 0
 }
 
+// IsUpdate returns true if the row is a update event
+func (r *RowChangedEvent) IsUpdate() bool {
+	return len(r.PreColumns) != 0 && len(r.Columns) != 0
+}
+
+// IsInsert returns true if the row is a insert event
+func (r *RowChangedEvent) IsInsert() bool {
+	return len(r.PreColumns) == 0 && len(r.Columns) != 0
+}
+
 // PrimaryKeyColumns returns the column(s) corresponding to the handle key(s)
 func (r *RowChangedEvent) PrimaryKeyColumns() []*Column {
 	pkeyCols := make([]*Column, 0)
@@ -285,12 +295,38 @@ func (r *RowChangedEvent) HandleKeyColumns() []*Column {
 	return pkeyCols
 }
 
+// HandlePrimaryKeyColumns returns the column(s) corresponding to the handle key(s)
+func (r *RowChangedEvent) HandlePrimaryKeyColumns() []*Column {
+	pkeyCols := make([]*Column, 0)
+
+	var cols []*Column
+	if r.IsDelete() || r.IsUpdate() {
+		cols = r.PreColumns
+	} else {
+		cols = r.Columns
+	}
+
+	for _, col := range cols {
+		if col != nil && col.Flag.IsPrimaryKey() {
+			pkeyCols = append(pkeyCols, col)
+		}
+	}
+
+	if len(pkeyCols) == 0 {
+		// TODO redact the message
+		log.Panic("Cannot find handle primary key columns, bug?", zap.Reflect("event", r))
+	}
+
+	return pkeyCols
+}
+
 // Column represents a column value in row changed event
 type Column struct {
 	Name  string         `json:"name"`
 	Type  byte           `json:"type"`
 	Flag  ColumnFlagType `json:"flag"`
 	Value interface{}    `json:"value"`
+	Str   *string        `json:"-"`
 }
 
 // ColumnValueString returns the string representation of the column value
