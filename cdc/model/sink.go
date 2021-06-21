@@ -14,6 +14,7 @@
 package model
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"sync"
@@ -294,11 +295,11 @@ type Column struct {
 }
 
 // ColumnValueString returns the string representation of the column value
-func ColumnValueString(c interface{}) string {
+func ColumnValueString(c interface{}, flag ColumnFlagType) *string {
 	var data string
 	switch v := c.(type) {
 	case nil:
-		data = "null"
+		return nil
 	case bool:
 		if v {
 			data = "1"
@@ -330,11 +331,15 @@ func ColumnValueString(c interface{}) string {
 	case string:
 		data = v
 	case []byte:
-		data = string(v)
+		if flag.IsBinary() {
+			data = hex.EncodeToString(v)
+		} else {
+			data = string(v)
+		}
 	default:
 		data = fmt.Sprintf("%v", v)
 	}
-	return data
+	return &data
 }
 
 // ColumnInfo represents the name and type information passed to the sink
