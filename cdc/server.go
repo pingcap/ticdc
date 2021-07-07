@@ -61,7 +61,7 @@ type Server struct {
 	capture      *Capture
 	owner        *Owner
 	ownerLock    sync.RWMutex
-	statusServer *http.Server
+	statusServer *statusServer
 	pdClient     pd.Client
 	etcdClient   *kv.CDCEtcdClient
 	kvStorage    tidbkv.Storage
@@ -75,15 +75,20 @@ func NewServer(pdEndpoints []string) (*Server, error) {
 		zap.Strings("pd-addrs", pdEndpoints),
 		zap.Stringer("config", conf),
 	)
-
-	s := &Server{
+	server := &Server{
 		pdEndpoints: pdEndpoints,
 	}
-	return s, nil
+
+	statusServer, err := newStatusServer(server)
+	if err != nil {
+		return nil, cerror.WrapError(cerror.ErrServerNewStatusHTTP, err)
+	}
+	server.statusServer = statusServer
+
+	return server, nil
 }
 
-// Run runs the server.
-func (s *Server) Run(ctx context.Context) error {
+func (s *Server) initPDClient(ctx context.Context) error {
 	conf := config.GetGlobalServerConfig()
 
 	grpcTLSOption, err := conf.Security.ToGRPCDialOption()
@@ -147,6 +152,16 @@ func (s *Server) Run(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
+	return nil
+}
+
+// Run runs the server.
+func (s *Server) Run(ctx context.Context) (err error) {
+	if err = s.initPDClient(ctx); err != nil {
+		return err
+	}
+
+	conf := config.GetGlobalServerConfig()
 	// To not block CDC server startup, we need to warn instead of error
 	// when TiKV is incompatible.
 	errorTiKVIncompatible := false
@@ -154,8 +169,8 @@ func (s *Server) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	err = s.startStatusHTTP()
-	if err != nil {
+
+	if err = s.statusServer.start(); err != nil {
 		return err
 	}
 
@@ -208,13 +223,12 @@ func (s *Server) campaignOwnerLoop(ctx context.Context) error {
 
 		// Campaign to be an owner, it blocks until it becomes the owner
 		if err := s.capture.Campaign(ctx); err != nil {
-			switch errors.Cause(err) {
-			case context.Canceled:
+			if errors.Cause(err) == context.Canceled {
 				return nil
-			case mvcc.ErrCompacted:
-				continue
 			}
-			log.Warn("campaign owner failed", zap.Error(err))
+			if errors.Cause(err) != mvcc.ErrCompacted {
+				log.Warn("campaign owner failed", zap.Error(err))
+			}
 			continue
 		}
 		captureID := s.capture.info.ID
@@ -359,6 +373,8 @@ func (s *Server) Close() {
 		}
 		s.statusServer = nil
 	}
+
+	sorter.UnifiedSorterCleanUp()
 }
 
 func (s *Server) initDataDir(ctx context.Context) error {

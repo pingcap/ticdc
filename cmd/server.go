@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cdc"
-	"github.com/pingcap/ticdc/cdc/puller/sorter"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logutil"
@@ -133,9 +132,8 @@ func runEServer(cmd *cobra.Command, args []string) error {
 		return errors.Annotate(err, "run server")
 	}
 	server.Close()
-	sorter.UnifiedSorterCleanUp()
-	log.Info("cdc server exits successfully")
 
+	log.Info("cdc server exits successfully")
 	return nil
 }
 

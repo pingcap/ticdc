@@ -60,7 +60,7 @@ func (s *httpStatusSuite) TestHTTPStatus(c *check.C) {
 	config.StoreGlobalServerConfig(conf)
 	server, err := NewServer([]string{"http://127.0.0.1:2379"})
 	c.Assert(err, check.IsNil)
-	err = server.startStatusHTTP()
+	err = server.statusServer.start()
 	c.Assert(err, check.IsNil)
 	defer func() {
 		c.Assert(server.statusServer.Close(), check.IsNil)
