@@ -188,7 +188,7 @@ func prepareBenchMultiStore(b *testing.B, storeNum, regionNum int) (
 
 	lockresolver := txnutil.NewLockerResolver(kvStorage)
 	isPullInit := &mockPullerInit{}
-	cdcClient := NewCDCClient(ctx, pdClient, kvStorage, &security.Credential{})
+	cdcClient := NewCDCClient(ctx, pdClient, kvStorage, NewConnArray(&security.Credential{}, 2))
 	eventCh := make(chan *model.RegionFeedEvent, 1000000)
 	wg.Add(1)
 	go func() {
@@ -276,7 +276,7 @@ func prepareBench(b *testing.B, regionNum int) (
 
 	lockresolver := txnutil.NewLockerResolver(kvStorage)
 	isPullInit := &mockPullerInit{}
-	cdcClient := NewCDCClient(ctx, pdClient, kvStorage, &security.Credential{})
+	cdcClient := NewCDCClient(ctx, pdClient, kvStorage, NewConnArray(&security.Credential{}, 2))
 	eventCh := make(chan *model.RegionFeedEvent, 1000000)
 	wg.Add(1)
 	go func() {

@@ -36,7 +36,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/notify"
 	"github.com/pingcap/ticdc/pkg/scheduler"
-	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/store/tikv/oracle"
 	pd "github.com/tikv/pd/client"
@@ -118,7 +117,7 @@ type Owner struct {
 	l sync.RWMutex
 
 	pdEndpoints []string
-	credential  *security.Credential
+	conns       *kv.ConnArray
 	pdClient    pd.Client
 	etcdClient  kv.CDCEtcdClient
 
@@ -157,7 +156,7 @@ const (
 func NewOwner(
 	ctx context.Context,
 	pdClient pd.Client,
-	credential *security.Credential,
+	conns *kv.ConnArray,
 	sess *concurrency.Session,
 	gcTTL int64,
 	flushChangefeedInterval time.Duration,
@@ -173,7 +172,7 @@ func NewOwner(
 		done:                    make(chan struct{}),
 		session:                 sess,
 		pdClient:                pdClient,
-		credential:              credential,
+		conns:                   conns,
 		changeFeeds:             make(map[model.ChangeFeedID]*changeFeed),
 		failInitFeeds:           make(map[model.ChangeFeedID]struct{}),
 		stoppedFeeds:            make(map[model.ChangeFeedID]*model.ChangeFeedStatus),
@@ -344,7 +343,7 @@ func (o *Owner) newChangeFeed(
 		}
 	}
 
-	ddlHandler := newDDLHandler(o.pdClient, o.credential, kvStore, checkpointTs)
+	ddlHandler := newDDLHandler(o.pdClient, o.conns, kvStore, checkpointTs)
 	defer func() {
 		if resultErr != nil {
 			ddlHandler.Close()

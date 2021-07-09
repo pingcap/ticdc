@@ -39,7 +39,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/notify"
 	"github.com/pingcap/ticdc/pkg/regionspan"
 	"github.com/pingcap/ticdc/pkg/retry"
-	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
 	tidbkv "github.com/pingcap/tidb/kv"
 	"github.com/pingcap/tidb/store/tikv/oracle"
@@ -68,10 +67,10 @@ type oldProcessor struct {
 	limitter     *puller.BlurResourceLimitter
 	stopped      int32
 
-	pdCli      pd.Client
-	credential *security.Credential
-	etcdCli    kv.CDCEtcdClient
-	session    *concurrency.Session
+	conns   *kv.ConnArray
+	pdCli   pd.Client
+	etcdCli kv.CDCEtcdClient
+	session *concurrency.Session
 
 	sinkManager *sink.Manager
 
@@ -145,7 +144,7 @@ func (t *tableInfo) loadCheckpointTs() uint64 {
 func newProcessor(
 	ctx context.Context,
 	pdCli pd.Client,
-	credential *security.Credential,
+	conns *kv.ConnArray,
 	session *concurrency.Session,
 	changefeed model.ChangeFeedInfo,
 	sinkManager *sink.Manager,
@@ -166,7 +165,7 @@ func newProcessor(
 		return nil, errors.Trace(err)
 	}
 	ddlspans := []regionspan.Span{regionspan.GetDDLSpan(), regionspan.GetAddIndexDDLSpan()}
-	ddlPuller := puller.NewPuller(ctx, pdCli, credential, kvStorage, checkpointTs, ddlspans, limitter, false)
+	ddlPuller := puller.NewPuller(ctx, pdCli, conns, kvStorage, checkpointTs, ddlspans, limitter, false)
 	filter, err := filter.NewFilter(changefeed.Config)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -194,8 +193,8 @@ func newProcessor(
 		captureInfo:   captureInfo,
 		changefeedID:  changefeedID,
 		changefeed:    changefeed,
+		conns:         conns,
 		pdCli:         pdCli,
-		credential:    credential,
 		etcdCli:       cdcEtcdCli,
 		session:       session,
 		sinkManager:   sinkManager,
@@ -818,7 +817,7 @@ func (p *oldProcessor) addTable(ctx context.Context, tableID int64, replicaInfo 
 			p.sendError(err)
 			return nil
 		}
-		plr := puller.NewPuller(ctx, p.pdCli, p.credential, kvStorage,
+		plr := puller.NewPuller(ctx, p.pdCli, p.conns, kvStorage,
 			replicaInfo.StartTs, []regionspan.Span{span}, p.limitter,
 			enableOldValue)
 		go func() {
@@ -1215,7 +1214,7 @@ var runProcessorImpl = runProcessor
 func runProcessor(
 	ctx context.Context,
 	pdCli pd.Client,
-	credential *security.Credential,
+	conns *kv.ConnArray,
 	session *concurrency.Session,
 	info model.ChangeFeedInfo,
 	changefeedID string,
@@ -1244,7 +1243,7 @@ func runProcessor(
 		return nil, errors.Trace(err)
 	}
 	sinkManager := sink.NewManager(ctx, s, errCh, checkpointTs)
-	processor, err := newProcessor(ctx, pdCli, credential, session, info, sinkManager,
+	processor, err := newProcessor(ctx, pdCli, conns, session, info, sinkManager,
 		changefeedID, captureInfo, checkpointTs, errCh, flushCheckpointInterval)
 	if err != nil {
 		cancel()
