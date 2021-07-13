@@ -286,6 +286,8 @@ func (a *ConnArray) initLocked(ctx context.Context, target string) error {
 			grpc.WithInitialWindowSize(grpcInitialWindowSize),
 			grpc.WithInitialConnWindowSize(grpcInitialConnWindowSize),
 			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(grpcMaxCallRecvMsgSize)),
+			grpc.WithUnaryInterceptor(grpcMetrics.UnaryClientInterceptor()),
+			grpc.WithStreamInterceptor(grpcMetrics.StreamClientInterceptor()),
 			grpc.WithConnectParams(grpc.ConnectParams{
 				Backoff: gbackoff.Config{
 					BaseDelay:  time.Second,
