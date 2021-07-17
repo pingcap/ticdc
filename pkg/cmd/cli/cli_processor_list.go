@@ -1,4 +1,4 @@
-// Copyright 2020 PingCAP, Inc.
+// Copyright 2021 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,41 +11,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cmd
+package cli
 
 import (
-	"os"
-
+	"github.com/pingcap/ticdc/pkg/cmd/context"
+	"github.com/pingcap/ticdc/pkg/cmd/util"
 	"github.com/spf13/cobra"
-	"github.com/tikv/client-go/v2/oracle"
 )
 
-func newTsoCommand() *cobra.Command {
+// newCmdListProcessor creates the `cli processor list` command.
+func newCmdListProcessor(f util.Factory) *cobra.Command {
 	command := &cobra.Command{
-		Use:   "tso",
-		Short: "Manage tso",
-	}
-	command.AddCommand(
-		newQueryTsoCommand(),
-	)
-	return command
-}
-
-func newQueryTsoCommand() *cobra.Command {
-	command := &cobra.Command{
-		Use:   "query",
-		Short: "Get tso from PD",
+		Use:   "list",
+		Short: "List all processors in TiCDC cluster",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := defaultContext
-			ts, logic, err := pdCli.GetTS(ctx)
+			ctx := context.GetDefaultContext()
+
+			etcdClient, err := f.EtcdClient()
 			if err != nil {
 				return err
 			}
-			cmd.Println(oracle.ComposeTS(ts, logic))
-			return nil
+
+			info, err := etcdClient.GetProcessors(ctx)
+			if err != nil {
+				return err
+			}
+
+			return util.JSONPrint(cmd, info)
 		},
 	}
-	command.SetOut(os.Stdout)
-	command.SetErr(os.Stdout)
+
 	return command
 }

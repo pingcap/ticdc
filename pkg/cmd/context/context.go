@@ -1,4 +1,4 @@
-// Copyright 2020 PingCAP, Inc.
+// Copyright 2021 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,13 +11,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package context
 
-import (
-	"github.com/pingcap/ticdc/pkg/cmd"
-	_ "github.com/pingcap/tidb/types/parser_driver"
-)
+import "context"
 
-func main() {
-	cmd.Run()
+var defaultContext context.Context
+
+// SetDefaultContext sets the default context for command line usage.
+func SetDefaultContext(ctx context.Context) {
+	defaultContext = ctx
+}
+
+// GetDefaultContext returns the default context for command line usage.
+func GetDefaultContext() context.Context {
+	return defaultContext
 }

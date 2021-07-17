@@ -1,4 +1,4 @@
-// Copyright 2020 PingCAP, Inc.
+// Copyright 2021 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,13 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package version
 
 import (
-	"github.com/pingcap/ticdc/pkg/cmd"
-	_ "github.com/pingcap/tidb/types/parser_driver"
+	"fmt"
+
+	"github.com/pingcap/ticdc/pkg/version"
+	"github.com/spf13/cobra"
 )
 
-func main() {
-	cmd.Run()
+// NewCmdVersion creates the `version` command.
+func NewCmdVersion() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Output version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Println(version.GetRawInfo())
+		},
+	}
 }
