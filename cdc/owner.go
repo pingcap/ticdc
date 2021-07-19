@@ -374,7 +374,6 @@ func (o *Owner) newChangeFeed(
 			continue
 		}
 
-		tables[tid] = table
 		schema, ok := schemaSnap.SchemaByTableID(tid)
 		if !ok {
 			log.Warn("schema not found for table", zap.Int64("tid", tid))
@@ -394,6 +393,8 @@ func (o *Owner) newChangeFeed(
 			log.Warn("skip ineligible table", zap.Int64("tid", tid), zap.Stringer("table", table))
 			continue
 		}
+		// Note we only add eligible tables to changefeed.tables
+		tables[tid] = table
 		// `existingTables` are tables dispatched to a processor, however the
 		// capture that this processor belongs to could have crashed or exited.
 		// So we check this before task dispatching, but after the update of
