@@ -14,6 +14,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -485,6 +486,12 @@ func newCreateChangefeedCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			var out bytes.Buffer
+			err = json.Indent(&out, []byte(infoStr), "", "\t")
+			if err != nil {
+				return err
+			}
+			infoStr = out.String()
 			cmd.Printf("Create changefeed successfully!\nID: %s\nInfo: %s\n", id, infoStr)
 			return nil
 		},
