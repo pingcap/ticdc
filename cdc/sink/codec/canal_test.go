@@ -25,9 +25,15 @@ import (
 	canal "github.com/pingcap/ticdc/proto/canal"
 )
 
+type rowCaseExpect struct {
+	txnNumber    int
+	rowNumPerTxn []int
+}
+
 type canalBatchSuite struct {
-	rowCases [][]*model.RowChangedEvent
-	ddlCases [][]*model.DDLEvent
+	rowCases            [][]*model.RowChangedEvent
+	ddlCases            [][]*model.DDLEvent
+	rowCaseExpectValues []rowCaseExpect
 }
 
 var _ = check.Suite(&canalBatchSuite{
@@ -36,22 +42,40 @@ var _ = check.Suite(&canalBatchSuite{
 		Table:    &model.TableName{Schema: "a", Table: "b"},
 		Columns:  []*model.Column{{Name: "col1", Type: 1, Value: "aa"}},
 	}}, {{
+		StartTs:  0,
 		CommitTs: 1,
 		Table:    &model.TableName{Schema: "a", Table: "b"},
 		Columns:  []*model.Column{{Name: "col1", Type: 1, Value: "aa"}},
 	}, {
-		CommitTs: 2,
-		Table:    &model.TableName{Schema: "a", Table: "b"},
-		Columns:  []*model.Column{{Name: "col1", Type: 1, Value: "bb"}},
-	}, {
+		StartTs:  2,
 		CommitTs: 3,
 		Table:    &model.TableName{Schema: "a", Table: "b"},
 		Columns:  []*model.Column{{Name: "col1", Type: 1, Value: "bb"}},
 	}, {
+		StartTs:  2,
+		CommitTs: 3,
+		Table:    &model.TableName{Schema: "a", Table: "b"},
+		Columns:  []*model.Column{{Name: "col1", Type: 1, Value: "bb"}},
+	}, {
+		StartTs:  3,
 		CommitTs: 4,
 		Table:    &model.TableName{Schema: "a", Table: "c", TableID: 6, IsPartition: true},
 		Columns:  []*model.Column{{Name: "col1", Type: 1, Value: "cc"}},
 	}}, {}},
+	rowCaseExpectValues: []rowCaseExpect{
+		{
+			txnNumber:    1,
+			rowNumPerTxn: []int{1},
+		},
+		{
+			txnNumber:    3,
+			rowNumPerTxn: []int{1, 2, 1},
+		},
+		{
+			txnNumber:    0,
+			rowNumPerTxn: nil,
+		},
+	},
 	ddlCases: [][]*model.DDLEvent{{{
 		CommitTs: 1,
 		TableInfo: &model.SimpleTableInfo{
@@ -83,15 +107,65 @@ var _ = check.Suite(&canalBatchSuite{
 	}}, {}},
 })
 
-func (s *canalBatchSuite) TestCanalEventBatchEncoder(c *check.C) {
+func (s *canalBatchSuite) TestCanalEventBatchEncoderWithTxn(c *check.C) {
+	defer testleak.AfterTest(c)()
+	for i, cs := range s.rowCases {
+		encoder := NewCanalEventBatchEncoderWithTxn()
+		var mxCommitTs uint64
+		for _, row := range cs {
+			_, err := encoder.AppendRowChangedEvent(row)
+			if mxCommitTs < row.CommitTs {
+				mxCommitTs = row.CommitTs
+			}
+			c.Assert(err, check.IsNil)
+		}
+		_, _ = encoder.AppendResolvedEvent(mxCommitTs)
+		res := encoder.Build()
+		c.Assert(res, check.HasLen, s.rowCaseExpectValues[i].txnNumber)
+		for _, message := range res {
+			c.Assert(message.Key, check.IsNil)
+		}
+		for j := range res {
+			packet := &canal.Packet{}
+			err := proto.Unmarshal(res[j].Value, packet)
+			c.Assert(err, check.IsNil)
+			c.Assert(packet.GetType(), check.Equals, canal.PacketType_MESSAGES)
+			messages := &canal.Messages{}
+			err = proto.Unmarshal(packet.GetBody(), messages)
+			c.Assert(err, check.IsNil)
+			c.Assert(len(messages.GetMessages()), check.Equals, s.rowCaseExpectValues[i].rowNumPerTxn[j])
+		}
+	}
+
+	for _, cs := range s.ddlCases {
+		encoder := NewCanalEventBatchEncoder()
+		for _, ddl := range cs {
+			msg, err := encoder.EncodeDDLEvent(ddl)
+			c.Assert(err, check.IsNil)
+			c.Assert(msg, check.NotNil)
+			c.Assert(msg.Key, check.IsNil)
+
+			packet := &canal.Packet{}
+			err = proto.Unmarshal(msg.Value, packet)
+			c.Assert(err, check.IsNil)
+			c.Assert(packet.GetType(), check.Equals, canal.PacketType_MESSAGES)
+			messages := &canal.Messages{}
+			err = proto.Unmarshal(packet.GetBody(), messages)
+			c.Assert(err, check.IsNil)
+			c.Assert(len(messages.GetMessages()), check.Equals, 1)
+			c.Assert(err, check.IsNil)
+		}
+	}
+}
+
+func (s *canalBatchSuite) TestCanalEventBatchEncoderWithoutTxn(c *check.C) {
 	defer testleak.AfterTest(c)()
 	for _, cs := range s.rowCases {
-		encoder := NewCanalEventBatchEncoder()
+		encoder := NewCanalEventBatchEncoderWithoutTxn()
 		for _, row := range cs {
 			_, err := encoder.AppendRowChangedEvent(row)
 			c.Assert(err, check.IsNil)
 		}
-		size := encoder.Size()
 		res := encoder.Build()
 
 		if len(cs) == 0 {
@@ -101,7 +175,6 @@ func (s *canalBatchSuite) TestCanalEventBatchEncoder(c *check.C) {
 
 		c.Assert(res, check.HasLen, 1)
 		c.Assert(res[0].Key, check.IsNil)
-		c.Assert(len(res[0].Value), check.Equals, size)
 
 		packet := &canal.Packet{}
 		err := proto.Unmarshal(res[0].Value, packet)
@@ -230,15 +303,16 @@ func testUpdate(c *check.C) {
 			Table:  "person",
 		},
 		Columns: []*model.Column{
-			{Name: "id", Type: mysql.TypeLong, Flag: model.PrimaryKeyFlag, Value: 1},
-			{Name: "name", Type: mysql.TypeVarchar, Value: "Bob"},
+			{Name: "id", Type: mysql.TypeLong, Flag: model.HandleKeyFlag | model.PrimaryKeyFlag, Value: 1},
+			{Name: "name", Type: mysql.TypeVarchar, Flag: model.HandleKeyFlag | model.PrimaryKeyFlag, Value: "Bob"},
 		},
 		PreColumns: []*model.Column{
-			{Name: "id", Type: mysql.TypeLong, Flag: model.PrimaryKeyFlag, Value: 2},
-			{Name: "name", Type: mysql.TypeVarchar, Value: "Nancy"},
+			{Name: "id", Type: mysql.TypeLong, Flag: model.HandleKeyFlag | model.PrimaryKeyFlag, Value: 2},
+			{Name: "name", Type: mysql.TypeVarchar, Flag: model.HandleKeyFlag | model.PrimaryKeyFlag, Value: "Nancy"},
 		},
 	}
 	builder := NewCanalEntryBuilder()
+
 	entry, err := builder.FromRowEvent(testCaseUpdate)
 	c.Assert(err, check.IsNil)
 	c.Assert(entry.GetEntryType(), check.Equals, canal.EntryType_ROWDATA)
@@ -271,7 +345,7 @@ func testUpdate(c *check.C) {
 			c.Assert(col.GetMysqlType(), check.Equals, "int")
 		case "name":
 			c.Assert(col.GetSqlType(), check.Equals, int32(JavaSQLTypeVARCHAR))
-			c.Assert(col.GetIsKey(), check.IsFalse)
+			c.Assert(col.GetIsKey(), check.IsTrue)
 			c.Assert(col.GetIsNull(), check.IsFalse)
 			c.Assert(col.GetValue(), check.Equals, "Nancy")
 			c.Assert(col.GetMysqlType(), check.Equals, "varchar")
@@ -291,7 +365,8 @@ func testUpdate(c *check.C) {
 			c.Assert(col.GetMysqlType(), check.Equals, "int")
 		case "name":
 			c.Assert(col.GetSqlType(), check.Equals, int32(JavaSQLTypeVARCHAR))
-			c.Assert(col.GetIsKey(), check.IsFalse)
+			c.Assert(col.GetIsKey(), check.IsTrue)
+
 			c.Assert(col.GetIsNull(), check.IsFalse)
 			c.Assert(col.GetValue(), check.Equals, "Bob")
 			c.Assert(col.GetMysqlType(), check.Equals, "varchar")

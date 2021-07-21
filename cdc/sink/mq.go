@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/notify"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
+
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -83,7 +84,8 @@ func newMqSink(
 	protocol.FromString(config.Sink.Protocol)
 
 	newEncoder := codec.NewEventBatchEncoder(protocol)
-	if protocol == codec.ProtocolAvro {
+	switch protocol {
+	case codec.ProtocolAvro:
 		registryURI, ok := opts["registry"]
 		if !ok {
 			return nil, cerror.ErrPrepareAvroFailed.GenWithStack(`Avro protocol requires parameter "registry"`)
@@ -108,9 +110,20 @@ func newMqSink(
 			avroEncoder.SetTimeZone(util.TimezoneFromCtx(ctx))
 			return avroEncoder
 		}
-	} else if (protocol == codec.ProtocolCanal || protocol == codec.ProtocolCanalJSON) && !config.EnableOldValue {
-		log.Error("Old value is not enabled when using Canal protocol. Please update changefeed config")
-		return nil, cerror.WrapError(cerror.ErrKafkaInvalidConfig, errors.New("Canal requires old value to be enabled"))
+	case codec.ProtocolCanal, codec.ProtocolCanalJSON:
+		if !config.EnableOldValue {
+			log.Error("Old value is not enabled when using Canal protocol. Please update changefeed config")
+			return nil, cerror.WrapError(cerror.ErrKafkaInvalidConfig, errors.New("Canal requires old value to be enabled"))
+		}
+		if protocol == codec.ProtocolCanalJSON {
+			break
+		}
+		newEncoder = func() codec.EventBatchEncoder {
+			if opts["support-txn"] == "true" {
+				return codec.NewCanalEventBatchEncoderWithTxn()
+			}
+			return codec.NewCanalEventBatchEncoderWithoutTxn()
+		}
 	}
 
 	// pre-flight verification of encoder parameters
@@ -133,12 +146,11 @@ func newMqSink(
 		return nil, err
 	}
 	k := &mqSink{
-		mqProducer: mqProducer,
-		dispatcher: d,
-		newEncoder: newEncoder,
-		filter:     filter,
-		protocol:   protocol,
-
+		mqProducer:          mqProducer,
+		dispatcher:          d,
+		newEncoder:          newEncoder,
+		filter:              filter,
+		protocol:            protocol,
 		partitionNum:        partitionNum,
 		partitionInput:      partitionInput,
 		partitionResolvedTs: make([]uint64, partitionNum),
@@ -170,6 +182,7 @@ func (k *mqSink) EmitRowChangedEvents(ctx context.Context, rows ...*model.RowCha
 			continue
 		}
 		partition := k.dispatcher.Dispatch(row)
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -256,8 +269,15 @@ func (k *mqSink) EmitDDLEvent(ctx context.Context, ddl *model.DDLEvent) error {
 	if msg == nil {
 		return nil
 	}
+	var partition int32 = -1
+	if k.protocol == codec.ProtocolCanal || k.protocol == codec.ProtocolCanalJSON {
+		// canal server always put ddl event into partition 0
+		// ref https://github.com/alibaba/canal/blob/master/connector/core/src/main/java/com/alibaba/otter/canal/connector/core/producer/MQMessageUtils.java#L274
+		partition = 0
+	}
 	log.Debug("emit ddl event", zap.String("query", ddl.Query), zap.Uint64("commit-ts", ddl.CommitTs))
-	err = k.writeToProducer(ctx, msg, codec.EncoderNeedSyncWrite, -1)
+
+	err = k.writeToProducer(ctx, msg, codec.EncoderNeedSyncWrite, partition)
 	return errors.Trace(err)
 }
 
@@ -317,6 +337,7 @@ func (k *mqSink) runWorker(ctx context.Context, partition int32) error {
 			return thisBatchSize, nil
 		})
 	}
+
 	for {
 		var e struct {
 			row        *model.RowChangedEvent
@@ -336,6 +357,9 @@ func (k *mqSink) runWorker(ctx context.Context, partition int32) error {
 			if e.resolvedTs != 0 {
 				op, err := encoder.AppendResolvedEvent(e.resolvedTs)
 				if err != nil {
+					return errors.Trace(err)
+				}
+				if err := flushToProducer(op); err != nil {
 					return errors.Trace(err)
 				}
 

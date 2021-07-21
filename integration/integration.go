@@ -56,9 +56,25 @@ func testCanal() {
 		tests.NewSimpleCase(task),
 		tests.NewDeleteCase(task),
 		tests.NewManyTypesCase(task),
-		// tests.NewUnsignedCase(task), //now canal adapter can not deal with unsigned int greater than int max
+		// tests.NewUnsignedCase(task),
 		tests.NewCompositePKeyCase(task),
-		// tests.NewAlterCase(task), // basic implementation can not grantee ddl dml sequence, so can not pass
+		tests.NewAlterCase(task),
+	}
+
+	runTests(testCases, env)
+}
+
+func testCanalWithTxn() {
+	env := canal.NewKafkaDockerEnv(*dockerComposeFile)
+	env.DockerComposeOperator.ExecEnv = []string{"USE_FLAT_MESSAGE=false", "SUPPORT_TXN=true"}
+	task := &canal.SingleTableTask{TableName: "test"}
+	testCases := []framework.Task{
+		tests.NewSimpleCase(task),
+		tests.NewDeleteCase(task),
+		tests.NewManyTypesCase(task),
+		// tests.NewUnsignedCase(task), // canal-adapter use jdbc prepare sql, jdbc maps bit(n) to bool, so bit(64) case will always overflow
+		tests.NewCompositePKeyCase(task),
+		tests.NewAlterCase(task),
 	}
 
 	runTests(testCases, env)
@@ -72,7 +88,7 @@ func testCanalJSON() {
 		tests.NewSimpleCase(task),
 		tests.NewDeleteCase(task),
 		tests.NewManyTypesCase(task),
-		// tests.NewUnsignedCase(task), //now canal adapter can not deal with unsigned int greater than int max
+		// tests.NewUnsignedCase(task),
 		tests.NewCompositePKeyCase(task),
 		tests.NewAlterCase(task),
 	}
@@ -131,6 +147,8 @@ func main() {
 		testAvro()
 	} else if *testProtocol == "canal" {
 		testCanal()
+	} else if *testProtocol == "canal-with-txn" {
+		testCanalWithTxn()
 	} else if *testProtocol == "canalJson" {
 		testCanalJSON()
 	} else if *testProtocol == "mysql" {
