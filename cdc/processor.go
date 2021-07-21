@@ -826,13 +826,8 @@ func (p *oldProcessor) addTable(ctx context.Context, tableID int64, replicaInfo 
 			return nil
 		}
 		plr := puller.NewPuller(ctx, p.pdCli, p.credential, kvStorage,
-<<<<<<< HEAD
-			replicaInfo.StartTs, []regionspan.Span{span}, p.limitter,
-			enableOldValue)
-=======
 			replicaInfo.StartTs, []regionspan.Span{span},
 			true)
->>>>>>> d748922e (puller: clean up unused parameter (#2309))
 		go func() {
 			err := plr.Run(ctx)
 			if errors.Cause(err) != context.Canceled {
