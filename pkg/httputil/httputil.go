@@ -62,3 +62,13 @@ func IsFiltered(whiteList string, feedState model.FeedState) bool {
 	}
 	return whiteList == string(feedState)
 }
+
+// IsContainNonASCII return true if a string contain non-ascii char
+func IsContainNonASCII(s string) bool {
+	for _, r := range s {
+		if r < 0 || r > 127 {
+			return true
+		}
+	}
+	return false
+}

@@ -16,6 +16,7 @@ package cmd
 import (
 	"os"
 
+	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/spf13/cobra"
 )
 
@@ -29,6 +30,15 @@ var rootCmd = &cobra.Command{
 func Execute() {
 	// Outputs cmd.Print to stdout.
 	rootCmd.SetOut(os.Stdout)
+	args := os.Args[1:]
+
+	for _, arg := range args {
+		if httputil.IsContainNonASCII(arg) {
+			rootCmd.Printf("Please input ASCII char only, the arg: %s contain Non-ASCII char.\n", arg)
+			os.Exit(1)
+		}
+	}
+
 	if err := rootCmd.Execute(); err != nil {
 		rootCmd.Println(err)
 		os.Exit(1)
