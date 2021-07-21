@@ -169,7 +169,7 @@ func newProcessor(
 		zap.Uint64("startts", checkpointTs), util.ZapFieldChangefeed(ctx))
 	kvStorage := util.KVStorageFromCtx(ctx)
 	ddlspans := []regionspan.Span{regionspan.GetDDLSpan(), regionspan.GetAddIndexDDLSpan()}
-	ddlPuller := puller.NewPuller(ctx, pdCli, credential, kvStorage, checkpointTs, ddlspans, limitter, false)
+	ddlPuller := puller.NewPuller(ctx, pdCli, credential, kvStorage, checkpointTs, ddlspans, false)
 	filter, err := filter.NewFilter(changefeed.Config)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -814,10 +814,24 @@ func (p *oldProcessor) addTable(ctx context.Context, tableID int64, replicaInfo 
 
 	startPuller := func(tableID model.TableID, pResolvedTs *uint64, pCheckpointTs *uint64) sink.Sink {
 		// start table puller
+<<<<<<< HEAD
 		enableOldValue := p.changefeed.Config.EnableOldValue
 		span := regionspan.GetTableSpan(tableID, enableOldValue)
 		kvStorage := util.KVStorageFromCtx(ctx)
 		plr := puller.NewPuller(ctx, p.pdCli, p.credential, kvStorage, replicaInfo.StartTs, []regionspan.Span{span}, p.limitter, enableOldValue)
+=======
+		span := regionspan.GetTableSpan(tableID)
+		kvStorage, err := util.KVStorageFromCtx(ctx)
+		if err != nil {
+			p.sendError(err)
+			return nil
+		}
+		// NOTICE: always pull the old value internally
+		// See also: TODO(hi-rustin): add issue link here.
+		plr := puller.NewPuller(ctx, p.pdCli, p.credential, kvStorage,
+			replicaInfo.StartTs, []regionspan.Span{span},
+			true)
+>>>>>>> d748922e (puller: clean up unused parameter (#2309))
 		go func() {
 			err := plr.Run(ctx)
 			if errors.Cause(err) != context.Canceled {
