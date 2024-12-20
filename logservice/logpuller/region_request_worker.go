@@ -156,7 +156,7 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 	}()
 
 	g, gctx := errgroup.WithContext(ctx)
-	cc, err := Connect(gctx, credential, s.store.storeAddr)
+	conn, err := Connect(gctx, credential, s.store.storeAddr)
 	if err != nil {
 		log.Warn("region request worker create grpc stream failed",
 			zap.Uint64("workerID", s.workerID),
@@ -166,22 +166,19 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 		return isCanceled()
 	}
 	defer func() {
-		_ = cc.Conn.Close()
+		_ = conn.Conn.Close()
 	}()
 
 	g.Go(func() error {
-		return s.receiveAndDispatchChangeEvents(gctx, cc)
+		return s.receiveAndDispatchChangeEvents(conn)
 	})
-	g.Go(func() error { return s.processRegionSendTask(gctx, cc) })
+	g.Go(func() error { return s.processRegionSendTask(gctx, conn) })
 	_ = g.Wait()
 	return isCanceled()
 }
 
 // receiveAndDispatchChangeEventsToProcessor receives events from the grpc stream and dispatches them to ds.
-func (s *regionRequestWorker) receiveAndDispatchChangeEvents(
-	ctx context.Context,
-	conn *ConnAndClient,
-) error {
+func (s *regionRequestWorker) receiveAndDispatchChangeEvents(conn *ConnAndClient) error {
 	for {
 		changeEvent, err := conn.Client.Recv()
 		if err != nil {
