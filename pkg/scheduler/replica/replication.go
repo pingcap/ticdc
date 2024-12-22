@@ -14,6 +14,7 @@
 package replica
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -347,10 +348,30 @@ func (db *replicationDB[T, R]) GetGroupStat() string {
 				distribute.WriteString(strconv.Itoa(size))
 				distribute.WriteString("; ")
 			}
-			distribute.WriteString("] ")
+			distribute.WriteString("]")
+			total++
 		}
 	})
 	return distribute.String()
+}
+
+func (db *replicationDB[T, R]) GetCheckerStat() string {
+	stat := strings.Builder{}
+	db.withRLock(func() {
+		total := 0
+		for groupID, group := range db.taskGroups {
+			if total > 0 {
+				stat.WriteString(" ")
+			}
+			stat.WriteString(GetGroupName(groupID))
+			stat.WriteString(fmt.Sprintf("(%s)", group.checker.Name()))
+			stat.WriteString(": [")
+			stat.WriteString(group.checker.Stat())
+			stat.WriteString("] ")
+			total++
+		}
+	})
+	return stat.String()
 }
 
 func (db *replicationDB[T, R]) getOrCreateGroup(task R) *replicationGroup[T, R] {

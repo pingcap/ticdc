@@ -38,18 +38,28 @@ type GroupChecker[T ReplicationID, R Replication[T]] interface {
 	AddReplica(replication R)
 	RemoveReplica(replication R)
 	UpdateStatus(replication R)
-	Check() GroupCheckResult
+	Check(batch int) GroupCheckResult
+	Name() string
+	Stat() string
 }
 
 // implement a empty status checker
 type EmptyStatusChecker[T ReplicationID, R Replication[T], S ReplicationStatus] struct{}
 
-func (c *EmptyStatusChecker[T, R, S]) AddReplica(replication R) {}
+func (c *EmptyStatusChecker[T, R, S]) AddReplica(_ R) {}
 
-func (c *EmptyStatusChecker[T, R, S]) RemoveReplica(replication R) {}
+func (c *EmptyStatusChecker[T, R, S]) RemoveReplica(_ R) {}
 
-func (c *EmptyStatusChecker[T, R, S]) UpdateStatus(replication R) {}
+func (c *EmptyStatusChecker[T, R, S]) UpdateStatus(_ R) {}
 
-func (c *EmptyStatusChecker[T, R, S]) Check() GroupCheckResult {
+func (c *EmptyStatusChecker[T, R, S]) Check(_ int) GroupCheckResult {
 	return nil
+}
+
+func (c *EmptyStatusChecker[T, R, S]) Name() string {
+	return "empty checker"
+}
+
+func (c *EmptyStatusChecker[T, R, S]) Stat() string {
+	return ""
 }
