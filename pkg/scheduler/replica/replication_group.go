@@ -49,7 +49,7 @@ type replicationGroup[T ReplicationID, R Replication[T]] struct {
 	scheduling  map[T]R
 	absent      map[T]R
 
-	checker GroupChecker[T, R, ReplicationStatus, GroupCheckResult]
+	checker GroupChecker[T, R]
 }
 
 func newReplicationGroup[T ReplicationID, R Replication[T]](id string, groupID GroupID) *replicationGroup[T, R] {

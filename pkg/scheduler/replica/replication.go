@@ -64,9 +64,13 @@ type ScheduleGroup[T ReplicationID, R Replication[T]] interface {
 	GetImbalanceGroupNodeTask(nodes map[node.ID]*node.Info) (groups map[GroupID]map[node.ID]R, valid bool)
 	GetTaskSizePerNodeByGroup(groupID GroupID) map[node.ID]int
 
-	GetGroupChecker(groupID GroupID) GroupChecker[T, R, ReplicationStatus, GroupCheckResult]
+	GetGroupChecker(groupID GroupID) GroupChecker[T, R]
 }
 
+// ReplicationDB is responsible for managing the scheduling state of replication tasks.
+//  1. It provides the interface for the scheduler to query the scheduling information.
+//  2. It provides the interface for `Add/Remove“ replication tasks and update the scheduling state.
+//  3. It maintains the scheduling group information internally.
 type ReplicationDB[T ReplicationID, R Replication[T]] interface {
 	ScheduleGroup[T, R]
 
@@ -112,7 +116,7 @@ func (db *replicationDB[T, R]) GetGroups() []GroupID {
 	return groups
 }
 
-func (db *replicationDB[T, R]) GetGroupChecker(groupID GroupID) (ret GroupChecker[T, R, ReplicationStatus, GroupCheckResult]) {
+func (db *replicationDB[T, R]) GetGroupChecker(groupID GroupID) (ret GroupChecker[T, R]) {
 	db.withRLock(func() {
 		ret = db.mustGetGroup(groupID).checker
 	})

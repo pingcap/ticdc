@@ -13,8 +13,6 @@
 
 package replica
 
-import "github.com/pingcap/ticdc/pkg/node"
-
 type OpType int
 
 const (
@@ -36,11 +34,11 @@ type Checker[T ReplicationID, R Replication[T], S any] interface {
 type GroupCheckResult any
 type ReplicationStatus any
 
-type GroupChecker[T ReplicationID, R Replication[T], S ReplicationStatus, C GroupCheckResult] interface {
+type GroupChecker[T ReplicationID, R Replication[T]] interface {
 	AddReplica(replication R)
 	RemoveReplica(replication R)
-	UpdateStatus(replication R, status S)
-	Check(nodes map[node.ID]*node.Info) []C
+	UpdateStatus(replication R)
+	Check() GroupCheckResult
 }
 
 // implement a empty status checker
@@ -50,8 +48,8 @@ func (c *EmptyStatusChecker[T, R, S]) AddReplica(replication R) {}
 
 func (c *EmptyStatusChecker[T, R, S]) RemoveReplica(replication R) {}
 
-func (c *EmptyStatusChecker[T, R, S]) UpdateStatus(replication R, status S) {}
+func (c *EmptyStatusChecker[T, R, S]) UpdateStatus(replication R) {}
 
-func (c *EmptyStatusChecker[T, R, S]) Check(nodes map[node.ID]*node.Info) []GroupCheckResult {
+func (c *EmptyStatusChecker[T, R, S]) Check() GroupCheckResult {
 	return nil
 }
