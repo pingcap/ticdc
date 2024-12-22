@@ -64,7 +64,7 @@ type ScheduleGroup[T ReplicationID, R Replication[T]] interface {
 	GetImbalanceGroupNodeTask(nodes map[node.ID]*node.Info) (groups map[GroupID]map[node.ID]R, valid bool)
 	GetTaskSizePerNodeByGroup(groupID GroupID) map[node.ID]int
 
-	GetGroupChecker(groupID GroupID) StatusChecker[T, R, ReplicationStatus, GroupCheckResult]
+	GetGroupChecker(groupID GroupID) GroupChecker[T, R, ReplicationStatus, GroupCheckResult]
 }
 
 type ReplicationDB[T ReplicationID, R Replication[T]] interface {
@@ -112,7 +112,7 @@ func (db *replicationDB[T, R]) GetGroups() []GroupID {
 	return groups
 }
 
-func (db *replicationDB[T, R]) GetGroupChecker(groupID GroupID) (ret StatusChecker[T, R, ReplicationStatus, GroupCheckResult]) {
+func (db *replicationDB[T, R]) GetGroupChecker(groupID GroupID) (ret GroupChecker[T, R, ReplicationStatus, GroupCheckResult]) {
 	db.withRLock(func() {
 		ret = db.mustGetGroup(groupID).checker
 	})
@@ -257,8 +257,8 @@ func (db *replicationDB[T, R]) GetImbalanceGroupNodeTask(nodes map[node.ID]*node
 				case upperLimitPerNode - 1:
 					groupMap[nodeID] = zeroR
 				default:
-					// len(tasks) > upperLimitPerNode || len(tasks) < upperLimitPerNode-1
-					log.Error("scheduler: invalid group state",
+					// invalid state: len(tasks) > upperLimitPerNode || len(tasks) < upperLimitPerNode-1
+					log.Panic("scheduler: invalid group state",
 						zap.String("schedulerID", db.id),
 						zap.String("group", GetGroupName(gid)), zap.Int("totalSpan", totalSpan),
 						zap.Int("nodesNum", nodesNum), zap.Int("upperLimitPerNode", upperLimitPerNode),

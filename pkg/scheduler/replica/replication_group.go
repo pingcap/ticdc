@@ -49,7 +49,7 @@ type replicationGroup[T ReplicationID, R Replication[T]] struct {
 	scheduling  map[T]R
 	absent      map[T]R
 
-	checker StatusChecker[T, R, ReplicationStatus, GroupCheckResult]
+	checker GroupChecker[T, R, ReplicationStatus, GroupCheckResult]
 }
 
 func newReplicationGroup[T ReplicationID, R Replication[T]](id string, groupID GroupID) *replicationGroup[T, R] {
@@ -112,6 +112,7 @@ func (g *replicationGroup[T, R]) AddReplicatingReplica(replica R) {
 		zap.String("replica", replica.GetID().String()))
 	g.replicating[replica.GetID()] = replica
 	g.updateNodeMap("", nodeID, replica)
+	g.checker.AddReplica(replica)
 }
 
 // MarkReplicaReplicating move the replica to the replicating map
@@ -169,6 +170,7 @@ func (g *replicationGroup[T, R]) updateNodeMap(old, new node.ID, replica R) {
 func (g *replicationGroup[T, R]) AddAbsentReplica(replica R) {
 	g.mustVerifyGroupID(replica.GetGroupID())
 	g.absent[replica.GetID()] = replica
+	g.checker.AddReplica(replica)
 }
 
 func (g *replicationGroup[T, R]) RemoveReplica(replica R) {
@@ -185,6 +187,7 @@ func (g *replicationGroup[T, R]) RemoveReplica(replica R) {
 	if len(nodeMap) == 0 {
 		delete(g.nodeTasks, replica.GetNodeID())
 	}
+	g.checker.RemoveReplica(replica)
 }
 
 func (g *replicationGroup[T, R]) IsEmpty() bool {
