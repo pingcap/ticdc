@@ -103,7 +103,7 @@ jobs:
 
       - name: Unit Test
         run: |
-          go test --tags=intest -timeout 120s  github.com/pingcap/ticdc/pkg/eventService/...
+          go test --tags=intest -timeout 120s  github.com/pingcap/ticdc/pkg/eventservice/...
 
 
 
