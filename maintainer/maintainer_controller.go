@@ -74,25 +74,29 @@ func NewController(changefeedID common.ChangeFeedID,
 	ddlSpan *replica.SpanReplication,
 	batchSize int, balanceInterval time.Duration) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-	replicaSetDB := replica.NewReplicaSetDB(changefeedID, ddlSpan)
+	enableTableAcrossNodes := false
+	var splitter *split.Splitter
+	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
+		enableTableAcrossNodes = true
+		splitter = split.NewSplitter(changefeedID, pdapi, regionCache, cfConfig.Scheduler)
+	}
+	replicaSetDB := replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	oc := operator.NewOperatorController(changefeedID, mc, replicaSetDB, nodeManager, batchSize)
 	s := &Controller{
-		startCheckpointTs:  checkpointTs,
-		changefeedID:       changefeedID,
-		bootstrapped:       false,
-		ddlDispatcherID:    ddlSpan.ID,
-		operatorController: oc,
-		messageCenter:      mc,
-		replicationDB:      replicaSetDB,
-		nodeManager:        nodeManager,
-		taskScheduler:      taskScheduler,
-		cfConfig:           cfConfig,
-		tsoClient:          tsoClient,
-	}
-	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
-		s.splitter = split.NewSplitter(changefeedID, pdapi, regionCache, cfConfig.Scheduler)
-		s.spanReplicationEnabled = true
+		startCheckpointTs:      checkpointTs,
+		changefeedID:           changefeedID,
+		bootstrapped:           false,
+		ddlDispatcherID:        ddlSpan.ID,
+		operatorController:     oc,
+		messageCenter:          mc,
+		replicationDB:          replicaSetDB,
+		nodeManager:            nodeManager,
+		taskScheduler:          taskScheduler,
+		cfConfig:               cfConfig,
+		tsoClient:              tsoClient,
+		splitter:               splitter,
+		spanReplicationEnabled: spanReplicationEnabled,
 	}
 	s.schedulerController = NewScheduleController(changefeedID, batchSize, oc, replicaSetDB, nodeManager, balanceInterval, s.splitter)
 	return s

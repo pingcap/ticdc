@@ -35,7 +35,9 @@ func getTableSpanByID(id common.TableID) *heartbeatpb.TableSpan {
 }
 
 func TestBasicFunction(t *testing.T) {
-	db := newDBForTest(t)
+	t.Parallel()
+
+	db := newDBWithCheckerForTest(t)
 	absent := NewReplicaSet(db.changefeedID, common.NewDispatcherID(), db.ddlSpan.tsoClient, 1, getTableSpanByID(4), 1)
 	db.AddAbsentReplicaSet(absent)
 	// replicating and scheduling will be returned
@@ -106,7 +108,9 @@ func TestBasicFunction(t *testing.T) {
 }
 
 func TestReplaceReplicaSet(t *testing.T) {
-	db := newDBForTest(t)
+	t.Parallel()
+
+	db := newDBWithCheckerForTest(t)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
 	replicaSpan := NewWorkingReplicaSet(db.changefeedID, replicaSpanID,
@@ -131,7 +135,9 @@ func TestReplaceReplicaSet(t *testing.T) {
 }
 
 func TestMarkSpanAbsent(t *testing.T) {
-	db := newDBForTest(t)
+	t.Parallel()
+
+	db := newDBWithCheckerForTest(t)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
 	replicaSpan := NewWorkingReplicaSet(db.changefeedID, replicaSpanID,
@@ -148,7 +154,9 @@ func TestMarkSpanAbsent(t *testing.T) {
 }
 
 func TestForceRemove(t *testing.T) {
-	db := newDBForTest(t)
+	t.Parallel()
+
+	db := newDBWithCheckerForTest(t)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
 	replicaSpan := NewWorkingReplicaSet(db.changefeedID, replicaSpanID,
@@ -166,7 +174,9 @@ func TestForceRemove(t *testing.T) {
 }
 
 func TestGetAbsents(t *testing.T) {
-	db := newDBForTest(t)
+	t.Parallel()
+
+	db := newDBWithCheckerForTest(t)
 	for i := 0; i < 10; i++ {
 		absent := NewReplicaSet(db.changefeedID, common.NewDispatcherID(), db.ddlSpan.tsoClient, 1, getTableSpanByID(int64(i+1)), 1)
 		db.AddAbsentReplicaSet(absent)
@@ -176,7 +186,9 @@ func TestGetAbsents(t *testing.T) {
 }
 
 func TestRemoveAllTables(t *testing.T) {
-	db := newDBForTest(t)
+	t.Parallel()
+
+	db := newDBWithCheckerForTest(t)
 	// ddl span will not be removed
 	removed := db.TryRemoveAll()
 	require.Len(t, removed, 0)
@@ -209,7 +221,7 @@ func TestRemoveAllTables(t *testing.T) {
 	require.Len(t, db.GetAllTasks(), 1)
 }
 
-func newDBForTest(t *testing.T) *ReplicationDB {
+func newDBWithCheckerForTest(t *testing.T) *ReplicationDB {
 	cfID := common.NewChangeFeedIDWithName("test")
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ctrl := gomock.NewController(t)
@@ -221,5 +233,5 @@ func newDBForTest(t *testing.T) *ReplicationDB {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	return NewReplicaSetDB(cfID, ddlSpan)
+	return NewReplicaSetDB(cfID, ddlSpan, true)
 }

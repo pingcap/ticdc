@@ -89,7 +89,7 @@ func (s *splitScheduler) Execute() time.Time {
 	}
 
 	log.Info("check split status", zap.String("changefeed", s.changefeedID.Name()),
-		zap.String("hotSpans", s.db.GetHotSpanStat()), zap.String("groupDistribution", s.db.GetGroupStat()))
+		zap.String("hotSpans", s.db.GetCheckerStat()), zap.String("groupDistribution", s.db.GetGroupStat()))
 
 	batch := s.batchSize
 	needBreak := false

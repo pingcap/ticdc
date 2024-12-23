@@ -66,6 +66,7 @@ type ScheduleGroup[T ReplicationID, R Replication[T]] interface {
 	GetTaskSizePerNodeByGroup(groupID GroupID) map[node.ID]int
 
 	GetGroupChecker(groupID GroupID) GroupChecker[T, R]
+	GetCheckerStat() string
 }
 
 // ReplicationDB is responsible for managing the scheduling state of replication tasks.
@@ -75,7 +76,7 @@ type ScheduleGroup[T ReplicationID, R Replication[T]] interface {
 type ReplicationDB[T ReplicationID, R Replication[T]] interface {
 	ScheduleGroup[T, R]
 
-	// The flowing methods are not thread-safe
+	// The flowing methods are NOT thread-safe
 	GetReplicatingWithoutLock() []R
 	GetSchedulingWithoutLock() []R
 	AddAbsentWithoutLock(task R)

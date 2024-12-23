@@ -41,14 +41,19 @@ type ReplicationDB struct {
 
 	ddlSpan *SpanReplication
 	// LOCK protects the above maps
-	lock sync.RWMutex
-
-	hotSpans *hotSpans
+	lock            sync.RWMutex
+	newGroupChecker func(groupID replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication]
 }
 
 // NewReplicaSetDB creates a new ReplicationDB and initializes the maps
-func NewReplicaSetDB(changefeedID common.ChangeFeedID, ddlSpan *SpanReplication) *ReplicationDB {
-	db := &ReplicationDB{changefeedID: changefeedID, ddlSpan: ddlSpan}
+func NewReplicaSetDB(
+	changefeedID common.ChangeFeedID, ddlSpan *SpanReplication, enableTableAcrossNodes bool,
+) *ReplicationDB {
+	db := &ReplicationDB{
+		changefeedID:    changefeedID,
+		ddlSpan:         ddlSpan,
+		newGroupChecker: getNewGroupChecker(changefeedID, enableTableAcrossNodes),
+	}
 	db.reset()
 	db.putDDLDispatcher(db.ddlSpan)
 	return db
@@ -302,6 +307,15 @@ func (db *ReplicationDB) UpdateSchemaID(tableID, newSchemaID int64) {
 	}
 }
 
+func (db *ReplicationDB) UpdateStatus(task *SpanReplication, status *heartbeatpb.TableSpanStatus) {
+	task.UpdateStatus(status)
+	checker := db.GetGroupChecker(task.GetGroupID()) // Note: need RLock here
+
+	db.lock.Lock()
+	defer db.lock.Unlock()
+	checker.UpdateStatus(task)
+}
+
 // BindSpanToNode binds the span to the node, it will remove the task from the old node and add it to the new node
 // ,and it also marks the task as scheduling
 func (db *ReplicationDB) BindSpanToNode(old, new node.ID, task *SpanReplication) {
@@ -377,8 +391,7 @@ func (db *ReplicationDB) reset() {
 	db.tableTasks = make(map[int64]map[common.DispatcherID]*SpanReplication)
 	db.allTasks = make(map[common.DispatcherID]*SpanReplication)
 	db.ReplicationDB = replica.NewReplicationDB[common.DispatcherID, *SpanReplication](db.changefeedID.String(),
-		db.withRLock, replica.NewEmptyChecker)
-	db.hotSpans = NewHotSpans()
+		db.withRLock, db.newGroupChecker)
 }
 
 func (db *ReplicationDB) putDDLDispatcher(ddlSpan *SpanReplication) {

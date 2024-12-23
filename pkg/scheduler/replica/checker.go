@@ -34,10 +34,12 @@ type Checker[T ReplicationID, R Replication[T], S any] interface {
 type GroupCheckResult any
 type ReplicationStatus any
 
+// Notice: all methods are NOT thread-safe.
 type GroupChecker[T ReplicationID, R Replication[T]] interface {
 	AddReplica(replication R)
 	RemoveReplica(replication R)
 	UpdateStatus(replication R)
+
 	Check(batch int) GroupCheckResult
 	Name() string
 	Stat() string
