@@ -252,6 +252,10 @@ func (p *persistentStorage) initializeFromDisk() {
 	}
 }
 
+func (p *persistentStorage) close() error {
+	return p.db.Close()
+}
+
 // getAllPhysicalTables returns all physical tables in the snapshot
 // caller must ensure current resolve ts is larger than snapTs
 func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filter.Filter) ([]commonEvent.Table, error) {
@@ -664,13 +668,6 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	}
 
 	p.mu.Unlock()
-	// log.Info("handle resolved ddl event",
-	// 	zap.Int64("schemaID", ddlEvent.CurrentSchemaID),
-	// 	zap.Int64("tableID", ddlEvent.CurrentTableID),
-	// 	zap.Uint64("finishedTs", ddlEvent.FinishedTs),
-	// 	zap.Int64("schemaVersion", ddlEvent.SchemaVersion),
-	// 	zap.String("ddlType", model.ActionType(ddlEvent.Type).String()),
-	// 	zap.String("query", ddlEvent.Query))
 
 	// Note: need write ddl event to disk before update ddl history,
 	// becuase other goroutines may read ddl events from disk according to ddl history
@@ -792,8 +789,16 @@ func buildPersistedDDLEventFromJob(
 		return tableInfo.SchemaID
 	}
 
-	// TODO: handle err
-	query, _ := transformDDLJobQuery(job)
+	var query string
+	// only in unit test, job.Query is empty
+	if job.Query != "" {
+		var err error
+		query, err = transformDDLJobQuery(job)
+		if err != nil {
+			log.Panic("transformDDLJobQuery failed",
+				zap.Error(err))
+		}
+	}
 
 	event := PersistedDDLEvent{
 		ID:              job.ID,
