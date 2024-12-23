@@ -139,6 +139,12 @@ type mockMessageCenter struct {
 	messageCh chan *messaging.TargetMessage
 }
 
+func newMockMessageCenter() *mockMessageCenter {
+	return &mockMessageCenter{
+		messageCh: make(chan *messaging.TargetMessage, 100),
+	}
+}
+
 func (m *mockMessageCenter) OnNodeChanges(nodeInfos map[node.ID]*node.Info) {
 
 }
@@ -310,14 +316,16 @@ type mockSchemaStore struct {
 	DDLEvents map[common.TableID][]commonEvent.DDLEvent
 	TableInfo map[common.TableID][]*common.TableInfo
 
-	resolvedTs uint64
+	resolvedTs     uint64
+	maxDDLCommitTs uint64
 }
 
 func newMockSchemaStore() *mockSchemaStore {
 	return &mockSchemaStore{
-		DDLEvents:  make(map[common.TableID][]commonEvent.DDLEvent),
-		TableInfo:  make(map[common.TableID][]*common.TableInfo),
-		resolvedTs: math.MaxUint64,
+		DDLEvents:      make(map[common.TableID][]commonEvent.DDLEvent),
+		TableInfo:      make(map[common.TableID][]*common.TableInfo),
+		resolvedTs:     math.MaxUint64,
+		maxDDLCommitTs: math.MaxUint64,
 	}
 }
 
@@ -358,7 +366,7 @@ func (m *mockSchemaStore) GetAllPhysicalTables(snapTs uint64, filter filter.Filt
 func (m *mockSchemaStore) GetTableDDLEventState(tableID int64) schemastore.DDLEventState {
 	return schemastore.DDLEventState{
 		ResolvedTs:       m.resolvedTs,
-		MaxEventCommitTs: m.resolvedTs,
+		MaxEventCommitTs: m.maxDDLCommitTs,
 	}
 }
 

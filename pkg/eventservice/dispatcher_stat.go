@@ -138,10 +138,6 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 
 type scanTask = *dispatcherStat
 
-func (t scanTask) handle() {
-	//metricScanTaskQueueDuration.Observe(float64(time.Since(t.createTime).Milliseconds()))
-}
-
 func (t scanTask) GetKey() common.DispatcherID {
 	return t.id
 }

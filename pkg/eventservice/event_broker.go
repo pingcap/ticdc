@@ -306,7 +306,6 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 	if task.resetTs.Load() == 0 {
 		remoteID := node.ID(task.info.GetServerID())
 		c.sendReadyEvent(remoteID, task)
-		//log.Info("Send ready event to dispatcher", zap.Stringer("dispatcher", task.id))
 		return false, common.DataRange{}
 	}
 
@@ -323,6 +322,8 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		dataRange.EndTs = ddlState.ResolvedTs
 	}
 
+	// Note: May be we should still send a resolvedTs to downstream to tell that
+	// the dispatcher is alive?
 	if dataRange.EndTs <= dataRange.StartTs {
 		return false, dataRange
 	}
@@ -393,7 +394,6 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 
 // TODO: handle error properly.
 func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
-	task.handle()
 	start := time.Now()
 	remoteID := node.ID(task.info.GetServerID())
 	dispatcherID := task.id
@@ -638,6 +638,7 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 	}
 }
 
+// updateMetrics updates the metrics of the event broker periodically.
 func (c *eventBroker) updateMetrics(ctx context.Context) {
 	c.wg.Add(1)
 	ticker := time.NewTicker(10 * time.Second)
@@ -673,9 +674,7 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 				c.metricEventServiceResolvedTsLag.Set(lag)
 				lag = float64(oracle.GetPhysical(time.Now())-oracle.ExtractPhysical(sentMinWaterMark)) / 1e3
 				c.metricEventServiceSentResolvedTs.Set(lag)
-
 				metricEventBrokerPendingScanTaskCount.Set(float64(len(c.taskChan)))
-
 			}
 		}
 	}()
@@ -720,6 +719,7 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommi
 		d.onLatestCommitTs(latestCommitTs)
 		needScan, _ := c.checkNeedScan(d, false)
 		if needScan {
+			log.Info("fizz need scan")
 			d.taskScanning.Store(true)
 			c.taskChan <- d
 		}
