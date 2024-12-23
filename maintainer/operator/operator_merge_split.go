@@ -173,7 +173,7 @@ func (m *MergeSplitDispatcherOperator) PostFinish() {
 func (m *MergeSplitDispatcherOperator) String() string {
 	if m.originReplicaSet.ID == m.primary {
 		return fmt.Sprintf("merge-split dispatcher operator[primary]: %s, totalAffected: %d, finished: %d, splitSpans:%s",
-			m.originReplicaSet.ID, len(m.affectedReplicaSets), m.totalRemoved, m.splitSpanInfo)
+			m.originReplicaSet.ID, len(m.affectedReplicaSets), m.totalRemoved.Load(), m.splitSpanInfo)
 	}
 	return fmt.Sprintf("merge-split dispatcher operator[secondary]: %s, primary: %s", m.originReplicaSet.ID, m.primary)
 }

@@ -53,7 +53,7 @@ type Controller struct {
 	tsoClient           replica.TSOClient
 
 	splitter               *split.Splitter
-	spanReplicationEnabled bool
+	enableTableAcrossNodes bool
 	startCheckpointTs      uint64
 	ddlDispatcherID        common.DispatcherID
 
@@ -96,7 +96,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		cfConfig:               cfConfig,
 		tsoClient:              tsoClient,
 		splitter:               splitter,
-		spanReplicationEnabled: spanReplicationEnabled,
+		enableTableAcrossNodes: enableTableAcrossNodes,
 	}
 	s.schedulerController = NewScheduleController(changefeedID, batchSize, oc, replicaSetDB, nodeManager, balanceInterval, s.splitter)
 	return s
@@ -134,10 +134,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 				zap.Stringer("node", nodeID))
 			continue
 		}
-		stm.UpdateStatus(status)
-		if c.spanReplicationEnabled {
-			c.replicationDB.UpdateHotSpan(stm, status)
-		}
+		c.replicationDB.UpdateStatus(stm, status)
 	}
 }
 
@@ -173,7 +170,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		EndKey:   span.EndKey,
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
-	if c.spanReplicationEnabled {
+	if c.enableTableAcrossNodes {
 		//split the whole table span base on the configuration, todo: background split table
 		tableSpans = c.splitter.SplitSpans(context.Background(), tableSpan, len(c.nodeManager.GetAliveNodes()), 0)
 	}
@@ -276,7 +273,7 @@ func (c *Controller) FinishBootstrap(
 				zap.String("changefeed", c.changefeedID.Name()),
 				zap.Int64("tableID", table.TableID))
 			c.addWorkingSpans(tableMap)
-			if c.spanReplicationEnabled {
+			if c.enableTableAcrossNodes {
 				holes := split.FindHoles(tableMap, tableSpan)
 				// todo: split the hole
 				c.addNewSpans(table.SchemaID, holes, c.startCheckpointTs)

@@ -141,9 +141,10 @@ func (s *hotSpanChecker) Check(batchSize int) replica.GroupCheckResult {
 
 	for _, hotSpan := range s.hotTasks {
 		if time.Since(hotSpan.lastUpdateTime) > clearTimeout*time.Second {
-			log.Warn("remove hot span since it is outdated",
+			// should not happen
+			log.Panic("remove hot span since it is outdated",
 				zap.String("changefeed", s.changefeedID.Name()), zap.String("span", hotSpan.ID.String()))
-			s.RemoveReplica(hotSpan.SpanReplication)
+			// s.RemoveReplica(hotSpan.SpanReplication)
 		} else if hotSpan.score >= s.scoreThreshold {
 			cache = append(cache, CheckResult{
 				OpType:       OpSplit,

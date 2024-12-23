@@ -337,5 +337,12 @@ func (oc *Controller) AddMergeSplitOperator(
 		}
 		oc.pushOperator(op)
 	}
+	log.Info("add merge split operator",
+		zap.String("changefeed", oc.changefeedID.Name()),
+		zap.String("primary", primaryID.String()),
+		zap.Int64("tableID", splitSpans[0].TableID),
+		zap.Int("oldSpans", len(affectedReplicaSets)),
+		zap.Int("newSpans", len(splitSpans)),
+	)
 	return true
 }

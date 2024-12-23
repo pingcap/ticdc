@@ -379,6 +379,15 @@ func (db *ReplicationDB) GetAbsentForTest(_ []*SpanReplication, maxSize int) []*
 	return ret[:maxSize]
 }
 
+// Optimize the lock usage, maybe control the lock within checker
+func (db *ReplicationDB) CheckByGroup(groupID replica.GroupID, batch int) replica.GroupCheckResult {
+	checker := db.GetGroupChecker(groupID)
+
+	db.lock.RLock()
+	defer db.lock.RUnlock()
+	return checker.Check(batch)
+}
+
 func (db *ReplicationDB) withRLock(action func()) {
 	db.lock.RLock()
 	defer db.lock.RUnlock()
