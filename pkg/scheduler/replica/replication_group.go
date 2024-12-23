@@ -52,7 +52,9 @@ type replicationGroup[T ReplicationID, R Replication[T]] struct {
 	checker GroupChecker[T, R]
 }
 
-func newReplicationGroup[T ReplicationID, R Replication[T]](id string, groupID GroupID) *replicationGroup[T, R] {
+func newReplicationGroup[T ReplicationID, R Replication[T]](
+	id string, groupID GroupID, checker GroupChecker[T, R],
+) *replicationGroup[T, R] {
 	return &replicationGroup[T, R]{
 		id:          id,
 		groupID:     groupID,
@@ -61,6 +63,7 @@ func newReplicationGroup[T ReplicationID, R Replication[T]](id string, groupID G
 		replicating: make(map[T]R),
 		scheduling:  make(map[T]R),
 		absent:      make(map[T]R),
+		checker:     checker,
 	}
 }
 

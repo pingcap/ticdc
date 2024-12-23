@@ -90,20 +90,22 @@ type ReplicationDB[T ReplicationID, R Replication[T]] interface {
 }
 
 func NewReplicationDB[T ReplicationID, R Replication[T]](
-	id string, withRLock func(action func()),
+	id string, withRLock func(action func()), newChecker func(GroupID) GroupChecker[T, R],
 ) ReplicationDB[T, R] {
 	r := &replicationDB[T, R]{
 		id:         id,
 		taskGroups: make(map[GroupID]*replicationGroup[T, R]),
 		withRLock:  withRLock,
+		newChecker: newChecker,
 	}
-	r.taskGroups[DefaultGroupID] = newReplicationGroup[T, R](id, DefaultGroupID)
+	r.taskGroups[DefaultGroupID] = newReplicationGroup(id, DefaultGroupID, r.newChecker(DefaultGroupID))
 	return r
 }
 
 type replicationDB[T ReplicationID, R Replication[T]] struct {
 	id         string
 	withRLock  func(action func())
+	newChecker func(GroupID) GroupChecker[T, R]
 	taskGroups map[GroupID]*replicationGroup[T, R]
 }
 
@@ -378,7 +380,8 @@ func (db *replicationDB[T, R]) getOrCreateGroup(task R) *replicationGroup[T, R] 
 	groupID := task.GetGroupID()
 	g, ok := db.taskGroups[groupID]
 	if !ok {
-		g = newReplicationGroup[T, R](db.id, groupID)
+		checker := db.newChecker(groupID)
+		g = newReplicationGroup(db.id, groupID, checker)
 		db.taskGroups[groupID] = g
 		log.Info("scheduler: add new task group", zap.String("schedulerID", db.id),
 			zap.String("group", GetGroupName(groupID)),

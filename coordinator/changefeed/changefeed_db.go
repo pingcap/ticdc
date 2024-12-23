@@ -49,7 +49,8 @@ func NewChangefeedDB(version int64) *ChangefeedDB {
 		changefeedDisplayNames: make(map[common.ChangeFeedDisplayName]common.ChangeFeedID),
 		stopped:                make(map[common.ChangeFeedID]*Changefeed),
 	}
-	db.ReplicationDB = replica.NewReplicationDB[common.ChangeFeedID, *Changefeed](db.id, db.withRLock)
+	db.ReplicationDB = replica.NewReplicationDB[common.ChangeFeedID, *Changefeed](db.id,
+		db.withRLock, replica.NewEmptyChecker)
 	return db
 }
 

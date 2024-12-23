@@ -29,6 +29,7 @@ import (
 const (
 	HotSpanWriteThreshold = 1024 * 1024 // 1MB per second
 	HotSpanScoreThreshold = 3           // TODO: bump to 10 befroe release
+	DefaultScoreThreshold = 3
 	HotSpanMaxLevel       = 1
 
 	EnableDynamicThreshold = false

@@ -152,28 +152,39 @@ type hotSpanStatus struct {
 	lastUpdateTime time.Time
 }
 
-type imbalanceChecker struct {
-	allTasks               map[common.DispatcherID]*hotSpanStatus
-	nodeManager            *watcher.NodeManager
-	softWriteThreshold     float32
-	softImbalanceThreshold int
-	softScore              int
-	softMergeScore         int
-	softScoreThreshold     int
+type rebalanceChecker struct {
+	allTasks    map[common.DispatcherID]*hotSpanStatus
+	nodeManager *watcher.NodeManager
 
+	// fast check, rebalance immediately when both the total load and imbalance ratio is high
 	hardWriteThreshold     float32
 	hardImbalanceThreshold int
+
+	// slow check, rebalance only if the imbalance condition has lasted for a period of time
+	softWriteThreshold          float32
+	softImbalanceThreshold      int
+	softRebalanceScore          int // add 1 when the load is not balanced
+	softRebalanceScoreThreshold int
+	softMergeScore              int // add 1 when the total load is lowwer than the softWriteThreshold
+	softMergeScoreThreshold     int
 }
 
-func newImbalanceChecker() *imbalanceChecker {
+func newImbalanceChecker() *rebalanceChecker {
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
-	return &imbalanceChecker{
-		allTasks:    make(map[common.DispatcherID]*hotSpanStatus),
-		nodeManager: nodeManager,
+	return &rebalanceChecker{
+		allTasks:               make(map[common.DispatcherID]*hotSpanStatus),
+		nodeManager:            nodeManager,
+		hardWriteThreshold:     10 * ImbalanceThreshold * HotSpanWriteThreshold,
+		hardImbalanceThreshold: ImbalanceThreshold,
+
+		softWriteThreshold:          ImbalanceThreshold * HotSpanWriteThreshold,
+		softImbalanceThreshold:      ImbalanceThreshold,
+		softRebalanceScoreThreshold: DefaultScoreThreshold,
+		softMergeScoreThreshold:     DefaultScoreThreshold,
 	}
 }
 
-func (s *imbalanceChecker) AddReplica(replica *SpanReplication) {
+func (s *rebalanceChecker) AddReplica(replica *SpanReplication) {
 	if _, ok := s.allTasks[replica.ID]; ok {
 		log.Panic("add duplicated replica", zap.String("replica", replica.ID.String()))
 	}
@@ -182,17 +193,17 @@ func (s *imbalanceChecker) AddReplica(replica *SpanReplication) {
 	}
 }
 
-func (s *imbalanceChecker) RemoveReplica(replica *SpanReplication) {
+func (s *rebalanceChecker) RemoveReplica(replica *SpanReplication) {
 	delete(s.allTasks, replica.ID)
 }
 
-func (s *imbalanceChecker) UpdateStatus(replica *SpanReplication) {
+func (s *rebalanceChecker) UpdateStatus(replica *SpanReplication) {
 	if _, ok := s.allTasks[replica.ID]; !ok {
 		log.Panic("update unexist replica", zap.String("replica", replica.ID.String()))
 	}
 }
 
-func (s *imbalanceChecker) Check(_ int) any {
+func (s *rebalanceChecker) Check(_ int) any {
 	nodeLoads := make(map[node.ID]float64)
 	replications := []*SpanReplication{}
 	totalEventSizePerSecond := float32(0)
@@ -203,9 +214,11 @@ func (s *imbalanceChecker) Check(_ int) any {
 		replications = append(replications, span.SpanReplication)
 	}
 
+	// check merge
 	if totalEventSizePerSecond <= s.softWriteThreshold {
+		s.softImbalanceThreshold = 0
 		s.softMergeScore++
-		if s.softMergeScore >= s.softScoreThreshold {
+		if s.softMergeScore >= s.softMergeScoreThreshold {
 			s.softMergeScore = 0
 			return []CheckResult{
 				{
@@ -218,12 +231,19 @@ func (s *imbalanceChecker) Check(_ int) any {
 	}
 
 	s.softMergeScore = 0
+	return s.checkRebalance(nodeLoads, replications)
+}
+
+func (s *rebalanceChecker) checkRebalance(
+	nodeLoads map[node.ID]float64, replications []*SpanReplication,
+) []CheckResult {
 	ret := []CheckResult{
 		{
 			OpType:       OpMergeAndSplit,
 			Replications: replications,
 		},
 	}
+	// case 1: too much nodes, need split more spans
 	if len(s.allTasks) < len(s.nodeManager.GetAliveNodes()) {
 		return ret
 	}
@@ -233,23 +253,25 @@ func (s *imbalanceChecker) Check(_ int) any {
 		maxLoad = math.Max(maxLoad, load)
 		minLoad = math.Min(minLoad, load)
 	}
-
 	minLoad = math.Max(minLoad, float64(s.softWriteThreshold))
-	if maxLoad-minLoad > float64(s.hardWriteThreshold) {
-		if int(maxLoad/minLoad) > s.hardImbalanceThreshold {
-			s.softScore = 0
-			return ret
-		}
-	}
 
-	if maxLoad/minLoad > float64(s.softImbalanceThreshold) {
-		s.softScore++
-	} else {
-		s.softScore = max(s.softScore-1, 0)
-	}
-	if s.softScore >= s.softScoreThreshold {
-		s.softScore = 0
+	// case 2: check hard rebalance
+	if maxLoad-minLoad > float64(s.hardWriteThreshold) && int(maxLoad/minLoad) > s.hardImbalanceThreshold {
+		s.softRebalanceScore = 0
 		return ret
 	}
+
+	// case 3: check soft rebalance
+	if maxLoad/minLoad > float64(s.softImbalanceThreshold) {
+		s.softRebalanceScore++
+	} else {
+		s.softRebalanceScore = max(s.softRebalanceScore-1, 0)
+	}
+	if s.softRebalanceScore >= s.softImbalanceThreshold {
+		s.softRebalanceScore = 0
+		return ret
+	}
+
+	// default case: no need to rebalance
 	return nil
 }
