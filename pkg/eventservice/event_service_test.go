@@ -57,7 +57,7 @@ func TestEventServiceBasic(t *testing.T) {
 		messageCh: make(chan *messaging.TargetMessage, 100),
 	}
 	esImpl := initEventService(ctx, t, mc, mockStore)
-	defer esImpl.Close(ctx)
+	esImpl.Close(ctx)
 
 	dispatcherInfo := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	// register acceptor

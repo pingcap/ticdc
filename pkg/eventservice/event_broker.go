@@ -719,7 +719,6 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommi
 		d.onLatestCommitTs(latestCommitTs)
 		needScan, _ := c.checkNeedScan(d, false)
 		if needScan {
-			log.Info("fizz need scan")
 			d.taskScanning.Store(true)
 			c.taskChan <- d
 		}
