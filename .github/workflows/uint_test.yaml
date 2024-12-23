@@ -75,7 +75,7 @@ jobs:
 
   coordinator_unit_test:
     runs-on: ubuntu-latest 
-    name: EventService Unit Test
+    name: Coordinator Unit Test
     steps:
       - name: Check out code
         uses: actions/checkout@v2
