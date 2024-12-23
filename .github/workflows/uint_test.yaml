@@ -27,53 +27,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # dispatcher_unit_test:
-  #   runs-on: ubuntu-latest 
-  #   name: Dispatcher Unit Test
-  #   steps:
-  #     - name: Check out code
-  #       uses: actions/checkout@v2
+  dispatcher_unit_test:
+    runs-on: ubuntu-latest 
+    name: Dispatcher Unit Test
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2
 
-  #     - name: Setup Go environment
-  #       uses: actions/setup-go@v3
-  #       with:
-  #         go-version: '1.23'
+      - name: Setup Go environment
+        uses: actions/setup-go@v3
+        with:
+          go-version: '1.23'
 
-  #     - name: Unit Test
-  #       run: |
-  #         cd pkg/sink/mysql
-  #         go test --tags=intest
-  #         cd ../util
-  #         go test
-  #         cd ../../../downstreamadapter/sink/
-  #         go test ./... --tags=intest
-  #         cd ../dispatcher
-  #         go test --tags=intest
-  #         cd ../worker
-  #         go test ./... --tags=intest
-  #         cd ../../pkg/sink/codec
-  #         cd open
-  #         go test  --tags=intest
-  #         cd ../canal
-  #         go test  --tags=intest
+      - name: Unit Test
+        run: |
+          cd pkg/sink/mysql
+          go test --tags=intest
+          cd ../util
+          go test
+          cd ../../../downstreamadapter/sink/
+          go test ./... --tags=intest
+          cd ../dispatcher
+          go test --tags=intest
+          cd ../worker
+          go test ./... --tags=intest
+          cd ../../pkg/sink/codec
+          cd open
+          go test  --tags=intest
+          cd ../canal
+          go test  --tags=intest
 
-  # maintainer_unit_test:
-  #   runs-on: ubuntu-latest 
-  #   name: Maintainer Unit Test
-  #   steps:
-  #     - name: Check out code
-  #       uses: actions/checkout@v2
+  maintainer_unit_test:
+    runs-on: ubuntu-latest 
+    name: Maintainer Unit Test
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2
 
-  #     - name: Setup Go environment
-  #       uses: actions/setup-go@v3
-  #       with:
-  #         go-version: '1.23'
+      - name: Setup Go environment
+        uses: actions/setup-go@v3
+        with:
+          go-version: '1.23'
 
-  #     - name: Unit Test
-  #       run: |
-  #         go test --tags=intest -timeout 120s  github.com/pingcap/ticdc/maintainer/...
+      - name: Unit Test
+        run: |
+          go test --tags=intest -timeout 120s  github.com/pingcap/ticdc/maintainer/...
 
-  # coordinator_unit_test:
+  coordinator_unit_test:
   #   runs-on: ubuntu-latest 
   #   name: EventService Unit Test
   #   steps:
