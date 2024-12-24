@@ -83,7 +83,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	path *pathInfo[A, P, T, D, H],
 	event eventWrap[A, P, T, D, H],
 	handler H,
-	eventQueue *eventQueue[A, P, T, D, H],
 ) {
 	replaced := false
 	// if isPeriodicSignal(event) {
@@ -98,7 +97,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	// }
 
 	if !replaced {
-		if as.shouldDropEvent(path, event, handler, eventQueue) {
+		if as.shouldDropEvent(path, event, handler) {
 			// Drop the event
 			handler.OnDrop(event.event)
 		} else {
@@ -107,9 +106,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 			// Update the pending size.
 			path.pendingSize += event.eventSize
 			as.totalPendingSize.Add(int64(event.eventSize))
-			// Update the heaps after adding the event in the queue.
-			eventQueue.updateHeapAfterUpdatePath(path)
-			eventQueue.totalPendingLength.Add(1)
 		}
 	}
 
@@ -120,7 +116,6 @@ func (as *areaMemStat[A, P, T, D, H]) shouldDropEvent(
 	path *pathInfo[A, P, T, D, H],
 	event eventWrap[A, P, T, D, H],
 	handler H,
-	eventQueue *eventQueue[A, P, T, D, H],
 ) bool {
 	if event.eventSize > as.settings.Load().MaxPendingSize {
 		log.Warn("The event size exceeds the max pending size",
@@ -172,8 +167,6 @@ LOOP:
 			handler.OnDrop(back.event)
 			longestPath.pendingSize -= back.eventSize
 			as.totalPendingSize.Add(int64(-back.eventSize))
-			eventQueue.updateHeapAfterUpdatePath((*pathInfo[A, P, T, D, H])(longestPath))
-			eventQueue.totalPendingLength.Add(-1)
 			if !exceedMaxPendingSize() {
 				break LOOP
 			}

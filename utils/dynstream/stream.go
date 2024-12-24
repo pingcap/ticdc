@@ -18,6 +18,17 @@ const BlockLenInPendingQueue = 32
 
 // ====== internal types ======
 
+// An area info contains the path nodes of the area in a stream.
+// Note that the instance is stream level, not global level.
+type streamAreaInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
+	area A
+
+	// The path bound to the area info instance.
+	// Since timestampHeap and queueTimeHeap only store the paths who has pending events,
+	// the pathCount could be larger than the length of the heaps.
+	pathCount int
+}
+
 type pathStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	pathInfo  *pathInfo[A, P, T, D, H]
 	totalTime time.Duration
@@ -71,17 +82,12 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Fields only use by the eventQueue.
 	// Stream level area info.
 	// Each stream has its own areaInfo map, after a path is assigned to a stream, the areaInfo is set.
-	streamAreaInfo     *streamAreaInfo[A, P, T, D, H]
-	timestampHeapIndex int
-	queueTimeHeapIndex int
-	sizeHeapIndex      int
-	handledTSHeapIndex int
+	streamAreaInfo *streamAreaInfo[A, P, T, D, H]
+	areaMemStat    *areaMemStat[A, P, T, D, H]
 
 	// Those values below are used to compare in the heap.
 	frontTimestamp Timestamp // The timestamp of the front event.
 	frontQueueTime time.Time // The queue time of the front event.
-
-	areaMemStat *areaMemStat[A, P, T, D, H]
 
 	pendingSize          int  // The total size(bytes) of pending events in the pendingQueue of the path.
 	paused               bool // The path is paused to send events.
@@ -104,10 +110,6 @@ func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A,
 
 func (pi *pathInfo[A, P, T, D, H]) setStream(stream *stream[A, P, T, D, H]) {
 	pi.stream = stream
-}
-
-func (pi *pathInfo[A, P, T, D, H]) setEventBlockAllocator(eventBlockAllocator *deque.BlockAllocator[eventWrap[A, P, T, D, H]]) {
-	pi.pendingQueue.SetBlockAllocator(eventBlockAllocator)
 }
 
 func (pi *pathInfo[A, P, T, D, H]) resetStat() {
