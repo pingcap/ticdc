@@ -773,6 +773,7 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 
 	// merge the hole
 	dispatcherID := common.NewDispatcherID()
+	// the holeSpan is on node0, which is offlined
 	spanReplica := replica.NewWorkingReplicaSet(cfID, dispatcherID, tsoClient, 1, holeSpan, &heartbeatpb.TableSpanStatus{
 		ID:                 dispatcherID.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,

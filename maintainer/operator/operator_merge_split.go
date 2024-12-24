@@ -34,19 +34,19 @@ type MergeSplitDispatcherOperator struct {
 	db               *replica.ReplicationDB
 	originNode       node.ID
 	originReplicaSet *replica.SpanReplication
-	checkpointTs     uint64
 
+	checkpointTs uint64
+	removed      bool
+	finished     bool
+	onFinished   func()
+	lck          sync.Mutex // protect the previous fields
+
+	// For primary operator, totalRemoved tend to be increased by operators of other affectedReplicaSets
+	totalRemoved        atomic.Int64
 	primary             common.DispatcherID
 	affectedReplicaSets []*replica.SpanReplication
-	totalRemoved        atomic.Int64
 	splitSpans          []*heartbeatpb.TableSpan
 	splitSpanInfo       string
-
-	finished   atomic.Bool
-	onFinished func()
-
-	removed atomic.Bool
-	lck     sync.Mutex
 }
 
 // NewMergeSplitDispatcherOperator creates a new MergeSplitDispatcherOperator
@@ -75,8 +75,10 @@ func NewMergeSplitDispatcherOperator(
 		splitSpanInfo:       spansInfo,
 		onFinished:          onFinished,
 	}
-	if op.primary == originReplicaSet.ID {
-		op.onFinished = op.increaseTotalRemoved
+	if op.isPrimary() {
+		op.onFinished = func() {
+			op.totalRemoved.Add(1)
+		}
 	}
 	return op
 }
@@ -99,13 +101,15 @@ func (m *MergeSplitDispatcherOperator) OnNodeRemove(n node.ID) {
 	}
 }
 
-func (m *MergeSplitDispatcherOperator) increaseTotalRemoved() {
-	m.totalRemoved.Add(1)
+func (m *MergeSplitDispatcherOperator) isPrimary() bool {
+	return m.originReplicaSet.ID == m.primary
 }
 
 func (m *MergeSplitDispatcherOperator) markFinished() {
-	m.finished.Store(true)
-	m.onFinished()
+	if !m.finished {
+		m.finished = true
+		m.onFinished()
+	}
 }
 
 func (m *MergeSplitDispatcherOperator) AffectedNodes() []node.ID {
@@ -117,16 +121,19 @@ func (m *MergeSplitDispatcherOperator) ID() common.DispatcherID {
 }
 
 func (m *MergeSplitDispatcherOperator) IsFinished() bool {
-	if m.removed.Load() {
+	m.lck.Lock()
+	defer m.lck.Unlock()
+
+	if m.removed {
 		return true
 	}
 
 	if m.originReplicaSet.ID == m.primary {
 		// primary operator wait for all affected replica sets to be removed, since it
 		// is responsible for relpace them with new spans.
-		return m.finished.Load() && int(m.totalRemoved.Load()) == len(m.affectedReplicaSets)
+		return m.finished && int(m.totalRemoved.Load()) == len(m.affectedReplicaSets)
 	}
-	return m.finished.Load()
+	return m.finished
 }
 
 func (m *MergeSplitDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSpanStatus) {
@@ -155,7 +162,7 @@ func (m *MergeSplitDispatcherOperator) OnTaskRemoved() {
 	defer m.lck.Unlock()
 
 	log.Info("task removed", zap.String("replicaSet", m.originReplicaSet.ID.String()))
-	m.removed.Store(true)
+	m.removed = true
 }
 
 func (m *MergeSplitDispatcherOperator) PostFinish() {
