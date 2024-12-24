@@ -231,7 +231,7 @@ func newImbalanceChecker(cfID common.ChangeFeedID) *rebalanceChecker {
 		changefeedID:           cfID,
 		allTasks:               make(map[common.DispatcherID]*hotSpanStatus),
 		nodeManager:            nodeManager,
-		hardWriteThreshold:     10 * HotSpanWriteThreshold,
+		hardWriteThreshold:     5 * HotSpanWriteThreshold,
 		hardImbalanceThreshold: defaultHardImbalanceThreshold,
 
 		softWriteThreshold:          HotSpanWriteThreshold,
