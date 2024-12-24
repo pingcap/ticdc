@@ -132,7 +132,7 @@ func (l *LargeRowWorkload) BuildInsertSql(tableN int, batchSize int) string {
 		}
 	}
 
-	log.Info("large row workload, insert the table",
+	log.Debug("large row workload, insert the table",
 		zap.Int("table", tableN), zap.Int("batchSize", batchSize),
 		zap.Int("largeRowCount", largeRowCount), zap.Int("length", len(insertSQL)))
 
@@ -155,7 +155,7 @@ func (l *LargeRowWorkload) BuildUpdateSql(opts UpdateOption) string {
 	}
 	upsertSQL.WriteString(" ON DUPLICATE KEY UPDATE col_0=VALUES(col_0)")
 
-	log.Info("large row workload, upsert the table",
+	log.Debug("large row workload, upsert the table",
 		zap.Int("table", opts.Table), zap.Int("batchSize", opts.Batch),
 		zap.Int("largeRowCount", largeRowCount))
 	return upsertSQL.String()

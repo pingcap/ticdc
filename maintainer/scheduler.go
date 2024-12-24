@@ -155,20 +155,20 @@ func (s *splitScheduler) valid(c replica.CheckResult) (*heartbeatpb.TableSpan, b
 			zap.Int64("tableId", c.Replications[0].Span.TableID),
 			zap.Stringer("checkResult", c))
 	}
-	if len(c.Replications) <= 1 {
-		log.Panic("invalid replication size",
-			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Int64("tableId", c.Replications[0].Span.TableID),
-			zap.Stringer("checkResult", c))
-	}
-
 	span := spanz.TableIDToComparableSpan(c.Replications[0].Span.TableID)
 	totalSpan := &heartbeatpb.TableSpan{
 		TableID:  span.TableID,
 		StartKey: span.StartKey,
 		EndKey:   span.EndKey,
 	}
+
 	if c.OpType == replica.OpMerge || c.OpType == replica.OpMergeAndSplit {
+		if len(c.Replications) <= 1 {
+			log.Panic("invalid replication size",
+				zap.String("changefeed", s.changefeedID.Name()),
+				zap.Int64("tableId", c.Replications[0].Span.TableID),
+				zap.Stringer("checkResult", c))
+		}
 		spanMap := utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](heartbeatpb.LessTableSpan)
 		for _, r := range c.Replications {
 			spanMap.ReplaceOrInsert(r.Span, r)

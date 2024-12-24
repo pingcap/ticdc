@@ -313,6 +313,8 @@ func (oc *Controller) AddMergeSplitOperator(
 ) bool {
 	oc.lock.Lock()
 	defer oc.lock.Unlock()
+	// TODO: check if there are some intersection between `ret.Replications` and `spans`.
+	// Ignore the intersection spans to prevent meaningless split operation.
 	for _, replicaSet := range affectedReplicaSets {
 		if _, ok := oc.operators[replicaSet.ID]; ok {
 			log.Info("add operator failed, operator already exists",
