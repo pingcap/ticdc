@@ -15,6 +15,7 @@ package schemastore
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"reflect"
 	"testing"
@@ -64,6 +65,9 @@ func loadPersistentStorageForTest(db *pebble.DB, gcTs uint64, upperBound UpperBo
 
 // create an empty persistent storage at dbPath
 func newEmptyPersistentStorageForTest(dbPath string) *persistentStorage {
+	if err := os.RemoveAll(dbPath); err != nil {
+		log.Panic("remove path fail", zap.Error(err))
+	}
 	db, err := pebble.Open(dbPath, &pebble.Options{})
 	if err != nil {
 		log.Panic("create database fail", zap.Error(err))
@@ -71,6 +75,21 @@ func newEmptyPersistentStorageForTest(dbPath string) *persistentStorage {
 	gcTs := uint64(0)
 	upperBound := UpperBoundMeta{
 		FinishedDDLTs: 0,
+		SchemaVersion: 0,
+		ResolvedTs:    0,
+	}
+	return loadPersistentStorageForTest(db, gcTs, upperBound)
+}
+
+// load a persistent storage from dbPath
+func loadPersistentStorageFromPathForTest(dbPath string, maxFinishedDDLTs uint64) *persistentStorage {
+	db, err := pebble.Open(dbPath, &pebble.Options{})
+	if err != nil {
+		log.Panic("create database fail", zap.Error(err))
+	}
+	gcTs := uint64(0)
+	upperBound := UpperBoundMeta{
+		FinishedDDLTs: maxFinishedDDLTs,
 		SchemaVersion: 0,
 		ResolvedTs:    0,
 	}
@@ -226,37 +245,43 @@ func TestApplyDDLJobs(t *testing.T) {
 
 	for _, tt := range testCases {
 		dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
-		require.Nil(t, os.RemoveAll(dbPath))
 		pStorage := newEmptyPersistentStorageForTest(dbPath)
+		checkState := func(fromDisk bool) {
+			if (tt.tableMap != nil && !reflect.DeepEqual(tt.tableMap, pStorage.tableMap)) ||
+				(tt.tableMap == nil && len(pStorage.tableMap) != 0) {
+				log.Warn("tableMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("tableMap not equal")
+			}
+			if (tt.partitionMap != nil && !reflect.DeepEqual(tt.partitionMap, pStorage.partitionMap)) ||
+				(tt.partitionMap == nil && len(pStorage.partitionMap) != 0) {
+				log.Warn("partitionMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.partitionMap), zap.Any("actual", pStorage.partitionMap), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("partitionMap not equal")
+			}
+			if (tt.databaseMap != nil && !reflect.DeepEqual(tt.databaseMap, pStorage.databaseMap)) ||
+				(tt.databaseMap == nil && len(pStorage.databaseMap) != 0) {
+				log.Warn("databaseMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.databaseMap), zap.Any("actual", pStorage.databaseMap), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("databaseMap not equal")
+			}
+			if (tt.tablesDDLHistory != nil && !reflect.DeepEqual(tt.tablesDDLHistory, pStorage.tablesDDLHistory)) ||
+				(tt.tablesDDLHistory == nil && len(pStorage.tablesDDLHistory) != 0) {
+				log.Warn("tablesDDLHistory not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tablesDDLHistory), zap.Any("actual", pStorage.tablesDDLHistory), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("tablesDDLHistory not equal")
+			}
+			if (tt.tableTriggerDDLHistory != nil && !reflect.DeepEqual(tt.tableTriggerDDLHistory, pStorage.tableTriggerDDLHistory)) ||
+				(tt.tableTriggerDDLHistory == nil && len(pStorage.tableTriggerDDLHistory) != 0) {
+				log.Warn("tableTriggerDDLHistory not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tableTriggerDDLHistory), zap.Any("actual", pStorage.tableTriggerDDLHistory), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("tableTriggerDDLHistory not equal")
+			}
+		}
 		for _, job := range tt.ddlJobs {
 			err := pStorage.handleDDLJob(job)
 			require.Nil(t, err)
 		}
-		if (tt.tableMap != nil && !reflect.DeepEqual(tt.tableMap, pStorage.tableMap)) ||
-			(tt.tableMap == nil && len(pStorage.tableMap) != 0) {
-			log.Warn("tableMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap))
-			t.Errorf("tableMap not equal")
-		}
-		if (tt.partitionMap != nil && !reflect.DeepEqual(tt.partitionMap, pStorage.partitionMap)) ||
-			(tt.partitionMap == nil && len(pStorage.partitionMap) != 0) {
-			log.Warn("partitionMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.partitionMap), zap.Any("actual", pStorage.partitionMap))
-			t.Errorf("partitionMap not equal")
-		}
-		if (tt.databaseMap != nil && !reflect.DeepEqual(tt.databaseMap, pStorage.databaseMap)) ||
-			(tt.databaseMap == nil && len(pStorage.databaseMap) != 0) {
-			log.Warn("databaseMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.databaseMap), zap.Any("actual", pStorage.databaseMap))
-			t.Errorf("databaseMap not equal")
-		}
-		if (tt.tablesDDLHistory != nil && !reflect.DeepEqual(tt.tablesDDLHistory, pStorage.tablesDDLHistory)) ||
-			(tt.tablesDDLHistory == nil && len(pStorage.tablesDDLHistory) != 0) {
-			log.Warn("tablesDDLHistory not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tablesDDLHistory), zap.Any("actual", pStorage.tablesDDLHistory))
-			t.Errorf("tablesDDLHistory not equal")
-		}
-		if (tt.tableTriggerDDLHistory != nil && !reflect.DeepEqual(tt.tableTriggerDDLHistory, pStorage.tableTriggerDDLHistory)) ||
-			(tt.tableTriggerDDLHistory == nil && len(pStorage.tableTriggerDDLHistory) != 0) {
-			log.Warn("tableTriggerDDLHistory not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tableTriggerDDLHistory), zap.Any("actual", pStorage.tableTriggerDDLHistory))
-			t.Errorf("tableTriggerDDLHistory not equal")
-		}
+		checkState(false)
+		pStorage.close()
+		// load from disk and check again
+		pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
+		checkState(true)
 		pStorage.close()
 	}
 }
