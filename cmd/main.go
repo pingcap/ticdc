@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	tiflowCmd "github.com/pingcap/tiflow/pkg/cmd"
 	"github.com/pingcap/tiflow/pkg/cmd/util"
+	"github.com/pingcap/tidb/pkg/util/collate"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
