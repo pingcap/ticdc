@@ -237,6 +237,13 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 					}
 					return
 				}
+				log.Info("hyy before BlockReportAfterWrite")
+				// failpoint.Inject("BlockReportAfterWrite", nil)
+				failpoint.Inject("BlockReportAfterWrite", func() {
+					log.Info("hyy into BlockReportAfterWrite")
+					time.Sleep(5000)
+				})
+				log.Info("hyy after BlockReportAfterWrite")
 			} else {
 				d.PassBlockEventToSink(pendingEvent)
 			}
