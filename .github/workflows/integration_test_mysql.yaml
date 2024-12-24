@@ -93,7 +93,7 @@ jobs:
       #     path: |
       #       ./logs.tar.gz
 
-failover_e2e_test:
+  failover_e2e_test:
     runs-on: ubuntu-latest 
     name: E2E Test
     steps:
