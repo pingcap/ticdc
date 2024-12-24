@@ -43,8 +43,8 @@ const (
 	HotSpanScoreThreshold = 3           // TODO: bump to 10 befroe release
 	DefaultScoreThreshold = 3
 
-	defaultHardImbalanceThreshold = float64(1.2) // used to trigger the rebalance
-	clearTimeout                  = 300          // seconds
+	defaultHardImbalanceThreshold = float64(1.35) // used to trigger the rebalance
+	clearTimeout                  = 300           // seconds
 )
 
 var MinSpanNumberCoefficient = 2

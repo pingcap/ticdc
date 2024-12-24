@@ -38,7 +38,7 @@ const (
 
 // baseSpanNumberCoefficient is the base coefficient that use to
 // multiply the number of captures to get the number of spans.
-var baseSpanNumberCoefficient = replica.MinSpanNumberCoefficient + 1
+var baseSpanNumberCoefficient = replica.MinSpanNumberCoefficient * 2
 
 // RegionCache is a simplified interface of tikv.RegionCache.
 // It is useful to restrict RegionCache usage and mocking in tests.
