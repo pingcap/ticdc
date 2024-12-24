@@ -177,7 +177,7 @@ EOF
 	echo "y" | run_cdc_cli unsafe delete-service-gc-safepoint
 	run_cdc_cli unsafe reset --no-confirm --pd=$pd_addr
 	REGION_ID=$(pd-ctl --cacert="${TLS_DIR}/ca.pem" --cert="${TLS_DIR}/client.pem" --key="${TLS_DIR}/client-key.pem" -u=$pd_addr region | jq '.regions[0].id')
-	TS=$(cdc cli tso query --pd=$pd_addr)
+	TS=$(run_cdc_cli_tso_query $TLS_PD_HOST $TLS_PD_PORT true)
 	# wait for owner online
 	sleep 3
 	run_cdc_cli unsafe resolve-lock --region=$REGION_ID

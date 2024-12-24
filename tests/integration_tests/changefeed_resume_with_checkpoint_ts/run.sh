@@ -22,7 +22,7 @@ function resume_changefeed_in_stopped_state() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 	changefeed_id=$(cdc cli changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" 2>&1 | tail -n2 | head -n1 | awk '{print $2}')
 
-	checkpointTs1=$(cdc cli tso query --pd=http://$UP_PD_HOST_1:$UP_PD_PORT_1)
+	checkpointTs1=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
 	for i in $(seq 1 2); do
 		stmt="create table test.table$i (id int primary key auto_increment, time datetime DEFAULT CURRENT_TIMESTAMP)"
 		run_sql "$stmt" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -36,14 +36,14 @@ function resume_changefeed_in_stopped_state() {
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config2.toml
 	cdc cli changefeed pause --changefeed-id=$changefeed_id --pd=$pd_addr
 
-	checkpointTs2=$(cdc cli tso query --pd=http://$UP_PD_HOST_1:$UP_PD_PORT_1)
+	checkpointTs2=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
 	for i in $(seq 3 4); do
 		stmt="CREATE table test.table$i (id int primary key auto_increment, time datetime DEFAULT CURRENT_TIMESTAMP)"
 		run_sql "$stmt" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 		stmt="insert into test.table$i values (),(),(),(),()"
 		run_sql "$stmt" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	done
-	checkpointTs3=$(cdc cli tso query --pd=http://$UP_PD_HOST_1:$UP_PD_PORT_1)
+	checkpointTs3=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
 	for i in $(seq 5 6); do
 		stmt="CREATE table test.table$i (id int primary key auto_increment, time datetime DEFAULT CURRENT_TIMESTAMP)"
 		run_sql "$stmt" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
