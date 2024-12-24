@@ -303,6 +303,10 @@ func (oc *Controller) NewSplitOperator(
 	return NewSplitDispatcherOperator(oc.replicationDB, replicaSet, originNode, splitSpans)
 }
 
+// AddMergeSplitOperator adds a merge split operator to the controller.
+//  1. Merge Operator: len(affectedReplicaSets) > 1, len(splitSpans) == 1
+//  2. Split Operator: len(affectedReplicaSets) == 1, len(splitSpans) > 1
+//  3. MergeAndSplit Operator: len(affectedReplicaSets) > 1, len(splitSpans) > 1
 func (oc *Controller) AddMergeSplitOperator(
 	affectedReplicaSets []*replica.SpanReplication,
 	splitSpans []*heartbeatpb.TableSpan,

@@ -702,6 +702,7 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 
 	totalTables := 10
 	victim := rand.Intn(totalTables) + 1
+	var holeSpan *heartbeatpb.TableSpan
 	for i := 1; i <= totalTables; i++ {
 		totalSpan := spanz.TableIDToComparableSpan(int64(i))
 		partialSpans := []*heartbeatpb.TableSpan{
@@ -713,6 +714,7 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 			// victim has hole, should not merged
 			k := i % 3
 			old := partialSpans
+			holeSpan = old[k]
 			partialSpans = old[:k]
 			partialSpans = append(partialSpans, old[k+1:]...)
 		}
@@ -727,19 +729,65 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 			s.replicationDB.AddReplicatingSpan(spanReplica)
 		}
 	}
+
+	expected := (totalTables - 1) * 3
+	victimExpected := 2
 	replicas := s.replicationDB.GetReplicating()
-	require.Equal(t, totalTables*3-1, s.replicationDB.GetReplicatingSize())
+	require.Equal(t, expected+victimExpected, s.replicationDB.GetReplicatingSize())
 
 	scheduler := s.schedulerController.GetScheduler(scheduler.SplitScheduler)
 	for i := 0; i < replica.DefaultScoreThreshold; i++ {
 		scheduler.Execute()
 	}
-	scheduler.Execute()
-	require.Equal(t, 0, s.replicationDB.GetReplicatingSize())
-	require.Equal(t, totalTables*3-1, s.replicationDB.GetSchedulingSize())
-	require.Equal(t, totalTables*3-1, s.operatorController.OperatorSize())
+	scheduler.Execute() // dummy execute does not take effect
+	require.Equal(t, victimExpected, s.replicationDB.GetReplicatingSize())
+	require.Equal(t, expected, s.replicationDB.GetSchedulingSize())
+	require.Equal(t, expected, s.operatorController.OperatorSize())
 
 	primarys := make(map[int64]pkgOpearator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus])
+	for _, task := range replicas {
+		op := s.operatorController.GetOperator(task.ID)
+		if op == nil {
+			require.Equal(t, int64(victim), task.Span.GetTableID())
+			continue
+		}
+		op.Schedule()
+		op.Check(task.GetNodeID(), &heartbeatpb.TableSpanStatus{
+			ID:              op.ID().ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Stopped,
+			CheckpointTs:    10,
+		})
+		if op.IsFinished() {
+			op.PostFinish()
+		} else {
+			primarys[task.Span.GetTableID()] = op
+		}
+	}
+	for _, op := range primarys {
+		finished := op.IsFinished()
+		require.True(t, finished)
+		op.PostFinish()
+	}
+
+	require.Equal(t, totalTables-1, s.replicationDB.GetAbsentSize())
+
+	// merge the hole
+	dispatcherID := common.NewDispatcherID()
+	spanReplica := replica.NewWorkingReplicaSet(cfID, dispatcherID, tsoClient, 1, holeSpan, &heartbeatpb.TableSpanStatus{
+		ID:                 dispatcherID.ToPB(),
+		ComponentStatus:    heartbeatpb.ComponentState_Working,
+		CheckpointTs:       10,
+		EventSizePerSecond: 0,
+	}, node.ID(fmt.Sprintf("node%d", 0)))
+	s.replicationDB.AddReplicatingSpan(spanReplica)
+	replicas = s.replicationDB.GetReplicating()
+	require.Equal(t, 3, len(replicas))
+	for i := 0; i < replica.DefaultScoreThreshold; i++ {
+		scheduler.Execute()
+	}
+	require.Equal(t, 0, s.replicationDB.GetReplicatingSize())
+	require.Equal(t, 30, s.operatorController.OperatorSize())
+	primarys = make(map[int64]pkgOpearator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus])
 	for _, task := range replicas {
 		op := s.operatorController.GetOperator(task.ID)
 		op.Schedule()
@@ -759,7 +807,6 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 		require.True(t, finished)
 		op.PostFinish()
 	}
-
 	require.Equal(t, totalTables, s.replicationDB.GetAbsentSize())
 }
 

@@ -55,6 +55,21 @@ type CheckResult struct {
 	Replications []*SpanReplication
 }
 
+func (c CheckResult) String() string {
+	opStr := ""
+	switch c.OpType {
+	case OpSplit:
+		opStr = "split"
+	case OpMerge:
+		opStr = "merge"
+	case OpMergeAndSplit:
+		opStr = "merge and split"
+	default:
+		panic("unknown op type")
+	}
+	return fmt.Sprintf("OpType: %s, ReplicationSize: %d", opStr, len(c.Replications))
+}
+
 func getNewGroupChecker(
 	cfID common.ChangeFeedID, enableTableAcrossNodes bool,
 ) func(replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication] {

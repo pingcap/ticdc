@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/ticdc/utils"
 	"github.com/pingcap/tiflow/pkg/spanz"
 	"go.uber.org/zap"
 )
@@ -76,7 +77,7 @@ func newSplitScheduler(
 		db:            db,
 		nodeManager:   nodeManager,
 		batchSize:     batchSize,
-		maxCheckTime:  time.Second * 5,
+		maxCheckTime:  time.Second * 500,
 		checkInterval: checkInterval,
 	}
 }
@@ -123,29 +124,17 @@ func (s *splitScheduler) doCheck(ret pkgReplica.GroupCheckResult, start time.Tim
 			return checkedIndex, true
 		}
 		ret := checkResults[checkedIndex]
+		totalSpan, valid := s.valid(ret)
+		if !valid {
+			continue
+		}
+
 		switch ret.OpType {
+		case replica.OpMerge:
+			s.opController.AddMergeSplitOperator(ret.Replications, []*heartbeatpb.TableSpan{totalSpan})
 		case replica.OpSplit:
-			span := ret.Replications[0]
-			if s.db.GetTaskByID(span.ID) == nil {
-				continue
-			}
-			spans := s.splitter.SplitSpans(context.Background(), span.Span, len(s.nodeManager.GetAliveNodes()), 0)
-			if len(spans) > 1 {
-				log.Info("split span",
-					zap.String("changefeed", s.changefeedID.Name()),
-					zap.String("dispatcher", span.ID.String()),
-					zap.Int("span szie", len(spans)))
-				// s.opController.AddOperator(operator.NewSplitDispatcherOperator(s.db, span, span.GetNodeID(), spans))
-				s.opController.AddMergeSplitOperator(ret.Replications, spans)
-			}
+			fallthrough
 		case replica.OpMergeAndSplit:
-			// check hole
-			span := spanz.TableIDToComparableSpan(ret.Replications[0].Span.TableID)
-			totalSpan := &heartbeatpb.TableSpan{
-				TableID:  span.TableID,
-				StartKey: span.StartKey,
-				EndKey:   span.EndKey,
-			}
 			spans := s.splitter.SplitSpans(context.Background(), totalSpan, len(s.nodeManager.GetAliveNodes()), 0)
 			if len(spans) > 1 {
 				log.Info("split span",
@@ -154,16 +143,42 @@ func (s *splitScheduler) doCheck(ret pkgReplica.GroupCheckResult, start time.Tim
 					zap.Int("span szie", len(spans)))
 				s.opController.AddMergeSplitOperator(ret.Replications, spans)
 			}
-		case replica.OpMerge:
-			newSpan := spanz.TableIDToComparableSpan(ret.Replications[0].Span.TableID)
-			s.opController.AddMergeSplitOperator(ret.Replications, []*heartbeatpb.TableSpan{
-				{
-					TableID:  newSpan.TableID,
-					StartKey: newSpan.StartKey,
-					EndKey:   newSpan.EndKey,
-				},
-			})
 		}
 	}
 	return checkedIndex, false
+}
+
+func (s *splitScheduler) valid(c replica.CheckResult) (*heartbeatpb.TableSpan, bool) {
+	if c.OpType == replica.OpSplit && len(c.Replications) != 1 {
+		log.Panic("split operation should have only one replication",
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Int64("tableId", c.Replications[0].Span.TableID),
+			zap.Stringer("checkResult", c))
+	}
+	if len(c.Replications) <= 1 {
+		log.Panic("invalid replication size",
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Int64("tableId", c.Replications[0].Span.TableID),
+			zap.Stringer("checkResult", c))
+	}
+
+	span := spanz.TableIDToComparableSpan(c.Replications[0].Span.TableID)
+	totalSpan := &heartbeatpb.TableSpan{
+		TableID:  span.TableID,
+		StartKey: span.StartKey,
+		EndKey:   span.EndKey,
+	}
+	if c.OpType == replica.OpMerge || c.OpType == replica.OpMergeAndSplit {
+		spanMap := utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](heartbeatpb.LessTableSpan)
+		for _, r := range c.Replications {
+			spanMap.ReplaceOrInsert(r.Span, r)
+		}
+		holes := split.FindHoles(spanMap, totalSpan)
+		log.Warn("skip merge operation since there are holes",
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Int64("tableId", c.Replications[0].Span.TableID),
+			zap.Int("holes", len(holes)), zap.Stringer("checkResult", c))
+		return totalSpan, len(holes) == 0
+	}
+	return totalSpan, true
 }
