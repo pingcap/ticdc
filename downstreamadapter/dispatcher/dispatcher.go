@@ -14,9 +14,11 @@
 package dispatcher
 
 import (
+	"math/rand"
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
@@ -266,6 +268,12 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	block = false
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
+		failpoint.Inject("HandleEventsSlowly", func() {
+			lag := time.Duration(rand.Intn(5000)) * time.Millisecond
+			log.Warn("handle events slowly", zap.Duration("lag", lag))
+			time.Sleep(lag)
+		})
+
 		event := dispatcherEvent.Event
 		// Pre-check, make sure the event is not stale
 		if event.GetCommitTs() < atomic.LoadUint64(&d.resolvedTs) {

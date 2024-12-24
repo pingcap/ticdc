@@ -92,3 +92,27 @@ jobs:
       #     name: upstream-switch-logs
       #     path: |
       #       ./logs.tar.gz
+
+failover_e2e_test:
+    runs-on: ubuntu-latest 
+    name: E2E Test
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2
+
+      - name: Setup Go environment
+        uses: actions/setup-go@v3
+        with:
+          go-version: '1.23'
+
+      - name: Integration Build
+        run: |
+          tests/scripts/download-integration-test-binaries.sh master true
+          go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
+          make integration_test_build
+          ls -l bin/ && ls -l tools/bin/
+
+      - name: Test failover
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=failover 
