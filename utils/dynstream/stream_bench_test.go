@@ -41,7 +41,7 @@ func runStream(eventCount int, times int) {
 	reportChan := make(chan streamStat[int, string, *inc, D, *incHandler], 100)
 
 	pi := newPathInfo[int, string, *inc, D, *incHandler](0, "p1", D{})
-	stream := newStream[int, string, *inc, D](1 /*id*/, handler, reportChan, 10, NewOption())
+	stream := newStream[int, string, *inc, D](1 /*id*/, handler, NewOption())
 	stream.start([]*pathInfo[int, string, *inc, D, *incHandler]{pi})
 
 	go func() {

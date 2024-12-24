@@ -114,8 +114,8 @@ func TestStreamBasic(t *testing.T) {
 	p1 := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "p1", "d1")
 	p2 := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "p2", "d2")
 	p3 := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "p3", "d3")
-	s1 := newStream(1 /*id*/, handler, reportChan, 10, option)
-	s2 := newStream(2 /*id*/, handler, reportChan, 10, option)
+	s1 := newStream(1 /*id*/, handler, option)
+	s2 := newStream(2 /*id*/, handler, option)
 
 	s1.start([]*pathInfo[int, string, *mockEvent, any, *mockHandler]{p1})
 	s2.start([]*pathInfo[int, string, *mockEvent, any, *mockHandler]{p2})
@@ -169,7 +169,7 @@ Loop:
 
 	option = NewOption()
 	option.ReportInterval = 1 * time.Hour /*don't report*/
-	s3 := newStream(3 /*id*/, handler, reportChan, 10, option)
+	s3 := newStream(3 /*id*/, handler, option)
 	s3.start([]*pathInfo[int, string, *mockEvent, any, *mockHandler]{p1, p2}, s1, s2)
 
 	eventDone = &sync.WaitGroup{}
@@ -203,16 +203,6 @@ Loop:
 	assert.Equal(t, 3, stat.id)
 	assert.Equal(t, 6, stat.count)
 
-	assert.Equal(t, 3, stat.mostBusyPath.Len())
-	top, ok := stat.mostBusyPath.PopTop()
-	assert.True(t, ok)
-	assert.Equal(t, "p3", top.pathInfo.path)
-	_, ok = stat.mostBusyPath.PopTop()
-	assert.True(t, ok)
-	// assert.Equal(t, Path("p1"), top.pathInfo.path)
-	_, ok = stat.mostBusyPath.PopTop()
-	assert.True(t, ok)
-	// assert.Equal(t, Path("p2"), top.pathInfo.path)
 }
 
 func TestStreamMerge(t *testing.T) {
@@ -223,8 +213,8 @@ func TestStreamMerge(t *testing.T) {
 	p2 := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "p2", "d2")
 	option := NewOption()
 	option.ReportInterval = 1 * time.Hour /*don't report*/
-	s1 := newStream(1 /*id*/, handler, reportChan, 10, option)
-	s2 := newStream(2 /*id*/, handler, reportChan, 10, option)
+	s1 := newStream(1 /*id*/, handler, option)
+	s2 := newStream(2 /*id*/, handler, option)
 
 	s1.start([]*pathInfo[int, string, *mockEvent, any, *mockHandler]{p1})
 	s2.start([]*pathInfo[int, string, *mockEvent, any, *mockHandler]{p2})
@@ -241,7 +231,7 @@ func TestStreamMerge(t *testing.T) {
 
 	wg.Wait()
 
-	s3 := newStream(3 /*id*/, handler, reportChan, 10, option)
+	s3 := newStream(3 /*id*/, handler, option)
 	s3.start([]*pathInfo[int, string, *mockEvent, any, *mockHandler]{p1, p2}, s1, s2)
 
 	wg = &sync.WaitGroup{}
@@ -265,11 +255,6 @@ func TestStreamMerge(t *testing.T) {
 	stat := stats[2]
 	assert.Equal(t, 3, stat.id)
 	assert.Equal(t, 3, stat.count)
-
-	assert.Equal(t, 1, stat.mostBusyPath.Len())
-	top, ok := stat.mostBusyPath.PopTop()
-	assert.True(t, ok)
-	assert.Equal(t, "p2", top.pathInfo.path)
 }
 
 func TestStreamManyEvents(t *testing.T) {
@@ -279,7 +264,7 @@ func TestStreamManyEvents(t *testing.T) {
 	p1 := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "p1", "d1")
 	option := NewOption()
 	option.ReportInterval = 1 * time.Hour
-	s1 := newStream(1 /*id*/, handler, reportChan, 10, option)
+	s1 := newStream(1 /*id*/, handler, option)
 	s1.start([]*pathInfo[int, string, *mockEvent, any, *mockHandler]{p1})
 
 	incr := &atomic.Int64{}

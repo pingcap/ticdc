@@ -49,7 +49,7 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 		s.feedbackChan = make(chan Feedback[A, P, D], 1024)
 	}
 	for i := range option.StreamCount {
-		s.streams = append(s.streams, newStream(i, handler, nil, 0, option))
+		s.streams = append(s.streams, newStream(i, handler, option))
 	}
 	return s
 }
