@@ -79,22 +79,6 @@ func (pi *pathInfo[A, P, T, D, H]) setStream(stream *stream[A, P, T, D, H]) {
 	pi.stream = stream
 }
 
-type streamStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	id int
-
-	// Time elapsed since the last statistics report
-	elapsedTime time.Duration
-	// Total CPU time spent processing events
-	processingTime time.Duration
-	count          int
-
-	pendingLen int
-}
-
-func (s streamStat[A, P, T, D, H]) isValid() bool {
-	return s.count != 0
-}
-
 // eventWrap contains the event and the path info.
 // It can be a event or a wake signal.
 type eventWrap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
@@ -256,15 +240,21 @@ func (s *stream[A, P, T, D, H]) reciever() {
 	}
 }
 
-func (s *stream[A, P, T, D, H]) handleLoop(acceptedPaths []*pathInfo[A, P, T, D, H], formerStreams []*stream[A, P, T, D, H]) {
+// handleLoop is the main loop of the stream.
+// It handles the events.
+func (s *stream[A, P, T, D, H]) handleLoop(
+	acceptedPaths []*pathInfo[A, P, T, D, H],
+	formerStreams []*stream[A, P, T, D, H],
+) {
 	pushToPendingQueue := func(e eventWrap[A, P, T, D, H]) {
-		if e.wake {
+		switch {
+		case e.wake:
 			s.eventQueue.wakePath(e.pathInfo)
-		} else if e.newPath {
+		case e.newPath:
 			s.eventQueue.initPath(e.pathInfo)
-		} else if e.pathInfo.removed {
+		case e.pathInfo.removed:
 			s.eventQueue.removePath(e.pathInfo)
-		} else {
+		default:
 			s.eventQueue.appendEvent(e)
 		}
 	}
@@ -311,8 +301,6 @@ func (s *stream[A, P, T, D, H]) handleLoop(acceptedPaths []*pathInfo[A, P, T, D,
 			eventBuf = eventBuf[:0]
 		}
 		path *pathInfo[A, P, T, D, H]
-		// property Property
-		// lastTS   Timestamp
 	)
 
 	// For testing. Don't handle events until this wait group is done.

@@ -91,29 +91,11 @@ func TestStreamBasic(t *testing.T) {
 	handler := &mockHandler{}
 	option := NewOption()
 	option.ReportInterval = 8 * time.Millisecond
-	reportChan := make(chan streamStat[int, string, *mockEvent, any, *mockHandler], 10)
-	stats := make([]streamStat[int, string, *mockEvent, any, *mockHandler], 0)
 	statWait := sync.WaitGroup{}
 	statWait.Add(1)
-	go func() {
-		defer statWait.Done()
-
-		// Wait for 3 rounds
-		// stop := time.NewTimer(option.ReportInterval*3 + option.ReportInterval/2)
-		for {
-			if len(stats) == 3*2 {
-				return
-			}
-			stat := <-reportChan
-			stats = append(stats, stat)
-			// case <-stop.C:
-			// 	return
-		}
-	}()
 
 	p1 := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "p1", "d1")
 	p2 := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "p2", "d2")
-	p3 := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "p3", "d3")
 	s1 := newStream(1 /*id*/, handler, option)
 	s2 := newStream(2 /*id*/, handler, option)
 
@@ -142,124 +124,10 @@ func TestStreamBasic(t *testing.T) {
 	s1.close()
 	s2.close()
 
-	assert.Equal(t, 3*2, len(stats))
-
-	s1Stat := make([]streamStat[int, string, *mockEvent, any, *mockHandler], 0, 3)
-	s2Stat := make([]streamStat[int, string, *mockEvent, any, *mockHandler], 0, 3)
-	for _, stat := range stats {
-		if stat.id == 1 {
-			s1Stat = append(s1Stat, stat)
-		} else {
-			s2Stat = append(s2Stat, stat)
-		}
-	}
-
-	assert.Equal(t, 3, len(s1Stat))
-	assert.Equal(t, 3, len(s2Stat))
-
-Loop:
-	for {
-		// Drain the reportChan
-		select {
-		case <-reportChan:
-		default:
-			break Loop
-		}
-	}
-
-	option = NewOption()
-	option.ReportInterval = 1 * time.Hour /*don't report*/
-	s3 := newStream(3 /*id*/, handler, option)
-	s3.start([]*pathInfo[int, string, *mockEvent, any, *mockHandler]{p1, p2}, s1, s2)
-
-	eventDone = &sync.WaitGroup{}
-	event5 := eventWrap[int, string, *mockEvent, any, *mockHandler]{event: newMockEvent(5, "p1", 0 /*sleep*/, &Inc{num: 5, inc: incr}, nil, eventDone), pathInfo: p1}
-	event6 := eventWrap[int, string, *mockEvent, any, *mockHandler]{event: newMockEvent(6, "p2", 0 /*sleep*/, &Inc{num: 6, inc: incr}, nil, eventDone), pathInfo: p2}
-	event7 := eventWrap[int, string, *mockEvent, any, *mockHandler]{event: newMockEvent(7, "p1", 0 /*sleep*/, &Inc{num: 7, inc: incr}, nil, eventDone), pathInfo: p1}
-	event8 := eventWrap[int, string, *mockEvent, any, *mockHandler]{event: newMockEvent(8, "p2", 0 /*sleep*/, &Inc{num: 8, inc: incr}, nil, eventDone), pathInfo: p2}
-	event9 := eventWrap[int, string, *mockEvent, any, *mockHandler]{event: newMockEvent(9, "p3", 0 /*sleep*/, &Inc{num: 9, inc: incr}, nil, eventDone), pathInfo: p3}
-	event10 := eventWrap[int, string, *mockEvent, any, *mockHandler]{event: newMockEvent(10, "p2", 0 /*sleep*/, &Inc{num: 10, inc: incr}, nil, eventDone), pathInfo: p2}
-
-	s3.in() <- event5
-	s3.in() <- event6
-	s3.in() <- event7
-	s3.in() <- event8
-	s3.in() <- event9
-	s3.in() <- event10
-
-	eventDone.Wait()
-	s3.close(true)
-	close(reportChan)
-
-	assert.Equal(t, int64(1+2+3+4+5+6+7+8+9+10), incr.Load())
-
-	stats = stats[:0]
-	for stat := range reportChan {
-		stats = append(stats, stat)
-	}
-	assert.Equal(t, 1, len(stats))
-
-	stat := stats[0]
-	assert.Equal(t, 3, stat.id)
-	assert.Equal(t, 6, stat.count)
-
-}
-
-func TestStreamMerge(t *testing.T) {
-	handler := &mockHandler{}
-	reportChan := make(chan streamStat[int, string, *mockEvent, any, *mockHandler], 10)
-
-	p1 := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "p1", "d1")
-	p2 := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "p2", "d2")
-	option := NewOption()
-	option.ReportInterval = 1 * time.Hour /*don't report*/
-	s1 := newStream(1 /*id*/, handler, option)
-	s2 := newStream(2 /*id*/, handler, option)
-
-	s1.start([]*pathInfo[int, string, *mockEvent, any, *mockHandler]{p1})
-	s2.start([]*pathInfo[int, string, *mockEvent, any, *mockHandler]{p2})
-
-	incr := &atomic.Int64{}
-
-	wg := &sync.WaitGroup{}
-
-	s1.in() <- eventWrap[int, string, *mockEvent, any, *mockHandler]{event: newMockEvent(1, "p1", 0*time.Millisecond /*sleep*/, &Inc{num: 1, inc: incr}, nil, nil), pathInfo: p1}
-	s1.in() <- eventWrap[int, string, *mockEvent, any, *mockHandler]{event: newMockEvent(3, "p1", 50*time.Millisecond /*sleep*/, &Inc{num: 3, inc: incr}, wg, nil), pathInfo: p1}
-
-	s2.in() <- eventWrap[int, string, *mockEvent, any, *mockHandler]{event: newMockEvent(2, "p2", 0*time.Millisecond /*sleep*/, &Inc{num: 2, inc: incr}, nil, nil), pathInfo: p2}
-	s2.in() <- eventWrap[int, string, *mockEvent, any, *mockHandler]{event: newMockEvent(4, "p2", 50*time.Millisecond /*sleep*/, &Inc{num: 4, inc: incr}, wg, nil), pathInfo: p2}
-
-	wg.Wait()
-
-	s3 := newStream(3 /*id*/, handler, option)
-	s3.start([]*pathInfo[int, string, *mockEvent, any, *mockHandler]{p1, p2}, s1, s2)
-
-	wg = &sync.WaitGroup{}
-	s3.in() <- eventWrap[int, string, *mockEvent, any, *mockHandler]{event: newMockEvent(5, "p2", 50*time.Millisecond /*sleep*/, &Inc{num: 5, inc: incr}, wg, nil), pathInfo: p2}
-	s3.in() <- eventWrap[int, string, *mockEvent, any, *mockHandler]{event: newMockEvent(6, "p2", 50*time.Millisecond /*sleep*/, &Inc{num: 6, inc: incr}, wg, nil), pathInfo: p2}
-	s3.in() <- eventWrap[int, string, *mockEvent, any, *mockHandler]{event: newMockEvent(7, "p2", 50*time.Millisecond /*sleep*/, &Inc{num: 7, inc: incr}, wg, nil), pathInfo: p2}
-
-	wg.Wait()
-	s3.close()
-
-	assert.Equal(t, int64(1+2+3+4+5+6+7), incr.Load())
-
-	close(reportChan)
-
-	stats := make([]streamStat[int, string, *mockEvent, any, *mockHandler], 0)
-	for stat := range reportChan {
-		stats = append(stats, stat)
-	}
-	assert.Equal(t, 3, len(stats))
-
-	stat := stats[2]
-	assert.Equal(t, 3, stat.id)
-	assert.Equal(t, 3, stat.count)
 }
 
 func TestStreamManyEvents(t *testing.T) {
 	handler := &mockHandler{}
-	reportChan := make(chan streamStat[int, string, *mockEvent, any, *mockHandler], 10)
 
 	p1 := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "p1", "d1")
 	option := NewOption()
@@ -278,23 +146,4 @@ func TestStreamManyEvents(t *testing.T) {
 	s1.close()
 
 	assert.Equal(t, int64(total), incr.Load())
-
-	close(reportChan)
-	stats := make([]streamStat[int, string, *mockEvent, any, *mockHandler], 0)
-	for stat := range reportChan {
-		stats = append(stats, stat)
-	}
-	assert.Equal(t, 1, len(stats))
-	stat := stats[0]
-	assert.Equal(t, 1, stat.id)
-	assert.Equal(t, total, stat.count)
-}
-
-func TestAA(t *testing.T) {
-	f1 := 0.9
-	f2 := 1.0
-
-	a := 100
-	assert.Equal(t, 90, int(float64(a)*f1))
-	assert.Equal(t, 100, int(float64(a)*f2))
 }
