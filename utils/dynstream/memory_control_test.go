@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/utils/deque"
-	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,19 +15,11 @@ func setupTestComponents() (*memControl[int, string, *mockEvent, any, *mockHandl
 
 	area := 1
 
-	sai := &streamAreaInfo[int, string, *mockEvent, any, *mockHandler]{
-		area:          area,
-		timestampHeap: heap.NewHeap[*timestampPathNode[int, string, *mockEvent, any, *mockHandler]](),
-		queueTimeHeap: heap.NewHeap[*queuePathNode[int, string, *mockEvent, any, *mockHandler]](),
-		pathSizeHeap:  heap.NewHeap[*pathSizeStat[int, string, *mockEvent, any, *mockHandler]](),
-	}
-
 	path := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
-		area:           area,
-		path:           "test-path",
-		dest:           "test-dest",
-		streamAreaInfo: sai,
-		pendingQueue:   deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
+		area:         area,
+		path:         "test-path",
+		dest:         "test-dest",
+		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
 	}
 
 	return mc, path
@@ -78,7 +69,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventSize: 10,
 		queueTime: time.Now(),
 	}
-	path1.areaMemStat.appendEvent(path1, normalEvent1, handler, &eventQueue)
+	path1.areaMemStat.appendEvent(path1, normalEvent1, handler)
 	require.Equal(t, int64(10), path1.areaMemStat.totalPendingSize.Load())
 
 	// Append 2 periodic signals, and the second one will replace the first one
@@ -89,7 +80,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		eventType: EventType{Property: PeriodicSignal},
 	}
-	path1.areaMemStat.appendEvent(path1, periodicEvent, handler, &eventQueue)
+	path1.areaMemStat.appendEvent(path1, periodicEvent, handler)
 	require.Equal(t, int64(15), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 2, path1.pendingQueue.Length())
 	back, _ := path1.pendingQueue.BackRef()
@@ -101,7 +92,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		eventType: EventType{Property: PeriodicSignal},
 	}
-	path1.areaMemStat.appendEvent(path1, periodicEvent2, handler, &eventQueue)
+	path1.areaMemStat.appendEvent(path1, periodicEvent2, handler)
 	// Size should remain the same as the signal was replaced
 	require.Equal(t, int64(15), path1.areaMemStat.totalPendingSize.Load())
 	// The pending queue should only have 2 events
@@ -117,7 +108,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		timestamp: 4,
 	}
-	path1.areaMemStat.appendEvent(path1, normalEvent2, handler, &eventQueue)
+	path1.areaMemStat.appendEvent(path1, normalEvent2, handler)
 	require.Equal(t, int64(15), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 2, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
@@ -146,7 +137,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		timestamp: 5,
 	}
-	path1.areaMemStat.appendEvent(path1, normalEvent3, handler, &eventQueue)
+	path1.areaMemStat.appendEvent(path1, normalEvent3, handler)
 	require.Equal(t, int64(35), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 3, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
@@ -154,10 +145,9 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 
 	// 6. Add a new path, and append a large event to it, it will consume the remaining memory
 	path2 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
-		area:           1,
-		path:           "test-path-2",
-		streamAreaInfo: path1.streamAreaInfo,
-		pendingQueue:   deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
+		area:         1,
+		path:         "test-path-2",
+		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
 	}
 	mc.addPathToArea(path2, newSettings, feedbackChan)
 	eventQueue.initPath(path2)
@@ -167,7 +157,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventSize: int(newSettings.MaxPendingSize - int(path1.areaMemStat.totalPendingSize.Load())),
 		queueTime: time.Now(),
 	}
-	path2.areaMemStat.appendEvent(path2, largeEvent, handler, &eventQueue)
+	path2.areaMemStat.appendEvent(path2, largeEvent, handler)
 	require.Equal(t, newSettings.MaxPendingSize, int(path2.areaMemStat.totalPendingSize.Load()))
 	require.Equal(t, 2, path2.areaMemStat.pathCount)
 	// There are 4 events in the eventQueue, [normalEvent1, periodicEvent2, normalEvent3, largeEvent]
@@ -187,7 +177,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventSize: 10,
 		queueTime: time.Now(),
 	}
-	path1.areaMemStat.appendEvent(path1, normalEvent4, handler, &eventQueue)
+	path1.areaMemStat.appendEvent(path1, normalEvent4, handler)
 	require.Equal(t, 45, int(path1.areaMemStat.totalPendingSize.Load()))
 	require.Equal(t, 0, path2.pendingQueue.Length())
 	droppedEvents := handler.drainDroppedEvents()
@@ -202,7 +192,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventSize: 5,
 		queueTime: time.Now(),
 	}
-	path2.areaMemStat.appendEvent(path2, periodicEvent3, handler, &eventQueue)
+	path2.areaMemStat.appendEvent(path2, periodicEvent3, handler)
 	require.Equal(t, 1, path2.pendingQueue.Length())
 	require.Equal(t, int64(5), eventQueue.totalPendingLength.Load())
 	require.False(t, path2.paused)
@@ -211,14 +201,13 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 func TestShouldPausePath(t *testing.T) {
 	mc, path := setupTestComponents()
 
-	// Add 100 path to the heap
+	// Add 100 path
 	maxPendingSize := 0
 	for i := 0; i < 100; i++ {
 		newPath := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
 			path:        fmt.Sprintf("test-path-%d", i),
 			pendingSize: i,
 		}
-		path.streamAreaInfo.pathSizeHeap.AddOrUpdate((*pathSizeStat[int, string, *mockEvent, any, *mockHandler])(newPath))
 		maxPendingSize += i
 	}
 
@@ -245,7 +234,6 @@ func TestShouldPausePath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path.areaMemStat.totalPendingSize.Store(tt.pendingSize)
-			path.sizeHeapIndex = tt.heapIndex
 			result := path.areaMemStat.shouldPausePath(path)
 			require.Equal(t, tt.expectedPause, result)
 		})

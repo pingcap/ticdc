@@ -1,6 +1,7 @@
 package dynstream
 
 import (
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 
@@ -58,6 +59,12 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 
 	pathCount        int
 	totalPendingSize atomic.Int64
+
+	// maxPendingPath is the path with the largest pending size.
+	maxPendingPath struct {
+		path atomic.Pointer[pathInfo[A, P, T, D, H]]
+		size atomic.Int64
+	}
 }
 
 func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
@@ -76,6 +83,14 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	return res
 }
 
+func (as *areaMemStat[A, P, T, D, H]) updateMaxPendingPath(path *pathInfo[A, P, T, D, H]) {
+	if as.maxPendingPath.path.Load() == nil ||
+		as.maxPendingPath.size.Load() < int64(path.pendingSize) {
+		as.maxPendingPath.path.Store(path)
+		as.maxPendingPath.size.Store(int64(path.pendingSize))
+	}
+}
+
 // This method is called by streams' handleLoop concurrently.
 // Although the method is called concurrently, we don't need a mutex here. Because we only change totalPendingSize,
 // which is an atomic variable. Although the settings could be updated concurrently, we don't really care about the accuracy.
@@ -83,40 +98,32 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	path *pathInfo[A, P, T, D, H],
 	event eventWrap[A, P, T, D, H],
 	handler H,
-) {
-	replaced := false
-	// if isPeriodicSignal(event) {
-	// 	back, ok := path.pendingQueue.BackRef()
-	// 	if ok && isPeriodicSignal(*back) {
-	// 		// Replace the repeated signal.
-	// 		// Note that since the size of the repeated signal is the same, we don't need to update the pending size.
-	// 		*back = event
-	// 		replaced = true
-	// 		eventQueue.updateHeapAfterUpdatePath(path)
-	// 	}
-	// }
-
-	if !replaced {
-		if as.shouldDropEvent(path, event, handler) {
-			// Drop the event
-			handler.OnDrop(event.event)
-		} else {
-			// Add the event to the pending queue.
-			path.pendingQueue.PushBack(event)
-			// Update the pending size.
-			path.pendingSize += event.eventSize
-			as.totalPendingSize.Add(int64(event.eventSize))
-		}
+) bool {
+	dropped := false
+	if as.shouldDropEvent(path, event, handler) {
+		// Drop the event
+		handler.OnDrop(event.event)
+		dropped = true
+	} else {
+		// Add the event to the pending queue.
+		path.pendingQueue.PushBack(event)
+		// Update the pending size.
+		path.pendingSize += event.eventSize
+		as.totalPendingSize.Add(int64(event.eventSize))
+		as.updateMaxPendingPath(path)
 	}
-
 	as.updatePathPauseState(path, event)
+
+	return dropped
 }
 
+// shouldDropEvent determines if an event should be dropped.
 func (as *areaMemStat[A, P, T, D, H]) shouldDropEvent(
 	path *pathInfo[A, P, T, D, H],
 	event eventWrap[A, P, T, D, H],
 	handler H,
 ) bool {
+	// If a single event size exceeds the max pending size, drop the event.
 	if event.eventSize > as.settings.Load().MaxPendingSize {
 		log.Warn("The event size exceeds the max pending size",
 			zap.Any("area", as.area),
@@ -134,42 +141,40 @@ func (as *areaMemStat[A, P, T, D, H]) shouldDropEvent(
 	// don't drop the event.
 	// We use the periodic event to notify the handler about the status of the path, so we send it even if the mem quota is exceeded.
 	// The periodic event consumes little memory and should be processed very fast.
-	if !exceedMaxPendingSize() || (path.pendingQueue.Length() == 0 && event.eventType.Property == PeriodicSignal) {
+	if !exceedMaxPendingSize() ||
+		(path.pendingQueue.Length() == 0 && event.eventType.Property == PeriodicSignal) {
 		return false
 	}
 
 	// Drop the events of the largest pending size path to find a place for the new event.
-LOOP:
-	for exceedMaxPendingSize() {
-		longestPath, ok := path.streamAreaInfo.pathSizeHeap.PeekTop()
-		if !ok {
-			log.Warn("pathSizeHeap is empty, but exceed MaxPendingSize, it should not happen",
-				zap.Any("area", as.area), zap.Any("path", path.path))
-			return true
-		}
-		front, ok := longestPath.pendingQueue.FrontRef()
-		if !ok {
-			log.Warn("pendingQueue is empty, but exceed MaxPendingSize, it should not happen",
-				zap.Any("area", as.area), zap.Any("path", path.path))
-			return true
-		}
-		if front.timestamp <= event.timestamp {
-			// By default, drop the event.
-			// And only NOT drop the event when the event's timestamp is smaller than the smallest event of about-to-drop path.
-			return true
-		}
-		// If the longest path is the same as the current path, drop the event and return.
-		if longestPath.path == path.path {
-			return true
-		}
-		for longestPath.pendingQueue.Length() != 0 {
-			back, _ := longestPath.pendingQueue.PopBack()
-			handler.OnDrop(back.event)
-			longestPath.pendingSize -= back.eventSize
-			as.totalPendingSize.Add(int64(-back.eventSize))
-			if !exceedMaxPendingSize() {
-				break LOOP
-			}
+	longestPath := as.maxPendingPath.path.Load()
+	if longestPath == nil {
+		log.Warn("There is no max pending path, but exceed MaxPendingSize, it should not happen",
+			zap.Any("area", as.area), zap.Any("path", path.path))
+		return true
+	}
+
+	front, ok := longestPath.pendingQueue.FrontRef()
+	if !ok {
+		log.Warn("The max pending path's pending queue is empty, but exceed MaxPendingSize, it should not happen",
+			zap.Any("area", as.area), zap.Any("path", path.path))
+		return true
+	}
+
+	// If the event's timestamp is larger than the smallest event of about-to-drop path, drop the event.
+	// OR, If the longest path is the same as the current path, drop the event.
+	if front.timestamp <= event.timestamp ||
+		longestPath.path == path.path {
+		return true
+	}
+
+	for longestPath.pendingQueue.Length() != 0 {
+		back, _ := longestPath.pendingQueue.PopBack()
+		handler.OnDrop(back.event)
+		longestPath.pendingSize -= back.eventSize
+		as.totalPendingSize.Add(int64(-back.eventSize))
+		if !exceedMaxPendingSize() {
+			break
 		}
 	}
 
@@ -224,27 +229,13 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 }
 
 // shouldPausePath determines if a path should be paused based on memory usage.
-// 1. Find the stopMaxIndex, which is the index of the path that should be paused in the heap.
-// 2. If the path is not in the heap, it should be paused only if all the paths in the heap should be paused.
-// 3. If the path is in the heap, it should be paused if its index in the heap is smaller than the stopMaxIndex.
 func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D, H]) bool {
 	memoryUsageRatio := float64(as.totalPendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
 	pausePathRatio := findPausePathRatio(memoryUsageRatio)
-
-	heapLength := path.streamAreaInfo.pathSizeHeap.Len()
-	stopMaxIndex := int(float64(heapLength) * pausePathRatio)
-	// Although heap indices don't guarantee exact ordering,
-	// they provide a good approximation for our use case.
-	// Since we're using a max heap, larger elements are closer to the root (index 0).
-	shouldPause := false
-	if path.sizeHeapIndex == 0 {
-		// The path is not in the heap.
-		// It should be paused only if all the paths in the heap should be paused.
-		shouldPause = pausePathRatio == 1.0
-	} else {
-		shouldPause = (path.sizeHeapIndex - 1) < stopMaxIndex
+	if pausePathRatio == 0 {
+		return false
 	}
-	return shouldPause
+	return rand.Float64() < pausePathRatio
 }
 
 // A memControl is used to control the memory usage of the dynamic stream.

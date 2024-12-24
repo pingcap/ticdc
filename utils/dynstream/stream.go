@@ -55,10 +55,6 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Fields used by the memory control.
 	areaMemStat *areaMemStat[A, P, T, D, H]
 
-	// Those values below are used to compare in the heap.
-	frontTimestamp Timestamp // The timestamp of the front event.
-	frontQueueTime time.Time // The queue time of the front event.
-
 	pendingSize          int  // The total size(bytes) of pending events in the pendingQueue of the path.
 	paused               bool // The path is paused to send events.
 	lastSwitchPausedTime time.Time
@@ -81,13 +77,16 @@ func (pi *pathInfo[A, P, T, D, H]) setStream(stream *stream[A, P, T, D, H]) {
 
 // appendEvent appends an event to the pending queue.
 // It returns true if the event is appended successfully.
-func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) bool {
+func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], handler H) bool {
+	if pi.areaMemStat != nil {
+		return pi.areaMemStat.appendEvent(pi, event, handler)
+	}
+
 	if event.eventType.Property != PeriodicSignal {
 		pi.pendingQueue.PushBack(event)
 		pi.pendingSize += event.eventSize
 		return true
 	}
-
 	back, ok := pi.pendingQueue.BackRef()
 	if ok && back.eventType.Property == PeriodicSignal {
 		// If the last event is a periodic signal, we only need to keep the latest one.

@@ -58,7 +58,7 @@ func (q *eventQueue[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) 
 		q.totalPendingLength.Add(1)
 	}
 
-	if path.appendEvent(event) {
+	if path.appendEvent(event, q.handler) {
 		addSignal()
 	}
 }

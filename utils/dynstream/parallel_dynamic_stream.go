@@ -3,6 +3,7 @@ package dynstream
 import (
 	"reflect"
 	"sync"
+	"time"
 	"unsafe"
 
 	. "github.com/pingcap/ticdc/pkg/apperror"
@@ -89,6 +90,8 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 		paused:    s.handler.IsPaused(e),
 		eventType: s.handler.GetType(e),
 		eventSize: s.eventExtraSize + s.handler.GetSize(e),
+		timestamp: s.handler.GetTimestamp(e),
+		queueTime: time.Now(),
 	}
 	pi.stream.in() <- ew
 }
