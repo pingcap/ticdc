@@ -95,7 +95,7 @@ jobs:
 
   failover_e2e_test:
     runs-on: ubuntu-latest 
-    name: E2E Test
+    name: Failover E2E Test
     steps:
       - name: Check out code
         uses: actions/checkout@v2
