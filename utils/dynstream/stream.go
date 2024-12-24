@@ -79,6 +79,27 @@ func (pi *pathInfo[A, P, T, D, H]) setStream(stream *stream[A, P, T, D, H]) {
 	pi.stream = stream
 }
 
+// appendEvent appends an event to the pending queue.
+// It returns true if the event is appended successfully.
+func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) bool {
+	if event.eventType.Property != PeriodicSignal {
+		pi.pendingQueue.PushBack(event)
+		pi.pendingSize += event.eventSize
+		return true
+	}
+
+	back, ok := pi.pendingQueue.BackRef()
+	if ok && back.eventType.Property == PeriodicSignal {
+		// If the last event is a periodic signal, we only need to keep the latest one.
+		// And we don't need to add a new signal.
+		*back = event
+		return false
+	} else {
+		pi.pendingQueue.PushBack(event)
+		return true
+	}
+}
+
 // eventWrap contains the event and the path info.
 // It can be a event or a wake signal.
 type eventWrap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
@@ -125,7 +146,6 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	isClosed atomic.Bool
 
 	handleWg sync.WaitGroup
-	reportWg sync.WaitGroup
 
 	startTime time.Time
 }
@@ -172,7 +192,7 @@ func (s *stream[A, P, T, D, H]) in() chan eventWrap[A, P, T, D, H] {
 }
 
 // Start the stream.
-func (s *stream[A, P, T, D, H]) start(acceptedPaths []*pathInfo[A, P, T, D, H], formerStreams ...*stream[A, P, T, D, H]) {
+func (s *stream[A, P, T, D, H]) start() {
 	if s.isClosed.Load() {
 		panic("The stream has been closed.")
 	}
@@ -181,7 +201,7 @@ func (s *stream[A, P, T, D, H]) start(acceptedPaths []*pathInfo[A, P, T, D, H], 
 	}
 
 	s.handleWg.Add(1)
-	go s.handleLoop(acceptedPaths, formerStreams)
+	go s.handleLoop()
 }
 
 // Close the stream and wait for all goroutines to exit.
@@ -242,11 +262,8 @@ func (s *stream[A, P, T, D, H]) reciever() {
 
 // handleLoop is the main loop of the stream.
 // It handles the events.
-func (s *stream[A, P, T, D, H]) handleLoop(
-	acceptedPaths []*pathInfo[A, P, T, D, H],
-	formerStreams []*stream[A, P, T, D, H],
-) {
-	pushToPendingQueue := func(e eventWrap[A, P, T, D, H]) {
+func (s *stream[A, P, T, D, H]) handleLoop() {
+	handleEvent := func(e eventWrap[A, P, T, D, H]) {
 		switch {
 		case e.wake:
 			s.eventQueue.wakePath(e.pathInfo)
@@ -268,25 +285,11 @@ func (s *stream[A, P, T, D, H]) handleLoop(
 
 		// Move remaining events in the eventChan to pendingQueue.
 		for e := range s.eventChan {
-			pushToPendingQueue(e)
+			handleEvent(e)
 		}
 
-		s.reportWg.Wait()
 		s.handleWg.Done()
 	}()
-
-	// Close and wait for the former streams.
-	for _, stream := range formerStreams {
-		stream.close()
-		// We don't need to explicitly remove the paths from the pendingQueue.
-		// Because the stream is closed already, and the data structure is not used anymore.
-	}
-
-	// We initialize the pathMap here to avoid blocking the main goroutine.
-	// As there could be many paths, and the initialization could be time-consuming.
-	for _, p := range acceptedPaths {
-		s.eventQueue.initPath(p)
-	}
 
 	// Variables below will be used in the Loop below.
 	// Declared here to avoid repeated allocation.
@@ -318,7 +321,7 @@ Loop:
 				// The stream is closed.
 				return
 			}
-			pushToPendingQueue(e)
+			handleEvent(e)
 			eventQueueEmpty = false
 		} else {
 			select {
@@ -326,7 +329,7 @@ Loop:
 				if !ok {
 					return
 				}
-				pushToPendingQueue(e)
+				handleEvent(e)
 				eventQueueEmpty = false
 			default:
 				eventBuf, path = s.eventQueue.popEvents(eventBuf)

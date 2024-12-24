@@ -3,6 +3,7 @@ package dynstream
 import (
 	"sync/atomic"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/utils/deque"
 )
 
@@ -18,6 +19,7 @@ type eventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Used to reduce the block allocation in the paths' pending queue.
 	eventBlockAlloc *deque.BlockAllocator[eventWrap[A, P, T, D, H]]
 
+	// Signal queue is used to decide which path's events should be popped.
 	signalQueue        *deque.Deque[eventSignal[A, P, T, D, H]]
 	totalPendingLength atomic.Int64 // The total signal count in the queue.
 }
@@ -56,21 +58,7 @@ func (q *eventQueue[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) 
 		q.totalPendingLength.Add(1)
 	}
 
-	if event.eventType.Property == PeriodicSignal {
-		back, ok := path.pendingQueue.BackRef()
-		if !ok || back.eventType.Property != PeriodicSignal {
-			path.pendingQueue.PushBack(event)
-			addSignal()
-		} else {
-			// If the last event is a periodic signal, we only need to keep the latest one.
-			// And we don't need to add a new signal.
-			*back = event
-		}
-		// Don't count the size of periodic signals
-	} else {
-		path.pendingQueue.PushBack(event)
-		path.pendingSize += event.eventSize
-
+	if path.appendEvent(event) {
 		addSignal()
 	}
 }
@@ -108,10 +96,11 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 		pendingQueue := path.pendingQueue
 
 		if signal.eventCount == 0 {
-			panic("signal event count is zero")
+			log.Panic("signal event count is zero")
 		}
 		if path.blocking || path.removed {
 			// The path is blocking or removed, we should ignore the signal completely.
+			// Since when it is waked, a signal event will be added to the queue.
 			q.signalQueue.PopFront()
 			q.totalPendingLength.Add(-int64(signal.eventCount))
 			continue

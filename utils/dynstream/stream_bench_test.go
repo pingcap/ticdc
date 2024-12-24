@@ -41,7 +41,7 @@ func runStream(eventCount int, times int) {
 
 	pi := newPathInfo[int, string, *inc, D, *incHandler](0, "p1", D{})
 	stream := newStream[int, string, *inc, D](1 /*id*/, handler, NewOption())
-	stream.start([]*pathInfo[int, string, *inc, D, *incHandler]{pi})
+	stream.start()
 
 	total := &atomic.Int64{}
 	done := &sync.WaitGroup{}

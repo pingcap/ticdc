@@ -56,7 +56,7 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 
 func (s *parallelDynamicStream[A, P, T, D, H]) Start() {
 	for _, ds := range s.streams {
-		ds.start(nil)
+		ds.start()
 	}
 }
 
