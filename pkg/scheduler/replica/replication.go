@@ -14,6 +14,7 @@
 package replica
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -63,12 +64,19 @@ type ScheduleGroup[T ReplicationID, R Replication[T]] interface {
 	GetTaskSizePerNode() map[node.ID]int
 	GetImbalanceGroupNodeTask(nodes map[node.ID]*node.Info) (groups map[GroupID]map[node.ID]R, valid bool)
 	GetTaskSizePerNodeByGroup(groupID GroupID) map[node.ID]int
+
+	GetGroupChecker(groupID GroupID) GroupChecker[T, R]
+	GetCheckerStat() string
 }
 
+// ReplicationDB is responsible for managing the scheduling state of replication tasks.
+//  1. It provides the interface for the scheduler to query the scheduling information.
+//  2. It provides the interface for `Add/Remove“ replication tasks and update the scheduling state.
+//  3. It maintains the scheduling group information internally.
 type ReplicationDB[T ReplicationID, R Replication[T]] interface {
 	ScheduleGroup[T, R]
 
-	// The flowing methods are not thread-safe
+	// The flowing methods are NOT thread-safe
 	GetReplicatingWithoutLock() []R
 	GetSchedulingWithoutLock() []R
 	AddAbsentWithoutLock(task R)
@@ -83,20 +91,22 @@ type ReplicationDB[T ReplicationID, R Replication[T]] interface {
 }
 
 func NewReplicationDB[T ReplicationID, R Replication[T]](
-	id string, withRLock func(action func()),
+	id string, withRLock func(action func()), newChecker func(GroupID) GroupChecker[T, R],
 ) ReplicationDB[T, R] {
 	r := &replicationDB[T, R]{
 		id:         id,
 		taskGroups: make(map[GroupID]*replicationGroup[T, R]),
 		withRLock:  withRLock,
+		newChecker: newChecker,
 	}
-	r.taskGroups[DefaultGroupID] = newReplicationGroup[T, R](id, DefaultGroupID)
+	r.taskGroups[DefaultGroupID] = newReplicationGroup(id, DefaultGroupID, r.newChecker(DefaultGroupID))
 	return r
 }
 
 type replicationDB[T ReplicationID, R Replication[T]] struct {
 	id         string
 	withRLock  func(action func())
+	newChecker func(GroupID) GroupChecker[T, R]
 	taskGroups map[GroupID]*replicationGroup[T, R]
 }
 
@@ -108,6 +118,13 @@ func (db *replicationDB[T, R]) GetGroups() []GroupID {
 		}
 	})
 	return groups
+}
+
+func (db *replicationDB[T, R]) GetGroupChecker(groupID GroupID) (ret GroupChecker[T, R]) {
+	db.withRLock(func() {
+		ret = db.mustGetGroup(groupID).checker
+	})
+	return
 }
 
 func (db *replicationDB[T, R]) GetAbsent() []R {
@@ -248,8 +265,8 @@ func (db *replicationDB[T, R]) GetImbalanceGroupNodeTask(nodes map[node.ID]*node
 				case upperLimitPerNode - 1:
 					groupMap[nodeID] = zeroR
 				default:
-					// len(tasks) > upperLimitPerNode || len(tasks) < upperLimitPerNode-1
-					log.Error("scheduler: invalid group state",
+					// invalid state: len(tasks) > upperLimitPerNode || len(tasks) < upperLimitPerNode-1
+					log.Panic("scheduler: invalid group state",
 						zap.String("schedulerID", db.id),
 						zap.String("group", GetGroupName(gid)), zap.Int("totalSpan", totalSpan),
 						zap.Int("nodesNum", nodesNum), zap.Int("upperLimitPerNode", upperLimitPerNode),
@@ -334,17 +351,38 @@ func (db *replicationDB[T, R]) GetGroupStat() string {
 				distribute.WriteString(strconv.Itoa(size))
 				distribute.WriteString("; ")
 			}
-			distribute.WriteString("] ")
+			distribute.WriteString("]")
+			total++
 		}
 	})
 	return distribute.String()
+}
+
+func (db *replicationDB[T, R]) GetCheckerStat() string {
+	stat := strings.Builder{}
+	db.withRLock(func() {
+		total := 0
+		for groupID, group := range db.taskGroups {
+			if total > 0 {
+				stat.WriteString(" ")
+			}
+			stat.WriteString(GetGroupName(groupID))
+			stat.WriteString(fmt.Sprintf("(%s)", group.checker.Name()))
+			stat.WriteString(": [")
+			stat.WriteString(group.checker.Stat())
+			stat.WriteString("] ")
+			total++
+		}
+	})
+	return stat.String()
 }
 
 func (db *replicationDB[T, R]) getOrCreateGroup(task R) *replicationGroup[T, R] {
 	groupID := task.GetGroupID()
 	g, ok := db.taskGroups[groupID]
 	if !ok {
-		g = newReplicationGroup[T, R](db.id, groupID)
+		checker := db.newChecker(groupID)
+		g = newReplicationGroup(db.id, groupID, checker)
 		db.taskGroups[groupID] = g
 		log.Info("scheduler: add new task group", zap.String("schedulerID", db.id),
 			zap.String("group", GetGroupName(groupID)),

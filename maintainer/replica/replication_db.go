@@ -41,14 +41,19 @@ type ReplicationDB struct {
 
 	ddlSpan *SpanReplication
 	// LOCK protects the above maps
-	lock sync.RWMutex
-
-	hotSpans *hotSpans
+	lock            sync.RWMutex
+	newGroupChecker func(groupID replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication]
 }
 
 // NewReplicaSetDB creates a new ReplicationDB and initializes the maps
-func NewReplicaSetDB(changefeedID common.ChangeFeedID, ddlSpan *SpanReplication) *ReplicationDB {
-	db := &ReplicationDB{changefeedID: changefeedID, ddlSpan: ddlSpan}
+func NewReplicaSetDB(
+	changefeedID common.ChangeFeedID, ddlSpan *SpanReplication, enableTableAcrossNodes bool,
+) *ReplicationDB {
+	db := &ReplicationDB{
+		changefeedID:    changefeedID,
+		ddlSpan:         ddlSpan,
+		newGroupChecker: getNewGroupChecker(changefeedID, enableTableAcrossNodes),
+	}
 	db.reset()
 	db.putDDLDispatcher(db.ddlSpan)
 	return db
@@ -184,19 +189,26 @@ func (db *ReplicationDB) GetTasksBySchemaID(schemaID int64) []*SpanReplication {
 }
 
 // ReplaceReplicaSet replaces the old replica set with the new spans
-func (db *ReplicationDB) ReplaceReplicaSet(old *SpanReplication, newSpans []*heartbeatpb.TableSpan, checkpointTs uint64) bool {
+func (db *ReplicationDB) ReplaceReplicaSet(oldReplications []*SpanReplication, newSpans []*heartbeatpb.TableSpan, checkpointTs uint64) {
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
 	// first check  the old replica set exists, if not, return false
-	if _, ok := db.allTasks[old.ID]; !ok {
-		log.Warn("old replica set not found, skip",
-			zap.String("changefeed", db.changefeedID.Name()),
-			zap.String("span", old.ID.String()))
-		return false
+	for _, old := range oldReplications {
+		if _, ok := db.allTasks[old.ID]; !ok {
+			log.Panic("old replica set not found",
+				zap.String("changefeed", db.changefeedID.Name()),
+				zap.String("span", old.ID.String()))
+		}
+		oldCheckpointTs := old.GetStatus().GetCheckpointTs()
+		if checkpointTs > oldCheckpointTs {
+			checkpointTs = oldCheckpointTs
+		}
+		db.removeSpanUnLock(old)
 	}
 
 	var news []*SpanReplication
+	old := oldReplications[0]
 	for _, span := range newSpans {
 		new := NewReplicaSet(
 			old.ChangefeedID,
@@ -206,11 +218,8 @@ func (db *ReplicationDB) ReplaceReplicaSet(old *SpanReplication, newSpans []*hea
 			span, checkpointTs)
 		news = append(news, new)
 	}
-
-	// remove and insert the new replica set
-	db.removeSpanUnLock(old)
+	// insert the new replica set
 	db.addAbsentReplicaSetUnLock(news...)
-	return true
 }
 
 // AddReplicatingSpan adds a replicating the replicating map, that means the task is already scheduled to a dispatcher
@@ -298,6 +307,15 @@ func (db *ReplicationDB) UpdateSchemaID(tableID, newSchemaID int64) {
 	}
 }
 
+func (db *ReplicationDB) UpdateStatus(task *SpanReplication, status *heartbeatpb.TableSpanStatus) {
+	task.UpdateStatus(status)
+	checker := db.GetGroupChecker(task.GetGroupID()) // Note: need RLock here
+
+	db.lock.Lock()
+	defer db.lock.Unlock()
+	checker.UpdateStatus(task)
+}
+
 // BindSpanToNode binds the span to the node, it will remove the task from the old node and add it to the new node
 // ,and it also marks the task as scheduling
 func (db *ReplicationDB) BindSpanToNode(old, new node.ID, task *SpanReplication) {
@@ -361,6 +379,15 @@ func (db *ReplicationDB) GetAbsentForTest(_ []*SpanReplication, maxSize int) []*
 	return ret[:maxSize]
 }
 
+// Optimize the lock usage, maybe control the lock within checker
+func (db *ReplicationDB) CheckByGroup(groupID replica.GroupID, batch int) replica.GroupCheckResult {
+	checker := db.GetGroupChecker(groupID)
+
+	db.lock.RLock()
+	defer db.lock.RUnlock()
+	return checker.Check(batch)
+}
+
 func (db *ReplicationDB) withRLock(action func()) {
 	db.lock.RLock()
 	defer db.lock.RUnlock()
@@ -372,8 +399,8 @@ func (db *ReplicationDB) reset() {
 	db.schemaTasks = make(map[int64]map[common.DispatcherID]*SpanReplication)
 	db.tableTasks = make(map[int64]map[common.DispatcherID]*SpanReplication)
 	db.allTasks = make(map[common.DispatcherID]*SpanReplication)
-	db.ReplicationDB = replica.NewReplicationDB[common.DispatcherID, *SpanReplication](db.changefeedID.String(), db.withRLock)
-	db.hotSpans = NewHotSpans()
+	db.ReplicationDB = replica.NewReplicationDB[common.DispatcherID, *SpanReplication](db.changefeedID.String(),
+		db.withRLock, db.newGroupChecker)
 }
 
 func (db *ReplicationDB) putDDLDispatcher(ddlSpan *SpanReplication) {

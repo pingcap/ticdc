@@ -26,6 +26,8 @@ import (
 )
 
 func TestUpdateStatus(t *testing.T) {
+	t.Parallel()
+
 	replicaSet := NewReplicaSet(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), nil, 1, getTableSpanByID(4), 10)
 	replicaSet.UpdateStatus(&heartbeatpb.TableSpanStatus{CheckpointTs: 9})
 	require.Equal(t, uint64(10), replicaSet.status.Load().CheckpointTs)
@@ -34,6 +36,8 @@ func TestUpdateStatus(t *testing.T) {
 }
 
 func TestNewRemoveDispatcherMessage(t *testing.T) {
+	t.Parallel()
+
 	replicaSet := NewReplicaSet(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), nil, 1, getTableSpanByID(4), 10)
 	msg := replicaSet.NewRemoveDispatcherMessage("node1")
 	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
@@ -43,6 +47,8 @@ func TestNewRemoveDispatcherMessage(t *testing.T) {
 }
 
 func TestSpanReplication_NewAddDispatcherMessage(t *testing.T) {
+	t.Parallel()
+
 	ctrl := gomock.NewController(t)
 	tsoClient := replica_mock.NewMockTSOClient(ctrl)
 	replicaSet := NewReplicaSet(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), tsoClient, 1, getTableSpanByID(4), 10)

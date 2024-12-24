@@ -13,24 +13,93 @@
 
 package replica
 
-// type OpType int
+import "fmt"
 
-// const (
-// 	OpSplit         OpType = iota // Split one span to multiple subspans
-// 	OpMerge                       // merge multiple spans to one span
-// 	OpMergeAndSplit               // remove old spans and split to multiple subspans
-// )
+type (
+	GroupID           = int64
+	GroupTpye         int8
+	GroupCheckResult  any
+	ReplicationStatus any
+)
 
-// type CheckResult[R Replication] struct {
-// 	OpType       OpType
-// 	Replications []R
-// }
+const DefaultGroupID GroupID = 0
 
-// type Checker[R Replication, S any] interface {
-// 	UpdateStatus(replication R, status S)
-// 	Check() []CheckResult[R]
-// }
+const (
+	GroupDefault GroupTpye = iota
+	GroupTable
+	// add more group strategy later
+	// groupHotLevel1
+)
 
-// define the check strategy
-// soft/hard threadhold
-// split/merge/mergeAndSplit result
+// Notice: all methods are NOT thread-safe.
+type GroupChecker[T ReplicationID, R Replication[T]] interface {
+	AddReplica(replication R)
+	RemoveReplica(replication R)
+	UpdateStatus(replication R)
+
+	Check(batch int) GroupCheckResult
+	Name() string
+	Stat() string
+}
+
+func NewEmptyChecker[T ReplicationID, R Replication[T]](GroupID) GroupChecker[T, R] {
+	return &EmptyStatusChecker[T, R]{}
+}
+
+// implement a empty status checker
+type EmptyStatusChecker[T ReplicationID, R Replication[T]] struct{}
+
+func (c *EmptyStatusChecker[T, R]) AddReplica(_ R) {}
+
+func (c *EmptyStatusChecker[T, R]) RemoveReplica(_ R) {}
+
+func (c *EmptyStatusChecker[T, R]) UpdateStatus(_ R) {}
+
+func (c *EmptyStatusChecker[T, R]) Check(_ int) GroupCheckResult {
+	return nil
+}
+
+func (c *EmptyStatusChecker[T, R]) Name() string {
+	return "empty checker"
+}
+
+func (c *EmptyStatusChecker[T, R]) Stat() string {
+	return ""
+}
+
+func GetGroupName(id GroupID) string {
+	gt := GroupTpye(id >> 56)
+	if gt == GroupTable {
+		return fmt.Sprintf("%s-%d", gt.String(), id&0x00FFFFFFFFFFFFFF)
+	}
+	return gt.String()
+}
+
+func (gt GroupTpye) Less(other GroupTpye) bool {
+	return gt < other
+}
+
+func (gt GroupTpye) String() string {
+	switch gt {
+	case GroupDefault:
+		return "default"
+	case GroupTable:
+		return "table"
+	default:
+		// return "HotLevel" + strconv.Itoa(int(gt-groupHotLevel1))
+		panic("unreachable")
+	}
+}
+
+func GenGroupID(gt GroupTpye, tableID int64) GroupID {
+	// use high 8 bits to store the group type
+	id := int64(gt) << 56
+	if gt == GroupTable {
+		return id | tableID
+	}
+	return id
+}
+
+func GetGroupType(id GroupID) GroupTpye {
+	return GroupTpye(id >> 56)
+}

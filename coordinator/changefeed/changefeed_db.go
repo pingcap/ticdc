@@ -41,12 +41,16 @@ type ChangefeedDB struct {
 
 func NewChangefeedDB(version int64) *ChangefeedDB {
 	db := &ChangefeedDB{
+		// id is the unique id of the changefeed db. The prefix `coordinator` distinguishes
+		// it from other ReplicationDB. The suffix is the version of the coordinator, which
+		// is useful to track the scheduling history.
 		id:                     fmt.Sprintf("coordinator-%d", version),
 		changefeeds:            make(map[common.ChangeFeedID]*Changefeed),
 		changefeedDisplayNames: make(map[common.ChangeFeedDisplayName]common.ChangeFeedID),
 		stopped:                make(map[common.ChangeFeedID]*Changefeed),
 	}
-	db.ReplicationDB = replica.NewReplicationDB[common.ChangeFeedID, *Changefeed](db.id, db.withRLock)
+	db.ReplicationDB = replica.NewReplicationDB[common.ChangeFeedID, *Changefeed](db.id,
+		db.withRLock, replica.NewEmptyChecker)
 	return db
 }
 
