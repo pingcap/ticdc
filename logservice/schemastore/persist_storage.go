@@ -682,6 +682,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		&ddlEvent,
 		p.databaseMap,
 		p.tableMap,
+		p.partitionMap,
 		p.tablesDDLHistory,
 		p.tableTriggerDDLHistory); err != nil {
 		p.mu.Unlock()
@@ -975,6 +976,7 @@ func updateDDLHistory(
 	ddlEvent *PersistedDDLEvent,
 	databaseMap map[int64]*BasicDatabaseInfo,
 	tableMap map[int64]*BasicTableInfo,
+	partitionMap map[int64]BasicPartitionInfo,
 	tablesDDLHistory map[int64][]uint64,
 	tableTriggerDDLHistory []uint64,
 ) ([]uint64, error) {
@@ -993,7 +995,13 @@ func updateDDLHistory(
 	case model.ActionDropSchema:
 		tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
 		for tableID := range databaseMap[ddlEvent.CurrentSchemaID].Tables {
-			appendTableHistory(tableID)
+			if partitionInfo, ok := partitionMap[tableID]; ok {
+				for id := range partitionInfo {
+					appendTableHistory(id)
+				}
+			} else {
+				appendTableHistory(tableID)
+			}
 		}
 	case model.ActionCreateTable,
 		model.ActionDropTable:

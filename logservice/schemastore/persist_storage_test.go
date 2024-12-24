@@ -123,22 +123,28 @@ func TestApplyDDLJobs(t *testing.T) {
 		tablesDDLHistory       map[int64][]uint64
 		tableTriggerDDLHistory []uint64
 	}{
+		// test drop schema can clear table info and partition info
 		{
 			func() []*model.Job {
 				return []*model.Job{
-					buildCreateSchemaJob(100, "test", 1000),   // create schema 100
-					buildCreateTableJob(100, 200, "t1", 1010), // create table 200
-					buildDropSchemaJob(100, 1020),             // drop schema 100
+					buildCreateSchemaJob(100, "test", 1000),                                    // create schema 100
+					buildCreateTableJob(100, 200, "t1", 1010),                                  // create table 200
+					buildCreatePartitionTableJob(100, 300, "t1", []int64{301, 302, 303}, 1020), // create partition table 300
+					buildDropSchemaJob(100, 1030),                                              // drop schema 100
 				}
 			}(),
 			nil,
 			nil,
 			nil,
 			map[int64][]uint64{
-				200: {1010, 1020},
+				200: {1010, 1030},
+				301: {1020, 1030},
+				302: {1020, 1030},
+				303: {1020, 1030},
 			},
-			[]uint64{1000, 1010, 1020},
+			[]uint64{1000, 1010, 1020, 1030},
 		},
+		// test create table/drop table/truncate table
 		{
 			func() []*model.Job {
 				return []*model.Job{
@@ -171,6 +177,51 @@ func TestApplyDDLJobs(t *testing.T) {
 			},
 			[]uint64{1000, 1010, 1020, 1030, 1040},
 		},
+		// test partition table related ddl
+		{
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateSchemaJob(100, "test", 1000),                                           // create schema 100
+					buildCreatePartitionTableJob(100, 200, "t1", []int64{201, 202, 203}, 1010),        // create partition table 200
+					buildTruncatePartitionTableJob(100, 200, 300, "t1", []int64{204, 205, 206}, 1020), // truncate partition table 200 to 300
+					buildAddPartitionJob(100, 300, "t1", []int64{204, 205, 206, 207}, 1030),           // add partition 207
+					buildDropPartitionJob(100, 300, "t1", []int64{205, 206, 207}, 1040),               // drop partition 204
+					buildTruncatePartitionJob(100, 300, "t1", []int64{206, 207, 208}, 1050),           // truncate partition 205 to 208
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				300: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+			},
+			map[int64]BasicPartitionInfo{
+				300: {
+					206: nil,
+					207: nil,
+					208: nil,
+				},
+			},
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						300: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				201: {1010, 1020},
+				202: {1010, 1020},
+				203: {1010, 1020},
+				204: {1020, 1030, 1040},
+				205: {1020, 1030, 1040, 1050},
+				206: {1020, 1030, 1040, 1050},
+				207: {1030, 1040, 1050},
+				208: {1050},
+			},
+			[]uint64{1000, 1010, 1020, 1030, 1040, 1050},
+		},
 	}
 
 	for _, tt := range testCases {
@@ -183,27 +234,28 @@ func TestApplyDDLJobs(t *testing.T) {
 		}
 		if (tt.tableMap != nil && !reflect.DeepEqual(tt.tableMap, pStorage.tableMap)) ||
 			(tt.tableMap == nil && len(pStorage.tableMap) != 0) {
-			log.Warn("tableMap not equal", zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap))
+			log.Warn("tableMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap))
 			t.Errorf("tableMap not equal")
 		}
 		if (tt.partitionMap != nil && !reflect.DeepEqual(tt.partitionMap, pStorage.partitionMap)) ||
 			(tt.partitionMap == nil && len(pStorage.partitionMap) != 0) {
-			log.Warn("partitionMap not equal", zap.Any("expected", tt.partitionMap), zap.Any("actual", pStorage.partitionMap))
+			log.Warn("partitionMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.partitionMap), zap.Any("actual", pStorage.partitionMap))
 			t.Errorf("partitionMap not equal")
 		}
 		if (tt.databaseMap != nil && !reflect.DeepEqual(tt.databaseMap, pStorage.databaseMap)) ||
 			(tt.databaseMap == nil && len(pStorage.databaseMap) != 0) {
-			log.Warn("databaseMap not equal", zap.Any("expected", tt.databaseMap), zap.Any("actual", pStorage.databaseMap))
+			log.Warn("databaseMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.databaseMap), zap.Any("actual", pStorage.databaseMap))
 			t.Errorf("databaseMap not equal")
 		}
 		if (tt.tablesDDLHistory != nil && !reflect.DeepEqual(tt.tablesDDLHistory, pStorage.tablesDDLHistory)) ||
 			(tt.tablesDDLHistory == nil && len(pStorage.tablesDDLHistory) != 0) {
-			log.Warn("tablesDDLHistory not equal", zap.Any("expected", tt.tablesDDLHistory), zap.Any("actual", pStorage.tableMap))
+			log.Warn("tablesDDLHistory not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tablesDDLHistory), zap.Any("actual", pStorage.tablesDDLHistory))
 			t.Errorf("tablesDDLHistory not equal")
 		}
 		if (tt.tableTriggerDDLHistory != nil && !reflect.DeepEqual(tt.tableTriggerDDLHistory, pStorage.tableTriggerDDLHistory)) ||
 			(tt.tableTriggerDDLHistory == nil && len(pStorage.tableTriggerDDLHistory) != 0) {
-			t.Errorf("tableTriggerDDLHistory not equal, expected: %v, actual: %v", tt.tableTriggerDDLHistory, pStorage.tableTriggerDDLHistory)
+			log.Warn("tableTriggerDDLHistory not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tableTriggerDDLHistory), zap.Any("actual", pStorage.tableTriggerDDLHistory))
+			t.Errorf("tableTriggerDDLHistory not equal")
 		}
 		pStorage.close()
 	}
