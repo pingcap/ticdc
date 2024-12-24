@@ -14,25 +14,9 @@
 package replica
 
 import (
-	"fmt"
-
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
-)
-
-type (
-	GroupID   = int64
-	GroupTpye int8
-)
-
-const DefaultGroupID GroupID = 0
-
-const (
-	GroupDefault GroupTpye = iota
-	GroupTable
-	// add more group strategy later
-	// groupHotLevel1
 )
 
 // replicationGroup maintains a group of replication tasks.
@@ -254,41 +238,4 @@ func (g *replicationGroup[T, R]) GetTaskSizePerNode() map[node.ID]int {
 		res[nodeID] = len(tasks)
 	}
 	return res
-}
-
-func GetGroupName(id GroupID) string {
-	gt := GroupTpye(id >> 56)
-	if gt == GroupTable {
-		return fmt.Sprintf("%s-%d", gt.String(), id&0x00FFFFFFFFFFFFFF)
-	}
-	return gt.String()
-}
-
-func (gt GroupTpye) Less(other GroupTpye) bool {
-	return gt < other
-}
-
-func (gt GroupTpye) String() string {
-	switch gt {
-	case GroupDefault:
-		return "default"
-	case GroupTable:
-		return "table"
-	default:
-		// return "HotLevel" + strconv.Itoa(int(gt-groupHotLevel1))
-		panic("unreachable")
-	}
-}
-
-func GenGroupID(gt GroupTpye, tableID int64) GroupID {
-	// use high 8 bits to store the group type
-	id := int64(gt) << 56
-	if gt == GroupTable {
-		return id | tableID
-	}
-	return id
-}
-
-func GetGroupType(id GroupID) GroupTpye {
-	return GroupTpye(id >> 56)
 }

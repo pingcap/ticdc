@@ -31,13 +31,14 @@ import (
 const (
 	// spanRegionLimit is the maximum number of regions a span can cover.
 	spanRegionLimit = 50000
-	// baseSpanNumberCoefficient is the base coefficient that use to
-	// multiply the number of captures to get the number of spans.
-	baseSpanNumberCoefficient = 3
 	// defaultMaxSpanNumber is the maximum number of spans that can be split
 	// in single batch.
 	defaultMaxSpanNumber = 100
 )
+
+// baseSpanNumberCoefficient is the base coefficient that use to
+// multiply the number of captures to get the number of spans.
+var baseSpanNumberCoefficient = replica.MinSpanNumberCoefficient + 1
 
 // RegionCache is a simplified interface of tikv.RegionCache.
 // It is useful to restrict RegionCache usage and mocking in tests.

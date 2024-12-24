@@ -13,26 +13,23 @@
 
 package replica
 
-type OpType int
+import "fmt"
 
-const (
-	OpSplit         OpType = iota // Split one span to multiple subspans
-	OpMerge                       // merge multiple spans to one span
-	OpMergeAndSplit               // remove old spans and split to multiple subspans
+type (
+	GroupID           = int64
+	GroupTpye         int8
+	GroupCheckResult  any
+	ReplicationStatus any
 )
 
-type CheckResult[T ReplicationID, R Replication[T]] struct {
-	OpType       OpType
-	Replications []R
-}
+const DefaultGroupID GroupID = 0
 
-type Checker[T ReplicationID, R Replication[T], S any] interface {
-	UpdateStatus(replication R, status S)
-	Check() []CheckResult[T, R]
-}
-
-type GroupCheckResult any
-type ReplicationStatus any
+const (
+	GroupDefault GroupTpye = iota
+	GroupTable
+	// add more group strategy later
+	// groupHotLevel1
+)
 
 // Notice: all methods are NOT thread-safe.
 type GroupChecker[T ReplicationID, R Replication[T]] interface {
@@ -68,4 +65,41 @@ func (c *EmptyStatusChecker[T, R]) Name() string {
 
 func (c *EmptyStatusChecker[T, R]) Stat() string {
 	return ""
+}
+
+func GetGroupName(id GroupID) string {
+	gt := GroupTpye(id >> 56)
+	if gt == GroupTable {
+		return fmt.Sprintf("%s-%d", gt.String(), id&0x00FFFFFFFFFFFFFF)
+	}
+	return gt.String()
+}
+
+func (gt GroupTpye) Less(other GroupTpye) bool {
+	return gt < other
+}
+
+func (gt GroupTpye) String() string {
+	switch gt {
+	case GroupDefault:
+		return "default"
+	case GroupTable:
+		return "table"
+	default:
+		// return "HotLevel" + strconv.Itoa(int(gt-groupHotLevel1))
+		panic("unreachable")
+	}
+}
+
+func GenGroupID(gt GroupTpye, tableID int64) GroupID {
+	// use high 8 bits to store the group type
+	id := int64(gt) << 56
+	if gt == GroupTable {
+		return id | tableID
+	}
+	return id
+}
+
+func GetGroupType(id GroupID) GroupTpye {
+	return GroupTpye(id >> 56)
 }

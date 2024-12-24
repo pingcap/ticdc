@@ -87,6 +87,11 @@ func TestHotSpanChecker(t *testing.T) {
 
 // Not parallel because it will change the global node manager
 func TestRebalanceChecker(t *testing.T) {
+	oldMinSpanNumberCoefficient := MinSpanNumberCoefficient
+	MinSpanNumberCoefficient = 1
+	defer func() {
+		MinSpanNumberCoefficient = oldMinSpanNumberCoefficient
+	}()
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	allNodes := nodeManager.GetAliveNodes()
 	for i := 0; i < 3; i++ {
@@ -177,6 +182,11 @@ func TestRebalanceChecker(t *testing.T) {
 
 // Not parallel because it will change the global node manager
 func TestSoftRebalanceChecker(t *testing.T) {
+	oldMinSpanNumberCoefficient := MinSpanNumberCoefficient
+	MinSpanNumberCoefficient = 1
+	defer func() {
+		MinSpanNumberCoefficient = oldMinSpanNumberCoefficient
+	}()
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	allNodes := nodeManager.GetAliveNodes()
 	totalNodes := 3
@@ -225,7 +235,7 @@ func TestSoftRebalanceChecker(t *testing.T) {
 	db.UpdateStatus(replica, &heartbeatpb.TableSpanStatus{
 		CheckpointTs:       9,
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
-		EventSizePerSecond: checker.softWriteThreshold * float32(checker.hardImbalanceThreshold),
+		EventSizePerSecond: checker.softWriteThreshold * float32(checker.softImbalanceThreshold),
 	})
 	for i := 1; i < checker.softRebalanceScoreThreshold; i++ {
 		checker.softMergeScore = 2

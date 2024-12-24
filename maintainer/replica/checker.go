@@ -42,13 +42,12 @@ const (
 	HotSpanWriteThreshold = 1024 * 1024 // 1MB per second
 	HotSpanScoreThreshold = 3           // TODO: bump to 10 befroe release
 	DefaultScoreThreshold = 3
-	HotSpanMaxLevel       = 1
 
-	EnableDynamicThreshold = false
-	ImbalanceThreshold     = 3 // trigger merge after it is supported
-
-	clearTimeout = 300 // seconds
+	defaultHardImbalanceThreshold = float64(1.2) // used to trigger the rebalance
+	clearTimeout                  = 300          // seconds
 )
+
+var MinSpanNumberCoefficient = 2
 
 type CheckResult struct {
 	OpType       OpType
@@ -214,10 +213,10 @@ type rebalanceChecker struct {
 
 	// fast check, rebalance immediately when both the total load and imbalance ratio is high
 	hardWriteThreshold     float32
-	hardImbalanceThreshold int
+	hardImbalanceThreshold float64
 	// slow check, rebalance only if the imbalance condition has lasted for a period of time
 	softWriteThreshold     float32
-	softImbalanceThreshold int
+	softImbalanceThreshold float64
 
 	// score measures the duration of the condition
 	softRebalanceScore          int // add 1 when the load is not balanced
@@ -232,11 +231,11 @@ func newImbalanceChecker(cfID common.ChangeFeedID) *rebalanceChecker {
 		changefeedID:           cfID,
 		allTasks:               make(map[common.DispatcherID]*hotSpanStatus),
 		nodeManager:            nodeManager,
-		hardWriteThreshold:     10 * ImbalanceThreshold * HotSpanWriteThreshold,
-		hardImbalanceThreshold: ImbalanceThreshold,
+		hardWriteThreshold:     10 * HotSpanWriteThreshold,
+		hardImbalanceThreshold: defaultHardImbalanceThreshold,
 
-		softWriteThreshold:          ImbalanceThreshold * HotSpanWriteThreshold,
-		softImbalanceThreshold:      ImbalanceThreshold,
+		softWriteThreshold:          HotSpanWriteThreshold,
+		softImbalanceThreshold:      2 * defaultHardImbalanceThreshold,
 		softRebalanceScoreThreshold: DefaultScoreThreshold,
 		softMergeScoreThreshold:     DefaultScoreThreshold,
 	}
@@ -299,8 +298,8 @@ func (s *rebalanceChecker) Check(_ int) replica.GroupCheckResult {
 		}
 		return nil
 	}
-
 	s.softMergeScore = 0
+
 	return s.checkRebalance(nodeLoads, replications)
 }
 
@@ -315,7 +314,7 @@ func (s *rebalanceChecker) checkRebalance(
 	}
 	// case 1: too much nodes, need split more spans
 	allNodes := s.nodeManager.GetAliveNodes()
-	if len(s.allTasks) < len(allNodes) {
+	if len(s.allTasks) < len(allNodes)*MinSpanNumberCoefficient {
 		return ret
 	}
 	if len(nodeLoads) != len(allNodes) {
@@ -333,13 +332,13 @@ func (s *rebalanceChecker) checkRebalance(
 	minLoad = math.Max(minLoad, float64(s.softWriteThreshold))
 
 	// case 2: check hard rebalance
-	if maxLoad-minLoad >= float64(s.hardWriteThreshold) && int(maxLoad/minLoad) > s.hardImbalanceThreshold {
+	if maxLoad-minLoad >= float64(s.hardWriteThreshold) && maxLoad/minLoad > s.hardImbalanceThreshold {
 		s.softRebalanceScore = 0
 		return ret
 	}
 
 	// case 3: check soft rebalance
-	if maxLoad/minLoad >= float64(s.softImbalanceThreshold) {
+	if maxLoad/minLoad >= s.softImbalanceThreshold {
 		s.softRebalanceScore++
 	} else {
 		s.softRebalanceScore = max(s.softRebalanceScore-1, 0)
@@ -355,9 +354,9 @@ func (s *rebalanceChecker) checkRebalance(
 
 func (s *rebalanceChecker) Stat() string {
 	res := strings.Builder{}
-	res.WriteString(fmt.Sprintf("total tasks: %d; hard: [writeThreshold: %f, imbalanceThreshold: %d];",
+	res.WriteString(fmt.Sprintf("total tasks: %d; hard: [writeThreshold: %f, imbalanceThreshold: %f];",
 		len(s.allTasks), s.hardWriteThreshold, s.hardImbalanceThreshold))
-	res.WriteString(fmt.Sprintf("soft: [writeThreshold: %f, imbalanceThreshold: %d, rebalanceScoreThreshold: %d, mergeScoreThreshold: %d];",
+	res.WriteString(fmt.Sprintf("soft: [writeThreshold: %f, imbalanceThreshold: %f, rebalanceScoreThreshold: %d, mergeScoreThreshold: %d];",
 		s.softWriteThreshold, s.softImbalanceThreshold, s.softRebalanceScoreThreshold, s.softMergeScoreThreshold))
 	res.WriteString(fmt.Sprintf("softScore: [rebalance: %d, merge: %d]", s.softRebalanceScore, s.softMergeScore))
 	return res.String()
