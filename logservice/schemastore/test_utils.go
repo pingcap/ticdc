@@ -14,11 +14,30 @@
 package schemastore
 
 import (
+	"fmt"
+
+	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"go.uber.org/zap"
 )
 
-func buildCreateSchemaJob(schemaID int64, schemaName string, finishedTs uint64) *model.Job {
+func buildTableFilterByNameForTest(schemaName, tableName string) filter.Filter {
+	filterRule := fmt.Sprintf("%s.%s", schemaName, tableName)
+	log.Info("filterRule", zap.String("filterRule", filterRule))
+	filterConfig := &config.FilterConfig{
+		Rules: []string{filterRule},
+	}
+	tableFilter, err := filter.NewFilter(filterConfig, "", false)
+	if err != nil {
+		log.Panic("build filter failed", zap.Error(err))
+	}
+	return tableFilter
+}
+
+func buildCreateSchemaJobForTest(schemaID int64, schemaName string, finishedTs uint64) *model.Job {
 	return &model.Job{
 		Type:     model.ActionCreateSchema,
 		SchemaID: schemaID,
@@ -32,7 +51,7 @@ func buildCreateSchemaJob(schemaID int64, schemaName string, finishedTs uint64) 
 	}
 }
 
-func buildDropSchemaJob(schemaID int64, finishedTs uint64) *model.Job {
+func buildDropSchemaJobForTest(schemaID int64, finishedTs uint64) *model.Job {
 	return &model.Job{
 		Type:     model.ActionDropSchema,
 		SchemaID: schemaID,
@@ -45,7 +64,7 @@ func buildDropSchemaJob(schemaID int64, finishedTs uint64) *model.Job {
 	}
 }
 
-func buildCreateTableJob(schemaID, tableID int64, tableName string, finishedTs uint64) *model.Job {
+func buildCreateTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64) *model.Job {
 	return &model.Job{
 		Type:     model.ActionCreateTable,
 		SchemaID: schemaID,
@@ -60,7 +79,7 @@ func buildCreateTableJob(schemaID, tableID int64, tableName string, finishedTs u
 	}
 }
 
-func buildCreatePartitionTableJob(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
+func buildCreatePartitionTableJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
 	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
 	for _, partitionID := range partitionIDs {
 		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
@@ -84,7 +103,7 @@ func buildCreatePartitionTableJob(schemaID, tableID int64, tableName string, par
 	}
 }
 
-func buildDropTableJob(schemaID, tableID int64, finishedTs uint64) *model.Job {
+func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
 	return &model.Job{
 		Type:     model.ActionDropTable,
 		SchemaID: schemaID,
@@ -96,7 +115,7 @@ func buildDropTableJob(schemaID, tableID int64, finishedTs uint64) *model.Job {
 }
 
 // Note: `partitionIDs` must include all partition IDs of the original table.
-func buildDropPartitionTableJob(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
+func buildDropPartitionTableJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
 	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
 	for _, partitionID := range partitionIDs {
 		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
@@ -120,7 +139,7 @@ func buildDropPartitionTableJob(schemaID, tableID int64, tableName string, parti
 	}
 }
 
-func buildTruncateTableJob(schemaID, oldTableID, newTableID int64, tableName string, finishedTs uint64) *model.Job {
+func buildTruncateTableJobForTest(schemaID, oldTableID, newTableID int64, tableName string, finishedTs uint64) *model.Job {
 	return &model.Job{
 		Type:     model.ActionTruncateTable,
 		SchemaID: schemaID,
@@ -135,7 +154,7 @@ func buildTruncateTableJob(schemaID, oldTableID, newTableID int64, tableName str
 	}
 }
 
-func buildTruncatePartitionTableJob(schemaID, oldTableID, newTableID int64, tableName string, newPartitionIDs []int64, finishedTs uint64) *model.Job {
+func buildTruncatePartitionTableJobForTest(schemaID, oldTableID, newTableID int64, tableName string, newPartitionIDs []int64, finishedTs uint64) *model.Job {
 	partitionDefinitions := make([]model.PartitionDefinition, 0, len(newPartitionIDs))
 	for _, partitionID := range newPartitionIDs {
 		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
@@ -160,7 +179,7 @@ func buildTruncatePartitionTableJob(schemaID, oldTableID, newTableID int64, tabl
 }
 
 // Note: `partitionIDs` must include all partition IDs of the table after add partition.
-func buildAddPartitionJob(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
+func buildAddPartitionJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
 	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
 	for _, partitionID := range partitionIDs {
 		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
@@ -185,7 +204,7 @@ func buildAddPartitionJob(schemaID, tableID int64, tableName string, partitionID
 }
 
 // Note: `partitionIDs` must include all partition IDs of the table after drop partition.
-func buildDropPartitionJob(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
+func buildDropPartitionJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
 	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
 	for _, partitionID := range partitionIDs {
 		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
@@ -210,7 +229,7 @@ func buildDropPartitionJob(schemaID, tableID int64, tableName string, partitionI
 }
 
 // Note: `partitionIDs` must include all partition IDs of the table after truncate partition.
-func buildTruncatePartitionJob(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
+func buildTruncatePartitionJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
 	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
 	for _, partitionID := range partitionIDs {
 		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{

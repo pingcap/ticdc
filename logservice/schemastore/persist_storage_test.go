@@ -23,6 +23,8 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -125,22 +127,30 @@ func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos map[int64]mockD
 }
 
 func TestApplyDDLJobs(t *testing.T) {
+	type PhysicalTableQueryTestCase struct {
+		snapTs      uint64
+		tableFilter filter.Filter
+		result      []commonEvent.Table
+	}
 	var testCases = []struct {
-		ddlJobs                []*model.Job
-		tableMap               map[int64]*BasicTableInfo
-		partitionMap           map[int64]BasicPartitionInfo
-		databaseMap            map[int64]*BasicDatabaseInfo
-		tablesDDLHistory       map[int64][]uint64
-		tableTriggerDDLHistory []uint64
+		initailDBInfos              map[int64]mockDBInfo
+		ddlJobs                     []*model.Job
+		tableMap                    map[int64]*BasicTableInfo
+		partitionMap                map[int64]BasicPartitionInfo
+		databaseMap                 map[int64]*BasicDatabaseInfo
+		tablesDDLHistory            map[int64][]uint64
+		tableTriggerDDLHistory      []uint64
+		physicalTableQueryTestCases []PhysicalTableQueryTestCase
 	}{
 		// test drop schema can clear table info and partition info
 		{
+			nil,
 			func() []*model.Job {
 				return []*model.Job{
-					buildCreateSchemaJob(100, "test", 1000),                                    // create schema 100
-					buildCreateTableJob(100, 200, "t1", 1010),                                  // create table 200
-					buildCreatePartitionTableJob(100, 300, "t1", []int64{301, 302, 303}, 1020), // create partition table 300
-					buildDropSchemaJob(100, 1030),                                              // drop schema 100
+					buildCreateSchemaJobForTest(100, "test", 1000),                                    // create schema 100
+					buildCreateTableJobForTest(100, 200, "t1", 1010),                                  // create table 200
+					buildCreatePartitionTableJobForTest(100, 300, "t1", []int64{301, 302, 303}, 1020), // create partition table 300
+					buildDropSchemaJobForTest(100, 1030),                                              // drop schema 100
 				}
 			}(),
 			nil,
@@ -153,16 +163,18 @@ func TestApplyDDLJobs(t *testing.T) {
 				303: {1020, 1030},
 			},
 			[]uint64{1000, 1010, 1020, 1030},
+			nil,
 		},
 		// test create table/drop table/truncate table
 		{
+			nil,
 			func() []*model.Job {
 				return []*model.Job{
-					buildCreateSchemaJob(100, "test", 1000),          // create schema 100
-					buildCreateTableJob(100, 200, "t1", 1010),        // create table 200
-					buildCreateTableJob(100, 201, "t2", 1020),        // create table 201
-					buildDropTableJob(100, 201, 1030),                // drop table 201
-					buildTruncateTableJob(100, 200, 202, "t1", 1040), // truncate table 200 to 202
+					buildCreateSchemaJobForTest(100, "test", 1000),          // create schema 100
+					buildCreateTableJobForTest(100, 200, "t1", 1010),        // create table 200
+					buildCreateTableJobForTest(100, 201, "t2", 1020),        // create table 201
+					buildDropTableJobForTest(100, 201, 1030),                // drop table 201
+					buildTruncateTableJobForTest(100, 200, 202, "t1", 1040), // truncate table 200 to 202
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -186,17 +198,73 @@ func TestApplyDDLJobs(t *testing.T) {
 				202: {1040},
 			},
 			[]uint64{1000, 1010, 1020, 1030, 1040},
+			[]PhysicalTableQueryTestCase{
+				{
+					snapTs: 1010,
+					result: []commonEvent.Table{
+						{
+							SchemaID: 100,
+							TableID:  200,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+					},
+				},
+				{
+					snapTs: 1020,
+					result: []commonEvent.Table{
+						{
+							SchemaID: 100,
+							TableID:  200,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+						{
+							SchemaID: 100,
+							TableID:  201,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t2",
+							},
+						},
+					},
+				},
+				{
+					snapTs:      1040,
+					tableFilter: buildTableFilterByNameForTest("test", "t1"),
+					result: []commonEvent.Table{
+						{
+							SchemaID: 100,
+							TableID:  202,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+					},
+				},
+				{
+					snapTs:      1040,
+					tableFilter: buildTableFilterByNameForTest("test", "t2"),
+					result:      []commonEvent.Table{},
+				},
+			},
 		},
 		// test partition table related ddl
 		{
+			nil,
 			func() []*model.Job {
 				return []*model.Job{
-					buildCreateSchemaJob(100, "test", 1000),                                           // create schema 100
-					buildCreatePartitionTableJob(100, 200, "t1", []int64{201, 202, 203}, 1010),        // create partition table 200
-					buildTruncatePartitionTableJob(100, 200, 300, "t1", []int64{204, 205, 206}, 1020), // truncate partition table 200 to 300
-					buildAddPartitionJob(100, 300, "t1", []int64{204, 205, 206, 207}, 1030),           // add partition 207
-					buildDropPartitionJob(100, 300, "t1", []int64{205, 206, 207}, 1040),               // drop partition 204
-					buildTruncatePartitionJob(100, 300, "t1", []int64{206, 207, 208}, 1050),           // truncate partition 205 to 208
+					buildCreateSchemaJobForTest(100, "test", 1000),                                           // create schema 100
+					buildCreatePartitionTableJobForTest(100, 200, "t1", []int64{201, 202, 203}, 1010),        // create partition table 200
+					buildTruncatePartitionTableJobForTest(100, 200, 300, "t1", []int64{204, 205, 206}, 1020), // truncate partition table 200 to 300
+					buildAddPartitionJobForTest(100, 300, "t1", []int64{204, 205, 206, 207}, 1030),           // add partition 207
+					buildDropPartitionJobForTest(100, 300, "t1", []int64{205, 206, 207}, 1040),               // drop partition 204
+					buildTruncatePartitionJobForTest(100, 300, "t1", []int64{206, 207, 208}, 1050),           // truncate partition 205 to 208
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -231,12 +299,13 @@ func TestApplyDDLJobs(t *testing.T) {
 				208: {1050},
 			},
 			[]uint64{1000, 1010, 1020, 1030, 1040, 1050},
+			nil,
 		},
 	}
 
 	for _, tt := range testCases {
 		dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
-		pStorage := newPersistentStorageForTest(dbPath, nil)
+		pStorage := newPersistentStorageForTest(dbPath, tt.initailDBInfos)
 		checkState := func(fromDisk bool) {
 			if (tt.tableMap != nil && !reflect.DeepEqual(tt.tableMap, pStorage.tableMap)) ||
 				(tt.tableMap == nil && len(pStorage.tableMap) != 0) {
@@ -262,6 +331,20 @@ func TestApplyDDLJobs(t *testing.T) {
 				(tt.tableTriggerDDLHistory == nil && len(pStorage.tableTriggerDDLHistory) != 0) {
 				log.Warn("tableTriggerDDLHistory not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tableTriggerDDLHistory), zap.Any("actual", pStorage.tableTriggerDDLHistory), zap.Bool("fromDisk", fromDisk))
 				t.Fatalf("tableTriggerDDLHistory not equal")
+			}
+			for _, testCase := range tt.physicalTableQueryTestCases {
+				allPhysicalTables, err := pStorage.getAllPhysicalTables(testCase.snapTs, testCase.tableFilter)
+				require.Nil(t, err)
+				if !reflect.DeepEqual(testCase.result, allPhysicalTables) {
+					log.Warn("getAllPhysicalTables result wrong",
+						zap.Any("ddlJobs", tt.ddlJobs),
+						zap.Uint64("snapTs", testCase.snapTs),
+						zap.Any("tableFilter", testCase.tableFilter),
+						zap.Any("expected", testCase.result),
+						zap.Any("actual", allPhysicalTables),
+						zap.Bool("fromDisk", fromDisk))
+					t.Fatalf("getAllPhysicalTables result wrong")
+				}
 			}
 		}
 		for _, job := range tt.ddlJobs {
