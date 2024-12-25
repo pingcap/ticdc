@@ -105,10 +105,8 @@ func (s *TableSchemaStore) Clear() {
 }
 
 func (s *TableSchemaStore) AddEvent(event *commonEvent.DDLEvent) {
-	log.Info("hyy TableSchemaStore AddEvent", zap.Any("event", event), zap.Any("sinkType", s.sinkType))
 	if s.sinkType == commonType.MysqlSinkType {
 		s.tableIDStore.AddEvent(event)
-		log.Info("hyy TableSchemaStore AddEvent", zap.Any("event", event))
 	} else {
 		s.tableNameStore.AddEvent(event)
 	}
