@@ -325,6 +325,108 @@ func TestApplyDDLJobs(t *testing.T) {
 			[]uint64{1010, 1020, 1030},
 			nil,
 		},
+		// test rename table
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+				{
+					dbInfo: &model.DBInfo{
+						ID:   105,
+						Name: pmodel.NewCIStr("test2"),
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateTableJobForTest(100, 300, "t1", 1010), // create table 300
+					buildRenameTableJobForTest(105, 300, "t2", 1020), // rename table 300 to schema 105
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				300: {
+					SchemaID: 105,
+					Name:     "t2",
+				},
+			},
+			nil,
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name:   "test",
+					Tables: map[int64]bool{},
+				},
+				105: {
+					Name: "test2",
+					Tables: map[int64]bool{
+						300: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				300: {1010, 1020},
+			},
+			[]uint64{1010, 1020},
+			nil,
+		},
+		// test rename partition table
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+				{
+					dbInfo: &model.DBInfo{
+						ID:   105,
+						Name: pmodel.NewCIStr("test2"),
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreatePartitionTableJobForTest(100, 300, "t1", []int64{301, 302, 303}, 1010), // create table 300
+					buildRenamePartitionTableJobForTest(105, 300, "t2", []int64{301, 302, 303}, 1020), // rename table 300 to schema 105
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				300: {
+					SchemaID: 105,
+					Name:     "t2",
+				},
+			},
+			map[int64]BasicPartitionInfo{
+				300: {
+					301: nil,
+					302: nil,
+					303: nil,
+				},
+			},
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name:   "test",
+					Tables: map[int64]bool{},
+				},
+				105: {
+					Name: "test2",
+					Tables: map[int64]bool{
+						300: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				301: {1010, 1020},
+				302: {1010, 1020},
+				303: {1010, 1020},
+			},
+			[]uint64{1010, 1020},
+			nil,
+		},
 	}
 
 	for _, tt := range testCases {

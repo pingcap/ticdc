@@ -194,6 +194,25 @@ func buildCreateTableJobForTest(schemaID, tableID int64, tableName string, finis
 	}
 }
 
+func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionRenameTable,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			TableInfo: &model.TableInfo{
+				ID:   tableID,
+				Name: pmodel.NewCIStr(tableName),
+			},
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildRenamePartitionTableJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
+	return buildPartitionTableRelatedJobForTest(model.ActionRenameTable, schemaID, tableID, tableName, partitionIDs, finishedTs)
+}
+
 // most partition table related job have the same structure
 func buildPartitionTableRelatedJobForTest(jobType model.ActionType, schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
 	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
