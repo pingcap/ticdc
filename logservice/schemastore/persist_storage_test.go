@@ -14,14 +14,11 @@
 package schemastore
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"reflect"
 	"testing"
 
-	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
@@ -29,102 +26,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
-
-// import (
-// 	"encoding/json"
-// 	"fmt"
-// 	"os"
-// 	"testing"
-
-// 	"github.com/cockroachdb/pebble"
-// 	"github.com/pingcap/log"
-// 	"github.com/pingcap/ticdc/heartbeatpb"
-// 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-// 	"github.com/pingcap/ticdc/pkg/filter"
-// 	"github.com/pingcap/tidb/pkg/meta/model"
-// 	"github.com/pingcap/tiflow/pkg/config"
-// 	"github.com/stretchr/testify/require"
-// 	"go.uber.org/zap"
-// )
-
-func loadPersistentStorageForTest(db *pebble.DB, gcTs uint64, upperBound UpperBoundMeta) *persistentStorage {
-	p := &persistentStorage{
-		pdCli:                  nil,
-		kvStorage:              nil,
-		db:                     db,
-		gcTs:                   gcTs,
-		upperBound:             upperBound,
-		tableMap:               make(map[int64]*BasicTableInfo),
-		partitionMap:           make(map[int64]BasicPartitionInfo),
-		databaseMap:            make(map[int64]*BasicDatabaseInfo),
-		tablesDDLHistory:       make(map[int64][]uint64),
-		tableTriggerDDLHistory: make([]uint64, 0),
-		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
-		tableRegisteredCount:   make(map[int64]int),
-	}
-	p.initializeFromDisk()
-	return p
-}
-
-// create a persistent storage at dbPath with initailDBInfos
-func newPersistentStorageForTest(dbPath string, initailDBInfos map[int64]mockDBInfo) *persistentStorage {
-	if err := os.RemoveAll(dbPath); err != nil {
-		log.Panic("remove path fail", zap.Error(err))
-	}
-	db, err := pebble.Open(dbPath, &pebble.Options{})
-	if err != nil {
-		log.Panic("create database fail", zap.Error(err))
-	}
-	gcTs := uint64(0)
-	if len(initailDBInfos) > 0 {
-		mockWriteKVSnapOnDisk(db, gcTs, initailDBInfos)
-	}
-	upperBound := UpperBoundMeta{
-		FinishedDDLTs: gcTs,
-		ResolvedTs:    gcTs,
-	}
-	writeUpperBoundMeta(db, upperBound)
-	return loadPersistentStorageForTest(db, gcTs, upperBound)
-}
-
-// load a persistent storage from dbPath
-func loadPersistentStorageFromPathForTest(dbPath string, maxFinishedDDLTs uint64) *persistentStorage {
-	db, err := pebble.Open(dbPath, &pebble.Options{})
-	if err != nil {
-		log.Panic("create database fail", zap.Error(err))
-	}
-	gcTs := uint64(0)
-	upperBound := UpperBoundMeta{
-		FinishedDDLTs: maxFinishedDDLTs,
-		ResolvedTs:    maxFinishedDDLTs,
-	}
-	writeUpperBoundMeta(db, upperBound)
-	return loadPersistentStorageForTest(db, gcTs, upperBound)
-}
-
-type mockDBInfo struct {
-	dbInfo *model.DBInfo
-	tables []*model.TableInfo
-}
-
-func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos map[int64]mockDBInfo) {
-	batch := db.NewBatch()
-	defer batch.Close()
-	for _, dbInfo := range dbInfos {
-		writeSchemaInfoToBatch(batch, snapTs, dbInfo.dbInfo)
-		for _, tableInfo := range dbInfo.tables {
-			tableInfoValue, err := json.Marshal(tableInfo)
-			if err != nil {
-				log.Panic("marshal table info fail", zap.Error(err))
-			}
-			writeTableInfoToBatch(batch, snapTs, dbInfo.dbInfo, tableInfoValue)
-		}
-	}
-	if err := batch.Commit(pebble.NoSync); err != nil {
-		log.Panic("commit batch fail", zap.Error(err))
-	}
-	writeGcTs(db, snapTs)
-}
 
 func TestApplyDDLJobs(t *testing.T) {
 	type PhysicalTableQueryTestCase struct {
@@ -299,7 +200,66 @@ func TestApplyDDLJobs(t *testing.T) {
 				208: {1050},
 			},
 			[]uint64{1000, 1010, 1020, 1030, 1040, 1050},
-			nil,
+			[]PhysicalTableQueryTestCase{
+				{
+					snapTs: 1010,
+					result: []commonEvent.Table{
+						{
+							SchemaID: 100,
+							TableID:  201,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+						{
+							SchemaID: 100,
+							TableID:  202,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+						{
+							SchemaID: 100,
+							TableID:  203,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+					},
+				},
+				{
+					snapTs: 1050,
+					result: []commonEvent.Table{
+						{
+							SchemaID: 100,
+							TableID:  206,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+						{
+							SchemaID: 100,
+							TableID:  207,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+						{
+							SchemaID: 100,
+							TableID:  208,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+					},
+				},
+			},
 		},
 	}
 
@@ -335,7 +295,7 @@ func TestApplyDDLJobs(t *testing.T) {
 			for _, testCase := range tt.physicalTableQueryTestCases {
 				allPhysicalTables, err := pStorage.getAllPhysicalTables(testCase.snapTs, testCase.tableFilter)
 				require.Nil(t, err)
-				if !reflect.DeepEqual(testCase.result, allPhysicalTables) {
+				if !compareUnorderedTableSlices(testCase.result, allPhysicalTables) {
 					log.Warn("getAllPhysicalTables result wrong",
 						zap.Any("ddlJobs", tt.ddlJobs),
 						zap.Uint64("snapTs", testCase.snapTs),

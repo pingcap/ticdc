@@ -14,15 +14,130 @@
 package schemastore
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"reflect"
+	"sort"
 
+	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"go.uber.org/zap"
 )
+
+func loadPersistentStorageForTest(db *pebble.DB, gcTs uint64, upperBound UpperBoundMeta) *persistentStorage {
+	p := &persistentStorage{
+		pdCli:                  nil,
+		kvStorage:              nil,
+		db:                     db,
+		gcTs:                   gcTs,
+		upperBound:             upperBound,
+		tableMap:               make(map[int64]*BasicTableInfo),
+		partitionMap:           make(map[int64]BasicPartitionInfo),
+		databaseMap:            make(map[int64]*BasicDatabaseInfo),
+		tablesDDLHistory:       make(map[int64][]uint64),
+		tableTriggerDDLHistory: make([]uint64, 0),
+		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
+		tableRegisteredCount:   make(map[int64]int),
+	}
+	p.initializeFromDisk()
+	return p
+}
+
+// create a persistent storage at dbPath with initailDBInfos
+func newPersistentStorageForTest(dbPath string, initailDBInfos map[int64]mockDBInfo) *persistentStorage {
+	if err := os.RemoveAll(dbPath); err != nil {
+		log.Panic("remove path fail", zap.Error(err))
+	}
+	db, err := pebble.Open(dbPath, &pebble.Options{})
+	if err != nil {
+		log.Panic("create database fail", zap.Error(err))
+	}
+	gcTs := uint64(0)
+	if len(initailDBInfos) > 0 {
+		mockWriteKVSnapOnDisk(db, gcTs, initailDBInfos)
+	}
+	upperBound := UpperBoundMeta{
+		FinishedDDLTs: gcTs,
+		ResolvedTs:    gcTs,
+	}
+	writeUpperBoundMeta(db, upperBound)
+	return loadPersistentStorageForTest(db, gcTs, upperBound)
+}
+
+// load a persistent storage from dbPath
+func loadPersistentStorageFromPathForTest(dbPath string, maxFinishedDDLTs uint64) *persistentStorage {
+	db, err := pebble.Open(dbPath, &pebble.Options{})
+	if err != nil {
+		log.Panic("create database fail", zap.Error(err))
+	}
+	gcTs := uint64(0)
+	upperBound := UpperBoundMeta{
+		FinishedDDLTs: maxFinishedDDLTs,
+		ResolvedTs:    maxFinishedDDLTs,
+	}
+	writeUpperBoundMeta(db, upperBound)
+	return loadPersistentStorageForTest(db, gcTs, upperBound)
+}
+
+type mockDBInfo struct {
+	dbInfo *model.DBInfo
+	tables []*model.TableInfo
+}
+
+func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos map[int64]mockDBInfo) {
+	batch := db.NewBatch()
+	defer batch.Close()
+	for _, dbInfo := range dbInfos {
+		writeSchemaInfoToBatch(batch, snapTs, dbInfo.dbInfo)
+		for _, tableInfo := range dbInfo.tables {
+			tableInfoValue, err := json.Marshal(tableInfo)
+			if err != nil {
+				log.Panic("marshal table info fail", zap.Error(err))
+			}
+			writeTableInfoToBatch(batch, snapTs, dbInfo.dbInfo, tableInfoValue)
+		}
+	}
+	if err := batch.Commit(pebble.NoSync); err != nil {
+		log.Panic("commit batch fail", zap.Error(err))
+	}
+	writeGcTs(db, snapTs)
+}
+
+func compareUnorderedTableSlices(slice1, slice2 []commonEvent.Table) bool {
+	if len(slice1) != len(slice2) {
+		return false
+	}
+
+	sort.Slice(slice1, func(i, j int) bool {
+		if slice1[i].SchemaID == slice1[j].SchemaID {
+			return slice1[i].TableID < slice1[j].TableID
+		}
+		return slice1[i].SchemaID < slice1[j].SchemaID
+	})
+
+	sort.Slice(slice2, func(i, j int) bool {
+		if slice2[i].SchemaID == slice2[j].SchemaID {
+			return slice2[i].TableID < slice2[j].TableID
+		}
+		return slice2[i].SchemaID < slice2[j].SchemaID
+	})
+
+	for i := range slice1 {
+		if slice1[i].SchemaID != slice2[i].SchemaID ||
+			slice1[i].TableID != slice2[i].TableID ||
+			!reflect.DeepEqual(slice1[i].SchemaTableName, slice2[i].SchemaTableName) {
+			return false
+		}
+	}
+
+	return true
+}
 
 func buildTableFilterByNameForTest(schemaName, tableName string) filter.Filter {
 	filterRule := fmt.Sprintf("%s.%s", schemaName, tableName)

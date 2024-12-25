@@ -116,6 +116,11 @@ type Table struct {
 	*SchemaTableName
 }
 
+func (t Table) Equals(other Table) bool {
+	return t.SchemaID == other.SchemaID && t.TableID == other.TableID &&
+		t.SchemaName == other.SchemaName && t.TableName == other.TableName
+}
+
 type SchemaIDChange struct {
 	TableID     int64
 	OldSchemaID int64
