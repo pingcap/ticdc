@@ -65,6 +65,8 @@ enum ActionType {
     ACTION_TYPE_PAUSE = 3;
     ACTION_TYPE_RESUME = 4;
     ACTION_TYPE_RESET = 5;
+    ACTION_TYPE_PAUSE_CHANGEFEED = 6;
+    ACTION_TYPE_RESUME_CHANGEFEED = 7;
 }
 
 message RegisterDispatcherRequest {

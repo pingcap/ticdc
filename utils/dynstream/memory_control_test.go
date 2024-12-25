@@ -37,17 +37,16 @@ func TestMemControlAddRemovePath(t *testing.T) {
 	mc.addPathToArea(path, settings, feedbackChan)
 	require.NotNil(t, path.areaMemStat)
 	require.Equal(t, 1, path.areaMemStat.pathCount)
+	require.Equal(t, 1, path.areaMemStat.pathSizeHeap.len())
 
 	// Test removing path
 	mc.removePathFromArea(path)
 	require.Equal(t, 0, path.areaMemStat.pathCount)
+	require.Equal(t, 0, path.areaMemStat.pathSizeHeap.len())
 	require.Empty(t, mc.areaStatMap)
 }
 
 func TestAreaMemStatAppendEvent(t *testing.T) {
-	// TODO: fix this test
-	t.Skip("Skipping TestAreaMemStatAppendEvent because we don't merge periodic signals when append any more")
-
 	mc, path1 := setupTestComponents()
 	settings := AreaSettings{
 		MaxPendingSize:   15,
@@ -59,8 +58,6 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	handler := &mockHandler{}
 	option := NewOption()
 	option.EnableMemoryControl = true
-	eventQueue := newEventQueue(option, handler)
-	eventQueue.initPath(path1)
 
 	// 1. Append normal event, it should be accepted
 	normalEvent1 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
@@ -69,7 +66,8 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventSize: 10,
 		queueTime: time.Now(),
 	}
-	path1.areaMemStat.appendEvent(path1, normalEvent1, handler)
+	ok := path1.areaMemStat.appendEvent(path1, normalEvent1, handler)
+	require.True(t, ok)
 	require.Equal(t, int64(10), path1.areaMemStat.totalPendingSize.Load())
 
 	// Append 2 periodic signals, and the second one will replace the first one
@@ -80,7 +78,8 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		eventType: EventType{Property: PeriodicSignal},
 	}
-	path1.areaMemStat.appendEvent(path1, periodicEvent, handler)
+	ok = path1.areaMemStat.appendEvent(path1, periodicEvent, handler)
+	require.True(t, ok)
 	require.Equal(t, int64(15), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 2, path1.pendingQueue.Length())
 	back, _ := path1.pendingQueue.BackRef()
@@ -92,7 +91,8 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		eventType: EventType{Property: PeriodicSignal},
 	}
-	path1.areaMemStat.appendEvent(path1, periodicEvent2, handler)
+	ok = path1.areaMemStat.appendEvent(path1, periodicEvent2, handler)
+	require.False(t, ok)
 	// Size should remain the same as the signal was replaced
 	require.Equal(t, int64(15), path1.areaMemStat.totalPendingSize.Load())
 	// The pending queue should only have 2 events
@@ -108,7 +108,8 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		timestamp: 4,
 	}
-	path1.areaMemStat.appendEvent(path1, normalEvent2, handler)
+	ok = path1.areaMemStat.appendEvent(path1, normalEvent2, handler)
+	require.False(t, ok)
 	require.Equal(t, int64(15), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 2, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
@@ -137,7 +138,8 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		timestamp: 5,
 	}
-	path1.areaMemStat.appendEvent(path1, normalEvent3, handler)
+	ok = path1.areaMemStat.appendEvent(path1, normalEvent3, handler)
+	require.True(t, ok)
 	require.Equal(t, int64(35), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 3, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
@@ -150,18 +152,17 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
 	}
 	mc.addPathToArea(path2, newSettings, feedbackChan)
-	eventQueue.initPath(path2)
 	largeEvent := eventWrap[int, string, *mockEvent, any, *mockHandler]{
 		event:     &mockEvent{id: 6, path: "test-path-2"},
 		timestamp: 6,
 		eventSize: int(newSettings.MaxPendingSize - int(path1.areaMemStat.totalPendingSize.Load())),
 		queueTime: time.Now(),
 	}
-	path2.areaMemStat.appendEvent(path2, largeEvent, handler)
+	ok = path2.areaMemStat.appendEvent(path2, largeEvent, handler)
+	require.True(t, ok)
 	require.Equal(t, newSettings.MaxPendingSize, int(path2.areaMemStat.totalPendingSize.Load()))
 	require.Equal(t, 2, path2.areaMemStat.pathCount)
 	// There are 4 events in the eventQueue, [normalEvent1, periodicEvent2, normalEvent3, largeEvent]
-	require.Equal(t, int64(4), eventQueue.totalPendingLength.Load())
 	// The new path should be paused, because the pending size is reach the max pending size
 	require.True(t, path2.paused)
 
@@ -177,13 +178,15 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventSize: 10,
 		queueTime: time.Now(),
 	}
-	path1.areaMemStat.appendEvent(path1, normalEvent4, handler)
+	// Force update the heap to make sure the path2 is moved to the front of the heap
+	path1.areaMemStat.pathSizeHeap.tryUpdate(true)
+	ok = path1.areaMemStat.appendEvent(path1, normalEvent4, handler)
+	require.True(t, ok)
 	require.Equal(t, 45, int(path1.areaMemStat.totalPendingSize.Load()))
 	require.Equal(t, 0, path2.pendingQueue.Length())
 	droppedEvents := handler.drainDroppedEvents()
 	require.Equal(t, 1, len(droppedEvents))
 	require.Equal(t, largeEvent.event, droppedEvents[0])
-	require.Equal(t, int64(4), eventQueue.totalPendingLength.Load())
 
 	// 8. Add a signal event to path2, and it should be accepted, and its state should be resumed
 	periodicEvent3 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
@@ -192,51 +195,54 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventSize: 5,
 		queueTime: time.Now(),
 	}
-	path2.areaMemStat.appendEvent(path2, periodicEvent3, handler)
+	ok = path2.areaMemStat.appendEvent(path2, periodicEvent3, handler)
+	require.True(t, ok)
 	require.Equal(t, 1, path2.pendingQueue.Length())
-	require.Equal(t, int64(5), eventQueue.totalPendingLength.Load())
 	require.False(t, path2.paused)
 }
 
 func TestShouldPausePath(t *testing.T) {
 	mc, path := setupTestComponents()
 
-	// Add 100 path
 	maxPendingSize := 0
 	for i := 0; i < 100; i++ {
 		newPath := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
-			path:        fmt.Sprintf("test-path-%d", i),
-			pendingSize: i,
+			area: path.area,
+			path: fmt.Sprintf("test-path-%d", i),
 		}
+		newPath.pendingSize.Store(uint32(i))
+		mc.addPathToArea(newPath, AreaSettings{
+			MaxPendingSize:   maxPendingSize,
+			FeedbackInterval: time.Second,
+		}, nil)
 		maxPendingSize += i
 	}
 
-	settings := AreaSettings{
+	feedbackChan := make(chan Feedback[int, string, any], 10)
+
+	mc.addPathToArea(path, AreaSettings{
 		MaxPendingSize:   maxPendingSize,
 		FeedbackInterval: time.Second,
-	}
-	feedbackChan := make(chan Feedback[int, string, any], 10)
-	mc.addPathToArea(path, settings, feedbackChan)
+	}, feedbackChan)
 
 	tests := []struct {
 		name          string
+		pathHeapIndex int
 		pendingSize   int64
-		heapIndex     int
 		expectedPause bool
 	}{
-		{"No pause needed", int64(maxPendingSize / 2), 2, false},
-		{"Need pause", int64(maxPendingSize * 4 / 5), 20, true},
-		{"Critical level", int64(maxPendingSize), 2, true},
-		{"Not in heap", int64(maxPendingSize / 2), 0, false},
-		{"Not in heap but critical", int64(maxPendingSize), 0, true},
+		{"No pause needed", 50, int64(maxPendingSize / 2), false},
+		{"Need pause", 20, int64(maxPendingSize * 4 / 5), true},
+		{"Critical level", 80, int64(maxPendingSize), true},
+		{"Not in heap", 0, int64(maxPendingSize / 2), false},
+		{"Not in heap but critical", 0, int64(maxPendingSize), true},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path.areaMemStat.totalPendingSize.Store(tt.pendingSize)
-			result := path.areaMemStat.shouldPausePath(path)
-			require.Equal(t, tt.expectedPause, result)
-		})
+		path.sizeHeapIndex = tt.pathHeapIndex
+		path.areaMemStat.totalPendingSize.Store(tt.pendingSize)
+		result := path.areaMemStat.shouldPausePath(path)
+		require.Equal(t, tt.expectedPause, result, tt.name)
 	}
 }
 
@@ -270,21 +276,6 @@ func TestSetAreaSettings(t *testing.T) {
 	require.Equal(t, DefaultMaxPendingSize, path.areaMemStat.settings.Load().MaxPendingSize)
 }
 
-func TestIsPeriodicSignal(t *testing.T) {
-	batchableEvent := eventWrap[int, string, *mockEvent, any, *mockHandler]{
-		eventType: EventType{Property: BatchableData},
-	}
-	periodicEvent := eventWrap[int, string, *mockEvent, any, *mockHandler]{
-		eventType: EventType{Property: PeriodicSignal},
-	}
-	nonBatchableEvent := eventWrap[int, string, *mockEvent, any, *mockHandler]{
-		eventType: EventType{Property: NonBatchable},
-	}
-	require.False(t, isPeriodicSignal(batchableEvent))
-	require.True(t, isPeriodicSignal(periodicEvent))
-	require.False(t, isPeriodicSignal(nonBatchableEvent))
-}
-
 func TestFindPausePathRatio(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -304,4 +295,116 @@ func TestFindPausePathRatio(t *testing.T) {
 			require.Equal(t, tt.expectedPauseRatio, ratio)
 		})
 	}
+}
+
+func TestPathSizeHeapBasicOperations(t *testing.T) {
+	h := newPathSizeHeap[int, string, *mockEvent, any, *mockHandler]()
+
+	// Create test paths with different pending sizes
+	path1 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+		path: "path1",
+	}
+	path1.pendingSize.Store(uint32(100))
+	path2 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+		path: "path2",
+	}
+	path2.pendingSize.Store(uint32(200))
+	path3 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+		path: "path3",
+	}
+	path3.pendingSize.Store(uint32(300))
+
+	// Test push and len
+	h.push(path1)
+	require.Equal(t, 1, h.len())
+	h.push(path2)
+	h.push(path3)
+	require.Equal(t, 3, h.len())
+
+	// Test peek (should return largest pending size)
+	top, ok := h.peek()
+	require.True(t, ok)
+	require.Equal(t, "path3", top.path)
+	require.Equal(t, 300, top.pendingSize)
+
+	// Test remove
+	h.remove(path2)
+	require.Equal(t, 2, h.len())
+	top, ok = h.peek()
+	require.True(t, ok)
+	require.Equal(t, "path3", top.path)
+}
+
+func TestPathSizeHeapTryUpdate(t *testing.T) {
+	h := newPathSizeHeap[int, string, *mockEvent, any, *mockHandler]()
+
+	// Set a smaller update interval for testing
+	h.updateInterval = 10 * time.Millisecond
+
+	path1 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+		path: "path1",
+	}
+	path1.pendingSize.Store(uint32(100))
+	h.push(path1)
+
+	// First update should work
+	initialUpdateTime := h.lastUpdateTime
+	h.tryUpdate(false)
+	require.Equal(t, initialUpdateTime, h.lastUpdateTime, "Should not update within interval")
+
+	// Force update should work regardless of interval
+	h.tryUpdate(true)
+	require.True(t, h.lastUpdateTime.After(initialUpdateTime), "Force update should work")
+
+	// Wait for interval and try again
+	time.Sleep(h.updateInterval + time.Millisecond)
+	oldUpdateTime := h.lastUpdateTime
+	h.tryUpdate(false)
+	require.True(t, h.lastUpdateTime.After(oldUpdateTime), "Should update after interval")
+}
+
+func TestPathSizeHeapUpdatePendingSize(t *testing.T) {
+	h := newPathSizeHeap[int, string, *mockEvent, any, *mockHandler]()
+
+	path1 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+		path: "path1",
+	}
+	path1.pendingSize.Store(uint32(100))
+	path2 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+		path: "path2",
+	}
+	path2.pendingSize.Store(uint32(200))
+
+	h.push(path1)
+	h.push(path2)
+
+	// Update pending size and force heap update
+	path1.pendingSize.Store(uint32(300))
+	h.tryUpdate(true)
+
+	// Check if heap order is updated
+	top, ok := h.peek()
+	require.True(t, ok)
+	require.Equal(t, "path1", top.path)
+	require.Equal(t, uint32(300), top.pendingSize.Load())
+}
+
+func TestGetMetrics(t *testing.T) {
+	mc, path := setupTestComponents()
+	usedMemory, maxMemory := mc.getMetrics()
+	require.Equal(t, int64(0), usedMemory)
+	require.Equal(t, int64(0), maxMemory)
+
+	mc.addPathToArea(path, AreaSettings{
+		MaxPendingSize:   100,
+		FeedbackInterval: time.Second,
+	}, nil)
+	usedMemory, maxMemory = mc.getMetrics()
+	require.Equal(t, int64(0), usedMemory)
+	require.Equal(t, int64(100), maxMemory)
+
+	path.areaMemStat.totalPendingSize.Store(100)
+	usedMemory, maxMemory = mc.getMetrics()
+	require.Equal(t, int64(100), usedMemory)
+	require.Equal(t, int64(100), maxMemory)
 }

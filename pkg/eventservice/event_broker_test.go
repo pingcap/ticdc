@@ -44,8 +44,9 @@ func TestCheckNeedScan(t *testing.T) {
 	broker, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
 	broker.close()
+	changefeedStatus := broker.getOrSetChangefeedStatus(common.GID{})
 
-	disp := newDispatcherStat(100, newMockDispatcherInfoForTest(t), nil, 0)
+	disp := newDispatcherStat(100, newMockDispatcherInfoForTest(t), nil, 0, changefeedStatus)
 	// Set the eventStoreResolvedTs and latestCommitTs to 102 and 101.
 	// To simulate the eventStore has just notified the broker.
 	disp.eventStoreResolvedTs.Store(102)
@@ -92,10 +93,12 @@ func TestOnNotify(t *testing.T) {
 	disInfo := newMockDispatcherInfoForTest(t)
 	startTs := uint64(100)
 	workerIndex := 0
+	changefeedStatus := broker.getOrSetChangefeedStatus(common.GID{})
 
-	disp := newDispatcherStat(startTs, disInfo, nil, workerIndex)
+	disp := newDispatcherStat(startTs, disInfo, nil, workerIndex, changefeedStatus)
 	// Make the dispatcher is reset.
-	disp.resetTs.Store(100)
+	disp.resetState(100)
+	disp.isHandshaked.Store(true)
 
 	// Case 1: The resolvedTs is less than the startTs, it should not happen.
 	notifyMsgs1 := notifyMsg{1, 1}

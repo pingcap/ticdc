@@ -22,12 +22,15 @@ func TestNewDispatcherStat(t *testing.T) {
 
 	startTs := uint64(50)
 	workerIndex := 1
+	changefeedStatus := &changefeedStatus{
+		changefeedID: info.GetChangefeedID().ID(),
+	}
 
-	stat := newDispatcherStat(startTs, info, info.filter, workerIndex)
+	stat := newDispatcherStat(startTs, info, info.filter, workerIndex, changefeedStatus)
 
 	require.Equal(t, info.GetID(), stat.id)
 	require.Equal(t, workerIndex, stat.workerIndex)
-	require.Equal(t, startTs, stat.startTs)
+	require.Equal(t, uint64(0), stat.resetTs.Load())
 	require.Equal(t, startTs, stat.eventStoreResolvedTs.Load())
 	require.Equal(t, startTs, stat.checkpointTs.Load())
 	require.Equal(t, startTs, stat.sentResolvedTs.Load())
@@ -41,7 +44,10 @@ func TestDispatcherStatResolvedTs(t *testing.T) {
 	t.Parallel()
 
 	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	stat := newDispatcherStat(100, info, info.filter, 1)
+	changefeedStatus := &changefeedStatus{
+		changefeedID: info.GetChangefeedID().ID(),
+	}
+	stat := newDispatcherStat(100, info, info.filter, 1, changefeedStatus)
 
 	// Test normal update
 	updated := stat.onResolvedTs(150)
@@ -62,7 +68,10 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 	t.Parallel()
 
 	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	stat := newDispatcherStat(100, info, info.filter, 1)
+	changefeedStatus := &changefeedStatus{
+		changefeedID: info.GetChangefeedID().ID(),
+	}
+	stat := newDispatcherStat(100, info, info.filter, 1, changefeedStatus)
 	stat.eventStoreResolvedTs.Store(200)
 
 	// Normal case
@@ -88,7 +97,10 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 func TestDispatcherStatUpdateWatermark(t *testing.T) {
 	startTs := uint64(100)
 	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	stat := newDispatcherStat(startTs, info, info.filter, 1)
+	changefeedStatus := &changefeedStatus{
+		changefeedID: info.GetChangefeedID().ID(),
+	}
+	stat := newDispatcherStat(startTs, info, info.filter, 1, changefeedStatus)
 
 	// Case 1: no new events, only watermark change
 	stat.onResolvedTs(200)

@@ -54,6 +54,8 @@ type eventBroker struct {
 	// msgSender is used to send the events to the dispatchers.
 	msgSender messaging.MessageSender
 
+	// changefeedMap is used to track the changefeed status.
+	changefeedMap sync.Map
 	// All the dispatchers that register to the eventBroker.
 	dispatchers sync.Map
 	// dispatcherID -> dispatcherStat map, track all table trigger dispatchers.
@@ -107,6 +109,7 @@ func newEventBroker(
 		eventStore:              eventStore,
 		mounter:                 pevent.NewMounter(tz),
 		schemaStore:             schemaStore,
+		changefeedMap:           sync.Map{},
 		dispatchers:             sync.Map{},
 		tableTriggerDispatchers: sync.Map{},
 		msgSender:               mc,
@@ -214,26 +217,11 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) {
 			case <-ticker.C:
 				c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 					dispatcherStat := value.(*dispatcherStat)
-					if dispatcherStat.resetTs.Load() == 0 {
-						c.sendReadyEvent(node.ID(dispatcherStat.info.GetServerID()), dispatcherStat)
+
+					if !c.checkAndSendReady(dispatcherStat) {
 						return true
 					}
-					if !dispatcherStat.isInitialized.Load() {
-						dispatcherStat.seq.Store(0)
-						e := pevent.NewHandshakeEvent(
-							dispatcherStat.id,
-							dispatcherStat.startTs,
-							dispatcherStat.seq.Add(1),
-							nil)
-						wrapE := &wrapEvent{
-							serverID: node.ID(dispatcherStat.info.GetServerID()),
-							e:        e,
-							msgType:  pevent.TypeHandshakeEvent,
-							postSendFunc: func() {
-								dispatcherStat.isInitialized.Store(true)
-							},
-						}
-						c.getMessageCh(dispatcherStat.workerIndex) <- wrapE
+					if !c.checkAndSendHandshake(dispatcherStat) {
 						return true
 					}
 
@@ -250,7 +238,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) {
 					if endTs > startTs {
 						// After all the events are sent, we send the watermark to the dispatcher.
 						c.sendWatermark(remoteID, dispatcherStat, endTs)
-						dispatcherStat.sentResolvedTs.Store(endTs)
+						dispatcherStat.updateSentResolvedTs(endTs)
 					}
 					return true
 				})
@@ -303,13 +291,12 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 	if !mustCheck && task.taskScanning.Load() {
 		return false, common.DataRange{}
 	}
-	if task.resetTs.Load() == 0 {
-		remoteID := node.ID(task.info.GetServerID())
-		c.sendReadyEvent(remoteID, task)
+
+	// If the dispatcher is not ready, we don't need to scan the event store.
+	if !c.checkAndSendReady(task) {
 		return false, common.DataRange{}
 	}
-
-	c.checkAndInitDispatcher(task)
+	c.checkAndSendHandshake(task)
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
@@ -335,7 +322,7 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		// We just send the watermark to the dispatcher.
 		remoteID := node.ID(task.info.GetServerID())
 		c.sendWatermark(remoteID, task, dataRange.EndTs)
-		task.sentResolvedTs.Store(dataRange.EndTs)
+		task.updateSentResolvedTs(dataRange.EndTs)
 		return false, dataRange
 	}
 
@@ -352,9 +339,18 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 	return true, dataRange
 }
 
-func (c *eventBroker) checkAndInitDispatcher(task scanTask) {
-	if task.isInitialized.Load() {
-		return
+func (c *eventBroker) checkAndSendReady(task scanTask) bool {
+	if task.resetTs.Load() == 0 {
+		remoteID := node.ID(task.info.GetServerID())
+		c.sendReadyEvent(remoteID, task)
+		return false
+	}
+	return true
+}
+
+func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
+	if task.isHandshaked.Load() {
+		return true
 	}
 	// Always reset the seq of the dispatcher to 0 before sending a handshake event.
 	task.seq.Store(0)
@@ -362,17 +358,17 @@ func (c *eventBroker) checkAndInitDispatcher(task scanTask) {
 		serverID: node.ID(task.info.GetServerID()),
 		e: pevent.NewHandshakeEvent(
 			task.id,
-			task.sentResolvedTs.Load(),
+			task.resetTs.Load(),
 			task.seq.Add(1),
 			task.startTableInfo.Load()),
 		msgType: pevent.TypeHandshakeEvent,
 		postSendFunc: func() {
-			task.isInitialized.Store(true)
+			task.isHandshaked.Store(true)
 		},
 	}
-	//log.Info("Send handshake event to dispatcher", zap.Uint64("seq", wrapE.e.(*pevent.HandshakeEvent).Seq), zap.Stringer("dispatcher", task.id))
 	c.getMessageCh(task.workerIndex) <- wrapE
 	metricEventServiceSendCommandCount.Inc()
+	return false
 }
 
 // emitSyncPointEventIfNeeded emits a sync point event if the current ts is greater than the next sync point, and updates the next sync point.
@@ -426,7 +422,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		for _, e := range ddlEvents {
 			c.sendDDL(ctx, remoteID, e, task)
 		}
-		task.sentResolvedTs.Store(dataRange.EndTs)
+		task.updateSentResolvedTs(dataRange.EndTs)
 		// After all the events are sent, we send the watermark to the dispatcher.
 		c.sendWatermark(remoteID,
 			task,
@@ -548,8 +544,8 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 						if !ok {
 							log.Warn("Get dispatcher failed", zap.Any("dispatcherID", m.getDispatcherID()))
 							continue
-						} else if d.isInitialized.Load() {
-							log.Info("Ignore handshake event since the dispatcher is initialized", zap.Any("dispatcherID", m.getDispatcherID()))
+						} else if d.isHandshaked.Load() {
+							log.Info("Ignore handshake event since the dispatcher already handshaked", zap.Any("dispatcherID", m.getDispatcherID()))
 							continue
 						}
 					}
@@ -744,8 +740,11 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 	id := info.GetID()
 	span := info.GetTableSpan()
 	startTs := info.GetStartTs()
+	changefeedID := info.GetChangefeedID().ID()
+	changefeedStatus := c.getOrSetChangefeedStatus(changefeedID)
 	workerIndex := int((common.GID)(id).Hash(uint64(c.sendMessageWorkerCount)))
-	dispatcher := newDispatcherStat(startTs, info, filter, workerIndex)
+
+	dispatcher := newDispatcherStat(startTs, info, filter, workerIndex, changefeedStatus)
 	if span.Equal(heartbeatpb.DDLSpan) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
 		log.Info("table trigger dispatcher register dispatcher", zap.Uint64("clusterID", c.tidbClusterID),
@@ -787,7 +786,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 	}
 	dispatcher.updateTableInfo(tableInfo)
 	eventStoreRegisterDuration := time.Since(start)
-
 	c.dispatchers.Store(id, dispatcher)
 
 	log.Info("register dispatcher", zap.Uint64("clusterID", c.tidbClusterID),
@@ -804,11 +802,12 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		c.tableTriggerDispatchers.Delete(id)
 		return
 	}
+	stat.(*dispatcherStat).changefeedStat.removeDispatcher()
 	stat.(*dispatcherStat).isRemoved.Store(true)
 	c.eventStore.UnregisterDispatcher(id)
 	c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
 	c.dispatchers.Delete(id)
-	log.Info("deregister acceptor", zap.Uint64("clusterID", c.tidbClusterID), zap.Any("acceptorID", id))
+	log.Info("remove dispatcher", zap.Uint64("clusterID", c.tidbClusterID), zap.Any("dispatcherID", id))
 }
 
 func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
@@ -835,8 +834,33 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	if !ok {
 		return
 	}
+	stat.resetState(dispatcherInfo.GetStartTs())
 	log.Info("reset dispatcher", zap.Any("dispatcher", stat.id), zap.Uint64("startTs", stat.info.GetStartTs()))
-	stat.resetTs.Store(dispatcherInfo.GetStartTs())
-	stat.isInitialized.Store(false)
-	stat.taskScanning.Store(false)
+}
+
+func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.GID) *changefeedStatus {
+	stat, ok := c.changefeedMap.Load(changefeedID)
+	if !ok {
+		stat = &changefeedStatus{
+			changefeedID: changefeedID,
+		}
+		c.changefeedMap.Store(changefeedID, stat)
+	}
+	return stat.(*changefeedStatus)
+}
+
+func (c *eventBroker) pauseChangefeed(dispatcherInfo DispatcherInfo) {
+	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
+	if !ok {
+		return
+	}
+	stat.changefeedStat.isPaused.Store(true)
+}
+
+func (c *eventBroker) resumeChangefeed(dispatcherInfo DispatcherInfo) {
+	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
+	if !ok {
+		return
+	}
+	stat.changefeedStat.isPaused.Store(false)
 }

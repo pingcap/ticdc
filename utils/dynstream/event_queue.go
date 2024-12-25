@@ -25,10 +25,11 @@ type eventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 func newEventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](option Option, handler H) eventQueue[A, P, T, D, H] {
 	eq := eventQueue[A, P, T, D, H]{
-		option:          option,
-		handler:         handler,
-		eventBlockAlloc: deque.NewBlockAllocator[eventWrap[A, P, T, D, H]](32, 1024),
-		signalQueue:     deque.NewDeque[eventSignal[A, P, T, D, H]](1024, deque.NewBlockAllocator[eventSignal[A, P, T, D, H]](1024, 32)),
+		option:             option,
+		handler:            handler,
+		eventBlockAlloc:    deque.NewBlockAllocator[eventWrap[A, P, T, D, H]](32, 1024),
+		signalQueue:        deque.NewDeque[eventSignal[A, P, T, D, H]](1024, deque.NewBlockAllocator[eventSignal[A, P, T, D, H]](1024, 32)),
+		totalPendingLength: &atomic.Int64{},
 	}
 
 	return eq
@@ -40,10 +41,6 @@ func (q *eventQueue[A, P, T, D, H]) initPath(path *pathInfo[A, P, T, D, H]) {
 		q.signalQueue.PushBack(eventSignal[A, P, T, D, H]{pathInfo: path, eventCount: len})
 		q.totalPendingLength.Add(int64(len))
 	}
-}
-
-func (q *eventQueue[A, P, T, D, H]) removePath(path *pathInfo[A, P, T, D, H]) {
-	// Do nothing
 }
 
 func (q *eventQueue[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) {

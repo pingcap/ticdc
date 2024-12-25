@@ -243,11 +243,18 @@ type Feedback[A Area, P Path, D Dest] struct {
 	Path P
 	Dest D
 
-	Pause bool // Pause or resume the path.
+	FeedbackType int // 0: path feedback, 1: area feedback
+
+	Pause     bool // Pause or resume the path.
+	PauseArea bool // Pause or resume the area.
+}
+
+func (f *Feedback[A, P, D]) IsAreaFeedback() bool {
+	return f.FeedbackType == 1
 }
 
 func (f *Feedback[A, P, D]) String() string {
-	return fmt.Sprintf("DynamicStream Feedback{Area: %v, Path: %v, Pause: %v}", f.Area, f.Path, f.Pause)
+	return fmt.Sprintf("DynamicStream Feedback{Area: %v, Path: %v, Pause: %v, PauseArea: %v}", f.Area, f.Path, f.Pause, f.PauseArea)
 }
 
 func NewDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, option ...Option) DynamicStream[A, P, T, D, H] {
@@ -275,9 +282,8 @@ type Metrics struct {
 	AddPath         int
 	RemovePath      int
 
-	ArrangeStream struct {
-		CreateSolo int
-		RemoveSolo int
-		Shuffle    int
+	MemoryControl struct {
+		UsedMemory int64
+		MaxMemory  int64
 	}
 }

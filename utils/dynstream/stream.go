@@ -163,7 +163,8 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 		case e.newPath:
 			s.eventQueue.initPath(e.pathInfo)
 		case e.pathInfo.removed:
-			s.eventQueue.removePath(e.pathInfo)
+			// The path is removed, so we don't need to handle its events.
+			return
 		default:
 			s.eventQueue.appendEvent(e)
 		}
@@ -270,9 +271,8 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	areaMemStat   *areaMemStat[A, P, T, D, H]
 	sizeHeapIndex int
 
-	pendingSize          int  // The total size(bytes) of pending events in the pendingQueue of the path.
-	paused               bool // The path is paused to send events.
-	lastSwitchPausedTime time.Time
+	pendingSize          atomic.Uint32 // The total size(bytes) of pending events in the pendingQueue of the path.
+	paused               bool          // The path is paused to send events.
 	lastSendFeedbackTime time.Time
 }
 
@@ -299,7 +299,7 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 
 	if event.eventType.Property != PeriodicSignal {
 		pi.pendingQueue.PushBack(event)
-		pi.pendingSize += event.eventSize
+		pi.pendingSize.Add(uint32(event.eventSize))
 		return true
 	}
 
@@ -320,25 +320,12 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 	if !ok {
 		return eventWrap[A, P, T, D, H]{}, false
 	}
-	pi.pendingSize -= e.eventSize
+	pi.pendingSize.Add(uint32(-e.eventSize))
 
 	if pi.areaMemStat != nil {
 		pi.areaMemStat.totalPendingSize.Add(-int64(e.eventSize))
 	}
 	return e, true
-}
-
-func (p *pathInfo[A, P, T, D, H]) SetHeapIndex(index int) {
-	p.sizeHeapIndex = index
-}
-
-func (p *pathInfo[A, P, T, D, H]) GetHeapIndex() int {
-	return p.sizeHeapIndex
-}
-
-func (p *pathInfo[A, P, T, D, H]) LessThan(other *pathInfo[A, P, T, D, H]) bool {
-	// pathSizeHeap should be in descending order. That say the node with the largest pending size is the top.
-	return p.pendingSize > other.pendingSize
 }
 
 // eventWrap contains the event and the path info.
