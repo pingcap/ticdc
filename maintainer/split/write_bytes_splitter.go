@@ -56,7 +56,7 @@ func (m *writeSplitter) split(
 	ctx context.Context,
 	span *heartbeatpb.TableSpan,
 	captureNum int,
-	maxSpanNum int,
+	expectedSpanNum int,
 ) []*heartbeatpb.TableSpan {
 	if m.writeKeyThreshold == 0 {
 		return nil
@@ -76,7 +76,7 @@ func (m *writeSplitter) split(
 		return []*heartbeatpb.TableSpan{span}
 	}
 
-	spansNum := getSpansNumber(len(regions), captureNum, maxSpanNum)
+	spansNum := getSpansNumber(len(regions), captureNum, expectedSpanNum, DefaultMaxSpanNumber)
 	if spansNum <= 1 {
 		log.Warn("only one capture and the regions number less than"+
 			" the maxSpanRegionLimit, skip split span",

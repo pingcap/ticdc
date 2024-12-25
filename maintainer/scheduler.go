@@ -135,7 +135,8 @@ func (s *splitScheduler) doCheck(ret pkgReplica.GroupCheckResult, start time.Tim
 		case replica.OpSplit:
 			fallthrough
 		case replica.OpMergeAndSplit:
-			spans := s.splitter.SplitSpans(context.Background(), totalSpan, len(s.nodeManager.GetAliveNodes()), 0)
+			expectedSpanNum := split.NextExpectedSpansNumber(len(ret.Replications))
+			spans := s.splitter.SplitSpans(context.Background(), totalSpan, len(s.nodeManager.GetAliveNodes()), expectedSpanNum)
 			if len(spans) > 1 {
 				log.Info("split span",
 					zap.String("changefeed", s.changefeedID.Name()),
@@ -179,6 +180,13 @@ func (s *splitScheduler) valid(c replica.CheckResult) (*heartbeatpb.TableSpan, b
 			zap.Int64("tableId", c.Replications[0].Span.TableID),
 			zap.Int("holes", len(holes)), zap.Stringer("checkResult", c))
 		return totalSpan, len(holes) == 0
+	}
+
+	if c.OpType == replica.OpMergeAndSplit && len(c.Replications) >= split.DefaultMaxSpanNumber {
+		log.Debug("skip split operation since the replication number is too large",
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Int64("tableId", c.Replications[0].Span.TableID), zap.Stringer("checkResult", c))
+		return totalSpan, false
 	}
 	return totalSpan, true
 }

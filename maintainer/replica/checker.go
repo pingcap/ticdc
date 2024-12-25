@@ -214,6 +214,9 @@ type rebalanceChecker struct {
 	// fast check, rebalance immediately when both the total load and imbalance ratio is high
 	hardWriteThreshold     float32
 	hardImbalanceThreshold float64
+	// disable rebalance if every span load is lower than the softWriteThreshold or
+	// total span is larger than x
+
 	// slow check, rebalance only if the imbalance condition has lasted for a period of time
 	softWriteThreshold     float32
 	softImbalanceThreshold float64
@@ -234,8 +237,8 @@ func newImbalanceChecker(cfID common.ChangeFeedID) *rebalanceChecker {
 		hardWriteThreshold:     10 * HotSpanWriteThreshold,
 		hardImbalanceThreshold: defaultHardImbalanceThreshold,
 
-		softWriteThreshold:          HotSpanWriteThreshold,
-		softImbalanceThreshold:      2 * defaultHardImbalanceThreshold,
+		softWriteThreshold:          3 * HotSpanWriteThreshold,
+		softImbalanceThreshold:      1.2, // 2 * defaultHardImbalanceThreshold,
 		softRebalanceScoreThreshold: DefaultScoreThreshold,
 		softMergeScoreThreshold:     DefaultScoreThreshold,
 	}
