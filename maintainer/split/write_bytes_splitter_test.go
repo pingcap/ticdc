@@ -173,7 +173,7 @@ func TestSplitRegionsByWrittenKeysCold(t *testing.T) {
 	re := require.New(t)
 	cfID := common.NewChangeFeedIDWithName("test")
 	splitter := newWriteSplitter(cfID, nil, 0)
-	baseSpanNum := getSpansNumber(2, 1, DefaultMaxSpanNumber, DefaultMaxSpanNumber)
+	baseSpanNum := getSpansNumber(2, 1, 0, DefaultMaxSpanNumber)
 	require.Equal(t, 3, baseSpanNum)
 	regions, startKeys, endKeys := prepareRegionsInfo(make([]int, 7))
 	info := splitter.splitRegionsByWrittenKeysV1(0, regions, baseSpanNum) // [2,3,4], [5,6,7], [8]
@@ -199,7 +199,7 @@ func TestNotSplitRegionsByWrittenKeysCold(t *testing.T) {
 	re := require.New(t)
 	cfID := common.NewChangeFeedIDWithName("test")
 	splitter := newWriteSplitter(cfID, nil, 1)
-	baseSpanNum := getSpansNumber(2, 1, DefaultMaxSpanNumber, DefaultMaxSpanNumber)
+	baseSpanNum := getSpansNumber(2, 1, 0, DefaultMaxSpanNumber)
 	require.Equal(t, 3, baseSpanNum)
 	regions, startKeys, endKeys := prepareRegionsInfo(make([]int, 7))
 	info := splitter.splitRegionsByWrittenKeysV1(0, regions, baseSpanNum) // [2,3,4,5,6,7,8]
@@ -269,7 +269,7 @@ func TestSpanRegionLimitBase(t *testing.T) {
 		regions = append(regions, pdutil.NewTestRegionInfo(uint64(i+9), []byte("f"), []byte("f"), 100))
 	}
 	captureNum := 2
-	spanNum := getSpansNumber(len(regions), captureNum, DefaultMaxSpanNumber, DefaultMaxSpanNumber)
+	spanNum := getSpansNumber(len(regions), captureNum, 0, DefaultMaxSpanNumber)
 	info := splitter.splitRegionsByWrittenKeysV1(0, cloneRegions(regions), spanNum)
 	require.Len(t, info.RegionCounts, spanNum)
 	for _, c := range info.RegionCounts {
@@ -341,7 +341,7 @@ func TestSpanRegionLimit(t *testing.T) {
 			pdutil.NewTestRegionInfo(uint64(i+9), []byte("f"), []byte("f"), uint64(writtenKeys[i])))
 	}
 	captureNum := 3
-	spanNum := getSpansNumber(len(regions), captureNum, DefaultMaxSpanNumber, DefaultMaxSpanNumber)
+	spanNum := getSpansNumber(len(regions), captureNum, 0, DefaultMaxSpanNumber)
 	info := splitter.splitRegionsByWrittenKeysV1(0, cloneRegions(regions), spanNum)
 	require.LessOrEqual(t, spanNum, len(info.RegionCounts))
 	for _, c := range info.RegionCounts {
