@@ -50,7 +50,7 @@ func loadPersistentStorageForTest(db *pebble.DB, gcTs uint64, upperBound UpperBo
 }
 
 // create a persistent storage at dbPath with initailDBInfos
-func newPersistentStorageForTest(dbPath string, initailDBInfos map[int64]mockDBInfo) *persistentStorage {
+func newPersistentStorageForTest(dbPath string, initailDBInfos []mockDBInfo) *persistentStorage {
 	if err := os.RemoveAll(dbPath); err != nil {
 		log.Panic("remove path fail", zap.Error(err))
 	}
@@ -90,7 +90,7 @@ type mockDBInfo struct {
 	tables []*model.TableInfo
 }
 
-func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos map[int64]mockDBInfo) {
+func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos []mockDBInfo) {
 	batch := db.NewBatch()
 	defer batch.Close()
 	for _, dbInfo := range dbInfos {
@@ -194,7 +194,8 @@ func buildCreateTableJobForTest(schemaID, tableID int64, tableName string, finis
 	}
 }
 
-func buildCreatePartitionTableJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
+// most partition table related job have the same structure
+func buildPartitionTableRelatedJobForTest(jobType model.ActionType, schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
 	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
 	for _, partitionID := range partitionIDs {
 		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
@@ -202,7 +203,7 @@ func buildCreatePartitionTableJobForTest(schemaID, tableID int64, tableName stri
 		})
 	}
 	return &model.Job{
-		Type:     model.ActionCreateTable,
+		Type:     jobType,
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
@@ -216,6 +217,10 @@ func buildCreatePartitionTableJobForTest(schemaID, tableID int64, tableName stri
 			FinishedTS: finishedTs,
 		},
 	}
+}
+
+func buildCreatePartitionTableJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
+	return buildPartitionTableRelatedJobForTest(model.ActionCreateTable, schemaID, tableID, tableName, partitionIDs, finishedTs)
 }
 
 func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
@@ -231,27 +236,7 @@ func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64) *model
 
 // Note: `partitionIDs` must include all partition IDs of the original table.
 func buildDropPartitionTableJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
-	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
-	for _, partitionID := range partitionIDs {
-		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
-			ID: partitionID,
-		})
-	}
-	return &model.Job{
-		Type:     model.ActionDropTable,
-		SchemaID: schemaID,
-		TableID:  tableID,
-		BinlogInfo: &model.HistoryInfo{
-			TableInfo: &model.TableInfo{
-				ID:   tableID,
-				Name: pmodel.NewCIStr(tableName),
-				Partition: &model.PartitionInfo{
-					Definitions: partitionDefinitions,
-				},
-			},
-			FinishedTS: finishedTs,
-		},
-	}
+	return buildPartitionTableRelatedJobForTest(model.ActionDropTable, schemaID, tableID, tableName, partitionIDs, finishedTs)
 }
 
 func buildTruncateTableJobForTest(schemaID, oldTableID, newTableID int64, tableName string, finishedTs uint64) *model.Job {
@@ -295,56 +280,28 @@ func buildTruncatePartitionTableJobForTest(schemaID, oldTableID, newTableID int6
 
 // Note: `partitionIDs` must include all partition IDs of the table after add partition.
 func buildAddPartitionJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
-	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
-	for _, partitionID := range partitionIDs {
-		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
-			ID: partitionID,
-		})
-	}
-	return &model.Job{
-		Type:     model.ActionAddTablePartition,
-		SchemaID: schemaID,
-		TableID:  tableID,
-		BinlogInfo: &model.HistoryInfo{
-			TableInfo: &model.TableInfo{
-				ID:   tableID,
-				Name: pmodel.NewCIStr(tableName),
-				Partition: &model.PartitionInfo{
-					Definitions: partitionDefinitions,
-				},
-			},
-			FinishedTS: finishedTs,
-		},
-	}
+	return buildPartitionTableRelatedJobForTest(model.ActionAddTablePartition, schemaID, tableID, tableName, partitionIDs, finishedTs)
 }
 
 // Note: `partitionIDs` must include all partition IDs of the table after drop partition.
 func buildDropPartitionJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
-	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
-	for _, partitionID := range partitionIDs {
-		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
-			ID: partitionID,
-		})
-	}
-	return &model.Job{
-		Type:     model.ActionDropTablePartition,
-		SchemaID: schemaID,
-		TableID:  tableID,
-		BinlogInfo: &model.HistoryInfo{
-			TableInfo: &model.TableInfo{
-				ID:   tableID,
-				Name: pmodel.NewCIStr(tableName),
-				Partition: &model.PartitionInfo{
-					Definitions: partitionDefinitions,
-				},
-			},
-			FinishedTS: finishedTs,
-		},
-	}
+	return buildPartitionTableRelatedJobForTest(model.ActionDropTablePartition, schemaID, tableID, tableName, partitionIDs, finishedTs)
 }
 
 // Note: `partitionIDs` must include all partition IDs of the table after truncate partition.
 func buildTruncatePartitionJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
+	return buildPartitionTableRelatedJobForTest(model.ActionTruncateTablePartition, schemaID, tableID, tableName, partitionIDs, finishedTs)
+}
+
+// Note: `partitionIDs` must include all partition IDs of the table after exchange partition.
+func buildExchangePartitionJobForTest(
+	normalSchemaID int64,
+	normalTableID int64,
+	partitionTableID int64,
+	partitionTableName string,
+	partitionIDs []int64,
+	finishedTs uint64,
+) *model.Job {
 	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
 	for _, partitionID := range partitionIDs {
 		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
@@ -352,13 +309,13 @@ func buildTruncatePartitionJobForTest(schemaID, tableID int64, tableName string,
 		})
 	}
 	return &model.Job{
-		Type:     model.ActionTruncateTablePartition,
-		SchemaID: schemaID,
-		TableID:  tableID,
+		Type:     model.ActionExchangeTablePartition,
+		SchemaID: normalSchemaID,
+		TableID:  normalTableID,
 		BinlogInfo: &model.HistoryInfo{
 			TableInfo: &model.TableInfo{
-				ID:   tableID,
-				Name: pmodel.NewCIStr(tableName),
+				ID:   partitionTableID,
+				Name: pmodel.NewCIStr(partitionTableName),
 				Partition: &model.PartitionInfo{
 					Definitions: partitionDefinitions,
 				},

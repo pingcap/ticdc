@@ -1141,12 +1141,21 @@ func updateDatabaseInfoAndTableInfo(
 		delete(databaseInfo.Tables, tableID)
 	}
 
-	createTable := func(schemaID int64, tableID int64) {
+	createTable := func(schemaID int64, tableID int64, tableName string) {
 		addTableToDB(schemaID, tableID)
 		tableMap[tableID] = &BasicTableInfo{
 			SchemaID: schemaID,
-			Name:     event.TableInfo.Name.O,
+			Name:     tableName,
 		}
+	}
+
+	getTableName := func(tableID int64) string {
+		tableInfo, ok := tableMap[tableID]
+		if !ok {
+			log.Panic("table not found",
+				zap.Int64("tableID", tableID))
+		}
+		return tableInfo.Name
 	}
 
 	dropTable := func(schemaID int64, tableID int64) {
@@ -1168,7 +1177,7 @@ func updateDatabaseInfoAndTableInfo(
 		}
 		delete(databaseMap, event.CurrentSchemaID)
 	case model.ActionCreateTable, model.ActionRecoverTable:
-		createTable(event.CurrentSchemaID, event.CurrentTableID)
+		createTable(event.CurrentSchemaID, event.CurrentTableID, event.TableInfo.Name.O)
 		if isPartitionTable(event.TableInfo) {
 			partitionInfo := make(BasicPartitionInfo)
 			for _, id := range getAllPartitionIDs(event.TableInfo) {
@@ -1190,7 +1199,7 @@ func updateDatabaseInfoAndTableInfo(
 		// ignore
 	case model.ActionTruncateTable:
 		dropTable(event.CurrentSchemaID, event.PrevTableID)
-		createTable(event.CurrentSchemaID, event.CurrentTableID)
+		createTable(event.CurrentSchemaID, event.CurrentTableID, event.TableInfo.Name.O)
 		if isPartitionTable(event.TableInfo) {
 			delete(partitionMap, event.PrevTableID)
 			partitionInfo := make(BasicPartitionInfo)
@@ -1244,8 +1253,9 @@ func updateDatabaseInfoAndTableInfo(
 				zap.Int64s("droppedIDs", droppedIDs))
 		}
 		targetPartitionID := droppedIDs[0]
+		normalTableName := getTableName(event.PrevTableID)
 		dropTable(event.PrevSchemaID, event.PrevTableID)
-		createTable(event.PrevSchemaID, targetPartitionID)
+		createTable(event.PrevSchemaID, targetPartitionID, normalTableName)
 		delete(partitionMap[event.CurrentTableID], targetPartitionID)
 		partitionMap[event.CurrentTableID][event.PrevTableID] = nil
 	case model.ActionCreateTables:

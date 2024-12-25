@@ -23,6 +23,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -34,7 +35,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		result      []commonEvent.Table
 	}
 	var testCases = []struct {
-		initailDBInfos              map[int64]mockDBInfo
+		initailDBInfos              []mockDBInfo
 		ddlJobs                     []*model.Job
 		tableMap                    map[int64]*BasicTableInfo
 		partitionMap                map[int64]BasicPartitionInfo
@@ -260,6 +261,69 @@ func TestApplyDDLJobs(t *testing.T) {
 					},
 				},
 			},
+		},
+		// test exchange partition
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+				{
+					dbInfo: &model.DBInfo{
+						ID:   105,
+						Name: pmodel.NewCIStr("test2"),
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreatePartitionTableJobForTest(100, 200, "t1", []int64{201, 202, 203}, 1010),   // create partition table 200
+					buildCreateTableJobForTest(105, 300, "t2", 1020),                                    // create table 300
+					buildExchangePartitionJobForTest(105, 300, 200, "t1", []int64{201, 202, 300}, 1030), // exchange partition 203 with table 300
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				200: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+				203: {
+					SchemaID: 105,
+					Name:     "t2",
+				},
+			},
+			map[int64]BasicPartitionInfo{
+				200: {
+					201: nil,
+					202: nil,
+					300: nil,
+				},
+			},
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						200: true,
+					},
+				},
+				105: {
+					Name: "test2",
+					Tables: map[int64]bool{
+						203: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				300: {1020, 1030},
+				201: {1010},
+				202: {1010},
+				203: {1010, 1030},
+			},
+			[]uint64{1010, 1020, 1030},
+			nil,
 		},
 	}
 
@@ -2251,169 +2315,4 @@ func TestApplyDDLJobs(t *testing.T) {
 // 	}
 
 // 	// TODO: test obsolete data can be removed
-// }
-
-// func TestGetAllPhysicalTables(t *testing.T) {
-// 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
-// 	err := os.RemoveAll(dbPath)
-// 	require.Nil(t, err)
-
-// 	schemaID := int64(300)
-// 	gcTs := uint64(600)
-// 	tableID1 := int64(100)
-// 	tableID2 := tableID1 + 100
-
-// 	databaseInfo := make(map[int64]*model.DBInfo)
-// 	databaseInfo[schemaID] = &model.DBInfo{
-// 		ID:   schemaID,
-// 		Name: model.NewCIStr("test"),
-// 		Tables: []*model.TableInfo{
-// 			{
-// 				ID:   tableID1,
-// 				Name: model.NewCIStr("t1"),
-// 			},
-// 			{
-// 				ID:   tableID2,
-// 				Name: model.NewCIStr("t2"),
-// 			},
-// 		},
-// 	}
-// 	pStorage := newPersistentStorageForTest(dbPath, gcTs, databaseInfo)
-
-// 	// create table t3
-// 	tableID3 := tableID2 + 100
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionCreateTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID3,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 501,
-// 				TableInfo: &model.TableInfo{
-// 					ID:   tableID3,
-// 					Name: model.NewCIStr("t3"),
-// 				},
-
-// 				FinishedTS: 601,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-// 	}
-
-// 	// drop table t2
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionDropTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID2,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 503,
-// 				TableInfo:     nil,
-// 				FinishedTS:    603,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-// 	}
-
-// 	// create partition table t4
-// 	tableID4 := tableID3 + 100
-// 	partitionID1 := tableID4 + 100
-// 	partitionID2 := tableID4 + 200
-// 	partitionID3 := tableID4 + 300
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionCreateTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID4,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 503,
-// 				TableInfo: &model.TableInfo{
-// 					ID:   tableID4,
-// 					Name: model.NewCIStr("t4"),
-// 					Partition: &model.PartitionInfo{
-// 						Definitions: []model.PartitionDefinition{
-// 							{
-// 								ID: partitionID1,
-// 							},
-// 							{
-// 								ID: partitionID2,
-// 							},
-// 							{
-// 								ID: partitionID3,
-// 							},
-// 						},
-// 					},
-// 				},
-// 				FinishedTS: 609,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-// 	}
-
-// 	// drop partition table t4
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionDropTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID4,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 505,
-// 				TableInfo: &model.TableInfo{
-// 					ID:   tableID4,
-// 					Name: model.NewCIStr("t4"),
-// 					Partition: &model.PartitionInfo{
-// 						Definitions: []model.PartitionDefinition{
-// 							{
-// 								ID: partitionID1,
-// 							},
-// 							{
-// 								ID: partitionID2,
-// 							},
-// 							{
-// 								ID: partitionID3,
-// 							},
-// 						},
-// 					},
-// 				},
-// 				FinishedTS: 611,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-// 	}
-
-// 	{
-// 		allPhysicalTables, err := pStorage.getAllPhysicalTables(600, nil)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 2, len(allPhysicalTables))
-// 	}
-
-// 	{
-// 		allPhysicalTables, err := pStorage.getAllPhysicalTables(601, nil)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 3, len(allPhysicalTables))
-// 	}
-
-// 	{
-// 		allPhysicalTables, err := pStorage.getAllPhysicalTables(603, nil)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 2, len(allPhysicalTables))
-// 	}
-
-// 	{
-// 		allPhysicalTables, err := pStorage.getAllPhysicalTables(605, nil)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 2, len(allPhysicalTables))
-// 	}
-
-// 	{
-// 		allPhysicalTables, err := pStorage.getAllPhysicalTables(609, nil)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 5, len(allPhysicalTables))
-// 	}
-
-// 	{
-// 		allPhysicalTables, err := pStorage.getAllPhysicalTables(611, nil)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 2, len(allPhysicalTables))
-// 	}
 // }
