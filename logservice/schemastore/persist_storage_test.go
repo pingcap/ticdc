@@ -427,6 +427,128 @@ func TestApplyDDLJobs(t *testing.T) {
 			[]uint64{1010, 1020},
 			nil,
 		},
+		// test create tables
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateTablesJobForTest(100, []int64{301, 302, 303}, []string{"t1", "t2", "t3"}, 1010), // create table 301, 302, 303
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				301: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+				302: {
+					SchemaID: 100,
+					Name:     "t2",
+				},
+				303: {
+					SchemaID: 100,
+					Name:     "t3",
+				},
+			},
+			nil,
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						301: true,
+						302: true,
+						303: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				301: {1010},
+				302: {1010},
+				303: {1010},
+			},
+			[]uint64{1010},
+			nil,
+		},
+		// test create tables for partition table
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreatePartitionTablesJobForTest(100,
+						[]int64{300, 400, 500},
+						[]string{"t1", "t2", "t3"},
+						[][]int64{{301, 302, 303}, {401, 402, 403}, {501, 502, 503}},
+						1010), // create table 301, 302, 303
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				300: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+				400: {
+					SchemaID: 100,
+					Name:     "t2",
+				},
+				500: {
+					SchemaID: 100,
+					Name:     "t3",
+				},
+			},
+			map[int64]BasicPartitionInfo{
+				300: {
+					301: nil,
+					302: nil,
+					303: nil,
+				},
+				400: {
+					401: nil,
+					402: nil,
+					403: nil,
+				},
+				500: {
+					501: nil,
+					502: nil,
+					503: nil,
+				},
+			},
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						300: true,
+						400: true,
+						500: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				301: {1010},
+				302: {1010},
+				303: {1010},
+				401: {1010},
+				402: {1010},
+				403: {1010},
+				501: {1010},
+				502: {1010},
+				503: {1010},
+			},
+			[]uint64{1010},
+			nil,
+		},
 	}
 
 	for _, tt := range testCases {

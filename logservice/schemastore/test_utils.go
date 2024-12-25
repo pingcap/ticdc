@@ -19,6 +19,7 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
@@ -190,6 +191,57 @@ func buildCreateTableJobForTest(schemaID, tableID int64, tableName string, finis
 				Name: pmodel.NewCIStr(tableName),
 			},
 			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildCreateTablesJobForTest(schemaID int64, tableIDs []int64, tableNames []string, finishedTs uint64) *model.Job {
+	multiTableInfos := make([]*model.TableInfo, 0, len(tableIDs))
+	querys := make([]string, 0, len(tableIDs))
+	for i, id := range tableIDs {
+		multiTableInfos = append(multiTableInfos, &model.TableInfo{
+			ID:   id,
+			Name: pmodel.NewCIStr(tableNames[i]),
+		})
+		querys = append(querys, fmt.Sprintf("create table %s(a int primary key)", tableNames[i]))
+	}
+	return &model.Job{
+		Type:     model.ActionCreateTables,
+		SchemaID: schemaID,
+		Query:    strings.Join(querys, ";"),
+		BinlogInfo: &model.HistoryInfo{
+			MultipleTableInfos: multiTableInfos,
+			FinishedTS:         finishedTs,
+		},
+	}
+}
+
+func buildCreatePartitionTablesJobForTest(schemaID int64, tableIDs []int64, tableNames []string, partitionIDLists [][]int64, finishedTs uint64) *model.Job {
+	multiTableInfos := make([]*model.TableInfo, 0, len(tableIDs))
+	querys := make([]string, 0, len(tableIDs))
+	for i, id := range tableIDs {
+		partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDLists[i]))
+		for _, partitionID := range partitionIDLists[i] {
+			partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
+				ID: partitionID,
+			})
+		}
+		multiTableInfos = append(multiTableInfos, &model.TableInfo{
+			ID:   id,
+			Name: pmodel.NewCIStr(tableNames[i]),
+			Partition: &model.PartitionInfo{
+				Definitions: partitionDefinitions,
+			},
+		})
+		querys = append(querys, fmt.Sprintf("create table %s(a int primary key)", tableNames[i]))
+	}
+	return &model.Job{
+		Type:     model.ActionCreateTables,
+		SchemaID: schemaID,
+		Query:    strings.Join(querys, ";"),
+		BinlogInfo: &model.HistoryInfo{
+			MultipleTableInfos: multiTableInfos,
+			FinishedTS:         finishedTs,
 		},
 	}
 }
