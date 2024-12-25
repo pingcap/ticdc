@@ -272,10 +272,12 @@ func (w *MysqlWriter) SendDDLTs(event *commonEvent.DDLEvent) error {
 		case commonEvent.InfluenceTypeNormal:
 			dropTableIds = append(dropTableIds, dropTables.TableIDs...)
 		case commonEvent.InfluenceTypeDB:
-			ids := w.tableSchemaStore.GetTableIdsByDB(dropTables.SchemaID)
+			// for drop table, we will never delete the item of table trigger, so we get normal table ids for the schemaID.
+			ids := w.tableSchemaStore.GetNormalTableIdsByDB(dropTables.SchemaID)
 			dropTableIds = append(dropTableIds, ids...)
 		case commonEvent.InfluenceTypeAll:
-			ids := w.tableSchemaStore.GetAllTableIds()
+			// for drop table, we will never delete the item of table trigger, so we get normal table ids for the schemaID.
+			ids := w.tableSchemaStore.GetAllNormalTableIds()
 			dropTableIds = append(dropTableIds, ids...)
 		}
 	}
@@ -312,6 +314,7 @@ func (w *MysqlWriter) SendDDLTs(event *commonEvent.DDLEvent) error {
 		builder.WriteString(" ON DUPLICATE KEY UPDATE ddl_ts=VALUES(ddl_ts), created_at=CURRENT_TIMESTAMP;")
 
 		query := builder.String()
+		log.Debug("send ddl ts table query", zap.String("query", query))
 
 		_, err = tx.Exec(query)
 		if err != nil {
@@ -350,6 +353,7 @@ func (w *MysqlWriter) SendDDLTs(event *commonEvent.DDLEvent) error {
 
 		builder.WriteString(")")
 		query := builder.String()
+		log.Debug("send ddl ts table query", zap.String("query", query))
 
 		_, err = tx.Exec(query)
 		if err != nil {

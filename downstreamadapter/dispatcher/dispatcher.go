@@ -237,13 +237,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 					}
 					return
 				}
-				log.Info("hyy before BlockReportAfterWrite")
-				// failpoint.Inject("BlockReportAfterWrite", nil)
-				failpoint.Inject("BlockReportAfterWrite", func() {
-					log.Info("hyy into BlockReportAfterWrite")
-					time.Sleep(5000)
-				})
-				log.Info("hyy after BlockReportAfterWrite")
+				failpoint.Inject("BlockReportAfterWrite", nil)
 			} else {
 				d.PassBlockEventToSink(pendingEvent)
 			}
@@ -327,10 +321,10 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				zap.Int64("table", event.TableID),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
-			if d.tableSchemaStore != nil {
-				d.tableSchemaStore.AddEvent(event)
-			}
 			event.AddPostFlushFunc(func() {
+				if d.tableSchemaStore != nil {
+					d.tableSchemaStore.AddEvent(event)
+				}
 				wakeCallback()
 			})
 			d.dealWithBlockEvent(event)

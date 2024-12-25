@@ -27,8 +27,8 @@ function failOverCaseA() {
 	## server 1
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-	## server 2
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
+	# ## server 2
+	# run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 	
 	TOPIC_NAME="ticdc-failover-ddl-test-two-node-$RANDOM"
 	case $SINK_TYPE in
@@ -45,9 +45,10 @@ function failOverCaseA() {
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
 	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
-	esac
+	esac	
 
     run_sql "drop database if exists fail_over_ddl_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "drop database if exists fail_over_ddl_test2;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
     run_sql "create database fail_over_ddl_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
     run_sql "create table fail_over_ddl_test.test1 (id int primary key, val int);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
     run_sql "create table fail_over_ddl_test.test2 (id int primary key, val int);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -55,24 +56,35 @@ function failOverCaseA() {
 
     check_table_exists fail_over_ddl_test.test3 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockReportAfterWrite=return(true)'
-
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/HandleEventsSlowly=return(true)'
+	# restart cdc server to enable failpoint
+	kill_cdc_pid $cdc_pid_1
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockReportAfterWrite=pause'
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
+	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
     run_sql "drop database fail_over_ddl_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "create database fail_over_ddl_test2;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
     ## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
-	sleep 100
+	sleep 5
+
+	# to ensure the failpoint is effective(the first ddl executed and block, so the next ddl must not be executed)
+	run_sql "show databases;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
+		check_contains "fail_over_ddl_test"
+	run_sql "show databases;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
+		check_not_contains "fail_over_ddl_test2"
+
 	
-    kill_cdc_pid $cdc_pid_1
+	kill_cdc_pid $cdc_pid_1
 	cdc_pid_2=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
     kill_cdc_pid $cdc_pid_2
 
     export GO_FAILPOINTS=''
 
     # restart cdc server
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
     run_sql "show databases;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
 		check_not_contains "fail_over_test"
@@ -87,5 +99,6 @@ function failOverCaseA() {
 
 trap stop_tidb_cluster EXIT
 failOverCaseA $*
+
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

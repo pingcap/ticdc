@@ -105,8 +105,10 @@ func (s *TableSchemaStore) Clear() {
 }
 
 func (s *TableSchemaStore) AddEvent(event *commonEvent.DDLEvent) {
+	log.Info("hyy TableSchemaStore AddEvent", zap.Any("event", event), zap.Any("sinkType", s.sinkType))
 	if s.sinkType == commonType.MysqlSinkType {
 		s.tableIDStore.AddEvent(event)
+		log.Info("hyy TableSchemaStore AddEvent", zap.Any("event", event))
 	} else {
 		s.tableNameStore.AddEvent(event)
 	}
@@ -127,11 +129,27 @@ func (s *TableSchemaStore) GetTableIdsByDB(schemaID int64) []int64 {
 	return s.tableIDStore.GetTableIdsByDB(schemaID)
 }
 
+// GetNormalTableIdsByDB will not return table id = 0 , this is the only different between GetTableIdsByDB and GetNormalTableIdsByDB
+func (s *TableSchemaStore) GetNormalTableIdsByDB(schemaID int64) []int64 {
+	if !s.initialized() {
+		return nil
+	}
+	return s.tableIDStore.GetNormalTableIdsByDB(schemaID)
+}
+
 func (s *TableSchemaStore) GetAllTableIds() []int64 {
 	if !s.initialized() {
 		return nil
 	}
 	return s.tableIDStore.GetAllTableIds()
+}
+
+// GetAllNormalTableIds will not return table id = 0 , this is the only different between GetAllNormalTableIds and GetAllTableIds
+func (s *TableSchemaStore) GetAllNormalTableIds() []int64 {
+	if !s.initialized() {
+		return nil
+	}
+	return s.tableIDStore.GetAllNormalTableIds()
 }
 
 // GetAllTableNames only will be called when maintainer send message to ask dispatcher to write checkpointTs to downstream.
@@ -287,10 +305,9 @@ func (s *TableIDStore) AddEvent(event *commonEvent.DDLEvent) {
 			s.tableIDToSchemaID[schemaIDChange.TableID] = schemaIDChange.NewSchemaID
 		}
 	}
-
 }
 
-func (s *TableIDStore) GetTableIdsByDB(schemaID int64) []int64 {
+func (s *TableIDStore) GetNormalTableIdsByDB(schemaID int64) []int64 {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -299,19 +316,29 @@ func (s *TableIDStore) GetTableIdsByDB(schemaID int64) []int64 {
 	for tableID := range tables {
 		tableIds = append(tableIds, tableID)
 	}
+	return tableIds
+}
+
+func (s *TableIDStore) GetTableIdsByDB(schemaID int64) []int64 {
+	tableIds := s.GetNormalTableIdsByDB(schemaID)
 	// Add the table id of the span of table trigger event dispatcher
 	// Each influence-DB ddl must have table trigger event dispatcher's participation
 	tableIds = append(tableIds, heartbeatpb.DDLSpan.TableID)
 	return tableIds
 }
 
-func (s *TableIDStore) GetAllTableIds() []int64 {
+func (s *TableIDStore) GetAllNormalTableIds() []int64 {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	tableIds := make([]int64, 0, len(s.tableIDToSchemaID))
 	for tableID := range s.tableIDToSchemaID {
 		tableIds = append(tableIds, tableID)
 	}
+	return tableIds
+}
+
+func (s *TableIDStore) GetAllTableIds() []int64 {
+	tableIds := s.GetAllNormalTableIds()
 	// Add the table id of the span of table trigger event dispatcher
 	// Each influence-DB ddl must have table trigger event dispatcher's participation
 	tableIds = append(tableIds, heartbeatpb.DDLSpan.TableID)
