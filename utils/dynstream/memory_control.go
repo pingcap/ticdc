@@ -1,24 +1,26 @@
 package dynstream
 
 import (
-	"math/rand/v2"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/utils/heap"
 	"go.uber.org/zap"
 )
 
-var maxMemoryUsageMetric = metrics.DynamicStreamMemoryUsage.WithLabelValues("max")
-var usedMemoryUsageMetric = metrics.DynamicStreamMemoryUsage.WithLabelValues("used")
+var (
+	maxMemoryUsageMetric  = metrics.DynamicStreamMemoryUsage.WithLabelValues("max")
+	usedMemoryUsageMetric = metrics.DynamicStreamMemoryUsage.WithLabelValues("used")
+)
 
 // memoryPauseRule defines a mapping rule between memory usage ratio and path pause ratio
 type memoryPauseRule struct {
 	// alarmThreshold represents the memory usage ratio (used/max) that triggers the control
 	// e.g., 0.95 means when memory usage reaches 95% of max allowed memory
 	alarmThreshold float64
-
 	// pausePathRatio represents the proportion of paths that should be paused
 	// e.g., 1.0 means pause all paths, 0.5 means pause top 50% paths with largest pending size
 	pausePathRatio float64
@@ -60,11 +62,7 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	pathCount        int
 	totalPendingSize atomic.Int64
 
-	// maxPendingPath is the path with the largest pending size.
-	maxPendingPath struct {
-		path atomic.Pointer[pathInfo[A, P, T, D, H]]
-		size atomic.Int64
-	}
+	pathSizeHeap *pathSizeHeap[A, P, T, D, H]
 }
 
 func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
@@ -79,16 +77,14 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 		memControl:   memoryControl,
 		feedbackChan: feedbackChan,
 	}
+
+	res.pathSizeHeap = &pathSizeHeap[A, P, T, D, H]{
+		h:              heap.NewHeap[*pathInfo[A, P, T, D, H]](),
+		lastUpdateTime: time.Now(),
+	}
+
 	res.settings.Store(&settings)
 	return res
-}
-
-func (as *areaMemStat[A, P, T, D, H]) updateMaxPendingPath(path *pathInfo[A, P, T, D, H]) {
-	if as.maxPendingPath.path.Load() == nil ||
-		as.maxPendingPath.size.Load() < int64(path.pendingSize) {
-		as.maxPendingPath.path.Store(path)
-		as.maxPendingPath.size.Store(int64(path.pendingSize))
-	}
 }
 
 // This method is called by streams' handleLoop concurrently.
@@ -99,22 +95,20 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	event eventWrap[A, P, T, D, H],
 	handler H,
 ) bool {
-	dropped := false
+	defer as.updatePathPauseState(path, event)
+
 	if as.shouldDropEvent(path, event, handler) {
 		// Drop the event
 		handler.OnDrop(event.event)
-		dropped = true
-	} else {
-		// Add the event to the pending queue.
-		path.pendingQueue.PushBack(event)
-		// Update the pending size.
-		path.pendingSize += event.eventSize
-		as.totalPendingSize.Add(int64(event.eventSize))
-		as.updateMaxPendingPath(path)
+		return true
 	}
-	as.updatePathPauseState(path, event)
-
-	return dropped
+	// Add the event to the pending queue.
+	path.pendingQueue.PushBack(event)
+	// Update the pending size.
+	path.pendingSize += event.eventSize
+	as.totalPendingSize.Add(int64(event.eventSize))
+	as.pathSizeHeap.tryUpdate(false)
+	return false
 }
 
 // shouldDropEvent determines if an event should be dropped.
@@ -147,8 +141,8 @@ func (as *areaMemStat[A, P, T, D, H]) shouldDropEvent(
 	}
 
 	// Drop the events of the largest pending size path to find a place for the new event.
-	longestPath := as.maxPendingPath.path.Load()
-	if longestPath == nil {
+	longestPath, ok := as.pathSizeHeap.peek()
+	if !ok {
 		log.Warn("There is no max pending path, but exceed MaxPendingSize, it should not happen",
 			zap.Any("area", as.area), zap.Any("path", path.path))
 		return true
@@ -161,13 +155,15 @@ func (as *areaMemStat[A, P, T, D, H]) shouldDropEvent(
 		return true
 	}
 
-	// If the event's timestamp is larger than the smallest event of about-to-drop path, drop the event.
-	// OR, If the longest path is the same as the current path, drop the event.
+	// Drop the event if:
+	// 1. The current event's timestamp is larger than the smallest event of about-to-drop path.
+	// 2. OR, The longest path is the same as the current path.
 	if front.timestamp <= event.timestamp ||
 		longestPath.path == path.path {
 		return true
 	}
 
+	// Drop the events of the longest path until the pending size is less than the max allowed size.
 	for longestPath.pendingQueue.Length() != 0 {
 		back, _ := longestPath.pendingQueue.PopBack()
 		handler.OnDrop(back.event)
@@ -177,6 +173,13 @@ func (as *areaMemStat[A, P, T, D, H]) shouldDropEvent(
 			break
 		}
 	}
+
+	// Force update the heap when the longest path is changed.
+	as.pathSizeHeap.tryUpdate(true)
+
+	// Note: If the pending size is still larger than the max allowed size,
+	// we will just append this event to the pending queue.
+	// This is because the memory control does not have to be very accurate and strict.
 
 	return false
 }
@@ -229,13 +232,19 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 }
 
 // shouldPausePath determines if a path should be paused based on memory usage.
+// 1. Find the stopMaxIndex, which is the index of the path that should be paused in the heap.
+// 2. If the path is not in the heap, it should be paused only if all the paths in the heap should be paused.
+// 3. If the path is in the heap, it should be paused if its index in the heap is smaller than the stopMaxIndex.
 func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D, H]) bool {
 	memoryUsageRatio := float64(as.totalPendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
 	pausePathRatio := findPausePathRatio(memoryUsageRatio)
-	if pausePathRatio == 0 {
+
+	stopMaxIndex := int(float64(as.pathSizeHeap.h.Len()) * pausePathRatio)
+	if stopMaxIndex == 0 {
 		return false
 	}
-	return rand.Float64() < pausePathRatio
+
+	return path.sizeHeapIndex < stopMaxIndex
 }
 
 // A memControl is used to control the memory usage of the dynamic stream.
@@ -275,7 +284,7 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 
 	path.areaMemStat = area
 	area.pathCount++
-
+	area.pathSizeHeap.push(path)
 	// Update the settings
 	area.settings.Store(&settings)
 }
@@ -287,6 +296,7 @@ func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
+	area.pathSizeHeap.remove(path)
 
 	area.pathCount--
 	if area.pathCount == 0 {
@@ -308,6 +318,53 @@ func (m *memControl[A, P, T, D, H]) updateMetrics() {
 	usedMemoryUsageMetric.Set(float64(usedMemory))
 }
 
-func isPeriodicSignal[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](event eventWrap[A, P, T, D, H]) bool {
-	return event.eventType.Property == PeriodicSignal
+// pathSizeHeap is a heap to store the paths by their pending size.
+// Note: All the methods of this heap should be thread safe.
+// It is used to:
+// 1. Find the path with the largest pending size.
+// 2. Determine if a path should be paused based on the memory usage.
+type pathSizeHeap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
+	sync.RWMutex
+	h              *heap.Heap[*pathInfo[A, P, T, D, H]]
+	lastUpdateTime time.Time
+	// Limit the update interval to avoid cpu overhead.
+	// We don't need a very accurate heap, so 100ms is enough.
+	updateInterval time.Duration
+}
+
+func newPathSizeHeap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]]() *pathSizeHeap[A, P, T, D, H] {
+	return &pathSizeHeap[A, P, T, D, H]{
+		h:              heap.NewHeap[*pathInfo[A, P, T, D, H]](),
+		lastUpdateTime: time.Now(),
+		updateInterval: 100 * time.Millisecond,
+	}
+}
+
+func (h *pathSizeHeap[A, P, T, D, H]) push(path *pathInfo[A, P, T, D, H]) {
+	h.Lock()
+	defer h.Unlock()
+	h.h.AddOrUpdate(path)
+}
+
+func (h *pathSizeHeap[A, P, T, D, H]) peek() (*pathInfo[A, P, T, D, H], bool) {
+	h.RLock()
+	defer h.RUnlock()
+	return h.h.PeekTop()
+}
+
+func (h *pathSizeHeap[A, P, T, D, H]) remove(path *pathInfo[A, P, T, D, H]) {
+	h.Lock()
+	defer h.Unlock()
+	h.h.Remove(path)
+}
+
+func (h *pathSizeHeap[A, P, T, D, H]) tryUpdate(force bool) {
+	h.Lock()
+	defer h.Unlock()
+	if !force && time.Since(h.lastUpdateTime) < h.updateInterval {
+		return
+	}
+
+	h.h.Fix()
+	h.lastUpdateTime = time.Now()
 }

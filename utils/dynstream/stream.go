@@ -11,115 +11,7 @@ import (
 	"github.com/pingcap/ticdc/utils/deque"
 )
 
-var nextReportRound = atomic.Int64{}
-
 const BlockLenInPendingQueue = 32
-
-// ====== internal types ======
-
-// An area info contains the path nodes of the area in a stream.
-// Note that the instance is stream level, not global level.
-type streamAreaInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	area A
-
-	// The path bound to the area info instance.
-	// Since timestampHeap and queueTimeHeap only store the paths who has pending events,
-	// the pathCount could be larger than the length of the heaps.
-	pathCount int
-}
-
-// pathInfo contains the status of a path.
-// Note that although this struct is used by multiple goroutines, it doesn't need synchronization because
-// different fields are either immutable or accessed by different goroutines.
-// We use one struct to store them together to avoid mapping by path in different places in many times,
-// and to avoid the overhead of creating a new struct.
-
-type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	area A
-	path P
-	dest D
-
-	// The current stream this path belongs to.
-	stream *stream[A, P, T, D, H]
-	// This field is used to mark the path as removed, so that the handle goroutine can ignore it.
-	// Note that we should not need to use a atomic.Bool here, because this field is set by the RemovePaths method,
-	// and we use sync.WaitGroup to wait for finish. So if RemovePaths is called in the handle goroutine, it should be
-	// guaranteed to see the memory change of this field.
-	removed bool
-	// The path is blocked by the handler.
-	blocking bool
-
-	// The pending events of the path.
-	pendingQueue *deque.Deque[eventWrap[A, P, T, D, H]]
-
-	// Fields used by the memory control.
-	areaMemStat *areaMemStat[A, P, T, D, H]
-
-	pendingSize          int  // The total size(bytes) of pending events in the pendingQueue of the path.
-	paused               bool // The path is paused to send events.
-	lastSwitchPausedTime time.Time
-	lastSendFeedbackTime time.Time
-}
-
-func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A, path P, dest D) *pathInfo[A, P, T, D, H] {
-	pi := &pathInfo[A, P, T, D, H]{
-		area:         area,
-		path:         path,
-		dest:         dest,
-		pendingQueue: deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
-	}
-	return pi
-}
-
-func (pi *pathInfo[A, P, T, D, H]) setStream(stream *stream[A, P, T, D, H]) {
-	pi.stream = stream
-}
-
-// appendEvent appends an event to the pending queue.
-// It returns true if the event is appended successfully.
-func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], handler H) bool {
-	if pi.areaMemStat != nil {
-		return pi.areaMemStat.appendEvent(pi, event, handler)
-	}
-
-	if event.eventType.Property != PeriodicSignal {
-		pi.pendingQueue.PushBack(event)
-		pi.pendingSize += event.eventSize
-		return true
-	}
-	back, ok := pi.pendingQueue.BackRef()
-	if ok && back.eventType.Property == PeriodicSignal {
-		// If the last event is a periodic signal, we only need to keep the latest one.
-		// And we don't need to add a new signal.
-		*back = event
-		return false
-	} else {
-		pi.pendingQueue.PushBack(event)
-		return true
-	}
-}
-
-// eventWrap contains the event and the path info.
-// It can be a event or a wake signal.
-type eventWrap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	event   T
-	wake    bool
-	newPath bool
-
-	pathInfo *pathInfo[A, P, T, D, H]
-
-	paused    bool
-	eventSize int
-	eventType EventType
-
-	timestamp Timestamp
-	queueTime time.Time
-}
-
-type doneInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	pathInfo   *pathInfo[A, P, T, D, H]
-	handleTime time.Duration
-}
 
 // A stream uses two goroutines
 // 1. handleLoop: to handle the events.
@@ -130,7 +22,7 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	handler Handler[A, P, T, D]
 
 	// These fields are used when UseBuffer is true.
-	// They are used to buffer the events between the reciever and the handleLoop.
+	// They are used to buffer the events between the receiver and the handleLoop.
 	bufferCount atomic.Int64
 	inChan      chan eventWrap[A, P, T, D, H] // The buffer channel to receive the events.
 	outChan     chan eventWrap[A, P, T, D, H] // The buffer channel to send the events.
@@ -138,7 +30,8 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// The channel used by the handleLoop to receive the events.
 	eventChan chan eventWrap[A, P, T, D, H]
 
-	eventQueue eventQueue[A, P, T, D, H] // The queue to store the pending events.
+	// The queue to store the pending events of this stream.
+	eventQueue eventQueue[A, P, T, D, H]
 
 	option Option
 
@@ -195,8 +88,9 @@ func (s *stream[A, P, T, D, H]) start() {
 	if s.isClosed.Load() {
 		panic("The stream has been closed.")
 	}
+
 	if s.option.UseBuffer {
-		go s.reciever()
+		go s.receiver()
 	}
 
 	s.handleWg.Add(1)
@@ -218,7 +112,7 @@ func (s *stream[A, P, T, D, H]) close(wait ...bool) {
 	}
 }
 
-func (s *stream[A, P, T, D, H]) reciever() {
+func (s *stream[A, P, T, D, H]) receiver() {
 	buffer := deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue)
 	defer func() {
 		// Move all remaining events in the buffer to the outChan.
@@ -344,4 +238,122 @@ Loop:
 			}
 		}
 	}
+}
+
+// ====== internal types ======
+
+// pathInfo contains the status of a path.
+// Note that although this struct is used by multiple goroutines, it doesn't need synchronization because
+// different fields are either immutable or accessed by different goroutines.
+// We use one struct to store them together to avoid mapping by path in different places in many times,
+// and to avoid the overhead of creating a new struct.
+
+type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
+	area A
+	path P
+	dest D
+
+	// The current stream this path belongs to.
+	stream *stream[A, P, T, D, H]
+	// This field is used to mark the path as removed, so that the handle goroutine can ignore it.
+	// Note that we should not need to use a atomic.Bool here, because this field is set by the RemovePaths method,
+	// and we use sync.WaitGroup to wait for finish. So if RemovePaths is called in the handle goroutine, it should be
+	// guaranteed to see the memory change of this field.
+	removed bool
+	// The path is blocked by the handler.
+	blocking bool
+
+	// The pending events of the path.
+	pendingQueue *deque.Deque[eventWrap[A, P, T, D, H]]
+
+	// Fields used by the memory control.
+	areaMemStat   *areaMemStat[A, P, T, D, H]
+	sizeHeapIndex int
+
+	pendingSize          int  // The total size(bytes) of pending events in the pendingQueue of the path.
+	paused               bool // The path is paused to send events.
+	lastSwitchPausedTime time.Time
+	lastSendFeedbackTime time.Time
+}
+
+func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A, path P, dest D) *pathInfo[A, P, T, D, H] {
+	pi := &pathInfo[A, P, T, D, H]{
+		area:         area,
+		path:         path,
+		dest:         dest,
+		pendingQueue: deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
+	}
+	return pi
+}
+
+func (pi *pathInfo[A, P, T, D, H]) setStream(stream *stream[A, P, T, D, H]) {
+	pi.stream = stream
+}
+
+// appendEvent appends an event to the pending queue.
+// It returns true if the event is appended successfully.
+func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], handler H) bool {
+	if pi.areaMemStat != nil {
+		return pi.areaMemStat.appendEvent(pi, event, handler)
+	}
+
+	if event.eventType.Property != PeriodicSignal {
+		pi.pendingQueue.PushBack(event)
+		pi.pendingSize += event.eventSize
+		return true
+	}
+
+	back, ok := pi.pendingQueue.BackRef()
+	if ok && back.eventType.Property == PeriodicSignal {
+		// If the last event is a periodic signal, we only need to keep the latest one.
+		// And we don't need to add a new signal.
+		*back = event
+		return false
+	} else {
+		pi.pendingQueue.PushBack(event)
+		return true
+	}
+}
+
+func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
+	e, ok := pi.pendingQueue.PopFront()
+	if !ok {
+		return eventWrap[A, P, T, D, H]{}, false
+	}
+	pi.pendingSize -= e.eventSize
+
+	if pi.areaMemStat != nil {
+		pi.areaMemStat.totalPendingSize.Add(-int64(e.eventSize))
+	}
+	return e, true
+}
+
+func (p *pathInfo[A, P, T, D, H]) SetHeapIndex(index int) {
+	p.sizeHeapIndex = index
+}
+
+func (p *pathInfo[A, P, T, D, H]) GetHeapIndex() int {
+	return p.sizeHeapIndex
+}
+
+func (p *pathInfo[A, P, T, D, H]) LessThan(other *pathInfo[A, P, T, D, H]) bool {
+	// pathSizeHeap should be in descending order. That say the node with the largest pending size is the top.
+	return p.pendingSize > other.pendingSize
+}
+
+// eventWrap contains the event and the path info.
+// It can be a event or a wake signal.
+type eventWrap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
+	event   T
+	wake    bool
+	newPath bool
+
+	pathInfo *pathInfo[A, P, T, D, H]
+
+	paused    bool
+	eventSize int
+	eventType EventType
+
+	timestamp Timestamp
+	queueTime time.Time
 }

@@ -110,3 +110,8 @@ func (h *Heap[T]) All() []T {
 func (h *Heap[T]) IsEmpty() bool {
 	return len(h.items) == 0
 }
+
+// Fix re-establishes the heap ordering.
+func (h *Heap[T]) Fix() {
+	heap.Fix(h, 0)
+}
