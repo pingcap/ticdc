@@ -6,14 +6,8 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/heap"
 	"go.uber.org/zap"
-)
-
-var (
-	maxMemoryUsageMetric  = metrics.DynamicStreamMemoryUsage.WithLabelValues("max")
-	usedMemoryUsageMetric = metrics.DynamicStreamMemoryUsage.WithLabelValues("used")
 )
 
 // memoryPauseRule defines a mapping rule between memory usage ratio and path pause ratio
@@ -78,10 +72,7 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 		feedbackChan: feedbackChan,
 	}
 
-	res.pathSizeHeap = &pathSizeHeap[A, P, T, D, H]{
-		h:              heap.NewHeap[*pathInfo[A, P, T, D, H]](),
-		lastUpdateTime: time.Now(),
-	}
+	res.pathSizeHeap = newPathSizeHeap[A, P, T, D, H]()
 
 	res.settings.Store(&settings)
 	return res
@@ -96,6 +87,17 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	handler H,
 ) bool {
 	defer as.updatePathPauseState(path, event)
+
+	// Check if we should merge periodic signals.
+	if event.eventType.Property == PeriodicSignal {
+		back, ok := path.pendingQueue.BackRef()
+		if ok && back.eventType.Property == PeriodicSignal {
+			// If the last event is a periodic signal, we only need to keep the latest one.
+			// And we don't need to add a new signal.
+			*back = event
+			return false
+		}
+	}
 
 	if as.shouldDropEvent(path, event, handler) {
 		// Drop the event
@@ -239,12 +241,16 @@ func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D,
 	memoryUsageRatio := float64(as.totalPendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
 	pausePathRatio := findPausePathRatio(memoryUsageRatio)
 
-	stopMaxIndex := int(float64(as.pathSizeHeap.h.Len()) * pausePathRatio)
-	if stopMaxIndex == 0 {
-		return false
-	}
+	stopMaxIndex := int(float64(as.pathSizeHeap.len()) * pausePathRatio)
 
-	return path.sizeHeapIndex < stopMaxIndex
+	switch pausePathRatio {
+	case 0:
+		return false
+	case 1:
+		return true
+	default:
+		return path.sizeHeapIndex <= stopMaxIndex
+	}
 }
 
 // A memControl is used to control the memory usage of the dynamic stream.
@@ -305,20 +311,19 @@ func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D
 }
 
 // FIXME/TODO: We use global metric here, which is not good for multiple streams.
-func (m *memControl[A, P, T, D, H]) updateMetrics() {
+func (m *memControl[A, P, T, D, H]) getMetrics() (usedMemory int64, maxMemory int64) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	usedMemory := int64(0)
-	maxMemory := 0
+	usedMemory = int64(0)
+	maxMemory = int64(0)
 	for _, area := range m.areaStatMap {
 		usedMemory += area.totalPendingSize.Load()
-		maxMemory += area.settings.Load().MaxPendingSize
+		maxMemory += int64(area.settings.Load().MaxPendingSize)
 	}
-	maxMemoryUsageMetric.Set(float64(maxMemory))
-	usedMemoryUsageMetric.Set(float64(usedMemory))
+	return usedMemory, maxMemory
 }
 
-// pathSizeHeap is a heap to store the paths by their pending size.
+// pathSizeHeap is a heap to store the paths by their pending size in descending order.
 // Note: All the methods of this heap should be thread safe.
 // It is used to:
 // 1. Find the path with the largest pending size.
@@ -367,4 +372,10 @@ func (h *pathSizeHeap[A, P, T, D, H]) tryUpdate(force bool) {
 
 	h.h.Fix()
 	h.lastUpdateTime = time.Now()
+}
+
+func (h *pathSizeHeap[A, P, T, D, H]) len() int {
+	h.RLock()
+	defer h.RUnlock()
+	return h.h.Len()
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/pingcap/log"
 	. "github.com/pingcap/ticdc/pkg/apperror"
 )
 
@@ -47,6 +48,7 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 		eventExtraSize: eventExtraSize,
 	}
 	if option.EnableMemoryControl {
+		log.Info("Dynamic stream enable memory control")
 		s.feedbackChan = make(chan Feedback[A, P, D], 1024)
 		s.memControl = newMemControl[A, P, T, D, H]()
 	}
@@ -166,6 +168,13 @@ func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics {
 	}
 	metrics.AddPath = s._statAddPathCount
 	metrics.RemovePath = s._statRemovePathCount
+
+	if s.memControl != nil {
+		usedMemory, maxMemory := s.memControl.getMetrics()
+		metrics.MemoryControl.UsedMemory = usedMemory
+		metrics.MemoryControl.MaxMemory = maxMemory
+	}
+
 	return metrics
 }
 

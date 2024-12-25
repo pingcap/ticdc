@@ -48,6 +48,8 @@ var (
 	handleEventDuration      = metrics.EventCollectorHandleEventDuration
 	metricsDSInputChanLen    = metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector")
 	metricsDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector")
+	metricsDSMaxMemoryUsage  = metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "max")
+	metricsDSUsedMemoryUsage = metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "used")
 )
 
 type DispatcherRequest struct {

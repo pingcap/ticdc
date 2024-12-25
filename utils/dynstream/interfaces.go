@@ -275,9 +275,8 @@ type Metrics struct {
 	AddPath         int
 	RemovePath      int
 
-	ArrangeStream struct {
-		CreateSolo int
-		RemoveSolo int
-		Shuffle    int
+	MemoryControl struct {
+		UsedMemory int64
+		MaxMemory  int64
 	}
 }
