@@ -66,7 +66,8 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventSize: 10,
 		queueTime: time.Now(),
 	}
-	path1.areaMemStat.appendEvent(path1, normalEvent1, handler)
+	ok := path1.areaMemStat.appendEvent(path1, normalEvent1, handler)
+	require.True(t, ok)
 	require.Equal(t, int64(10), path1.areaMemStat.totalPendingSize.Load())
 
 	// Append 2 periodic signals, and the second one will replace the first one
@@ -77,7 +78,8 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		eventType: EventType{Property: PeriodicSignal},
 	}
-	path1.areaMemStat.appendEvent(path1, periodicEvent, handler)
+	ok = path1.areaMemStat.appendEvent(path1, periodicEvent, handler)
+	require.True(t, ok)
 	require.Equal(t, int64(15), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 2, path1.pendingQueue.Length())
 	back, _ := path1.pendingQueue.BackRef()
@@ -89,7 +91,8 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		eventType: EventType{Property: PeriodicSignal},
 	}
-	path1.areaMemStat.appendEvent(path1, periodicEvent2, handler)
+	ok = path1.areaMemStat.appendEvent(path1, periodicEvent2, handler)
+	require.False(t, ok)
 	// Size should remain the same as the signal was replaced
 	require.Equal(t, int64(15), path1.areaMemStat.totalPendingSize.Load())
 	// The pending queue should only have 2 events
@@ -105,7 +108,8 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		timestamp: 4,
 	}
-	path1.areaMemStat.appendEvent(path1, normalEvent2, handler)
+	ok = path1.areaMemStat.appendEvent(path1, normalEvent2, handler)
+	require.False(t, ok)
 	require.Equal(t, int64(15), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 2, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
@@ -134,7 +138,8 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		queueTime: time.Now(),
 		timestamp: 5,
 	}
-	path1.areaMemStat.appendEvent(path1, normalEvent3, handler)
+	ok = path1.areaMemStat.appendEvent(path1, normalEvent3, handler)
+	require.True(t, ok)
 	require.Equal(t, int64(35), path1.areaMemStat.totalPendingSize.Load())
 	require.Equal(t, 3, path1.pendingQueue.Length())
 	back, _ = path1.pendingQueue.BackRef()
@@ -153,7 +158,8 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventSize: int(newSettings.MaxPendingSize - int(path1.areaMemStat.totalPendingSize.Load())),
 		queueTime: time.Now(),
 	}
-	path2.areaMemStat.appendEvent(path2, largeEvent, handler)
+	ok = path2.areaMemStat.appendEvent(path2, largeEvent, handler)
+	require.True(t, ok)
 	require.Equal(t, newSettings.MaxPendingSize, int(path2.areaMemStat.totalPendingSize.Load()))
 	require.Equal(t, 2, path2.areaMemStat.pathCount)
 	// There are 4 events in the eventQueue, [normalEvent1, periodicEvent2, normalEvent3, largeEvent]
@@ -172,9 +178,10 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventSize: 10,
 		queueTime: time.Now(),
 	}
-	// Must update the heap to make sure the path2 is moved to the front of the heap
+	// Force update the heap to make sure the path2 is moved to the front of the heap
 	path1.areaMemStat.pathSizeHeap.tryUpdate(true)
-	path1.areaMemStat.appendEvent(path1, normalEvent4, handler)
+	ok = path1.areaMemStat.appendEvent(path1, normalEvent4, handler)
+	require.True(t, ok)
 	require.Equal(t, 45, int(path1.areaMemStat.totalPendingSize.Load()))
 	require.Equal(t, 0, path2.pendingQueue.Length())
 	droppedEvents := handler.drainDroppedEvents()
@@ -188,7 +195,8 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		eventSize: 5,
 		queueTime: time.Now(),
 	}
-	path2.areaMemStat.appendEvent(path2, periodicEvent3, handler)
+	ok = path2.areaMemStat.appendEvent(path2, periodicEvent3, handler)
+	require.True(t, ok)
 	require.Equal(t, 1, path2.pendingQueue.Length())
 	require.False(t, path2.paused)
 }
@@ -379,4 +387,24 @@ func TestPathSizeHeapUpdatePendingSize(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "path1", top.path)
 	require.Equal(t, 300, top.pendingSize)
+}
+
+func TestGetMetrics(t *testing.T) {
+	mc, path := setupTestComponents()
+	usedMemory, maxMemory := mc.getMetrics()
+	require.Equal(t, int64(0), usedMemory)
+	require.Equal(t, int64(0), maxMemory)
+
+	mc.addPathToArea(path, AreaSettings{
+		MaxPendingSize:   100,
+		FeedbackInterval: time.Second,
+	}, nil)
+	usedMemory, maxMemory = mc.getMetrics()
+	require.Equal(t, int64(0), usedMemory)
+	require.Equal(t, int64(100), maxMemory)
+
+	path.areaMemStat.totalPendingSize.Store(100)
+	usedMemory, maxMemory = mc.getMetrics()
+	require.Equal(t, int64(100), usedMemory)
+	require.Equal(t, int64(100), maxMemory)
 }

@@ -102,7 +102,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	if as.shouldDropEvent(path, event, handler) {
 		// Drop the event
 		handler.OnDrop(event.event)
-		return true
+		return false
 	}
 	// Add the event to the pending queue.
 	path.pendingQueue.PushBack(event)
@@ -110,7 +110,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	path.pendingSize += event.eventSize
 	as.totalPendingSize.Add(int64(event.eventSize))
 	as.pathSizeHeap.tryUpdate(false)
-	return false
+	return true
 }
 
 // shouldDropEvent determines if an event should be dropped.
@@ -378,4 +378,17 @@ func (h *pathSizeHeap[A, P, T, D, H]) len() int {
 	h.RLock()
 	defer h.RUnlock()
 	return h.h.Len()
+}
+
+func (p *pathInfo[A, P, T, D, H]) SetHeapIndex(index int) {
+	p.sizeHeapIndex = index
+}
+
+func (p *pathInfo[A, P, T, D, H]) GetHeapIndex() int {
+	return p.sizeHeapIndex
+}
+
+func (p *pathInfo[A, P, T, D, H]) LessThan(other *pathInfo[A, P, T, D, H]) bool {
+	// pathSizeHeap should be in descending order. That say the node with the largest pending size is the top.
+	return p.pendingSize > other.pendingSize
 }

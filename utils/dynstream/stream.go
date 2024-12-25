@@ -163,7 +163,8 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 		case e.newPath:
 			s.eventQueue.initPath(e.pathInfo)
 		case e.pathInfo.removed:
-			s.eventQueue.removePath(e.pathInfo)
+			// The path is removed, so we don't need to handle its events.
+			return
 		default:
 			s.eventQueue.appendEvent(e)
 		}
@@ -326,19 +327,6 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 		pi.areaMemStat.totalPendingSize.Add(-int64(e.eventSize))
 	}
 	return e, true
-}
-
-func (p *pathInfo[A, P, T, D, H]) SetHeapIndex(index int) {
-	p.sizeHeapIndex = index
-}
-
-func (p *pathInfo[A, P, T, D, H]) GetHeapIndex() int {
-	return p.sizeHeapIndex
-}
-
-func (p *pathInfo[A, P, T, D, H]) LessThan(other *pathInfo[A, P, T, D, H]) bool {
-	// pathSizeHeap should be in descending order. That say the node with the largest pending size is the top.
-	return p.pendingSize > other.pendingSize
 }
 
 // eventWrap contains the event and the path info.
