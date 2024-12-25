@@ -15,7 +15,7 @@ function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
 	cd $WORK_DIR
-	start_ts=$(cdc cli tso query --pd=http://$UP_PD_HOST_1:$UP_PD_PORT_1)
+	start_ts=$(run_cdc_cli_tso_query --pd=http://$UP_PD_HOST_1:$UP_PD_PORT_1)
 
 	for i in $(seq $DB_COUNT); do
 		db="changefeed_auto_stop_$i"

@@ -169,6 +169,7 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	GetMetrics() Metrics
 }
 
+// PathHasher is used to select target stream for the path.
 type PathHasher[P Path] func(path P) uint64
 
 const DefaultInputBufferSize = 1024

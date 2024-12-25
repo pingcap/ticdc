@@ -38,17 +38,10 @@ func (h *incHandler) OnDrop(event *inc)                 {}
 
 func runStream(eventCount int, times int) {
 	handler := &incHandler{}
-	reportChan := make(chan streamStat[int, string, *inc, D, *incHandler], 100)
 
 	pi := newPathInfo[int, string, *inc, D, *incHandler](0, "p1", D{})
-	stream := newStream[int, string, *inc, D](1 /*id*/, handler, reportChan, 10, NewOption())
-	stream.start([]*pathInfo[int, string, *inc, D, *incHandler]{pi})
-
-	go func() {
-		// Drain the report channel. To avoid the report channel blocking.
-		for range reportChan {
-		}
-	}()
+	stream := newStream[int, string, *inc, D](1 /*id*/, handler, NewOption())
+	stream.start()
 
 	total := &atomic.Int64{}
 	done := &sync.WaitGroup{}
@@ -61,7 +54,6 @@ func runStream(eventCount int, times int) {
 	done.Wait()
 	stream.close()
 
-	close(reportChan)
 }
 
 func runLoop(eventCount int, times int) {

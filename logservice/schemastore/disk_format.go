@@ -280,6 +280,7 @@ func loadAndApplyDDLHistory(
 			&ddlEvent,
 			databaseMap,
 			tableMap,
+			partitionMap,
 			tablesDDLHistory,
 			tableTriggerDDLHistory); err != nil {
 			log.Panic("updateDDLHistory error", zap.Error(err))

@@ -85,7 +85,7 @@ function run() {
 
 	storage_path="s3://logbucket/test-changefeed?endpoint=http://127.0.0.1:24927/"
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
-	current_tso=$(cdc cli tso query --pd=http://$UP_PD_HOST_1:$UP_PD_PORT_1)
+	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
 	ensure 50 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
 	cleanup_process $CDC_BINARY
 

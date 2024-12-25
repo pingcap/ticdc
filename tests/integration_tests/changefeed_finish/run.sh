@@ -27,7 +27,7 @@ function run() {
 	esac
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
-	now=$(cdc cli tso query --pd=http://$UP_PD_HOST_1:$UP_PD_PORT_1)
+	now=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
 	# 90s after now
 	target_ts=$(($now + 90 * 10 ** 3 * 2 ** 18))
 	changefeed_id=$(cdc cli changefeed create --sink-uri="$SINK_URI" --target-ts=$target_ts 2>&1 | tail -n2 | head -n1 | awk '{print $2}')

@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/server"
 	"github.com/pingcap/ticdc/cmd/version"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/tidb/pkg/util/collate"
 	tiflowCmd "github.com/pingcap/tiflow/pkg/cmd"
 	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/spf13/cobra"
@@ -120,8 +121,21 @@ func main() {
 		tiflowCmd.AddTiCDCCommandTo(cmd)
 	}
 
+	setNewCollationEnabled()
 	if err := cmd.Execute(); err != nil {
 		cmd.PrintErrln(err)
 		os.Exit(1)
 	}
+}
+
+// When the upstream doesn't enable new collation and there is a table with cluster index,
+// tidb will not encode the pk column in the value part.
+// So we will rely on the function `tablecodec.DecodeHandleToDatumMap` to decode pk value from the key.
+// But this function only works when the global variable `newCollationEnabled` in tidb package is set to false.
+//
+// Previouly, this global variable is set to false in tidb package,
+// but it was removed as described in https://github.com/pingcap/tidb/pull/52191#issuecomment-2024836481.
+// So we need to manully set it to false here.
+func setNewCollationEnabled() {
+	collate.SetNewCollationEnabledForTest(false)
 }

@@ -9,7 +9,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/pingcap/ticdc/utils/deque"
-	"github.com/pingcap/ticdc/utils/heap"
 )
 
 var nextReportRound = atomic.Int64{}
@@ -18,26 +17,15 @@ const BlockLenInPendingQueue = 32
 
 // ====== internal types ======
 
-type pathStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	pathInfo  *pathInfo[A, P, T, D, H]
-	totalTime time.Duration
-	count     int
-	heapIndex int
-}
+// An area info contains the path nodes of the area in a stream.
+// Note that the instance is stream level, not global level.
+type streamAreaInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
+	area A
 
-func (p *pathStat[A, P, T, D, H]) busyRatio(period time.Duration) float64 {
-	if period == 0 {
-		return 0
-	} else {
-		return float64(p.totalTime) / float64(period)
-	}
-}
-
-// Implement heap.Item interface
-func (p *pathStat[A, P, T, D, H]) SetHeapIndex(index int) { p.heapIndex = index }
-func (p *pathStat[A, P, T, D, H]) GetHeapIndex() int      { return p.heapIndex }
-func (p *pathStat[A, P, T, D, H]) LessThan(o *pathStat[A, P, T, D, H]) bool {
-	return p.totalTime < o.totalTime
+	// The path bound to the area info instance.
+	// Since timestampHeap and queueTimeHeap only store the paths who has pending events,
+	// the pathCount could be larger than the length of the heaps.
+	pathCount int
 }
 
 // pathInfo contains the status of a path.
@@ -64,31 +52,13 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// The pending events of the path.
 	pendingQueue *deque.Deque[eventWrap[A, P, T, D, H]]
 
-	// Fields used by the reportStatLoop.
-	reportRound int64
-	pathStat    *pathStat[A, P, T, D, H]
-
-	// Fields only use by the eventQueue.
-	// Stream level area info.
-	// Each stream has its own areaInfo map, after a path is assigned to a stream, the areaInfo is set.
-	streamAreaInfo     *streamAreaInfo[A, P, T, D, H]
-	timestampHeapIndex int
-	queueTimeHeapIndex int
-	sizeHeapIndex      int
-	handledTSHeapIndex int
-
-	// Those values below are used to compare in the heap.
-	frontTimestamp Timestamp // The timestamp of the front event.
-	frontQueueTime time.Time // The queue time of the front event.
-
+	// Fields used by the memory control.
 	areaMemStat *areaMemStat[A, P, T, D, H]
 
 	pendingSize          int  // The total size(bytes) of pending events in the pendingQueue of the path.
 	paused               bool // The path is paused to send events.
 	lastSwitchPausedTime time.Time
 	lastSendFeedbackTime time.Time
-
-	// lastHandledTS Timestamp
 }
 
 func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A, path P, dest D) *pathInfo[A, P, T, D, H] {
@@ -97,7 +67,6 @@ func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A,
 		path:         path,
 		dest:         dest,
 		pendingQueue: deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
-		pathStat:     &pathStat[A, P, T, D, H]{},
 	}
 	return pi
 }
@@ -106,49 +75,27 @@ func (pi *pathInfo[A, P, T, D, H]) setStream(stream *stream[A, P, T, D, H]) {
 	pi.stream = stream
 }
 
-func (pi *pathInfo[A, P, T, D, H]) setEventBlockAllocator(eventBlockAllocator *deque.BlockAllocator[eventWrap[A, P, T, D, H]]) {
-	pi.pendingQueue.SetBlockAllocator(eventBlockAllocator)
-}
-
-func (pi *pathInfo[A, P, T, D, H]) resetStat() {
-	// Don't create a new pathStat on the heap, just reset the fields.
-	(*pi.pathStat) = pathStat[A, P, T, D, H]{pathInfo: pi}
-}
-
-type streamStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	id int
-
-	// Time elapsed since the last statistics report
-	elapsedTime time.Duration
-	// Total CPU time spent processing events
-	processingTime time.Duration
-	count          int
-
-	pendingLen int
-
-	mostBusyPath *heap.Heap[*pathStat[A, P, T, D, H]]
-}
-
-func (s streamStat[A, P, T, D, H]) getMostBusyPaths() []*pathStat[A, P, T, D, H] {
-	if s.mostBusyPath == nil || s.mostBusyPath.IsEmpty() {
-		return nil
+// appendEvent appends an event to the pending queue.
+// It returns true if the event is appended successfully.
+func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], handler H) bool {
+	if pi.areaMemStat != nil {
+		return pi.areaMemStat.appendEvent(pi, event, handler)
 	}
-	return s.mostBusyPath.All()
-}
 
-func (s streamStat[A, P, T, D, H]) isValid() bool {
-	return s.count != 0
-}
-
-// Try to add the path to the busy heap.
-// If the heap is not full, add the path directly.
-// If the heap is full, only add the path if it is busier than the least busy path in the heap.
-func tryAddPathToBusyHeap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](heap *heap.Heap[*pathStat[A, P, T, D, H]], pi *pathStat[A, P, T, D, H], maxBusyPathsToTrack int) {
-	if heap.Len() < maxBusyPathsToTrack {
-		heap.AddOrUpdate(pi)
-	} else if top, _ := heap.PeekTop(); top.LessThan(pi) {
-		heap.PopTop()
-		heap.AddOrUpdate(pi)
+	if event.eventType.Property != PeriodicSignal {
+		pi.pendingQueue.PushBack(event)
+		pi.pendingSize += event.eventSize
+		return true
+	}
+	back, ok := pi.pendingQueue.BackRef()
+	if ok && back.eventType.Property == PeriodicSignal {
+		// If the last event is a periodic signal, we only need to keep the latest one.
+		// And we don't need to add a new signal.
+		*back = event
+		return false
+	} else {
+		pi.pendingQueue.PushBack(event)
+		return true
 	}
 }
 
@@ -182,7 +129,8 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 	handler Handler[A, P, T, D]
 
-	// The fields when UseBuffer is true.
+	// These fields are used when UseBuffer is true.
+	// They are used to buffer the events between the reciever and the handleLoop.
 	bufferCount atomic.Int64
 	inChan      chan eventWrap[A, P, T, D, H] // The buffer channel to receive the events.
 	outChan     chan eventWrap[A, P, T, D, H] // The buffer channel to send the events.
@@ -190,19 +138,13 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// The channel used by the handleLoop to receive the events.
 	eventChan chan eventWrap[A, P, T, D, H]
 
-	eventQueue eventQueueFast[A, P, T, D, H] // The queue to store the pending events.
-	doneChan   chan doneInfo[A, P, T, D, H]  // The channel to receive the done events.
+	eventQueue eventQueue[A, P, T, D, H] // The queue to store the pending events.
 
-	reportNow chan struct{} // For test, make the reportStatLoop to report immediately.
-
-	reportChan          chan streamStat[A, P, T, D, H]
-	maxBusyPathsToTrack int // The maximum number of paths to track the busy status.
-	option              Option
+	option Option
 
 	isClosed atomic.Bool
 
 	handleWg sync.WaitGroup
-	reportWg sync.WaitGroup
 
 	startTime time.Time
 }
@@ -210,23 +152,14 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	id int,
 	handler H,
-	reportChan chan streamStat[A, P, T, D, H],
-	maxBusyPathsToTrack int,
 	option Option,
 ) *stream[A, P, T, D, H] {
 	s := &stream[A, P, T, D, H]{
-		id:                  id,
-		handler:             handler,
-		eventQueue:          newEventQueueFast(option, handler),
-		reportNow:           make(chan struct{}, 1),
-		reportChan:          reportChan,
-		maxBusyPathsToTrack: maxBusyPathsToTrack,
-		option:              option,
-		startTime:           time.Now(),
-	}
-
-	if reportChan != nil {
-		s.doneChan = make(chan doneInfo[A, P, T, D, H], 64)
+		id:         id,
+		handler:    handler,
+		eventQueue: newEventQueue(option, handler),
+		option:     option,
+		startTime:  time.Now(),
 	}
 
 	if option.UseBuffer {
@@ -258,7 +191,7 @@ func (s *stream[A, P, T, D, H]) in() chan eventWrap[A, P, T, D, H] {
 }
 
 // Start the stream.
-func (s *stream[A, P, T, D, H]) start(acceptedPaths []*pathInfo[A, P, T, D, H], formerStreams ...*stream[A, P, T, D, H]) {
+func (s *stream[A, P, T, D, H]) start() {
 	if s.isClosed.Load() {
 		panic("The stream has been closed.")
 	}
@@ -267,12 +200,7 @@ func (s *stream[A, P, T, D, H]) start(acceptedPaths []*pathInfo[A, P, T, D, H], 
 	}
 
 	s.handleWg.Add(1)
-	go s.handleLoop(acceptedPaths, formerStreams)
-
-	if s.reportChan != nil {
-		s.reportWg.Add(1)
-		go s.reportStatLoop()
-	}
+	go s.handleLoop()
 }
 
 // Close the stream and wait for all goroutines to exit.
@@ -331,15 +259,18 @@ func (s *stream[A, P, T, D, H]) reciever() {
 	}
 }
 
-func (s *stream[A, P, T, D, H]) handleLoop(acceptedPaths []*pathInfo[A, P, T, D, H], formerStreams []*stream[A, P, T, D, H]) {
-	pushToPendingQueue := func(e eventWrap[A, P, T, D, H]) {
-		if e.wake {
+// handleLoop is the main loop of the stream.
+// It handles the events.
+func (s *stream[A, P, T, D, H]) handleLoop() {
+	handleEvent := func(e eventWrap[A, P, T, D, H]) {
+		switch {
+		case e.wake:
 			s.eventQueue.wakePath(e.pathInfo)
-		} else if e.newPath {
+		case e.newPath:
 			s.eventQueue.initPath(e.pathInfo)
-		} else if e.pathInfo.removed {
+		case e.pathInfo.removed:
 			s.eventQueue.removePath(e.pathInfo)
-		} else {
+		default:
 			s.eventQueue.appendEvent(e)
 		}
 	}
@@ -350,31 +281,14 @@ func (s *stream[A, P, T, D, H]) handleLoop(acceptedPaths []*pathInfo[A, P, T, D,
 				zap.Any("recover", r),
 				zap.Stack("stack"))
 		}
-		if s.doneChan != nil {
-			close(s.doneChan)
-		}
 
 		// Move remaining events in the eventChan to pendingQueue.
 		for e := range s.eventChan {
-			pushToPendingQueue(e)
+			handleEvent(e)
 		}
 
-		s.reportWg.Wait()
 		s.handleWg.Done()
 	}()
-
-	// Close and wait for the former streams.
-	for _, stream := range formerStreams {
-		stream.close()
-		// We don't need to explicitly remove the paths from the pendingQueue.
-		// Because the stream is closed already, and the data structure is not used anymore.
-	}
-
-	// We initialize the pathMap here to avoid blocking the main goroutine.
-	// As there could be many paths, and the initialization could be time-consuming.
-	for _, p := range acceptedPaths {
-		s.eventQueue.initPath(p)
-	}
 
 	// Variables below will be used in the Loop below.
 	// Declared here to avoid repeated allocation.
@@ -389,8 +303,6 @@ func (s *stream[A, P, T, D, H]) handleLoop(acceptedPaths []*pathInfo[A, P, T, D,
 			eventBuf = eventBuf[:0]
 		}
 		path *pathInfo[A, P, T, D, H]
-		// property Property
-		// lastTS   Timestamp
 	)
 
 	// For testing. Don't handle events until this wait group is done.
@@ -408,7 +320,7 @@ Loop:
 				// The stream is closed.
 				return
 			}
-			pushToPendingQueue(e)
+			handleEvent(e)
 			eventQueueEmpty = false
 		} else {
 			select {
@@ -416,7 +328,7 @@ Loop:
 				if !ok {
 					return
 				}
-				pushToPendingQueue(e)
+				handleEvent(e)
 				eventQueueEmpty = false
 			default:
 				eventBuf, path = s.eventQueue.popEvents(eventBuf)
@@ -424,88 +336,12 @@ Loop:
 					eventQueueEmpty = true
 					continue Loop
 				}
-				beginTime := time.Now()
 				path.blocking = s.handler.Handle(path.dest, eventBuf...)
-				if s.doneChan != nil {
-					s.doneChan <- doneInfo[A, P, T, D, H]{pathInfo: path, handleTime: time.Since(beginTime)}
-				}
 				if path.blocking {
 					s.eventQueue.blockPath(path)
 				}
 				cleanUpEventBuf()
 			}
-		}
-	}
-}
-
-func (s *stream[A, P, T, D, H]) reportStatLoop() {
-	defer s.reportWg.Done()
-	ticker := time.NewTicker(s.option.ReportInterval)
-	defer ticker.Stop()
-
-	// statistics variables that are used in the loop.
-	var (
-		// lastReportTime is used to calculate the period since the last report.
-		lastReportTime = time.Now()
-		reportRound    = nextReportRound.Add(1)
-		handleCount    = 0
-		totalTime      = time.Duration(0)
-		mostBusyPaths  = heap.NewHeap[*pathStat[A, P, T, D, H]]()
-	)
-
-	resetStatistics := func() {
-		lastReportTime = time.Now()
-		reportRound = nextReportRound.Add(1)
-		handleCount = 0
-		totalTime = time.Duration(0)
-		mostBusyPaths = heap.NewHeap[*pathStat[A, P, T, D, H]]()
-	}
-
-	recordStat := func(doneInfo doneInfo[A, P, T, D, H]) {
-		handleCount++
-		totalTime += doneInfo.handleTime
-
-		if doneInfo.pathInfo.reportRound != reportRound {
-			doneInfo.pathInfo.resetStat()
-			doneInfo.pathInfo.reportRound = reportRound
-		}
-
-		doneInfo.pathInfo.pathStat.totalTime += doneInfo.handleTime
-		doneInfo.pathInfo.pathStat.count++
-
-		tryAddPathToBusyHeap(mostBusyPaths, doneInfo.pathInfo.pathStat, s.maxBusyPathsToTrack)
-	}
-
-	reportStat := func() {
-		select {
-		case <-time.After(10 * time.Millisecond):
-			// If the reportChan is full, we just drop the report.
-			// It could happen when the scheduler is closing or too busy.
-		case s.reportChan <- streamStat[A, P, T, D, H]{
-			id:             s.id,
-			elapsedTime:    time.Since(lastReportTime),
-			processingTime: totalTime,
-			count:          handleCount,
-			pendingLen:     int(s.eventQueue.totalPendingLength.Load()), // It is not very accurate, because this value is updated by the handle goroutine.
-			mostBusyPath:   mostBusyPaths,
-		}:
-			// Only reset the statistics when the report is sent successfully.
-			resetStatistics()
-		}
-	}
-
-	for {
-		select {
-		case <-ticker.C:
-			reportStat()
-		case <-s.reportNow:
-			reportStat()
-		case doneInfo, ok := <-s.doneChan:
-			if !ok {
-				reportStat()
-				return
-			}
-			recordStat(doneInfo)
 		}
 	}
 }

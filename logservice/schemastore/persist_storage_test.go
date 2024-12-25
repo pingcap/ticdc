@@ -13,6 +13,20 @@
 
 package schemastore
 
+import (
+	"fmt"
+	"math"
+	"os"
+	"reflect"
+	"testing"
+
+	"github.com/cockroachdb/pebble"
+	"github.com/pingcap/log"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+)
+
 // import (
 // 	"encoding/json"
 // 	"fmt"
@@ -30,39 +44,57 @@ package schemastore
 // 	"go.uber.org/zap"
 // )
 
-// func loadPersistentStorageForTest(db *pebble.DB, gcTs uint64, upperBound UpperBoundMeta) *persistentStorage {
-// 	p := &persistentStorage{
-// 		pdCli:                  nil,
-// 		kvStorage:              nil,
-// 		db:                     db,
-// 		gcTs:                   gcTs,
-// 		upperBound:             upperBound,
-// 		tableMap:               make(map[int64]*BasicTableInfo),
-// 		partitionMap:           make(map[int64]BasicPartitionInfo),
-// 		databaseMap:            make(map[int64]*BasicDatabaseInfo),
-// 		tablesDDLHistory:       make(map[int64][]uint64),
-// 		tableTriggerDDLHistory: make([]uint64, 0),
-// 		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
-// 		tableRegisteredCount:   make(map[int64]int),
-// 	}
-// 	p.initializeFromDisk()
-// 	return p
-// }
+func loadPersistentStorageForTest(db *pebble.DB, gcTs uint64, upperBound UpperBoundMeta) *persistentStorage {
+	p := &persistentStorage{
+		pdCli:                  nil,
+		kvStorage:              nil,
+		db:                     db,
+		gcTs:                   gcTs,
+		upperBound:             upperBound,
+		tableMap:               make(map[int64]*BasicTableInfo),
+		partitionMap:           make(map[int64]BasicPartitionInfo),
+		databaseMap:            make(map[int64]*BasicDatabaseInfo),
+		tablesDDLHistory:       make(map[int64][]uint64),
+		tableTriggerDDLHistory: make([]uint64, 0),
+		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
+		tableRegisteredCount:   make(map[int64]int),
+	}
+	p.initializeFromDisk()
+	return p
+}
 
-// // create an empty persistent storage at dbPath
-// func newEmptyPersistentStorageForTest(dbPath string) *persistentStorage {
-// 	db, err := pebble.Open(dbPath, &pebble.Options{})
-// 	if err != nil {
-// 		log.Panic("create database fail")
-// 	}
-// 	gcTs := uint64(0)
-// 	upperBound := UpperBoundMeta{
-// 		FinishedDDLTs: 0,
-// 		SchemaVersion: 0,
-// 		ResolvedTs:    0,
-// 	}
-// 	return loadPersistentStorageForTest(db, gcTs, upperBound)
-// }
+// create an empty persistent storage at dbPath
+func newEmptyPersistentStorageForTest(dbPath string) *persistentStorage {
+	if err := os.RemoveAll(dbPath); err != nil {
+		log.Panic("remove path fail", zap.Error(err))
+	}
+	db, err := pebble.Open(dbPath, &pebble.Options{})
+	if err != nil {
+		log.Panic("create database fail", zap.Error(err))
+	}
+	gcTs := uint64(0)
+	upperBound := UpperBoundMeta{
+		FinishedDDLTs: 0,
+		SchemaVersion: 0,
+		ResolvedTs:    0,
+	}
+	return loadPersistentStorageForTest(db, gcTs, upperBound)
+}
+
+// load a persistent storage from dbPath
+func loadPersistentStorageFromPathForTest(dbPath string, maxFinishedDDLTs uint64) *persistentStorage {
+	db, err := pebble.Open(dbPath, &pebble.Options{})
+	if err != nil {
+		log.Panic("create database fail", zap.Error(err))
+	}
+	gcTs := uint64(0)
+	upperBound := UpperBoundMeta{
+		FinishedDDLTs: maxFinishedDDLTs,
+		SchemaVersion: 0,
+		ResolvedTs:    0,
+	}
+	return loadPersistentStorageForTest(db, gcTs, upperBound)
+}
 
 // // create a persistent storage with initial db info and table info
 // func newPersistentStorageForTest(dbPath string, gcTs uint64, initialDBInfos map[int64]*model.DBInfo) *persistentStorage {
@@ -100,6 +132,159 @@ package schemastore
 // 	}
 // 	writeGcTs(db, snapTs)
 // }
+
+func TestApplyDDLJobs(t *testing.T) {
+	var testCases = []struct {
+		ddlJobs                []*model.Job
+		tableMap               map[int64]*BasicTableInfo
+		partitionMap           map[int64]BasicPartitionInfo
+		databaseMap            map[int64]*BasicDatabaseInfo
+		tablesDDLHistory       map[int64][]uint64
+		tableTriggerDDLHistory []uint64
+	}{
+		// test drop schema can clear table info and partition info
+		{
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateSchemaJob(100, "test", 1000),                                    // create schema 100
+					buildCreateTableJob(100, 200, "t1", 1010),                                  // create table 200
+					buildCreatePartitionTableJob(100, 300, "t1", []int64{301, 302, 303}, 1020), // create partition table 300
+					buildDropSchemaJob(100, 1030),                                              // drop schema 100
+				}
+			}(),
+			nil,
+			nil,
+			nil,
+			map[int64][]uint64{
+				200: {1010, 1030},
+				301: {1020, 1030},
+				302: {1020, 1030},
+				303: {1020, 1030},
+			},
+			[]uint64{1000, 1010, 1020, 1030},
+		},
+		// test create table/drop table/truncate table
+		{
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateSchemaJob(100, "test", 1000),          // create schema 100
+					buildCreateTableJob(100, 200, "t1", 1010),        // create table 200
+					buildCreateTableJob(100, 201, "t2", 1020),        // create table 201
+					buildDropTableJob(100, 201, 1030),                // drop table 201
+					buildTruncateTableJob(100, 200, 202, "t1", 1040), // truncate table 200 to 202
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				202: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+			},
+			nil,
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						202: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				200: {1010, 1040},
+				201: {1020, 1030},
+				202: {1040},
+			},
+			[]uint64{1000, 1010, 1020, 1030, 1040},
+		},
+		// test partition table related ddl
+		{
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateSchemaJob(100, "test", 1000),                                           // create schema 100
+					buildCreatePartitionTableJob(100, 200, "t1", []int64{201, 202, 203}, 1010),        // create partition table 200
+					buildTruncatePartitionTableJob(100, 200, 300, "t1", []int64{204, 205, 206}, 1020), // truncate partition table 200 to 300
+					buildAddPartitionJob(100, 300, "t1", []int64{204, 205, 206, 207}, 1030),           // add partition 207
+					buildDropPartitionJob(100, 300, "t1", []int64{205, 206, 207}, 1040),               // drop partition 204
+					buildTruncatePartitionJob(100, 300, "t1", []int64{206, 207, 208}, 1050),           // truncate partition 205 to 208
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				300: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+			},
+			map[int64]BasicPartitionInfo{
+				300: {
+					206: nil,
+					207: nil,
+					208: nil,
+				},
+			},
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						300: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				201: {1010, 1020},
+				202: {1010, 1020},
+				203: {1010, 1020},
+				204: {1020, 1030, 1040},
+				205: {1020, 1030, 1040, 1050},
+				206: {1020, 1030, 1040, 1050},
+				207: {1030, 1040, 1050},
+				208: {1050},
+			},
+			[]uint64{1000, 1010, 1020, 1030, 1040, 1050},
+		},
+	}
+
+	for _, tt := range testCases {
+		dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
+		pStorage := newEmptyPersistentStorageForTest(dbPath)
+		checkState := func(fromDisk bool) {
+			if (tt.tableMap != nil && !reflect.DeepEqual(tt.tableMap, pStorage.tableMap)) ||
+				(tt.tableMap == nil && len(pStorage.tableMap) != 0) {
+				log.Warn("tableMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("tableMap not equal")
+			}
+			if (tt.partitionMap != nil && !reflect.DeepEqual(tt.partitionMap, pStorage.partitionMap)) ||
+				(tt.partitionMap == nil && len(pStorage.partitionMap) != 0) {
+				log.Warn("partitionMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.partitionMap), zap.Any("actual", pStorage.partitionMap), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("partitionMap not equal")
+			}
+			if (tt.databaseMap != nil && !reflect.DeepEqual(tt.databaseMap, pStorage.databaseMap)) ||
+				(tt.databaseMap == nil && len(pStorage.databaseMap) != 0) {
+				log.Warn("databaseMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.databaseMap), zap.Any("actual", pStorage.databaseMap), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("databaseMap not equal")
+			}
+			if (tt.tablesDDLHistory != nil && !reflect.DeepEqual(tt.tablesDDLHistory, pStorage.tablesDDLHistory)) ||
+				(tt.tablesDDLHistory == nil && len(pStorage.tablesDDLHistory) != 0) {
+				log.Warn("tablesDDLHistory not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tablesDDLHistory), zap.Any("actual", pStorage.tablesDDLHistory), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("tablesDDLHistory not equal")
+			}
+			if (tt.tableTriggerDDLHistory != nil && !reflect.DeepEqual(tt.tableTriggerDDLHistory, pStorage.tableTriggerDDLHistory)) ||
+				(tt.tableTriggerDDLHistory == nil && len(pStorage.tableTriggerDDLHistory) != 0) {
+				log.Warn("tableTriggerDDLHistory not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tableTriggerDDLHistory), zap.Any("actual", pStorage.tableTriggerDDLHistory), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("tableTriggerDDLHistory not equal")
+			}
+		}
+		for _, job := range tt.ddlJobs {
+			err := pStorage.handleDDLJob(job)
+			require.Nil(t, err)
+		}
+		checkState(false)
+		pStorage.close()
+		// load from disk and check again
+		pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
+		checkState(true)
+		pStorage.close()
+	}
+}
 
 // func TestReadWriteMeta(t *testing.T) {
 // 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
@@ -428,170 +613,6 @@ package schemastore
 // 		store := newEmptyVersionedTableInfoStore(partitionID4)
 // 		pStorage.buildVersionedTableInfoStore(store)
 // 		require.Equal(t, 1, len(store.infos))
-// 	}
-// }
-
-// func TestHandleCreateDropSchemaTableDDL(t *testing.T) {
-// 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
-// 	err := os.RemoveAll(dbPath)
-// 	require.Nil(t, err)
-// 	pStorage := newEmptyPersistentStorageForTest(dbPath)
-
-// 	// create db
-// 	schemaID := int64(300)
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionCreateSchema,
-// 			SchemaID: schemaID,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 100,
-// 				DBInfo: &model.DBInfo{
-// 					ID:   schemaID,
-// 					Name: model.NewCIStr("test"),
-// 				},
-// 				TableInfo:  nil,
-// 				FinishedTS: 200,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 1, len(pStorage.databaseMap))
-// 		require.Equal(t, "test", pStorage.databaseMap[schemaID].Name)
-// 		require.Equal(t, 1, len(pStorage.tableTriggerDDLHistory))
-// 		require.Equal(t, uint64(200), pStorage.tableTriggerDDLHistory[0])
-// 	}
-
-// 	// create a table
-// 	tableID := int64(100)
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionCreateTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 101,
-// 				TableInfo: &model.TableInfo{
-// 					Name: model.NewCIStr("t1"),
-// 				},
-// 				FinishedTS: 201,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 1, len(pStorage.databaseMap[schemaID].Tables))
-// 		require.Equal(t, 1, len(pStorage.tableMap))
-// 		require.Equal(t, 2, len(pStorage.tableTriggerDDLHistory))
-// 		require.Equal(t, uint64(201), pStorage.tableTriggerDDLHistory[1])
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory))
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[tableID]))
-// 	}
-
-// 	// create another table
-// 	tableID2 := int64(105)
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionCreateTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID2,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 103,
-// 				TableInfo: &model.TableInfo{
-// 					Name: model.NewCIStr("t2"),
-// 				},
-
-// 				FinishedTS: 203,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 2, len(pStorage.databaseMap[schemaID].Tables))
-// 		require.Equal(t, 2, len(pStorage.tableMap))
-// 		require.Equal(t, 3, len(pStorage.tableTriggerDDLHistory))
-// 		require.Equal(t, uint64(203), pStorage.tableTriggerDDLHistory[2])
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory))
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[tableID2]))
-// 		require.Equal(t, uint64(203), pStorage.tablesDDLHistory[tableID2][0])
-// 	}
-
-// 	// drop a table
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionDropTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID2,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 105,
-// 				TableInfo:     nil,
-// 				FinishedTS:    205,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 1, len(pStorage.databaseMap[schemaID].Tables))
-// 		require.Equal(t, 1, len(pStorage.tableMap))
-// 		require.Equal(t, 4, len(pStorage.tableTriggerDDLHistory))
-// 		require.Equal(t, uint64(205), pStorage.tableTriggerDDLHistory[3])
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory))
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[tableID]))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[tableID2]))
-// 		require.Equal(t, uint64(205), pStorage.tablesDDLHistory[tableID2][1])
-// 	}
-
-// 	// truncate a table
-// 	tableID3 := int64(112)
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionTruncateTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 107,
-// 				TableInfo: &model.TableInfo{
-// 					ID: tableID3,
-// 				},
-// 				FinishedTS: 207,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 1, len(pStorage.databaseMap[schemaID].Tables))
-// 		require.Equal(t, 1, len(pStorage.tableMap))
-// 		require.Equal(t, 5, len(pStorage.tableTriggerDDLHistory))
-// 		require.Equal(t, uint64(207), pStorage.tableTriggerDDLHistory[4])
-// 		require.Equal(t, 3, len(pStorage.tablesDDLHistory))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[tableID]))
-// 		require.Equal(t, uint64(207), pStorage.tablesDDLHistory[tableID][1])
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[tableID3]))
-// 		require.Equal(t, uint64(207), pStorage.tablesDDLHistory[tableID3][0])
-// 	}
-
-// 	// drop db
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionDropSchema,
-// 			SchemaID: schemaID,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 200,
-// 				DBInfo: &model.DBInfo{
-// 					ID:   schemaID,
-// 					Name: model.NewCIStr("test"),
-// 				},
-// 				TableInfo:  nil,
-// 				FinishedTS: 300,
-// 			},
-// 		}
-
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 0, len(pStorage.databaseMap))
-// 		require.Equal(t, 0, len(pStorage.tableMap))
-// 		require.Equal(t, 6, len(pStorage.tableTriggerDDLHistory))
-// 		require.Equal(t, uint64(300), pStorage.tableTriggerDDLHistory[5])
-// 		require.Equal(t, 3, len(pStorage.tablesDDLHistory))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[tableID]))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[tableID2]))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[tableID3]))
-// 		require.Equal(t, uint64(300), pStorage.tablesDDLHistory[tableID3][1])
 // 	}
 // }
 
