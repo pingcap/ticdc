@@ -14,6 +14,7 @@
 package schemastore
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -63,8 +64,8 @@ func loadPersistentStorageForTest(db *pebble.DB, gcTs uint64, upperBound UpperBo
 	return p
 }
 
-// create an empty persistent storage at dbPath
-func newEmptyPersistentStorageForTest(dbPath string) *persistentStorage {
+// create a persistent storage at dbPath with initailDBInfos
+func newPersistentStorageForTest(dbPath string, initailDBInfos map[int64]mockDBInfo) *persistentStorage {
 	if err := os.RemoveAll(dbPath); err != nil {
 		log.Panic("remove path fail", zap.Error(err))
 	}
@@ -73,11 +74,14 @@ func newEmptyPersistentStorageForTest(dbPath string) *persistentStorage {
 		log.Panic("create database fail", zap.Error(err))
 	}
 	gcTs := uint64(0)
-	upperBound := UpperBoundMeta{
-		FinishedDDLTs: 0,
-		SchemaVersion: 0,
-		ResolvedTs:    0,
+	if len(initailDBInfos) > 0 {
+		mockWriteKVSnapOnDisk(db, gcTs, initailDBInfos)
 	}
+	upperBound := UpperBoundMeta{
+		FinishedDDLTs: gcTs,
+		ResolvedTs:    gcTs,
+	}
+	writeUpperBoundMeta(db, upperBound)
 	return loadPersistentStorageForTest(db, gcTs, upperBound)
 }
 
@@ -90,48 +94,35 @@ func loadPersistentStorageFromPathForTest(dbPath string, maxFinishedDDLTs uint64
 	gcTs := uint64(0)
 	upperBound := UpperBoundMeta{
 		FinishedDDLTs: maxFinishedDDLTs,
-		SchemaVersion: 0,
-		ResolvedTs:    0,
+		ResolvedTs:    maxFinishedDDLTs,
 	}
+	writeUpperBoundMeta(db, upperBound)
 	return loadPersistentStorageForTest(db, gcTs, upperBound)
 }
 
-// // create a persistent storage with initial db info and table info
-// func newPersistentStorageForTest(dbPath string, gcTs uint64, initialDBInfos map[int64]*model.DBInfo) *persistentStorage {
-// 	db, err := pebble.Open(dbPath, &pebble.Options{})
-// 	if err != nil {
-// 		log.Panic("create database fail")
-// 	}
-// 	if len(initialDBInfos) > 0 {
-// 		mockWriteKVSnapOnDisk(db, gcTs, initialDBInfos)
-// 	}
-// 	upperBound := UpperBoundMeta{
-// 		FinishedDDLTs: 0,
-// 		SchemaVersion: 0,
-// 		ResolvedTs:    gcTs,
-// 	}
-// 	writeUpperBoundMeta(db, upperBound)
-// 	return loadPersistentStorageForTest(db, gcTs, upperBound)
-// }
+type mockDBInfo struct {
+	dbInfo *model.DBInfo
+	tables []*model.TableInfo
+}
 
-// func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos map[int64]*model.DBInfo) {
-// 	batch := db.NewBatch()
-// 	defer batch.Close()
-// 	for _, dbInfo := range dbInfos {
-// 		writeSchemaInfoToBatch(batch, snapTs, dbInfo)
-// 		for _, tableInfo := range dbInfo.Tables {
-// 			tableInfoValue, err := json.Marshal(tableInfo)
-// 			if err != nil {
-// 				log.Panic("marshal table info fail", zap.Error(err))
-// 			}
-// 			writeTableInfoToBatch(batch, snapTs, dbInfo, tableInfoValue)
-// 		}
-// 	}
-// 	if err := batch.Commit(pebble.NoSync); err != nil {
-// 		log.Panic("commit batch fail", zap.Error(err))
-// 	}
-// 	writeGcTs(db, snapTs)
-// }
+func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos map[int64]mockDBInfo) {
+	batch := db.NewBatch()
+	defer batch.Close()
+	for _, dbInfo := range dbInfos {
+		writeSchemaInfoToBatch(batch, snapTs, dbInfo.dbInfo)
+		for _, tableInfo := range dbInfo.tables {
+			tableInfoValue, err := json.Marshal(tableInfo)
+			if err != nil {
+				log.Panic("marshal table info fail", zap.Error(err))
+			}
+			writeTableInfoToBatch(batch, snapTs, dbInfo.dbInfo, tableInfoValue)
+		}
+	}
+	if err := batch.Commit(pebble.NoSync); err != nil {
+		log.Panic("commit batch fail", zap.Error(err))
+	}
+	writeGcTs(db, snapTs)
+}
 
 func TestApplyDDLJobs(t *testing.T) {
 	var testCases = []struct {
@@ -245,7 +236,7 @@ func TestApplyDDLJobs(t *testing.T) {
 
 	for _, tt := range testCases {
 		dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
-		pStorage := newEmptyPersistentStorageForTest(dbPath)
+		pStorage := newPersistentStorageForTest(dbPath, nil)
 		checkState := func(fromDisk bool) {
 			if (tt.tableMap != nil && !reflect.DeepEqual(tt.tableMap, pStorage.tableMap)) ||
 				(tt.tableMap == nil && len(pStorage.tableMap) != 0) {

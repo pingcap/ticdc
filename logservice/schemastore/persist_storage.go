@@ -216,7 +216,6 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, storage kv.St
 	p.gcTs = gcTs
 	p.upperBound = UpperBoundMeta{
 		FinishedDDLTs: 0,
-		SchemaVersion: 0,
 		ResolvedTs:    gcTs,
 	}
 	writeUpperBoundMeta(p.db, p.upperBound)
