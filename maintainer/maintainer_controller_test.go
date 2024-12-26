@@ -674,10 +674,6 @@ func TestDynamicSplitTableBasic(t *testing.T) {
 	require.Equal(t, 7, s.replicationDB.GetAbsentSize())
 }
 
-func TestDynamiSplitTableWhenScaleOut(t *testing.T) {
-	t.Skip("skip unimplemented test")
-}
-
 func TestDynamicRebalanceTable(t *testing.T) {
 	pdAPI := &mockPdAPI{
 		regions: make(map[int64][]pdutil.RegionInfo),
@@ -709,6 +705,7 @@ func TestDynamicRebalanceTable(t *testing.T) {
 	for i := 1; i <= totalTables; i++ {
 		totalSpan := spanz.TableIDToComparableSpan(int64(i))
 		partialSpans := []*heartbeatpb.TableSpan{
+			// total tasks < total nodes * replica.MinSpanNumberCoefficient
 			{TableID: int64(i), StartKey: totalSpan.StartKey, EndKey: appendNew(totalSpan.StartKey, 'a')},
 			{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'a'), EndKey: appendNew(totalSpan.StartKey, 'b')},
 			{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'b'), EndKey: totalSpan.EndKey},
@@ -737,7 +734,9 @@ func TestDynamicRebalanceTable(t *testing.T) {
 		// new split regions
 		pdAPI.regions[int64(i)] = []pdutil.RegionInfo{
 			pdutil.NewTestRegionInfo(1, totalSpan.StartKey, appendNew(totalSpan.StartKey, 'a'), uint64(1)),
-			pdutil.NewTestRegionInfo(2, appendNew(totalSpan.StartKey, 'a'), totalSpan.EndKey, uint64(1)),
+			pdutil.NewTestRegionInfo(2, appendNew(totalSpan.StartKey, 'a'), appendNew(totalSpan.StartKey, 'b'), uint64(1)),
+			pdutil.NewTestRegionInfo(2, appendNew(totalSpan.StartKey, 'b'), appendNew(totalSpan.StartKey, 'c'), uint64(1)),
+			pdutil.NewTestRegionInfo(2, appendNew(totalSpan.StartKey, 'c'), totalSpan.EndKey, uint64(1)),
 		}
 	}
 	expected := (totalTables - 1) * 3
@@ -775,7 +774,7 @@ func TestDynamicRebalanceTable(t *testing.T) {
 		op.PostFinish()
 	}
 
-	require.Equal(t, (totalTables-1)*2, s.replicationDB.GetAbsentSize())
+	require.Equal(t, (totalTables-1)*4, s.replicationDB.GetAbsentSize())
 }
 
 func TestDynamicMergeTableBasic(t *testing.T) {
