@@ -17,13 +17,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"reflect"
-	"sort"
 	"strings"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -108,36 +105,6 @@ func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos []mockDBInfo) {
 		log.Panic("commit batch fail", zap.Error(err))
 	}
 	writeGcTs(db, snapTs)
-}
-
-func compareUnorderedTableSlices(slice1, slice2 []commonEvent.Table) bool {
-	if len(slice1) != len(slice2) {
-		return false
-	}
-
-	sort.Slice(slice1, func(i, j int) bool {
-		if slice1[i].SchemaID == slice1[j].SchemaID {
-			return slice1[i].TableID < slice1[j].TableID
-		}
-		return slice1[i].SchemaID < slice1[j].SchemaID
-	})
-
-	sort.Slice(slice2, func(i, j int) bool {
-		if slice2[i].SchemaID == slice2[j].SchemaID {
-			return slice2[i].TableID < slice2[j].TableID
-		}
-		return slice2[i].SchemaID < slice2[j].SchemaID
-	})
-
-	for i := range slice1 {
-		if slice1[i].SchemaID != slice2[i].SchemaID ||
-			slice1[i].TableID != slice2[i].TableID ||
-			!reflect.DeepEqual(slice1[i].SchemaTableName, slice2[i].SchemaTableName) {
-			return false
-		}
-	}
-
-	return true
 }
 
 func buildTableFilterByNameForTest(schemaName, tableName string) filter.Filter {

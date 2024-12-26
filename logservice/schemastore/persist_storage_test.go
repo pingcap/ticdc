@@ -18,6 +18,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/cockroachdb/pebble"
@@ -36,6 +37,19 @@ func TestApplyDDLJobs(t *testing.T) {
 		tableFilter filter.Filter
 		result      []commonEvent.Table // order doesn't matter
 	}
+	type FetchTableDDLEventsTestCase struct {
+		tableID     int64
+		tableFilter filter.Filter
+		startTs     uint64
+		endTs       uint64
+		result      []commonEvent.DDLEvent // Note: not all fields in DDLEvent are compared
+	}
+	type FetchTableTriggerDDLEventsTestCase struct {
+		tableFilter filter.Filter
+		startTs     uint64
+		limit       int
+		result      []commonEvent.DDLEvent // Note: not all fields in DDLEvent are compared
+	}
 	var testCases = []struct {
 		initailDBInfos              []mockDBInfo
 		ddlJobs                     []*model.Job
@@ -44,7 +58,9 @@ func TestApplyDDLJobs(t *testing.T) {
 		databaseMap                 map[int64]*BasicDatabaseInfo
 		tablesDDLHistory            map[int64][]uint64
 		tableTriggerDDLHistory      []uint64
-		physicalTableQueryTestCases []PhysicalTableQueryTestCase
+		physicalTableQueryTestCases []PhysicalTableQueryTestCase         // test cases for getAllPhysicalTables
+		fetchTableDDLEventsTestCase []FetchTableDDLEventsTestCase        // test cases for fetchTableDDLEvents
+		fetchTableTriggerDDLEvents  []FetchTableTriggerDDLEventsTestCase //	test cases for fetchTableTriggerDDLEvents
 	}{
 		// test drop schema can clear table info and partition info
 		{
@@ -67,6 +83,8 @@ func TestApplyDDLJobs(t *testing.T) {
 				303: {1020, 1030},
 			},
 			[]uint64{1000, 1010, 1020, 1030},
+			nil,
+			nil,
 			nil,
 		},
 		// test create table/drop table/truncate table
@@ -157,6 +175,8 @@ func TestApplyDDLJobs(t *testing.T) {
 					result:      []commonEvent.Table{},
 				},
 			},
+			nil,
+			nil,
 		},
 		// test partition table related ddl
 		{
@@ -263,6 +283,8 @@ func TestApplyDDLJobs(t *testing.T) {
 					},
 				},
 			},
+			nil,
+			nil,
 		},
 		// test exchange partition
 		{
@@ -326,6 +348,8 @@ func TestApplyDDLJobs(t *testing.T) {
 			},
 			[]uint64{1010, 1020, 1030},
 			nil,
+			nil,
+			nil,
 		},
 		// test rename table
 		{
@@ -372,6 +396,8 @@ func TestApplyDDLJobs(t *testing.T) {
 				300: {1010, 1020},
 			},
 			[]uint64{1010, 1020},
+			nil,
+			nil,
 			nil,
 		},
 		// test rename partition table
@@ -428,6 +454,8 @@ func TestApplyDDLJobs(t *testing.T) {
 			},
 			[]uint64{1010, 1020},
 			nil,
+			nil,
+			nil,
 		},
 		// test create tables
 		{
@@ -475,6 +503,8 @@ func TestApplyDDLJobs(t *testing.T) {
 				303: {1010},
 			},
 			[]uint64{1010},
+			nil,
+			nil,
 			nil,
 		},
 		// test create tables for partition table
@@ -550,6 +580,8 @@ func TestApplyDDLJobs(t *testing.T) {
 			},
 			[]uint64{1010},
 			nil,
+			nil,
+			nil,
 		},
 	}
 
@@ -585,7 +617,23 @@ func TestApplyDDLJobs(t *testing.T) {
 			for _, testCase := range tt.physicalTableQueryTestCases {
 				allPhysicalTables, err := pStorage.getAllPhysicalTables(testCase.snapTs, testCase.tableFilter)
 				require.Nil(t, err)
-				if !compareUnorderedTableSlices(testCase.result, allPhysicalTables) {
+				sort.Slice(allPhysicalTables, func(i, j int) bool {
+					// SchemaID and TableID should be enough?
+					if allPhysicalTables[i].SchemaID != allPhysicalTables[j].SchemaID {
+						return allPhysicalTables[i].SchemaID < allPhysicalTables[j].SchemaID
+					} else {
+						return allPhysicalTables[i].TableID < allPhysicalTables[j].TableID
+					}
+				})
+				sort.Slice(testCase.result, func(i, j int) bool {
+					// SchemaID and TableID should be enough?
+					if testCase.result[i].SchemaID != testCase.result[j].SchemaID {
+						return testCase.result[i].SchemaID < testCase.result[j].SchemaID
+					} else {
+						return testCase.result[i].TableID < testCase.result[j].TableID
+					}
+				})
+				if !reflect.DeepEqual(testCase.result, allPhysicalTables) {
 					log.Warn("getAllPhysicalTables result wrong",
 						zap.Any("ddlJobs", tt.ddlJobs),
 						zap.Uint64("snapTs", testCase.snapTs),
@@ -594,6 +642,123 @@ func TestApplyDDLJobs(t *testing.T) {
 						zap.Any("actual", allPhysicalTables),
 						zap.Bool("fromDisk", fromDisk))
 					t.Fatalf("getAllPhysicalTables result wrong")
+				}
+			}
+			checkDDLEvents := func(expected []commonEvent.DDLEvent, actual []commonEvent.DDLEvent) bool {
+				if len(expected) != len(actual) {
+					return false
+				}
+				for i := range expected {
+					expectedDDLEvent := expected[i]
+					actualDDLEvent := actual[i]
+					if expectedDDLEvent.Type != actualDDLEvent.Type || expectedDDLEvent.FinishedTs != actualDDLEvent.FinishedTs {
+						return false
+					}
+					// check BlockedTables
+					if expectedDDLEvent.BlockedTables == nil && actualDDLEvent.BlockedTables != nil {
+						return false
+					}
+					if expectedDDLEvent.BlockedTables != nil {
+						sort.Slice(expectedDDLEvent.BlockedTables.TableIDs, func(i, j int) bool {
+							return expectedDDLEvent.BlockedTables.TableIDs[i] < expectedDDLEvent.BlockedTables.TableIDs[j]
+						})
+						sort.Slice(actualDDLEvent.BlockedTables.TableIDs, func(i, j int) bool {
+							return actualDDLEvent.BlockedTables.TableIDs[i] < actualDDLEvent.BlockedTables.TableIDs[j]
+						})
+						if !reflect.DeepEqual(expectedDDLEvent.BlockedTables, actualDDLEvent.BlockedTables) {
+							return false
+						}
+					}
+					// check UpdatedSchemas
+					sort.Slice(expectedDDLEvent.UpdatedSchemas, func(i, j int) bool {
+						// TableID should be unique, so it is enough
+						return expectedDDLEvent.UpdatedSchemas[i].TableID < expectedDDLEvent.UpdatedSchemas[j].TableID
+					})
+					if !reflect.DeepEqual(expectedDDLEvent.UpdatedSchemas, actualDDLEvent.UpdatedSchemas) {
+						return false
+					}
+					// check NeedDroppedTables
+					if expectedDDLEvent.NeedDroppedTables == nil && actualDDLEvent.NeedDroppedTables != nil {
+						return false
+					}
+					if expectedDDLEvent.NeedDroppedTables != nil {
+						sort.Slice(expectedDDLEvent.NeedDroppedTables.TableIDs, func(i, j int) bool {
+							return expectedDDLEvent.NeedDroppedTables.TableIDs[i] < expectedDDLEvent.NeedDroppedTables.TableIDs[j]
+						})
+						sort.Slice(actualDDLEvent.NeedDroppedTables.TableIDs, func(i, j int) bool {
+							return actualDDLEvent.NeedDroppedTables.TableIDs[i] < actualDDLEvent.NeedDroppedTables.TableIDs[j]
+						})
+						if !reflect.DeepEqual(expectedDDLEvent.NeedDroppedTables, actualDDLEvent.NeedDroppedTables) {
+							return false
+						}
+					}
+					// check NeedAddedTables
+					sort.Slice(expectedDDLEvent.NeedAddedTables, func(i, j int) bool {
+						// TableID should be unique, so it is enough
+						return expectedDDLEvent.NeedAddedTables[i].TableID < expectedDDLEvent.NeedAddedTables[j].TableID
+					})
+					if !reflect.DeepEqual(expectedDDLEvent.NeedAddedTables, actualDDLEvent.NeedAddedTables) {
+						return false
+					}
+					// check TableNameChange
+					if expectedDDLEvent.TableNameChange == nil && actualDDLEvent.TableNameChange != nil {
+						return false
+					}
+					if expectedDDLEvent.TableNameChange != nil {
+						sort.Slice(expectedDDLEvent.TableNameChange.AddName, func(i, j int) bool {
+							if expectedDDLEvent.TableNameChange.AddName[i].TableName < expectedDDLEvent.TableNameChange.AddName[j].TableName {
+								return true
+							} else if expectedDDLEvent.TableNameChange.AddName[i].TableName > expectedDDLEvent.TableNameChange.AddName[j].TableName {
+								return false
+							} else {
+								return expectedDDLEvent.TableNameChange.AddName[i].SchemaName < expectedDDLEvent.TableNameChange.AddName[j].SchemaName
+							}
+						})
+						sort.Slice(expectedDDLEvent.TableNameChange.DropName, func(i, j int) bool {
+							if expectedDDLEvent.TableNameChange.DropName[i].TableName < expectedDDLEvent.TableNameChange.DropName[j].TableName {
+								return true
+							} else if expectedDDLEvent.TableNameChange.DropName[i].TableName > expectedDDLEvent.TableNameChange.DropName[j].TableName {
+								return false
+							} else {
+								return expectedDDLEvent.TableNameChange.DropName[i].SchemaName < expectedDDLEvent.TableNameChange.DropName[j].SchemaName
+							}
+						})
+						if !reflect.DeepEqual(expectedDDLEvent.TableNameChange, actualDDLEvent.TableNameChange) {
+							return false
+						}
+					}
+				}
+				return true
+			}
+			for _, testCase := range tt.fetchTableDDLEventsTestCase {
+				events, err := pStorage.fetchTableDDLEvents(testCase.tableID, testCase.tableFilter, testCase.startTs, testCase.endTs)
+				require.Nil(t, err)
+				if !checkDDLEvents(testCase.result, events) {
+					log.Warn("fetchTableDDLEvents result wrong",
+						zap.Any("ddlJobs", tt.ddlJobs),
+						zap.Int64("tableID", testCase.tableID),
+						zap.Any("tableFilter", testCase.tableFilter),
+						zap.Uint64("startTs", testCase.startTs),
+						zap.Uint64("endTs", testCase.endTs),
+						zap.Any("expected", testCase.result),
+						zap.Any("actual", events),
+						zap.Bool("fromDisk", fromDisk))
+					t.Fatalf("fetchTableDDLEvents result wrong")
+				}
+			}
+			for _, testCase := range tt.fetchTableTriggerDDLEvents {
+				events, err := pStorage.fetchTableTriggerDDLEvents(testCase.tableFilter, testCase.startTs, testCase.limit)
+				require.Nil(t, err)
+				if !checkDDLEvents(testCase.result, events) {
+					log.Warn("fetchTableTriggerDDLEvents result wrong",
+						zap.Any("ddlJobs", tt.ddlJobs),
+						zap.Any("tableFilter", testCase.tableFilter),
+						zap.Uint64("startTs", testCase.startTs),
+						zap.Int("endTs", testCase.limit),
+						zap.Any("expected", testCase.result),
+						zap.Any("actual", events),
+						zap.Bool("fromDisk", fromDisk))
+					t.Fatalf("fetchTableTriggerDDLEvents result wrong")
 				}
 			}
 		}
