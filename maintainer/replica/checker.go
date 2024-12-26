@@ -40,11 +40,12 @@ const (
 
 const (
 	HotSpanWriteThreshold = 1024 * 1024 // 1MB per second
-	HotSpanScoreThreshold = 3           // TODO: bump to 10 befroe release
-	DefaultScoreThreshold = 3
 
-	defaultHardImbalanceThreshold = float64(1.35) // used to trigger the rebalance
-	clearTimeout                  = 300           // seconds
+	DefaultHotSpanScoreThreshold   = 10 // 10 * status report interval = 100s
+	DefaultImbalanceScoreThreshold = 3  // 3 * check interval = 180s
+
+	defaultImbalanceThreshold = float64(1.35) // used to trigger the rebalance
+	clearTimeout              = 300           // seconds
 )
 
 var MinSpanNumberCoefficient = 2
@@ -100,7 +101,7 @@ func newHotSpanChecker(cfID common.ChangeFeedID) *hotSpanChecker {
 		changefeedID:   cfID,
 		hotTasks:       make(map[common.DispatcherID]*hotSpanStatus),
 		writeThreshold: HotSpanWriteThreshold,
-		scoreThreshold: HotSpanScoreThreshold,
+		scoreThreshold: DefaultHotSpanScoreThreshold,
 	}
 }
 
@@ -231,16 +232,17 @@ type rebalanceChecker struct {
 func newImbalanceChecker(cfID common.ChangeFeedID) *rebalanceChecker {
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	return &rebalanceChecker{
-		changefeedID:           cfID,
-		allTasks:               make(map[common.DispatcherID]*hotSpanStatus),
-		nodeManager:            nodeManager,
-		hardWriteThreshold:     10 * HotSpanWriteThreshold,
-		hardImbalanceThreshold: defaultHardImbalanceThreshold,
+		changefeedID: cfID,
+		allTasks:     make(map[common.DispatcherID]*hotSpanStatus),
+		nodeManager:  nodeManager,
+		// FIXME: maybe remove hard check since it could be tiggered unexpectedly in scale out cases.
+		hardWriteThreshold:     64 * HotSpanWriteThreshold,
+		hardImbalanceThreshold: 2 * defaultImbalanceThreshold,
 
 		softWriteThreshold:          3 * HotSpanWriteThreshold,
-		softImbalanceThreshold:      1.2, // 2 * defaultHardImbalanceThreshold,
-		softRebalanceScoreThreshold: DefaultScoreThreshold,
-		softMergeScoreThreshold:     DefaultScoreThreshold,
+		softImbalanceThreshold:      defaultImbalanceThreshold,
+		softRebalanceScoreThreshold: DefaultImbalanceScoreThreshold,
+		softMergeScoreThreshold:     DefaultImbalanceScoreThreshold,
 	}
 }
 

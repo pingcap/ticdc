@@ -645,7 +645,7 @@ func TestDynamicSplitTableBasic(t *testing.T) {
 	require.Equal(t, 2, s.replicationDB.GetReplicatingSize())
 
 	for _, task := range replicas {
-		for cnt := 0; cnt < replica.HotSpanScoreThreshold; cnt++ {
+		for cnt := 0; cnt < replica.DefaultHotSpanScoreThreshold; cnt++ {
 			s.replicationDB.UpdateStatus(task, &heartbeatpb.TableSpanStatus{
 				ID:                 task.ID.ToPB(),
 				ComponentStatus:    heartbeatpb.ComponentState_Working,
@@ -832,7 +832,7 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 	require.Equal(t, expected+victimExpected, s.replicationDB.GetReplicatingSize())
 
 	scheduler := s.schedulerController.GetScheduler(scheduler.SplitScheduler)
-	for i := 0; i < replica.DefaultScoreThreshold; i++ {
+	for i := 0; i < replica.DefaultImbalanceScoreThreshold; i++ {
 		scheduler.Execute()
 	}
 	scheduler.Execute() // dummy execute does not take effect
@@ -879,7 +879,7 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 	s.replicationDB.AddReplicatingSpan(spanReplica)
 	replicas = s.replicationDB.GetReplicating()
 	require.Equal(t, 3, len(replicas))
-	for i := 0; i < replica.DefaultScoreThreshold; i++ {
+	for i := 0; i < replica.DefaultImbalanceScoreThreshold; i++ {
 		scheduler.Execute()
 	}
 	require.Equal(t, 0, s.replicationDB.GetReplicatingSize())
