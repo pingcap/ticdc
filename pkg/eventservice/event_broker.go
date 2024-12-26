@@ -780,7 +780,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 	}
 	dispatcher.updateTableInfo(tableInfo)
 	eventStoreRegisterDuration := time.Since(start)
-
 	c.dispatchers.Store(id, dispatcher)
 
 	log.Info("register dispatcher", zap.Uint64("clusterID", c.tidbClusterID),
@@ -801,7 +800,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	c.eventStore.UnregisterDispatcher(id)
 	c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
 	c.dispatchers.Delete(id)
-	log.Info("deregister acceptor", zap.Uint64("clusterID", c.tidbClusterID), zap.Any("acceptorID", id))
+	log.Info("remove dispatcher", zap.Uint64("clusterID", c.tidbClusterID), zap.Any("dispatcherID", id))
 }
 
 func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
