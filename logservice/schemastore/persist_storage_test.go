@@ -16,9 +16,11 @@ package schemastore
 import (
 	"fmt"
 	"math"
+	"os"
 	"reflect"
 	"testing"
 
+	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
@@ -32,7 +34,7 @@ func TestApplyDDLJobs(t *testing.T) {
 	type PhysicalTableQueryTestCase struct {
 		snapTs      uint64
 		tableFilter filter.Filter
-		result      []commonEvent.Table
+		result      []commonEvent.Table // order doesn't matter
 	}
 	var testCases = []struct {
 		initailDBInfos              []mockDBInfo
@@ -608,60 +610,60 @@ func TestApplyDDLJobs(t *testing.T) {
 	}
 }
 
-// func TestReadWriteMeta(t *testing.T) {
-// 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
-// 	err := os.RemoveAll(dbPath)
-// 	require.Nil(t, err)
-// 	db, err := pebble.Open(dbPath, &pebble.Options{})
-// 	require.Nil(t, err)
-// 	defer db.Close()
+func TestReadWriteMeta(t *testing.T) {
+	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
+	err := os.RemoveAll(dbPath)
+	require.Nil(t, err)
+	db, err := pebble.Open(dbPath, &pebble.Options{})
+	require.Nil(t, err)
+	defer db.Close()
 
-// 	{
-// 		gcTS := uint64(1000)
-// 		upperBound := UpperBoundMeta{
-// 			FinishedDDLTs: 3000,
-// 			SchemaVersion: 4000,
-// 			ResolvedTs:    1000,
-// 		}
+	{
+		gcTS := uint64(1000)
+		upperBound := UpperBoundMeta{
+			FinishedDDLTs: 3000,
+			SchemaVersion: 4000,
+			ResolvedTs:    1000,
+		}
 
-// 		writeGcTs(db, gcTS)
-// 		writeUpperBoundMeta(db, upperBound)
+		writeGcTs(db, gcTS)
+		writeUpperBoundMeta(db, upperBound)
 
-// 		gcTSRead, err := readGcTs(db)
-// 		require.Nil(t, err)
-// 		require.Equal(t, gcTS, gcTSRead)
+		gcTSRead, err := readGcTs(db)
+		require.Nil(t, err)
+		require.Equal(t, gcTS, gcTSRead)
 
-// 		upperBoundRead, err := readUpperBoundMeta(db)
-// 		require.Nil(t, err)
-// 		require.Equal(t, upperBound, upperBoundRead)
-// 	}
+		upperBoundRead, err := readUpperBoundMeta(db)
+		require.Nil(t, err)
+		require.Equal(t, upperBound, upperBoundRead)
+	}
 
-// 	// update gcTs
-// 	{
-// 		gcTS := uint64(2000)
+	// update gcTs
+	{
+		gcTS := uint64(2000)
 
-// 		writeGcTs(db, gcTS)
+		writeGcTs(db, gcTS)
 
-// 		gcTSRead, err := readGcTs(db)
-// 		require.Nil(t, err)
-// 		require.Equal(t, gcTS, gcTSRead)
-// 	}
+		gcTSRead, err := readGcTs(db)
+		require.Nil(t, err)
+		require.Equal(t, gcTS, gcTSRead)
+	}
 
-// 	// update upperbound
-// 	{
-// 		upperBound := UpperBoundMeta{
-// 			FinishedDDLTs: 5000,
-// 			SchemaVersion: 5000,
-// 			ResolvedTs:    1000,
-// 		}
+	// update upperbound
+	{
+		upperBound := UpperBoundMeta{
+			FinishedDDLTs: 5000,
+			SchemaVersion: 5000,
+			ResolvedTs:    1000,
+		}
 
-// 		writeUpperBoundMeta(db, upperBound)
+		writeUpperBoundMeta(db, upperBound)
 
-// 		upperBoundRead, err := readUpperBoundMeta(db)
-// 		require.Nil(t, err)
-// 		require.Equal(t, upperBound, upperBoundRead)
-// 	}
-// }
+		upperBoundRead, err := readUpperBoundMeta(db)
+		require.Nil(t, err)
+		require.Equal(t, upperBound, upperBoundRead)
+	}
+}
 
 // func TestBuildVersionedTableInfoStore(t *testing.T) {
 // 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
