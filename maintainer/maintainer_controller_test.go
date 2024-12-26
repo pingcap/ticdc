@@ -678,8 +678,7 @@ func TestDynamiSplitTableWhenScaleOut(t *testing.T) {
 	t.Skip("skip unimplemented test")
 }
 
-func TestDynamicMergeAndSplitTable(t *testing.T) {
-	t.Skip("skip flaky test")
+func TestDynamicRebalanceTable(t *testing.T) {
 	pdAPI := &mockPdAPI{
 		regions: make(map[int64][]pdutil.RegionInfo),
 	}
@@ -730,44 +729,53 @@ func TestDynamicMergeAndSplitTable(t *testing.T) {
 				EventSizePerSecond: replica.HotSpanWriteThreshold,
 			}, node.ID(fmt.Sprintf("node%d", idx%2+1)))
 			if idx == 0 {
-				spanReplica.GetStatus().EventSizePerSecond = replica.HotSpanWriteThreshold * 100
+				spanReplica.GetStatus().EventSizePerSecond = replica.HotSpanWriteThreshold * 2
 			}
 			s.replicationDB.AddReplicatingSpan(spanReplica)
 		}
 
 		// new split regions
-		pdAPI.regions[1] = []pdutil.RegionInfo{
+		pdAPI.regions[int64(i)] = []pdutil.RegionInfo{
 			pdutil.NewTestRegionInfo(1, totalSpan.StartKey, appendNew(totalSpan.StartKey, 'a'), uint64(1)),
 			pdutil.NewTestRegionInfo(2, appendNew(totalSpan.StartKey, 'a'), totalSpan.EndKey, uint64(1)),
 		}
 	}
+	expected := (totalTables - 1) * 3
 	replicas := s.replicationDB.GetReplicating()
-	require.Equal(t, totalTables*3-1, s.replicationDB.GetReplicatingSize())
+	require.Equal(t, expected+2, s.replicationDB.GetReplicatingSize())
 
 	scheduler := s.schedulerController.GetScheduler(scheduler.SplitScheduler)
 	scheduler.Execute()
-	require.Equal(t, 0, s.replicationDB.GetSchedulingSize())
-	require.Equal(t, totalTables*3-1, s.operatorController.OperatorSize())
-	finishedCnt := 0
+	require.Equal(t, 2, s.replicationDB.GetReplicatingSize())
+	require.Equal(t, expected, s.replicationDB.GetSchedulingSize())
+	require.Equal(t, expected, s.operatorController.OperatorSize())
+
+	primarys := make(map[int64]pkgOpearator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus])
 	for _, task := range replicas {
 		op := s.operatorController.GetOperator(task.ID)
+		if op == nil {
+			require.Equal(t, int64(victim), task.Span.GetTableID())
+			continue
+		}
 		op.Schedule()
-		op.Check("node1", &heartbeatpb.TableSpanStatus{
+		op.Check(task.GetNodeID(), &heartbeatpb.TableSpanStatus{
 			ID:              op.ID().ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Stopped,
 			CheckpointTs:    10,
 		})
 		if op.IsFinished() {
 			op.PostFinish()
-			finishedCnt++
+		} else {
+			primarys[task.Span.GetTableID()] = op
 		}
 	}
-	require.Less(t, finishedCnt, totalTables*3-1)
+	for _, op := range primarys {
+		finished := op.IsFinished()
+		require.True(t, finished)
+		op.PostFinish()
+	}
 
-	//total 7 regions,
-	// table 1: split to 4 spans, will be inserted to absent
-	// table 2: split to 3 spans, will be inserted to absent
-	require.Equal(t, 7, s.replicationDB.GetAbsentSize())
+	require.Equal(t, (totalTables-1)*2, s.replicationDB.GetAbsentSize())
 }
 
 func TestDynamicMergeTableBasic(t *testing.T) {

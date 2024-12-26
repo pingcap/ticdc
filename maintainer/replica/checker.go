@@ -366,10 +366,3 @@ func (s *rebalanceChecker) Stat() string {
 	res.WriteString(fmt.Sprintf("softScore: [rebalance: %d, merge: %d]", s.softRebalanceScore, s.softMergeScore))
 	return res.String()
 }
-
-// TODO: implement the dynamic merge and split checker
-type dynamicMergeSplitChecker struct {
-	changefeedID common.ChangeFeedID
-	allTasks     map[common.DispatcherID]*hotSpanStatus
-	nodeManager  *watcher.NodeManager
-}
