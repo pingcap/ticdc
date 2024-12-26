@@ -27,7 +27,7 @@ func TestNewDispatcherStat(t *testing.T) {
 
 	require.Equal(t, info.GetID(), stat.id)
 	require.Equal(t, workerIndex, stat.workerIndex)
-	require.Equal(t, startTs, stat.startTs)
+	require.Equal(t, uint64(0), stat.resetTs.Load())
 	require.Equal(t, startTs, stat.eventStoreResolvedTs.Load())
 	require.Equal(t, startTs, stat.checkpointTs.Load())
 	require.Equal(t, startTs, stat.sentResolvedTs.Load())

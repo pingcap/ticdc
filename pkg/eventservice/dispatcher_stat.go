@@ -25,20 +25,21 @@ type dispatcherStat struct {
 	// startTableInfo is the table info of the dispatcher when it is registered or reset.
 	startTableInfo atomic.Pointer[common.TableInfo]
 	filter         filter.Filter
-	// The start ts of the dispatcher
-	startTs uint64
+	// The reset ts send by the dispatcher.
+	// It is also the start ts of the dispatcher.
+	resetTs atomic.Uint64
 	// The max resolved ts received from event store.
 	eventStoreResolvedTs atomic.Uint64
 	// The max latest commit ts received from event store.
 	latestCommitTs atomic.Uint64
 	// The sentResolvedTs of the events that have been sent to the dispatcher.
+	// We use this value to generate data range for the next scan task.
+	// Note: Please don't changed this value directly, use updateSentResolvedTs instead.
 	sentResolvedTs atomic.Uint64
 	// checkpointTs is the ts that reported by the downstream dispatcher.
 	// events <= checkpointTs will not needed anymore, so we can inform eventStore to GC them.
 	// TODO: maintain it
 	checkpointTs atomic.Uint64
-	// The reset ts send by the dispatcher.
-	resetTs atomic.Uint64
 
 	// The seq of the events that have been sent to the downstream dispatcher.
 	// It start from 1, and increase by 1 for each event.
@@ -49,10 +50,10 @@ type dispatcherStat struct {
 	// It will be set to false, after it receives the pause event from the dispatcher.
 	// It will be set to true, after it receives the register/resume/reset event from the dispatcher.
 	isRunning atomic.Bool
-	// isInitialized is used to indicate whether the dispatcher is initialized.
+	// isHandshaked is used to indicate whether the dispatcher is ready to send data.
 	// It will be set to true, after it sends the handshake event to the dispatcher.
 	// It will be set to false, after it receives the reset event from the dispatcher.
-	isInitialized atomic.Bool
+	isHandshaked atomic.Bool
 
 	// syncpoint related
 	enableSyncPoint   bool
@@ -81,7 +82,6 @@ func newDispatcherStat(
 		workerIndex: workerIndex,
 		info:        info,
 		filter:      filter,
-		startTs:     startTs,
 	}
 	if info.SyncPointEnabled() {
 		dispStat.enableSyncPoint = true
@@ -104,6 +104,27 @@ func (a *dispatcherStat) getEventSenderState() pevent.EventSenderState {
 
 func (a *dispatcherStat) updateTableInfo(tableInfo *common.TableInfo) {
 	a.startTableInfo.Store(tableInfo)
+}
+
+func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
+	// Only update the sentResolvedTs when the dispatcher is handshaked.
+	if a.isHandshaked.Load() {
+		a.sentResolvedTs.Store(resolvedTs)
+	}
+}
+
+// resetState is used to reset the state of the dispatcher.
+func (a *dispatcherStat) resetState(resetTs uint64) {
+	// Uninitialize the dispatcher first
+	// To prevent the dispatcher's sentResolvedTs being updated by other goroutines.
+	a.isHandshaked.Store(false)
+	// Reset the sentResolvedTs to the resetTs.
+	// Because when the dispatcher is reset, the downstream want to resend the events from the resetTs.
+	a.sentResolvedTs.Store(resetTs)
+	a.resetTs.Store(resetTs)
+	a.seq.Store(0)
+	a.taskScanning.Store(false)
+	a.isRunning.Store(true)
 }
 
 // onResolvedTs try to update the resolved ts of the dispatcher.

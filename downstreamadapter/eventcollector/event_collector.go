@@ -211,6 +211,9 @@ func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID) {
 	c.ds.Wake(dispatcherID)
 }
 
+// resetDispatcher is used to reset the dispatcher when it receives a out-of-order event.
+// It will send a reset request to the event service to reset the remote dispatcher.
+// And it will reset the dispatcher stat to wait for a new handshake event.
 func (c *EventCollector) resetDispatcher(d *dispatcherStat) {
 	c.addDispatcherRequestToSendingQueue(
 		d.eventServiceInfo.serverID,
