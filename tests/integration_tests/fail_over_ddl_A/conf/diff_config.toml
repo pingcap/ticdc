@@ -12,7 +12,7 @@ source-instances = ["mysql1"]
 
 target-instance = "tidb0"
 
-target-check-tables = ["fail_over_ddl_test2.*"]
+target-check-tables = ["fail_over_ddl_test2.*", "fail_over_ddl_test.*"]
 
 [data-sources]
 [data-sources.mysql1]

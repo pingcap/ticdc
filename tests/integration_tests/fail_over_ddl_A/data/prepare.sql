@@ -1,3 +1,4 @@
+create database `fail_over_ddl_test2`;
 use `fail_over_ddl_test2`;
 
 create table t1 (
