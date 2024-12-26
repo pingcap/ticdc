@@ -11,7 +11,8 @@ This tool helps generate and manipulate test data for database performance testi
 ## Building the Tool
 
 ```bash
-go build -o ./workload
+cd tools/workload
+make 
 ```
 
 ## Common Usage Scenarios
