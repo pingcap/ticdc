@@ -453,7 +453,7 @@ func executeWithValues(db *sql.DB, sqlStr string, workload schema.Workload, n in
 			return nil, err
 		}
 		// Create table if not exists
-		_, err := db.Exec(workload.BuildCreateTableStatement(n), values...)
+		_, err := db.Exec(workload.BuildCreateTableStatement(n))
 		if err != nil {
 			log.Info("create table error: ", zap.Error(err))
 			return nil, err
