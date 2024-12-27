@@ -207,10 +207,10 @@ func TestShouldPausePath(t *testing.T) {
 	maxPendingSize := 0
 	for i := 0; i < 100; i++ {
 		newPath := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
-			area:        path.area,
-			path:        fmt.Sprintf("test-path-%d", i),
-			pendingSize: i,
+			area: path.area,
+			path: fmt.Sprintf("test-path-%d", i),
 		}
+		newPath.pendingSize.Store(uint32(i))
 		mc.addPathToArea(newPath, AreaSettings{
 			MaxPendingSize:   maxPendingSize,
 			FeedbackInterval: time.Second,
@@ -302,17 +302,17 @@ func TestPathSizeHeapBasicOperations(t *testing.T) {
 
 	// Create test paths with different pending sizes
 	path1 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
-		path:        "path1",
-		pendingSize: 100,
+		path: "path1",
 	}
+	path1.pendingSize.Store(uint32(100))
 	path2 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
-		path:        "path2",
-		pendingSize: 200,
+		path: "path2",
 	}
+	path2.pendingSize.Store(uint32(200))
 	path3 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
-		path:        "path3",
-		pendingSize: 300,
+		path: "path3",
 	}
+	path3.pendingSize.Store(uint32(300))
 
 	// Test push and len
 	h.push(path1)
@@ -342,9 +342,9 @@ func TestPathSizeHeapTryUpdate(t *testing.T) {
 	h.updateInterval = 10 * time.Millisecond
 
 	path1 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
-		path:        "path1",
-		pendingSize: 100,
+		path: "path1",
 	}
+	path1.pendingSize.Store(uint32(100))
 	h.push(path1)
 
 	// First update should work
@@ -367,26 +367,26 @@ func TestPathSizeHeapUpdatePendingSize(t *testing.T) {
 	h := newPathSizeHeap[int, string, *mockEvent, any, *mockHandler]()
 
 	path1 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
-		path:        "path1",
-		pendingSize: 100,
+		path: "path1",
 	}
+	path1.pendingSize.Store(uint32(100))
 	path2 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
-		path:        "path2",
-		pendingSize: 200,
+		path: "path2",
 	}
+	path2.pendingSize.Store(uint32(200))
 
 	h.push(path1)
 	h.push(path2)
 
 	// Update pending size and force heap update
-	path1.pendingSize = 300
+	path1.pendingSize.Store(uint32(300))
 	h.tryUpdate(true)
 
 	// Check if heap order is updated
 	top, ok := h.peek()
 	require.True(t, ok)
 	require.Equal(t, "path1", top.path)
-	require.Equal(t, 300, top.pendingSize)
+	require.Equal(t, uint32(300), top.pendingSize.Load())
 }
 
 func TestGetMetrics(t *testing.T) {

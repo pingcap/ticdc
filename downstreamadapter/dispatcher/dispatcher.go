@@ -276,13 +276,13 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 
 		event := dispatcherEvent.Event
 		// Pre-check, make sure the event is not stale
-		if event.GetCommitTs() < atomic.LoadUint64(&d.resolvedTs) {
+		if event.GetCommitTs() < d.GetResolvedTs() {
 			log.Info("Received a stale event, should ignore it",
-				zap.Any("commitTs", event.GetCommitTs()),
+				zap.Any("dispatcherResolvedTs", d.GetResolvedTs()),
+				zap.Any("EVentCommitTs", event.GetCommitTs()),
 				zap.Any("seq", event.GetSeq()),
 				zap.Any("eventType", event.GetType()),
-				zap.Any("dispatcher", d.id),
-				zap.Any("event", event))
+				zap.Any("dispatcher", d.id))
 			continue
 		}
 
@@ -290,6 +290,16 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 		case commonEvent.TypeResolvedEvent:
 			atomic.StoreUint64(&d.resolvedTs, event.(commonEvent.ResolvedEvent).ResolvedTs)
 		case commonEvent.TypeDMLEvent:
+
+			// Fizz: remove this after testing
+			// {
+			// 	tableName := d.tableInfo.GetTableName()
+			// 	lowerTableName := strings.ToLower(tableName)
+			// 	if lowerTableName == "data0" {
+			// 		return true
+			// 	}
+			// }
+
 			dml := event.(*commonEvent.DMLEvent)
 			if dml.Len() == 0 {
 				return block

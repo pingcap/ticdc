@@ -271,8 +271,8 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	areaMemStat   *areaMemStat[A, P, T, D, H]
 	sizeHeapIndex int
 
-	pendingSize          int  // The total size(bytes) of pending events in the pendingQueue of the path.
-	paused               bool // The path is paused to send events.
+	pendingSize          atomic.Uint32 // The total size(bytes) of pending events in the pendingQueue of the path.
+	paused               bool          // The path is paused to send events.
 	lastSwitchPausedTime time.Time
 	lastSendFeedbackTime time.Time
 }
@@ -300,7 +300,7 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 
 	if event.eventType.Property != PeriodicSignal {
 		pi.pendingQueue.PushBack(event)
-		pi.pendingSize += event.eventSize
+		pi.pendingSize.Add(uint32(event.eventSize))
 		return true
 	}
 
@@ -321,7 +321,7 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 	if !ok {
 		return eventWrap[A, P, T, D, H]{}, false
 	}
-	pi.pendingSize -= e.eventSize
+	pi.pendingSize.Add(uint32(-e.eventSize))
 
 	if pi.areaMemStat != nil {
 		pi.areaMemStat.totalPendingSize.Add(-int64(e.eventSize))

@@ -107,7 +107,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	// Add the event to the pending queue.
 	path.pendingQueue.PushBack(event)
 	// Update the pending size.
-	path.pendingSize += event.eventSize
+	path.pendingSize.Add(uint32(event.eventSize))
 	as.totalPendingSize.Add(int64(event.eventSize))
 	as.pathSizeHeap.tryUpdate(false)
 	return true
@@ -142,7 +142,10 @@ func (as *areaMemStat[A, P, T, D, H]) shouldDropEvent(
 		return false
 	}
 
+	// Need to find the longest path to drop events.
+	as.pathSizeHeap.tryUpdate(true)
 	// Drop the events of the largest pending size path to find a place for the new event.
+	// FIZZ: 似乎这个 path 有可能会被并发访问。
 	longestPath, ok := as.pathSizeHeap.peek()
 	if !ok {
 		log.Warn("There is no max pending path, but exceed MaxPendingSize, it should not happen",
@@ -152,8 +155,7 @@ func (as *areaMemStat[A, P, T, D, H]) shouldDropEvent(
 
 	front, ok := longestPath.pendingQueue.FrontRef()
 	if !ok {
-		log.Warn("The max pending path's pending queue is empty, but exceed MaxPendingSize, it should not happen",
-			zap.Any("area", as.area), zap.Any("path", path.path))
+		// Just ignore the event if the longest path is empty.
 		return true
 	}
 
@@ -169,7 +171,7 @@ func (as *areaMemStat[A, P, T, D, H]) shouldDropEvent(
 	for longestPath.pendingQueue.Length() != 0 {
 		back, _ := longestPath.pendingQueue.PopBack()
 		handler.OnDrop(back.event)
-		longestPath.pendingSize -= back.eventSize
+		longestPath.pendingSize.Add(uint32(-back.eventSize))
 		as.totalPendingSize.Add(int64(-back.eventSize))
 		if !exceedMaxPendingSize() {
 			break
@@ -241,14 +243,15 @@ func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D,
 	memoryUsageRatio := float64(as.totalPendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
 	pausePathRatio := findPausePathRatio(memoryUsageRatio)
 
-	stopMaxIndex := int(float64(as.pathSizeHeap.len()) * pausePathRatio)
-
 	switch pausePathRatio {
 	case 0:
 		return false
 	case 1:
 		return true
 	default:
+		// Update the heap to get the correct stopMaxIndex.
+		as.pathSizeHeap.tryUpdate(true)
+		stopMaxIndex := int(float64(as.pathSizeHeap.len()) * pausePathRatio)
 		return path.sizeHeapIndex <= stopMaxIndex
 	}
 }
@@ -298,7 +301,7 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 // This method is called after the path is removed.
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
-	area.totalPendingSize.Add(int64(-path.pendingSize))
+	area.totalPendingSize.Add(int64(-path.pendingSize.Load()))
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
@@ -390,5 +393,5 @@ func (p *pathInfo[A, P, T, D, H]) GetHeapIndex() int {
 
 func (p *pathInfo[A, P, T, D, H]) LessThan(other *pathInfo[A, P, T, D, H]) bool {
 	// pathSizeHeap should be in descending order. That say the node with the largest pending size is the top.
-	return p.pendingSize > other.pendingSize
+	return p.pendingSize.Load() > other.pendingSize.Load()
 }

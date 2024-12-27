@@ -661,7 +661,8 @@ func (d *dispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
 	defer d.eventServiceInfo.RUnlock()
 
 	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
-		log.Panic("should not happen: pause dispatcher before receiving ready signal")
+		// Just ignore the request if the dispatcher is not ready.
+		return
 	}
 
 	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
@@ -675,7 +676,8 @@ func (d *dispatcherStat) resumeDispatcher(eventCollector *EventCollector) {
 	defer d.eventServiceInfo.RUnlock()
 
 	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
-		log.Panic("should not happen: resume dispatcher before receiving ready signal")
+		// Just ignore the request if the dispatcher is not ready.
+		return
 	}
 
 	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
