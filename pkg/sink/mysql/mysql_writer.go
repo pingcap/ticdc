@@ -463,6 +463,14 @@ func (w *MysqlWriter) RemoveDDLTsItem() error {
 
 	_, err = tx.Exec(query)
 	if err != nil {
+		if apperror.IsTableNotExistsErr(err) {
+			// If this table is not existed, this means the table is first being synced
+			log.Info("ddl ts table is not found when RemoveDDLTsItem",
+				zap.String("namespace", w.ChangefeedID.Namespace()),
+				zap.String("changefeedID", w.ChangefeedID.Name()),
+				zap.Error(err))
+			return nil
+		}
 		log.Error("failed to delete ddl ts item ", zap.Error(err))
 		err2 := tx.Rollback()
 		if err2 != nil {
