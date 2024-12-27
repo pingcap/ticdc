@@ -605,8 +605,6 @@ func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeat
 	if response.Success {
 		m.nodesClosed[from] = struct{}{}
 	}
-	// check if all nodes have sent response
-	m.onRemoveMaintainer(m.cascadeRemoving, m.changefeedRemoved)
 }
 
 func (m *Maintainer) handleResendMessage() {
