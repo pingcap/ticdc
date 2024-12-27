@@ -464,7 +464,7 @@ func (w *MysqlWriter) RemoveDDLTsItem() error {
 	_, err = tx.Exec(query)
 	if err != nil {
 		if apperror.IsTableNotExistsErr(err) {
-			// If this table is not existed, this means the table is first being synced
+			// If this table is not existed, this means the changefeed has not table, so we just return nil.
 			log.Info("ddl ts table is not found when RemoveDDLTsItem",
 				zap.String("namespace", w.ChangefeedID.Namespace()),
 				zap.String("changefeedID", w.ChangefeedID.Name()),
