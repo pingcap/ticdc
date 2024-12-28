@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/tiflow/cdc/api"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/httputil"
@@ -50,10 +51,13 @@ func ErrorHandleMiddleware() gin.HandlerFunc {
 		lastError := c.Errors.Last()
 		if lastError != nil {
 			err := lastError.Err
+			log.Info("hyy ErrorHandleMiddleware error", zap.Error(err))
 			// put the error into response
 			if api.IsHTTPBadRequestError(err) {
+				log.Info("hyy IsHTTPBadRequestError")
 				c.IndentedJSON(http.StatusBadRequest, model.NewHTTPError(err))
 			} else {
+				log.Info("hyy StatusInternalServerError")
 				c.IndentedJSON(http.StatusInternalServerError, model.NewHTTPError(err))
 			}
 			c.Abort()
@@ -94,7 +98,7 @@ func LogMiddleware() gin.HandlerFunc {
 }
 
 // ForwardToCoordinatorMiddleware forward a request to controller
-func ForwardToCoordinatorMiddleware(server node.Server) gin.HandlerFunc {
+func ForwardToCoordinatorMiddleware(server server.Server) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		if !server.IsCoordinator() {
 			ForwardToOwner(ctx, server)
@@ -110,7 +114,7 @@ func ForwardToCoordinatorMiddleware(server node.Server) gin.HandlerFunc {
 }
 
 // ForwardToOwner forwards a request to the controller
-func ForwardToOwner(c *gin.Context, server node.Server) {
+func ForwardToOwner(c *gin.Context, server server.Server) {
 	ctx := c.Request.Context()
 	info, err := server.SelfInfo()
 	if err != nil {

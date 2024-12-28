@@ -37,6 +37,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	tiserver "github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tiflow/cdc/model"
@@ -65,7 +66,7 @@ type server struct {
 	pdAPIClient   pdutil.PDAPIClient
 	pdEndpoints   []string
 	coordinatorMu sync.Mutex
-	coordinator   node.Coordinator
+	coordinator   tiserver.Coordinator
 
 	dispatcherOrchestrator *dispatcherorchestrator.DispatcherOrchestrator
 
@@ -83,7 +84,7 @@ type server struct {
 }
 
 // New returns a new Server instance
-func New(conf *config.ServerConfig, pdEndpoints []string) (node.Server, error) {
+func New(conf *config.ServerConfig, pdEndpoints []string) (tiserver.Server, error) {
 	// This is to make communication between nodes possible.
 	// In other words, the nodes have to trust each other.
 	if len(conf.Security.CertAllowedCN) != 0 {
@@ -203,14 +204,14 @@ func (c *server) SelfInfo() (*node.Info, error) {
 	return nil, cerror.ErrCaptureNotInitialized.GenWithStackByArgs()
 }
 
-func (c *server) setCoordinator(co node.Coordinator) {
+func (c *server) setCoordinator(co tiserver.Coordinator) {
 	c.coordinatorMu.Lock()
 	defer c.coordinatorMu.Unlock()
 	c.coordinator = co
 }
 
 // GetCoordinator returns coordinator if it is the coordinator.
-func (c *server) GetCoordinator() (node.Coordinator, error) {
+func (c *server) GetCoordinator() (tiserver.Coordinator, error) {
 	c.coordinatorMu.Lock()
 	defer c.coordinatorMu.Unlock()
 	if c.coordinator == nil {
@@ -302,4 +303,8 @@ func isErrCompacted(err error) bool {
 
 func (c *server) GetEtcdClient() etcd.CDCEtcdClient {
 	return c.EtcdClient
+}
+
+func (c *server) GetMaintainerManager() *maintainer.Manager {
+	return appctx.GetService[*maintainer.Manager]("maintainer-manager")
 }

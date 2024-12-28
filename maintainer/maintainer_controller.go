@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/split"
+	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -402,6 +403,54 @@ func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
 	tables, err := schemaStore.GetAllPhysicalTables(startTs, f)
 	log.Info("get table ids", zap.Int("count", len(tables)), zap.String("changefeed", c.changefeedID.Name()))
 	return tables, err
+}
+
+// only for test
+// moveTable is used for inner api(which just for make test cases convience) to force move a table to a target node.
+// moveTable only works for the complete table, not for the table splited.
+func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
+	if !c.replicationDB.IsTableExists(tableId) {
+		// the table is not exist in this node
+		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableId)
+	}
+
+	nodes := c.nodeManager.GetAliveNodes()
+	hasNode := false
+	for _, node := range nodes {
+		if node.ID == targetNode {
+			hasNode = true
+			break
+		}
+	}
+	if !hasNode {
+		return apperror.ErrNodeIsNotFound.GenWithStackByArgs("targetNode", targetNode)
+	}
+
+	replications := c.replicationDB.GetTasksByTableIDs(tableId)
+	if len(replications) != 1 {
+		log.Warn("unexpected number of replications found for table in this node", zap.Int64("tableID", tableId), zap.Int("count", len(replications)))
+		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("unexpected number of replications found for table in this node; tableID is %s, replication count is %s", tableId, len(replications))
+	}
+
+	replication := replications[0]
+
+	op := c.operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
+	c.operatorController.AddOperator(op)
+
+	// check the op is finished or not
+	count := 0
+	maxTry := 30
+	for !op.IsFinished() && count < maxTry {
+		time.Sleep(500 * time.Millisecond)
+		count += 1
+		log.Info("wait for move table operator finished", zap.Int("count", count))
+	}
+
+	if !op.IsFinished() {
+		return apperror.ErrMoveTableTimeout.GenWithStackByArgs("move table operator is timeout")
+	}
+
+	return nil
 }
 
 func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.SchemaInfo {

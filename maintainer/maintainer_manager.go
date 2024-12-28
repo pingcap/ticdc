@@ -137,6 +137,7 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 }
 
 func (m *Manager) Name() string {
+	//TODO: change to context.MaintainerManager
 	return "maintainer-manager"
 }
 
@@ -388,4 +389,12 @@ func (m *Manager) updateMetricsOnce() {
 	dsMetrics := m.stream.GetMetrics()
 	metricsDSInputChanLen.Set(float64(dsMetrics.EventChanSize))
 	metricsDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
+}
+
+func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) *Maintainer {
+	c, ok := m.maintainers.Load(changefeedID)
+	if !ok {
+		return nil
+	}
+	return c.(*Maintainer)
 }

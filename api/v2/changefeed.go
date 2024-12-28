@@ -17,13 +17,16 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
+	apperror "github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/version"
 	"github.com/pingcap/tiflow/cdc/api"
@@ -385,11 +388,6 @@ func (h *OpenAPIV2) pauseChangefeed(c *gin.Context) {
 			changefeedDisplayName.Name))
 		return
 	}
-	if err := model.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
-		return
-	}
 
 	coordinator, err := h.server.GetCoordinator()
 	if err != nil {
@@ -425,11 +423,6 @@ func (h *OpenAPIV2) pauseChangefeed(c *gin.Context) {
 func (h *OpenAPIV2) resumeChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
 	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), getNamespaceValueWithDefault(c))
-	if err := model.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
-		return
-	}
 	if err := model.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
@@ -616,6 +609,55 @@ func verifyResumeChangefeedConfig(
 	}
 
 	return nil
+}
+
+// moveTable handles move table in changefeed to target node,
+// it returns the move result(success or err)
+// moveTable is just for inner test use, not public use.
+func (h *OpenAPIV2) moveTable(c *gin.Context) {
+	tableIdStr := c.Query("tableID")
+	tableId, err := strconv.ParseInt(tableIdStr, 10, 64)
+	if err != nil {
+		log.Error("failed to parse tableID", zap.Error(err), zap.String("tableID", tableIdStr))
+		_ = c.Error(err)
+		return
+	}
+	targetNodeID := c.Query("targetNodeID")
+
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), getNamespaceValueWithDefault(c))
+	if err := model.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
+			changefeedDisplayName.Name))
+		return
+	}
+	// get changefeefID first
+	coordinator, err := h.server.GetCoordinator()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	cfInfo, _, err := coordinator.GetChangefeed(c, changefeedDisplayName)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	changefeedID := cfInfo.ChangefeedID
+
+	maintainerManager := h.server.GetMaintainerManager()
+	maintainer := maintainerManager.GetMaintainerForChangefeed(changefeedID)
+
+	if maintainer == nil {
+		log.Error("maintainer not found for changefeed in this node", zap.String("changefeed", changefeedID.String()))
+		_ = c.Error(apperror.ErrMaintainerNotFounded)
+		return
+	}
+
+	err = maintainer.MoveTable(int64(tableId), node.ID(targetNodeID))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(http.StatusOK, &EmptyResponse{})
 }
 
 func getNamespaceValueWithDefault(c *gin.Context) string {
