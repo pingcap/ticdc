@@ -51,13 +51,10 @@ func ErrorHandleMiddleware() gin.HandlerFunc {
 		lastError := c.Errors.Last()
 		if lastError != nil {
 			err := lastError.Err
-			log.Info("hyy ErrorHandleMiddleware error", zap.Error(err))
 			// put the error into response
 			if api.IsHTTPBadRequestError(err) {
-				log.Info("hyy IsHTTPBadRequestError")
 				c.IndentedJSON(http.StatusBadRequest, model.NewHTTPError(err))
 			} else {
-				log.Info("hyy StatusInternalServerError")
 				c.IndentedJSON(http.StatusInternalServerError, model.NewHTTPError(err))
 			}
 			c.Abort()

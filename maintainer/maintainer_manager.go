@@ -137,8 +137,7 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 }
 
 func (m *Manager) Name() string {
-	//TODO: change to context.MaintainerManager
-	return "maintainer-manager"
+	return appcontext.MaintainerManager
 }
 
 func (m *Manager) Run(ctx context.Context) error {

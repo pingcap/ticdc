@@ -428,7 +428,6 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 
 	replications := c.replicationDB.GetTasksByTableIDs(tableId)
 	if len(replications) != 1 {
-		log.Warn("unexpected number of replications found for table in this node", zap.Int64("tableID", tableId), zap.Int("count", len(replications)))
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("unexpected number of replications found for table in this node; tableID is %s, replication count is %s", tableId, len(replications))
 	}
 

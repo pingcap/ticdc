@@ -306,5 +306,5 @@ func (c *server) GetEtcdClient() etcd.CDCEtcdClient {
 }
 
 func (c *server) GetMaintainerManager() *maintainer.Manager {
-	return appctx.GetService[*maintainer.Manager]("maintainer-manager")
+	return appctx.GetService[*maintainer.Manager](appctx.MaintainerManager)
 }

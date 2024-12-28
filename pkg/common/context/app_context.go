@@ -18,7 +18,7 @@ const (
 	EventStore              = "EventStore"
 	EventService            = "EventService"
 	DispatcherDynamicStream = "DispatcherDynamicStream"
-	MaintainerManager       = "maintainer-manager"
+	MaintainerManager       = "MaintainerManager"
 )
 
 // Put all the global instances here.
