@@ -6,24 +6,13 @@
 # This is the case-B of fail-over with ddl events.
 # when dispatchers are all meet the block event ddl, and report the status to maintainer, 
 # and maintainer ask table trigger to write ddl, table trigger write the ddl, but not response to maintainer, 
-# and then one node is restarted.(Because  we can't ensure each dipatcher is in which node now)
+# and then the node with table trigger event dispatcher restart, the node with the related table is not restarted.
 # --> we expect the cluster will get the correct table count and continue to sync the following events successfully.
 #     1 ddl is drop databases
 #     2 ddl is drop table 
 #     3 ddl is rename table //
 #     4 ddl is recover table // not support yet
 #     5 ddl is truncate table
-## TODO(hyy):currently, we can't ensure each dipatcher is in which node,
-## so it's possible that the table trigger dispatcher and the table is in the same node, or not. 
-## and we can't ensure we restart the node with which dispatchers.
-## So it actuallt includes three cases:
-## 1. normal table and table trigger dispatcher in the same node    
-##    1.1 the node which both normal table and table trigger dispatcher is restarted
-##    1.2 the node with no tables is restarted
-## 2. normal table and table trigger dispatcher in different node
-##    2.1 the node with table trigger is restarted
-##    2.2 the node with normal table is restarted
-## Later we will try to the table in the other node for better test.
 
 set -eu
 
