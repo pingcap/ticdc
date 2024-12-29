@@ -102,7 +102,7 @@ func newDispatcherStat(
 }
 
 func (a *dispatcherStat) getEventSenderState() pevent.EventSenderState {
-	if a.isRunning.Load() {
+	if a.IsRunning() {
 		return pevent.EventSenderStateNormal
 	}
 	return pevent.EventSenderStatePaused
@@ -150,10 +150,12 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	if startTs < a.resetTs.Load() {
 		startTs = a.resetTs.Load()
 	}
+
 	if startTs >= a.eventStoreResolvedTs.Load() {
 		return common.DataRange{}, false
 	}
-	// ts range: (startTs, EndTs]
+	// Range: (startTs, EndTs],
+	// since the startTs(and the data before startTs) is already sent to the dispatcher.
 	r := common.DataRange{
 		Span:    a.info.GetTableSpan(),
 		StartTs: startTs,

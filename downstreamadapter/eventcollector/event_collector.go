@@ -163,7 +163,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 		target:       target,
 	}
 	stat.reset()
-	stat.sendCommitTs.Store(target.GetStartTs())
+	stat.sentCommitTs.Store(target.GetStartTs())
 	c.dispatcherMap.Store(target.GetId(), stat)
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
@@ -220,13 +220,13 @@ func (c *EventCollector) resetDispatcher(d *dispatcherStat) {
 		eventServiceTopic,
 		DispatcherRequest{
 			Dispatcher: d.target,
-			StartTs:    d.sendCommitTs.Load(),
+			StartTs:    d.sentCommitTs.Load(),
 			ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
 		})
 	d.reset()
 	log.Info("Send reset dispatcher request to event service",
 		zap.Stringer("dispatcher", d.target.GetId()),
-		zap.Uint64("startTs", d.sendCommitTs.Load()))
+		zap.Uint64("startTs", d.sentCommitTs.Load()))
 }
 
 func (c *EventCollector) addDispatcherRequestToSendingQueue(serverId node.ID, topic string, req DispatcherRequest) {
@@ -479,7 +479,7 @@ type dispatcherStat struct {
 	waitHandshake atomic.Bool
 
 	// The largest commit ts that has been sent to the dispatcher.
-	sendCommitTs atomic.Uint64
+	sentCommitTs atomic.Uint64
 }
 
 func (d *dispatcherStat) reset() {
@@ -527,15 +527,16 @@ func (d *dispatcherStat) shouldIgnoreDataEvent(event dispatcher.DispatcherEvent,
 	// Note: a commit ts may have multiple transactions.
 	// it is ok to send the same txn multiple times?
 	// (we just want to avoid send old dml after new ddl)
-	if event.GetCommitTs() < d.sendCommitTs.Load() {
+	if event.GetCommitTs() < d.sentCommitTs.Load() {
 		log.Warn("Receive a event older than sendCommitTs, ignore it",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Int64("tableID", d.target.GetTableSpan().TableID),
 			zap.Stringer("dispatcher", d.target.GetId()),
 			zap.Uint64("eventCommitTs", event.GetCommitTs()),
-			zap.Uint64("sendCommitTs", d.sendCommitTs.Load()))
+			zap.Uint64("sentCommitTs", d.sentCommitTs.Load()))
 		return true
 	}
-	d.sendCommitTs.Store(event.GetCommitTs())
+	d.sentCommitTs.Store(event.GetCommitTs())
 	return false
 }
 
@@ -586,7 +587,7 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 			eventServiceTopic,
 			DispatcherRequest{
 				Dispatcher: d.target,
-				StartTs:    d.sendCommitTs.Load(),
+				StartTs:    d.sentCommitTs.Load(),
 				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
 			},
 		)
@@ -610,7 +611,7 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 			eventServiceTopic,
 			DispatcherRequest{
 				Dispatcher: d.target,
-				StartTs:    d.sendCommitTs.Load(),
+				StartTs:    d.sentCommitTs.Load(),
 				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
 			},
 		)

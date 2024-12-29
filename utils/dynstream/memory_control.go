@@ -4,9 +4,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/siddontang/go-log/log"
-	"go.uber.org/zap"
 )
 
 // memoryPauseRule defines a mapping rule between memory usage ratio and path pause ratio
@@ -106,29 +103,11 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	return true
 }
 
-var lastLogTime atomic.Value
-
-func init() {
-	lastLogTime.Store(time.Unix(0, 0))
-}
-
 // updatePathPauseState determines the pause state of a path and sends feedback to handler if the state is changed.
 // It needs to be called after a event is appended.
 // Note: Our gaol is to fast pause, and lazy resume.
 func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, T, D, H], event eventWrap[A, P, T, D, H]) {
 	shouldPause := as.shouldPausePath(path)
-
-	if time.Since(lastLogTime.Load().(time.Time)) >= 2*time.Second {
-		log.Info("updatePathPauseState",
-			zap.Any("path", path.path),
-			zap.Any("shouldPause", shouldPause),
-			zap.Any("pendingSize", path.pendingSize.Load()),
-			zap.Any("totalPendingSize", as.totalPendingSize.Load()),
-			zap.Any("lastSendFeedbackTime", path.lastSendFeedbackTime.Load().(time.Time)),
-			zap.Any("feedbackInterval", as.settings.Load().FeedbackInterval),
-		)
-		lastLogTime.Store(time.Now())
-	}
 
 	sendFeedback := func(pause bool) {
 		as.feedbackChan <- Feedback[A, P, D]{
@@ -143,11 +122,10 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 
 	// If the path is not paused previously but should be paused, we need to pause it.
 	// And send pause feedback.
-	if path.paused != shouldPause &&
+	if path.paused.Load() != shouldPause &&
 		time.Since(path.lastSendFeedbackTime.Load().(time.Time)) >= as.settings.Load().FeedbackInterval {
-		path.paused = shouldPause
+		path.paused.Store(shouldPause)
 		sendFeedback(shouldPause)
-		return
 	}
 }
 

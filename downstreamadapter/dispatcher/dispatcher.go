@@ -290,16 +290,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 		case commonEvent.TypeResolvedEvent:
 			atomic.StoreUint64(&d.resolvedTs, event.(commonEvent.ResolvedEvent).ResolvedTs)
 		case commonEvent.TypeDMLEvent:
-
-			// Fizz: remove this after testing
-			// {
-			// 	tableName := d.tableInfo.GetTableName()
-			// 	lowerTableName := strings.ToLower(tableName)
-			// 	if lowerTableName == "data0" {
-			// 		return true
-			// 	}
-			// }
-
 			dml := event.(*commonEvent.DMLEvent)
 			if dml.Len() == 0 {
 				return block

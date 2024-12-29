@@ -217,14 +217,12 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) {
 			case <-ticker.C:
 				c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 					dispatcherStat := value.(*dispatcherStat)
-
 					if !c.checkAndSendReady(dispatcherStat) {
 						return true
 					}
 					if !c.checkAndSendHandshake(dispatcherStat) {
 						return true
 					}
-
 					startTs := dispatcherStat.sentResolvedTs.Load()
 					remoteID := node.ID(dispatcherStat.info.GetServerID())
 					// TODO: maybe limit 1 is enough.
@@ -296,11 +294,23 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 	if !c.checkAndSendReady(task) {
 		return false, common.DataRange{}
 	}
+
 	c.checkAndSendHandshake(task)
+
+	// Only check scan when the dispatcher is running.
+	if !task.IsRunning() {
+		// If the dispatcher is not running, we also need to send the watermark to the dispatcher.
+		// And the resolvedTs should be the last sent watermark.
+		resolvedTs := task.sentResolvedTs.Load()
+		remoteID := node.ID(task.info.GetServerID())
+		c.sendWatermark(remoteID, task, resolvedTs)
+		return false, common.DataRange{}
+	}
+
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
-		return false, dataRange
+		return false, common.DataRange{}
 	}
 
 	// 2. Constrain the data range by the ddl state of the table.
@@ -312,7 +322,7 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 	// Note: May be we should still send a resolvedTs to downstream to tell that
 	// the dispatcher is alive?
 	if dataRange.EndTs <= dataRange.StartTs {
-		return false, dataRange
+		return false, common.DataRange{}
 	}
 
 	// target ts range: (dataRange.StartTs, dataRange.EndTs]
@@ -323,17 +333,7 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		remoteID := node.ID(task.info.GetServerID())
 		c.sendWatermark(remoteID, task, dataRange.EndTs)
 		task.updateSentResolvedTs(dataRange.EndTs)
-		return false, dataRange
-	}
-
-	// Only scan when the dispatcher is running.
-	if !task.IsRunning() {
-		// If the dispatcher is not running, we also need to send the watermark to the dispatcher.
-		// And the resolvedTs should be the last sent watermark.
-		resolvedTs := task.sentResolvedTs.Load()
-		remoteID := node.ID(task.info.GetServerID())
-		c.sendWatermark(remoteID, task, resolvedTs)
-		return false, dataRange
+		return false, common.DataRange{}
 	}
 
 	return true, dataRange
@@ -401,7 +401,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// If the target is not ready to send, we don't need to scan the event store.
 	// To avoid the useless scan task.
 	if !c.msgSender.IsReadyToSend(remoteID) {
-		log.Info("The remote target is not ready, skip scan", zap.Stringer("dispatcher", task.id), zap.Stringer("remote", remoteID))
+		log.Info("The remote target is not ready, skip scan",
+			zap.String("changefeed", task.info.GetChangefeedID().String()),
+			zap.String("dispatcher", task.id.String()),
+			zap.String("remote", remoteID.String()))
 		return
 	}
 
@@ -411,31 +414,34 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	// TODO: distinguish only dml or only ddl scenario
-	ddlEvents, err := c.schemaStore.FetchTableDDLEvents(dataRange.Span.TableID, task.filter, dataRange.StartTs, dataRange.EndTs)
+	ddlEvents, err := c.schemaStore.
+		FetchTableDDLEvents(
+			dataRange.Span.TableID,
+			task.filter,
+			dataRange.StartTs,
+			dataRange.EndTs,
+		)
 	if err != nil {
 		log.Panic("get ddl events failed", zap.Error(err))
 	}
 
-	// After all the events are sent, we need to
-	// drain the ddlEvents and wake up the dispatcher.
-	defer func() {
+	// After all the events are sent, we need to drain the remaining ddlEvents.
+	sendRemainingDDLEvents := func() {
 		for _, e := range ddlEvents {
 			c.sendDDL(ctx, remoteID, e, task)
 		}
+		c.sendWatermark(remoteID, task, dataRange.EndTs)
 		task.updateSentResolvedTs(dataRange.EndTs)
-		// After all the events are sent, we send the watermark to the dispatcher.
-		c.sendWatermark(remoteID,
-			task,
-			dataRange.EndTs)
-	}()
+	}
 
 	//2. Get event iterator from eventStore.
 	iter, err := c.eventStore.GetIterator(dispatcherID, dataRange)
 	if err != nil {
 		log.Panic("read events failed", zap.Error(err))
 	}
-	// TODO: use error to indicate the dispatcher is removed
+
 	if iter == nil {
+		sendRemainingDDLEvents()
 		return
 	}
 
@@ -447,6 +453,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		metricEventBrokerScanTaskCount.Inc()
 	}()
 
+	lastSentDMLCommitTs := uint64(0)
 	// sendDML is used to send the dml event to the dispatcher.
 	// It returns true if the dml event is sent successfully.
 	// Otherwise, it returns false.
@@ -458,6 +465,18 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		// Check if the dispatcher is running.
 		// If not, we don't need to send the dml event.
 		if !task.IsRunning() {
+			if lastSentDMLCommitTs != 0 {
+				task.updateSentResolvedTs(lastSentDMLCommitTs)
+				c.sendWatermark(remoteID, task, lastSentDMLCommitTs)
+				log.Info("The dispatcher is not running, skip the following scan",
+					zap.Uint64("clusterID", task.info.GetClusterID()),
+					zap.String("changefeed", task.info.GetChangefeedID().String()),
+					zap.String("dispatcher", task.id.String()),
+					zap.Uint64("taskStartTs", dataRange.StartTs),
+					zap.Uint64("taskEndTs", dataRange.EndTs),
+					zap.Uint64("lastSentResolvedTs", task.sentResolvedTs.Load()),
+					zap.Uint64("lastSentDMLCommitTs", lastSentDMLCommitTs))
+			}
 			return false
 		}
 
@@ -469,6 +488,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		c.emitSyncPointEventIfNeeded(dml.CommitTs, task, remoteID)
 		c.getMessageCh(task.workerIndex) <- newWrapDMLEvent(remoteID, dml, task.getEventSenderState())
 		metricEventServiceSendKvCount.Add(float64(dml.Len()))
+		lastSentDMLCommitTs = dml.CommitTs
 		return true
 	}
 
@@ -483,9 +503,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		if e == nil {
 			// Send the last dml to the dispatcher.
 			sendDML(dml)
+			sendRemainingDDLEvents()
 			c.metricScanEventDuration.Observe(time.Since(start).Seconds())
 			return
 		}
+
 		if e.CRTs < dataRange.StartTs {
 			// If the commitTs of the event is less than the startTs of the data range,
 			// there are some bugs in the eventStore.
@@ -820,7 +842,10 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	c.eventStore.UnregisterDispatcher(id)
 	c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
 	c.dispatchers.Delete(id)
-	log.Info("remove dispatcher", zap.Uint64("clusterID", c.tidbClusterID), zap.Any("dispatcherID", id))
+	log.Info("remove dispatcher",
+		zap.Uint64("clusterID", c.tidbClusterID),
+		zap.Int64("tableID", dispatcherInfo.GetTableSpan().TableID),
+		zap.Any("dispatcherID", id))
 }
 
 func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
@@ -828,7 +853,12 @@ func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 	if !ok {
 		return
 	}
-	log.Info("pause dispatcher", zap.Any("dispatcher", stat.id))
+	log.Info("pause dispatcher",
+		zap.Uint64("clusterID", c.tidbClusterID),
+		zap.Int64("tableID", stat.info.GetTableSpan().TableID),
+		zap.Any("dispatcher", stat.id),
+		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
+		zap.Uint64("seq", stat.seq.Load()))
 	stat.isRunning.Store(false)
 }
 
@@ -837,8 +867,11 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 	if !ok {
 		return
 	}
-	log.Info("resume dispatcher", zap.Any("dispatcher", stat.id), zap.Uint64("checkpointTs", stat.sentResolvedTs.Load()), zap.Uint64("seq", stat.seq.Load()))
-	// Reset the watermark to the startTs of the dispatcherInfo.
+	log.Info("resume dispatcher",
+		zap.Int64("tableID", stat.info.GetTableSpan().TableID),
+		zap.Any("dispatcher", stat.id),
+		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
+		zap.Uint64("seq", stat.seq.Load()))
 	stat.isRunning.Store(true)
 }
 
@@ -848,7 +881,10 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		return
 	}
 	stat.resetState(dispatcherInfo.GetStartTs())
-	log.Info("reset dispatcher", zap.Any("dispatcher", stat.id), zap.Uint64("startTs", stat.info.GetStartTs()))
+	log.Info("reset dispatcher",
+		zap.Int64("tableID", stat.info.GetTableSpan().TableID),
+		zap.Any("dispatcher", stat.id),
+		zap.Uint64("startTs", stat.info.GetStartTs()))
 }
 
 func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
