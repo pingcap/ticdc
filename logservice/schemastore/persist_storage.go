@@ -1536,7 +1536,6 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commo
 					TableID:  id,
 				})
 			}
-			ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, heartbeatpb.DDLSpan.TableID)
 		} else {
 			ddlEvent.NeedAddedTables = []commonEvent.Table{
 				{
@@ -1604,7 +1603,6 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commo
 				InfluenceType: commonEvent.InfluenceTypeNormal,
 				TableIDs:      prevPartitionsAndDDLSpanID,
 			}
-			ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, heartbeatpb.DDLSpan.TableID)
 			// Note: for truncate table, prev partitions must all be dropped.
 			ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
 				InfluenceType: commonEvent.InfluenceTypeNormal,

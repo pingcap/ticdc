@@ -21,6 +21,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -81,6 +82,37 @@ func loadPersistentStorageFromPathForTest(dbPath string, maxFinishedDDLTs uint64
 	}
 	writeUpperBoundMeta(db, upperBound)
 	return loadPersistentStorageForTest(db, gcTs, upperBound)
+}
+
+func formatDDLJobsForTest(jobs []*model.Job) string {
+	var res []string
+	for _, job := range jobs {
+		res = append(res, fmt.Sprintf("type: %s, finishedTs: %d, schemaID: %d, tableID: %d", job.Type, job.BinlogInfo.FinishedTS, job.SchemaID, job.TableID))
+	}
+	return strings.Join(res, "; ")
+}
+
+func formatDDLEventsForTest(events []commonEvent.DDLEvent) string {
+	var res []string
+	for _, event := range events {
+		var blockedTableIDs string
+		if event.BlockedTables != nil {
+			blockedTableIDs = fmt.Sprintf("type: %v, schemaID: %d, tableIDs: %v", event.BlockedTables.InfluenceType, event.BlockedTables.SchemaID, event.BlockedTables.TableIDs)
+		}
+		var needDroppedTableIDs string
+		if event.NeedDroppedTables != nil {
+			needDroppedTableIDs = fmt.Sprintf("type: %v, schemaID: %d, tableIDs: %v", event.NeedDroppedTables.InfluenceType, event.NeedDroppedTables.SchemaID, event.NeedDroppedTables.TableIDs)
+		}
+		res = append(res, fmt.Sprintf("type: %s, finishedTs: %d, blocked tables: %s, updated schemas %v, need dropped tables: %s, need added tables: %v, table name change %v",
+			model.ActionType(event.Type),
+			event.FinishedTs,
+			blockedTableIDs,
+			event.UpdatedSchemas,
+			needDroppedTableIDs,
+			event.NeedAddedTables,
+			event.TableNameChange))
+	}
+	return strings.Join(res, "; ")
 }
 
 type mockDBInfo struct {

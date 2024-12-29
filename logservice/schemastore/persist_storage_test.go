@@ -284,7 +284,114 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 			nil,
-			nil,
+			[]FetchTableTriggerDDLEventsTestCase{
+				{
+					startTs: 1000,
+					limit:   10,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionCreateTable),
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  201,
+								},
+								{
+									SchemaID: 100,
+									TableID:  202,
+								},
+								{
+									SchemaID: 100,
+									TableID:  203,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+								},
+							},
+						},
+						{
+							Type:       byte(model.ActionTruncateTable),
+							FinishedTs: 1020,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 201, 202, 203},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{201, 202, 203},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  204,
+								},
+								{
+									SchemaID: 100,
+									TableID:  205,
+								},
+								{
+									SchemaID: 100,
+									TableID:  206,
+								},
+							},
+						},
+						{
+							Type:       byte(model.ActionAddTablePartition),
+							FinishedTs: 1030,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 204, 205, 206},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  207,
+								},
+							},
+						},
+						{
+							Type:       byte(model.ActionDropTablePartition),
+							FinishedTs: 1040,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 204, 205, 206, 207},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{204},
+							},
+						},
+						{
+							Type:       byte(model.ActionTruncateTablePartition),
+							FinishedTs: 1050,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 205, 206, 207},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{205},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  208,
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 		// test exchange partition
 		{
@@ -652,10 +759,20 @@ func TestApplyDDLJobs(t *testing.T) {
 					expectedDDLEvent := expected[i]
 					actualDDLEvent := actual[i]
 					if expectedDDLEvent.Type != actualDDLEvent.Type || expectedDDLEvent.FinishedTs != actualDDLEvent.FinishedTs {
+						// log.Warn("fetchTableDDLEvents result wrong",
+						// 	zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)),
+						// 	zap.Any("expectedType", formatDDLJobsForTest(expectedDDLEvent.Type)),
+						// 	zap.Any("actualType", actualDDLEvent.Type),
+						// 	zap.Uint64("expectedFinishedTs", expectedDDLEvent.FinishedTs),
+						// 	zap.Uint64("actualFinishedTs", actualDDLEvent.FinishedTs))
 						return false
 					}
 					// check BlockedTables
 					if expectedDDLEvent.BlockedTables == nil && actualDDLEvent.BlockedTables != nil {
+						// log.Warn("fetchTableDDLEvents result wrong",
+						// 	zap.Any("ddlJobs", tt.ddlJobs),
+						// 	zap.Any("expected", expectedDDLEvent.BlockedTables),
+						// 	zap.Any("actual", actualDDLEvent.BlockedTables))
 						return false
 					}
 					if expectedDDLEvent.BlockedTables != nil {
@@ -666,6 +783,10 @@ func TestApplyDDLJobs(t *testing.T) {
 							return actualDDLEvent.BlockedTables.TableIDs[i] < actualDDLEvent.BlockedTables.TableIDs[j]
 						})
 						if !reflect.DeepEqual(expectedDDLEvent.BlockedTables, actualDDLEvent.BlockedTables) {
+							// log.Warn("fetchTableDDLEvents result wrong",
+							// 	zap.Any("ddlJobs", tt.ddlJobs),
+							// 	zap.Any("expected", expectedDDLEvent.BlockedTables),
+							// 	zap.Any("actual", actualDDLEvent.BlockedTables))
 							return false
 						}
 					}
@@ -675,10 +796,18 @@ func TestApplyDDLJobs(t *testing.T) {
 						return expectedDDLEvent.UpdatedSchemas[i].TableID < expectedDDLEvent.UpdatedSchemas[j].TableID
 					})
 					if !reflect.DeepEqual(expectedDDLEvent.UpdatedSchemas, actualDDLEvent.UpdatedSchemas) {
+						// log.Warn("fetchTableDDLEvents result wrong",
+						// 	zap.Any("ddlJobs", tt.ddlJobs),
+						// 	zap.Any("expected", expectedDDLEvent.UpdatedSchemas),
+						// 	zap.Any("actual", actualDDLEvent.UpdatedSchemas))
 						return false
 					}
 					// check NeedDroppedTables
 					if expectedDDLEvent.NeedDroppedTables == nil && actualDDLEvent.NeedDroppedTables != nil {
+						// log.Warn("fetchTableDDLEvents result wrong",
+						// 	zap.Any("ddlJobs", tt.ddlJobs),
+						// 	zap.Any("expected", expectedDDLEvent.NeedDroppedTables),
+						// 	zap.Any("actual", actualDDLEvent.NeedDroppedTables))
 						return false
 					}
 					if expectedDDLEvent.NeedDroppedTables != nil {
@@ -689,6 +818,10 @@ func TestApplyDDLJobs(t *testing.T) {
 							return actualDDLEvent.NeedDroppedTables.TableIDs[i] < actualDDLEvent.NeedDroppedTables.TableIDs[j]
 						})
 						if !reflect.DeepEqual(expectedDDLEvent.NeedDroppedTables, actualDDLEvent.NeedDroppedTables) {
+							// log.Warn("fetchTableDDLEvents result wrong",
+							// 	zap.Any("ddlJobs", tt.ddlJobs),
+							// 	zap.Any("expected", expectedDDLEvent.NeedDroppedTables),
+							// 	zap.Any("actual", actualDDLEvent.NeedDroppedTables))
 							return false
 						}
 					}
@@ -698,10 +831,18 @@ func TestApplyDDLJobs(t *testing.T) {
 						return expectedDDLEvent.NeedAddedTables[i].TableID < expectedDDLEvent.NeedAddedTables[j].TableID
 					})
 					if !reflect.DeepEqual(expectedDDLEvent.NeedAddedTables, actualDDLEvent.NeedAddedTables) {
+						// log.Warn("fetchTableDDLEvents result wrong",
+						// 	zap.Any("ddlJobs", tt.ddlJobs),
+						// 	zap.Any("expected", expectedDDLEvent.NeedAddedTables),
+						// 	zap.Any("actual", actualDDLEvent.NeedAddedTables))
 						return false
 					}
 					// check TableNameChange
 					if expectedDDLEvent.TableNameChange == nil && actualDDLEvent.TableNameChange != nil {
+						// log.Warn("fetchTableDDLEvents result wrong",
+						// 	zap.Any("ddlJobs", tt.ddlJobs),
+						// 	zap.Any("expected", expectedDDLEvent.TableNameChange),
+						// 	zap.Any("actual", actualDDLEvent.TableNameChange))
 						return false
 					}
 					if expectedDDLEvent.TableNameChange != nil {
@@ -724,6 +865,10 @@ func TestApplyDDLJobs(t *testing.T) {
 							}
 						})
 						if !reflect.DeepEqual(expectedDDLEvent.TableNameChange, actualDDLEvent.TableNameChange) {
+							// log.Warn("fetchTableDDLEvents result wrong",
+							// 	zap.Any("ddlJobs", tt.ddlJobs),
+							// 	zap.Any("expected", expectedDDLEvent.TableNameChange),
+							// 	zap.Any("actual", actualDDLEvent.TableNameChange))
 							return false
 						}
 					}
@@ -734,15 +879,6 @@ func TestApplyDDLJobs(t *testing.T) {
 				events, err := pStorage.fetchTableDDLEvents(testCase.tableID, testCase.tableFilter, testCase.startTs, testCase.endTs)
 				require.Nil(t, err)
 				if !checkDDLEvents(testCase.result, events) {
-					log.Warn("fetchTableDDLEvents result wrong",
-						zap.Any("ddlJobs", tt.ddlJobs),
-						zap.Int64("tableID", testCase.tableID),
-						zap.Any("tableFilter", testCase.tableFilter),
-						zap.Uint64("startTs", testCase.startTs),
-						zap.Uint64("endTs", testCase.endTs),
-						zap.Any("expected", testCase.result),
-						zap.Any("actual", events),
-						zap.Bool("fromDisk", fromDisk))
 					t.Fatalf("fetchTableDDLEvents result wrong")
 				}
 			}
@@ -751,13 +887,9 @@ func TestApplyDDLJobs(t *testing.T) {
 				require.Nil(t, err)
 				if !checkDDLEvents(testCase.result, events) {
 					log.Warn("fetchTableTriggerDDLEvents result wrong",
-						zap.Any("ddlJobs", tt.ddlJobs),
-						zap.Any("tableFilter", testCase.tableFilter),
-						zap.Uint64("startTs", testCase.startTs),
-						zap.Int("endTs", testCase.limit),
-						zap.Any("expected", testCase.result),
-						zap.Any("actual", events),
-						zap.Bool("fromDisk", fromDisk))
+						zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)),
+						zap.String("expectedEvents", formatDDLEventsForTest(testCase.result)),
+						zap.String("actualEvents", formatDDLEventsForTest(events)))
 					t.Fatalf("fetchTableTriggerDDLEvents result wrong")
 				}
 			}
