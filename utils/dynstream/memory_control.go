@@ -5,7 +5,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/ticdc/utils/heap"
+	"github.com/siddontang/go-log/log"
+	"go.uber.org/zap"
 )
 
 // memoryPauseRule defines a mapping rule between memory usage ratio and path pause ratio
@@ -65,11 +66,12 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 ) *areaMemStat[A, P, T, D, H] {
 	settings.fix()
 	res := &areaMemStat[A, P, T, D, H]{
-		area:         area,
-		memControl:   memoryControl,
-		feedbackChan: feedbackChan,
+		area:                 area,
+		memControl:           memoryControl,
+		feedbackChan:         feedbackChan,
+		lastSendFeedbackTime: atomic.Value{},
 	}
-
+	res.lastSendFeedbackTime.Store(time.Unix(0, 0))
 	res.settings.Store(&settings)
 	return res
 }
@@ -104,12 +106,29 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	return true
 }
 
+var lastLogTime atomic.Value
+
+func init() {
+	lastLogTime.Store(time.Unix(0, 0))
+}
+
 // updatePathPauseState determines the pause state of a path and sends feedback to handler if the state is changed.
 // It needs to be called after a event is appended.
 // Note: Our gaol is to fast pause, and lazy resume.
 func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, T, D, H], event eventWrap[A, P, T, D, H]) {
 	shouldPause := as.shouldPausePath(path)
-	currentTime := event.queueTime
+
+	if time.Since(lastLogTime.Load().(time.Time)) >= 2*time.Second {
+		log.Info("updatePathPauseState",
+			zap.Any("path", path.path),
+			zap.Any("shouldPause", shouldPause),
+			zap.Any("pendingSize", path.pendingSize.Load()),
+			zap.Any("totalPendingSize", as.totalPendingSize.Load()),
+			zap.Any("lastSendFeedbackTime", path.lastSendFeedbackTime.Load().(time.Time)),
+			zap.Any("feedbackInterval", as.settings.Load().FeedbackInterval),
+		)
+		lastLogTime.Store(time.Now())
+	}
 
 	sendFeedback := func(pause bool) {
 		as.feedbackChan <- Feedback[A, P, D]{
@@ -119,13 +138,13 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 			FeedbackType: 0,
 			Pause:        pause,
 		}
-		path.lastSendFeedbackTime = currentTime
+		path.lastSendFeedbackTime.Store(time.Now())
 	}
 
 	// If the path is not paused previously but should be paused, we need to pause it.
 	// And send pause feedback.
 	if path.paused != shouldPause &&
-		time.Since(path.lastSendFeedbackTime) >= as.settings.Load().FeedbackInterval {
+		time.Since(path.lastSendFeedbackTime.Load().(time.Time)) >= as.settings.Load().FeedbackInterval {
 		path.paused = shouldPause
 		sendFeedback(shouldPause)
 		return
@@ -236,63 +255,6 @@ func (m *memControl[A, P, T, D, H]) getMetrics() (usedMemory int64, maxMemory in
 		maxMemory += int64(area.settings.Load().MaxPendingSize)
 	}
 	return usedMemory, maxMemory
-}
-
-// pathSizeHeap is a heap to store the paths by their pending size in descending order.
-// Note: All the methods of this heap should be thread safe.
-// It is used to:
-// 1. Find the path with the largest pending size.
-// 2. Determine if a path should be paused based on the memory usage.
-type pathSizeHeap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	sync.RWMutex
-	h              *heap.Heap[*pathInfo[A, P, T, D, H]]
-	lastUpdateTime time.Time
-	// Limit the update interval to avoid cpu overhead.
-	// We don't need a very accurate heap, so 100ms is enough.
-	updateInterval time.Duration
-}
-
-func newPathSizeHeap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]]() *pathSizeHeap[A, P, T, D, H] {
-	return &pathSizeHeap[A, P, T, D, H]{
-		h:              heap.NewHeap[*pathInfo[A, P, T, D, H]](),
-		lastUpdateTime: time.Now(),
-		updateInterval: 100 * time.Millisecond,
-	}
-}
-
-func (h *pathSizeHeap[A, P, T, D, H]) push(path *pathInfo[A, P, T, D, H]) {
-	h.Lock()
-	defer h.Unlock()
-	h.h.AddOrUpdate(path)
-}
-
-func (h *pathSizeHeap[A, P, T, D, H]) peek() (*pathInfo[A, P, T, D, H], bool) {
-	h.RLock()
-	defer h.RUnlock()
-	return h.h.PeekTop()
-}
-
-func (h *pathSizeHeap[A, P, T, D, H]) remove(path *pathInfo[A, P, T, D, H]) {
-	h.Lock()
-	defer h.Unlock()
-	h.h.Remove(path)
-}
-
-func (h *pathSizeHeap[A, P, T, D, H]) tryUpdate(force bool) {
-	h.Lock()
-	defer h.Unlock()
-	if !force && time.Since(h.lastUpdateTime) < h.updateInterval {
-		return
-	}
-
-	h.h.Fix()
-	h.lastUpdateTime = time.Now()
-}
-
-func (h *pathSizeHeap[A, P, T, D, H]) len() int {
-	h.RLock()
-	defer h.RUnlock()
-	return h.h.Len()
 }
 
 func (p *pathInfo[A, P, T, D, H]) SetHeapIndex(index int) {

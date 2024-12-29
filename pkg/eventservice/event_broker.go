@@ -327,7 +327,7 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 	}
 
 	// Only scan when the dispatcher is running.
-	if !task.isRunning.Load() {
+	if !task.IsRunning() {
 		// If the dispatcher is not running, we also need to send the watermark to the dispatcher.
 		// And the resolvedTs should be the last sent watermark.
 		resolvedTs := task.sentResolvedTs.Load()
@@ -447,9 +447,18 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		metricEventBrokerScanTaskCount.Inc()
 	}()
 
-	sendDML := func(dml *pevent.DMLEvent) {
+	// sendDML is used to send the dml event to the dispatcher.
+	// It returns true if the dml event is sent successfully.
+	// Otherwise, it returns false.
+	sendDML := func(dml *pevent.DMLEvent) bool {
 		if dml == nil {
-			return
+			return true
+		}
+
+		// Check if the dispatcher is running.
+		// If not, we don't need to send the dml event.
+		if !task.IsRunning() {
+			return false
 		}
 
 		for len(ddlEvents) > 0 && dml.CommitTs > ddlEvents[0].FinishedTs {
@@ -460,6 +469,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		c.emitSyncPointEventIfNeeded(dml.CommitTs, task, remoteID)
 		c.getMessageCh(task.workerIndex) <- newWrapDMLEvent(remoteID, dml, task.getEventSenderState())
 		metricEventServiceSendKvCount.Add(float64(dml.Len()))
+		return true
 	}
 
 	// 3. Send the events to the dispatcher.
@@ -483,7 +493,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		}
 
 		if isNewTxn {
-			sendDML(dml)
+			ok := sendDML(dml)
+			if !ok {
+				return
+			}
 			tableID := task.info.GetTableSpan().TableID
 			tableInfo, err := c.schemaStore.GetTableInfo(tableID, e.CRTs-1)
 			if err != nil {
@@ -740,7 +753,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 	id := info.GetID()
 	span := info.GetTableSpan()
 	startTs := info.GetStartTs()
-	changefeedID := info.GetChangefeedID().ID()
+	changefeedID := info.GetChangefeedID()
 	changefeedStatus := c.getOrSetChangefeedStatus(changefeedID)
 	workerIndex := int((common.GID)(id).Hash(uint64(c.sendMessageWorkerCount)))
 
@@ -838,12 +851,13 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	log.Info("reset dispatcher", zap.Any("dispatcher", stat.id), zap.Uint64("startTs", stat.info.GetStartTs()))
 }
 
-func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.GID) *changefeedStatus {
+func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
 	stat, ok := c.changefeedMap.Load(changefeedID)
 	if !ok {
-		stat = &changefeedStatus{
-			changefeedID: changefeedID,
-		}
+		stat = newChangefeedStatus(changefeedID)
+		log.Info("new changefeed status",
+			zap.Any("changefeedID", changefeedID.String()),
+			zap.Any("stat", stat.(*changefeedStatus).isRunning.Load()))
 		c.changefeedMap.Store(changefeedID, stat)
 	}
 	return stat.(*changefeedStatus)
@@ -854,7 +868,9 @@ func (c *eventBroker) pauseChangefeed(dispatcherInfo DispatcherInfo) {
 	if !ok {
 		return
 	}
-	stat.changefeedStat.isPaused.Store(true)
+	log.Info("pause changefeed",
+		zap.Any("changefeedID", stat.changefeedStat.changefeedID.String()))
+	stat.changefeedStat.isRunning.Store(false)
 }
 
 func (c *eventBroker) resumeChangefeed(dispatcherInfo DispatcherInfo) {
@@ -862,5 +878,7 @@ func (c *eventBroker) resumeChangefeed(dispatcherInfo DispatcherInfo) {
 	if !ok {
 		return
 	}
-	stat.changefeedStat.isPaused.Store(false)
+	log.Info("resume changefeed",
+		zap.Any("changefeedID", stat.changefeedStat.changefeedID.String()))
+	stat.changefeedStat.isRunning.Store(true)
 }

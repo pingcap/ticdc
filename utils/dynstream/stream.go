@@ -273,16 +273,18 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 	pendingSize          atomic.Uint32 // The total size(bytes) of pending events in the pendingQueue of the path.
 	paused               bool          // The path is paused to send events.
-	lastSendFeedbackTime time.Time
+	lastSendFeedbackTime atomic.Value
 }
 
 func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A, path P, dest D) *pathInfo[A, P, T, D, H] {
 	pi := &pathInfo[A, P, T, D, H]{
-		area:         area,
-		path:         path,
-		dest:         dest,
-		pendingQueue: deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
+		area:                 area,
+		path:                 path,
+		dest:                 dest,
+		pendingQueue:         deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
+		lastSendFeedbackTime: atomic.Value{},
 	}
+	pi.lastSendFeedbackTime.Store(time.Unix(0, 0))
 	return pi
 }
 

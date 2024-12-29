@@ -162,6 +162,10 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	return r, true
 }
 
+func (a *dispatcherStat) IsRunning() bool {
+	return a.isRunning.Load() && a.changefeedStat.isRunning.Load()
+}
+
 type scanTask = *dispatcherStat
 
 func (t scanTask) GetKey() common.DispatcherID {
@@ -297,10 +301,22 @@ func (c *resolvedTsCache) reset() {
 }
 
 type changefeedStatus struct {
-	changefeedID common.GID
-	isPaused     atomic.Bool
+	changefeedID common.ChangeFeedID
+	// isRunning is used to indicate whether the changefeed is running.
+	// It will be set to false, after it receives the pause event from the dispatcher.
+	// It will be set to true, after it receives the register/resume/reset event from the dispatcher.
+	isRunning atomic.Bool
 	// dispatcherCount is the number of the dispatchers that belong to this changefeed.
 	dispatcherCount atomic.Uint64
+}
+
+func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
+	stat := &changefeedStatus{
+		changefeedID: changefeedID,
+		isRunning:    atomic.Bool{},
+	}
+	stat.isRunning.Store(true)
+	return stat
 }
 
 func (c *changefeedStatus) addDispatcher() {
