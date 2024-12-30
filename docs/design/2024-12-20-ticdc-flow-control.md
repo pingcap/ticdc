@@ -29,9 +29,9 @@ When downstream consumption lags behind upstream production, data accumulates in
 
 ### Pause and Resume Mechanism
 
-The **EventCollector** uses the `dynamicStream` component to handle and buffer data. Each stream corresponds to a `path`, and unprocessed data is stored in its unlimited queue, `pendingQueue`.
+The **EventCollector** uses the `dynamicStream` component to handle and buffer data. Each stream corresponds to a `path` (A path represents a dispatcher), and unprocessed data is stored in its unlimited queue, `pendingQueue`.
 
-To manage memory usage, the `dynamicStream` will incorporate a **memory control module**. This module tracks memory usage for each `path` and `area` (changefeed) and triggers flow control actions. The detailed plan is as follows:
+To manage memory usage, the `dynamicStream` will incorporate a **memory control module**. This module tracks memory usage for each `path` and `area` (An area represents a changefeed) and triggers flow control actions. The detailed plan is as follows:
 
 #### 1. Path-Level Flow Control
 
