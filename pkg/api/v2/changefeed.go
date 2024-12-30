@@ -16,6 +16,7 @@ package v2
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/pkg/api/internal/rest"
@@ -47,6 +48,8 @@ type ChangefeedInterface interface {
 	Get(ctx context.Context, namespace string, name string) (*v2.ChangeFeedInfo, error)
 	// List lists all changefeeds
 	List(ctx context.Context, namespace string, state string) ([]v2.ChangefeedCommonInfo, error)
+	// Move Table to target node, it just for make test case now. **Not for public use.**
+	MoveTable(ctx context.Context, namespace string, name string, tableID int64, targetNode string) error
 }
 
 // changefeeds implements ChangefeedInterface
@@ -156,4 +159,17 @@ func (c *changefeeds) List(ctx context.Context,
 		Do(ctx).
 		Into(result)
 	return result.Items, err
+}
+
+// MoveTable to target node, it just for make test case now. **Not for public use.**
+func (c *changefeeds) MoveTable(ctx context.Context,
+	namespace string, name string, tableID int64, targetNode string,
+) error {
+	url := fmt.Sprintf("changefeeds/%s/move_table?namespace=%s", name, namespace)
+	err := c.client.Post().
+		WithURI(url).
+		WithParam("tableID", strconv.FormatInt(tableID, 10)).
+		WithParam("targetNodeID", targetNode).
+		Do(ctx).Error()
+	return err
 }

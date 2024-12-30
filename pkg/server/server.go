@@ -11,12 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package node
+package server
 
 import (
 	"context"
 
+	"github.com/pingcap/ticdc/maintainer"
 	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/tiflow/cdc/model"
 	pd "github.com/tikv/pd/client"
 )
@@ -27,15 +29,17 @@ type Server interface {
 	Run(ctx context.Context) error
 	Close(ctx context.Context)
 
-	SelfInfo() (*Info, error)
+	SelfInfo() (*node.Info, error)
 	Liveness() model.Liveness
 
 	GetCoordinator() (Coordinator, error)
 	IsCoordinator() bool
 
 	// GetCoordinatorInfo returns the coordinator server， it will be used when forward api request
-	GetCoordinatorInfo(ctx context.Context) (*Info, error)
+	GetCoordinatorInfo(ctx context.Context) (*node.Info, error)
 
 	GetPdClient() pd.Client
 	GetEtcdClient() etcd.CDCEtcdClient
+
+	GetMaintainerManager() *maintainer.Manager
 }

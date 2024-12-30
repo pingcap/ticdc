@@ -13,93 +13,600 @@
 
 package schemastore
 
-// import (
-// 	"encoding/json"
-// 	"fmt"
-// 	"os"
-// 	"testing"
+import (
+	"fmt"
+	"math"
+	"reflect"
+	"testing"
 
-// 	"github.com/cockroachdb/pebble"
-// 	"github.com/pingcap/log"
-// 	"github.com/pingcap/ticdc/heartbeatpb"
-// 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-// 	"github.com/pingcap/ticdc/pkg/filter"
-// 	"github.com/pingcap/tidb/pkg/meta/model"
-// 	"github.com/pingcap/tiflow/pkg/config"
-// 	"github.com/stretchr/testify/require"
-// 	"go.uber.org/zap"
-// )
+	"github.com/pingcap/log"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+)
 
-// func loadPersistentStorageForTest(db *pebble.DB, gcTs uint64, upperBound UpperBoundMeta) *persistentStorage {
-// 	p := &persistentStorage{
-// 		pdCli:                  nil,
-// 		kvStorage:              nil,
-// 		db:                     db,
-// 		gcTs:                   gcTs,
-// 		upperBound:             upperBound,
-// 		tableMap:               make(map[int64]*BasicTableInfo),
-// 		partitionMap:           make(map[int64]BasicPartitionInfo),
-// 		databaseMap:            make(map[int64]*BasicDatabaseInfo),
-// 		tablesDDLHistory:       make(map[int64][]uint64),
-// 		tableTriggerDDLHistory: make([]uint64, 0),
-// 		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
-// 		tableRegisteredCount:   make(map[int64]int),
-// 	}
-// 	p.initializeFromDisk()
-// 	return p
-// }
+func TestApplyDDLJobs(t *testing.T) {
+	type PhysicalTableQueryTestCase struct {
+		snapTs      uint64
+		tableFilter filter.Filter
+		result      []commonEvent.Table
+	}
+	var testCases = []struct {
+		initailDBInfos              []mockDBInfo
+		ddlJobs                     []*model.Job
+		tableMap                    map[int64]*BasicTableInfo
+		partitionMap                map[int64]BasicPartitionInfo
+		databaseMap                 map[int64]*BasicDatabaseInfo
+		tablesDDLHistory            map[int64][]uint64
+		tableTriggerDDLHistory      []uint64
+		physicalTableQueryTestCases []PhysicalTableQueryTestCase
+	}{
+		// test drop schema can clear table info and partition info
+		{
+			nil,
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateSchemaJobForTest(100, "test", 1000),                                    // create schema 100
+					buildCreateTableJobForTest(100, 200, "t1", 1010),                                  // create table 200
+					buildCreatePartitionTableJobForTest(100, 300, "t1", []int64{301, 302, 303}, 1020), // create partition table 300
+					buildDropSchemaJobForTest(100, 1030),                                              // drop schema 100
+				}
+			}(),
+			nil,
+			nil,
+			nil,
+			map[int64][]uint64{
+				200: {1010, 1030},
+				301: {1020, 1030},
+				302: {1020, 1030},
+				303: {1020, 1030},
+			},
+			[]uint64{1000, 1010, 1020, 1030},
+			nil,
+		},
+		// test create table/drop table/truncate table
+		{
+			nil,
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateSchemaJobForTest(100, "test", 1000),          // create schema 100
+					buildCreateTableJobForTest(100, 200, "t1", 1010),        // create table 200
+					buildCreateTableJobForTest(100, 201, "t2", 1020),        // create table 201
+					buildDropTableJobForTest(100, 201, 1030),                // drop table 201
+					buildTruncateTableJobForTest(100, 200, 202, "t1", 1040), // truncate table 200 to 202
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				202: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+			},
+			nil,
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						202: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				200: {1010, 1040},
+				201: {1020, 1030},
+				202: {1040},
+			},
+			[]uint64{1000, 1010, 1020, 1030, 1040},
+			[]PhysicalTableQueryTestCase{
+				{
+					snapTs: 1010,
+					result: []commonEvent.Table{
+						{
+							SchemaID: 100,
+							TableID:  200,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+					},
+				},
+				{
+					snapTs: 1020,
+					result: []commonEvent.Table{
+						{
+							SchemaID: 100,
+							TableID:  200,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+						{
+							SchemaID: 100,
+							TableID:  201,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t2",
+							},
+						},
+					},
+				},
+				{
+					snapTs:      1040,
+					tableFilter: buildTableFilterByNameForTest("test", "t1"),
+					result: []commonEvent.Table{
+						{
+							SchemaID: 100,
+							TableID:  202,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+					},
+				},
+				{
+					snapTs:      1040,
+					tableFilter: buildTableFilterByNameForTest("test", "t2"),
+					result:      []commonEvent.Table{},
+				},
+			},
+		},
+		// test partition table related ddl
+		{
+			nil,
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateSchemaJobForTest(100, "test", 1000),                                           // create schema 100
+					buildCreatePartitionTableJobForTest(100, 200, "t1", []int64{201, 202, 203}, 1010),        // create partition table 200
+					buildTruncatePartitionTableJobForTest(100, 200, 300, "t1", []int64{204, 205, 206}, 1020), // truncate partition table 200 to 300
+					buildAddPartitionJobForTest(100, 300, "t1", []int64{204, 205, 206, 207}, 1030),           // add partition 207
+					buildDropPartitionJobForTest(100, 300, "t1", []int64{205, 206, 207}, 1040),               // drop partition 204
+					buildTruncatePartitionJobForTest(100, 300, "t1", []int64{206, 207, 208}, 1050),           // truncate partition 205 to 208
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				300: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+			},
+			map[int64]BasicPartitionInfo{
+				300: {
+					206: nil,
+					207: nil,
+					208: nil,
+				},
+			},
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						300: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				201: {1010, 1020},
+				202: {1010, 1020},
+				203: {1010, 1020},
+				204: {1020, 1030, 1040},
+				205: {1020, 1030, 1040, 1050},
+				206: {1020, 1030, 1040, 1050},
+				207: {1030, 1040, 1050},
+				208: {1050},
+			},
+			[]uint64{1000, 1010, 1020, 1030, 1040, 1050},
+			[]PhysicalTableQueryTestCase{
+				{
+					snapTs: 1010,
+					result: []commonEvent.Table{
+						{
+							SchemaID: 100,
+							TableID:  201,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+						{
+							SchemaID: 100,
+							TableID:  202,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+						{
+							SchemaID: 100,
+							TableID:  203,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+					},
+				},
+				{
+					snapTs: 1050,
+					result: []commonEvent.Table{
+						{
+							SchemaID: 100,
+							TableID:  206,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+						{
+							SchemaID: 100,
+							TableID:  207,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+						{
+							SchemaID: 100,
+							TableID:  208,
+							SchemaTableName: &commonEvent.SchemaTableName{
+								SchemaName: "test",
+								TableName:  "t1",
+							},
+						},
+					},
+				},
+			},
+		},
+		// test exchange partition
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+				{
+					dbInfo: &model.DBInfo{
+						ID:   105,
+						Name: pmodel.NewCIStr("test2"),
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreatePartitionTableJobForTest(100, 200, "t1", []int64{201, 202, 203}, 1010),   // create partition table 200
+					buildCreateTableJobForTest(105, 300, "t2", 1020),                                    // create table 300
+					buildExchangePartitionJobForTest(105, 300, 200, "t1", []int64{201, 202, 300}, 1030), // exchange partition 203 with table 300
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				200: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+				203: {
+					SchemaID: 105,
+					Name:     "t2",
+				},
+			},
+			map[int64]BasicPartitionInfo{
+				200: {
+					201: nil,
+					202: nil,
+					300: nil,
+				},
+			},
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						200: true,
+					},
+				},
+				105: {
+					Name: "test2",
+					Tables: map[int64]bool{
+						203: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				300: {1020, 1030},
+				201: {1010},
+				202: {1010},
+				203: {1010, 1030},
+			},
+			[]uint64{1010, 1020, 1030},
+			nil,
+		},
+		// test rename table
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+				{
+					dbInfo: &model.DBInfo{
+						ID:   105,
+						Name: pmodel.NewCIStr("test2"),
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateTableJobForTest(100, 300, "t1", 1010), // create table 300
+					buildRenameTableJobForTest(105, 300, "t2", 1020), // rename table 300 to schema 105
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				300: {
+					SchemaID: 105,
+					Name:     "t2",
+				},
+			},
+			nil,
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name:   "test",
+					Tables: map[int64]bool{},
+				},
+				105: {
+					Name: "test2",
+					Tables: map[int64]bool{
+						300: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				300: {1010, 1020},
+			},
+			[]uint64{1010, 1020},
+			nil,
+		},
+		// test rename partition table
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+				{
+					dbInfo: &model.DBInfo{
+						ID:   105,
+						Name: pmodel.NewCIStr("test2"),
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreatePartitionTableJobForTest(100, 300, "t1", []int64{301, 302, 303}, 1010), // create table 300
+					buildRenamePartitionTableJobForTest(105, 300, "t2", []int64{301, 302, 303}, 1020), // rename table 300 to schema 105
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				300: {
+					SchemaID: 105,
+					Name:     "t2",
+				},
+			},
+			map[int64]BasicPartitionInfo{
+				300: {
+					301: nil,
+					302: nil,
+					303: nil,
+				},
+			},
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name:   "test",
+					Tables: map[int64]bool{},
+				},
+				105: {
+					Name: "test2",
+					Tables: map[int64]bool{
+						300: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				301: {1010, 1020},
+				302: {1010, 1020},
+				303: {1010, 1020},
+			},
+			[]uint64{1010, 1020},
+			nil,
+		},
+		// test create tables
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreateTablesJobForTest(100, []int64{301, 302, 303}, []string{"t1", "t2", "t3"}, 1010), // create table 301, 302, 303
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				301: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+				302: {
+					SchemaID: 100,
+					Name:     "t2",
+				},
+				303: {
+					SchemaID: 100,
+					Name:     "t3",
+				},
+			},
+			nil,
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						301: true,
+						302: true,
+						303: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				301: {1010},
+				302: {1010},
+				303: {1010},
+			},
+			[]uint64{1010},
+			nil,
+		},
+		// test create tables for partition table
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreatePartitionTablesJobForTest(100,
+						[]int64{300, 400, 500},
+						[]string{"t1", "t2", "t3"},
+						[][]int64{{301, 302, 303}, {401, 402, 403}, {501, 502, 503}},
+						1010), // create table 301, 302, 303
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				300: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+				400: {
+					SchemaID: 100,
+					Name:     "t2",
+				},
+				500: {
+					SchemaID: 100,
+					Name:     "t3",
+				},
+			},
+			map[int64]BasicPartitionInfo{
+				300: {
+					301: nil,
+					302: nil,
+					303: nil,
+				},
+				400: {
+					401: nil,
+					402: nil,
+					403: nil,
+				},
+				500: {
+					501: nil,
+					502: nil,
+					503: nil,
+				},
+			},
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						300: true,
+						400: true,
+						500: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				301: {1010},
+				302: {1010},
+				303: {1010},
+				401: {1010},
+				402: {1010},
+				403: {1010},
+				501: {1010},
+				502: {1010},
+				503: {1010},
+			},
+			[]uint64{1010},
+			nil,
+		},
+	}
 
-// // create an empty persistent storage at dbPath
-// func newEmptyPersistentStorageForTest(dbPath string) *persistentStorage {
-// 	db, err := pebble.Open(dbPath, &pebble.Options{})
-// 	if err != nil {
-// 		log.Panic("create database fail")
-// 	}
-// 	gcTs := uint64(0)
-// 	upperBound := UpperBoundMeta{
-// 		FinishedDDLTs: 0,
-// 		SchemaVersion: 0,
-// 		ResolvedTs:    0,
-// 	}
-// 	return loadPersistentStorageForTest(db, gcTs, upperBound)
-// }
-
-// // create a persistent storage with initial db info and table info
-// func newPersistentStorageForTest(dbPath string, gcTs uint64, initialDBInfos map[int64]*model.DBInfo) *persistentStorage {
-// 	db, err := pebble.Open(dbPath, &pebble.Options{})
-// 	if err != nil {
-// 		log.Panic("create database fail")
-// 	}
-// 	if len(initialDBInfos) > 0 {
-// 		mockWriteKVSnapOnDisk(db, gcTs, initialDBInfos)
-// 	}
-// 	upperBound := UpperBoundMeta{
-// 		FinishedDDLTs: 0,
-// 		SchemaVersion: 0,
-// 		ResolvedTs:    gcTs,
-// 	}
-// 	writeUpperBoundMeta(db, upperBound)
-// 	return loadPersistentStorageForTest(db, gcTs, upperBound)
-// }
-
-// func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos map[int64]*model.DBInfo) {
-// 	batch := db.NewBatch()
-// 	defer batch.Close()
-// 	for _, dbInfo := range dbInfos {
-// 		writeSchemaInfoToBatch(batch, snapTs, dbInfo)
-// 		for _, tableInfo := range dbInfo.Tables {
-// 			tableInfoValue, err := json.Marshal(tableInfo)
-// 			if err != nil {
-// 				log.Panic("marshal table info fail", zap.Error(err))
-// 			}
-// 			writeTableInfoToBatch(batch, snapTs, dbInfo, tableInfoValue)
-// 		}
-// 	}
-// 	if err := batch.Commit(pebble.NoSync); err != nil {
-// 		log.Panic("commit batch fail", zap.Error(err))
-// 	}
-// 	writeGcTs(db, snapTs)
-// }
+	for _, tt := range testCases {
+		dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
+		pStorage := newPersistentStorageForTest(dbPath, tt.initailDBInfos)
+		checkState := func(fromDisk bool) {
+			if (tt.tableMap != nil && !reflect.DeepEqual(tt.tableMap, pStorage.tableMap)) ||
+				(tt.tableMap == nil && len(pStorage.tableMap) != 0) {
+				log.Warn("tableMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("tableMap not equal")
+			}
+			if (tt.partitionMap != nil && !reflect.DeepEqual(tt.partitionMap, pStorage.partitionMap)) ||
+				(tt.partitionMap == nil && len(pStorage.partitionMap) != 0) {
+				log.Warn("partitionMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.partitionMap), zap.Any("actual", pStorage.partitionMap), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("partitionMap not equal")
+			}
+			if (tt.databaseMap != nil && !reflect.DeepEqual(tt.databaseMap, pStorage.databaseMap)) ||
+				(tt.databaseMap == nil && len(pStorage.databaseMap) != 0) {
+				log.Warn("databaseMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.databaseMap), zap.Any("actual", pStorage.databaseMap), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("databaseMap not equal")
+			}
+			if (tt.tablesDDLHistory != nil && !reflect.DeepEqual(tt.tablesDDLHistory, pStorage.tablesDDLHistory)) ||
+				(tt.tablesDDLHistory == nil && len(pStorage.tablesDDLHistory) != 0) {
+				log.Warn("tablesDDLHistory not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tablesDDLHistory), zap.Any("actual", pStorage.tablesDDLHistory), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("tablesDDLHistory not equal")
+			}
+			if (tt.tableTriggerDDLHistory != nil && !reflect.DeepEqual(tt.tableTriggerDDLHistory, pStorage.tableTriggerDDLHistory)) ||
+				(tt.tableTriggerDDLHistory == nil && len(pStorage.tableTriggerDDLHistory) != 0) {
+				log.Warn("tableTriggerDDLHistory not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tableTriggerDDLHistory), zap.Any("actual", pStorage.tableTriggerDDLHistory), zap.Bool("fromDisk", fromDisk))
+				t.Fatalf("tableTriggerDDLHistory not equal")
+			}
+			for _, testCase := range tt.physicalTableQueryTestCases {
+				allPhysicalTables, err := pStorage.getAllPhysicalTables(testCase.snapTs, testCase.tableFilter)
+				require.Nil(t, err)
+				if !compareUnorderedTableSlices(testCase.result, allPhysicalTables) {
+					log.Warn("getAllPhysicalTables result wrong",
+						zap.Any("ddlJobs", tt.ddlJobs),
+						zap.Uint64("snapTs", testCase.snapTs),
+						zap.Any("tableFilter", testCase.tableFilter),
+						zap.Any("expected", testCase.result),
+						zap.Any("actual", allPhysicalTables),
+						zap.Bool("fromDisk", fromDisk))
+					t.Fatalf("getAllPhysicalTables result wrong")
+				}
+			}
+		}
+		for _, job := range tt.ddlJobs {
+			err := pStorage.handleDDLJob(job)
+			require.Nil(t, err)
+		}
+		checkState(false)
+		pStorage.close()
+		// load from disk and check again
+		pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
+		checkState(true)
+		pStorage.close()
+	}
+}
 
 // func TestReadWriteMeta(t *testing.T) {
 // 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
@@ -428,170 +935,6 @@ package schemastore
 // 		store := newEmptyVersionedTableInfoStore(partitionID4)
 // 		pStorage.buildVersionedTableInfoStore(store)
 // 		require.Equal(t, 1, len(store.infos))
-// 	}
-// }
-
-// func TestHandleCreateDropSchemaTableDDL(t *testing.T) {
-// 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
-// 	err := os.RemoveAll(dbPath)
-// 	require.Nil(t, err)
-// 	pStorage := newEmptyPersistentStorageForTest(dbPath)
-
-// 	// create db
-// 	schemaID := int64(300)
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionCreateSchema,
-// 			SchemaID: schemaID,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 100,
-// 				DBInfo: &model.DBInfo{
-// 					ID:   schemaID,
-// 					Name: model.NewCIStr("test"),
-// 				},
-// 				TableInfo:  nil,
-// 				FinishedTS: 200,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 1, len(pStorage.databaseMap))
-// 		require.Equal(t, "test", pStorage.databaseMap[schemaID].Name)
-// 		require.Equal(t, 1, len(pStorage.tableTriggerDDLHistory))
-// 		require.Equal(t, uint64(200), pStorage.tableTriggerDDLHistory[0])
-// 	}
-
-// 	// create a table
-// 	tableID := int64(100)
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionCreateTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 101,
-// 				TableInfo: &model.TableInfo{
-// 					Name: model.NewCIStr("t1"),
-// 				},
-// 				FinishedTS: 201,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 1, len(pStorage.databaseMap[schemaID].Tables))
-// 		require.Equal(t, 1, len(pStorage.tableMap))
-// 		require.Equal(t, 2, len(pStorage.tableTriggerDDLHistory))
-// 		require.Equal(t, uint64(201), pStorage.tableTriggerDDLHistory[1])
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory))
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[tableID]))
-// 	}
-
-// 	// create another table
-// 	tableID2 := int64(105)
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionCreateTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID2,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 103,
-// 				TableInfo: &model.TableInfo{
-// 					Name: model.NewCIStr("t2"),
-// 				},
-
-// 				FinishedTS: 203,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 2, len(pStorage.databaseMap[schemaID].Tables))
-// 		require.Equal(t, 2, len(pStorage.tableMap))
-// 		require.Equal(t, 3, len(pStorage.tableTriggerDDLHistory))
-// 		require.Equal(t, uint64(203), pStorage.tableTriggerDDLHistory[2])
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory))
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[tableID2]))
-// 		require.Equal(t, uint64(203), pStorage.tablesDDLHistory[tableID2][0])
-// 	}
-
-// 	// drop a table
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionDropTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID2,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 105,
-// 				TableInfo:     nil,
-// 				FinishedTS:    205,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 1, len(pStorage.databaseMap[schemaID].Tables))
-// 		require.Equal(t, 1, len(pStorage.tableMap))
-// 		require.Equal(t, 4, len(pStorage.tableTriggerDDLHistory))
-// 		require.Equal(t, uint64(205), pStorage.tableTriggerDDLHistory[3])
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory))
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[tableID]))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[tableID2]))
-// 		require.Equal(t, uint64(205), pStorage.tablesDDLHistory[tableID2][1])
-// 	}
-
-// 	// truncate a table
-// 	tableID3 := int64(112)
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionTruncateTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 107,
-// 				TableInfo: &model.TableInfo{
-// 					ID: tableID3,
-// 				},
-// 				FinishedTS: 207,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 1, len(pStorage.databaseMap[schemaID].Tables))
-// 		require.Equal(t, 1, len(pStorage.tableMap))
-// 		require.Equal(t, 5, len(pStorage.tableTriggerDDLHistory))
-// 		require.Equal(t, uint64(207), pStorage.tableTriggerDDLHistory[4])
-// 		require.Equal(t, 3, len(pStorage.tablesDDLHistory))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[tableID]))
-// 		require.Equal(t, uint64(207), pStorage.tablesDDLHistory[tableID][1])
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[tableID3]))
-// 		require.Equal(t, uint64(207), pStorage.tablesDDLHistory[tableID3][0])
-// 	}
-
-// 	// drop db
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionDropSchema,
-// 			SchemaID: schemaID,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 200,
-// 				DBInfo: &model.DBInfo{
-// 					ID:   schemaID,
-// 					Name: model.NewCIStr("test"),
-// 				},
-// 				TableInfo:  nil,
-// 				FinishedTS: 300,
-// 			},
-// 		}
-
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 0, len(pStorage.databaseMap))
-// 		require.Equal(t, 0, len(pStorage.tableMap))
-// 		require.Equal(t, 6, len(pStorage.tableTriggerDDLHistory))
-// 		require.Equal(t, uint64(300), pStorage.tableTriggerDDLHistory[5])
-// 		require.Equal(t, 3, len(pStorage.tablesDDLHistory))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[tableID]))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[tableID2]))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[tableID3]))
-// 		require.Equal(t, uint64(300), pStorage.tablesDDLHistory[tableID3][1])
 // 	}
 // }
 
@@ -2196,169 +2539,4 @@ package schemastore
 // 	}
 
 // 	// TODO: test obsolete data can be removed
-// }
-
-// func TestGetAllPhysicalTables(t *testing.T) {
-// 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
-// 	err := os.RemoveAll(dbPath)
-// 	require.Nil(t, err)
-
-// 	schemaID := int64(300)
-// 	gcTs := uint64(600)
-// 	tableID1 := int64(100)
-// 	tableID2 := tableID1 + 100
-
-// 	databaseInfo := make(map[int64]*model.DBInfo)
-// 	databaseInfo[schemaID] = &model.DBInfo{
-// 		ID:   schemaID,
-// 		Name: model.NewCIStr("test"),
-// 		Tables: []*model.TableInfo{
-// 			{
-// 				ID:   tableID1,
-// 				Name: model.NewCIStr("t1"),
-// 			},
-// 			{
-// 				ID:   tableID2,
-// 				Name: model.NewCIStr("t2"),
-// 			},
-// 		},
-// 	}
-// 	pStorage := newPersistentStorageForTest(dbPath, gcTs, databaseInfo)
-
-// 	// create table t3
-// 	tableID3 := tableID2 + 100
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionCreateTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID3,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 501,
-// 				TableInfo: &model.TableInfo{
-// 					ID:   tableID3,
-// 					Name: model.NewCIStr("t3"),
-// 				},
-
-// 				FinishedTS: 601,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-// 	}
-
-// 	// drop table t2
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionDropTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID2,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 503,
-// 				TableInfo:     nil,
-// 				FinishedTS:    603,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-// 	}
-
-// 	// create partition table t4
-// 	tableID4 := tableID3 + 100
-// 	partitionID1 := tableID4 + 100
-// 	partitionID2 := tableID4 + 200
-// 	partitionID3 := tableID4 + 300
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionCreateTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID4,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 503,
-// 				TableInfo: &model.TableInfo{
-// 					ID:   tableID4,
-// 					Name: model.NewCIStr("t4"),
-// 					Partition: &model.PartitionInfo{
-// 						Definitions: []model.PartitionDefinition{
-// 							{
-// 								ID: partitionID1,
-// 							},
-// 							{
-// 								ID: partitionID2,
-// 							},
-// 							{
-// 								ID: partitionID3,
-// 							},
-// 						},
-// 					},
-// 				},
-// 				FinishedTS: 609,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-// 	}
-
-// 	// drop partition table t4
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionDropTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID4,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 505,
-// 				TableInfo: &model.TableInfo{
-// 					ID:   tableID4,
-// 					Name: model.NewCIStr("t4"),
-// 					Partition: &model.PartitionInfo{
-// 						Definitions: []model.PartitionDefinition{
-// 							{
-// 								ID: partitionID1,
-// 							},
-// 							{
-// 								ID: partitionID2,
-// 							},
-// 							{
-// 								ID: partitionID3,
-// 							},
-// 						},
-// 					},
-// 				},
-// 				FinishedTS: 611,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-// 	}
-
-// 	{
-// 		allPhysicalTables, err := pStorage.getAllPhysicalTables(600, nil)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 2, len(allPhysicalTables))
-// 	}
-
-// 	{
-// 		allPhysicalTables, err := pStorage.getAllPhysicalTables(601, nil)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 3, len(allPhysicalTables))
-// 	}
-
-// 	{
-// 		allPhysicalTables, err := pStorage.getAllPhysicalTables(603, nil)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 2, len(allPhysicalTables))
-// 	}
-
-// 	{
-// 		allPhysicalTables, err := pStorage.getAllPhysicalTables(605, nil)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 2, len(allPhysicalTables))
-// 	}
-
-// 	{
-// 		allPhysicalTables, err := pStorage.getAllPhysicalTables(609, nil)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 5, len(allPhysicalTables))
-// 	}
-
-// 	{
-// 		allPhysicalTables, err := pStorage.getAllPhysicalTables(611, nil)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 2, len(allPhysicalTables))
-// 	}
 // }

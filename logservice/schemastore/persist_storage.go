@@ -216,7 +216,6 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, storage kv.St
 	p.gcTs = gcTs
 	p.upperBound = UpperBoundMeta{
 		FinishedDDLTs: 0,
-		SchemaVersion: 0,
 		ResolvedTs:    gcTs,
 	}
 	writeUpperBoundMeta(p.db, p.upperBound)
@@ -250,6 +249,10 @@ func (p *persistentStorage) initializeFromDisk() {
 		p.partitionMap); err != nil {
 		log.Fatal("fail to initialize from disk")
 	}
+}
+
+func (p *persistentStorage) close() error {
+	return p.db.Close()
 }
 
 // getAllPhysicalTables returns all physical tables in the snapshot
@@ -664,13 +667,6 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	}
 
 	p.mu.Unlock()
-	// log.Info("handle resolved ddl event",
-	// 	zap.Int64("schemaID", ddlEvent.CurrentSchemaID),
-	// 	zap.Int64("tableID", ddlEvent.CurrentTableID),
-	// 	zap.Uint64("finishedTs", ddlEvent.FinishedTs),
-	// 	zap.Int64("schemaVersion", ddlEvent.SchemaVersion),
-	// 	zap.String("ddlType", model.ActionType(ddlEvent.Type).String()),
-	// 	zap.String("query", ddlEvent.Query))
 
 	// Note: need write ddl event to disk before update ddl history,
 	// becuase other goroutines may read ddl events from disk according to ddl history
@@ -685,6 +681,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		&ddlEvent,
 		p.databaseMap,
 		p.tableMap,
+		p.partitionMap,
 		p.tablesDDLHistory,
 		p.tableTriggerDDLHistory); err != nil {
 		p.mu.Unlock()
@@ -792,8 +789,16 @@ func buildPersistedDDLEventFromJob(
 		return tableInfo.SchemaID
 	}
 
-	// TODO: handle err
-	query, _ := transformDDLJobQuery(job)
+	var query string
+	// only in unit test, job.Query is empty
+	if job.Query != "" {
+		var err error
+		query, err = transformDDLJobQuery(job)
+		if err != nil {
+			log.Panic("transformDDLJobQuery failed",
+				zap.Error(err))
+		}
+	}
 
 	event := PersistedDDLEvent{
 		ID:              job.ID,
@@ -970,6 +975,7 @@ func updateDDLHistory(
 	ddlEvent *PersistedDDLEvent,
 	databaseMap map[int64]*BasicDatabaseInfo,
 	tableMap map[int64]*BasicTableInfo,
+	partitionMap map[int64]BasicPartitionInfo,
 	tablesDDLHistory map[int64][]uint64,
 	tableTriggerDDLHistory []uint64,
 ) ([]uint64, error) {
@@ -988,7 +994,13 @@ func updateDDLHistory(
 	case model.ActionDropSchema:
 		tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
 		for tableID := range databaseMap[ddlEvent.CurrentSchemaID].Tables {
-			appendTableHistory(tableID)
+			if partitionInfo, ok := partitionMap[tableID]; ok {
+				for id := range partitionInfo {
+					appendTableHistory(id)
+				}
+			} else {
+				appendTableHistory(tableID)
+			}
 		}
 	case model.ActionCreateTable, model.ActionRecoverTable,
 		model.ActionDropTable:
@@ -1129,12 +1141,21 @@ func updateDatabaseInfoAndTableInfo(
 		delete(databaseInfo.Tables, tableID)
 	}
 
-	createTable := func(schemaID int64, tableID int64) {
+	createTable := func(schemaID int64, tableID int64, tableName string) {
 		addTableToDB(schemaID, tableID)
 		tableMap[tableID] = &BasicTableInfo{
 			SchemaID: schemaID,
-			Name:     event.TableInfo.Name.O,
+			Name:     tableName,
 		}
+	}
+
+	getTableName := func(tableID int64) string {
+		tableInfo, ok := tableMap[tableID]
+		if !ok {
+			log.Panic("table not found",
+				zap.Int64("tableID", tableID))
+		}
+		return tableInfo.Name
 	}
 
 	dropTable := func(schemaID int64, tableID int64) {
@@ -1156,7 +1177,7 @@ func updateDatabaseInfoAndTableInfo(
 		}
 		delete(databaseMap, event.CurrentSchemaID)
 	case model.ActionCreateTable, model.ActionRecoverTable:
-		createTable(event.CurrentSchemaID, event.CurrentTableID)
+		createTable(event.CurrentSchemaID, event.CurrentTableID, event.TableInfo.Name.O)
 		if isPartitionTable(event.TableInfo) {
 			partitionInfo := make(BasicPartitionInfo)
 			for _, id := range getAllPartitionIDs(event.TableInfo) {
@@ -1178,7 +1199,7 @@ func updateDatabaseInfoAndTableInfo(
 		// ignore
 	case model.ActionTruncateTable:
 		dropTable(event.CurrentSchemaID, event.PrevTableID)
-		createTable(event.CurrentSchemaID, event.CurrentTableID)
+		createTable(event.CurrentSchemaID, event.CurrentTableID, event.TableInfo.Name.O)
 		if isPartitionTable(event.TableInfo) {
 			delete(partitionMap, event.PrevTableID)
 			partitionInfo := make(BasicPartitionInfo)
@@ -1232,8 +1253,9 @@ func updateDatabaseInfoAndTableInfo(
 				zap.Int64s("droppedIDs", droppedIDs))
 		}
 		targetPartitionID := droppedIDs[0]
+		normalTableName := getTableName(event.PrevTableID)
 		dropTable(event.PrevSchemaID, event.PrevTableID)
-		createTable(event.PrevSchemaID, targetPartitionID)
+		createTable(event.PrevSchemaID, targetPartitionID, normalTableName)
 		delete(partitionMap[event.CurrentTableID], targetPartitionID)
 		partitionMap[event.CurrentTableID][event.PrevTableID] = nil
 	case model.ActionCreateTables:

@@ -789,3 +789,8 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 		}
 	}
 }
+
+// for test only
+func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
+	return m.controller.moveTable(tableId, targetNode)
+}

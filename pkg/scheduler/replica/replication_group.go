@@ -14,25 +14,9 @@
 package replica
 
 import (
-	"fmt"
-
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
-)
-
-type (
-	GroupID   = int64
-	GroupTpye int8
-)
-
-const DefaultGroupID GroupID = 0
-
-const (
-	GroupDefault GroupTpye = iota
-	GroupTable
-	// add more group strategy later
-	// groupHotLevel1
 )
 
 // replicationGroup maintains a group of replication tasks.
@@ -49,10 +33,12 @@ type replicationGroup[T ReplicationID, R Replication[T]] struct {
 	scheduling  map[T]R
 	absent      map[T]R
 
-	// checker []replica.Checker
+	checker GroupChecker[T, R]
 }
 
-func newReplicationGroup[T ReplicationID, R Replication[T]](id string, groupID GroupID) *replicationGroup[T, R] {
+func newReplicationGroup[T ReplicationID, R Replication[T]](
+	id string, groupID GroupID, checker GroupChecker[T, R],
+) *replicationGroup[T, R] {
 	return &replicationGroup[T, R]{
 		id:          id,
 		groupID:     groupID,
@@ -61,6 +47,7 @@ func newReplicationGroup[T ReplicationID, R Replication[T]](id string, groupID G
 		replicating: make(map[T]R),
 		scheduling:  make(map[T]R),
 		absent:      make(map[T]R),
+		checker:     checker,
 	}
 }
 
@@ -112,6 +99,7 @@ func (g *replicationGroup[T, R]) AddReplicatingReplica(replica R) {
 		zap.String("replica", replica.GetID().String()))
 	g.replicating[replica.GetID()] = replica
 	g.updateNodeMap("", nodeID, replica)
+	g.checker.AddReplica(replica)
 }
 
 // MarkReplicaReplicating move the replica to the replicating map
@@ -169,6 +157,7 @@ func (g *replicationGroup[T, R]) updateNodeMap(old, new node.ID, replica R) {
 func (g *replicationGroup[T, R]) AddAbsentReplica(replica R) {
 	g.mustVerifyGroupID(replica.GetGroupID())
 	g.absent[replica.GetID()] = replica
+	g.checker.AddReplica(replica)
 }
 
 func (g *replicationGroup[T, R]) RemoveReplica(replica R) {
@@ -185,6 +174,7 @@ func (g *replicationGroup[T, R]) RemoveReplica(replica R) {
 	if len(nodeMap) == 0 {
 		delete(g.nodeTasks, replica.GetNodeID())
 	}
+	g.checker.RemoveReplica(replica)
 }
 
 func (g *replicationGroup[T, R]) IsEmpty() bool {
@@ -248,41 +238,4 @@ func (g *replicationGroup[T, R]) GetTaskSizePerNode() map[node.ID]int {
 		res[nodeID] = len(tasks)
 	}
 	return res
-}
-
-func GetGroupName(id GroupID) string {
-	gt := GroupTpye(id >> 56)
-	if gt == GroupTable {
-		return fmt.Sprintf("%s-%d", gt.String(), id&0x00FFFFFFFFFFFFFF)
-	}
-	return gt.String()
-}
-
-func (gt GroupTpye) Less(other GroupTpye) bool {
-	return gt < other
-}
-
-func (gt GroupTpye) String() string {
-	switch gt {
-	case GroupDefault:
-		return "default"
-	case GroupTable:
-		return "table"
-	default:
-		// return "HotLevel" + strconv.Itoa(int(gt-groupHotLevel1))
-		panic("unreachable")
-	}
-}
-
-func GenGroupID(gt GroupTpye, tableID int64) GroupID {
-	// use high 8 bits to store the group type
-	id := int64(gt) << 56
-	if gt == GroupTable {
-		return id | tableID
-	}
-	return id
-}
-
-func GetGroupType(id GroupID) GroupTpye {
-	return GroupTpye(id >> 56)
 }

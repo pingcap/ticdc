@@ -18,12 +18,16 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/scheduler"
+	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/ticdc/utils"
+	"github.com/pingcap/tiflow/pkg/spanz"
 	"go.uber.org/zap"
 )
 
@@ -40,7 +44,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 		scheduler.BalanceScheduler: scheduler.NewBalanceScheduler(changefeedID.String(), batchSize, oc, db, nodeM, balanceInterval, oc.NewMoveOperator),
 	}
 	if splitter != nil {
-		schedulers[scheduler.SplitScheduler] = newSplitScheduler(changefeedID, batchSize, splitter, oc, db, nodeM)
+		schedulers[scheduler.SplitScheduler] = newSplitScheduler(changefeedID, batchSize, splitter, oc, db, nodeM, balanceInterval)
 	}
 	return scheduler.NewController(schedulers)
 }
@@ -58,23 +62,23 @@ type splitScheduler struct {
 	checkInterval time.Duration
 	lastCheckTime time.Time
 
-	cachedSpans []*replica.HotSpan
+	batchSize int
 }
 
 func newSplitScheduler(
 	changefeedID common.ChangeFeedID, batchSize int, splitter *split.Splitter,
 	oc *operator.Controller, db *replica.ReplicationDB, nodeManager *watcher.NodeManager,
+	checkInterval time.Duration,
 ) *splitScheduler {
 	return &splitScheduler{
-		changefeedID: changefeedID,
-		splitter:     splitter,
-		opController: oc,
-		db:           db,
-		nodeManager:  nodeManager,
-		cachedSpans:  make([]*replica.HotSpan, batchSize),
-
-		maxCheckTime:  time.Second * 5,
-		checkInterval: time.Second * 120,
+		changefeedID:  changefeedID,
+		splitter:      splitter,
+		opController:  oc,
+		db:            db,
+		nodeManager:   nodeManager,
+		batchSize:     batchSize,
+		maxCheckTime:  time.Second * 500,
+		checkInterval: checkInterval,
 	}
 }
 
@@ -87,44 +91,102 @@ func (s *splitScheduler) Execute() time.Time {
 	}
 
 	log.Info("check split status", zap.String("changefeed", s.changefeedID.Name()),
-		zap.String("hotSpans", s.db.GetHotSpanStat()), zap.String("groupDistribution", s.db.GetGroupStat()))
+		zap.String("hotSpans", s.db.GetCheckerStat()), zap.String("groupDistribution", s.db.GetGroupStat()))
 
-	batch := cap(s.cachedSpans)
+	checked, batch, start := 0, s.batchSize, time.Now()
 	needBreak := false
 	for _, group := range s.db.GetGroups() {
 		if needBreak || batch <= 0 {
 			break
 		}
 
-		s.cachedSpans = s.cachedSpans[:0]
-		cachedSpans := s.db.GetHotSpansByGroup(group, s.cachedSpans)
-		batch -= len(cachedSpans)
-
-		checkedIndex, start := 0, time.Now()
-		for ; checkedIndex < len(cachedSpans); checkedIndex++ {
-			if time.Since(start) > s.maxCheckTime {
-				needBreak = true
-				break
-			}
-			span := cachedSpans[checkedIndex]
-			if s.db.GetTaskByID(span.ID) == nil {
-				continue
-			}
-			spans := s.splitter.SplitSpans(context.Background(), span.Span, len(s.nodeManager.GetAliveNodes()), int(span.HintMaxSpanNum))
-			if len(spans) > 1 {
-				log.Info("split span",
-					zap.String("changefeed", s.changefeedID.Name()),
-					zap.String("span", span.ID.String()),
-					zap.Int("span szie", len(spans)))
-				s.opController.AddOperator(operator.NewSplitDispatcherOperator(s.db, span.SpanReplication, span.GetNodeID(), spans))
-			}
-		}
+		checkResults := s.db.CheckByGroup(group, s.batchSize)
+		checked, needBreak = s.doCheck(checkResults, start)
+		batch -= checked
 		s.lastCheckTime = time.Now()
-		s.db.ClearHotSpansByGroup(group, cachedSpans[:checkedIndex]...)
 	}
 	return s.lastCheckTime.Add(s.checkInterval)
 }
 
 func (s *splitScheduler) Name() string {
 	return scheduler.SplitScheduler
+}
+
+func (s *splitScheduler) doCheck(ret pkgReplica.GroupCheckResult, start time.Time) (int, bool) {
+	if ret == nil {
+		return 0, false
+	}
+	checkResults := ret.([]replica.CheckResult)
+
+	checkedIndex := 0
+	for ; checkedIndex < len(checkResults); checkedIndex++ {
+		if time.Since(start) > s.maxCheckTime {
+			return checkedIndex, true
+		}
+		ret := checkResults[checkedIndex]
+		totalSpan, valid := s.valid(ret)
+		if !valid {
+			continue
+		}
+
+		switch ret.OpType {
+		case replica.OpMerge:
+			s.opController.AddMergeSplitOperator(ret.Replications, []*heartbeatpb.TableSpan{totalSpan})
+		case replica.OpSplit:
+			fallthrough
+		case replica.OpMergeAndSplit:
+			expectedSpanNum := split.NextExpectedSpansNumber(len(ret.Replications))
+			spans := s.splitter.SplitSpans(context.Background(), totalSpan, len(s.nodeManager.GetAliveNodes()), expectedSpanNum)
+			if len(spans) > 1 {
+				log.Info("split span",
+					zap.String("changefeed", s.changefeedID.Name()),
+					zap.String("span", totalSpan.String()),
+					zap.Int("span szie", len(spans)))
+				s.opController.AddMergeSplitOperator(ret.Replications, spans)
+			}
+		}
+	}
+	return checkedIndex, false
+}
+
+func (s *splitScheduler) valid(c replica.CheckResult) (*heartbeatpb.TableSpan, bool) {
+	if c.OpType == replica.OpSplit && len(c.Replications) != 1 {
+		log.Panic("split operation should have only one replication",
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Int64("tableId", c.Replications[0].Span.TableID),
+			zap.Stringer("checkResult", c))
+	}
+	span := spanz.TableIDToComparableSpan(c.Replications[0].Span.TableID)
+	totalSpan := &heartbeatpb.TableSpan{
+		TableID:  span.TableID,
+		StartKey: span.StartKey,
+		EndKey:   span.EndKey,
+	}
+
+	if c.OpType == replica.OpMerge || c.OpType == replica.OpMergeAndSplit {
+		if len(c.Replications) <= 1 {
+			log.Panic("invalid replication size",
+				zap.String("changefeed", s.changefeedID.Name()),
+				zap.Int64("tableId", c.Replications[0].Span.TableID),
+				zap.Stringer("checkResult", c))
+		}
+		spanMap := utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](heartbeatpb.LessTableSpan)
+		for _, r := range c.Replications {
+			spanMap.ReplaceOrInsert(r.Span, r)
+		}
+		holes := split.FindHoles(spanMap, totalSpan)
+		log.Warn("skip merge operation since there are holes",
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Int64("tableId", c.Replications[0].Span.TableID),
+			zap.Int("holes", len(holes)), zap.Stringer("checkResult", c))
+		return totalSpan, len(holes) == 0
+	}
+
+	if c.OpType == replica.OpMergeAndSplit && len(c.Replications) >= split.DefaultMaxSpanNumber {
+		log.Debug("skip split operation since the replication number is too large",
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Int64("tableId", c.Replications[0].Span.TableID), zap.Stringer("checkResult", c))
+		return totalSpan, false
+	}
+	return totalSpan, true
 }

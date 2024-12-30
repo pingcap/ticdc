@@ -22,6 +22,8 @@ function failOverOnlyOneNode() {
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/HandleEventsSlowly=return(true)'
+
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
     cdc_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 
@@ -42,7 +44,6 @@ function failOverOnlyOneNode() {
 	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
 	esac
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/HandleEventsSlowly=return(true)'
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	sleep 1
@@ -52,6 +53,8 @@ function failOverOnlyOneNode() {
 
 	check_table_exists fail_over_test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+
+	export GO_FAILPOINTS=''
 
 	cleanup_process $CDC_BINARY
 }
@@ -66,6 +69,8 @@ function failOverWhenTwoNode() {
 
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
+
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/HandleEventsSlowly=return(true)'
 
 	## server 1
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
@@ -91,7 +96,7 @@ function failOverWhenTwoNode() {
 	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
 	esac
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/HandleEventsSlowly=return(true)'
+   
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	sleep 1
@@ -106,6 +111,8 @@ function failOverWhenTwoNode() {
 	check_table_exists fail_over_test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 
+	export GO_FAILPOINTS=''
+	
 	cleanup_process $CDC_BINARY
 } 
 

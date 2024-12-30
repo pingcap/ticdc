@@ -131,6 +131,9 @@ func (s *schemaStore) Run(ctx context.Context) error {
 
 func (s *schemaStore) Close(ctx context.Context) error {
 	log.Info("schema store closed")
+	if err := s.dataStorage.close(); err != nil {
+		log.Warn("failed to close data storage", zap.Error(err))
+	}
 	return s.ddlJobFetcher.close(ctx)
 }
 

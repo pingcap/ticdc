@@ -31,13 +31,14 @@ import (
 const (
 	// spanRegionLimit is the maximum number of regions a span can cover.
 	spanRegionLimit = 50000
-	// baseSpanNumberCoefficient is the base coefficient that use to
-	// multiply the number of captures to get the number of spans.
-	baseSpanNumberCoefficient = 3
-	// defaultMaxSpanNumber is the maximum number of spans that can be split
+	// DefaultMaxSpanNumber is the maximum number of spans that can be split
 	// in single batch.
-	defaultMaxSpanNumber = 100
+	DefaultMaxSpanNumber = 100
 )
+
+// baseSpanNumberCoefficient is the base coefficient that use to
+// multiply the number of captures to get the number of spans.
+var baseSpanNumberCoefficient = replica.MinSpanNumberCoefficient + 1
 
 // RegionCache is a simplified interface of tikv.RegionCache.
 // It is useful to restrict RegionCache usage and mocking in tests.
@@ -52,7 +53,7 @@ type RegionCache interface {
 
 type splitter interface {
 	split(
-		ctx context.Context, span *heartbeatpb.TableSpan, totalCaptures int, maxSpanNum int,
+		ctx context.Context, span *heartbeatpb.TableSpan, totalCaptures int, expectedSpanNum int,
 	) []*heartbeatpb.TableSpan
 }
 
@@ -81,13 +82,10 @@ func NewSplitter(
 func (s *Splitter) SplitSpans(ctx context.Context,
 	span *heartbeatpb.TableSpan,
 	totalCaptures int,
-	maxSpanNum int) []*heartbeatpb.TableSpan {
+	expectedSpanNum int) []*heartbeatpb.TableSpan {
 	spans := []*heartbeatpb.TableSpan{span}
-	if maxSpanNum <= 0 {
-		maxSpanNum = defaultMaxSpanNumber
-	}
 	for _, sp := range s.splitters {
-		spans = sp.split(ctx, span, totalCaptures, maxSpanNum)
+		spans = sp.split(ctx, span, totalCaptures, expectedSpanNum)
 		if len(spans) > 1 {
 			return spans
 		}
@@ -131,4 +129,20 @@ func FindHoles(currentSpan utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplic
 		})
 	}
 	return holes
+}
+
+func NextExpectedSpansNumber(oldNum int) int {
+	if oldNum < 64 {
+		return oldNum * 2
+	}
+	return min(DefaultMaxSpanNumber, oldNum*3/2)
+}
+
+func getSpansNumber(regionNum, captureNum, expectedNum, maxSpanNum int) int {
+	coefficient := max(captureNum-1, baseSpanNumberCoefficient)
+	spanNum := 1
+	if regionNum > 1 {
+		spanNum = max(expectedNum, captureNum*coefficient, regionNum/spanRegionLimit)
+	}
+	return min(spanNum, maxSpanNum)
 }

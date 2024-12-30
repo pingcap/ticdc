@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/split"
+	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -53,7 +54,7 @@ type Controller struct {
 	tsoClient           replica.TSOClient
 
 	splitter               *split.Splitter
-	spanReplicationEnabled bool
+	enableTableAcrossNodes bool
 	startCheckpointTs      uint64
 	ddlDispatcherID        common.DispatcherID
 
@@ -74,25 +75,29 @@ func NewController(changefeedID common.ChangeFeedID,
 	ddlSpan *replica.SpanReplication,
 	batchSize int, balanceInterval time.Duration) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-	replicaSetDB := replica.NewReplicaSetDB(changefeedID, ddlSpan)
+	enableTableAcrossNodes := false
+	var splitter *split.Splitter
+	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
+		enableTableAcrossNodes = true
+		splitter = split.NewSplitter(changefeedID, pdapi, regionCache, cfConfig.Scheduler)
+	}
+	replicaSetDB := replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	oc := operator.NewOperatorController(changefeedID, mc, replicaSetDB, nodeManager, batchSize)
 	s := &Controller{
-		startCheckpointTs:  checkpointTs,
-		changefeedID:       changefeedID,
-		bootstrapped:       false,
-		ddlDispatcherID:    ddlSpan.ID,
-		operatorController: oc,
-		messageCenter:      mc,
-		replicationDB:      replicaSetDB,
-		nodeManager:        nodeManager,
-		taskScheduler:      taskScheduler,
-		cfConfig:           cfConfig,
-		tsoClient:          tsoClient,
-	}
-	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
-		s.splitter = split.NewSplitter(changefeedID, pdapi, regionCache, cfConfig.Scheduler)
-		s.spanReplicationEnabled = true
+		startCheckpointTs:      checkpointTs,
+		changefeedID:           changefeedID,
+		bootstrapped:           false,
+		ddlDispatcherID:        ddlSpan.ID,
+		operatorController:     oc,
+		messageCenter:          mc,
+		replicationDB:          replicaSetDB,
+		nodeManager:            nodeManager,
+		taskScheduler:          taskScheduler,
+		cfConfig:               cfConfig,
+		tsoClient:              tsoClient,
+		splitter:               splitter,
+		enableTableAcrossNodes: enableTableAcrossNodes,
 	}
 	s.schedulerController = NewScheduleController(changefeedID, batchSize, oc, replicaSetDB, nodeManager, balanceInterval, s.splitter)
 	return s
@@ -130,10 +135,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 				zap.Stringer("node", nodeID))
 			continue
 		}
-		stm.UpdateStatus(status)
-		if c.spanReplicationEnabled {
-			c.replicationDB.UpdateHotSpan(stm, status)
-		}
+		c.replicationDB.UpdateStatus(stm, status)
 	}
 }
 
@@ -169,7 +171,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		EndKey:   span.EndKey,
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
-	if c.spanReplicationEnabled {
+	if c.enableTableAcrossNodes {
 		//split the whole table span base on the configuration, todo: background split table
 		tableSpans = c.splitter.SplitSpans(context.Background(), tableSpan, len(c.nodeManager.GetAliveNodes()), 0)
 	}
@@ -272,7 +274,7 @@ func (c *Controller) FinishBootstrap(
 				zap.String("changefeed", c.changefeedID.Name()),
 				zap.Int64("tableID", table.TableID))
 			c.addWorkingSpans(tableMap)
-			if c.spanReplicationEnabled {
+			if c.enableTableAcrossNodes {
 				holes := split.FindHoles(tableMap, tableSpan)
 				// todo: split the hole
 				c.addNewSpans(table.SchemaID, holes, c.startCheckpointTs)
@@ -401,6 +403,53 @@ func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
 	tables, err := schemaStore.GetAllPhysicalTables(startTs, f)
 	log.Info("get table ids", zap.Int("count", len(tables)), zap.String("changefeed", c.changefeedID.Name()))
 	return tables, err
+}
+
+// only for test
+// moveTable is used for inner api(which just for make test cases convience) to force move a table to a target node.
+// moveTable only works for the complete table, not for the table splited.
+func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
+	if !c.replicationDB.IsTableExists(tableId) {
+		// the table is not exist in this node
+		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableId)
+	}
+
+	nodes := c.nodeManager.GetAliveNodes()
+	hasNode := false
+	for _, node := range nodes {
+		if node.ID == targetNode {
+			hasNode = true
+			break
+		}
+	}
+	if !hasNode {
+		return apperror.ErrNodeIsNotFound.GenWithStackByArgs("targetNode", targetNode)
+	}
+
+	replications := c.replicationDB.GetTasksByTableIDs(tableId)
+	if len(replications) != 1 {
+		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("unexpected number of replications found for table in this node; tableID is %s, replication count is %s", tableId, len(replications))
+	}
+
+	replication := replications[0]
+
+	op := c.operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
+	c.operatorController.AddOperator(op)
+
+	// check the op is finished or not
+	count := 0
+	maxTry := 30
+	for !op.IsFinished() && count < maxTry {
+		time.Sleep(500 * time.Millisecond)
+		count += 1
+		log.Info("wait for move table operator finished", zap.Int("count", count))
+	}
+
+	if !op.IsFinished() {
+		return apperror.ErrMoveTableTimeout.GenWithStackByArgs("move table operator is timeout")
+	}
+
+	return nil
 }
 
 func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.SchemaInfo {

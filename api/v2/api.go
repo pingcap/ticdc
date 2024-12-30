@@ -16,16 +16,16 @@ package v2
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/ticdc/api/middleware"
-	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/server"
 )
 
 // OpenAPIV2 provides CDC v2 APIs
 type OpenAPIV2 struct {
-	server node.Server
+	server server.Server
 }
 
 // NewOpenAPIV2 creates a new OpenAPIV2.
-func NewOpenAPIV2(c node.Server) OpenAPIV2 {
+func NewOpenAPIV2(c server.Server) OpenAPIV2 {
 	return OpenAPIV2{c}
 }
 
@@ -56,6 +56,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, api.resumeChangefeed)
 	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, api.pauseChangefeed)
 	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, api.deleteChangefeed)
+	changefeedGroup.POST("/:changefeed_id/move_table", coordinatorMiddleware, api.moveTable)
 
 	// capture apis
 	captureGroup := v2.Group("/captures")

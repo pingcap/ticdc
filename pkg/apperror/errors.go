@@ -17,6 +17,26 @@ var (
 		"failed to init table trigger event dispatcher",
 		errors.RFCCodeText("CDC:ErrChangefeedInitTableTriggerEventDispatcherFailed"),
 	)
+
+	ErrTableIsNotFounded = errors.Normalize(
+		"table is not found",
+		errors.RFCCodeText("CDC:ErrTableIsNotFounded"),
+	)
+
+	ErrMaintainerNotFounded = errors.Normalize(
+		"maintainer is not found",
+		errors.RFCCodeText("CDC:ErrMaintainerNotFounded"),
+	)
+
+	ErrMoveTableTimeout = errors.Normalize(
+		"move table timeout",
+		errors.RFCCodeText("CDC:ErrMoveTableTimeout"),
+	)
+
+	ErrNodeIsNotFound = errors.Normalize(
+		"node is not found",
+		errors.RFCCodeText("CDC:ErrNodeIsNotFound"),
+	)
 )
 
 type ErrorType int

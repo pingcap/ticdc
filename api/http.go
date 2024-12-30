@@ -16,10 +16,9 @@ package api
 import (
 	"net/http/pprof"
 
-	"github.com/pingcap/ticdc/pkg/node"
-
 	"github.com/gin-gonic/gin"
 	v2 "github.com/pingcap/ticdc/api/v2"
+	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -27,7 +26,7 @@ import (
 // RegisterRoutes create a router for OpenAPI
 func RegisterRoutes(
 	router *gin.Engine,
-	server node.Server,
+	server server.Server,
 	registry prometheus.Gatherer,
 ) {
 

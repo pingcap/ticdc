@@ -98,7 +98,7 @@ func (o *changefeedCommonOptions) strictDecodeConfig(component string, cfg *conf
 	return err
 }
 
-// createChangefeedOptions defines common flags for the `cli changefeed crate` command.
+// createChangefeedOptions defines common flags for the `cli changefeed create` command.
 type createChangefeedOptions struct {
 	commonChangefeedOptions *changefeedCommonOptions
 	apiClient               apiv2client.APIV2Interface
