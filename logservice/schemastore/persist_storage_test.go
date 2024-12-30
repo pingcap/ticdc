@@ -965,7 +965,82 @@ func TestApplyDDLJobs(t *testing.T) {
 			[]uint64{1010},
 			nil,
 			nil,
-			nil,
+			[]FetchTableTriggerDDLEventsTestCase{
+				{
+					startTs: 1000,
+					limit:   10,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionCreateTables),
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  301,
+								},
+								{
+									SchemaID: 100,
+									TableID:  302,
+								},
+								{
+									SchemaID: 100,
+									TableID:  303,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+									{
+										SchemaName: "test",
+										TableName:  "t2",
+									},
+									{
+										SchemaName: "test",
+										TableName:  "t3",
+									},
+								},
+							},
+						},
+					},
+				},
+				// filter t2 and t3
+				{
+					tableFilter: buildTableFilterByNameForTest("test", "t1"),
+					startTs:     1000,
+					limit:       10,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionCreateTables),
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  301,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 		// test create tables for partition table
 		{
@@ -1041,7 +1116,114 @@ func TestApplyDDLJobs(t *testing.T) {
 			[]uint64{1010},
 			nil,
 			nil,
-			nil,
+			[]FetchTableTriggerDDLEventsTestCase{
+				{
+					startTs: 1000,
+					limit:   10,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionCreateTables),
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  301,
+								},
+								{
+									SchemaID: 100,
+									TableID:  302,
+								},
+								{
+									SchemaID: 100,
+									TableID:  303,
+								},
+								{
+									SchemaID: 100,
+									TableID:  401,
+								},
+								{
+									SchemaID: 100,
+									TableID:  402,
+								},
+								{
+									SchemaID: 100,
+									TableID:  403,
+								},
+								{
+									SchemaID: 100,
+									TableID:  501,
+								},
+								{
+									SchemaID: 100,
+									TableID:  502,
+								},
+								{
+									SchemaID: 100,
+									TableID:  503,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+									{
+										SchemaName: "test",
+										TableName:  "t2",
+									},
+									{
+										SchemaName: "test",
+										TableName:  "t3",
+									},
+								},
+							},
+						},
+					},
+				},
+				// filter t2 and t3
+				{
+					tableFilter: buildTableFilterByNameForTest("test", "t1"),
+					startTs:     1000,
+					limit:       10,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionCreateTables),
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  301,
+								},
+								{
+									SchemaID: 100,
+									TableID:  302,
+								},
+								{
+									SchemaID: 100,
+									TableID:  303,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 	}
 
