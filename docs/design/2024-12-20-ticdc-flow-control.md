@@ -1,7 +1,7 @@
 # TiCDC Flow Control Design
 
 - Author(s): [dongmen](https://github.com/asddongmen)
-- Tracking Issue(s):
+- Tracking Issue(s): [736](https://github.com/pingcap/ticdc/issues/736)
 
 ## Background
 
