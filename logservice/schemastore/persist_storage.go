@@ -1371,7 +1371,7 @@ func updateRegisteredTableInfoStore(
 	case model.ActionRebaseAutoID:
 		// TODO: verify can be ignored
 	case model.ActionRenameTable:
-		// ignore
+		tryApplyDDLToStore()
 	case model.ActionSetDefaultValue:
 		tryApplyDDLToStore()
 	case model.ActionShardRowID,
