@@ -6,39 +6,6 @@ import (
 	"time"
 )
 
-// memoryPauseRule defines a mapping rule between memory usage ratio and path pause ratio
-type memoryPauseRule struct {
-	// alarmThreshold represents the memory usage ratio (used/max) that triggers the control
-	// e.g., 0.95 means when memory usage reaches 95% of max allowed memory
-	alarmThreshold float64
-	// pausePathRatio represents the proportion of paths that should be paused
-	// e.g., 1.0 means pause all paths, 0.5 means pause top 50% paths with largest pending size
-	pausePathRatio float64
-}
-
-// rules defines the mapping rules for memory control:
-// - When memory usage >= 95%, pause all paths (100%)
-// - When memory usage >= 90%, pause top 80% paths
-// - When memory usage >= 85%, pause top 50% paths
-// - When memory usage >= 80%, pause top 20% paths
-// - When memory usage < 80%, no paths will be paused
-var rules = []memoryPauseRule{
-	{0.95, 1.0}, // Critical level: pause all paths
-	{0.90, 0.8}, // Severe level: pause most paths
-	{0.85, 0.5}, // Warning level: pause half paths
-	{0.80, 0.2}, // Caution level: pause few paths
-}
-
-// findPausePathRatio finds the pause path ratio based on the memory usage ratio.
-func findPausePathRatio(memoryUsageRatio float64) float64 {
-	for _, rule := range rules {
-		if memoryUsageRatio >= rule.alarmThreshold {
-			return rule.pausePathRatio
-		}
-	}
-	return 0 // No paths need to be paused
-}
-
 // areaMemStat is used to store the memory statistics of an area.
 // It is a global level struct, not stream level.
 type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
@@ -156,6 +123,13 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 // If the memory usage is greater than the 20% of max pending size, the path should be paused.
 func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D, H]) bool {
 	memoryUsageRatio := float64(path.pendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
+
+	// If the path is paused, we only need to resume it when the memory usage is less than 10%.
+	if path.paused.Load() {
+		return memoryUsageRatio < 0.1
+	}
+
+	// If the path is not paused, we need to pause it when the memory usage is greater than 20% of max pending size.
 	return memoryUsageRatio >= 0.2
 }
 
@@ -163,8 +137,14 @@ func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D,
 // If the memory usage is greater than the 80% of max pending size, the area should be paused.
 func (as *areaMemStat[A, P, T, D, H]) shouldPauseArea() bool {
 	memoryUsageRatio := float64(as.totalPendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
-	pauseRatio := findPausePathRatio(memoryUsageRatio)
-	return pauseRatio > 0
+
+	// If the area is paused, we only need to resume it when the memory usage is less than 50%.
+	if as.paused.Load() {
+		return memoryUsageRatio < 0.5
+	}
+
+	// If the area is not paused, we need to pause it when the memory usage is greater than 80% of max pending size.
+	return memoryUsageRatio >= 0.8
 }
 
 // A memControl is used to control the memory usage of the dynamic stream.

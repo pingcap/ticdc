@@ -44,7 +44,9 @@ func TestCheckNeedScan(t *testing.T) {
 	broker, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
 	broker.close()
-	changefeedStatus := broker.getOrSetChangefeedStatus(common.GID{})
+
+	disInfo := newMockDispatcherInfoForTest(t)
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 
 	disp := newDispatcherStat(100, newMockDispatcherInfoForTest(t), nil, 0, changefeedStatus)
 	// Set the eventStoreResolvedTs and latestCommitTs to 102 and 101.
@@ -93,7 +95,7 @@ func TestOnNotify(t *testing.T) {
 	disInfo := newMockDispatcherInfoForTest(t)
 	startTs := uint64(100)
 	workerIndex := 0
-	changefeedStatus := broker.getOrSetChangefeedStatus(common.GID{})
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 
 	disp := newDispatcherStat(startTs, disInfo, nil, workerIndex, changefeedStatus)
 	// Make the dispatcher is reset.

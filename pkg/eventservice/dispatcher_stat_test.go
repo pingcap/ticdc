@@ -23,7 +23,7 @@ func TestNewDispatcherStat(t *testing.T) {
 	startTs := uint64(50)
 	workerIndex := 1
 	changefeedStatus := &changefeedStatus{
-		changefeedID: info.GetChangefeedID().ID(),
+		changefeedID: info.GetChangefeedID(),
 	}
 
 	stat := newDispatcherStat(startTs, info, info.filter, workerIndex, changefeedStatus)
@@ -45,7 +45,7 @@ func TestDispatcherStatResolvedTs(t *testing.T) {
 
 	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	changefeedStatus := &changefeedStatus{
-		changefeedID: info.GetChangefeedID().ID(),
+		changefeedID: info.GetChangefeedID(),
 	}
 	stat := newDispatcherStat(100, info, info.filter, 1, changefeedStatus)
 
@@ -69,7 +69,7 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 
 	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	changefeedStatus := &changefeedStatus{
-		changefeedID: info.GetChangefeedID().ID(),
+		changefeedID: info.GetChangefeedID(),
 	}
 	stat := newDispatcherStat(100, info, info.filter, 1, changefeedStatus)
 	stat.eventStoreResolvedTs.Store(200)
@@ -98,7 +98,7 @@ func TestDispatcherStatUpdateWatermark(t *testing.T) {
 	startTs := uint64(100)
 	info := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	changefeedStatus := &changefeedStatus{
-		changefeedID: info.GetChangefeedID().ID(),
+		changefeedID: info.GetChangefeedID(),
 	}
 	stat := newDispatcherStat(startTs, info, info.filter, 1, changefeedStatus)
 

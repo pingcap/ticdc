@@ -1,0 +1,32 @@
+@startuml
+entity "Upstream" as Upstream
+entity "Downstream" as Downstream
+
+package "Data Puller" {
+    rectangle "LogPuller" as LogPuller
+    rectangle "EventStore" as EventStore
+    rectangle "EventService" as EventService
+    LogPuller --> EventStore
+    EventStore --> EventService
+}
+
+package "Data Sinker" {
+    rectangle "EventCollector" as EventCollector {
+        package "Dynamic Stream" {
+            rectangle "Area" as Area
+            rectangle "Path: Queue" as Path
+            Area --> Path
+        }
+    }
+    rectangle "Dispatcher" as Dispatcher
+    rectangle "Sink" as Sink
+    EventCollector --> Dispatcher
+    Dispatcher --> Sink
+}
+
+Upstream --> LogPuller
+Sink --> Downstream
+
+EventService ..> EventCollector : Push Event through Streams
+
+@enduml
