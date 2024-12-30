@@ -813,7 +813,8 @@ func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		if err = tx.Commit(); err != nil {
 			return 0, 0, err
 		}
-		log.Debug("Exec Rows succeeded")
+		// log.Debug("Exec Rows succeeded")
+		log.Info("Exec Rows succeeded")
 		return dmls.rowCount, dmls.approximateSize, nil
 	}
 	return retry.Do(w.ctx, func() error {

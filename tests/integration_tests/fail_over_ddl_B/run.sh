@@ -74,7 +74,9 @@ function failOverCaseB-1() {
 	kill_cdc_pid $cdc_pid_1
 	cleanup_process $CDC_BINARY
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
+	sleep 10
+
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockReportAfterWrite=pause'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
@@ -133,7 +135,9 @@ function failOverCaseB-2() {
 	kill_cdc_pid $cdc_pid_1
     cleanup_process $CDC_BINARY
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
+	sleep 10
+
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockReportAfterWrite=pause'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
@@ -200,7 +204,9 @@ function failOverCaseB-3() {
 	kill_cdc_pid $cdc_pid_1
     cleanup_process $CDC_BINARY
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
+	sleep 10
+
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockReportAfterWrite=pause'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
@@ -268,7 +274,9 @@ function failOverCaseB-5() {
 	kill_cdc_pid $cdc_pid_1
     cleanup_process $CDC_BINARY
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
+	sleep 10
+
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockReportAfterWrite=pause'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
@@ -326,9 +334,9 @@ function failOverCaseB-5() {
 }
 
 trap stop_tidb_cluster EXIT
-#failOverCaseB-1
-#failOverCaseB-2
+failOverCaseB-1
+failOverCaseB-2
 failOverCaseB-3
-#failOverCaseB-5
+failOverCaseB-5
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

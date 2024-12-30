@@ -135,6 +135,52 @@ func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			event.markDispatcherEventDone(common.NewDispatcherIDFromPB(span.ID))
 		}
 	}
+	// Here we iter the block event, to check each whether each blockTable each the target state.
+	//
+	// Because the maintainer is restarted, some dispatcher may finish push forward the ddl state
+	// For example, a rename table1 ddl, which block the NodeA's table trigger, and NodeB's table1,
+	// and sink is mysql-class.
+	// If NodeA offline when it just write the rename ddl, but not report to the maintainer.
+	// Then the maintainer will be restarted, and due to the ddl is finished into mysql,
+	// from ddl-ts, we can find the table trigger event dispatcher is reach the ddl's commit,
+	// so it will not block by the ddl, and can continue to handle the following events.
+	// While for the table1 in NodeB, it's still wait the pass action.
+	// So we need to check the block event when the maintainer is restarted to help block event decide its state.
+	// TODO:double check the logic here
+	for _, barrierEvent := range b.blockedTs {
+		switch barrierEvent.blockedDispatchers.InfluenceType {
+		case heartbeatpb.InfluenceType_Normal:
+			for _, tableId := range barrierEvent.blockedDispatchers.TableIDs {
+				replications := b.controller.replicationDB.GetTasksByTableIDs(tableId)
+				for _, replication := range replications {
+					if replication.GetStatus().CheckpointTs >= barrierEvent.commitTs {
+						barrierEvent.rangeChecker.AddSubRange(replication.Span.TableID, replication.Span.StartKey, replication.Span.EndKey)
+					}
+				}
+			}
+		case heartbeatpb.InfluenceType_DB:
+			schemaID := barrierEvent.blockedDispatchers.SchemaID
+			replications := b.controller.replicationDB.GetTasksBySchemaID(schemaID)
+			for _, replication := range replications {
+				if replication.GetStatus().CheckpointTs >= barrierEvent.commitTs {
+					barrierEvent.rangeChecker.AddSubRange(replication.Span.TableID, replication.Span.StartKey, replication.Span.EndKey)
+				}
+			}
+		case heartbeatpb.InfluenceType_All:
+			replications := b.controller.replicationDB.GetAllTasks()
+			for _, replication := range replications {
+				if replication.GetStatus().CheckpointTs >= barrierEvent.commitTs {
+					barrierEvent.rangeChecker.AddSubRange(replication.Span.TableID, replication.Span.StartKey, replication.Span.EndKey)
+				}
+			}
+		}
+		// meet the target state(which means the ddl is writen), we need to send pass actions in resend
+		if barrierEvent.allDispatcherReported() {
+			barrierEvent.selected = true
+			barrierEvent.writerDispatcherAdvanced = true
+		}
+	}
+
 }
 
 // Resend resends the message to the dispatcher manger, the pass action is handle here
@@ -267,7 +313,7 @@ func (b *Barrier) checkEvent(be *BarrierEvent,
 			zap.String("changefeed", be.cfID.Name()),
 			zap.Uint64("committs", be.commitTs))
 		// already selected a dispatcher to write, now all dispatchers reported the block event
-		delete(b.blockedTs, getEventKey(be.commitTs, be.isSyncPoint))
+		delete(b.blockedTs, getEventKey(be.commitTs, be.isSyncPoint)) //？那 pass 怎么办？
 		be.scheduleBlockEvent()
 		return nil
 	}
