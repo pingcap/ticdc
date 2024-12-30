@@ -520,13 +520,11 @@ func (c *Controller) newBootstrapMessage(id node.ID) *messaging.TargetMessage {
 
 func (c *Controller) collectMetrics() {
 	if time.Since(c.lastPrintStatusTime) > time.Second*20 {
-		stopped := c.changefeedDB.GetStoppedSize()
-		working := c.changefeedDB.GetReplicatingSize()
-		absent := c.changefeedDB.GetAbsentSize()
-
-		metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(absent))
-		metrics.ChangefeedStateGauge.WithLabelValues("Working").Set(float64(working))
-		metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(stopped))
+		metrics.ChangefeedStateGauge.WithLabelValues("Total").Set(float64(c.changefeedDB.GetSize()))
+		metrics.ChangefeedStateGauge.WithLabelValues("Working").Set(float64(c.changefeedDB.GetReplicatingSize()))
+		metrics.ChangefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
+		metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
+		metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
 		c.lastPrintStatusTime = time.Now()
 	}
 }
