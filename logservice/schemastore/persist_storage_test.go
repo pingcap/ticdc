@@ -286,6 +286,20 @@ func TestApplyDDLJobs(t *testing.T) {
 			nil,
 			[]FetchTableTriggerDDLEventsTestCase{
 				{
+					startTs: 999,
+					limit:   1,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionCreateSchema),
+							FinishedTs: 1000,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0},
+							},
+						},
+					},
+				},
+				{
 					startTs: 1000,
 					limit:   10,
 					result: []commonEvent.DDLEvent{
