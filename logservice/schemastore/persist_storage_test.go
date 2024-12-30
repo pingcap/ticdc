@@ -283,7 +283,45 @@ func TestApplyDDLJobs(t *testing.T) {
 					},
 				},
 			},
-			nil,
+			[]FetchTableDDLEventsTestCase{
+				{
+					tableID: 207,
+					startTs: 1030,
+					endTs:   1050,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionDropTablePartition),
+							FinishedTs: 1040,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 204, 205, 206, 207},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{204},
+							},
+						},
+						{
+							Type:       byte(model.ActionTruncateTablePartition),
+							FinishedTs: 1050,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 205, 206, 207},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{205},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  208,
+								},
+							},
+						},
+					},
+				},
+			},
 			[]FetchTableTriggerDDLEventsTestCase{
 				{
 					startTs: 999,
