@@ -715,6 +715,10 @@ func TestApplyDDLJobs(t *testing.T) {
 						{
 							Type:       byte(model.ActionRenameTable),
 							FinishedTs: 1020,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0},
+							},
 							NeedAddedTables: []commonEvent.Table{
 								{
 									SchemaID: 105,
@@ -795,8 +799,123 @@ func TestApplyDDLJobs(t *testing.T) {
 			},
 			[]uint64{1010, 1020},
 			nil,
-			nil,
-			nil,
+			[]FetchTableDDLEventsTestCase{
+				{
+					tableID: 301,
+					startTs: 1010,
+					endTs:   1020,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionRenameTable),
+							FinishedTs: 1020,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 301, 302, 303},
+							},
+							UpdatedSchemas: []commonEvent.SchemaIDChange{
+								{
+									TableID:     301,
+									OldSchemaID: 100,
+									NewSchemaID: 105,
+								},
+								{
+									TableID:     302,
+									OldSchemaID: 100,
+									NewSchemaID: 105,
+								},
+								{
+									TableID:     303,
+									OldSchemaID: 100,
+									NewSchemaID: 105,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test2",
+										TableName:  "t2",
+									},
+								},
+								DropName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+								},
+							},
+						},
+					},
+				},
+				// test filter: after rename, the table is filtered out
+				{
+					tableID:     301,
+					tableFilter: buildTableFilterByNameForTest("test", "*"),
+					startTs:     1010,
+					endTs:       1020,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionRenameTable),
+							FinishedTs: 1020,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 301, 302, 303},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{301, 302, 303},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								DropName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			[]FetchTableTriggerDDLEventsTestCase{
+				// test filter: before rename, the table is filtered out, so only table trigger can get the event
+				{
+					tableFilter: buildTableFilterByNameForTest("test2", "*"),
+					startTs:     1010,
+					limit:       10,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionRenameTable),
+							FinishedTs: 1020,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 105,
+									TableID:  301,
+								},
+								{
+									SchemaID: 105,
+									TableID:  302,
+								},
+								{
+									SchemaID: 105,
+									TableID:  303,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test2",
+										TableName:  "t2",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 		// test create tables
 		{

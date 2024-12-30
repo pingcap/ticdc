@@ -1695,6 +1695,10 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commo
 					}
 				}
 			} else if !ignoreCurrentTable {
+				ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
+				}
 				// the table is filtered out before rename table, we need add table here
 				ddlEvent.NeedAddedTables = []commonEvent.Table{
 					{
@@ -1771,6 +1775,10 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commo
 					}
 				}
 			} else if !ignoreCurrentTable {
+				ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
+				}
 				// the table is filtered out before rename table, we need add table here
 				ddlEvent.NeedAddedTables = []commonEvent.Table{
 					{
