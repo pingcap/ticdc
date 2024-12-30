@@ -638,8 +638,108 @@ func TestApplyDDLJobs(t *testing.T) {
 			},
 			[]uint64{1010, 1020},
 			nil,
-			nil,
-			nil,
+			[]FetchTableDDLEventsTestCase{
+				{
+					tableID: 300,
+					startTs: 1010,
+					endTs:   1020,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionRenameTable),
+							FinishedTs: 1020,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 300},
+							},
+							UpdatedSchemas: []commonEvent.SchemaIDChange{
+								{
+									TableID:     300,
+									OldSchemaID: 100,
+									NewSchemaID: 105,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test2",
+										TableName:  "t2",
+									},
+								},
+								DropName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+								},
+							},
+						},
+					},
+				},
+				// test filter: after rename, the table is filtered out
+				{
+					tableID:     300,
+					tableFilter: buildTableFilterByNameForTest("test", "*"),
+					startTs:     1010,
+					endTs:       1020,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionRenameTable),
+							FinishedTs: 1020,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 300},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{300},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								DropName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			[]FetchTableTriggerDDLEventsTestCase{
+				// test filter: before rename, the table is filtered out, so only table trigger can get the event
+				{
+					tableFilter: buildTableFilterByNameForTest("test2", "*"),
+					startTs:     1010,
+					limit:       10,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionRenameTable),
+							FinishedTs: 1020,
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 105,
+									TableID:  300,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test2",
+										TableName:  "t2",
+									},
+								},
+							},
+						},
+					},
+				},
+				// test filter: the table is always filtered out
+				{
+					tableFilter: buildTableFilterByNameForTest("test3", "*"),
+					startTs:     1010,
+					limit:       10,
+					result:      nil,
+				},
+			},
 		},
 		// test rename partition table
 		{
@@ -900,6 +1000,9 @@ func TestApplyDDLJobs(t *testing.T) {
 						return false
 					}
 					if expectedDDLEvent.BlockedTables != nil {
+						if actualDDLEvent.BlockedTables == nil {
+							return false
+						}
 						sort.Slice(expectedDDLEvent.BlockedTables.TableIDs, func(i, j int) bool {
 							return expectedDDLEvent.BlockedTables.TableIDs[i] < expectedDDLEvent.BlockedTables.TableIDs[j]
 						})
@@ -923,6 +1026,9 @@ func TestApplyDDLJobs(t *testing.T) {
 						return false
 					}
 					if expectedDDLEvent.NeedDroppedTables != nil {
+						if actualDDLEvent.NeedDroppedTables == nil {
+							return false
+						}
 						sort.Slice(expectedDDLEvent.NeedDroppedTables.TableIDs, func(i, j int) bool {
 							return expectedDDLEvent.NeedDroppedTables.TableIDs[i] < expectedDDLEvent.NeedDroppedTables.TableIDs[j]
 						})
@@ -946,6 +1052,9 @@ func TestApplyDDLJobs(t *testing.T) {
 						return false
 					}
 					if expectedDDLEvent.TableNameChange != nil {
+						if actualDDLEvent.TableNameChange == nil {
+							return false
+						}
 						sort.Slice(expectedDDLEvent.TableNameChange.AddName, func(i, j int) bool {
 							if expectedDDLEvent.TableNameChange.AddName[i].TableName < expectedDDLEvent.TableNameChange.AddName[j].TableName {
 								return true
@@ -975,7 +1084,7 @@ func TestApplyDDLJobs(t *testing.T) {
 				events, err := pStorage.fetchTableDDLEvents(testCase.tableID, testCase.tableFilter, testCase.startTs, testCase.endTs)
 				require.Nil(t, err)
 				if !checkDDLEvents(testCase.result, events) {
-					log.Warn("fetchTableTriggerDDLEvents result wrong",
+					log.Warn("fetchTableDDLEvents result wrong",
 						zap.Int64("tableID", testCase.tableID),
 						zap.Any("tableFilter", testCase.tableFilter),
 						zap.Uint64("startTs", testCase.startTs),

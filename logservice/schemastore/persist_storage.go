@@ -1665,6 +1665,20 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commo
 							})
 						}
 					}
+					ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+						AddName: []commonEvent.SchemaTableName{
+							{
+								SchemaName: rawEvent.CurrentSchemaName,
+								TableName:  rawEvent.CurrentTableName,
+							},
+						},
+						DropName: []commonEvent.SchemaTableName{
+							{
+								SchemaName: rawEvent.PrevSchemaName,
+								TableName:  rawEvent.PrevTableName,
+							},
+						},
+					}
 				} else {
 					// the table is filtered out after rename table, we need drop the table
 					ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
@@ -1724,6 +1738,20 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commo
 								TableID:     rawEvent.CurrentTableID,
 								OldSchemaID: rawEvent.PrevSchemaID,
 								NewSchemaID: rawEvent.CurrentSchemaID,
+							},
+						}
+						ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+							AddName: []commonEvent.SchemaTableName{
+								{
+									SchemaName: rawEvent.CurrentSchemaName,
+									TableName:  rawEvent.CurrentTableName,
+								},
+							},
+							DropName: []commonEvent.SchemaTableName{
+								{
+									SchemaName: rawEvent.PrevSchemaName,
+									TableName:  rawEvent.PrevTableName,
+								},
 							},
 						}
 					}
