@@ -49,7 +49,7 @@ func loadPersistentStorageForTest(db *pebble.DB, gcTs uint64, upperBound UpperBo
 }
 
 // create a persistent storage at dbPath with initailDBInfos
-func newPersistentStorageForTest(dbPath string, initailDBInfos []mockDBInfo) *persistentStorage {
+func newPersistentStorageForTest(dbPath string, initialDBInfos []mockDBInfo) *persistentStorage {
 	if err := os.RemoveAll(dbPath); err != nil {
 		log.Panic("remove path fail", zap.Error(err))
 	}
@@ -58,8 +58,8 @@ func newPersistentStorageForTest(dbPath string, initailDBInfos []mockDBInfo) *pe
 		log.Panic("create database fail", zap.Error(err))
 	}
 	gcTs := uint64(0)
-	if len(initailDBInfos) > 0 {
-		mockWriteKVSnapOnDisk(db, gcTs, initailDBInfos)
+	if len(initialDBInfos) > 0 {
+		mockWriteKVSnapOnDisk(db, gcTs, initialDBInfos)
 	}
 	upperBound := UpperBoundMeta{
 		FinishedDDLTs: gcTs,
