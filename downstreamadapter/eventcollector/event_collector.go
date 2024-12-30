@@ -104,7 +104,7 @@ type EventCollector struct {
 	metricReceiveEventLagDuration                prometheus.Observer
 }
 
-func New(ctx context.Context, globalMemoryQuota int64, serverId node.ID) *EventCollector {
+func New(ctx context.Context, serverId node.ID) *EventCollector {
 	eventCollector := EventCollector{
 		serverId:                             serverId,
 		dispatcherMap:                        sync.Map{},
@@ -226,7 +226,6 @@ func (c *EventCollector) addDispatcherRequestToSendingQueue(serverId node.ID, to
 }
 
 func (c *EventCollector) processFeedback(ctx context.Context) {
-	defer c.wg.Done()
 	for {
 		select {
 		case <-ctx.Done():
@@ -242,7 +241,6 @@ func (c *EventCollector) processFeedback(ctx context.Context) {
 }
 
 func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
-	defer c.wg.Done()
 	for {
 		select {
 		case <-ctx.Done():
@@ -258,7 +256,6 @@ func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
 }
 
 func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) {
-	defer c.wg.Done()
 	for {
 		select {
 		case <-ctx.Done():
@@ -361,11 +358,11 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 	return nil
 }
 
-func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage) error {
+func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *messaging.TargetMessage) {
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case targetMessage := <-inCh:
 			for _, msg := range targetMessage.Message {
 				switch msg.(type) {
@@ -397,8 +394,6 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 func (c *EventCollector) updateMetrics(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
-	defer c.wg.Done()
-
 	for {
 		select {
 		case <-ctx.Done():
