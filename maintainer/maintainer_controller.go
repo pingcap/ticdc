@@ -205,7 +205,6 @@ func (c *Controller) FinishBootstrap(
 			startTs = resp.CheckpointTs
 			// update the ddl dispatcher status
 			status := c.replicationDB.GetDDLDispatcher().GetStatus()
-			log.Info("update ddl dispatcher status", zap.Any("new startTs", startTs), zap.Any("status", status))
 			status.CheckpointTs = startTs
 			c.replicationDB.UpdateStatus(c.replicationDB.GetDDLDispatcher(), status)
 		}

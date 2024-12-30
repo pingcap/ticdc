@@ -313,7 +313,7 @@ func (b *Barrier) checkEvent(be *BarrierEvent,
 			zap.String("changefeed", be.cfID.Name()),
 			zap.Uint64("committs", be.commitTs))
 		// already selected a dispatcher to write, now all dispatchers reported the block event
-		delete(b.blockedTs, getEventKey(be.commitTs, be.isSyncPoint)) //？那 pass 怎么办？
+		delete(b.blockedTs, getEventKey(be.commitTs, be.isSyncPoint))
 		be.scheduleBlockEvent()
 		return nil
 	}
