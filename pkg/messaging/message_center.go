@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"golang.org/x/sync/errgroup"
 	"sync"
 	"time"
 
@@ -86,13 +87,15 @@ type messageCenter struct {
 	// Messages from all targets are put into these channels.
 	receiveEventCh chan *TargetMessage
 	receiveCmdCh   chan *TargetMessage
-	wg             *sync.WaitGroup
+	g              *errgroup.Group
 	cancel         context.CancelFunc
 }
 
 func NewMessageCenter(ctx context.Context, id node.ID, epoch uint64, cfg *config.MessageCenterConfig) *messageCenter {
 	receiveEventCh := make(chan *TargetMessage, cfg.CacheChannelSize)
 	receiveCmdCh := make(chan *TargetMessage, cfg.CacheChannelSize)
+
+	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
 	mc := &messageCenter{
 		id:             id,
@@ -102,15 +105,23 @@ func NewMessageCenter(ctx context.Context, id node.ID, epoch uint64, cfg *config
 		receiveEventCh: receiveEventCh,
 		receiveCmdCh:   receiveCmdCh,
 		cancel:         cancel,
-		wg:             &sync.WaitGroup{},
+		g:              g,
 		router:         newRouter(),
 	}
 	mc.remoteTargets.m = make(map[node.ID]*remoteMessageTarget)
-	mc.router.runDispatch(ctx, mc.wg, mc.receiveEventCh)
-	mc.router.runDispatch(ctx, mc.wg, mc.receiveCmdCh)
 
-	go mc.updateMetrics(ctx)
-
+	g.Go(func() error {
+		mc.router.runDispatch(ctx, mc.receiveEventCh)
+		return nil
+	})
+	g.Go(func() error {
+		mc.router.runDispatch(ctx, mc.receiveCmdCh)
+		return nil
+	})
+	g.Go(func() error {
+		mc.updateMetrics(ctx)
+		return nil
+	})
 	log.Info("create message center success, message router is running.",
 		zap.Stringer("id", id), zap.Any("epoch", epoch))
 	return mc
@@ -195,10 +206,10 @@ func (mc *messageCenter) SendEvent(msg *TargetMessage) error {
 	mc.remoteTargets.RUnlock()
 	if !ok {
 		// If target not found, there are two cases:
-		// 1. The target is not been discovered yet.
+		// 1. The target is not discovered yet.
 		// 2. The target is removed.
 		// The caller should handle the error correctly.
-		// For example, if the target is not been discovered yet, the caller can retry later.
+		// For example, if the target is not discovered yet, the caller can retry later.
 		// If the target is removed, the caller must remove the objects that was sending
 		// message to this target to avoid blocking.
 		return apperror.AppError{Type: apperror.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %s not found", msg.To)}
@@ -245,7 +256,7 @@ func (mc *messageCenter) Close() {
 		mc.grpcServer.Stop()
 	}
 	mc.grpcServer = nil
-	mc.wg.Wait()
+	_ = mc.g.Wait()
 }
 
 // touchRemoteTarget returns the remote target by the id,
@@ -365,7 +376,7 @@ func (s *grpcServer) handleConnect(msg *proto.Message, stream grpcSender, isEven
 	}
 
 	// The handshake message's epoch should be the same as the target's epoch.
-	if uint64(msg.Epoch) != remoteTarget.Epoch() {
+	if msg.Epoch != remoteTarget.Epoch() {
 		err := apperror.AppError{Type: apperror.ErrorTypeEpochMismatch, Reason: fmt.Sprintf("Target %s epoch mismatch, expect %d, got %d", targetId, remoteTarget.Epoch(), msg.Epoch)}
 		log.Error("Epoch mismatch", zap.Error(err))
 		return err
