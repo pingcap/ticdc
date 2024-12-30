@@ -1316,33 +1316,33 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 	}
 
-	for _, tt := range testCases {
+	for index, tt := range testCases {
 		dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
 		pStorage := newPersistentStorageForTest(dbPath, tt.initailDBInfos)
 		checkState := func(fromDisk bool) {
 			if (tt.tableMap != nil && !reflect.DeepEqual(tt.tableMap, pStorage.tableMap)) ||
 				(tt.tableMap == nil && len(pStorage.tableMap) != 0) {
-				log.Warn("tableMap not equal", zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap), zap.Bool("fromDisk", fromDisk))
+				log.Warn("tableMap not equal", zap.Int("testIndex", index), zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap), zap.Bool("fromDisk", fromDisk))
 				t.Fatalf("tableMap not equal")
 			}
 			if (tt.partitionMap != nil && !reflect.DeepEqual(tt.partitionMap, pStorage.partitionMap)) ||
 				(tt.partitionMap == nil && len(pStorage.partitionMap) != 0) {
-				log.Warn("partitionMap not equal", zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.partitionMap), zap.Any("actual", pStorage.partitionMap), zap.Bool("fromDisk", fromDisk))
+				log.Warn("partitionMap not equal", zap.Int("testIndex", index), zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.partitionMap), zap.Any("actual", pStorage.partitionMap), zap.Bool("fromDisk", fromDisk))
 				t.Fatalf("partitionMap not equal")
 			}
 			if (tt.databaseMap != nil && !reflect.DeepEqual(tt.databaseMap, pStorage.databaseMap)) ||
 				(tt.databaseMap == nil && len(pStorage.databaseMap) != 0) {
-				log.Warn("databaseMap not equal", zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.databaseMap), zap.Any("actual", pStorage.databaseMap), zap.Bool("fromDisk", fromDisk))
+				log.Warn("databaseMap not equal", zap.Int("testIndex", index), zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.databaseMap), zap.Any("actual", pStorage.databaseMap), zap.Bool("fromDisk", fromDisk))
 				t.Fatalf("databaseMap not equal")
 			}
 			if (tt.tablesDDLHistory != nil && !reflect.DeepEqual(tt.tablesDDLHistory, pStorage.tablesDDLHistory)) ||
 				(tt.tablesDDLHistory == nil && len(pStorage.tablesDDLHistory) != 0) {
-				log.Warn("tablesDDLHistory not equal", zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tablesDDLHistory), zap.Any("actual", pStorage.tablesDDLHistory), zap.Bool("fromDisk", fromDisk))
+				log.Warn("tablesDDLHistory not equal", zap.Int("testIndex", index), zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tablesDDLHistory), zap.Any("actual", pStorage.tablesDDLHistory), zap.Bool("fromDisk", fromDisk))
 				t.Fatalf("tablesDDLHistory not equal")
 			}
 			if (tt.tableTriggerDDLHistory != nil && !reflect.DeepEqual(tt.tableTriggerDDLHistory, pStorage.tableTriggerDDLHistory)) ||
 				(tt.tableTriggerDDLHistory == nil && len(pStorage.tableTriggerDDLHistory) != 0) {
-				log.Warn("tableTriggerDDLHistory not equal", zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tableTriggerDDLHistory), zap.Any("actual", pStorage.tableTriggerDDLHistory), zap.Bool("fromDisk", fromDisk))
+				log.Warn("tableTriggerDDLHistory not equal", zap.Int("testIndex", index), zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tableTriggerDDLHistory), zap.Any("actual", pStorage.tableTriggerDDLHistory), zap.Bool("fromDisk", fromDisk))
 				t.Fatalf("tableTriggerDDLHistory not equal")
 			}
 			for _, testCase := range tt.physicalTableQueryTestCases {
@@ -1366,6 +1366,7 @@ func TestApplyDDLJobs(t *testing.T) {
 				})
 				if !reflect.DeepEqual(testCase.result, allPhysicalTables) {
 					log.Warn("getAllPhysicalTables result wrong",
+						zap.Int("testIndex", index),
 						zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)),
 						zap.Uint64("snapTs", testCase.snapTs),
 						zap.Any("tableFilter", testCase.tableFilter),
@@ -1475,6 +1476,7 @@ func TestApplyDDLJobs(t *testing.T) {
 				require.Nil(t, err)
 				if !checkDDLEvents(testCase.result, events) {
 					log.Warn("fetchTableDDLEvents result wrong",
+						zap.Int("testIndex", index),
 						zap.Int64("tableID", testCase.tableID),
 						zap.Any("tableFilter", testCase.tableFilter),
 						zap.Uint64("startTs", testCase.startTs),
@@ -1490,6 +1492,7 @@ func TestApplyDDLJobs(t *testing.T) {
 				require.Nil(t, err)
 				if !checkDDLEvents(testCase.result, events) {
 					log.Warn("fetchTableTriggerDDLEvents result wrong",
+						zap.Int("testIndex", index),
 						zap.Any("tableFilter", testCase.tableFilter),
 						zap.Uint64("startTs", testCase.startTs),
 						zap.Int("limit", testCase.limit),

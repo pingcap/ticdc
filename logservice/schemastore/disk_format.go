@@ -276,15 +276,7 @@ func loadAndApplyDDLHistory(
 		if shouldSkipDDL(&ddlEvent, databaseMap, tableMap) {
 			continue
 		}
-		if tableTriggerDDLHistory, err = updateDDLHistory(
-			&ddlEvent,
-			databaseMap,
-			tableMap,
-			partitionMap,
-			tablesDDLHistory,
-			tableTriggerDDLHistory); err != nil {
-			log.Panic("updateDDLHistory error", zap.Error(err))
-		}
+		tableTriggerDDLHistory = updateDDLHistory(&ddlEvent, databaseMap, tableMap, partitionMap, tablesDDLHistory, tableTriggerDDLHistory)
 		if err := updateDatabaseInfoAndTableInfo(&ddlEvent, databaseMap, tableMap, partitionMap); err != nil {
 			log.Panic("updateDatabaseInfo error", zap.Error(err))
 		}

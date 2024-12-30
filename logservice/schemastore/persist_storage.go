@@ -673,20 +673,17 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	writePersistedDDLEvent(p.db, &ddlEvent)
 
 	p.mu.Lock()
-	var err error
 	// Note: `updateDDLHistory` must be before `updateDatabaseInfoAndTableInfo`,
 	// because `updateDDLHistory` will refer to the info in databaseMap and tableMap,
 	// and `updateDatabaseInfoAndTableInfo` may delete some info from databaseMap and tableMap
-	if p.tableTriggerDDLHistory, err = updateDDLHistory(
+	p.tableTriggerDDLHistory = updateDDLHistory(
 		&ddlEvent,
 		p.databaseMap,
 		p.tableMap,
 		p.partitionMap,
 		p.tablesDDLHistory,
-		p.tableTriggerDDLHistory); err != nil {
-		p.mu.Unlock()
-		return err
-	}
+		p.tableTriggerDDLHistory)
+
 	if err := updateDatabaseInfoAndTableInfo(&ddlEvent, p.databaseMap, p.tableMap, p.partitionMap); err != nil {
 		p.mu.Unlock()
 		return err
@@ -821,19 +818,6 @@ func shouldSkipDDL(
 	return false
 }
 
-func isPartitionTable(tableInfo *model.TableInfo) bool {
-	// tableInfo may only be nil in unit test
-	return tableInfo != nil && tableInfo.Partition != nil
-}
-
-func getAllPartitionIDs(tableInfo *model.TableInfo) []int64 {
-	physicalIDs := make([]int64, 0, len(tableInfo.Partition.Definitions))
-	for _, partition := range tableInfo.Partition.Definitions {
-		physicalIDs = append(physicalIDs, partition.ID)
-	}
-	return physicalIDs
-}
-
 func updateDDLHistory(
 	ddlEvent *PersistedDDLEvent,
 	databaseMap map[int64]*BasicDatabaseInfo,
@@ -841,133 +825,12 @@ func updateDDLHistory(
 	partitionMap map[int64]BasicPartitionInfo,
 	tablesDDLHistory map[int64][]uint64,
 	tableTriggerDDLHistory []uint64,
-) ([]uint64, error) {
-	appendTableHistory := func(tableID int64) {
-		tablesDDLHistory[tableID] = append(tablesDDLHistory[tableID], ddlEvent.FinishedTs)
+) []uint64 {
+	handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
+	if !ok {
+		log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
 	}
-	appendPartitionsHistory := func(partitionIDs []int64) {
-		for _, partitionID := range partitionIDs {
-			tablesDDLHistory[partitionID] = append(tablesDDLHistory[partitionID], ddlEvent.FinishedTs)
-		}
-	}
-
-	switch model.ActionType(ddlEvent.Type) {
-	case model.ActionCreateSchema:
-		tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-	case model.ActionDropSchema:
-		tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-		for tableID := range databaseMap[ddlEvent.CurrentSchemaID].Tables {
-			if partitionInfo, ok := partitionMap[tableID]; ok {
-				for id := range partitionInfo {
-					appendTableHistory(id)
-				}
-			} else {
-				appendTableHistory(tableID)
-			}
-		}
-	case model.ActionCreateTable, model.ActionRecoverTable,
-		model.ActionDropTable:
-		tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-		// Note: for create table, this ddl event will not be sent to table dispatchers.
-		// add it to ddl history is just for building table info store.
-		if isPartitionTable(ddlEvent.TableInfo) {
-			// for partition table, we only care the ddl history of physical table ids.
-			appendPartitionsHistory(getAllPartitionIDs(ddlEvent.TableInfo))
-		} else {
-			appendTableHistory(ddlEvent.CurrentTableID)
-		}
-	case model.ActionAddColumn,
-		model.ActionDropColumn,
-		model.ActionAddIndex,
-		model.ActionDropIndex,
-		model.ActionAddForeignKey,
-		model.ActionDropForeignKey:
-		if isPartitionTable(ddlEvent.TableInfo) {
-			appendPartitionsHistory(getAllPartitionIDs(ddlEvent.TableInfo))
-		} else {
-			appendTableHistory(ddlEvent.CurrentTableID)
-		}
-	case model.ActionTruncateTable:
-		tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-		if isPartitionTable(ddlEvent.TableInfo) {
-			appendPartitionsHistory(getAllPartitionIDs(ddlEvent.TableInfo))
-			appendPartitionsHistory(ddlEvent.PrevPartitions)
-		} else {
-			appendTableHistory(ddlEvent.CurrentTableID)
-			appendTableHistory(ddlEvent.PrevTableID)
-		}
-	case model.ActionModifyColumn,
-		model.ActionRebaseAutoID:
-		if isPartitionTable(ddlEvent.TableInfo) {
-			appendPartitionsHistory(getAllPartitionIDs(ddlEvent.TableInfo))
-		} else {
-			appendTableHistory(ddlEvent.CurrentTableID)
-		}
-	case model.ActionRenameTable:
-		tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-		if isPartitionTable(ddlEvent.TableInfo) {
-			appendPartitionsHistory(getAllPartitionIDs(ddlEvent.TableInfo))
-		} else {
-			appendTableHistory(ddlEvent.CurrentTableID)
-		}
-	case model.ActionSetDefaultValue,
-		model.ActionShardRowID,
-		model.ActionModifyTableComment,
-		model.ActionRenameIndex:
-		if isPartitionTable(ddlEvent.TableInfo) {
-			appendPartitionsHistory(getAllPartitionIDs(ddlEvent.TableInfo))
-		} else {
-			appendTableHistory(ddlEvent.CurrentTableID)
-		}
-	case model.ActionAddTablePartition:
-		tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-		// all partitions include newly create partitions will receive this event
-		appendPartitionsHistory(getAllPartitionIDs(ddlEvent.TableInfo))
-	case model.ActionDropTablePartition:
-		tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-		appendPartitionsHistory(ddlEvent.PrevPartitions)
-	case model.ActionCreateView:
-		tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-		for tableID := range tableMap {
-			appendTableHistory(tableID)
-		}
-	case model.ActionTruncateTablePartition:
-		tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-		appendPartitionsHistory(ddlEvent.PrevPartitions)
-		newCreateIDs := getCreatedIDs(ddlEvent.PrevPartitions, getAllPartitionIDs(ddlEvent.TableInfo))
-		appendPartitionsHistory(newCreateIDs)
-	case model.ActionExchangeTablePartition:
-		tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-		droppedIDs := getDroppedIDs(ddlEvent.PrevPartitions, getAllPartitionIDs(ddlEvent.TableInfo))
-		if len(droppedIDs) != 1 {
-			log.Panic("exchange table partition should only drop one partition",
-				zap.Int64s("droppedIDs", droppedIDs))
-		}
-		appendTableHistory(ddlEvent.PrevTableID)
-		appendPartitionsHistory(droppedIDs)
-	case model.ActionCreateTables:
-		tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-		// it won't be send to table dispatchers, just for build version store
-		for _, info := range ddlEvent.MultipleTableInfos {
-			if isPartitionTable(info) {
-				// for partition table, we only care the ddl history of physical table ids.
-				appendPartitionsHistory(getAllPartitionIDs(info))
-			} else {
-				appendTableHistory(info.ID)
-			}
-		}
-	case model.ActionReorganizePartition:
-		tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-		appendPartitionsHistory(ddlEvent.PrevPartitions)
-		newCreateIDs := getCreatedIDs(ddlEvent.PrevPartitions, getAllPartitionIDs(ddlEvent.TableInfo))
-		appendPartitionsHistory(newCreateIDs)
-	default:
-		log.Panic("unknown ddl type",
-			zap.Any("ddlType", ddlEvent.Type),
-			zap.String("DDL", ddlEvent.Query))
-	}
-
-	return tableTriggerDDLHistory, nil
+	return handler.updateDDLHistoryFunc(ddlEvent, databaseMap, tableMap, partitionMap, tablesDDLHistory, tableTriggerDDLHistory)
 }
 
 func updateDatabaseInfoAndTableInfo(
