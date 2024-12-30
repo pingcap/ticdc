@@ -26,18 +26,11 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
-)
-
-var (
-	metricsDSInputChanLen    = metrics.DynamicStreamEventChanSize.WithLabelValues("maintainer-manager")
-	metricsDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("maintainer-manager")
 )
 
 // Manager is the manager of all changefeed maintainer in a ticdc watcher, each ticdc watcher will
@@ -62,7 +55,6 @@ type Manager struct {
 
 	msgCh chan *messaging.TargetMessage
 
-	stream        dynstream.DynamicStream[int, common.GID, *Event, *Maintainer, *StreamHandler]
 	taskScheduler threadpool.ThreadPool
 }
 
@@ -88,8 +80,6 @@ func NewMaintainerManager(selfNode *node.Info,
 		tsoClient:     pdClient,
 		regionCache:   regionCache,
 	}
-	m.stream = dynstream.NewDynamicStream(NewStreamHandler())
-	m.stream.Start()
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
 	mc.RegisterHandler(messaging.MaintainerTopic,
@@ -159,18 +149,10 @@ func (m *Manager) Run(ctx context.Context) error {
 					cf.Close()
 					log.Info("maintainer removed, remove it from dynamic stream",
 						zap.String("changefeed", cf.id.String()))
-					if err := m.stream.RemovePath(cf.id.Id); err != nil {
-						log.Warn("remove path from dynstream failed, will retry later",
-							zap.String("changefeed", cf.id.String()),
-							zap.Error(err))
-						// try it again later
-						return true
-					}
 					m.maintainers.Delete(key)
 				}
 				return true
 			})
-			m.updateMetricsOnce()
 		}
 	}
 }
@@ -243,21 +225,19 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 			zap.Uint64("checkpointTs", req.CheckpointTs),
 			zap.Any("config", cfConfig))
 	}
-	cf := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.stream, m.taskScheduler,
+	cf := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.taskScheduler,
 		m.pdAPI, m.tsoClient, m.regionCache, req.CheckpointTs)
-	err = m.stream.AddPath(cfID.Id, cf)
 	if err != nil {
 		log.Warn("add path to dynstream failed, coordinator will retry later", zap.Error(err))
 		return
 	}
 	m.maintainers.Store(cfID, cf)
-	m.stream.Push(cfID.Id, &Event{changefeedID: cfID, eventType: EventInit})
 }
 
 func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heartbeatpb.MaintainerStatus {
 	req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
 	cfID := common.NewChangefeedIDFromPB(req.GetId())
-	_, ok := m.maintainers.Load(cfID)
+	cf, ok := m.maintainers.Load(cfID)
 	if !ok {
 		if !req.Cascade {
 			log.Warn("ignore remove maintainer request, "+
@@ -271,22 +251,17 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 		}
 		// it's cascade remove, we should remove the dispatcher from all node
 		// here we create a maintainer to run the remove the dispatcher logic
-		cf := NewMaintainerForRemove(cfID, m.conf, m.selfNode, m.stream, m.taskScheduler, m.pdAPI,
+		cf := NewMaintainerForRemove(cfID, m.conf, m.selfNode, m.taskScheduler, m.pdAPI,
 			m.tsoClient, m.regionCache)
-		err := m.stream.AddPath(cfID.Id, cf)
-		if err != nil {
-			log.Warn("add path to dynstream failed, coordinator will retry later", zap.Error(err))
-			return nil
-		}
 		m.maintainers.Store(cfID, cf)
 	}
-	log.Info("received remove maintainer request",
-		zap.String("changefeed", cfID.String()))
-	m.stream.Push(cfID.Id, &Event{
+	cf.(*Maintainer).eventCh.In() <- &Event{
 		changefeedID: cfID,
 		eventType:    EventMessage,
 		message:      msg,
-	})
+	}
+	log.Info("received remove maintainer request",
+		zap.String("changefeed", cfID.String()))
 	return nil
 }
 
@@ -382,12 +357,6 @@ func (m *Manager) dispatcherMaintainerMessage(
 		}
 	}
 	return nil
-}
-
-func (m *Manager) updateMetricsOnce() {
-	dsMetrics := m.stream.GetMetrics()
-	metricsDSInputChanLen.Set(float64(dsMetrics.EventChanSize))
-	metricsDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 }
 
 func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) *Maintainer {

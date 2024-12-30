@@ -3,6 +3,7 @@ package dynstream
 import (
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -24,8 +25,8 @@ type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D
 
 	feedbackChan chan Feedback[A, P, D]
 
-	_statAddPathCount    int
-	_statRemovePathCount int
+	_statAddPathCount    atomic.Int64
+	_statRemovePathCount atomic.Int64
 }
 
 func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](hasher PathHasher[P], handler H, option Option) *parallelDynamicStream[A, P, T, D, H] {
@@ -136,7 +137,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	}
 	pi.stream.in() <- eventWrap[A, P, T, D, H]{pathInfo: pi, newPath: true}
 
-	s._statAddPathCount++
+	s._statAddPathCount.Add(1)
 	return nil
 }
 
@@ -157,7 +158,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	pi.stream.in() <- eventWrap[A, P, T, D, H]{pathInfo: pi}
 	delete(s.pathMap, path)
 
-	s._statRemovePathCount++
+	s._statRemovePathCount.Add(1)
 	return nil
 }
 
@@ -173,7 +174,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics {
 		size := ds.getPendingSize()
 		metrics.PendingQueueLen += size
 	}
-	metrics.AddPath = s._statAddPathCount
-	metrics.RemovePath = s._statRemovePathCount
+	metrics.AddPath = int(s._statAddPathCount.Load())
+	metrics.RemovePath = int(s._statRemovePathCount.Load())
 	return metrics
 }

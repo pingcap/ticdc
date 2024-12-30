@@ -34,7 +34,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
-	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/errors"
@@ -66,7 +65,6 @@ type Maintainer struct {
 
 	eventCh *chann.DrainableChann[*Event]
 
-	stream        dynstream.DynamicStream[int, common.GID, *Event, *Maintainer, *StreamHandler]
 	taskScheduler threadpool.ThreadPool
 	mc            messaging.MessageCenter
 
@@ -127,7 +125,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	conf *config.SchedulerConfig,
 	cfg *config.ChangeFeedInfo,
 	selfNode *node.Info,
-	stream dynstream.DynamicStream[int, common.GID, *Event, *Maintainer, *StreamHandler],
 	taskScheduler threadpool.ThreadPool,
 	pdAPI pdutil.PDAPIClient,
 	tsoClient replica.TSOClient,
@@ -148,7 +145,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		id:                cfID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
-		stream:            stream,
 		taskScheduler:     taskScheduler,
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, pdAPI, tsoClient, regionCache, taskScheduler,
@@ -198,7 +194,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	conf *config.SchedulerConfig,
 	selfNode *node.Info,
-	stream dynstream.DynamicStream[int, common.GID, *Event, *Maintainer, *StreamHandler],
 	taskScheduler threadpool.ThreadPool,
 	pdAPI pdutil.PDAPIClient,
 	tsoClient replica.TSOClient,
@@ -209,11 +204,11 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 		SinkURI:      "",
 		Config:       config.GetDefaultReplicaConfig(),
 	}
-	m := NewMaintainer(cfID, conf, unused, selfNode, stream, taskScheduler, pdAPI,
+	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI,
 		tsoClient, regionCache, 1)
 	m.cascadeRemoving = true
 	// setup period event
-	SubmitScheduledEvent(m.taskScheduler, m.stream, &Event{
+	m.submitScheduledEvent(m.taskScheduler, &Event{
 		changefeedID: m.id,
 		eventType:    EventPeriod,
 	}, time.Now().Add(time.Millisecond*500))
@@ -308,7 +303,7 @@ func (m *Maintainer) initialize() error {
 	}
 	m.sendMessages(m.bootstrapper.HandleNewNodes(newNodes))
 	// setup period event
-	SubmitScheduledEvent(m.taskScheduler, m.stream, &Event{
+	m.submitScheduledEvent(m.taskScheduler, &Event{
 		changefeedID: m.id,
 		eventType:    EventPeriod,
 	}, time.Now().Add(time.Millisecond*500))
@@ -734,7 +729,7 @@ func (m *Maintainer) onPeriodTask() {
 	m.handleResendMessage()
 	m.collectMetrics()
 	m.calCheckpointTs()
-	SubmitScheduledEvent(m.taskScheduler, m.stream, &Event{
+	m.submitScheduledEvent(m.taskScheduler, &Event{
 		changefeedID: m.id,
 		eventType:    EventPeriod,
 	}, time.Now().Add(time.Millisecond*500))
@@ -793,4 +788,16 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 // for test only
 func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
 	return m.controller.moveTable(tableId, targetNode)
+}
+
+// SubmitScheduledEvent submits a task to controller pool to send a future event
+func (m *Maintainer) submitScheduledEvent(
+	scheduler threadpool.ThreadPool,
+	event *Event,
+	scheduleTime time.Time) {
+	task := func() time.Time {
+		m.eventCh.In() <- event
+		return time.Time{}
+	}
+	scheduler.SubmitFunc(task, scheduleTime)
 }
