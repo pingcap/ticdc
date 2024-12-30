@@ -328,6 +328,7 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 func (t *DMLEvent) AssembleRows(tableInfo *common.TableInfo) error {
 	defer t.TableInfo.InitPrivateFields()
 	// t.Rows is already set, no need to assemble again
+	// When the event is passed from the same node, the Rows is already set.
 	if t.Rows != nil {
 		return nil
 	}

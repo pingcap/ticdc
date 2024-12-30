@@ -1371,7 +1371,7 @@ func updateRegisteredTableInfoStore(
 	case model.ActionRebaseAutoID:
 		// TODO: verify can be ignored
 	case model.ActionRenameTable:
-		// ignore
+		tryApplyDDLToStore()
 	case model.ActionSetDefaultValue:
 		tryApplyDDLToStore()
 	case model.ActionShardRowID,
@@ -1536,7 +1536,6 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commo
 					TableID:  id,
 				})
 			}
-			ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, heartbeatpb.DDLSpan.TableID)
 		} else {
 			ddlEvent.NeedAddedTables = []commonEvent.Table{
 				{
@@ -1604,7 +1603,6 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commo
 				InfluenceType: commonEvent.InfluenceTypeNormal,
 				TableIDs:      prevPartitionsAndDDLSpanID,
 			}
-			ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, heartbeatpb.DDLSpan.TableID)
 			// Note: for truncate table, prev partitions must all be dropped.
 			ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
 				InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -1667,6 +1665,20 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commo
 							})
 						}
 					}
+					ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+						AddName: []commonEvent.SchemaTableName{
+							{
+								SchemaName: rawEvent.CurrentSchemaName,
+								TableName:  rawEvent.CurrentTableName,
+							},
+						},
+						DropName: []commonEvent.SchemaTableName{
+							{
+								SchemaName: rawEvent.PrevSchemaName,
+								TableName:  rawEvent.PrevTableName,
+							},
+						},
+					}
 				} else {
 					// the table is filtered out after rename table, we need drop the table
 					ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
@@ -1683,6 +1695,10 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commo
 					}
 				}
 			} else if !ignoreCurrentTable {
+				ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
+				}
 				// the table is filtered out before rename table, we need add table here
 				ddlEvent.NeedAddedTables = []commonEvent.Table{
 					{
@@ -1728,6 +1744,20 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commo
 								NewSchemaID: rawEvent.CurrentSchemaID,
 							},
 						}
+						ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+							AddName: []commonEvent.SchemaTableName{
+								{
+									SchemaName: rawEvent.CurrentSchemaName,
+									TableName:  rawEvent.CurrentTableName,
+								},
+							},
+							DropName: []commonEvent.SchemaTableName{
+								{
+									SchemaName: rawEvent.PrevSchemaName,
+									TableName:  rawEvent.PrevTableName,
+								},
+							},
+						}
 					}
 				} else {
 					// the table is filtered out after rename table, we need drop the table
@@ -1745,6 +1775,10 @@ func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commo
 					}
 				}
 			} else if !ignoreCurrentTable {
+				ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
+				}
 				// the table is filtered out before rename table, we need add table here
 				ddlEvent.NeedAddedTables = []commonEvent.Table{
 					{

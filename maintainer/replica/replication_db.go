@@ -416,3 +416,7 @@ func (db *ReplicationDB) putDDLDispatcher(ddlSpan *SpanReplication) {
 		ddlSpan.ID: ddlSpan,
 	}
 }
+
+func (db *ReplicationDB) GetDDLDispatcher() *SpanReplication {
+	return db.ddlSpan
+}

@@ -66,7 +66,7 @@ func (b *Bootstrapper[T]) HandleBootstrapResponse(
 	}
 	status.cachedBootstrapResp = msg
 	status.state = NodeStateInitialized
-	return b.fistBootstrap()
+	return b.firstBootstrap()
 }
 
 // HandleNewNodes add node to bootstrapper and return rpc messages that need to be sent to remote node
@@ -105,7 +105,7 @@ func (b *Bootstrapper[T]) HandleRemoveNodes(nodeIDs []node.ID) map[node.ID]*T {
 				zap.Any("id", id))
 		}
 	}
-	return b.fistBootstrap()
+	return b.firstBootstrap()
 }
 
 // ResendBootstrapMessage return rpc message that need to be resent
@@ -148,11 +148,11 @@ func (b *Bootstrapper[T]) checkAllCaptureInitialized() bool {
 	return len(b.nodes) != 0
 }
 
-// fistBootstrap check if bootstrapper is initialized first time,
+// firstBootstrap check if bootstrapper is initialized first time,
 // return nil is not bootstrapped or already bootstrapped before
 // return cached heartbeatpb.MaintainerBootstrapResponse map if it's not bootstrapped before
 // bootstrapper only return once
-func (b *Bootstrapper[T]) fistBootstrap() map[node.ID]*T {
+func (b *Bootstrapper[T]) firstBootstrap() map[node.ID]*T {
 	// first bootstrapped time, return the cached resp and clear it
 	if !b.bootstrapped && b.checkAllCaptureInitialized() {
 		b.bootstrapped = true
