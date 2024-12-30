@@ -16,6 +16,7 @@ TiCDC can be built on the following operating systems:
 * MacOS
 
 1. Install GoLang 1.23.2
+
 ```bash
 # Linux
 wget https://go.dev/dl/go1.23.2.linux-amd64.tar.gz
@@ -44,6 +45,7 @@ git checkout latest-version
 ```
 
 3. Build TiCDC
+
 ```bash
 make cdc
 
@@ -53,6 +55,7 @@ tar -czf newarch_cdc.tar.gz cdc
 ```
 
 ### Patch the new arch TiCDC to your cluster.
+
 Examples:
 ```bash
 # Scale out the old version TiCDC nodes
@@ -79,4 +82,4 @@ tiup cluster reload cdc-test -R cdc
 ### Import the new dashboard to grafana to monitor your workloads
 Download [ticdc_new_arch.json](https://github.com/pingcap/ticdc/blob/master/metrics/grafana/ticdc_new_arch.json), and use the import button.
 
-![](./media/grafana_import.png)
+![](./docs/media/grafana_import.png)
