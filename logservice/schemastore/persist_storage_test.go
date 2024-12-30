@@ -507,7 +507,89 @@ func TestApplyDDLJobs(t *testing.T) {
 			},
 			[]uint64{1010, 1020, 1030},
 			nil,
-			nil,
+			[]FetchTableDDLEventsTestCase{
+				{
+					tableID: 203,
+					startTs: 1010,
+					endTs:   1030,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionExchangeTablePartition),
+							FinishedTs: 1030,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{203, 300, 0},
+							},
+							UpdatedSchemas: []commonEvent.SchemaIDChange{
+								{
+									TableID:     300,
+									OldSchemaID: 105,
+									NewSchemaID: 100,
+								},
+								{
+									TableID:     203,
+									OldSchemaID: 100,
+									NewSchemaID: 105,
+								},
+							},
+						},
+					},
+				},
+				// normal table is filtered out
+				{
+					tableID:     203,
+					tableFilter: buildTableFilterByNameForTest("test", "t1"),
+					startTs:     1010,
+					endTs:       1030,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionExchangeTablePartition),
+							FinishedTs: 1030,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{203, 0},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{203},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  300,
+								},
+							},
+						},
+					},
+				},
+				// partition table is filtered out
+				{
+					tableID:     300,
+					tableFilter: buildTableFilterByNameForTest("test2", "t2"),
+					startTs:     1020,
+					endTs:       1030,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionExchangeTablePartition),
+							FinishedTs: 1030,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{300, 0},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{300},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 105,
+									TableID:  203,
+								},
+							},
+						},
+					},
+				},
+			},
 			nil,
 		},
 		// test rename table
@@ -750,27 +832,27 @@ func TestApplyDDLJobs(t *testing.T) {
 		checkState := func(fromDisk bool) {
 			if (tt.tableMap != nil && !reflect.DeepEqual(tt.tableMap, pStorage.tableMap)) ||
 				(tt.tableMap == nil && len(pStorage.tableMap) != 0) {
-				log.Warn("tableMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap), zap.Bool("fromDisk", fromDisk))
+				log.Warn("tableMap not equal", zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap), zap.Bool("fromDisk", fromDisk))
 				t.Fatalf("tableMap not equal")
 			}
 			if (tt.partitionMap != nil && !reflect.DeepEqual(tt.partitionMap, pStorage.partitionMap)) ||
 				(tt.partitionMap == nil && len(pStorage.partitionMap) != 0) {
-				log.Warn("partitionMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.partitionMap), zap.Any("actual", pStorage.partitionMap), zap.Bool("fromDisk", fromDisk))
+				log.Warn("partitionMap not equal", zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.partitionMap), zap.Any("actual", pStorage.partitionMap), zap.Bool("fromDisk", fromDisk))
 				t.Fatalf("partitionMap not equal")
 			}
 			if (tt.databaseMap != nil && !reflect.DeepEqual(tt.databaseMap, pStorage.databaseMap)) ||
 				(tt.databaseMap == nil && len(pStorage.databaseMap) != 0) {
-				log.Warn("databaseMap not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.databaseMap), zap.Any("actual", pStorage.databaseMap), zap.Bool("fromDisk", fromDisk))
+				log.Warn("databaseMap not equal", zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.databaseMap), zap.Any("actual", pStorage.databaseMap), zap.Bool("fromDisk", fromDisk))
 				t.Fatalf("databaseMap not equal")
 			}
 			if (tt.tablesDDLHistory != nil && !reflect.DeepEqual(tt.tablesDDLHistory, pStorage.tablesDDLHistory)) ||
 				(tt.tablesDDLHistory == nil && len(pStorage.tablesDDLHistory) != 0) {
-				log.Warn("tablesDDLHistory not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tablesDDLHistory), zap.Any("actual", pStorage.tablesDDLHistory), zap.Bool("fromDisk", fromDisk))
+				log.Warn("tablesDDLHistory not equal", zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tablesDDLHistory), zap.Any("actual", pStorage.tablesDDLHistory), zap.Bool("fromDisk", fromDisk))
 				t.Fatalf("tablesDDLHistory not equal")
 			}
 			if (tt.tableTriggerDDLHistory != nil && !reflect.DeepEqual(tt.tableTriggerDDLHistory, pStorage.tableTriggerDDLHistory)) ||
 				(tt.tableTriggerDDLHistory == nil && len(pStorage.tableTriggerDDLHistory) != 0) {
-				log.Warn("tableTriggerDDLHistory not equal", zap.Any("ddlJobs", tt.ddlJobs), zap.Any("expected", tt.tableTriggerDDLHistory), zap.Any("actual", pStorage.tableTriggerDDLHistory), zap.Bool("fromDisk", fromDisk))
+				log.Warn("tableTriggerDDLHistory not equal", zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tableTriggerDDLHistory), zap.Any("actual", pStorage.tableTriggerDDLHistory), zap.Bool("fromDisk", fromDisk))
 				t.Fatalf("tableTriggerDDLHistory not equal")
 			}
 			for _, testCase := range tt.physicalTableQueryTestCases {
@@ -794,7 +876,7 @@ func TestApplyDDLJobs(t *testing.T) {
 				})
 				if !reflect.DeepEqual(testCase.result, allPhysicalTables) {
 					log.Warn("getAllPhysicalTables result wrong",
-						zap.Any("ddlJobs", tt.ddlJobs),
+						zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)),
 						zap.Uint64("snapTs", testCase.snapTs),
 						zap.Any("tableFilter", testCase.tableFilter),
 						zap.Any("expected", testCase.result),
@@ -811,20 +893,10 @@ func TestApplyDDLJobs(t *testing.T) {
 					expectedDDLEvent := expected[i]
 					actualDDLEvent := actual[i]
 					if expectedDDLEvent.Type != actualDDLEvent.Type || expectedDDLEvent.FinishedTs != actualDDLEvent.FinishedTs {
-						// log.Warn("fetchTableDDLEvents result wrong",
-						// 	zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)),
-						// 	zap.Any("expectedType", formatDDLJobsForTest(expectedDDLEvent.Type)),
-						// 	zap.Any("actualType", actualDDLEvent.Type),
-						// 	zap.Uint64("expectedFinishedTs", expectedDDLEvent.FinishedTs),
-						// 	zap.Uint64("actualFinishedTs", actualDDLEvent.FinishedTs))
 						return false
 					}
 					// check BlockedTables
 					if expectedDDLEvent.BlockedTables == nil && actualDDLEvent.BlockedTables != nil {
-						// log.Warn("fetchTableDDLEvents result wrong",
-						// 	zap.Any("ddlJobs", tt.ddlJobs),
-						// 	zap.Any("expected", expectedDDLEvent.BlockedTables),
-						// 	zap.Any("actual", actualDDLEvent.BlockedTables))
 						return false
 					}
 					if expectedDDLEvent.BlockedTables != nil {
@@ -835,10 +907,6 @@ func TestApplyDDLJobs(t *testing.T) {
 							return actualDDLEvent.BlockedTables.TableIDs[i] < actualDDLEvent.BlockedTables.TableIDs[j]
 						})
 						if !reflect.DeepEqual(expectedDDLEvent.BlockedTables, actualDDLEvent.BlockedTables) {
-							// log.Warn("fetchTableDDLEvents result wrong",
-							// 	zap.Any("ddlJobs", tt.ddlJobs),
-							// 	zap.Any("expected", expectedDDLEvent.BlockedTables),
-							// 	zap.Any("actual", actualDDLEvent.BlockedTables))
 							return false
 						}
 					}
@@ -848,18 +916,10 @@ func TestApplyDDLJobs(t *testing.T) {
 						return expectedDDLEvent.UpdatedSchemas[i].TableID < expectedDDLEvent.UpdatedSchemas[j].TableID
 					})
 					if !reflect.DeepEqual(expectedDDLEvent.UpdatedSchemas, actualDDLEvent.UpdatedSchemas) {
-						// log.Warn("fetchTableDDLEvents result wrong",
-						// 	zap.Any("ddlJobs", tt.ddlJobs),
-						// 	zap.Any("expected", expectedDDLEvent.UpdatedSchemas),
-						// 	zap.Any("actual", actualDDLEvent.UpdatedSchemas))
 						return false
 					}
 					// check NeedDroppedTables
 					if expectedDDLEvent.NeedDroppedTables == nil && actualDDLEvent.NeedDroppedTables != nil {
-						// log.Warn("fetchTableDDLEvents result wrong",
-						// 	zap.Any("ddlJobs", tt.ddlJobs),
-						// 	zap.Any("expected", expectedDDLEvent.NeedDroppedTables),
-						// 	zap.Any("actual", actualDDLEvent.NeedDroppedTables))
 						return false
 					}
 					if expectedDDLEvent.NeedDroppedTables != nil {
@@ -870,10 +930,6 @@ func TestApplyDDLJobs(t *testing.T) {
 							return actualDDLEvent.NeedDroppedTables.TableIDs[i] < actualDDLEvent.NeedDroppedTables.TableIDs[j]
 						})
 						if !reflect.DeepEqual(expectedDDLEvent.NeedDroppedTables, actualDDLEvent.NeedDroppedTables) {
-							// log.Warn("fetchTableDDLEvents result wrong",
-							// 	zap.Any("ddlJobs", tt.ddlJobs),
-							// 	zap.Any("expected", expectedDDLEvent.NeedDroppedTables),
-							// 	zap.Any("actual", actualDDLEvent.NeedDroppedTables))
 							return false
 						}
 					}
@@ -883,18 +939,10 @@ func TestApplyDDLJobs(t *testing.T) {
 						return expectedDDLEvent.NeedAddedTables[i].TableID < expectedDDLEvent.NeedAddedTables[j].TableID
 					})
 					if !reflect.DeepEqual(expectedDDLEvent.NeedAddedTables, actualDDLEvent.NeedAddedTables) {
-						// log.Warn("fetchTableDDLEvents result wrong",
-						// 	zap.Any("ddlJobs", tt.ddlJobs),
-						// 	zap.Any("expected", expectedDDLEvent.NeedAddedTables),
-						// 	zap.Any("actual", actualDDLEvent.NeedAddedTables))
 						return false
 					}
 					// check TableNameChange
 					if expectedDDLEvent.TableNameChange == nil && actualDDLEvent.TableNameChange != nil {
-						// log.Warn("fetchTableDDLEvents result wrong",
-						// 	zap.Any("ddlJobs", tt.ddlJobs),
-						// 	zap.Any("expected", expectedDDLEvent.TableNameChange),
-						// 	zap.Any("actual", actualDDLEvent.TableNameChange))
 						return false
 					}
 					if expectedDDLEvent.TableNameChange != nil {
@@ -917,10 +965,6 @@ func TestApplyDDLJobs(t *testing.T) {
 							}
 						})
 						if !reflect.DeepEqual(expectedDDLEvent.TableNameChange, actualDDLEvent.TableNameChange) {
-							// log.Warn("fetchTableDDLEvents result wrong",
-							// 	zap.Any("ddlJobs", tt.ddlJobs),
-							// 	zap.Any("expected", expectedDDLEvent.TableNameChange),
-							// 	zap.Any("actual", actualDDLEvent.TableNameChange))
 							return false
 						}
 					}
@@ -931,6 +975,14 @@ func TestApplyDDLJobs(t *testing.T) {
 				events, err := pStorage.fetchTableDDLEvents(testCase.tableID, testCase.tableFilter, testCase.startTs, testCase.endTs)
 				require.Nil(t, err)
 				if !checkDDLEvents(testCase.result, events) {
+					log.Warn("fetchTableTriggerDDLEvents result wrong",
+						zap.Int64("tableID", testCase.tableID),
+						zap.Any("tableFilter", testCase.tableFilter),
+						zap.Uint64("startTs", testCase.startTs),
+						zap.Uint64("endTs", testCase.endTs),
+						zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)),
+						zap.String("expectedEvents", formatDDLEventsForTest(testCase.result)),
+						zap.String("actualEvents", formatDDLEventsForTest(events)))
 					t.Fatalf("fetchTableDDLEvents result wrong")
 				}
 			}
@@ -939,6 +991,9 @@ func TestApplyDDLJobs(t *testing.T) {
 				require.Nil(t, err)
 				if !checkDDLEvents(testCase.result, events) {
 					log.Warn("fetchTableTriggerDDLEvents result wrong",
+						zap.Any("tableFilter", testCase.tableFilter),
+						zap.Uint64("startTs", testCase.startTs),
+						zap.Int("limit", testCase.limit),
 						zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)),
 						zap.String("expectedEvents", formatDDLEventsForTest(testCase.result)),
 						zap.String("actualEvents", formatDDLEventsForTest(events)))
@@ -1286,422 +1341,6 @@ func TestReadWriteMeta(t *testing.T) {
 // 		store := newEmptyVersionedTableInfoStore(partitionID4)
 // 		pStorage.buildVersionedTableInfoStore(store)
 // 		require.Equal(t, 1, len(store.infos))
-// 	}
-// }
-
-// func TestPartitionTableDDL(t *testing.T) {
-// 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
-// 	err := os.RemoveAll(dbPath)
-// 	require.Nil(t, err)
-
-// 	gcTs := uint64(100)
-// 	schemaID := int64(300)
-// 	databaseInfo := make(map[int64]*model.DBInfo)
-// 	databaseInfo[schemaID] = &model.DBInfo{
-// 		ID:   schemaID,
-// 		Name: model.NewCIStr("test"),
-// 	}
-// 	pStorage := newPersistentStorageForTest(dbPath, gcTs, databaseInfo)
-
-// 	// create a partition table
-// 	tableID := int64(100)
-// 	partitionID1 := tableID + 100
-// 	partitionID2 := tableID + 200
-// 	partitionID3 := tableID + 300
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionCreateTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 101,
-// 				TableInfo: &model.TableInfo{
-// 					ID:   tableID,
-// 					Name: model.NewCIStr("t"),
-// 					Partition: &model.PartitionInfo{
-// 						Definitions: []model.PartitionDefinition{
-// 							{
-// 								ID: partitionID1,
-// 							},
-// 							{
-// 								ID: partitionID2,
-// 							},
-// 							{
-// 								ID: partitionID3,
-// 							},
-// 						},
-// 					},
-// 				},
-// 				FinishedTS: 201,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 1, len(pStorage.databaseMap[schemaID].Tables))
-// 		require.Equal(t, 1, len(pStorage.tableMap))
-// 		require.Equal(t, 3, len(pStorage.partitionMap[tableID]))
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[partitionID1]))
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[partitionID2]))
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[partitionID3]))
-// 	}
-
-// 	// truncate the partition table
-// 	tableID2 := tableID + 400
-// 	partitionID4 := tableID2 + 100
-// 	partitionID5 := tableID2 + 200
-// 	partitionID6 := tableID2 + 300
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionTruncateTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 107,
-// 				TableInfo: &model.TableInfo{
-// 					ID:   tableID2,
-// 					Name: model.NewCIStr("t"),
-// 					Partition: &model.PartitionInfo{
-// 						Definitions: []model.PartitionDefinition{
-// 							{
-// 								ID: partitionID4,
-// 							},
-// 							{
-// 								ID: partitionID5,
-// 							},
-// 							{
-// 								ID: partitionID6,
-// 							},
-// 						},
-// 					},
-// 				},
-// 				FinishedTS: 207,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 1, len(pStorage.databaseMap[schemaID].Tables))
-// 		require.Equal(t, 1, len(pStorage.tableMap))
-// 		require.Equal(t, 1, len(pStorage.partitionMap))
-// 		require.Equal(t, 3, len(pStorage.partitionMap[tableID2]))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[partitionID1]))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[partitionID2]))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[partitionID3]))
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[partitionID4]))
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[partitionID5]))
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[partitionID6]))
-// 	}
-
-// 	// add partition 7
-// 	partitionID7 := partitionID6 + 100
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionAddTablePartition,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID2,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 109,
-// 				TableInfo: &model.TableInfo{
-// 					ID:   tableID2,
-// 					Name: model.NewCIStr("t"),
-// 					Partition: &model.PartitionInfo{
-// 						Definitions: []model.PartitionDefinition{
-// 							{
-// 								ID: partitionID4,
-// 							},
-// 							{
-// 								ID: partitionID5,
-// 							},
-// 							{
-// 								ID: partitionID6,
-// 							},
-// 							{
-// 								ID: partitionID7,
-// 							},
-// 						},
-// 					},
-// 				},
-// 				FinishedTS: 209,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 4, len(pStorage.partitionMap[tableID2]))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[partitionID4]))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[partitionID5]))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[partitionID6]))
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[partitionID7]))
-// 	}
-
-// 	// drop patition 4
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionDropTablePartition,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID2,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 111,
-// 				TableInfo: &model.TableInfo{
-// 					ID:   tableID2,
-// 					Name: model.NewCIStr("t"),
-// 					Partition: &model.PartitionInfo{
-// 						Definitions: []model.PartitionDefinition{
-// 							{
-// 								ID: partitionID5,
-// 							},
-// 							{
-// 								ID: partitionID6,
-// 							},
-// 							{
-// 								ID: partitionID7,
-// 							},
-// 						},
-// 					},
-// 				},
-// 				FinishedTS: 211,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 3, len(pStorage.partitionMap[tableID2]))
-// 		require.Equal(t, 3, len(pStorage.tablesDDLHistory[partitionID4]))
-// 		require.Equal(t, 3, len(pStorage.tablesDDLHistory[partitionID5]))
-// 		require.Equal(t, 3, len(pStorage.tablesDDLHistory[partitionID6]))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[partitionID7]))
-// 	}
-
-// 	// truncate partition 5 -> 8
-// 	partitionID8 := partitionID7 + 100
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionTruncateTablePartition,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID2,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 113,
-// 				TableInfo: &model.TableInfo{
-// 					ID:   tableID2,
-// 					Name: model.NewCIStr("t"),
-// 					Partition: &model.PartitionInfo{
-// 						Definitions: []model.PartitionDefinition{
-// 							{
-// 								ID: partitionID6,
-// 							},
-// 							{
-// 								ID: partitionID7,
-// 							},
-// 							{
-// 								ID: partitionID8,
-// 							},
-// 						},
-// 					},
-// 				},
-// 				FinishedTS: 213,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 3, len(pStorage.partitionMap[tableID2]))
-// 		require.Equal(t, 3, len(pStorage.tablesDDLHistory[partitionID4]))
-// 		require.Equal(t, 4, len(pStorage.tablesDDLHistory[partitionID5]))
-// 		require.Equal(t, 4, len(pStorage.tablesDDLHistory[partitionID6]))
-// 		require.Equal(t, 3, len(pStorage.tablesDDLHistory[partitionID7]))
-// 		require.Equal(t, 1, len(pStorage.tablesDDLHistory[partitionID8]))
-// 	}
-
-// 	// // TODO: test reorganize partition(becuase its logic is same as truncate partition, ignore it now, add test after verify truncate partition)
-
-// 	// drop the partition table
-// 	{
-// 		job := &model.Job{
-// 			Type:     model.ActionDropTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID2,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 240,
-// 				TableInfo: &model.TableInfo{
-// 					ID:   tableID2,
-// 					Name: model.NewCIStr("t"),
-// 					Partition: &model.PartitionInfo{
-// 						Definitions: []model.PartitionDefinition{
-// 							{
-// 								ID: partitionID6,
-// 							},
-// 							{
-// 								ID: partitionID7,
-// 							},
-// 							{
-// 								ID: partitionID8,
-// 							},
-// 						},
-// 					},
-// 				},
-// 				FinishedTS: 300,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-
-// 		require.Equal(t, 0, len(pStorage.databaseMap[schemaID].Tables))
-// 		require.Equal(t, 0, len(pStorage.tableMap))
-// 		require.Equal(t, 0, len(pStorage.partitionMap))
-// 		require.Equal(t, 3, len(pStorage.tablesDDLHistory[partitionID4]))
-// 		require.Equal(t, 4, len(pStorage.tablesDDLHistory[partitionID5]))
-// 		require.Equal(t, 5, len(pStorage.tablesDDLHistory[partitionID6]))
-// 		require.Equal(t, 4, len(pStorage.tablesDDLHistory[partitionID7]))
-// 		require.Equal(t, 2, len(pStorage.tablesDDLHistory[partitionID8]))
-// 	}
-
-// 	{
-// 		ddlEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 200, 300)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 6, len(ddlEvents))
-// 		// create table event
-// 		verifyTableIsAdded(t, ddlEvents[0], partitionID1, schemaID)
-// 		verifyTableIsAdded(t, ddlEvents[0], partitionID2, schemaID)
-// 		verifyTableIsAdded(t, ddlEvents[0], partitionID3, schemaID)
-
-// 		require.Equal(t, uint64(207), ddlEvents[1].FinishedTs)
-// 		require.Equal(t, uint64(209), ddlEvents[2].FinishedTs)
-// 		require.Equal(t, uint64(211), ddlEvents[3].FinishedTs)
-// 		require.Equal(t, uint64(213), ddlEvents[4].FinishedTs)
-
-// 		// drop table event
-// 		verifyTableIsBlocked(t, ddlEvents[5], partitionID6)
-// 		verifyTableIsBlocked(t, ddlEvents[5], partitionID7)
-// 		verifyTableIsBlocked(t, ddlEvents[5], partitionID8)
-// 		verifyTableIsDropped(t, ddlEvents[5], partitionID6)
-// 		verifyTableIsDropped(t, ddlEvents[5], partitionID7)
-// 		verifyTableIsDropped(t, ddlEvents[5], partitionID8)
-// 	}
-
-// 	// partition 1, 2, 3 should be same
-// 	{
-// 		// don't fetch the create table events
-// 		ddlEvents, err := pStorage.fetchTableDDLEvents(partitionID1, nil, 201, 300)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 1, len(ddlEvents))
-// 		// truncate table event
-// 		verifyTableIsBlocked(t, ddlEvents[0], partitionID1)
-// 		verifyTableIsBlocked(t, ddlEvents[0], partitionID2)
-// 		verifyTableIsBlocked(t, ddlEvents[0], partitionID3)
-// 		verifyTableIsDropped(t, ddlEvents[0], partitionID1)
-// 		verifyTableIsDropped(t, ddlEvents[0], partitionID2)
-// 		verifyTableIsDropped(t, ddlEvents[0], partitionID3)
-// 		verifyTableIsAdded(t, ddlEvents[0], partitionID4, schemaID)
-// 		verifyTableIsAdded(t, ddlEvents[0], partitionID5, schemaID)
-// 		verifyTableIsAdded(t, ddlEvents[0], partitionID6, schemaID)
-// 	}
-
-// 	// partition 4: test add partition/drop partition
-// 	{
-// 		ddlEvents, err := pStorage.fetchTableDDLEvents(partitionID4, nil, 207, 300)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 2, len(ddlEvents))
-// 		// add partition event for partition 7
-// 		require.Equal(t, model.ActionAddTablePartition, model.ActionType(ddlEvents[0].Type))
-// 		verifyTableIsBlocked(t, ddlEvents[0], partitionID4)
-// 		verifyTableIsBlocked(t, ddlEvents[0], partitionID5)
-// 		verifyTableIsBlocked(t, ddlEvents[0], partitionID6)
-// 		verifyTableIsAdded(t, ddlEvents[0], partitionID7, schemaID)
-// 		// drop partition event
-// 		require.Equal(t, model.ActionDropTablePartition, model.ActionType(ddlEvents[1].Type))
-// 		verifyTableIsBlocked(t, ddlEvents[1], partitionID4)
-// 		verifyTableIsBlocked(t, ddlEvents[1], partitionID5)
-// 		verifyTableIsBlocked(t, ddlEvents[1], partitionID6)
-// 		verifyTableIsBlocked(t, ddlEvents[1], partitionID7)
-// 		verifyTableIsDropped(t, ddlEvents[1], partitionID4)
-// 	}
-
-// 	// partition 5: test truncate partition
-// 	{
-// 		ddlEvents, err := pStorage.fetchTableDDLEvents(partitionID5, nil, 207, 300)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 3, len(ddlEvents))
-// 		// add partition event for partition 7
-// 		require.Equal(t, model.ActionAddTablePartition, model.ActionType(ddlEvents[0].Type))
-// 		// drop partition event for partition 4
-// 		require.Equal(t, model.ActionDropTablePartition, model.ActionType(ddlEvents[1].Type))
-// 		// truncate partition event
-// 		require.Equal(t, model.ActionTruncateTablePartition, model.ActionType(ddlEvents[2].Type))
-// 		verifyTableIsBlocked(t, ddlEvents[2], partitionID5)
-// 		verifyTableIsBlocked(t, ddlEvents[2], partitionID6)
-// 		verifyTableIsBlocked(t, ddlEvents[2], partitionID7)
-// 		verifyTableIsDropped(t, ddlEvents[2], partitionID5)
-// 		verifyTableIsAdded(t, ddlEvents[2], partitionID8, schemaID)
-// 	}
-
-// 	// partiont 6 should be same
-// 	{
-// 		ddlEvents, err := pStorage.fetchTableDDLEvents(partitionID6, nil, 207, 300)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 4, len(ddlEvents))
-// 		require.Equal(t, model.ActionAddTablePartition, model.ActionType(ddlEvents[0].Type))
-// 		require.Equal(t, model.ActionDropTablePartition, model.ActionType(ddlEvents[1].Type))
-// 		require.Equal(t, model.ActionTruncateTablePartition, model.ActionType(ddlEvents[2].Type))
-// 		require.Equal(t, model.ActionDropTable, model.ActionType(ddlEvents[3].Type))
-// 	}
-
-// 	// partition 7
-// 	{
-// 		ddlEvents, err := pStorage.fetchTableDDLEvents(partitionID7, nil, 209, 300)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 3, len(ddlEvents))
-// 		require.Equal(t, model.ActionDropTablePartition, model.ActionType(ddlEvents[0].Type))
-// 		require.Equal(t, model.ActionTruncateTablePartition, model.ActionType(ddlEvents[1].Type))
-// 		require.Equal(t, model.ActionDropTable, model.ActionType(ddlEvents[2].Type))
-// 	}
-
-// 	// partition 8
-// 	{
-// 		ddlEvents, err := pStorage.fetchTableDDLEvents(partitionID8, nil, 209, 300)
-// 		require.Nil(t, err)
-// 		require.Equal(t, 2, len(ddlEvents))
-// 		require.Equal(t, model.ActionTruncateTablePartition, model.ActionType(ddlEvents[0].Type))
-// 		require.Equal(t, model.ActionDropTable, model.ActionType(ddlEvents[1].Type))
-// 	}
-
-// 	// test drop schema can clear partition info
-// 	{
-// 		pStorage.handleDDLJob(&model.Job{
-// 			Type:     model.ActionCreateTable,
-// 			SchemaID: schemaID,
-// 			TableID:  tableID + 1000,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 255,
-// 				TableInfo: &model.TableInfo{
-// 					ID:   tableID + 1000,
-// 					Name: model.NewCIStr("t100"),
-// 					Partition: &model.PartitionInfo{
-// 						Definitions: []model.PartitionDefinition{
-// 							{
-// 								ID: partitionID4 + 500,
-// 							},
-// 							{
-// 								ID: partitionID5 + 500,
-// 							},
-// 						},
-// 					},
-// 				},
-// 				FinishedTS: 355,
-// 			},
-// 		})
-// 		require.Less(t, 0, len(pStorage.partitionMap))
-
-// 		job := &model.Job{
-// 			Type:     model.ActionDropSchema,
-// 			SchemaID: schemaID,
-// 			BinlogInfo: &model.HistoryInfo{
-// 				SchemaVersion: 260,
-// 				DBInfo: &model.DBInfo{
-// 					ID:   schemaID,
-// 					Name: model.NewCIStr("test"),
-// 				},
-// 				TableInfo:  nil,
-// 				FinishedTS: 360,
-// 			},
-// 		}
-// 		pStorage.handleDDLJob(job)
-// 		require.Equal(t, 0, len(pStorage.databaseMap))
-// 		require.Equal(t, 0, len(pStorage.partitionMap))
 // 	}
 // }
 
