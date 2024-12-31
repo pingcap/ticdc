@@ -276,7 +276,18 @@ func loadAndApplyDDLHistory(
 		if shouldSkipDDL(&ddlEvent, databaseMap, tableMap) {
 			continue
 		}
-		tableTriggerDDLHistory = updateDDLHistory(&ddlEvent, databaseMap, tableMap, partitionMap, tablesDDLHistory, tableTriggerDDLHistory)
+		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
+		if !ok {
+			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
+		}
+		tableTriggerDDLHistory = handler.updateDDLHistoryFunc(updateDDLHistoryFuncArgs{
+			ddlEvent:               &ddlEvent,
+			databaseMap:            databaseMap,
+			tableMap:               tableMap,
+			partitionMap:           partitionMap,
+			tablesDDLHistory:       tablesDDLHistory,
+			tableTriggerDDLHistory: tableTriggerDDLHistory,
+		})
 		if err := updateDatabaseInfoAndTableInfo(&ddlEvent, databaseMap, tableMap, partitionMap); err != nil {
 			log.Panic("updateDatabaseInfo error", zap.Error(err))
 		}

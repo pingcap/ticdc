@@ -24,7 +24,6 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/bloom"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -33,9 +32,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser"
-	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/format"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
@@ -660,7 +656,17 @@ func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) e
 func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	p.mu.Lock()
 
-	ddlEvent := buildPersistedDDLEventFromJob(job, p.databaseMap, p.tableMap, p.partitionMap)
+	handler, ok := allDDLHandlers[job.Type]
+	if !ok {
+		log.Panic("unknown ddl type", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
+	}
+	ddlEvent := handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
+		job:          job,
+		databaseMap:  p.databaseMap,
+		tableMap:     p.tableMap,
+		partitionMap: p.partitionMap,
+	})
+
 	if shouldSkipDDL(&ddlEvent, p.databaseMap, p.tableMap) {
 		p.mu.Unlock()
 		return nil
@@ -676,13 +682,14 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	// Note: `updateDDLHistory` must be before `updateDatabaseInfoAndTableInfo`,
 	// because `updateDDLHistory` will refer to the info in databaseMap and tableMap,
 	// and `updateDatabaseInfoAndTableInfo` may delete some info from databaseMap and tableMap
-	p.tableTriggerDDLHistory = updateDDLHistory(
-		&ddlEvent,
-		p.databaseMap,
-		p.tableMap,
-		p.partitionMap,
-		p.tablesDDLHistory,
-		p.tableTriggerDDLHistory)
+	p.tableTriggerDDLHistory = handler.updateDDLHistoryFunc(updateDDLHistoryFuncArgs{
+		ddlEvent:               &ddlEvent,
+		databaseMap:            p.databaseMap,
+		tableMap:               p.tableMap,
+		partitionMap:           p.partitionMap,
+		tablesDDLHistory:       p.tablesDDLHistory,
+		tableTriggerDDLHistory: p.tableTriggerDDLHistory,
+	})
 
 	if err := updateDatabaseInfoAndTableInfo(&ddlEvent, p.databaseMap, p.tableMap, p.partitionMap); err != nil {
 		p.mu.Unlock()
@@ -694,83 +701,6 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	}
 	p.mu.Unlock()
 	return nil
-}
-
-// transform ddl query based on sql mode.
-func transformDDLJobQuery(job *model.Job) (string, error) {
-	p := parser.New()
-	// We need to use the correct SQL mode to parse the DDL query.
-	// Otherwise, the parser may fail to parse the DDL query.
-	// For example, it is needed to parse the following DDL query:
-	//  `alter table "t" add column "c" int default 1;`
-	// by adding `ANSI_QUOTES` to the SQL mode.
-	p.SetSQLMode(job.SQLMode)
-	stmts, _, err := p.Parse(job.Query, job.Charset, job.Collate)
-	if err != nil {
-		return "", errors.Trace(err)
-	}
-	var result string
-	buildQuery := func(stmt ast.StmtNode) (string, error) {
-		var sb strings.Builder
-		// translate TiDB feature to special comment
-		restoreFlags := format.RestoreTiDBSpecialComment
-		// escape the keyword
-		restoreFlags |= format.RestoreNameBackQuotes
-		// upper case keyword
-		restoreFlags |= format.RestoreKeyWordUppercase
-		// wrap string with single quote
-		restoreFlags |= format.RestoreStringSingleQuotes
-		// remove placement rule
-		restoreFlags |= format.SkipPlacementRuleForRestore
-		// force disable ttl
-		restoreFlags |= format.RestoreWithTTLEnableOff
-		if err = stmt.Restore(format.NewRestoreCtx(restoreFlags, &sb)); err != nil {
-			return "", errors.Trace(err)
-		}
-		return sb.String(), nil
-	}
-	if len(stmts) > 1 {
-		results := make([]string, 0, len(stmts))
-		for _, stmt := range stmts {
-			query, err := buildQuery(stmt)
-			if err != nil {
-				return "", errors.Trace(err)
-			}
-			results = append(results, query)
-		}
-		result = strings.Join(results, ";")
-	} else {
-		result, err = buildQuery(stmts[0])
-		if err != nil {
-			return "", errors.Trace(err)
-		}
-	}
-
-	log.Info("transform ddl query to result",
-		zap.String("DDL", job.Query),
-		zap.String("charset", job.Charset),
-		zap.String("collate", job.Collate),
-		zap.String("result", result))
-
-	return result, nil
-}
-
-func buildPersistedDDLEventFromJob(
-	job *model.Job,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-) PersistedDDLEvent {
-	handler, ok := allDDLHandlers[job.Type]
-	if !ok {
-		log.Panic("unknown ddl type", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
-	}
-	return handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
-		job:          job,
-		databaseMap:  databaseMap,
-		tableMap:     tableMap,
-		partitionMap: partitionMap,
-	})
 }
 
 func shouldSkipDDL(
@@ -821,28 +751,6 @@ func shouldSkipDDL(
 	}
 	// Note: create tables don't need to be ignore, because we won't receive it twice
 	return false
-}
-
-func updateDDLHistory(
-	ddlEvent *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-	tablesDDLHistory map[int64][]uint64,
-	tableTriggerDDLHistory []uint64,
-) []uint64 {
-	handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
-	if !ok {
-		log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
-	}
-	return handler.updateDDLHistoryFunc(updateDDLHistoryFuncArgs{
-		ddlEvent:               ddlEvent,
-		databaseMap:            databaseMap,
-		tableMap:               tableMap,
-		partitionMap:           partitionMap,
-		tablesDDLHistory:       tablesDDLHistory,
-		tableTriggerDDLHistory: tableTriggerDDLHistory,
-	})
 }
 
 func updateDatabaseInfoAndTableInfo(
