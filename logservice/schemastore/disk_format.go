@@ -288,9 +288,12 @@ func loadAndApplyDDLHistory(
 			tablesDDLHistory:       tablesDDLHistory,
 			tableTriggerDDLHistory: tableTriggerDDLHistory,
 		})
-		if err := updateDatabaseInfoAndTableInfo(&ddlEvent, databaseMap, tableMap, partitionMap); err != nil {
-			log.Panic("updateDatabaseInfo error", zap.Error(err))
-		}
+		handler.updateSchemaMetadataFunc(updateSchemaMetadataFuncArgs{
+			event:        &ddlEvent,
+			databaseMap:  databaseMap,
+			tableMap:     tableMap,
+			partitionMap: partitionMap,
+		})
 	}
 
 	return tablesDDLHistory, tableTriggerDDLHistory, nil
@@ -588,9 +591,16 @@ func loadAllPhysicalTablesAtTs(
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
 		ddlEvent := unmarshalPersistedDDLEvent(snapIter.Value())
-		if err := updateDatabaseInfoAndTableInfo(&ddlEvent, databaseMap, tableMap, partitionMap); err != nil {
-			log.Panic("updateDatabaseInfo error", zap.Error(err))
+		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
+		if !ok {
+			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
 		}
+		handler.updateSchemaMetadataFunc(updateSchemaMetadataFuncArgs{
+			event:        &ddlEvent,
+			databaseMap:  databaseMap,
+			tableMap:     tableMap,
+			partitionMap: partitionMap,
+		})
 	}
 	log.Info("after load tables from ddl",
 		zap.Int("tableMapLen", len(tableMap)),

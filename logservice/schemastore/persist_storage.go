@@ -691,10 +691,13 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		tableTriggerDDLHistory: p.tableTriggerDDLHistory,
 	})
 
-	if err := updateDatabaseInfoAndTableInfo(&ddlEvent, p.databaseMap, p.tableMap, p.partitionMap); err != nil {
-		p.mu.Unlock()
-		return err
-	}
+	handler.updateSchemaMetadataFunc(updateSchemaMetadataFuncArgs{
+		event:        &ddlEvent,
+		databaseMap:  p.databaseMap,
+		tableMap:     p.tableMap,
+		partitionMap: p.partitionMap,
+	})
+
 	if err := updateRegisteredTableInfoStore(&ddlEvent, p.tableInfoStoreMap); err != nil {
 		p.mu.Unlock()
 		return err
@@ -751,195 +754,6 @@ func shouldSkipDDL(
 	}
 	// Note: create tables don't need to be ignore, because we won't receive it twice
 	return false
-}
-
-func updateDatabaseInfoAndTableInfo(
-	event *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-) error {
-	addTableToDB := func(schemaID int64, tableID int64) {
-		databaseInfo, ok := databaseMap[schemaID]
-		if !ok {
-			log.Panic("database not found.",
-				zap.String("DDL", event.Query),
-				zap.Int64("jobID", event.ID),
-				zap.Int64("schemaID", schemaID),
-				zap.Int64("tableID", tableID),
-				zap.Uint64("finishTs", event.FinishedTs),
-				zap.Int64("jobSchemaVersion", event.SchemaVersion))
-		}
-		databaseInfo.Tables[tableID] = true
-	}
-
-	removeTableFromDB := func(schemaID int64, tableID int64) {
-		databaseInfo, ok := databaseMap[schemaID]
-		if !ok {
-			log.Panic("database not found. ",
-				zap.String("DDL", event.Query),
-				zap.Int64("jobID", event.ID),
-				zap.Int64("schemaID", schemaID),
-				zap.Int64("tableID", tableID),
-				zap.Uint64("finishTs", event.FinishedTs),
-				zap.Int64("jobSchemaVersion", event.SchemaVersion))
-		}
-		delete(databaseInfo.Tables, tableID)
-	}
-
-	createTable := func(schemaID int64, tableID int64, tableName string) {
-		addTableToDB(schemaID, tableID)
-		tableMap[tableID] = &BasicTableInfo{
-			SchemaID: schemaID,
-			Name:     tableName,
-		}
-	}
-
-	getTableName := func(tableID int64) string {
-		tableInfo, ok := tableMap[tableID]
-		if !ok {
-			log.Panic("table not found",
-				zap.Int64("tableID", tableID))
-		}
-		return tableInfo.Name
-	}
-
-	dropTable := func(schemaID int64, tableID int64) {
-		removeTableFromDB(schemaID, tableID)
-		delete(tableMap, tableID)
-	}
-
-	switch model.ActionType(event.Type) {
-	case model.ActionCreateSchema:
-		databaseMap[event.CurrentSchemaID] = &BasicDatabaseInfo{
-			Name:   event.CurrentSchemaName,
-			Tables: make(map[int64]bool),
-		}
-	case model.ActionDropSchema:
-		for tableID := range databaseMap[event.CurrentSchemaID].Tables {
-			delete(tableMap, tableID)
-			// TODO: test it
-			delete(partitionMap, tableID)
-		}
-		delete(databaseMap, event.CurrentSchemaID)
-	case model.ActionCreateTable, model.ActionRecoverTable:
-		createTable(event.CurrentSchemaID, event.CurrentTableID, event.TableInfo.Name.O)
-		if isPartitionTable(event.TableInfo) {
-			partitionInfo := make(BasicPartitionInfo)
-			for _, id := range getAllPartitionIDs(event.TableInfo) {
-				partitionInfo[id] = nil
-			}
-			partitionMap[event.CurrentTableID] = partitionInfo
-		}
-	case model.ActionDropTable:
-		dropTable(event.CurrentSchemaID, event.CurrentTableID)
-		if isPartitionTable(event.TableInfo) {
-			delete(partitionMap, event.CurrentTableID)
-		}
-	case model.ActionAddColumn,
-		model.ActionDropColumn,
-		model.ActionAddIndex,
-		model.ActionDropIndex,
-		model.ActionAddForeignKey,
-		model.ActionDropForeignKey:
-		// ignore
-	case model.ActionTruncateTable:
-		dropTable(event.CurrentSchemaID, event.PrevTableID)
-		createTable(event.CurrentSchemaID, event.CurrentTableID, event.TableInfo.Name.O)
-		if isPartitionTable(event.TableInfo) {
-			delete(partitionMap, event.PrevTableID)
-			partitionInfo := make(BasicPartitionInfo)
-			for _, id := range getAllPartitionIDs(event.TableInfo) {
-				partitionInfo[id] = nil
-			}
-			partitionMap[event.CurrentTableID] = partitionInfo
-		}
-	case model.ActionModifyColumn,
-		model.ActionRebaseAutoID:
-		// ignore
-	case model.ActionRenameTable:
-		if event.PrevSchemaID != event.CurrentSchemaID {
-			tableMap[event.CurrentTableID].SchemaID = event.CurrentSchemaID
-			removeTableFromDB(event.PrevSchemaID, event.CurrentTableID)
-			addTableToDB(event.CurrentSchemaID, event.CurrentTableID)
-		}
-		tableMap[event.CurrentTableID].Name = event.CurrentTableName
-	case model.ActionSetDefaultValue,
-		model.ActionShardRowID,
-		model.ActionModifyTableComment,
-		model.ActionRenameIndex:
-		// TODO: verify can be ignored
-	case model.ActionAddTablePartition:
-		newCreatedIDs := getCreatedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
-		for _, id := range newCreatedIDs {
-			partitionMap[event.CurrentTableID][id] = nil
-		}
-	case model.ActionDropTablePartition:
-		droppedIDs := getDroppedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
-		for _, id := range droppedIDs {
-			delete(partitionMap[event.CurrentTableID], id)
-		}
-	case model.ActionCreateView:
-		// ignore
-	case model.ActionTruncateTablePartition:
-		physicalIDs := getAllPartitionIDs(event.TableInfo)
-		droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
-		for _, id := range droppedIDs {
-			delete(partitionMap[event.CurrentTableID], id)
-		}
-		newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
-		for _, id := range newCreatedIDs {
-			partitionMap[event.CurrentTableID][id] = nil
-		}
-	case model.ActionExchangeTablePartition:
-		physicalIDs := getAllPartitionIDs(event.TableInfo)
-		droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
-		if len(droppedIDs) != 1 {
-			log.Panic("exchange table partition should only drop one partition",
-				zap.Int64s("droppedIDs", droppedIDs))
-		}
-		targetPartitionID := droppedIDs[0]
-		normalTableName := getTableName(event.PrevTableID)
-		dropTable(event.PrevSchemaID, event.PrevTableID)
-		createTable(event.PrevSchemaID, targetPartitionID, normalTableName)
-		delete(partitionMap[event.CurrentTableID], targetPartitionID)
-		partitionMap[event.CurrentTableID][event.PrevTableID] = nil
-	case model.ActionCreateTables:
-		if event.MultipleTableInfos == nil {
-			log.Panic("multiple table infos should not be nil")
-		}
-		for _, info := range event.MultipleTableInfos {
-			addTableToDB(event.CurrentSchemaID, info.ID)
-			tableMap[info.ID] = &BasicTableInfo{
-				SchemaID: event.CurrentSchemaID,
-				Name:     info.Name.O,
-			}
-			if isPartitionTable(info) {
-				partitionInfo := make(BasicPartitionInfo)
-				for _, id := range getAllPartitionIDs(info) {
-					partitionInfo[id] = nil
-				}
-				partitionMap[info.ID] = partitionInfo
-			}
-		}
-
-	case model.ActionReorganizePartition:
-		physicalIDs := getAllPartitionIDs(event.TableInfo)
-		droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
-		for _, id := range droppedIDs {
-			delete(partitionMap[event.CurrentTableID], id)
-		}
-		newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
-		for _, id := range newCreatedIDs {
-			partitionMap[event.CurrentTableID][id] = nil
-		}
-	default:
-		log.Panic("unknown ddl type",
-			zap.Any("ddlType", event.Type),
-			zap.String("DDL", event.Query))
-	}
-
-	return nil
 }
 
 func updateRegisteredTableInfoStore(
@@ -1108,23 +922,6 @@ func updateRegisteredTableInfoStore(
 			zap.String("DDL", event.Query))
 	}
 	return nil
-}
-
-func getCreatedIDs(oldIDs []int64, newIDs []int64) []int64 {
-	oldIDsMap := make(map[int64]interface{}, len(oldIDs))
-	for _, id := range oldIDs {
-		oldIDsMap[id] = nil
-	}
-	createdIDs := make([]int64, 0)
-	for _, id := range newIDs {
-		if _, ok := oldIDsMap[id]; !ok {
-			createdIDs = append(createdIDs, id)
-		}
-	}
-	return createdIDs
-}
-func getDroppedIDs(oldIDs []int64, newIDs []int64) []int64 {
-	return getCreatedIDs(newIDs, oldIDs)
 }
 
 func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {

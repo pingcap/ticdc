@@ -51,119 +51,172 @@ func (args *updateDDLHistoryFuncArgs) appendTablesDDLHistory(ts uint64, tableIDs
 	}
 }
 
+type updateSchemaMetadataFuncArgs struct {
+	event        *PersistedDDLEvent
+	databaseMap  map[int64]*BasicDatabaseInfo
+	tableMap     map[int64]*BasicTableInfo
+	partitionMap map[int64]BasicPartitionInfo
+}
+
+func (args *updateSchemaMetadataFuncArgs) addTableToDB(tableID int64, schemaID int64) {
+	databaseInfo, ok := args.databaseMap[schemaID]
+	if !ok {
+		log.Panic("database not found.", zap.Int64("schemaID", schemaID), zap.Int64("tableID", tableID))
+	}
+	databaseInfo.Tables[tableID] = true
+}
+
+func (args *updateSchemaMetadataFuncArgs) removeTableFromDB(tableID int64, schemaID int64) {
+	databaseInfo, ok := args.databaseMap[schemaID]
+	if !ok {
+		log.Panic("database not found.", zap.Int64("schemaID", schemaID), zap.Int64("tableID", tableID))
+	}
+	delete(databaseInfo.Tables, tableID)
+}
+
 type persistStorageDDLHandler struct {
+	// buildPersistedDDLEventFunc build a PersistedDDLEvent which will be write to disk from a ddl job
 	buildPersistedDDLEventFunc func(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent
-	updateDDLHistoryFunc       func(args updateDDLHistoryFuncArgs) []uint64
+	// updateDDLHistoryFunc add the finished ts of ddl event to the history of table trigger and related tables
+	updateDDLHistoryFunc func(args updateDDLHistoryFuncArgs) []uint64
+	// updateSchemaMetadataFunc update database info, table info and partition info according to the ddl event
+	updateSchemaMetadataFunc func(args updateSchemaMetadataFuncArgs)
 }
 
 var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionCreateSchema: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateDropSchema,
 		updateDDLHistoryFunc:       updateDDLHistoryForTableTriggerOnlyDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForCreateSchema,
 	},
 	model.ActionDropSchema: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateDropSchema,
 		updateDDLHistoryFunc:       updateDDLHistoryForDropSchema,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForDropSchema,
 	},
 	model.ActionCreateTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
 	},
 	model.ActionDropTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForDropTable,
 	},
 	model.ActionAddColumn: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 	},
 	model.ActionDropColumn: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 	},
 	model.ActionAddIndex: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 	},
 	model.ActionDropIndex: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 	},
 	model.ActionAddForeignKey: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 	},
 	model.ActionDropForeignKey: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 	},
 	model.ActionTruncateTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForTruncateTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForTruncateTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForTruncateTable,
 	},
 	model.ActionModifyColumn: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 	},
 	model.ActionRebaseAutoID: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 	},
 	model.ActionRenameTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForRenameTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForRenameTable,
 	},
 	model.ActionSetDefaultValue: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 	},
 	model.ActionShardRowID: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 	},
 	model.ActionModifyTableComment: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 	},
 	model.ActionRenameIndex: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 	},
 	model.ActionAddTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddPartition,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForAddPartition,
 	},
 	model.ActionDropTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForDropPartition,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForDropPartition,
 	},
 	model.ActionCreateView: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventCommon,
 		updateDDLHistoryFunc:       updateDDLHistoryForCreateView,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 	},
 	model.ActionTruncateTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForTruncatePartition,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForTruncateTablePartition,
 	},
 
 	model.ActionRecoverTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
 	},
 
 	model.ActionExchangeTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForExchangePartition,
 		updateDDLHistoryFunc:       updateDDLHistoryForExchangeTablePartition,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForExchangeTablePartition,
 	},
 
 	model.ActionCreateTables: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTables,
 		updateDDLHistoryFunc:       updateDDLHistoryForCreateTables,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForCreateTables,
 	},
 
 	model.ActionReorganizePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForReorganizePartition,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForReorganizePartition,
 	},
 }
 
@@ -376,6 +429,23 @@ func buildPersistedDDLEventForCreateTables(args buildPersistedDDLEventFuncArgs) 
 }
 
 // ==== updateDDLHistoryFunc begin ====
+func getCreatedIDs(oldIDs []int64, newIDs []int64) []int64 {
+	oldIDsMap := make(map[int64]interface{}, len(oldIDs))
+	for _, id := range oldIDs {
+		oldIDsMap[id] = nil
+	}
+	createdIDs := make([]int64, 0)
+	for _, id := range newIDs {
+		if _, ok := oldIDsMap[id]; !ok {
+			createdIDs = append(createdIDs, id)
+		}
+	}
+	return createdIDs
+}
+func getDroppedIDs(oldIDs []int64, newIDs []int64) []int64 {
+	return getCreatedIDs(newIDs, oldIDs)
+}
+
 func updateDDLHistoryForTableTriggerOnlyDDL(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	return args.tableTriggerDDLHistory
@@ -489,4 +559,164 @@ func updateDDLHistoryForReorganizePartition(args updateDDLHistoryFuncArgs) []uin
 	newCreateIDs := getCreatedIDs(args.ddlEvent.PrevPartitions, getAllPartitionIDs(args.ddlEvent.TableInfo))
 	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, newCreateIDs...)
 	return args.tableTriggerDDLHistory
+}
+
+// === updateDatabaseInfoAndTableInfoFunc begin ===
+func updateSchemaMetadataForCreateSchema(args updateSchemaMetadataFuncArgs) {
+	args.databaseMap[args.event.CurrentSchemaID] = &BasicDatabaseInfo{
+		Name:   args.event.CurrentSchemaName,
+		Tables: make(map[int64]bool),
+	}
+}
+
+func updateSchemaMetadataForDropSchema(args updateSchemaMetadataFuncArgs) {
+	schemaID := args.event.CurrentSchemaID
+	for tableID := range args.databaseMap[schemaID].Tables {
+		delete(args.tableMap, tableID)
+		delete(args.partitionMap, tableID)
+	}
+	delete(args.databaseMap, schemaID)
+}
+
+func updateSchemaMetadataForNewTableDDL(args updateSchemaMetadataFuncArgs) {
+	tableID := args.event.CurrentTableID
+	schemaID := args.event.CurrentSchemaID
+	args.addTableToDB(tableID, schemaID)
+	args.tableMap[tableID] = &BasicTableInfo{
+		SchemaID: schemaID,
+		Name:     args.event.TableInfo.Name.O,
+	}
+	if isPartitionTable(args.event.TableInfo) {
+		partitionInfo := make(BasicPartitionInfo)
+		for _, id := range getAllPartitionIDs(args.event.TableInfo) {
+			partitionInfo[id] = nil
+		}
+		args.partitionMap[tableID] = partitionInfo
+	}
+}
+
+func updateSchemaMetadataForDropTable(args updateSchemaMetadataFuncArgs) {
+	tableID := args.event.CurrentTableID
+	schemaID := args.event.CurrentSchemaID
+	args.removeTableFromDB(tableID, schemaID)
+	delete(args.tableMap, tableID)
+	if isPartitionTable(args.event.TableInfo) {
+		delete(args.partitionMap, tableID)
+	}
+}
+
+func updateSchemaMetadataIgnore(args updateSchemaMetadataFuncArgs) {}
+
+func updateSchemaMetadataForTruncateTable(args updateSchemaMetadataFuncArgs) {
+	oldTableID := args.event.PrevTableID
+	newTableID := args.event.CurrentTableID
+	schemaID := args.event.CurrentSchemaID
+	args.removeTableFromDB(oldTableID, schemaID)
+	delete(args.tableMap, oldTableID)
+	args.addTableToDB(newTableID, schemaID)
+	args.tableMap[newTableID] = &BasicTableInfo{
+		SchemaID: schemaID,
+		Name:     args.event.TableInfo.Name.O,
+	}
+	if isPartitionTable(args.event.TableInfo) {
+		delete(args.partitionMap, oldTableID)
+		partitionInfo := make(BasicPartitionInfo)
+		for _, id := range getAllPartitionIDs(args.event.TableInfo) {
+			partitionInfo[id] = nil
+		}
+		args.partitionMap[newTableID] = partitionInfo
+	}
+}
+
+func updateSchemaMetadataForRenameTable(args updateSchemaMetadataFuncArgs) {
+	tableID := args.event.CurrentTableID
+	if args.event.PrevSchemaID != args.event.CurrentSchemaID {
+		args.tableMap[tableID].SchemaID = args.event.CurrentSchemaID
+		args.removeTableFromDB(tableID, args.event.PrevSchemaID)
+		args.addTableToDB(tableID, args.event.CurrentSchemaID)
+	}
+	args.tableMap[tableID].Name = args.event.CurrentTableName
+}
+
+func updateSchemaMetadataForAddPartition(args updateSchemaMetadataFuncArgs) {
+	newCreatedIDs := getCreatedIDs(args.event.PrevPartitions, getAllPartitionIDs(args.event.TableInfo))
+	for _, id := range newCreatedIDs {
+		args.partitionMap[args.event.CurrentTableID][id] = nil
+	}
+}
+
+func updateSchemaMetadataForDropPartition(args updateSchemaMetadataFuncArgs) {
+	droppedIDs := getDroppedIDs(args.event.PrevPartitions, getAllPartitionIDs(args.event.TableInfo))
+	for _, id := range droppedIDs {
+		delete(args.partitionMap[args.event.CurrentTableID], id)
+	}
+}
+
+func updateSchemaMetadataForTruncateTablePartition(args updateSchemaMetadataFuncArgs) {
+	tableID := args.event.CurrentTableID
+	physicalIDs := getAllPartitionIDs(args.event.TableInfo)
+	droppedIDs := getDroppedIDs(args.event.PrevPartitions, physicalIDs)
+	for _, id := range droppedIDs {
+		delete(args.partitionMap[tableID], id)
+	}
+	newCreatedIDs := getCreatedIDs(args.event.PrevPartitions, physicalIDs)
+	for _, id := range newCreatedIDs {
+		args.partitionMap[tableID][id] = nil
+	}
+}
+
+func updateSchemaMetadataForExchangeTablePartition(args updateSchemaMetadataFuncArgs) {
+	physicalIDs := getAllPartitionIDs(args.event.TableInfo)
+	droppedIDs := getDroppedIDs(args.event.PrevPartitions, physicalIDs)
+	if len(droppedIDs) != 1 {
+		log.Panic("exchange table partition should only drop one partition",
+			zap.Int64s("droppedIDs", droppedIDs))
+	}
+	normalTableID := args.event.PrevTableID
+	normalSchemaID := args.event.PrevSchemaID
+	partitionID := droppedIDs[0]
+	normalTableName := getTableName(args.tableMap, normalTableID)
+	args.removeTableFromDB(normalTableID, normalSchemaID)
+	delete(args.tableMap, normalTableID)
+	args.addTableToDB(partitionID, normalSchemaID)
+	args.tableMap[partitionID] = &BasicTableInfo{
+		SchemaID: normalSchemaID,
+		Name:     normalTableName,
+	}
+	partitionTableID := args.event.CurrentTableID
+	delete(args.partitionMap[partitionTableID], partitionID)
+	args.partitionMap[partitionTableID][normalTableID] = nil
+}
+
+func updateSchemaMetadataForCreateTables(args updateSchemaMetadataFuncArgs) {
+	if args.event.MultipleTableInfos == nil {
+		log.Panic("multiple table infos should not be nil")
+	}
+	for _, info := range args.event.MultipleTableInfos {
+		args.addTableToDB(info.ID, args.event.CurrentSchemaID)
+		args.tableMap[info.ID] = &BasicTableInfo{
+			SchemaID: args.event.CurrentSchemaID,
+			Name:     info.Name.O,
+		}
+		if isPartitionTable(info) {
+			partitionInfo := make(BasicPartitionInfo)
+			for _, id := range getAllPartitionIDs(info) {
+				partitionInfo[id] = nil
+			}
+			args.partitionMap[info.ID] = partitionInfo
+		}
+	}
+}
+
+func updateSchemaMetadataForReorganizePartition(args updateSchemaMetadataFuncArgs) {
+	tableID := args.event.CurrentTableID
+	physicalIDs := getAllPartitionIDs(args.event.TableInfo)
+	droppedIDs := getDroppedIDs(args.event.PrevPartitions, physicalIDs)
+	for _, id := range droppedIDs {
+		delete(args.partitionMap[tableID], id)
+	}
+	newCreatedIDs := getCreatedIDs(args.event.PrevPartitions, physicalIDs)
+	for _, id := range newCreatedIDs {
+		args.partitionMap[tableID][id] = nil
+	}
 }
