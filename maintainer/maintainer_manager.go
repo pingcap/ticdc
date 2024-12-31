@@ -232,6 +232,7 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 		log.Warn("add path to dynstream failed, coordinator will retry later", zap.Error(err))
 		return
 	}
+	cf.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 	m.maintainers.Store(cfID, cf)
 }
 
@@ -256,11 +257,11 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 			m.tsoClient, m.regionCache)
 		m.maintainers.Store(cfID, cf)
 	}
-	cf.(*Maintainer).eventCh.In() <- &Event{
+	cf.(*Maintainer).pushEvent(&Event{
 		changefeedID: cfID,
 		eventType:    EventMessage,
 		message:      msg,
-	}
+	})
 	log.Info("received remove maintainer request",
 		zap.String("changefeed", cfID.String()))
 	return nil
@@ -346,11 +347,11 @@ func (m *Manager) dispatcherMaintainerMessage(
 			return nil
 		}
 		maintainer := c.(*Maintainer)
-		maintainer.eventCh.In() <- &Event{
+		maintainer.pushEvent(&Event{
 			changefeedID: changefeed,
 			eventType:    EventMessage,
 			message:      msg,
-		}
+		})
 	}
 	return nil
 }

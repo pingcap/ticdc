@@ -44,6 +44,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	periodEventInterval = time.Millisecond * 200
+)
+
 // Maintainer is response for handle changefeed replication tasks. Maintainer should:
 // 1. schedule tables to dispatcher manager
 // 2. calculate changefeed checkpoint ts
@@ -91,7 +95,7 @@ type Maintainer struct {
 
 	pdEndpoints []string
 	nodeManager *watcher.NodeManager
-	nodesClosed map[node.ID]struct{}
+	closedNodes map[node.ID]struct{}
 
 	statusChanged  *atomic.Bool
 	nodeChanged    *atomic.Bool
@@ -153,7 +157,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		state:           heartbeatpb.ComponentState_Working,
 		removed:         atomic.NewBool(false),
 		nodeManager:     nodeManager,
-		nodesClosed:     make(map[node.ID]struct{}),
+		closedNodes:     make(map[node.ID]struct{}),
 		statusChanged:   atomic.NewBool(true),
 		nodeChanged:     atomic.NewBool(false),
 		cascadeRemoving: false,
@@ -178,7 +182,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Namespace(), cfID.Name()),
 	}
 	m.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](m.id.Name(), m.getNewBootstrapFn())
-	log.Info("maintainer is created", zap.String("id", cfID.String()),
+	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
 		zap.Uint64("checkpointTs", checkpointTs),
 		zap.String("ddl dispatcher", tableTriggerEventDispatcherID.String()))
 	metrics.MaintainerGauge.WithLabelValues(cfID.Namespace(), cfID.Name()).Inc()
@@ -211,7 +215,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	m.submitScheduledEvent(m.taskScheduler, &Event{
 		changefeedID: m.id,
 		eventType:    EventPeriod,
-	}, time.Now().Add(time.Millisecond*500))
+	}, time.Now().Add(periodEventInterval))
 	return m
 }
 
@@ -306,7 +310,7 @@ func (m *Maintainer) initialize() error {
 	m.submitScheduledEvent(m.taskScheduler, &Event{
 		changefeedID: m.id,
 		eventType:    EventPeriod,
-	}, time.Now().Add(time.Millisecond*500))
+	}, time.Now().Add(periodEventInterval))
 	log.Info("changefeed maintainer initialized",
 		zap.String("id", m.id.String()),
 		zap.Duration("duration", time.Since(start)))
@@ -598,7 +602,7 @@ func (m *Maintainer) sendPostBootstrapRequest() {
 
 func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeatpb.MaintainerCloseResponse) {
 	if response.Success {
-		m.nodesClosed[from] = struct{}{}
+		m.closedNodes[from] = struct{}{}
 	}
 	// check if all nodes have sent response
 	m.onRemoveMaintainer(m.cascadeRemoving, m.changefeedRemoved)
@@ -635,7 +639,7 @@ func (m *Maintainer) tryCloseChangefeed() bool {
 func (m *Maintainer) sendMaintainerCloseRequestToAllNode() bool {
 	msgs := make([]*messaging.TargetMessage, 0)
 	for n := range m.nodeManager.GetAliveNodes() {
-		if _, ok := m.nodesClosed[n]; !ok {
+		if _, ok := m.closedNodes[n]; !ok {
 			msgs = append(msgs, messaging.NewSingleTargetMessage(
 				n,
 				messaging.DispatcherManagerManagerTopic,
@@ -732,7 +736,7 @@ func (m *Maintainer) onPeriodTask() {
 	m.submitScheduledEvent(m.taskScheduler, &Event{
 		changefeedID: m.id,
 		eventType:    EventPeriod,
-	}, time.Now().Add(time.Millisecond*500))
+	}, time.Now().Add(periodEventInterval))
 }
 
 func (m *Maintainer) collectMetrics() {
@@ -796,8 +800,14 @@ func (m *Maintainer) submitScheduledEvent(
 	event *Event,
 	scheduleTime time.Time) {
 	task := func() time.Time {
-		m.eventCh.In() <- event
+		m.pushEvent(event)
 		return time.Time{}
 	}
 	scheduler.SubmitFunc(task, scheduleTime)
+}
+
+// pushEvent is used to push event to maintainer's event channel
+// event will be handled by maintainer's main loop
+func (m *Maintainer) pushEvent(event *Event) {
+	m.eventCh.In() <- event
 }

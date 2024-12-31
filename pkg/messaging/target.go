@@ -179,13 +179,14 @@ func newRemoteMessageTarget(
 
 // close stops the grpc stream and the goroutine spawned by remoteMessageTarget.
 func (s *remoteMessageTarget) close() {
-	log.Info("Close remote target", zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Any("addr", s.targetAddr))
+	log.Info("Closing remote target", zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Any("addr", s.targetAddr))
 	if s.conn != nil {
 		s.conn.Close()
 		s.conn = nil
 	}
 	s.cancel()
 	s.wg.Wait()
+	log.Info("Close remote target done", zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId))
 }
 
 func (s *remoteMessageTarget) runHandleErr(ctx context.Context) {

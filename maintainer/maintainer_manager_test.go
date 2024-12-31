@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -91,6 +92,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	data, err := json.Marshal(cfConfig)
 	require.NoError(t, err)
 
+	// Case 1: Add new changefeed
 	cfID := common.NewChangeFeedIDWithName("test")
 	_ = mc.SendCommand(messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic, &heartbeatpb.AddMaintainerRequest{
@@ -107,7 +109,9 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	require.Equal(t, 4,
 		maintainer.controller.GetTaskSizeByNodeID(selfNode.ID))
 
-	// add 2 new node
+	log.Info("Pass case 1: Add new changefeed")
+
+	// Case 2: Add new nodes
 	node2 := node.NewInfo("127.0.0.1:8400", "")
 	mc2 := messaging.NewMessageCenter(ctx, node2.ID, 0, config.NewDefaultMessageCenterConfig())
 
@@ -142,23 +146,29 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	require.Equal(t, 1,
 		maintainer.controller.GetTaskSizeByNodeID(node4.ID))
 
-	// remove 2 nodes
+	log.Info("Pass case 2: Add new nodes")
+
+	// Case 3: Remove 2 nodes
 	dn3.stop()
+	log.Info("fizz Stop node 3")
 	dn4.stop()
+	log.Info("fizz Stop node 4")
 	_, _ = nodeManager.Tick(ctx, &orchestrator.GlobalReactorState{
 		Captures: map[model.CaptureID]*model.CaptureInfo{
 			model.CaptureID(selfNode.ID): {ID: model.CaptureID(selfNode.ID), AdvertiseAddr: selfNode.AdvertiseAddr},
 			model.CaptureID(node2.ID):    {ID: model.CaptureID(node2.ID), AdvertiseAddr: node2.AdvertiseAddr},
 		}})
 	time.Sleep(5 * time.Second)
+	log.Info("fizz Sleep 5 seconds done")
 	require.Equal(t, 4,
 		maintainer.controller.replicationDB.GetReplicatingSize())
 	require.Equal(t, 2,
 		maintainer.controller.GetTaskSizeByNodeID(selfNode.ID))
 	require.Equal(t, 2,
 		maintainer.controller.GetTaskSizeByNodeID(node2.ID))
+	log.Info("Pass case 3: Remove 2 nodes")
 
-	// remove 2 tables
+	// Case 4: Remove 2 tables
 	maintainer.controller.RemoveTasksByTableIDs(2, 3)
 	time.Sleep(5 * time.Second)
 	require.Equal(t, 2,
@@ -168,7 +178,9 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	require.Equal(t, 1,
 		maintainer.controller.GetTaskSizeByNodeID(node2.ID))
 
-	// add 2 tables
+	log.Info("Pass case 4: Remove 2 tables")
+
+	// Case 5: Add 2 tables
 	maintainer.controller.AddNewTable(commonEvent.Table{
 		SchemaID: 1,
 		TableID:  5,
@@ -185,7 +197,9 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	require.Equal(t, 2,
 		maintainer.controller.GetTaskSizeByNodeID(node2.ID))
 
-	//close maintainer
+	log.Info("Pass case 5: Add 2 tables")
+
+	// Case 6: Remove maintainer
 	err = mc.SendCommand(messaging.NewSingleTargetMessage(selfNode.ID, messaging.MaintainerManagerTopic,
 		&heartbeatpb.RemoveMaintainerRequest{Id: cfID.ToPB(), Cascade: true}))
 	require.NoError(t, err)
@@ -193,7 +207,8 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	require.Equal(t, heartbeatpb.ComponentState_Stopped, maintainer.state)
 	_, ok := manager.maintainers.Load(cfID)
 	require.False(t, ok)
-	// manager.stream.Close()
+	log.Info("Pass case 6: Remove maintainer")
+
 	cancel()
 }
 
