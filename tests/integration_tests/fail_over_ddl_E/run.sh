@@ -80,10 +80,11 @@ function failOverCaseE-1() {
     export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeWrite=pause'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-
+	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	# make it be the coordinator, todo fix it
 	sleep 15
 	
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	ans=$(run_cdc_cli capture list)
@@ -103,11 +104,9 @@ function failOverCaseE-1() {
 	## sleep to wait ddl event reach the block place(just all report to maintainer)
     sleep 20
 
-	cdc_pid_2=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-    kill_cdc_pid $cdc_pid_2
-
+    kill_cdc_pid $cdc_pid_1
     # restart cdc server
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 
      ## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer	
 	ensure 30 "run_sql 'show databases;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'fail_over_ddl_test'" 
@@ -141,9 +140,11 @@ function failOverCaseE-2() {
     export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeWrite=pause'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
+	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	# make it be the coordinator, todo fix it
 	sleep 15
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	ans=$(run_cdc_cli capture list)
@@ -163,9 +164,7 @@ function failOverCaseE-2() {
 	## sleep to wait ddl event reach the block place(just all report to maintainer)
     sleep 20
 
-	cdc_pid_2=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-    kill_cdc_pid $cdc_pid_2
-
+	kill_cdc_pid $cdc_pid_1
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 
@@ -212,10 +211,11 @@ function failOverCaseE-3() {
     export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeWrite=pause'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-
+	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	# make it be the coordinator, todo fix it
 	sleep 15
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	ans=$(run_cdc_cli capture list)
@@ -235,9 +235,7 @@ function failOverCaseE-3() {
     ## sleep to wait ddl event reach the block place(just all report to maintainer)
     sleep 20
 
-	cdc_pid_2=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-    kill_cdc_pid $cdc_pid_2
-
+	kill_cdc_pid $cdc_pid_1
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 
@@ -285,10 +283,11 @@ function failOverCaseE-5() {
     export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeWrite=pause'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
+	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 
 	# make it be the coordinator, todo fix it
 	sleep 15
-
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	ans=$(run_cdc_cli capture list)
@@ -311,13 +310,11 @@ function failOverCaseE-5() {
 	## sleep to wait ddl event reach the block place(just all report to maintainer)
     sleep 20
 
-	cdc_pid_2=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-    kill_cdc_pid $cdc_pid_2
-
+    kill_cdc_pid $cdc_pid_1
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 
-	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
+	 ## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'select id from fail_over_ddl_test.test1;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains '2'" 
 	
     run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
