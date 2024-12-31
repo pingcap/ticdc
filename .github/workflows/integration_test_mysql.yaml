@@ -76,6 +76,7 @@ jobs:
         run: |
           DIR=$(sudo find /tmp/tidb_cdc_test/ -type d -name 'cdc_data' -exec dirname {} \;)
           CASE=$(basename $DIR)
+          [ -z "$DIR" ] && exit 0
           mkdir -p ./logs/$CASE
           cat $DIR/stdout.log
           tail -n 10 $DIR/cdc.log
