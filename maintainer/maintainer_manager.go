@@ -138,7 +138,6 @@ func (m *Manager) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case msg := <-m.msgCh:
-			log.Info("fizz received message from coordinator", zap.Any("message", msg))
 			m.handleMessage(msg)
 		case <-ticker.C:
 			//1.  try to send heartbeat to coordinator
