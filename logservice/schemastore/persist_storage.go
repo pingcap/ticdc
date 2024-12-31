@@ -679,6 +679,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	writePersistedDDLEvent(p.db, &ddlEvent)
 
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	// Note: `updateDDLHistory` must be before `updateDatabaseInfoAndTableInfo`,
 	// because `updateDDLHistory` will refer to the info in databaseMap and tableMap,
 	// and `updateDatabaseInfoAndTableInfo` may delete some info from databaseMap and tableMap
@@ -698,11 +699,14 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		partitionMap: p.partitionMap,
 	})
 
-	if err := updateRegisteredTableInfoStore(&ddlEvent, p.tableInfoStoreMap); err != nil {
-		p.mu.Unlock()
-		return err
-	}
-	p.mu.Unlock()
+	handler.iterateEventTablesFunc(&ddlEvent, func(tableIDs ...int64) {
+		for _, tableID := range tableIDs {
+			if store, ok := p.tableInfoStoreMap[tableID]; ok {
+				store.applyDDL(&ddlEvent)
+			}
+		}
+	})
+
 	return nil
 }
 
@@ -754,174 +758,6 @@ func shouldSkipDDL(
 	}
 	// Note: create tables don't need to be ignore, because we won't receive it twice
 	return false
-}
-
-func updateRegisteredTableInfoStore(
-	event *PersistedDDLEvent,
-	tableInfoStoreMap map[int64]*versionedTableInfoStore,
-) error {
-	tryApplyDDLToStore := func() {
-		if isPartitionTable(event.TableInfo) {
-			allPhysicalIDs := getAllPartitionIDs(event.TableInfo)
-			for _, id := range allPhysicalIDs {
-				if store, ok := tableInfoStoreMap[id]; ok {
-					store.applyDDL(event)
-				}
-			}
-		} else {
-			if store, ok := tableInfoStoreMap[event.CurrentTableID]; ok {
-				store.applyDDL(event)
-			}
-		}
-	}
-
-	switch model.ActionType(event.Type) {
-	case model.ActionCreateSchema,
-		model.ActionDropSchema:
-		// ignore
-	case model.ActionCreateTable, model.ActionRecoverTable:
-		if isPartitionTable(event.TableInfo) {
-			allPhysicalIDs := getAllPartitionIDs(event.TableInfo)
-			for _, id := range allPhysicalIDs {
-				if _, ok := tableInfoStoreMap[event.CurrentTableID]; ok {
-					log.Panic("newly created tables should not be registered",
-						zap.Int64("tableID", id))
-				}
-			}
-		} else {
-			if _, ok := tableInfoStoreMap[event.CurrentTableID]; ok {
-				log.Panic("newly created tables should not be registered",
-					zap.Int64("tableID", event.CurrentTableID))
-			}
-		}
-	case model.ActionDropTable,
-		model.ActionAddColumn,
-		model.ActionDropColumn:
-		tryApplyDDLToStore()
-	case model.ActionAddIndex,
-		model.ActionDropIndex,
-		model.ActionAddForeignKey,
-		model.ActionDropForeignKey:
-		// ignore
-	case model.ActionTruncateTable:
-		if isPartitionTable(event.TableInfo) {
-			for _, id := range event.PrevPartitions {
-				if store, ok := tableInfoStoreMap[id]; ok {
-					store.applyDDL(event)
-				}
-			}
-			allPhysicalIDs := getAllPartitionIDs(event.TableInfo)
-			for _, id := range allPhysicalIDs {
-				if _, ok := tableInfoStoreMap[id]; ok {
-					log.Panic("newly created tables should not be registered",
-						zap.Int64("tableID", event.CurrentTableID))
-				}
-			}
-		} else {
-			if store, ok := tableInfoStoreMap[event.PrevTableID]; ok {
-				store.applyDDL(event)
-			}
-			if _, ok := tableInfoStoreMap[event.CurrentTableID]; ok {
-				log.Panic("newly created tables should not be registered",
-					zap.Int64("tableID", event.CurrentTableID))
-			}
-		}
-	case model.ActionModifyColumn:
-		tryApplyDDLToStore()
-	case model.ActionRebaseAutoID:
-		// TODO: verify can be ignored
-	case model.ActionRenameTable:
-		tryApplyDDLToStore()
-	case model.ActionSetDefaultValue:
-		tryApplyDDLToStore()
-	case model.ActionShardRowID,
-		model.ActionModifyTableComment,
-		model.ActionRenameIndex:
-		// TODO: verify can be ignored
-	case model.ActionAddTablePartition:
-		newCreatedIDs := getCreatedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
-		for _, id := range newCreatedIDs {
-			if _, ok := tableInfoStoreMap[id]; ok {
-				log.Panic("newly created partitions should not be registered",
-					zap.Int64("partitionID", id))
-			}
-		}
-	case model.ActionDropTablePartition:
-		droppedIDs := getDroppedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
-		for _, id := range droppedIDs {
-			if store, ok := tableInfoStoreMap[id]; ok {
-				store.applyDDL(event)
-			}
-		}
-	case model.ActionCreateView:
-		// ignore
-	case model.ActionTruncateTablePartition:
-		physicalIDs := getAllPartitionIDs(event.TableInfo)
-		droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
-		for _, id := range droppedIDs {
-			if store, ok := tableInfoStoreMap[id]; ok {
-				store.applyDDL(event)
-			}
-		}
-		newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
-		for _, id := range newCreatedIDs {
-			if _, ok := tableInfoStoreMap[id]; ok {
-				log.Panic("newly created partitions should not be registered",
-					zap.Int64("partitionID", id))
-			}
-		}
-	case model.ActionExchangeTablePartition:
-		physicalIDs := getAllPartitionIDs(event.TableInfo)
-		droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
-		if len(droppedIDs) != 1 {
-			log.Panic("exchange table partition should only drop one partition",
-				zap.Int64s("droppedIDs", droppedIDs))
-		}
-		targetPartitionID := droppedIDs[0]
-		if store, ok := tableInfoStoreMap[targetPartitionID]; ok {
-			store.applyDDL(event)
-		}
-		if store, ok := tableInfoStoreMap[event.PrevTableID]; ok {
-			store.applyDDL(event)
-		}
-	case model.ActionCreateTables:
-		for _, info := range event.MultipleTableInfos {
-			if isPartitionTable(info) {
-				for _, id := range getAllPartitionIDs(info) {
-					if _, ok := tableInfoStoreMap[id]; ok {
-						log.Panic("newly created tables should not be registered",
-							zap.Int64("tableID", id))
-					}
-				}
-			} else {
-				if _, ok := tableInfoStoreMap[info.ID]; ok {
-					log.Panic("newly created tables should not be registered",
-						zap.Int64("tableID", info.ID))
-				}
-			}
-
-		}
-	case model.ActionReorganizePartition:
-		physicalIDs := getAllPartitionIDs(event.TableInfo)
-		droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
-		for _, id := range droppedIDs {
-			if store, ok := tableInfoStoreMap[id]; ok {
-				store.applyDDL(event)
-			}
-		}
-		newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
-		for _, id := range newCreatedIDs {
-			if _, ok := tableInfoStoreMap[id]; ok {
-				log.Panic("newly created partitions should not be registered",
-					zap.Int64("partitionID", id))
-			}
-		}
-	default:
-		log.Panic("unknown ddl type",
-			zap.Any("ddlType", event.Type),
-			zap.String("DDL", event.Query))
-	}
-	return nil
 }
 
 func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
