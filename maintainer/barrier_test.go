@@ -987,6 +987,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 	require.NotEqual(t, uint64(0), msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).Config.StartTs)
 }
 
+// TODO:Add more cases here
 func TestHandleBlockBootstrapResponse(t *testing.T) {
 	setNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()

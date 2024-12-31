@@ -148,6 +148,14 @@ func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 	// So we need to check the block event when the maintainer is restarted to help block event decide its state.
 	// TODO:double check the logic here
 	for _, barrierEvent := range b.blockedTs {
+		if barrierEvent.allDispatcherReported() {
+			// it means the dispatchers involved in the block event are all in the cached resp, not restarted.
+			// so we don't do speical check for this event
+			// just use usual logic to handle it
+			// Besides, is the dispatchers are all reported waiting status, it means at least one dispatcher
+			// is not get acked, so it must be resend by dispatcher later.
+			continue
+		}
 		switch barrierEvent.blockedDispatchers.InfluenceType {
 		case heartbeatpb.InfluenceType_Normal:
 			for _, tableId := range barrierEvent.blockedDispatchers.TableIDs {
