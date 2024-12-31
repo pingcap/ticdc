@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Masterminds/semver/v3"
+	"github.com/coreos/go-semver/semver"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -47,7 +47,7 @@ const (
 	// networkDriftDuration is used to construct a context timeout for database operations.
 	networkDriftDuration = 5 * time.Second
 
-	defaultSupportVectorVersion = "8.3.0"
+	defaultSupportVectorVersion = "8.4.0"
 )
 
 // MysqlWriter is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
