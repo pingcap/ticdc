@@ -765,7 +765,12 @@ func buildPersistedDDLEventFromJob(
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
 	}
-	return handler.buildPersistedDDLEventFunc(job, databaseMap, tableMap, partitionMap)
+	return handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
+		job:          job,
+		databaseMap:  databaseMap,
+		tableMap:     tableMap,
+		partitionMap: partitionMap,
+	})
 }
 
 func shouldSkipDDL(
@@ -830,7 +835,14 @@ func updateDDLHistory(
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
 	}
-	return handler.updateDDLHistoryFunc(ddlEvent, databaseMap, tableMap, partitionMap, tablesDDLHistory, tableTriggerDDLHistory)
+	return handler.updateDDLHistoryFunc(updateDDLHistoryFuncArgs{
+		ddlEvent:               ddlEvent,
+		databaseMap:            databaseMap,
+		tableMap:               tableMap,
+		partitionMap:           partitionMap,
+		tablesDDLHistory:       tablesDDLHistory,
+		tableTriggerDDLHistory: tableTriggerDDLHistory,
+	})
 }
 
 func updateDatabaseInfoAndTableInfo(

@@ -58,9 +58,9 @@ func TestApplyDDLJobs(t *testing.T) {
 		databaseMap                 map[int64]*BasicDatabaseInfo
 		tablesDDLHistory            map[int64][]uint64
 		tableTriggerDDLHistory      []uint64
-		physicalTableQueryTestCases []PhysicalTableQueryTestCase         // test cases for getAllPhysicalTables
-		fetchTableDDLEventsTestCase []FetchTableDDLEventsTestCase        // test cases for fetchTableDDLEvents
-		fetchTableTriggerDDLEvents  []FetchTableTriggerDDLEventsTestCase //	test cases for fetchTableTriggerDDLEvents
+		physicalTableQueryTestCases []PhysicalTableQueryTestCase         // test cases for getAllPhysicalTables, nil means not check it
+		fetchTableDDLEventsTestCase []FetchTableDDLEventsTestCase        // test cases for fetchTableDDLEvents, nil means not check it
+		fetchTableTriggerDDLEvents  []FetchTableTriggerDDLEventsTestCase //	test cases for fetchTableTriggerDDLEvents, nil means not check it
 	}{
 		// test drop schema can clear table info and partition info
 		{

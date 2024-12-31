@@ -19,21 +19,35 @@ import (
 	"go.uber.org/zap"
 )
 
+type buildPersistedDDLEventFuncArgs struct {
+	job          *model.Job
+	databaseMap  map[int64]*BasicDatabaseInfo
+	tableMap     map[int64]*BasicTableInfo
+	partitionMap map[int64]BasicPartitionInfo
+}
+
+type updateDDLHistoryFuncArgs struct {
+	ddlEvent               *PersistedDDLEvent
+	databaseMap            map[int64]*BasicDatabaseInfo
+	tableMap               map[int64]*BasicTableInfo
+	partitionMap           map[int64]BasicPartitionInfo
+	tablesDDLHistory       map[int64][]uint64
+	tableTriggerDDLHistory []uint64
+}
+
+func (args *updateDDLHistoryFuncArgs) appendTableTriggerDDLHistory(ts uint64) {
+	args.tableTriggerDDLHistory = append(args.tableTriggerDDLHistory, ts)
+}
+
+func (args *updateDDLHistoryFuncArgs) appendTablesDDLHistory(ts uint64, tableIDs ...int64) {
+	for _, tableID := range tableIDs {
+		args.tablesDDLHistory[tableID] = append(args.tablesDDLHistory[tableID], ts)
+	}
+}
+
 type persistStorageDDLHandler struct {
-	buildPersistedDDLEventFunc func(
-		job *model.Job,
-		databaseMap map[int64]*BasicDatabaseInfo,
-		tableMap map[int64]*BasicTableInfo,
-		partitionMap map[int64]BasicPartitionInfo,
-	) PersistedDDLEvent
-	updateDDLHistoryFunc func(
-		ddlEvent *PersistedDDLEvent,
-		databaseMap map[int64]*BasicDatabaseInfo,
-		tableMap map[int64]*BasicTableInfo,
-		partitionMap map[int64]BasicPartitionInfo,
-		tablesDDLHistory map[int64][]uint64,
-		tableTriggerDDLHistory []uint64,
-	) []uint64
+	buildPersistedDDLEventFunc func(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent
+	updateDDLHistoryFunc       func(args updateDDLHistoryFuncArgs) []uint64
 }
 
 var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
@@ -160,14 +174,34 @@ func getAllPartitionIDs(tableInfo *model.TableInfo) []int64 {
 	return physicalIDs
 }
 
+func getSchemaName(databaseMap map[int64]*BasicDatabaseInfo, schemaID int64) string {
+	databaseInfo, ok := databaseMap[schemaID]
+	if !ok {
+		log.Panic("database not found", zap.Int64("schemaID", schemaID))
+	}
+	return databaseInfo.Name
+}
+
+func getTableName(tableMap map[int64]*BasicTableInfo, tableID int64) string {
+	tableInfo, ok := tableMap[tableID]
+	if !ok {
+		log.Panic("table not found", zap.Int64("tableID", tableID))
+	}
+	return tableInfo.Name
+}
+
+func getSchemaID(tableMap map[int64]*BasicTableInfo, tableID int64) int64 {
+	tableInfo, ok := tableMap[tableID]
+	if !ok {
+		log.Panic("table not found", zap.Int64("tableID", tableID))
+	}
+	return tableInfo.SchemaID
+}
+
 // ==== buildPersistedDDLEventFunc start ====
-func buildPersistedDDLEventCommon(
-	job *model.Job,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-) PersistedDDLEvent {
+func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	var query string
+	job := args.job
 	// only in unit test job.Query is empty
 	if job.Query != "" {
 		var err error
@@ -193,13 +227,8 @@ func buildPersistedDDLEventCommon(
 	return event
 }
 
-func buildPersistedDDLEventForCreateDropSchema(
-	job *model.Job,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-) PersistedDDLEvent {
-	event := buildPersistedDDLEventCommon(job, databaseMap, tableMap, partitionMap)
+func buildPersistedDDLEventForCreateDropSchema(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
 	log.Info("buildPersistedDDLEvent for create/drop schema",
 		zap.Any("type", event.Type),
 		zap.Int64("schemaID", event.CurrentSchemaID),
@@ -208,385 +237,191 @@ func buildPersistedDDLEventForCreateDropSchema(
 	return event
 }
 
-func buildPersistedDDLEventForCreateTable(
-	job *model.Job,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-) PersistedDDLEvent {
-	event := buildPersistedDDLEventCommon(job, databaseMap, tableMap, partitionMap)
-	databaseInfo, ok := databaseMap[event.CurrentSchemaID]
-	if !ok {
-		log.Panic("database not found", zap.Int64("schemaID", event.CurrentSchemaID))
-	}
-	event.CurrentSchemaName = databaseInfo.Name
+func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
 	event.CurrentTableName = event.TableInfo.Name.O
 	return event
 }
 
-func buildPersistedDDLEventForNormalDDLOnSingleTable(
-	job *model.Job,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-) PersistedDDLEvent {
-	event := buildPersistedDDLEventCommon(job, databaseMap, tableMap, partitionMap)
-	databaseInfo, ok := databaseMap[event.CurrentSchemaID]
-	if !ok {
-		log.Panic("database not found", zap.Int64("schemaID", event.CurrentSchemaID))
-	}
-	event.CurrentSchemaName = databaseInfo.Name
-	tableInfo, ok := tableMap[event.CurrentTableID]
-	if !ok {
-		log.Panic("table not found", zap.Int64("tableID", event.CurrentTableID))
-	}
-	event.CurrentTableName = tableInfo.Name
+func buildPersistedDDLEventForNormalDDLOnSingleTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
+	event.CurrentTableName = getTableName(args.tableMap, event.CurrentTableID)
 	return event
 }
 
-func buildPersistedDDLEventForTruncateTable(
-	job *model.Job,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-) PersistedDDLEvent {
-	event := buildPersistedDDLEventCommon(job, databaseMap, tableMap, partitionMap)
+func buildPersistedDDLEventForTruncateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
 	// only table id change after truncate
 	event.PrevTableID = event.CurrentTableID
 	event.CurrentTableID = event.TableInfo.ID
-	databaseInfo, ok := databaseMap[event.CurrentSchemaID]
-	if !ok {
-		log.Panic("database not found", zap.Int64("schemaID", event.CurrentSchemaID))
-	}
-	event.CurrentSchemaName = databaseInfo.Name
-	tableInfo, ok := tableMap[event.PrevTableID]
-	if !ok {
-		log.Panic("table not found", zap.Int64("tableID", event.PrevTableID))
-	}
-	event.CurrentTableName = tableInfo.Name
+	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
+	event.CurrentTableName = getTableName(args.tableMap, event.PrevTableID)
 	if isPartitionTable(event.TableInfo) {
-		for id := range partitionMap[event.PrevTableID] {
+		for id := range args.partitionMap[event.PrevTableID] {
 			event.PrevPartitions = append(event.PrevPartitions, id)
 		}
 	}
 	return event
 }
 
-func buildPersistedDDLEventForRenameTable(
-	job *model.Job,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-) PersistedDDLEvent {
-	event := buildPersistedDDLEventCommon(job, databaseMap, tableMap, partitionMap)
+func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
 	// Note: schema id/schema name/table name may be changed or not
 	// table id does not change, we use it to get the table's prev schema id/name and table name
-	tableInfo, ok := tableMap[event.CurrentTableID]
-	if !ok {
-		log.Panic("table not found", zap.Int64("tableID", event.CurrentTableID))
-	}
-	event.PrevSchemaID = tableInfo.SchemaID
-	event.PrevTableName = tableInfo.Name
-	prevDatabaseInfo, ok := databaseMap[event.PrevSchemaID]
-	if !ok {
-		log.Panic("database not found", zap.Int64("schemaID", event.PrevSchemaID))
-	}
-	event.PrevSchemaName = prevDatabaseInfo.Name
-	currentDatabaseInfo, ok := databaseMap[event.CurrentSchemaID]
-	if !ok {
-		log.Panic("database not found", zap.Int64("schemaID", event.CurrentSchemaID))
-	}
-	event.CurrentSchemaName = currentDatabaseInfo.Name
+	event.PrevSchemaID = getSchemaID(args.tableMap, event.CurrentTableID)
+	event.PrevTableName = getTableName(args.tableMap, event.CurrentTableID)
+	event.PrevSchemaName = getSchemaName(args.databaseMap, event.PrevSchemaID)
+	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
 	// get the table's current table name from the ddl job
 	event.CurrentTableName = event.TableInfo.Name.O
 	return event
 }
 
-func buildPersistedDDLEventForNormalPartitionDDL(
-	job *model.Job,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-) PersistedDDLEvent {
-	event := buildPersistedDDLEventForNormalDDLOnSingleTable(job, databaseMap, tableMap, partitionMap)
-	for id := range partitionMap[event.CurrentTableID] {
+func buildPersistedDDLEventForNormalPartitionDDL(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventForNormalDDLOnSingleTable(args)
+	for id := range args.partitionMap[event.CurrentTableID] {
 		event.PrevPartitions = append(event.PrevPartitions, id)
 	}
 	return event
 }
 
-func buildPersistedDDLEventForExchangePartition(
-	job *model.Job,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-) PersistedDDLEvent {
-	event := buildPersistedDDLEventCommon(job, databaseMap, tableMap, partitionMap)
+func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
 	event.PrevSchemaID = event.CurrentSchemaID
 	event.PrevTableID = event.CurrentTableID
-	prevDatabaseInfo, ok := databaseMap[event.PrevSchemaID]
-	if !ok {
-		log.Panic("database not found", zap.Int64("schemaID", event.PrevSchemaID))
-	}
-	event.PrevSchemaName = prevDatabaseInfo.Name
-	prevTableInfo, ok := tableMap[event.PrevTableID]
-	if !ok {
-		log.Panic("table not found", zap.Int64("tableID", event.PrevTableID))
-	}
-	event.PrevTableName = prevTableInfo.Name
+	event.PrevSchemaName = getSchemaName(args.databaseMap, event.PrevSchemaID)
+	event.PrevTableName = getTableName(args.tableMap, event.PrevTableID)
 	event.CurrentTableID = event.TableInfo.ID
-	currentTableInfo, ok := tableMap[event.CurrentTableID]
-	if !ok {
-		log.Panic("table not found", zap.Int64("tableID", event.CurrentTableID))
-	}
-	// set CurrentSchemaID before CurrentSchemaName
-	event.CurrentSchemaID = currentTableInfo.SchemaID
-	event.CurrentTableName = currentTableInfo.Name
-	currentDatabseInfo, ok := databaseMap[event.CurrentSchemaID]
-	if !ok {
-		log.Panic("database not found", zap.Int64("schemaID", event.CurrentSchemaID))
-	}
-	event.CurrentSchemaName = currentDatabseInfo.Name
-	for id := range partitionMap[event.CurrentTableID] {
+	event.CurrentSchemaID = getSchemaID(args.tableMap, event.TableInfo.ID)
+	event.CurrentTableName = getTableName(args.tableMap, event.TableInfo.ID)
+	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
+	for id := range args.partitionMap[event.CurrentTableID] {
 		event.PrevPartitions = append(event.PrevPartitions, id)
 	}
 	return event
 }
 
-func buildPersistedDDLEventForCreateTables(
-	job *model.Job,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-) PersistedDDLEvent {
-	event := buildPersistedDDLEventCommon(job, databaseMap, tableMap, partitionMap)
-	currentDatabseInfo, ok := databaseMap[event.CurrentSchemaID]
-	if !ok {
-		log.Panic("database not found", zap.Int64("schemaID", event.CurrentSchemaID))
-	}
-	event.CurrentSchemaName = currentDatabseInfo.Name
-	event.MultipleTableInfos = job.BinlogInfo.MultipleTableInfos
+func buildPersistedDDLEventForCreateTables(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
+	event.MultipleTableInfos = args.job.BinlogInfo.MultipleTableInfos
 	return event
 }
 
 // ==== updateDDLHistoryFunc begin ====
-func updateDDLHistoryForTableTriggerOnlyDDL(
-	ddlEvent *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-	tablesDDLHistory map[int64][]uint64,
-	tableTriggerDDLHistory []uint64,
-) []uint64 {
-	return append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
+func updateDDLHistoryForTableTriggerOnlyDDL(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForDropSchema(
-	ddlEvent *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-	tablesDDLHistory map[int64][]uint64,
-	tableTriggerDDLHistory []uint64,
-) []uint64 {
-	tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-	for tableID := range databaseMap[ddlEvent.CurrentSchemaID].Tables {
-		if partitionInfo, ok := partitionMap[tableID]; ok {
+func updateDDLHistoryForDropSchema(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	for tableID := range args.databaseMap[args.ddlEvent.CurrentSchemaID].Tables {
+		if partitionInfo, ok := args.partitionMap[tableID]; ok {
 			for id := range partitionInfo {
-				tablesDDLHistory[id] = append(tablesDDLHistory[id], ddlEvent.FinishedTs)
+				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, id)
 			}
 		} else {
-			tablesDDLHistory[tableID] = append(tablesDDLHistory[tableID], ddlEvent.FinishedTs)
+			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
 		}
 	}
-	return tableTriggerDDLHistory
+	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForAddDropTable(
-	ddlEvent *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-	tablesDDLHistory map[int64][]uint64,
-	tableTriggerDDLHistory []uint64,
-) []uint64 {
-	tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
+func updateDDLHistoryForAddDropTable(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	// Note: for create table, this ddl event will not be sent to table dispatchers.
 	// add it to ddl history is just for building table info store.
-	if isPartitionTable(ddlEvent.TableInfo) {
+	if isPartitionTable(args.ddlEvent.TableInfo) {
 		// for partition table, we only care the ddl history of physical table ids.
-		for _, partitionID := range getAllPartitionIDs(ddlEvent.TableInfo) {
-			tablesDDLHistory[partitionID] = append(tablesDDLHistory[partitionID], ddlEvent.FinishedTs)
+		for _, partitionID := range getAllPartitionIDs(args.ddlEvent.TableInfo) {
+			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, partitionID)
 		}
 	} else {
-		tablesDDLHistory[ddlEvent.CurrentTableID] = append(tablesDDLHistory[ddlEvent.CurrentTableID], ddlEvent.FinishedTs)
+		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.CurrentTableID)
 	}
-	return tableTriggerDDLHistory
+	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForNormalDDLOnSingleTable(
-	ddlEvent *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-	tablesDDLHistory map[int64][]uint64,
-	tableTriggerDDLHistory []uint64,
-) []uint64 {
-	if isPartitionTable(ddlEvent.TableInfo) {
-		for _, partitionID := range getAllPartitionIDs(ddlEvent.TableInfo) {
-			tablesDDLHistory[partitionID] = append(tablesDDLHistory[partitionID], ddlEvent.FinishedTs)
+func updateDDLHistoryForNormalDDLOnSingleTable(args updateDDLHistoryFuncArgs) []uint64 {
+	if isPartitionTable(args.ddlEvent.TableInfo) {
+		for _, partitionID := range getAllPartitionIDs(args.ddlEvent.TableInfo) {
+			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, partitionID)
 		}
 	} else {
-		tablesDDLHistory[ddlEvent.CurrentTableID] = append(tablesDDLHistory[ddlEvent.CurrentTableID], ddlEvent.FinishedTs)
+		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.CurrentTableID)
 	}
-	return tableTriggerDDLHistory
+	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForTruncateTable(
-	ddlEvent *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-	tablesDDLHistory map[int64][]uint64,
-	tableTriggerDDLHistory []uint64,
-) []uint64 {
-	tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-	if isPartitionTable(ddlEvent.TableInfo) {
-		for _, partitionID := range getAllPartitionIDs(ddlEvent.TableInfo) {
-			tablesDDLHistory[partitionID] = append(tablesDDLHistory[partitionID], ddlEvent.FinishedTs)
-		}
-		for _, partitionID := range ddlEvent.PrevPartitions {
-			tablesDDLHistory[partitionID] = append(tablesDDLHistory[partitionID], ddlEvent.FinishedTs)
-		}
+func updateDDLHistoryForTruncateTable(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	if isPartitionTable(args.ddlEvent.TableInfo) {
+		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, getAllPartitionIDs(args.ddlEvent.TableInfo)...)
+		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.PrevPartitions...)
 	} else {
-		tablesDDLHistory[ddlEvent.CurrentTableID] = append(tablesDDLHistory[ddlEvent.CurrentTableID], ddlEvent.FinishedTs)
-		tablesDDLHistory[ddlEvent.PrevTableID] = append(tablesDDLHistory[ddlEvent.PrevTableID], ddlEvent.FinishedTs)
+		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.CurrentTableID, args.ddlEvent.PrevTableID)
 	}
-	return tableTriggerDDLHistory
+	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForAddPartition(
-	ddlEvent *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-	tablesDDLHistory map[int64][]uint64,
-	tableTriggerDDLHistory []uint64,
-) []uint64 {
-	tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-	for _, partitionID := range getAllPartitionIDs(ddlEvent.TableInfo) {
-		tablesDDLHistory[partitionID] = append(tablesDDLHistory[partitionID], ddlEvent.FinishedTs)
-	}
-	return tableTriggerDDLHistory
+func updateDDLHistoryForAddPartition(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, getAllPartitionIDs(args.ddlEvent.TableInfo)...)
+	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForDropPartition(
-	ddlEvent *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-	tablesDDLHistory map[int64][]uint64,
-	tableTriggerDDLHistory []uint64,
-) []uint64 {
-	tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-	for _, partitionID := range ddlEvent.PrevPartitions {
-		tablesDDLHistory[partitionID] = append(tablesDDLHistory[partitionID], ddlEvent.FinishedTs)
-	}
-	return tableTriggerDDLHistory
+func updateDDLHistoryForDropPartition(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.PrevPartitions...)
+	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForCreateView(
-	ddlEvent *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-	tablesDDLHistory map[int64][]uint64,
-	tableTriggerDDLHistory []uint64,
-) []uint64 {
-	tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-	for tableID := range tableMap {
-		tablesDDLHistory[tableID] = append(tablesDDLHistory[tableID], ddlEvent.FinishedTs)
+func updateDDLHistoryForCreateView(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	for tableID := range args.tableMap {
+		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
 	}
-	return tableTriggerDDLHistory
+	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForTruncatePartition(
-	ddlEvent *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-	tablesDDLHistory map[int64][]uint64,
-	tableTriggerDDLHistory []uint64,
-) []uint64 {
-	tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-	for _, partitionID := range ddlEvent.PrevPartitions {
-		tablesDDLHistory[partitionID] = append(tablesDDLHistory[partitionID], ddlEvent.FinishedTs)
-	}
-	newCreateIDs := getCreatedIDs(ddlEvent.PrevPartitions, getAllPartitionIDs(ddlEvent.TableInfo))
-	for _, partitionID := range newCreateIDs {
-		tablesDDLHistory[partitionID] = append(tablesDDLHistory[partitionID], ddlEvent.FinishedTs)
-	}
-	return tableTriggerDDLHistory
+func updateDDLHistoryForTruncatePartition(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.PrevPartitions...)
+	newCreateIDs := getCreatedIDs(args.ddlEvent.PrevPartitions, getAllPartitionIDs(args.ddlEvent.TableInfo))
+	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, newCreateIDs...)
+	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForExchangeTablePartition(
-	ddlEvent *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-	tablesDDLHistory map[int64][]uint64,
-	tableTriggerDDLHistory []uint64,
-) []uint64 {
-	tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-	droppedIDs := getDroppedIDs(ddlEvent.PrevPartitions, getAllPartitionIDs(ddlEvent.TableInfo))
+func updateDDLHistoryForExchangeTablePartition(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	droppedIDs := getDroppedIDs(args.ddlEvent.PrevPartitions, getAllPartitionIDs(args.ddlEvent.TableInfo))
 	if len(droppedIDs) != 1 {
-		log.Panic("exchange table partition should only drop one partition",
-			zap.Int64s("droppedIDs", droppedIDs))
+		log.Panic("exchange table partition should only drop one partition", zap.Int64s("droppedIDs", droppedIDs))
 	}
-	tablesDDLHistory[ddlEvent.PrevTableID] = append(tablesDDLHistory[ddlEvent.PrevTableID], ddlEvent.FinishedTs)
-	for _, tableID := range droppedIDs {
-		tablesDDLHistory[tableID] = append(tablesDDLHistory[tableID], ddlEvent.FinishedTs)
-	}
-	return tableTriggerDDLHistory
+	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, droppedIDs[0], args.ddlEvent.PrevTableID)
+	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForCreateTables(
-	ddlEvent *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-	tablesDDLHistory map[int64][]uint64,
-	tableTriggerDDLHistory []uint64,
-) []uint64 {
-	tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
+func updateDDLHistoryForCreateTables(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	// it won't be send to table dispatchers, just for build version store
-	for _, info := range ddlEvent.MultipleTableInfos {
+	for _, info := range args.ddlEvent.MultipleTableInfos {
 		if isPartitionTable(info) {
-			for _, partitionID := range getAllPartitionIDs(info) {
-				tablesDDLHistory[partitionID] = append(tablesDDLHistory[partitionID], ddlEvent.FinishedTs)
-			}
+			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, getAllPartitionIDs(info)...)
 		} else {
-			tablesDDLHistory[info.ID] = append(tablesDDLHistory[info.ID], ddlEvent.FinishedTs)
+			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, info.ID)
 		}
 	}
-	return tableTriggerDDLHistory
+	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForReorganizePartition(
-	ddlEvent *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-	partitionMap map[int64]BasicPartitionInfo,
-	tablesDDLHistory map[int64][]uint64,
-	tableTriggerDDLHistory []uint64,
-) []uint64 {
-	tableTriggerDDLHistory = append(tableTriggerDDLHistory, ddlEvent.FinishedTs)
-	for _, partitionID := range ddlEvent.PrevPartitions {
-		tablesDDLHistory[partitionID] = append(tablesDDLHistory[partitionID], ddlEvent.FinishedTs)
-	}
-	newCreateIDs := getCreatedIDs(ddlEvent.PrevPartitions, getAllPartitionIDs(ddlEvent.TableInfo))
-	for _, partitionID := range newCreateIDs {
-		tablesDDLHistory[partitionID] = append(tablesDDLHistory[partitionID], ddlEvent.FinishedTs)
-	}
-	return tableTriggerDDLHistory
+func updateDDLHistoryForReorganizePartition(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.PrevPartitions...)
+	newCreateIDs := getCreatedIDs(args.ddlEvent.PrevPartitions, getAllPartitionIDs(args.ddlEvent.TableInfo))
+	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, newCreateIDs...)
+	return args.tableTriggerDDLHistory
 }
