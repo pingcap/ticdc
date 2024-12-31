@@ -278,7 +278,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 		event := dispatcherEvent.Event
 		// Pre-check, make sure the event is not stale
 		if event.GetCommitTs() < d.GetResolvedTs() {
-			log.Info("Received a stale event, should ignore it",
+			log.Warn("Received a stale event, should ignore it",
 				zap.Any("dispatcherResolvedTs", d.GetResolvedTs()),
 				zap.Any("EVentCommitTs", event.GetCommitTs()),
 				zap.Any("seq", event.GetSeq()),

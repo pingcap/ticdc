@@ -82,7 +82,7 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 			Path:         path.path,
 			Dest:         path.dest,
 			FeedbackType: 0,
-			Pause:        pause,
+			PausePath:    pause,
 		}
 		path.lastSendFeedbackTime.Store(time.Now())
 	}

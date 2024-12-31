@@ -245,7 +245,7 @@ type Feedback[A Area, P Path, D Dest] struct {
 
 	FeedbackType int // 0: path feedback, 1: area feedback
 
-	Pause     bool // Pause or resume the path.
+	PausePath bool // Pause or resume the path.
 	PauseArea bool // Pause or resume the area.
 }
 
@@ -253,8 +253,16 @@ func (f *Feedback[A, P, D]) IsAreaFeedback() bool {
 	return f.FeedbackType == 1
 }
 
+func (f *Feedback[A, P, D]) IsPausePath() bool {
+	return f.PausePath
+}
+
+func (f *Feedback[A, P, D]) IsPauseArea() bool {
+	return f.PauseArea
+}
+
 func (f *Feedback[A, P, D]) String() string {
-	return fmt.Sprintf("DynamicStream Feedback{Area: %v, Path: %v, Pause: %v, PauseArea: %v}", f.Area, f.Path, f.Pause, f.PauseArea)
+	return fmt.Sprintf("DynamicStream Feedback{Area: %v, Path: %v, Pause: %v, PauseArea: %v}", f.Area, f.Path, f.PausePath, f.PauseArea)
 }
 
 func NewDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, option ...Option) DynamicStream[A, P, T, D, H] {

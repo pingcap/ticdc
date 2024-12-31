@@ -244,15 +244,16 @@ func (c *EventCollector) processFeedback(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case feedback := <-c.ds.Feedback():
-
 			if feedback.IsAreaFeedback() {
-				if feedback.Pause {
+				if feedback.IsPauseArea() {
+					feedback.Dest.pauseChangefeed(c)
 				} else {
+					feedback.Dest.resumeChangefeed(c)
 				}
 				return
 			}
 
-			if feedback.Pause {
+			if feedback.IsPausePath() {
 				feedback.Dest.pauseDispatcher(c)
 			} else {
 				feedback.Dest.resumeDispatcher(c)
