@@ -277,13 +277,13 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 
 		event := dispatcherEvent.Event
 		// Pre-check, make sure the event is not stale
-		if event.GetCommitTs() < atomic.LoadUint64(&d.resolvedTs) {
-			log.Info("Received a stale event, should ignore it",
-				zap.Any("commitTs", event.GetCommitTs()),
+		if event.GetCommitTs() < d.GetResolvedTs() {
+			log.Warn("Received a stale event, should ignore it",
+				zap.Any("dispatcherResolvedTs", d.GetResolvedTs()),
+				zap.Any("EVentCommitTs", event.GetCommitTs()),
 				zap.Any("seq", event.GetSeq()),
 				zap.Any("eventType", event.GetType()),
-				zap.Any("dispatcher", d.id),
-				zap.Any("event", event))
+				zap.Any("dispatcher", d.id))
 			continue
 		}
 
