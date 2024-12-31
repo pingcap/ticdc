@@ -75,7 +75,7 @@ type Maintainer struct {
 	watermark             *heartbeatpb.Watermark
 	checkpointTsByCapture map[node.ID]heartbeatpb.Watermark
 
-	state        heartbeatpb.ComponentState
+	state        atomic.Int32
 	bootstrapper *bootstrap.Bootstrapper[heartbeatpb.MaintainerBootstrapResponse]
 
 	changefeedSate model.FeedState
@@ -155,7 +155,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		controller: NewController(cfID, checkpointTs, pdAPI, tsoClient, regionCache, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
-		state:           heartbeatpb.ComponentState_Working,
 		removed:         atomic.NewBool(false),
 		nodeManager:     nodeManager,
 		closedNodes:     make(map[node.ID]struct{}),
@@ -182,6 +181,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		tableCountGauge:                metrics.TableGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Namespace(), cfID.Name()),
 	}
+	m.state.Store(int32(heartbeatpb.ComponentState_Working))
 	m.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](m.id.Name(), m.getNewBootstrapFn())
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
 		zap.Uint64("checkpointTs", checkpointTs),
@@ -236,7 +236,7 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 		}
 		m.handleEventDuration.Observe(duration.Seconds())
 	}()
-	if m.state == heartbeatpb.ComponentState_Stopped {
+	if m.state.Load() == int32(heartbeatpb.ComponentState_Stopped) {
 		log.Warn("maintainer is stopped, ignore",
 			zap.String("changefeed", m.id.String()))
 		return false
@@ -282,7 +282,7 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 	status := &heartbeatpb.MaintainerStatus{
 		ChangefeedID: m.id.ToPB(),
 		FeedState:    string(m.changefeedSate),
-		State:        m.state,
+		State:        heartbeatpb.ComponentState(m.state.Load()),
 		CheckpointTs: m.watermark.CheckpointTs,
 		Err:          runningErrors,
 	}
@@ -315,7 +315,7 @@ func (m *Maintainer) initialize() error {
 	log.Info("changefeed maintainer initialized",
 		zap.String("id", m.id.String()),
 		zap.Duration("duration", time.Since(start)))
-	m.state = heartbeatpb.ComponentState_Working
+	m.state.Store(int32(heartbeatpb.ComponentState_Working))
 	m.statusChanged.Store(true)
 	return nil
 }
@@ -371,7 +371,7 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	closed := m.tryCloseChangefeed()
 	if closed {
 		m.removed.Store(true)
-		m.state = heartbeatpb.ComponentState_Stopped
+		m.state.Store(int32(heartbeatpb.ComponentState_Stopped))
 		metrics.MaintainerGauge.WithLabelValues(m.id.Namespace(), m.id.Name()).Dec()
 	}
 }
@@ -479,7 +479,7 @@ func (m *Maintainer) updateMetrics() {
 	lag = float64(oracle.GetPhysical(time.Now())-phyResolvedTs) / 1e3
 	m.changefeedResolvedTsLagGauge.Set(lag)
 
-	m.changefeedStatusGauge.Set(float64(m.state))
+	m.changefeedStatusGauge.Set(float64(m.state.Load()))
 }
 
 // send message to remote
@@ -604,6 +604,7 @@ func (m *Maintainer) sendPostBootstrapRequest() {
 func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeatpb.MaintainerCloseResponse) {
 	if response.Success {
 		m.closedNodes[from] = struct{}{}
+		m.onRemoveMaintainer(m.cascadeRemoving, m.changefeedRemoved)
 	}
 }
 
@@ -625,7 +626,7 @@ func (m *Maintainer) handleResendMessage() {
 }
 
 func (m *Maintainer) tryCloseChangefeed() bool {
-	if m.state != heartbeatpb.ComponentState_Stopped {
+	if m.state.Load() != int32(heartbeatpb.ComponentState_Stopped) {
 		m.statusChanged.Store(true)
 	}
 	if !m.cascadeRemoving {
