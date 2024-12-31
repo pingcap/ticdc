@@ -312,7 +312,10 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 
 	if err != nil {
 		log.Info("failed to send dispatcher request message to event service, try again later",
-			zap.Any("target", target),
+			zap.String("changefeedID", req.Dispatcher.GetChangefeedID().ID().String()),
+			zap.Stringer("dispatcher", req.Dispatcher.GetId()),
+			zap.Any("target", target.String()),
+			zap.Any("request", req),
 			zap.Error(err))
 		// Put the request back to the channel for later retry.
 		c.dispatcherRequestChan.In() <- DispatcherRequestWithTarget{
@@ -553,6 +556,7 @@ func (d *DispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 func (d *DispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {
 	d.eventServiceInfo.Lock()
 	defer d.eventServiceInfo.Unlock()
+
 	if event.GetType() != commonEvent.TypeReadyEvent {
 		log.Panic("should not happen")
 	}
@@ -641,7 +645,7 @@ func (d *DispatcherStat) unregisterDispatcher(eventCollector *EventCollector) {
 		ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
 	})
 	// unregister from remote event service if have
-	if d.eventServiceInfo.serverID != eventCollector.serverId {
+	if d.eventServiceInfo.serverID != "" && d.eventServiceInfo.serverID != eventCollector.serverId {
 		eventCollector.mustSendDispatcherRequest(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
 			Dispatcher: d.target,
 			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,

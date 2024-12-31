@@ -220,7 +220,7 @@ func (mc *messageCenter) SendCommand(msg *TargetMessage) error {
 	target, ok := mc.remoteTargets.m[msg.To]
 	mc.remoteTargets.RUnlock()
 	if !ok {
-		return errors.WithStack(apperror.AppError{Type: apperror.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %v not found", msg.To)})
+		return errors.WithStack(apperror.AppError{Type: apperror.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %v not found", msg.To.String())})
 	}
 	return target.sendCommand(msg)
 }
