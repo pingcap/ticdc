@@ -225,6 +225,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 		if pendingEvent != nil && action.CommitTs == pendingEvent.GetCommitTs() && blockStatus == heartbeatpb.BlockStage_WAITING {
 			d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
 			if action.Action == heartbeatpb.Action_Write {
+				failpoint.Inject("BlockBeforeWrite", nil)
 				err := d.AddBlockEventToSink(pendingEvent)
 				if err != nil {
 					select {
