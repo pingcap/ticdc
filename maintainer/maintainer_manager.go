@@ -34,10 +34,10 @@ import (
 )
 
 // Manager is the manager of all changefeed maintainer in a ticdc watcher, each ticdc watcher will
-// start a Manager when the watcher is startup. the Manager should:
-// 1. handle bootstrap command from coordinator and return all changefeed maintainer status
-// 2. handle dispatcher command from coordinator: add or remove changefeed maintainer
-// 3. check maintainer liveness
+// start a Manager when the watcher is startup. It responsible for:
+// 1. Handle bootstrap command from coordinator and report all changefeed maintainer status.
+// 2. Handle other commands from coordinator: like add or remove changefeed maintainer
+// 3. Manage maintainers lifetime
 type Manager struct {
 	mc   messaging.MessageCenter
 	conf *config.SchedulerConfig
@@ -53,15 +53,14 @@ type Manager struct {
 	tsoClient   replica.TSOClient
 	regionCache *tikv.RegionCache
 
+	// msgCh is used to cache messages from coordinator
 	msgCh chan *messaging.TargetMessage
 
 	taskScheduler threadpool.ThreadPool
 }
 
-// NewMaintainerManager create a changefeed maintainer manager instance,
-// 1. manager receives bootstrap command from coordinator
-// 2. manager manages maintainer lifetime
-// 3. manager report maintainer status to coordinator
+// NewMaintainerManager create a changefeed maintainer manager instance
+// and register message handler to message center
 func NewMaintainerManager(selfNode *node.Info,
 	conf *config.SchedulerConfig,
 	pdAPI pdutil.PDAPIClient,
@@ -131,13 +130,15 @@ func (m *Manager) Name() string {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
-	ticker := time.NewTicker(time.Millisecond * 500)
+	reportMaintainerStatusInterval := time.Millisecond * 200
+	ticker := time.NewTicker(reportMaintainerStatusInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case msg := <-m.msgCh:
+			log.Info("fizz received message from coordinator", zap.Any("message", msg))
 			m.handleMessage(msg)
 		case <-ticker.C:
 			//1.  try to send heartbeat to coordinator
@@ -287,7 +288,7 @@ func (m *Manager) onDispatchMaintainerRequest(
 }
 
 func (m *Manager) sendHeartbeat() {
-	if m.coordinatorVersion > 0 {
+	if m.isBootstrap() {
 		response := &heartbeatpb.MaintainerHeartbeat{}
 		m.maintainers.Range(func(key, value interface{}) bool {
 			cfMaintainer := value.(*Maintainer)
@@ -311,7 +312,7 @@ func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 		m.onCoordinatorBootstrapRequest(msg)
 	case messaging.TypeAddMaintainerRequest,
 		messaging.TypeRemoveMaintainerRequest:
-		if m.coordinatorVersion > 0 {
+		if m.isBootstrap() {
 			status := m.onDispatchMaintainerRequest(msg)
 			if status == nil {
 				return
@@ -338,11 +339,6 @@ func (m *Manager) dispatcherMaintainerMessage(
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		// m.stream.Push(changefeed.Id, &Event{
-		// 	changefeedID: changefeed,
-		// 	eventType:    EventMessage,
-		// 	message:      msg,
-		// })
 		c, ok := m.maintainers.Load(changefeed)
 		if !ok {
 			log.Warn("maintainer is not found",
@@ -365,4 +361,8 @@ func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) *
 		return nil
 	}
 	return c.(*Maintainer)
+}
+
+func (m *Manager) isBootstrap() bool {
+	return m.coordinatorVersion > 0
 }

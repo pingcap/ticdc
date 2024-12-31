@@ -62,7 +62,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
-	//discard maintainer manager messages
+	// Discard maintainer manager messages, cuz we don't need to handle them in this test
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		return nil
 	})
