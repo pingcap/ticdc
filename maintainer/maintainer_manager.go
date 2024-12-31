@@ -253,7 +253,7 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 		}
 		// it's cascade remove, we should remove the dispatcher from all node
 		// here we create a maintainer to run the remove the dispatcher logic
-		cf := NewMaintainerForRemove(cfID, m.conf, m.selfNode, m.taskScheduler, m.pdAPI,
+		cf = NewMaintainerForRemove(cfID, m.conf, m.selfNode, m.taskScheduler, m.pdAPI,
 			m.tsoClient, m.regionCache)
 		m.maintainers.Store(cfID, cf)
 	}
