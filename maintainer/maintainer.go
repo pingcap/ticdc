@@ -72,7 +72,7 @@ type Maintainer struct {
 	taskScheduler threadpool.ThreadPool
 	mc            messaging.MessageCenter
 
-	watermark             *heartbeatpb.Watermark
+	watermark             atomic.Pointer[heartbeatpb.Watermark]
 	checkpointTsByCapture map[node.ID]heartbeatpb.Watermark
 
 	state        atomic.Int32
@@ -163,11 +163,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		cascadeRemoving: false,
 		config:          cfg,
 
-		ddlSpan: ddlSpan,
-		watermark: &heartbeatpb.Watermark{
-			CheckpointTs: checkpointTs,
-			ResolvedTs:   checkpointTs,
-		},
+		ddlSpan:               ddlSpan,
 		checkpointTsByCapture: make(map[node.ID]heartbeatpb.Watermark),
 		runningErrors:         map[node.ID]*heartbeatpb.RunningError{},
 
@@ -181,6 +177,10 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		tableCountGauge:                metrics.TableGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Namespace(), cfID.Name()),
 	}
+	m.watermark.Store(&heartbeatpb.Watermark{
+		CheckpointTs: checkpointTs,
+		ResolvedTs:   checkpointTs,
+	})
 	m.state.Store(int32(heartbeatpb.ComponentState_Working))
 	m.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](m.id.Name(), m.getNewBootstrapFn())
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
@@ -265,7 +265,7 @@ func (m *Maintainer) Close() {
 	log.Info("changefeed maintainer closed",
 		zap.String("id", m.id.String()),
 		zap.Bool("removed", m.removed.Load()),
-		zap.Uint64("checkpointTs", m.watermark.CheckpointTs))
+		zap.Uint64("checkpointTs", m.watermark.Load().CheckpointTs))
 }
 
 func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
@@ -283,7 +283,7 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		ChangefeedID: m.id.ToPB(),
 		FeedState:    string(m.changefeedSate),
 		State:        heartbeatpb.ComponentState(m.state.Load()),
-		CheckpointTs: m.watermark.CheckpointTs,
+		CheckpointTs: m.watermark.Load().CheckpointTs,
 		Err:          runningErrors,
 	}
 	return status
@@ -417,8 +417,8 @@ func (m *Maintainer) calCheckpointTs() {
 	if !m.bootstrapped {
 		log.Warn("can not advance checkpointTs since not bootstrapped",
 			zap.String("changefeed", m.id.Name()),
-			zap.Uint64("checkpointTs", m.watermark.CheckpointTs),
-			zap.Uint64("resolvedTs", m.watermark.ResolvedTs))
+			zap.Uint64("checkpointTs", m.watermark.Load().CheckpointTs),
+			zap.Uint64("resolvedTs", m.watermark.Load().ResolvedTs))
 		return
 	}
 	// make sure there is no task running
@@ -429,16 +429,16 @@ func (m *Maintainer) calCheckpointTs() {
 	if !m.controller.ScheduleFinished() {
 		log.Warn("can not advance checkpointTs since schedule is not finished",
 			zap.String("changefeed", m.id.Name()),
-			zap.Uint64("checkpointTs", m.watermark.CheckpointTs),
-			zap.Uint64("resolvedTs", m.watermark.ResolvedTs),
+			zap.Uint64("checkpointTs", m.watermark.Load().CheckpointTs),
+			zap.Uint64("resolvedTs", m.watermark.Load().ResolvedTs),
 		)
 		return
 	}
 	if m.barrier.ShouldBlockCheckpointTs() {
 		log.Warn("can not advance checkpointTs since barrier is blocking",
 			zap.String("changefeed", m.id.Name()),
-			zap.Uint64("checkpointTs", m.watermark.CheckpointTs),
-			zap.Uint64("resolvedTs", m.watermark.ResolvedTs),
+			zap.Uint64("checkpointTs", m.watermark.Load().CheckpointTs),
+			zap.Uint64("resolvedTs", m.watermark.Load().ResolvedTs),
 		)
 		return
 	}
@@ -454,27 +454,27 @@ func (m *Maintainer) calCheckpointTs() {
 			log.Warn("checkpointTs can not be advanced, since missing capture heartbeat",
 				zap.String("changefeed", m.id.Name()),
 				zap.Any("node", id),
-				zap.Uint64("checkpointTs", m.watermark.CheckpointTs),
-				zap.Uint64("resolvedTs", m.watermark.ResolvedTs))
+				zap.Uint64("checkpointTs", m.watermark.Load().CheckpointTs),
+				zap.Uint64("resolvedTs", m.watermark.Load().ResolvedTs))
 			return
 		}
 		newWatermark.UpdateMin(m.checkpointTsByCapture[id])
 	}
 	if newWatermark.CheckpointTs != math.MaxUint64 {
-		m.watermark.CheckpointTs = newWatermark.CheckpointTs
+		m.watermark.Load().CheckpointTs = newWatermark.CheckpointTs
 	}
 	if newWatermark.ResolvedTs != math.MaxUint64 {
-		m.watermark.ResolvedTs = newWatermark.ResolvedTs
+		m.watermark.Load().ResolvedTs = newWatermark.ResolvedTs
 	}
 }
 
 func (m *Maintainer) updateMetrics() {
-	phyCkpTs := oracle.ExtractPhysical(m.watermark.CheckpointTs)
+	phyCkpTs := oracle.ExtractPhysical(m.watermark.Load().CheckpointTs)
 	m.changefeedCheckpointTsGauge.Set(float64(phyCkpTs))
 	lag := float64(oracle.GetPhysical(time.Now())-phyCkpTs) / 1e3
 	m.changefeedCheckpointTsLagGauge.Set(lag)
 
-	phyResolvedTs := oracle.ExtractPhysical(m.watermark.ResolvedTs)
+	phyResolvedTs := oracle.ExtractPhysical(m.watermark.Load().ResolvedTs)
 	m.changefeedResolvedTsGauge.Set(float64(phyResolvedTs))
 	lag = float64(oracle.GetPhysical(time.Now())-phyResolvedTs) / 1e3
 	m.changefeedResolvedTsLagGauge.Set(lag)
