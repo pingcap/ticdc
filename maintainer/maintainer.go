@@ -95,6 +95,7 @@ type Maintainer struct {
 
 	pdEndpoints []string
 	nodeManager *watcher.NodeManager
+	// closedNodes is used to record the nodes that dispatcherManager is closed
 	closedNodes map[node.ID]struct{}
 
 	statusChanged  *atomic.Bool
@@ -604,14 +605,12 @@ func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeat
 	if response.Success {
 		m.closedNodes[from] = struct{}{}
 	}
-	// check if all nodes have sent response
-	m.onRemoveMaintainer(m.cascadeRemoving, m.changefeedRemoved)
 }
 
 func (m *Maintainer) handleResendMessage() {
 	// resend closing message
 	if m.removing {
-		m.sendMaintainerCloseRequestToAllNode()
+		m.trySendMaintainerCloseRequestToAllNode()
 		return
 	}
 	// resend bootstrap message
@@ -633,12 +632,15 @@ func (m *Maintainer) tryCloseChangefeed() bool {
 		m.controller.RemoveTasksByTableIDs(m.ddlSpan.Span.TableID)
 		return !m.ddlSpan.IsWorking()
 	}
-	return m.sendMaintainerCloseRequestToAllNode()
+	return m.trySendMaintainerCloseRequestToAllNode()
 }
 
-func (m *Maintainer) sendMaintainerCloseRequestToAllNode() bool {
+// trySendMaintainerCloseRequestToAllNode is used to send maintainer close request to all nodes
+// if all nodes are closed, return true, otherwise return false.
+func (m *Maintainer) trySendMaintainerCloseRequestToAllNode() bool {
 	msgs := make([]*messaging.TargetMessage, 0)
 	for n := range m.nodeManager.GetAliveNodes() {
+		// Check if the node is already closed.
 		if _, ok := m.closedNodes[n]; !ok {
 			msgs = append(msgs, messaging.NewSingleTargetMessage(
 				n,
