@@ -12,7 +12,7 @@ TiCDC processes data in two main parts:
 
 The following diagram illustrates the relationship between the **data puller** and **data sinker**:
 
-![Data Flow](./medias/flow-control-1.png)
+![Data Flow](../media/flow-control-1.png)
 <!-- The source file for this diagram: docs/design/medias/flow-control-1.puml -->
 
 In this architecture, **EventService** and **EventCollector** facilitate communication between the two parts:  
