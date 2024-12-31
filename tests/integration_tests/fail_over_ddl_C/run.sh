@@ -336,7 +336,7 @@ function failOverCaseC-5() {
 }
 
 trap stop_tidb_cluster EXIT
-#failOverCaseC-1
+failOverCaseC-1
 failOverCaseC-2
 failOverCaseC-3
 failOverCaseC-5
