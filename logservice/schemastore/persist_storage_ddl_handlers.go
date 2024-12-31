@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -82,7 +83,9 @@ type persistStorageDDLHandler struct {
 	// updateSchemaMetadataFunc update database info, table info and partition info according to the ddl event
 	updateSchemaMetadataFunc func(args updateSchemaMetadataFuncArgs)
 	// iteratehEventTablesFunc call `apply` for all tables related to the ddl event
-	iterateEventTablesFunc func(event *PersistedDDLEvent, apply func(tableId ...int64))
+	iterateEventTablesFunc func(event *PersistedDDLEvent, apply func(tableIDs ...int64))
+	// extractTableInfoFunc extract (table info, deleted) for the specified `tableID` from ddl event
+	extractTableInfoFunc func(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool)
 }
 
 var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
@@ -91,132 +94,154 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateDDLHistoryFunc:       updateDDLHistoryForTableTriggerOnlyDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForCreateSchema,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
+		extractTableInfoFunc:       extractTableInfoFuncIgnore,
 	},
 	model.ActionDropSchema: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateDropSchema,
 		updateDDLHistoryFunc:       updateDDLHistoryForDropSchema,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropSchema,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
+		extractTableInfoFunc:       extractTableInfoFuncIgnore,
 	},
 	model.ActionCreateTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 	model.ActionDropTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropTable,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForDropTable,
 	},
 	model.ActionAddColumn: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 	model.ActionDropColumn: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 	model.ActionAddIndex: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 	model.ActionDropIndex: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 	model.ActionAddForeignKey: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 	model.ActionDropForeignKey: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 	model.ActionTruncateTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForTruncateTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForTruncateTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForTruncateTable,
 		iterateEventTablesFunc:     iterateEventTablesForTruncateTable,
+		extractTableInfoFunc:       extractTableInfoFuncForTruncateTable,
 	},
 	model.ActionModifyColumn: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 	model.ActionRebaseAutoID: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 	model.ActionRenameTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForRenameTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForRenameTable,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 	model.ActionSetDefaultValue: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 	model.ActionShardRowID: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 	model.ActionModifyTableComment: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 	model.ActionRenameIndex: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 	model.ActionAddTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddPartition,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForAddPartition,
 		iterateEventTablesFunc:     iterateEventTablesForAddPartition,
+		extractTableInfoFunc:       extractTableInfoFuncForAddPartition,
 	},
 	model.ActionDropTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForDropPartition,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropPartition,
 		iterateEventTablesFunc:     iterateEventTablesForDropPartition,
+		extractTableInfoFunc:       extractTableInfoFuncForDropPartition,
 	},
 	model.ActionCreateView: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventCommon,
 		updateDDLHistoryFunc:       updateDDLHistoryForCreateView,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
+		extractTableInfoFunc:       extractTableInfoFuncIgnore,
 	},
 	model.ActionTruncateTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForTruncatePartition,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForTruncateTablePartition,
 		iterateEventTablesFunc:     iterateEventTablesForTruncatePartition,
+		extractTableInfoFunc:       extractTableInfoFuncForTruncateAndReorganizePartition,
 	},
 
 	model.ActionRecoverTable: {
@@ -224,6 +249,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 	},
 
 	model.ActionExchangeTablePartition: {
@@ -231,6 +257,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateDDLHistoryFunc:       updateDDLHistoryForExchangeTablePartition,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForExchangeTablePartition,
 		iterateEventTablesFunc:     iterateEventTablesForExchangeTablePartition,
+		extractTableInfoFunc:       nil, // this func should not be called
 	},
 
 	model.ActionCreateTables: {
@@ -238,6 +265,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateDDLHistoryFunc:       updateDDLHistoryForCreateTables,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForCreateTables,
 		iterateEventTablesFunc:     iterateEventTablesForCreateTables,
+		extractTableInfoFunc:       extractTableInfoFuncForCreateTables,
 	},
 
 	model.ActionReorganizePartition: {
@@ -245,6 +273,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateDDLHistoryFunc:       updateDDLHistoryForReorganizePartition,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForReorganizePartition,
 		iterateEventTablesFunc:     iterateEventTablesForReorganizePartition,
+		extractTableInfoFunc:       extractTableInfoFuncForTruncateAndReorganizePartition,
 	},
 }
 
@@ -823,4 +852,110 @@ func iterateEventTablesForReorganizePartition(event *PersistedDDLEvent, apply fu
 	apply(droppedIDs...)
 	newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
 	apply(newCreatedIDs...)
+}
+
+// =======
+// extractTableInfoFunc begin
+// =======
+
+func extractTableInfoFuncForSingleTableDDL(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
+	if isPartitionTable(event.TableInfo) {
+		for _, partitionID := range getAllPartitionIDs(event.TableInfo) {
+			if tableID == partitionID {
+				return common.WrapTableInfo(event.CurrentSchemaID, event.CurrentSchemaName, event.TableInfo), false
+			}
+		}
+	} else {
+		if tableID == event.CurrentTableID {
+			return common.WrapTableInfo(event.CurrentSchemaID, event.CurrentSchemaName, event.TableInfo), false
+		}
+	}
+	log.Panic("should not reach here", zap.Any("event", event), zap.Int64("tableID", tableID))
+	return nil, false
+}
+
+func extractTableInfoFuncIgnore(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
+	return nil, false
+}
+
+func extractTableInfoFuncForDropTable(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
+	if event.CurrentTableID == tableID {
+		return nil, true
+	}
+	log.Panic("should not reach here", zap.Int64("tableID", tableID))
+	return nil, false
+}
+
+func extractTableInfoFuncForTruncateTable(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
+	if isPartitionTable(event.TableInfo) {
+		for _, partitionID := range getAllPartitionIDs(event.TableInfo) {
+			if tableID == partitionID {
+				return common.WrapTableInfo(event.CurrentSchemaID, event.CurrentSchemaName, event.TableInfo), false
+			}
+		}
+		return nil, true
+	} else {
+		if tableID == event.CurrentTableID {
+			return common.WrapTableInfo(event.CurrentSchemaID, event.CurrentSchemaName, event.TableInfo), false
+		} else if tableID == event.PrevTableID {
+			return nil, true
+		}
+	}
+	log.Panic("should not reach here", zap.Int64("tableID", tableID))
+	return nil, false
+}
+
+func extractTableInfoFuncForAddPartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
+	newCreatedIDs := getCreatedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
+	for _, partition := range newCreatedIDs {
+		if tableID == partition {
+			return common.WrapTableInfo(event.CurrentSchemaID, event.CurrentSchemaName, event.TableInfo), false
+		}
+	}
+	return nil, false
+}
+
+func extractTableInfoFuncForDropPartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
+	droppedIDs := getDroppedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
+	for _, partition := range droppedIDs {
+		if tableID == partition {
+			return nil, true
+		}
+	}
+	return nil, false
+}
+
+func extractTableInfoFuncForTruncateAndReorganizePartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
+	physicalIDs := getAllPartitionIDs(event.TableInfo)
+	droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
+	for _, partition := range droppedIDs {
+		if tableID == partition {
+			return nil, true
+		}
+	}
+	newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
+	for _, partition := range newCreatedIDs {
+		if tableID == partition {
+			return common.WrapTableInfo(event.CurrentSchemaID, event.CurrentSchemaName, event.TableInfo), false
+		}
+	}
+	return nil, false
+}
+
+func extractTableInfoFuncForCreateTables(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
+	for _, tableInfo := range event.MultipleTableInfos {
+		if isPartitionTable(tableInfo) {
+			for _, partitionID := range getAllPartitionIDs(tableInfo) {
+				if tableID == partitionID {
+					return common.WrapTableInfo(event.CurrentSchemaID, event.CurrentSchemaName, tableInfo), false
+				}
+			}
+		} else {
+			if tableID == tableInfo.ID {
+				return common.WrapTableInfo(event.CurrentSchemaID, event.CurrentSchemaName, tableInfo), false
+			}
+		}
+	}
+	log.Panic("should not reach here", zap.Int64("tableID", tableID))
+	return nil, false
 }
