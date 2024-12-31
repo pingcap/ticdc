@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -30,6 +31,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	"github.com/pingcap/tidb/br/pkg/version"
+	"github.com/pingcap/tidb/dumpling/export"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tiflow/pkg/config"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
@@ -43,6 +46,8 @@ const (
 
 	// networkDriftDuration is used to construct a context timeout for database operations.
 	networkDriftDuration = 5 * time.Second
+
+	defaultSupportVectorVersion = "8.3.0"
 )
 
 // MysqlWriter is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
@@ -65,6 +70,7 @@ type MysqlWriter struct {
 	maxAllowedPacket int64
 
 	statistics *metrics.Statistics
+	needFormat bool
 }
 
 func NewMysqlWriter(ctx context.Context, db *sql.DB, cfg *MysqlConfig, changefeedID common.ChangeFeedID, statistics *metrics.Statistics) *MysqlWriter {
@@ -80,6 +86,7 @@ func NewMysqlWriter(ctx context.Context, db *sql.DB, cfg *MysqlConfig, changefee
 		maxAllowedPacket:       cfg.MaxAllowedPacket,
 		stmtCache:              cfg.stmtCache,
 		statistics:             statistics,
+		needFormat:             checkVersionForVector(db, cfg),
 	}
 }
 
@@ -611,7 +618,13 @@ func (w *MysqlWriter) execDDL(event *commonEvent.DDLEvent) error {
 	}
 
 	shouldSwitchDB := needSwitchDB(event)
-
+	// Convert vector type to string type for unsupport database
+	if w.needFormat {
+		if newQuery := formatQuery(event.Query); newQuery != event.Query {
+			log.Warn("format ddl query", zap.String("newQuery", newQuery), zap.String("query", event.Query))
+			event.Query = newQuery
+		}
+	}
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
 		return err
@@ -948,4 +961,25 @@ func (w *MysqlWriter) Close() {
 	if w.stmtCache != nil {
 		w.stmtCache.Purge()
 	}
+}
+
+// checkVersionForVector checks vector type support
+func checkVersionForVector(db *sql.DB, cfg *MysqlConfig) bool {
+	if !cfg.HasVectorType {
+		log.Warn("please set `has-vector-type` to be true if a column is vector type when the downstream is not TiDB or TiDB version less than specify version",
+			zap.Any("hasVectorType", cfg.HasVectorType), zap.Any("supportVectorVersion", defaultSupportVectorVersion))
+		return false
+	}
+	versionInfo, err := export.SelectVersion(db)
+	if err != nil {
+		log.Warn("fail to get version", zap.Error(err), zap.Bool("isTiDB", cfg.IsTiDB))
+		return false
+	}
+	serverInfo := version.ParseServerInfo(versionInfo)
+	version := semver.New(defaultSupportVectorVersion)
+	if !cfg.IsTiDB || serverInfo.ServerVersion.LessThan(*version) {
+		log.Error("downstream unsupport vector type. it will be converted to longtext", zap.String("version", serverInfo.ServerVersion.String()), zap.String("supportVectorVersion", defaultSupportVectorVersion), zap.Bool("isTiDB", cfg.IsTiDB))
+		return true
+	}
+	return false
 }

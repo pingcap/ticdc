@@ -280,7 +280,10 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, 
 			yearValue := d.GetInt64()
 			value = strconv.FormatInt(yearValue, 10)
 		}
-
+	case mysql.TypeTiDBVectorFloat32:
+		javaType = internal.JavaSQLTypeVARCHAR
+		d := row.GetDatum(idx, &columnInfo.FieldType)
+		value = d.GetVectorFloat32().String()
 	default:
 		javaType = internal.JavaSQLTypeVARCHAR
 		d := row.GetDatum(idx, &columnInfo.FieldType)
