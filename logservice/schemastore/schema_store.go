@@ -104,8 +104,6 @@ func New(
 		zap.Int64("schemaVersion", s.schemaVersion))
 	s.ddlJobFetcher = newDDLJobFetcher(
 		subClient,
-		pdCli,
-		pdClock,
 		kvStorage,
 		upperBound.ResolvedTs,
 		s.writeDDLEvent,
@@ -123,18 +121,13 @@ func (s *schemaStore) Run(ctx context.Context) error {
 	eg.Go(func() error {
 		return s.updateResolvedTsPeriodically(ctx)
 	})
-	eg.Go(func() error {
-		return s.ddlJobFetcher.run(ctx)
-	})
+
 	return eg.Wait()
 }
 
 func (s *schemaStore) Close(ctx context.Context) error {
 	log.Info("schema store closed")
-	if err := s.dataStorage.close(); err != nil {
-		log.Warn("failed to close data storage", zap.Error(err))
-	}
-	return s.ddlJobFetcher.close(ctx)
+	return s.dataStorage.close()
 }
 
 func (s *schemaStore) updateResolvedTsPeriodically(ctx context.Context) error {

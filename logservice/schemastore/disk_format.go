@@ -273,7 +273,7 @@ func loadAndApplyDDLHistory(
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
 		ddlEvent := unmarshalPersistedDDLEvent(snapIter.Value())
-		if shouldSkipDDL(&ddlEvent, databaseMap, tableMap) {
+		if shouldSkipDDL(&ddlEvent, tableMap) {
 			continue
 		}
 		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
