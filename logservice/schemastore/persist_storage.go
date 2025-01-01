@@ -654,6 +654,11 @@ func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) e
 func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	p.mu.Lock()
 
+	if shouldSkipDDL(job, p.tableMap) {
+		p.mu.Unlock()
+		return nil
+	}
+
 	handler, ok := allDDLHandlers[job.Type]
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
@@ -664,11 +669,6 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		tableMap:     p.tableMap,
 		partitionMap: p.partitionMap,
 	})
-
-	if shouldSkipDDL(&ddlEvent, p.tableMap) {
-		p.mu.Unlock()
-		return nil
-	}
 
 	p.mu.Unlock()
 
@@ -708,11 +708,8 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	return nil
 }
 
-func shouldSkipDDL(
-	event *PersistedDDLEvent,
-	tableMap map[int64]*BasicTableInfo,
-) bool {
-	switch model.ActionType(event.Type) {
+func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
+	switch model.ActionType(job.Type) {
 	// Skipping ActionCreateTable and ActionCreateTables when the table already exists:
 	// 1. It is possible to receive ActionCreateTable and ActionCreateTables multiple times,
 	//    and filtering duplicates in a generic way is challenging.
@@ -723,31 +720,31 @@ func shouldSkipDDL(
 	//    is by verifying whether the table already exists.
 	case model.ActionCreateTable:
 		// Note: partition table's logical table id is also in tableMap
-		if _, ok := tableMap[event.CurrentTableID]; ok {
+		if _, ok := tableMap[job.BinlogInfo.TableInfo.ID]; ok {
 			log.Warn("table already exists. ignore DDL ",
-				zap.String("DDL", event.Query),
-				zap.Int64("jobID", event.ID),
-				zap.Int64("schemaID", event.CurrentSchemaID),
-				zap.Int64("tableID", event.CurrentTableID),
-				zap.Uint64("finishTs", event.FinishedTs),
-				zap.Int64("jobSchemaVersion", event.SchemaVersion))
+				zap.String("DDL", job.Query),
+				zap.Int64("jobID", job.ID),
+				zap.Int64("schemaID", job.SchemaID),
+				zap.Int64("tableID", job.BinlogInfo.TableInfo.ID),
+				zap.Uint64("finishTs", job.BinlogInfo.FinishedTS),
+				zap.Int64("jobSchemaVersion", job.BinlogInfo.SchemaVersion))
 			return true
 		}
 	case model.ActionCreateTables:
 		// For duplicate create tables ddl job, the tables in the job should be same, check the first table is enough
-		if _, ok := tableMap[event.MultipleTableInfos[0].ID]; ok {
+		if _, ok := tableMap[job.BinlogInfo.MultipleTableInfos[0].ID]; ok {
 			log.Warn("table already exists. ignore DDL ",
-				zap.String("DDL", event.Query),
-				zap.Int64("jobID", event.ID),
-				zap.Int64("schemaID", event.CurrentSchemaID),
-				zap.Int64("tableID", event.CurrentTableID),
-				zap.Uint64("finishTs", event.FinishedTs),
-				zap.Int64("jobSchemaVersion", event.SchemaVersion))
+				zap.String("DDL", job.Query),
+				zap.Int64("jobID", job.ID),
+				zap.Int64("schemaID", job.SchemaID),
+				zap.Int64("tableID", job.BinlogInfo.MultipleTableInfos[0].ID),
+				zap.Uint64("finishTs", job.BinlogInfo.FinishedTS),
+				zap.Int64("jobSchemaVersion", job.BinlogInfo.SchemaVersion))
 			return true
 		}
+	// DDLs ignored
 	case model.ActionAlterTableAttributes,
 		model.ActionAlterTablePartitionAttributes:
-		// Note: these ddls seems not useful to sync to downstream?
 		return true
 	}
 	return false
