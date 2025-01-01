@@ -18,7 +18,10 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -86,6 +89,8 @@ type persistStorageDDLHandler struct {
 	iterateEventTablesFunc func(event *PersistedDDLEvent, apply func(tableIDs ...int64))
 	// extractTableInfoFunc extract (table info, deleted) for the specified `tableID` from ddl event
 	extractTableInfoFunc func(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool)
+	// buildDDLEvent build a DDLEvent from a PersistedDDLEvent
+	buildDDLEventFunc func(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent
 }
 
 var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
@@ -95,6 +100,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForCreateSchema,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
+		buildDDLEventFunc:          buildDDLEventForCreateSchema,
 	},
 	model.ActionDropSchema: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateDropSchema,
@@ -102,6 +108,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropSchema,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
+		buildDDLEventFunc:          buildDDLEventForDropSchema,
 	},
 	model.ActionCreateTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
@@ -109,6 +116,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
 	},
 	model.ActionDropTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -116,6 +124,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropTable,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForDropTable,
+		buildDDLEventFunc:          buildDDLEventForDropTable,
 	},
 	model.ActionAddColumn: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -123,6 +132,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionDropColumn: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -130,6 +140,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionAddIndex: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -137,6 +148,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionDropIndex: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -144,6 +156,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionAddForeignKey: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -151,6 +164,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionDropForeignKey: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -158,6 +172,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionTruncateTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForTruncateTable,
@@ -165,6 +180,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForTruncateTable,
 		iterateEventTablesFunc:     iterateEventTablesForTruncateTable,
 		extractTableInfoFunc:       extractTableInfoFuncForTruncateTable,
+		buildDDLEventFunc:          buildDDLEventForTruncateTable,
 	},
 	model.ActionModifyColumn: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -172,6 +188,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionRebaseAutoID: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -179,6 +196,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionRenameTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForRenameTable,
@@ -186,6 +204,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForRenameTable,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForRenameTable,
 	},
 	model.ActionSetDefaultValue: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -193,6 +212,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionShardRowID: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -200,6 +220,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionModifyTableComment: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -207,6 +228,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionRenameIndex: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -214,6 +236,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionAddTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
@@ -221,6 +244,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForAddPartition,
 		iterateEventTablesFunc:     iterateEventTablesForAddPartition,
 		extractTableInfoFunc:       extractTableInfoFuncForAddPartition,
+		buildDDLEventFunc:          buildDDLEventForAddPartition,
 	},
 	model.ActionDropTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
@@ -228,6 +252,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropPartition,
 		iterateEventTablesFunc:     iterateEventTablesForDropPartition,
 		extractTableInfoFunc:       extractTableInfoFuncForDropPartition,
+		buildDDLEventFunc:          buildDDLEventForDropPartition,
 	},
 	model.ActionCreateView: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventCommon,
@@ -235,6 +260,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
+		buildDDLEventFunc:          buildDDLEventForCreateView,
 	},
 	model.ActionTruncateTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
@@ -242,6 +268,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForTruncateTablePartition,
 		iterateEventTablesFunc:     iterateEventTablesForTruncatePartition,
 		extractTableInfoFunc:       extractTableInfoFuncForTruncateAndReorganizePartition,
+		buildDDLEventFunc:          buildDDLEventForTruncateAndReorganizePartition,
 	},
 
 	model.ActionRecoverTable: {
@@ -250,6 +277,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
 	},
 
 	model.ActionExchangeTablePartition: {
@@ -258,6 +286,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForExchangeTablePartition,
 		iterateEventTablesFunc:     iterateEventTablesForExchangeTablePartition,
 		extractTableInfoFunc:       nil, // this func should not be called
+		buildDDLEventFunc:          buildDDLEventForExchangeTablePartition,
 	},
 
 	model.ActionCreateTables: {
@@ -266,6 +295,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForCreateTables,
 		iterateEventTablesFunc:     iterateEventTablesForCreateTables,
 		extractTableInfoFunc:       extractTableInfoFuncForCreateTables,
+		buildDDLEventFunc:          buildDDLEventForCreateTables,
 	},
 
 	model.ActionReorganizePartition: {
@@ -274,6 +304,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForReorganizePartition,
 		iterateEventTablesFunc:     iterateEventTablesForReorganizePartition,
 		extractTableInfoFunc:       extractTableInfoFuncForTruncateAndReorganizePartition,
+		buildDDLEventFunc:          buildDDLEventForTruncateAndReorganizePartition,
 	},
 }
 
@@ -958,4 +989,539 @@ func extractTableInfoFuncForCreateTables(event *PersistedDDLEvent, tableID int64
 	}
 	log.Panic("should not reach here", zap.Int64("tableID", tableID))
 	return nil, false
+}
+
+// =======
+// buildDDLEvent begin
+// =======
+
+func buildDDLEventCommon(rawEvent *PersistedDDLEvent, _ filter.Filter) commonEvent.DDLEvent {
+	var wrapTableInfo *common.TableInfo
+	if rawEvent.TableInfo != nil {
+		wrapTableInfo = common.WrapTableInfo(
+			rawEvent.CurrentSchemaID,
+			rawEvent.CurrentSchemaName,
+			rawEvent.TableInfo)
+	}
+
+	return commonEvent.DDLEvent{
+		Type: rawEvent.Type,
+		// TODO: whether the following four fields are needed
+		SchemaID:   rawEvent.CurrentSchemaID,
+		TableID:    rawEvent.CurrentTableID,
+		SchemaName: rawEvent.CurrentSchemaName,
+		TableName:  rawEvent.CurrentTableName,
+
+		Query:      rawEvent.Query,
+		TableInfo:  wrapTableInfo,
+		FinishedTs: rawEvent.FinishedTs,
+		TiDBOnly:   false,
+	}
+}
+
+func buildDDLEventForCreateSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeNormal,
+		TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForDropSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeDB,
+		SchemaID:      rawEvent.CurrentSchemaID,
+	}
+	ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeDB,
+		SchemaID:      rawEvent.CurrentSchemaID,
+	}
+	ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+		DropDatabaseName: rawEvent.CurrentSchemaName,
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeNormal,
+		TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
+	}
+	if isPartitionTable(rawEvent.TableInfo) {
+		physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
+		ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, len(physicalIDs))
+		for _, id := range physicalIDs {
+			ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
+				SchemaID: rawEvent.CurrentSchemaID,
+				TableID:  id,
+			})
+		}
+	} else {
+		ddlEvent.NeedAddedTables = []commonEvent.Table{
+			{
+				SchemaID: rawEvent.CurrentSchemaID,
+				TableID:  rawEvent.CurrentTableID,
+			},
+		}
+	}
+	ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+		AddName: []commonEvent.SchemaTableName{
+			{
+				SchemaName: rawEvent.CurrentSchemaName,
+				TableName:  rawEvent.CurrentTableName,
+			},
+		},
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	if isPartitionTable(rawEvent.TableInfo) {
+		allPhysicalTableIDs := getAllPartitionIDs(rawEvent.TableInfo)
+		allPhysicalTableIDsAndDDLSpanID := make([]int64, 0, len(rawEvent.TableInfo.Partition.Definitions)+1)
+		allPhysicalTableIDsAndDDLSpanID = append(allPhysicalTableIDsAndDDLSpanID, allPhysicalTableIDs...)
+		allPhysicalTableIDsAndDDLSpanID = append(allPhysicalTableIDsAndDDLSpanID, heartbeatpb.DDLSpan.TableID)
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      allPhysicalTableIDsAndDDLSpanID,
+		}
+		ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      allPhysicalTableIDs,
+		}
+	} else {
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.CurrentTableID, heartbeatpb.DDLSpan.TableID},
+		}
+		ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.CurrentTableID},
+		}
+	}
+	ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+		DropName: []commonEvent.SchemaTableName{
+			{
+				SchemaName: rawEvent.CurrentSchemaName,
+				TableName:  rawEvent.CurrentTableName,
+			},
+		},
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeNormal,
+		TableIDs:      []int64{rawEvent.CurrentTableID},
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForTruncateTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	if isPartitionTable(rawEvent.TableInfo) {
+		prevPartitionsAndDDLSpanID := make([]int64, 0, len(rawEvent.PrevPartitions)+1)
+		prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, rawEvent.PrevPartitions...)
+		prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, heartbeatpb.DDLSpan.TableID)
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      prevPartitionsAndDDLSpanID,
+		}
+		// Note: for truncate table, prev partitions must all be dropped.
+		ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      rawEvent.PrevPartitions,
+		}
+		physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
+		ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, len(physicalIDs))
+		for _, id := range physicalIDs {
+			ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
+				SchemaID: rawEvent.CurrentSchemaID,
+				TableID:  id,
+			})
+		}
+	} else {
+		ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.PrevTableID},
+		}
+		ddlEvent.NeedAddedTables = []commonEvent.Table{
+			{
+				SchemaID: rawEvent.CurrentSchemaID,
+				TableID:  rawEvent.CurrentTableID,
+			},
+		}
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.PrevTableID, heartbeatpb.DDLSpan.TableID},
+		}
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent.PrevSchemaName = rawEvent.PrevSchemaName
+	ddlEvent.PrevTableName = rawEvent.PrevTableName
+	ignorePrevTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.PrevSchemaName, rawEvent.PrevTableName)
+	ignoreCurrentTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, rawEvent.CurrentTableName)
+	if isPartitionTable(rawEvent.TableInfo) {
+		allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
+		if !ignorePrevTable {
+			allPhysicalIDsAndDDLSpanID := make([]int64, 0, len(allPhysicalIDs)+1)
+			allPhysicalIDsAndDDLSpanID = append(allPhysicalIDsAndDDLSpanID, allPhysicalIDs...)
+			allPhysicalIDsAndDDLSpanID = append(allPhysicalIDsAndDDLSpanID, heartbeatpb.DDLSpan.TableID)
+			ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				TableIDs:      allPhysicalIDsAndDDLSpanID,
+			}
+			if !ignoreCurrentTable {
+				// check whether schema change
+				if rawEvent.PrevSchemaID != rawEvent.CurrentSchemaID {
+					ddlEvent.UpdatedSchemas = make([]commonEvent.SchemaIDChange, 0, len(allPhysicalIDs))
+					for _, id := range allPhysicalIDs {
+						ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
+							TableID:     id,
+							OldSchemaID: rawEvent.PrevSchemaID,
+							NewSchemaID: rawEvent.CurrentSchemaID,
+						})
+					}
+				}
+				ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+					AddName: []commonEvent.SchemaTableName{
+						{
+							SchemaName: rawEvent.CurrentSchemaName,
+							TableName:  rawEvent.CurrentTableName,
+						},
+					},
+					DropName: []commonEvent.SchemaTableName{
+						{
+							SchemaName: rawEvent.PrevSchemaName,
+							TableName:  rawEvent.PrevTableName,
+						},
+					},
+				}
+			} else {
+				// the table is filtered out after rename table, we need drop the table
+				ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      allPhysicalIDs,
+				}
+				ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+					DropName: []commonEvent.SchemaTableName{
+						{
+							SchemaName: rawEvent.PrevSchemaName,
+							TableName:  rawEvent.PrevTableName,
+						},
+					},
+				}
+			}
+		} else if !ignoreCurrentTable {
+			ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
+			}
+			// the table is filtered out before rename table, we need add table here
+			ddlEvent.NeedAddedTables = []commonEvent.Table{
+				{
+					SchemaID: rawEvent.CurrentSchemaID,
+					TableID:  rawEvent.CurrentTableID,
+				},
+			}
+			ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, len(allPhysicalIDs))
+			for _, id := range allPhysicalIDs {
+				ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
+					SchemaID: rawEvent.CurrentSchemaID,
+					TableID:  id,
+				})
+			}
+			ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+				AddName: []commonEvent.SchemaTableName{
+					{
+						SchemaName: rawEvent.CurrentSchemaName,
+						TableName:  rawEvent.CurrentTableName,
+					},
+				},
+			}
+		} else {
+			// if the table is both filtered out before and after rename table, the ddl should not be fetched
+			log.Panic("should not build a ignored rename table ddl",
+				zap.String("DDL", rawEvent.Query),
+				zap.Int64("jobID", rawEvent.ID),
+				zap.Int64("schemaID", rawEvent.CurrentSchemaID),
+				zap.Int64("tableID", rawEvent.CurrentTableID))
+		}
+	} else {
+		if !ignorePrevTable {
+			ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				TableIDs:      []int64{rawEvent.CurrentTableID, heartbeatpb.DDLSpan.TableID},
+			}
+			if !ignoreCurrentTable {
+				if rawEvent.PrevSchemaID != rawEvent.CurrentSchemaID {
+					ddlEvent.UpdatedSchemas = []commonEvent.SchemaIDChange{
+						{
+							TableID:     rawEvent.CurrentTableID,
+							OldSchemaID: rawEvent.PrevSchemaID,
+							NewSchemaID: rawEvent.CurrentSchemaID,
+						},
+					}
+					ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+						AddName: []commonEvent.SchemaTableName{
+							{
+								SchemaName: rawEvent.CurrentSchemaName,
+								TableName:  rawEvent.CurrentTableName,
+							},
+						},
+						DropName: []commonEvent.SchemaTableName{
+							{
+								SchemaName: rawEvent.PrevSchemaName,
+								TableName:  rawEvent.PrevTableName,
+							},
+						},
+					}
+				}
+			} else {
+				// the table is filtered out after rename table, we need drop the table
+				ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      []int64{rawEvent.CurrentTableID},
+				}
+				ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+					DropName: []commonEvent.SchemaTableName{
+						{
+							SchemaName: rawEvent.PrevSchemaName,
+							TableName:  rawEvent.PrevTableName,
+						},
+					},
+				}
+			}
+		} else if !ignoreCurrentTable {
+			ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
+			}
+			// the table is filtered out before rename table, we need add table here
+			ddlEvent.NeedAddedTables = []commonEvent.Table{
+				{
+					SchemaID: rawEvent.CurrentSchemaID,
+					TableID:  rawEvent.CurrentTableID,
+				},
+			}
+			ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+				AddName: []commonEvent.SchemaTableName{
+					{
+						SchemaName: rawEvent.CurrentSchemaName,
+						TableName:  rawEvent.CurrentTableName,
+					},
+				},
+			}
+		} else {
+			// if the table is both filtered out before and after rename table, the ddl should not be fetched
+			log.Panic("should not build a ignored rename table ddl",
+				zap.String("DDL", rawEvent.Query),
+				zap.Int64("jobID", rawEvent.ID),
+				zap.Int64("schemaID", rawEvent.CurrentSchemaID),
+				zap.Int64("tableID", rawEvent.CurrentTableID))
+		}
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForAddPartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	prevPartitionsAndDDLSpanID := make([]int64, 0, len(rawEvent.PrevPartitions)+1)
+	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, rawEvent.PrevPartitions...)
+	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, heartbeatpb.DDLSpan.TableID)
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeNormal,
+		TableIDs:      prevPartitionsAndDDLSpanID,
+	}
+	physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
+	newCreatedIDs := getCreatedIDs(rawEvent.PrevPartitions, physicalIDs)
+	ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, len(newCreatedIDs))
+	for _, id := range newCreatedIDs {
+		ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
+			SchemaID: rawEvent.CurrentSchemaID,
+			TableID:  id,
+		})
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForDropPartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	prevPartitionsAndDDLSpanID := make([]int64, 0, len(rawEvent.PrevPartitions)+1)
+	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, rawEvent.PrevPartitions...)
+	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, heartbeatpb.DDLSpan.TableID)
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeNormal,
+		TableIDs:      prevPartitionsAndDDLSpanID,
+	}
+	physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
+	droppedIDs := getDroppedIDs(rawEvent.PrevPartitions, physicalIDs)
+	ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeNormal,
+		TableIDs:      droppedIDs,
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForCreateView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeAll,
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForTruncateAndReorganizePartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	prevPartitionsAndDDLSpanID := make([]int64, 0, len(rawEvent.PrevPartitions)+1)
+	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, rawEvent.PrevPartitions...)
+	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, heartbeatpb.DDLSpan.TableID)
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeNormal,
+		TableIDs:      prevPartitionsAndDDLSpanID,
+	}
+	physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
+	newCreatedIDs := getCreatedIDs(rawEvent.PrevPartitions, physicalIDs)
+	for _, id := range newCreatedIDs {
+		ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
+			SchemaID: rawEvent.CurrentSchemaID,
+			TableID:  id,
+		})
+	}
+	droppedIDs := getDroppedIDs(rawEvent.PrevPartitions, physicalIDs)
+	ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeNormal,
+		TableIDs:      droppedIDs,
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ignoreNormalTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.PrevSchemaName, rawEvent.PrevTableName)
+	ignorePartitionTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, rawEvent.CurrentTableName)
+	physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
+	droppedIDs := getDroppedIDs(rawEvent.PrevPartitions, physicalIDs)
+	if len(droppedIDs) != 1 {
+		log.Panic("exchange table partition should only drop one partition",
+			zap.Int64s("droppedIDs", droppedIDs))
+	}
+	targetPartitionID := droppedIDs[0]
+	if !ignoreNormalTable && !ignorePartitionTable {
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.PrevTableID, targetPartitionID, heartbeatpb.DDLSpan.TableID},
+		}
+		ddlEvent.UpdatedSchemas = []commonEvent.SchemaIDChange{
+			{
+				TableID:     targetPartitionID,
+				OldSchemaID: rawEvent.CurrentSchemaID,
+				NewSchemaID: rawEvent.PrevSchemaID,
+			},
+			{
+				TableID:     rawEvent.PrevTableID,
+				OldSchemaID: rawEvent.PrevSchemaID,
+				NewSchemaID: rawEvent.CurrentSchemaID,
+			},
+		}
+	} else if !ignoreNormalTable {
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.PrevTableID, heartbeatpb.DDLSpan.TableID},
+		}
+		ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.PrevTableID},
+		}
+		ddlEvent.NeedAddedTables = []commonEvent.Table{
+			{
+				SchemaID: rawEvent.PrevSchemaID,
+				TableID:  targetPartitionID,
+			},
+		}
+	} else if !ignorePartitionTable {
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{targetPartitionID, heartbeatpb.DDLSpan.TableID},
+		}
+		ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{targetPartitionID},
+		}
+		ddlEvent.NeedAddedTables = []commonEvent.Table{
+			{
+				SchemaID: rawEvent.CurrentSchemaID,
+				TableID:  rawEvent.PrevTableID,
+			},
+		}
+	} else {
+		log.Fatal("should not happen")
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeNormal,
+		TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
+	}
+	physicalTableCount := 0
+	logicalTableCount := 0
+	for _, info := range rawEvent.MultipleTableInfos {
+		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, info.Name.O) {
+			continue
+		}
+		logicalTableCount += 1
+		if isPartitionTable(info) {
+			physicalTableCount += len(info.Partition.Definitions)
+		} else {
+			physicalTableCount += 1
+		}
+	}
+	querys := strings.Split(rawEvent.Query, ";")
+	ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, physicalTableCount)
+	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)
+	resultQuerys := make([]string, 0, logicalTableCount)
+	for i, info := range rawEvent.MultipleTableInfos {
+		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, info.Name.O) {
+			continue
+		}
+		if isPartitionTable(info) {
+			for _, partitionID := range getAllPartitionIDs(info) {
+				ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
+					SchemaID: rawEvent.CurrentSchemaID,
+					TableID:  partitionID,
+				})
+			}
+		} else {
+			ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
+				SchemaID: rawEvent.CurrentSchemaID,
+				TableID:  info.ID,
+			})
+		}
+		addName = append(addName, commonEvent.SchemaTableName{
+			SchemaName: rawEvent.CurrentSchemaName,
+			TableName:  info.Name.O,
+		})
+		resultQuerys = append(resultQuerys, querys[i])
+	}
+	ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+		AddName: addName,
+	}
+	ddlEvent.Query = strings.Join(resultQuerys, ";")
+	if len(ddlEvent.NeedAddedTables) == 0 {
+		log.Fatal("should not happen")
+	}
+	return ddlEvent
 }
