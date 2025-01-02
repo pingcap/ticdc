@@ -115,6 +115,15 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
 		buildDDLEventFunc:          buildDDLEventForDropSchema,
 	},
+	model.ActionModifyTableCharsetAndCollate: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+	},
+
 	model.ActionCreateTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
@@ -156,6 +165,30 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionDropIndex: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+	},
+	model.ActionAlterIndexVisibility: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+	},
+	model.ActionAddPrimaryKey: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+	},
+	model.ActionDropPrimaryKey: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
@@ -319,6 +352,23 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		iterateEventTablesFunc:     iterateEventTablesForReorganizePartition,
 		extractTableInfoFunc:       extractTableInfoFuncForTruncateAndReorganizePartition,
 		buildDDLEventFunc:          buildDDLEventForTruncateAndReorganizePartition,
+	},
+
+	model.ActionAlterTTLInfo: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
+	},
+	model.ActionAlterTTLRemove: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
 	},
 }
 
@@ -625,6 +675,12 @@ func updateDDLHistoryForCreateView(args updateDDLHistoryFuncArgs) []uint64 {
 	for tableID := range args.tableMap {
 		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
 	}
+	return args.tableTriggerDDLHistory
+}
+
+func updateDDLHistoryForDropView(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.PrevPartitions...)
 	return args.tableTriggerDDLHistory
 }
 
@@ -1397,6 +1453,14 @@ func buildDDLEventForDropPartition(rawEvent *PersistedDDLEvent, tableFilter filt
 }
 
 func buildDDLEventForCreateView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeAll,
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForDropView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
 	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeAll,

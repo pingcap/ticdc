@@ -728,7 +728,7 @@ func shouldSkipDDL(
 	case model.ActionCreateTable:
 		// Note: partition table's logical table id is also in tableMap
 		if _, ok := tableMap[event.CurrentTableID]; ok {
-			log.Warn("table already exists. ignore DDL ",
+			log.Warn("table already exists. ignore DDL",
 				zap.String("DDL", event.Query),
 				zap.Int64("jobID", event.ID),
 				zap.Int64("schemaID", event.CurrentSchemaID),
@@ -744,7 +744,7 @@ func shouldSkipDDL(
 	case model.ActionCreateTables:
 		// For duplicate create tables ddl job, the tables in the job should be same, check the first table is enough
 		if _, ok := tableMap[event.MultipleTableInfos[0].ID]; ok {
-			log.Warn("table already exists. ignore DDL ",
+			log.Warn("table already exists. ignore DDL",
 				zap.String("DDL", event.Query),
 				zap.Int64("jobID", event.ID),
 				zap.Int64("schemaID", event.CurrentSchemaID),
