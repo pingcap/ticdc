@@ -167,6 +167,10 @@ func (c *eventBroker) sendReadyEvent(
 	wrapEvent := newWrapReadyEvent(server, event)
 	c.getMessageCh(d.workerIndex) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
+	log.Info("fizz: send ready event to dispatcher",
+		zap.Uint64("resolvedTs", d.sentResolvedTs.Load()),
+		zap.String("dispatcher", d.id.String()),
+		zap.String("server", server.String()))
 }
 
 func (c *eventBroker) sendNotReusableEvent(
@@ -299,6 +303,9 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 
 	// Only check scan when the dispatcher is running.
 	if !task.IsRunning() {
+		log.Info("fizz: dispatcher is not running, skip scan",
+			zap.String("changefeed", task.info.GetChangefeedID().String()),
+			zap.String("dispatcher", task.id.String()))
 		// If the dispatcher is not running, we also need to send the watermark to the dispatcher.
 		// And the resolvedTs should be the last sent watermark.
 		resolvedTs := task.sentResolvedTs.Load()
@@ -368,6 +375,9 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 	}
 	c.getMessageCh(task.workerIndex) <- wrapE
 	metricEventServiceSendCommandCount.Inc()
+	log.Info("fizz: send handshake event to dispatcher",
+		zap.String("dispatcher", task.id.String()),
+		zap.Uint64("resolvedTs", task.sentResolvedTs.Load()))
 	return false
 }
 

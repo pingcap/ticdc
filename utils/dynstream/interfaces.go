@@ -5,6 +5,9 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // The path interface. A path is a unique identifier of a destination.
@@ -175,7 +178,7 @@ type PathHasher[P Path] func(path P) uint64
 const DefaultInputBufferSize = 1024
 const DefaultSchedulerInterval = 16 * time.Second
 const DefaultReportInterval = 10 * time.Second
-const DefaultMaxPendingSize = 128 * (1 << 20) // 128 MB
+const DefaultMaxPendingSize = 1024 * 1024 * 1024 // 1 GB
 const DefaultFeedbackInterval = 1000 * time.Millisecond
 
 type Option struct {
@@ -224,6 +227,9 @@ type AreaSettings struct {
 
 func (s *AreaSettings) fix() {
 	if s.MaxPendingSize <= 0 {
+		log.Info("fizz: fix area settings",
+			zap.Int("maxPendingSize", s.MaxPendingSize),
+			zap.Int("defaultMaxPendingSize", DefaultMaxPendingSize))
 		s.MaxPendingSize = DefaultMaxPendingSize
 	}
 	if s.FeedbackInterval == 0 {
