@@ -14,6 +14,7 @@
 package schemastore
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/pingcap/errors"
@@ -563,6 +564,20 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
 	// get the table's current table name from the ddl job
 	event.CurrentTableName = event.TableInfo.Name.O
+	// Note: event.PrevSchemaID may not be accurate for rename table in some case.
+	// after pr: https://github.com/pingcap/tidb/pull/43341,
+	// assume there is a table `test.t` and a ddl: `rename table t to test2.t;`, and its commit ts is `100`.
+	// if you get a ddl snapshot at ts `99`, table `t` is already in `test2`.
+	// so event.PrevSchemaName will also be `test2`.
+	// And because SchemaStore is the source of truth of cdc,
+	// we can use event.PrevSchemaID(even it is wrong) to update the internal state of the cdc.
+	// TODO: not sure whether kafka sink will use event.PrevSchemaName and event.PrevTableName
+	// But event.Query will be emit to downstream(out of cdc), we must make it correct.
+	if args.job.Query != "" {
+		event.Query = fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`",
+			args.job.InvolvingSchemaInfo[0].Database, args.job.InvolvingSchemaInfo[0].Table,
+			event.CurrentSchemaName, event.CurrentTableName)
+	}
 	return event
 }
 
@@ -1311,6 +1326,7 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 				}
 			}
 		} else if !ignoreCurrentTable {
+			// TODO: this should report an error as old cdc behaviour
 			ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 				InfluenceType: commonEvent.InfluenceTypeNormal,
 				TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},

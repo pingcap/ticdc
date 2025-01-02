@@ -103,9 +103,10 @@ func formatDDLEventsForTest(events []commonEvent.DDLEvent) string {
 		if event.NeedDroppedTables != nil {
 			needDroppedTableIDs = fmt.Sprintf("type: %v, schemaID: %d, tableIDs: %v", event.NeedDroppedTables.InfluenceType, event.NeedDroppedTables.SchemaID, event.NeedDroppedTables.TableIDs)
 		}
-		res = append(res, fmt.Sprintf("type: %s, finishedTs: %d, blocked tables: %s, updated schemas %v, need dropped tables: %s, need added tables: %v, table name change %v",
+		res = append(res, fmt.Sprintf("type: %s, finishedTs: %d, query %s, blocked tables: %s, updated schemas %v, need dropped tables: %s, need added tables: %v, table name change %v",
 			model.ActionType(event.Type),
 			event.FinishedTs,
+			event.Query,
 			blockedTableIDs,
 			event.UpdatedSchemas,
 			needDroppedTableIDs,

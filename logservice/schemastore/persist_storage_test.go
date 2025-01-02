@@ -702,6 +702,9 @@ func TestApplyDDLJobs(t *testing.T) {
 				return []*model.Job{
 					buildCreateTableJobForTest(100, 300, "t1", 1010), // create table 300
 					buildRenameTableJobForTest(105, 300, "t2", 1020), // rename table 300 to schema 105
+					// rename table 300 to schema 105 with the same name again
+					// check comments in buildPersistedDDLEventForRenameTable to see why this would happen
+					buildRenameTableJobForTest(105, 300, "t2", 1030),
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -724,9 +727,9 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 			map[int64][]uint64{
-				300: {1010, 1020},
+				300: {1010, 1020, 1030},
 			},
-			[]uint64{1010, 1020},
+			[]uint64{1010, 1020, 1030},
 			nil,
 			[]FetchTableDDLEventsTestCase{
 				{
@@ -800,7 +803,7 @@ func TestApplyDDLJobs(t *testing.T) {
 				{
 					tableFilter: buildTableFilterByNameForTest("test2", "*"),
 					startTs:     1010,
-					limit:       10,
+					limit:       1,
 					result: []commonEvent.DDLEvent{
 						{
 							Type:       byte(model.ActionRenameTable),
@@ -1455,6 +1458,10 @@ func TestApplyDDLJobs(t *testing.T) {
 					expectedDDLEvent := expected[i]
 					actualDDLEvent := actual[i]
 					if expectedDDLEvent.Type != actualDDLEvent.Type || expectedDDLEvent.FinishedTs != actualDDLEvent.FinishedTs {
+						return false
+					}
+					// check query
+					if expectedDDLEvent.Query != "" && expectedDDLEvent.Query != actualDDLEvent.Query {
 						return false
 					}
 					// check BlockedTables
