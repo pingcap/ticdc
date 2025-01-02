@@ -243,7 +243,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 					return
 				}
 				failpoint.Inject("BlockReportAfterWrite", nil)
-				failpoint.Inject("WaitWhileAfterWriteBeforeReport", func() {
+				failpoint.Inject("WaitBeforeReport", func() {
 					time.Sleep(30 * time.Second)
 				})
 			} else {
