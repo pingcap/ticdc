@@ -814,6 +814,11 @@ func (a *BatchEncoder) columnToAvroSchema(
 			Type:       "int",
 			Parameters: map[string]string{tidbType: tt},
 		}, nil
+	case mysql.TypeTiDBVectorFloat32:
+		return avroSchema{
+			Type:       "string",
+			Parameters: map[string]string{tidbType: tt},
+		}, nil
 	default:
 		log.Error("unknown mysql type", zap.Any("mysqlType", col.Type))
 		return nil, cerror.ErrAvroEncodeFailed.GenWithStack("unknown mysql type")
@@ -973,6 +978,11 @@ func (a *BatchEncoder) columnToAvroData(
 			return int32(n), "int", nil
 		}
 		return int32(col.Value.(int64)), "int", nil
+	case mysql.TypeTiDBVectorFloat32:
+		if vec, ok := col.Value.(types.VectorFloat32); ok {
+			return vec.String(), "string", nil
+		}
+		return nil, "", cerror.ErrAvroEncodeFailed
 	default:
 		log.Error("unknown mysql type", zap.Any("value", col.Value), zap.Any("mysqlType", col.Type))
 		return nil, "", cerror.ErrAvroEncodeFailed.GenWithStack("unknown mysql type")

@@ -75,6 +75,8 @@ const (
 
 	// To limit memory usage for prepared statements.
 	prepStmtCacheSize int = 16 * 1024
+
+	defaultHasVectorType = false
 )
 
 type MysqlConfig struct {
@@ -113,6 +115,8 @@ type MysqlConfig struct {
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache        *lru.Cache
 	MaxAllowedPacket int64
+
+	HasVectorType bool // HasVectorType is true if the column is vector type
 }
 
 // NewConfig returns the default mysql backend config.
@@ -132,6 +136,7 @@ func NewMysqlConfig() *MysqlConfig {
 		CachePrepStmts:         defaultCachePrepStmts,
 		SourceID:               config.DefaultTiDBSourceID,
 		DMLMaxRetry:            8,
+		HasVectorType:          defaultHasVectorType,
 	}
 }
 

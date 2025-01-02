@@ -76,6 +76,9 @@ func FormatColVal(row *chunk.Row, col *model.ColumnInfo, idx int) (
 			b = 0
 		}
 		return b, nil
+	case mysql.TypeTiDBVectorFloat32:
+		b := row.GetVectorFloat32(idx).String()
+		return b, nil
 	default:
 		d := row.GetDatum(idx, &col.FieldType)
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail

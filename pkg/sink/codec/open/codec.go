@@ -450,6 +450,16 @@ func writeColumnFieldValueIfUpdated(
 				writeFunc(func() { writer.WriteStringField("v", preValue.String()) })
 			}
 		}
+	case mysql.TypeTiDBVectorFloat32:
+		rowValue := row.GetVectorFloat32(idx)
+		preValue := preRow.GetVectorFloat32(idx)
+		if rowValue.Compare(preValue) != 0 {
+			if preValue.IsZeroValue() {
+				writeFunc(func() { writer.WriteNullField("v") })
+			} else {
+				writeFunc(func() { writer.WriteStringField("v", preValue.String()) })
+			}
+		}
 	default:
 		rowDatum := row.GetDatum(idx, &col.FieldType)
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail

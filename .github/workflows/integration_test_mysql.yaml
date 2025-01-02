@@ -126,3 +126,23 @@ jobs:
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_B
+      
+      - name: Test fail_over_ddl_C
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_C
+      
+      - name: Test fail_over_ddl_D
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_D
+
+      - name: Test fail_over_ddl_E
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_E
+      
+      - name: Test fail_over_ddl_F
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
