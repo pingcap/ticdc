@@ -26,6 +26,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/charset"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -1314,6 +1315,150 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 		},
+		// test add/drop primary key and alter index visibility for table
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+					tables: []*model.TableInfo{
+						{
+							ID:   300,
+							Name: pmodel.NewCIStr("t1"),
+						},
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildAddPrimaryKeyJobForTest(100, 300, 1020, &model.IndexInfo{
+						ID:        500,
+						Name:      pmodel.NewCIStr("idx1"),
+						Table:     pmodel.NewCIStr("t1"),
+						Primary:   true,
+						Invisible: true,
+					}),
+					buildAlterIndexVisibilityJobForTest(100, 300, 1030, &model.IndexInfo{
+						ID:        500,
+						Name:      pmodel.NewCIStr("idx1"),
+						Table:     pmodel.NewCIStr("t1"),
+						Primary:   true,
+						Invisible: false,
+					}),
+					buildDropPrimaryKeyJobForTest(100, 300, 1040),
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				300: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+			},
+			nil,
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						300: true,
+					},
+				},
+			},
+			map[int64][]uint64{300: {1020, 1030, 1040}},
+			nil,
+			nil,
+			nil,
+			nil,
+		},
+		// test modify table charset
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+					tables: []*model.TableInfo{
+						{
+							ID:   300,
+							Name: pmodel.NewCIStr("t1"),
+						},
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildModifyTableCharsetJobForTest(100, 300, 1010, charset.CharsetUTF8MB4),
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				300: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+			},
+			nil,
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						300: true,
+					},
+				},
+			},
+			map[int64][]uint64{300: {1010}},
+			nil,
+			nil,
+			nil,
+			nil,
+		},
+		// trivial ddls
+		// test alter table ttl/remove ttl
+		// test set TiFlash replica
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+					tables: []*model.TableInfo{
+						{
+							ID:   300,
+							Name: pmodel.NewCIStr("t1"),
+						},
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildAlterTTLJobForTest(100, 300, 1010),
+					buildRemoveTTLJobForTest(100, 300, 1020),
+					buildSetTiFlashReplicaJobForTest(100, 300, 1030),
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				300: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+			},
+			nil,
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						300: true,
+					},
+				},
+			},
+			map[int64][]uint64{300: {1010, 1020, 1030}},
+			nil,
+			nil,
+			nil,
+			nil,
+		},
 	}
 
 	for index, tt := range testCases {
@@ -1322,7 +1467,8 @@ func TestApplyDDLJobs(t *testing.T) {
 		checkState := func(fromDisk bool) {
 			if (tt.tableMap != nil && !reflect.DeepEqual(tt.tableMap, pStorage.tableMap)) ||
 				(tt.tableMap == nil && len(pStorage.tableMap) != 0) {
-				log.Warn("tableMap not equal", zap.Int("testIndex", index), zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap), zap.Bool("fromDisk", fromDisk))
+				log.Warn("tableMap not equal", zap.Int("testIndex", index),
+					zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap), zap.Bool("fromDisk", fromDisk))
 				t.Fatalf("tableMap not equal")
 			}
 			if (tt.partitionMap != nil && !reflect.DeepEqual(tt.partitionMap, pStorage.partitionMap)) ||

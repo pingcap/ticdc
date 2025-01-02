@@ -394,3 +394,91 @@ func buildExchangePartitionJobForTest(
 		},
 	}
 }
+
+func buildAddPrimaryKeyJobForTest(schemaID, tableID int64, finishedTs uint64, indexes ...*model.IndexInfo) *model.Job {
+	return &model.Job{
+		Type:     model.ActionAddPrimaryKey,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+			TableInfo: &model.TableInfo{
+				ID:      tableID,
+				Indices: indexes,
+			},
+		},
+	}
+}
+
+func buildAlterIndexVisibilityJobForTest(schemaID, tableID int64, finishedTs uint64, indexes ...*model.IndexInfo) *model.Job {
+	return &model.Job{
+		Type:     model.ActionAlterIndexVisibility,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+			TableInfo: &model.TableInfo{
+				ID:      tableID,
+				Indices: indexes,
+			},
+		},
+	}
+}
+
+func buildDropPrimaryKeyJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionDropPrimaryKey,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildModifyTableCharsetJobForTest(schemaID, tableID int64, finishedTs uint64, charset string) *model.Job {
+	return &model.Job{
+		Type:     model.ActionModifyTableCharsetAndCollate,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+			TableInfo: &model.TableInfo{
+				Charset: charset,
+			},
+		},
+	}
+}
+
+func buildAlterTTLJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionAlterTTLInfo,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildRemoveTTLJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionAlterTTLRemove,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildSetTiFlashReplicaJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionSetTiFlashReplica,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
