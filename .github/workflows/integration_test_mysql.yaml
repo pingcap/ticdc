@@ -80,8 +80,9 @@ jobs:
           mkdir -p ./logs/$CASE
           cat $DIR/stdout.log
           tail -n 10 $DIR/cdc.log
-          sudo cp -r -L $DIR/{*.log} ./logs/$CASE/
-          sudo cp -r -L $DIR/{sync_diff} ./logs/$CASE/ || true
+          sudo ls $DIR
+          sudo cp -r -L $DIR/*.log ./logs/$CASE/ || true
+          sudo cp -r -L $DIR/sync_diff ./logs/$CASE/ || true
           sudo chown -R runner ./logs
           sudo tar -czvf ./logs.tar.gz ./logs
       # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
@@ -146,3 +147,26 @@ jobs:
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
+
+      - name: Copy logs to hack permission
+        if: ${{ always() }}
+        run: |
+          DIR=$(sudo find /tmp/tidb_cdc_test/ -type d -name 'cdc_data' -exec dirname {} \;)
+          [ -z "$DIR" ] && exit 0
+          CASE=$(basename $DIR)
+          mkdir -p ./logs/$CASE
+          cat $DIR/stdout.log
+          tail -n 10 $DIR/cdc.log
+          sudo ls $DIR
+          sudo cp -r -L $DIR/*.log ./logs/$CASE/ || true
+          sudo cp -r -L $DIR/sync_diff ./logs/$CASE/ || true
+          sudo chown -R runner ./logs
+          sudo tar -czvf ./logs.tar.gz ./logs
+      # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
+      - name: Upload logs
+        uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: upstream-switch-logs
+          path: |
+            ./logs.tar.gz
