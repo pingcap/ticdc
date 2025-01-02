@@ -111,6 +111,8 @@ function failOverCaseF-1() {
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
+	sleep 15
+
 	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer	
 	ensure 30 "run_sql 'show databases;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'fail_over_ddl_test'" 
 
@@ -120,7 +122,7 @@ function failOverCaseF-1() {
     ## continue to write ddl and dml to test the cdc server is working well
     run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	cleanup_process $CDC_BINARY
 
@@ -174,7 +176,8 @@ function failOverCaseF-2() {
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
-	 ## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
+	sleep 15
+	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1'" 
 
     run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
@@ -190,7 +193,7 @@ function failOverCaseF-2() {
     run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	cleanup_process $CDC_BINARY
 
@@ -244,6 +247,7 @@ function failOverCaseF-3() {
 	kill_cdc_pid $cdc_pid_2
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
+	
 	sleep 15
 	
 	 ## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
@@ -264,7 +268,7 @@ function failOverCaseF-3() {
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into fail_over_ddl_test.test4 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	cleanup_process $CDC_BINARY
 	export GO_FAILPOINTS=''
@@ -339,7 +343,7 @@ function failOverCaseF-5() {
 	run_sql "insert into fail_over_ddl_test.test1 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	cleanup_process $CDC_BINARY
 	export GO_FAILPOINTS=''

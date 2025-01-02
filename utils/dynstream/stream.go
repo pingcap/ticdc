@@ -37,7 +37,7 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 	isClosed atomic.Bool
 
-	handleWg sync.WaitGroup
+	wg sync.WaitGroup
 
 	startTime time.Time
 }
@@ -66,6 +66,10 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	return s
 }
 
+func (s *stream[A, P, T, D, H]) addPath(path *pathInfo[A, P, T, D, H]) {
+	s.in() <- eventWrap[A, P, T, D, H]{pathInfo: path, newPath: true}
+}
+
 func (s *stream[A, P, T, D, H]) getPendingSize() int {
 	if s.option.UseBuffer {
 		return len(s.inChan) + int(s.bufferCount.Load()) + len(s.outChan) + int(s.eventQueue.totalPendingLength.Load())
@@ -90,10 +94,11 @@ func (s *stream[A, P, T, D, H]) start() {
 	}
 
 	if s.option.UseBuffer {
+		s.wg.Add(1)
 		go s.receiver()
 	}
 
-	s.handleWg.Add(1)
+	s.wg.Add(1)
 	go s.handleLoop()
 }
 
@@ -108,7 +113,7 @@ func (s *stream[A, P, T, D, H]) close(wait ...bool) {
 		}
 	}
 	if len(wait) == 0 || wait[0] {
-		s.handleWg.Wait()
+		s.wg.Wait()
 	}
 }
 
@@ -127,7 +132,9 @@ func (s *stream[A, P, T, D, H]) receiver() {
 			}
 		}
 		close(s.outChan)
+		s.wg.Done()
 	}()
+
 	for {
 		event, ok := buffer.FrontRef()
 		if !ok {
@@ -182,7 +189,7 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 			handleEvent(e)
 		}
 
-		s.handleWg.Done()
+		s.wg.Done()
 	}()
 
 	// Variables below will be used in the Loop below.
@@ -268,8 +275,7 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	pendingQueue *deque.Deque[eventWrap[A, P, T, D, H]]
 
 	// Fields used by the memory control.
-	areaMemStat   *areaMemStat[A, P, T, D, H]
-	sizeHeapIndex int
+	areaMemStat *areaMemStat[A, P, T, D, H]
 
 	pendingSize          atomic.Uint32 // The total size(bytes) of pending events in the pendingQueue of the path.
 	paused               atomic.Bool   // The path is paused to send events.

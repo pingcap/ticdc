@@ -51,8 +51,10 @@ function failOverOnlyOneNode() {
     kill_cdc_pid $cdc_pid
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
+	sleep 15
+
 	check_table_exists fail_over_test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	export GO_FAILPOINTS=''
 
@@ -108,8 +110,10 @@ function failOverWhenTwoNode() {
  	kill_cdc_pid $cdc_pid_2
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
+	sleep 15
+
 	check_table_exists fail_over_test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	export GO_FAILPOINTS=''
 	

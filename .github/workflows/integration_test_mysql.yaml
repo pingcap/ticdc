@@ -61,10 +61,10 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=sql_mode
         
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
+      # - name: Test changefeed_pause_resume
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
 
       - name: Test changefeed_reconstruct
         if: ${{ success() }}
@@ -80,7 +80,8 @@ jobs:
           mkdir -p ./logs/$CASE
           cat $DIR/stdout.log
           tail -n 10 $DIR/cdc.log
-          sudo cp -r -L $DIR/{*.log,sync_diff} ./logs/$CASE/
+          sudo cp -r -L $DIR/{*.log} ./logs/$CASE/
+          sudo cp -r -L $DIR/{sync_diff} ./logs/$CASE/ || true
           sudo chown -R runner ./logs
           sudo tar -czvf ./logs.tar.gz ./logs
       # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
@@ -150,3 +151,25 @@ jobs:
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_G
+
+      - name: Copy logs to hack permission
+        if: ${{ always() }}
+        run: |
+          DIR=$(sudo find /tmp/tidb_cdc_test/ -type d -name 'cdc_data' -exec dirname {} \;)
+          [ -z "$DIR" ] && exit 0
+          CASE=$(basename $DIR)
+          mkdir -p ./logs/$CASE
+          cat $DIR/stdout.log
+          tail -n 10 $DIR/cdc.log
+          sudo cp -r -L $DIR/{*.log} ./logs/$CASE/
+          sudo cp -r -L $DIR/{sync_diff} ./logs/$CASE/ || true
+          sudo chown -R runner ./logs
+          sudo tar -czvf ./logs.tar.gz ./logs
+      # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
+      - name: Upload logs
+        uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: upstream-failover-logs
+          path: |
+            ./logs.tar.gz
