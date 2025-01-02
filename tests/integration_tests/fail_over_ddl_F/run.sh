@@ -111,6 +111,8 @@ function failOverCaseF-1() {
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
+	sleep 15
+
 	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer	
 	ensure 30 "run_sql 'show databases;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'fail_over_ddl_test'" 
 
@@ -174,7 +176,8 @@ function failOverCaseF-2() {
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
-	 ## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
+	sleep 15
+	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1'" 
 
     run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
@@ -245,7 +248,8 @@ function failOverCaseF-3() {
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
-	 ## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
+	sleep 15
+	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1' && check_contains 'test4'" 
 
     run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
@@ -320,6 +324,7 @@ function failOverCaseF-5() {
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
+	sleep 15
     ## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'select id from fail_over_ddl_test.test1;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains '2'" 
 
