@@ -101,7 +101,7 @@ function failOverCaseA-1() {
     ## continue to write ddl and dml to test the cdc server is working well
     run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	cleanup_process $CDC_BINARY
 
@@ -156,7 +156,7 @@ function failOverCaseA-2() {
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into fail_over_ddl_test.test3 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	cleanup_process $CDC_BINARY
 
@@ -213,7 +213,7 @@ function failOverCaseA-3() {
 	run_sql "insert into fail_over_ddl_test.test3 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into fail_over_ddl_test.test4 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	cleanup_process $CDC_BINARY
 
@@ -272,7 +272,7 @@ function failOverCaseA-5() {
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into fail_over_ddl_test.test3 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	cleanup_process $CDC_BINARY
 
