@@ -700,11 +700,11 @@ func TestApplyDDLJobs(t *testing.T) {
 			},
 			func() []*model.Job {
 				return []*model.Job{
-					buildCreateTableJobForTest(100, 300, "t1", 1010), // create table 300
-					buildRenameTableJobForTest(105, 300, "t2", 1020), // rename table 300 to schema 105
+					buildCreateTableJobForTest(100, 300, "t1", 1010),                                              // create table 300
+					buildRenameTableJobForTest(105, 300, "t2", 1020, "rename table t1 to test2.t2", "test", "t1"), // rename table 300 to schema 105
 					// rename table 300 to schema 105 with the same name again
 					// check comments in buildPersistedDDLEventForRenameTable to see why this would happen
-					buildRenameTableJobForTest(105, 300, "t2", 1030),
+					buildRenameTableJobForTest(105, 300, "t2", 1030, "", "", ""),
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -739,6 +739,7 @@ func TestApplyDDLJobs(t *testing.T) {
 					result: []commonEvent.DDLEvent{
 						{
 							Type:       byte(model.ActionRenameTable),
+							Query:      "RENAME TABLE `test`.`t1` TO `test2`.`t2`",
 							FinishedTs: 1020,
 							BlockedTables: &commonEvent.InfluencedTables{
 								InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -1677,7 +1678,7 @@ func TestRegisterTable(t *testing.T) {
 			},
 			ddlJobs: func() []*model.Job {
 				return []*model.Job{
-					buildRenameTableJobForTest(50, 99, "t2", 1000),                                   // rename table 99 to t2
+					buildRenameTableJobForTest(50, 99, "t2", 1000, "", "", ""),                       // rename table 99 to t2
 					buildCreateTableJobForTest(50, 100, "t3", 1010),                                  // create table 100
 					buildTruncateTableJobForTest(50, 100, 101, "t3", 1020),                           // truncate table 100 to 101
 					buildCreatePartitionTableJobForTest(50, 102, "t4", []int64{201, 202, 203}, 1030), // create partition table 102

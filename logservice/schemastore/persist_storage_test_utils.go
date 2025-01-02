@@ -246,17 +246,24 @@ func buildCreatePartitionTablesJobForTest(schemaID int64, tableIDs []int64, tabl
 	}
 }
 
-func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64) *model.Job {
+func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64, query, prevSchemaName, prevTableName string) *model.Job {
 	return &model.Job{
 		Type:     model.ActionRenameTable,
 		SchemaID: schemaID,
 		TableID:  tableID,
+		Query:    query,
 		BinlogInfo: &model.HistoryInfo{
 			TableInfo: &model.TableInfo{
 				ID:   tableID,
 				Name: pmodel.NewCIStr(tableName),
 			},
 			FinishedTS: finishedTs,
+		},
+		InvolvingSchemaInfo: []model.InvolvingSchemaInfo{
+			{
+				Database: prevSchemaName,
+				Table:    prevTableName,
+			},
 		},
 	}
 }
