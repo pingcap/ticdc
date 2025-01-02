@@ -654,6 +654,11 @@ func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) e
 func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	p.mu.Lock()
 
+	if shouldSkipDDL(job, p.tableMap) {
+		p.mu.Unlock()
+		return nil
+	}
+
 	handler, ok := allDDLHandlers[job.Type]
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
@@ -664,11 +669,6 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		tableMap:     p.tableMap,
 		partitionMap: p.partitionMap,
 	})
-
-	if shouldSkipDDL(&ddlEvent, p.databaseMap, p.tableMap) {
-		p.mu.Unlock()
-		return nil
-	}
 
 	p.mu.Unlock()
 
@@ -708,53 +708,45 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	return nil
 }
 
-func shouldSkipDDL(
-	event *PersistedDDLEvent,
-	databaseMap map[int64]*BasicDatabaseInfo,
-	tableMap map[int64]*BasicTableInfo,
-) bool {
-	switch model.ActionType(event.Type) {
-	// TODO: add some comment to explain why and when we should skip ActionCreateSchema/ActionCreateTable
-	case model.ActionCreateSchema:
-		if _, ok := databaseMap[event.CurrentSchemaID]; ok {
-			log.Warn("database already exists. ignore DDL ",
-				zap.String("DDL", event.Query),
-				zap.Int64("jobID", event.ID),
-				zap.Int64("schemaID", event.CurrentSchemaID),
-				zap.Uint64("finishTs", event.FinishedTs),
-				zap.Int64("jobSchemaVersion", event.SchemaVersion))
-			return true
-		}
+func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
+	switch model.ActionType(job.Type) {
+	// Skipping ActionCreateTable and ActionCreateTables when the table already exists:
+	// 1. It is possible to receive ActionCreateTable and ActionCreateTables multiple times,
+	//    and filtering duplicates in a generic way is challenging.
+	//    (SchemaVersion checks are unreliable because versions might not be strictly ordered in some cases.)
+	// 2. ActionCreateTable and ActionCreateTables for the same table may have different commit ts.
+	//    One of these actions could be garbage collected, leaving the table present in the snapshot.
+	//    Therefore, the only reliable way to determine if a later DDL operation is redundant
+	//    is by verifying whether the table already exists.
 	case model.ActionCreateTable:
 		// Note: partition table's logical table id is also in tableMap
-		if _, ok := tableMap[event.CurrentTableID]; ok {
+		if _, ok := tableMap[job.BinlogInfo.TableInfo.ID]; ok {
 			log.Warn("table already exists. ignore DDL",
-				zap.String("DDL", event.Query),
-				zap.Int64("jobID", event.ID),
-				zap.Int64("schemaID", event.CurrentSchemaID),
-				zap.Int64("tableID", event.CurrentTableID),
-				zap.Uint64("finishTs", event.FinishedTs),
-				zap.Int64("jobSchemaVersion", event.SchemaVersion))
+				zap.String("DDL", job.Query),
+				zap.Int64("jobID", job.ID),
+				zap.Int64("schemaID", job.SchemaID),
+				zap.Int64("tableID", job.BinlogInfo.TableInfo.ID),
+				zap.Uint64("finishTs", job.BinlogInfo.FinishedTS),
+				zap.Int64("jobSchemaVersion", job.BinlogInfo.SchemaVersion))
 			return true
 		}
-	case model.ActionAlterTableAttributes,
-		model.ActionAlterTablePartitionAttributes:
-		// Note: these ddls seems not useful to sync to downstream?
-		return true
 	case model.ActionCreateTables:
 		// For duplicate create tables ddl job, the tables in the job should be same, check the first table is enough
-		if _, ok := tableMap[event.MultipleTableInfos[0].ID]; ok {
+		if _, ok := tableMap[job.BinlogInfo.MultipleTableInfos[0].ID]; ok {
 			log.Warn("table already exists. ignore DDL",
-				zap.String("DDL", event.Query),
-				zap.Int64("jobID", event.ID),
-				zap.Int64("schemaID", event.CurrentSchemaID),
-				zap.Int64("tableID", event.CurrentTableID),
-				zap.Uint64("finishTs", event.FinishedTs),
-				zap.Int64("jobSchemaVersion", event.SchemaVersion))
+				zap.String("DDL", job.Query),
+				zap.Int64("jobID", job.ID),
+				zap.Int64("schemaID", job.SchemaID),
+				zap.Int64("tableID", job.BinlogInfo.MultipleTableInfos[0].ID),
+				zap.Uint64("finishTs", job.BinlogInfo.FinishedTS),
+				zap.Int64("jobSchemaVersion", job.BinlogInfo.SchemaVersion))
 			return true
 		}
+	// DDLs ignored
+	case model.ActionAlterTableAttributes,
+		model.ActionAlterTablePartitionAttributes:
+		return true
 	}
-	// Note: create tables don't need to be ignore, because we won't receive it twice
 	return false
 }
 

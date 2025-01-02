@@ -1090,7 +1090,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, _ filter.Filter, tiDBOnly 
 }
 
 func buildDDLEventForCreateSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, false)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
 		TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
@@ -1099,7 +1099,7 @@ func buildDDLEventForCreateSchema(rawEvent *PersistedDDLEvent, tableFilter filte
 }
 
 func buildDDLEventForDropSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, false)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeDB,
 		SchemaID:      rawEvent.CurrentSchemaID,
