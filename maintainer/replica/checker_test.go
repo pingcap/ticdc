@@ -63,7 +63,7 @@ func TestHotSpanChecker(t *testing.T) {
 		EventSizePerSecond: HotSpanWriteThreshold,
 	})
 	require.Equal(t, 1, len(checker.hotTasks))
-	for i := 0; i < HotSpanScoreThreshold; i++ {
+	for i := 0; i < DefaultHotSpanScoreThreshold; i++ {
 		db.UpdateStatus(replicaSpan, &heartbeatpb.TableSpanStatus{
 			CheckpointTs:       9,
 			EventSizePerSecond: HotSpanWriteThreshold,
