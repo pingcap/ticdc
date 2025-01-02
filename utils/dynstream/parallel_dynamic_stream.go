@@ -128,7 +128,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	s.pathMap[path] = pi
 	s.setMemControl(pi, as...)
 
-	pi.stream.in() <- eventWrap[A, P, T, D, H]{pathInfo: pi, newPath: true}
+	pi.stream.addPath(pi)
 
 	s._statAddPathCount.Add(1)
 	return nil

@@ -214,16 +214,3 @@ func (m *memControl[A, P, T, D, H]) getMetrics() (usedMemory int64, maxMemory in
 	}
 	return usedMemory, maxMemory
 }
-
-func (p *pathInfo[A, P, T, D, H]) SetHeapIndex(index int) {
-	p.sizeHeapIndex = index
-}
-
-func (p *pathInfo[A, P, T, D, H]) GetHeapIndex() int {
-	return p.sizeHeapIndex
-}
-
-func (p *pathInfo[A, P, T, D, H]) LessThan(other *pathInfo[A, P, T, D, H]) bool {
-	// pathSizeHeap should be in descending order. That say the node with the largest pending size is the top.
-	return p.pendingSize.Load() > other.pendingSize.Load()
-}

@@ -80,7 +80,8 @@ jobs:
           mkdir -p ./logs/$CASE
           cat $DIR/stdout.log
           tail -n 10 $DIR/cdc.log
-          sudo cp -r -L $DIR/{*.log,sync_diff} ./logs/$CASE/
+          sudo cp -r -L $DIR/{*.log} ./logs/$CASE/
+          sudo cp -r -L $DIR/{sync_diff} ./logs/$CASE/ || true
           sudo chown -R runner ./logs
           sudo tar -czvf ./logs.tar.gz ./logs
       # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
