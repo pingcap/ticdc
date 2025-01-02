@@ -370,6 +370,15 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
 	},
+
+	model.ActionMultiSchemaChange: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+	},
 }
 
 func isPartitionTable(tableInfo *model.TableInfo) bool {
@@ -680,7 +689,9 @@ func updateDDLHistoryForCreateView(args updateDDLHistoryFuncArgs) []uint64 {
 
 func updateDDLHistoryForDropView(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
-	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.PrevPartitions...)
+	for tableID := range args.tableMap {
+		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
+	}
 	return args.tableTriggerDDLHistory
 }
 

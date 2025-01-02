@@ -1320,6 +1320,8 @@ func TestApplyDDLJobs(t *testing.T) {
 		// test modify table charset
 		// test alter table ttl/remove ttl
 		// test set TiFlash replica
+		// test multi schema change
+		// test add/drop column
 		{
 			[]mockDBInfo{
 				{
@@ -1356,6 +1358,9 @@ func TestApplyDDLJobs(t *testing.T) {
 					buildAlterTTLJobForTest(100, 300, 1050),
 					buildRemoveTTLJobForTest(100, 300, 1060),
 					buildSetTiFlashReplicaJobForTest(100, 300, 1070),
+					buildMultiSchemaChangeJobForTest(100, 300, 1080),
+					buildAddColumnJobForTest(100, 300, 1090),
+					buildDropColumnJobForTest(100, 300, 1100),
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -1373,7 +1378,7 @@ func TestApplyDDLJobs(t *testing.T) {
 					},
 				},
 			},
-			map[int64][]uint64{300: {1010, 1020, 1030, 1040, 1050, 1060, 1070}},
+			map[int64][]uint64{300: {1010, 1020, 1030, 1040, 1050, 1060, 1070, 1080, 1090, 1100}},
 			nil,
 			nil,
 			nil,
