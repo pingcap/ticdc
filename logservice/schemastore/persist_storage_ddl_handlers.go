@@ -134,7 +134,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
 	},
 	model.ActionDropTable: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForDropTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropTable,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
@@ -529,6 +529,16 @@ func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) P
 	event := buildPersistedDDLEventCommon(args)
 	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
 	event.CurrentTableName = event.TableInfo.Name.O
+	return event
+}
+
+func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
+	event.CurrentTableName = getTableName(args.tableMap, event.CurrentTableID)
+	if event.Query != "" {
+		event.Query = fmt.Sprintf("DROP TABLE `%s`.`%s`", event.CurrentSchemaName, event.CurrentTableName)
+	}
 	return event
 }
 

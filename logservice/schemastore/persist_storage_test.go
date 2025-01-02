@@ -93,11 +93,11 @@ func TestApplyDDLJobs(t *testing.T) {
 			nil,
 			func() []*model.Job {
 				return []*model.Job{
-					buildCreateSchemaJobForTest(100, "test", 1000),          // create schema 100
-					buildCreateTableJobForTest(100, 200, "t1", 1010),        // create table 200
-					buildCreateTableJobForTest(100, 201, "t2", 1020),        // create table 201
-					buildDropTableJobForTest(100, 201, 1030),                // drop table 201
-					buildTruncateTableJobForTest(100, 200, 202, "t1", 1040), // truncate table 200 to 202
+					buildCreateSchemaJobForTest(100, "test", 1000),                  // create schema 100
+					buildCreateTableJobForTest(100, 200, "t1", 1010),                // create table 200
+					buildCreateTableJobForTest(100, 201, "t2", 1020),                // create table 201
+					buildDropTableJobForTest(100, 201, 1030, "drop table t2, t100"), // drop table 201
+					buildTruncateTableJobForTest(100, 200, 202, "t1", 1040),         // truncate table 200 to 202
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -245,6 +245,7 @@ func TestApplyDDLJobs(t *testing.T) {
 									},
 								},
 							},
+							Query: "DROP TABLE `test`.`t2`",
 						},
 						{
 							Type:       byte(model.ActionTruncateTable),

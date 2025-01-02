@@ -301,7 +301,7 @@ func buildCreatePartitionTableJobForTest(schemaID, tableID int64, tableName stri
 	return buildPartitionTableRelatedJobForTest(model.ActionCreateTable, schemaID, tableID, tableName, partitionIDs, finishedTs)
 }
 
-func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64, query string) *model.Job {
 	return &model.Job{
 		Type:     model.ActionDropTable,
 		SchemaID: schemaID,
@@ -309,6 +309,7 @@ func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64) *model
 		BinlogInfo: &model.HistoryInfo{
 			FinishedTS: finishedTs,
 		},
+		Query: query,
 	}
 }
 
