@@ -3,9 +3,11 @@ package dynstream
 import (
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
+	"github.com/pingcap/log"
 	. "github.com/pingcap/ticdc/pkg/apperror"
 )
 
@@ -24,8 +26,8 @@ type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D
 
 	feedbackChan chan Feedback[A, P, D]
 
-	_statAddPathCount    int
-	_statRemovePathCount int
+	_statAddPathCount    atomic.Int64
+	_statRemovePathCount atomic.Int64
 }
 
 func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](hasher PathHasher[P], handler H, option Option) *parallelDynamicStream[A, P, T, D, H] {
@@ -47,7 +49,9 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 		eventExtraSize: eventExtraSize,
 	}
 	if option.EnableMemoryControl {
+		log.Info("Dynamic stream enable memory control")
 		s.feedbackChan = make(chan Feedback[A, P, D], 1024)
+		s.memControl = newMemControl[A, P, T, D, H]()
 	}
 	for i := range option.StreamCount {
 		s.streams = append(s.streams, newStream(i, handler, option))
@@ -65,11 +69,6 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Close() {
 	for _, ds := range s.streams {
 		ds.close()
 	}
-}
-
-func (s *parallelDynamicStream[A, P, T, D, H]) hash(path P) int {
-	hash := s.pathHasher(path)
-	return int(hash % uint64(len(s.streams)))
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
@@ -127,16 +126,11 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	pi := newPathInfo[A, P, T, D, H](area, path, dest)
 	pi.setStream(s.streams[s.hash(path)])
 	s.pathMap[path] = pi
-	if s.memControl != nil {
-		setting := AreaSettings{}
-		if len(as) > 0 {
-			setting = as[0]
-		}
-		s.memControl.addPathToArea(pi, setting, s.feedbackChan)
-	}
-	pi.stream.in() <- eventWrap[A, P, T, D, H]{pathInfo: pi, newPath: true}
+	s.setMemControl(pi, as...)
 
-	s._statAddPathCount++
+	pi.stream.addPath(pi)
+
+	s._statAddPathCount.Add(1)
 	return nil
 }
 
@@ -157,7 +151,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	pi.stream.in() <- eventWrap[A, P, T, D, H]{pathInfo: pi}
 	delete(s.pathMap, path)
 
-	s._statRemovePathCount++
+	s._statRemovePathCount.Add(1)
 	return nil
 }
 
@@ -173,7 +167,32 @@ func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics {
 		size := ds.getPendingSize()
 		metrics.PendingQueueLen += size
 	}
-	metrics.AddPath = s._statAddPathCount
-	metrics.RemovePath = s._statRemovePathCount
+	metrics.AddPath = int(s._statAddPathCount.Load())
+	metrics.RemovePath = int(s._statRemovePathCount.Load())
+
+	if s.memControl != nil {
+		usedMemory, maxMemory := s.memControl.getMetrics()
+		metrics.MemoryControl.UsedMemory = usedMemory
+		metrics.MemoryControl.MaxMemory = maxMemory
+	}
+
 	return metrics
+}
+
+func (s *parallelDynamicStream[A, P, T, D, H]) hash(path P) int {
+	hash := s.pathHasher(path)
+	return int(hash % uint64(len(s.streams)))
+}
+
+func (s *parallelDynamicStream[A, P, T, D, H]) setMemControl(
+	pi *pathInfo[A, P, T, D, H],
+	as ...AreaSettings,
+) {
+	if s.memControl != nil {
+		setting := AreaSettings{}
+		if len(as) > 0 {
+			setting = as[0]
+		}
+		s.memControl.addPathToArea(pi, setting, s.feedbackChan)
+	}
 }

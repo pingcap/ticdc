@@ -3,7 +3,10 @@ package dynstream
 import (
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 type mockWork interface {
@@ -13,6 +16,7 @@ type mockWork interface {
 type mockEvent struct {
 	id    int
 	path  string
+	value int
 	sleep time.Duration
 
 	work mockWork
@@ -76,10 +80,111 @@ func (h *mockHandler) drainDroppedEvents() []*mockEvent {
 }
 
 type Inc struct {
-	num int64
-	inc *atomic.Int64
+	num    int64
+	inc    *atomic.Int64
+	notify *sync.WaitGroup
 }
 
 func (i *Inc) Do() {
 	i.inc.Add(i.num)
+	if i.notify != nil {
+		i.notify.Done()
+	}
+}
+
+func newInc(num int64, inc *atomic.Int64, notify ...*sync.WaitGroup) *Inc {
+	i := &Inc{num: num, inc: inc}
+	if len(notify) > 0 {
+		i.notify = notify[0]
+		i.notify.Add(1)
+	}
+	return i
+}
+
+func TestStreamBasic(t *testing.T) {
+	handler := mockHandler{}
+	stream := newStream(1, &handler, Option{UseBuffer: false})
+	require.Equal(t, 0, stream.getPendingSize())
+
+	stream.start()
+	defer stream.close()
+	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test/path", nil)
+	stream.addPath(pi)
+	// Test basic event handling
+	inc := &atomic.Int64{}
+	// notify is used to wait for the event to be processed
+	notify := &sync.WaitGroup{}
+
+	newEvent := func(num int) eventWrap[int, string, *mockEvent, any, *mockHandler] {
+		return eventWrap[int, string, *mockEvent, any, *mockHandler]{
+			pathInfo: pi,
+			event:    newMockEvent(num, pi.path, 0, newInc(int64(num), inc, notify), nil, nil),
+		}
+	}
+
+	// Send event to stream
+	stream.in() <- newEvent(1)
+
+	notify.Wait()
+	// Verify event was processed
+	require.Equal(t, int64(1), inc.Load())
+	require.Equal(t, 0, stream.getPendingSize())
+
+	// Test multiple events
+	stream.in() <- newEvent(2)
+	stream.in() <- newEvent(3)
+
+	notify.Wait()
+	// Verify all events were processed
+	require.Equal(t, int64(6), inc.Load()) // 1 + 2 + 3 = 6
+	require.Equal(t, 0, stream.getPendingSize())
+}
+
+func TestStreamBasicWithBuffer(t *testing.T) {
+	handler := mockHandler{}
+	stream := newStream(1, &handler, Option{UseBuffer: true})
+	require.Equal(t, 0, stream.getPendingSize())
+
+	stream.start()
+	defer stream.close()
+	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test/path", nil)
+	stream.addPath(pi)
+	// Test basic event handling
+	inc := &atomic.Int64{}
+	// notify is used to wait for the event to be processed
+	notify := &sync.WaitGroup{}
+
+	newEvent := func(num int) eventWrap[int, string, *mockEvent, any, *mockHandler] {
+		return eventWrap[int, string, *mockEvent, any, *mockHandler]{
+			pathInfo: pi,
+			event:    newMockEvent(num, pi.path, 0, newInc(int64(num), inc, notify), nil, nil),
+		}
+	}
+
+	// Send event to stream
+	stream.in() <- newEvent(1)
+
+	notify.Wait()
+	// Verify event was processed
+	require.Equal(t, int64(1), inc.Load())
+	require.Equal(t, 0, stream.getPendingSize())
+
+	// Test multiple events
+	stream.in() <- newEvent(2)
+	stream.in() <- newEvent(3)
+
+	notify.Wait()
+	// Verify all events were processed
+	require.Equal(t, int64(6), inc.Load()) // 1 + 2 + 3 = 6
+	require.Equal(t, 0, stream.getPendingSize())
+}
+
+func TestPathInfo(t *testing.T) {
+	// case 1: new path info
+	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test/path", nil)
+	require.Equal(t, 1, pi.area)
+	require.Equal(t, "test/path", pi.path)
+	require.Equal(t, uint32(0), pi.pendingSize.Load())
+	require.Equal(t, false, pi.paused.Load())
+	require.Equal(t, time.Unix(0, 0), pi.lastSendFeedbackTime.Load())
 }

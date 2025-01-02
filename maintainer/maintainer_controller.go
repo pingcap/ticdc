@@ -203,7 +203,12 @@ func (c *Controller) FinishBootstrap(
 			zap.Any("startTs", resp.CheckpointTs))
 		if resp.CheckpointTs > startTs {
 			startTs = resp.CheckpointTs
+			// update the ddl dispatcher status
+			status := c.replicationDB.GetDDLDispatcher().GetStatus()
+			status.CheckpointTs = startTs
+			c.replicationDB.UpdateStatus(c.replicationDB.GetDDLDispatcher(), status)
 		}
+
 	}
 	if startTs == 0 {
 		log.Panic("cant not found the start ts from the bootstrap response",

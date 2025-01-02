@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/pingcap/ticdc/logservice/logservicepb"
@@ -26,6 +27,10 @@ var LogServiceEventTypes = []IOType{
 	TypeHandshakeEvent,
 	TypeReadyEvent,
 	TypeNotReusableEvent,
+}
+
+func (t IOType) IsLogServiceEvent() bool {
+	return slices.Contains(LogServiceEventTypes, t)
 }
 
 const (

@@ -5,7 +5,6 @@ import (
 	mrand "math/rand"
 	"strings"
 	"sync"
-	"sync/atomic"
 )
 
 const createDataTableFormat = `
@@ -44,8 +43,6 @@ func (c *UUUWorkload) BuildCreateTableStatement(n int) string {
 	return fmt.Sprintf(createIndexTableFormat, n)
 }
 
-var count atomic.Int64
-
 func (c *UUUWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	panic("unimplemented")
 }
@@ -54,9 +51,8 @@ func (c *UUUWorkload) BuildInsertSql(tableN int, batchSize int) string {
 func (c *UUUWorkload) BuildInsertSqlWithValues(tableN int, batchSize int) (string, []interface{}) {
 	var sql string
 	values := make([]interface{}, 0, batchSize*4) // 预分配空间：每行4个值
-	count.Add(1)
 
-	if count.Load()%2 == 0 {
+	if tableN%2 == 0 {
 		// Data table insert
 		sql = fmt.Sprintf("INSERT INTO Data%d (model_id, object_id, object_value, version) VALUES ", tableN)
 		placeholders := make([]string, batchSize)

@@ -26,25 +26,18 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 )
 
-var (
-	metricsDSInputChanLen    = metrics.DynamicStreamEventChanSize.WithLabelValues("maintainer-manager")
-	metricsDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("maintainer-manager")
-)
-
 // Manager is the manager of all changefeed maintainer in a ticdc watcher, each ticdc watcher will
-// start a Manager when the watcher is startup. the Manager should:
-// 1. handle bootstrap command from coordinator and return all changefeed maintainer status
-// 2. handle dispatcher command from coordinator: add or remove changefeed maintainer
-// 3. check maintainer liveness
+// start a Manager when the watcher is startup. It responsible for:
+// 1. Handle bootstrap command from coordinator and report all changefeed maintainer status.
+// 2. Handle other commands from coordinator: like add or remove changefeed maintainer
+// 3. Manage maintainers lifetime
 type Manager struct {
 	mc   messaging.MessageCenter
 	conf *config.SchedulerConfig
@@ -60,16 +53,14 @@ type Manager struct {
 	tsoClient   replica.TSOClient
 	regionCache *tikv.RegionCache
 
+	// msgCh is used to cache messages from coordinator
 	msgCh chan *messaging.TargetMessage
 
-	stream        dynstream.DynamicStream[int, common.GID, *Event, *Maintainer, *StreamHandler]
 	taskScheduler threadpool.ThreadPool
 }
 
-// NewMaintainerManager create a changefeed maintainer manager instance,
-// 1. manager receives bootstrap command from coordinator
-// 2. manager manages maintainer lifetime
-// 3. manager report maintainer status to coordinator
+// NewMaintainerManager create a changefeed maintainer manager instance
+// and register message handler to message center
 func NewMaintainerManager(selfNode *node.Info,
 	conf *config.SchedulerConfig,
 	pdAPI pdutil.PDAPIClient,
@@ -88,8 +79,6 @@ func NewMaintainerManager(selfNode *node.Info,
 		tsoClient:     pdClient,
 		regionCache:   regionCache,
 	}
-	m.stream = dynstream.NewDynamicStream(NewStreamHandler())
-	m.stream.Start()
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
 	mc.RegisterHandler(messaging.MaintainerTopic,
@@ -141,7 +130,8 @@ func (m *Manager) Name() string {
 }
 
 func (m *Manager) Run(ctx context.Context) error {
-	ticker := time.NewTicker(time.Millisecond * 500)
+	reportMaintainerStatusInterval := time.Millisecond * 200
+	ticker := time.NewTicker(reportMaintainerStatusInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -159,18 +149,10 @@ func (m *Manager) Run(ctx context.Context) error {
 					cf.Close()
 					log.Info("maintainer removed, remove it from dynamic stream",
 						zap.String("changefeed", cf.id.String()))
-					if err := m.stream.RemovePath(cf.id.Id); err != nil {
-						log.Warn("remove path from dynstream failed, will retry later",
-							zap.String("changefeed", cf.id.String()),
-							zap.Error(err))
-						// try it again later
-						return true
-					}
 					m.maintainers.Delete(key)
 				}
 				return true
 			})
-			m.updateMetricsOnce()
 		}
 	}
 }
@@ -243,21 +225,20 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 			zap.Uint64("checkpointTs", req.CheckpointTs),
 			zap.Any("config", cfConfig))
 	}
-	cf := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.stream, m.taskScheduler,
+	cf := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.taskScheduler,
 		m.pdAPI, m.tsoClient, m.regionCache, req.CheckpointTs)
-	err = m.stream.AddPath(cfID.Id, cf)
 	if err != nil {
 		log.Warn("add path to dynstream failed, coordinator will retry later", zap.Error(err))
 		return
 	}
+	cf.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 	m.maintainers.Store(cfID, cf)
-	m.stream.Push(cfID.Id, &Event{changefeedID: cfID, eventType: EventInit})
 }
 
 func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heartbeatpb.MaintainerStatus {
 	req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
 	cfID := common.NewChangefeedIDFromPB(req.GetId())
-	_, ok := m.maintainers.Load(cfID)
+	cf, ok := m.maintainers.Load(cfID)
 	if !ok {
 		if !req.Cascade {
 			log.Warn("ignore remove maintainer request, "+
@@ -271,22 +252,17 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 		}
 		// it's cascade remove, we should remove the dispatcher from all node
 		// here we create a maintainer to run the remove the dispatcher logic
-		cf := NewMaintainerForRemove(cfID, m.conf, m.selfNode, m.stream, m.taskScheduler, m.pdAPI,
+		cf = NewMaintainerForRemove(cfID, m.conf, m.selfNode, m.taskScheduler, m.pdAPI,
 			m.tsoClient, m.regionCache)
-		err := m.stream.AddPath(cfID.Id, cf)
-		if err != nil {
-			log.Warn("add path to dynstream failed, coordinator will retry later", zap.Error(err))
-			return nil
-		}
 		m.maintainers.Store(cfID, cf)
 	}
-	log.Info("received remove maintainer request",
-		zap.String("changefeed", cfID.String()))
-	m.stream.Push(cfID.Id, &Event{
+	cf.(*Maintainer).pushEvent(&Event{
 		changefeedID: cfID,
 		eventType:    EventMessage,
 		message:      msg,
 	})
+	log.Info("received remove maintainer request",
+		zap.String("changefeed", cfID.String()))
 	return nil
 }
 
@@ -312,7 +288,7 @@ func (m *Manager) onDispatchMaintainerRequest(
 }
 
 func (m *Manager) sendHeartbeat() {
-	if m.coordinatorVersion > 0 {
+	if m.isBootstrap() {
 		response := &heartbeatpb.MaintainerHeartbeat{}
 		m.maintainers.Range(func(key, value interface{}) bool {
 			cfMaintainer := value.(*Maintainer)
@@ -336,7 +312,7 @@ func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 		m.onCoordinatorBootstrapRequest(msg)
 	case messaging.TypeAddMaintainerRequest,
 		messaging.TypeRemoveMaintainerRequest:
-		if m.coordinatorVersion > 0 {
+		if m.isBootstrap() {
 			status := m.onDispatchMaintainerRequest(msg)
 			if status == nil {
 				return
@@ -363,11 +339,6 @@ func (m *Manager) dispatcherMaintainerMessage(
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		// m.stream.Push(changefeed.Id, &Event{
-		// 	changefeedID: changefeed,
-		// 	eventType:    EventMessage,
-		// 	message:      msg,
-		// })
 		c, ok := m.maintainers.Load(changefeed)
 		if !ok {
 			log.Warn("maintainer is not found",
@@ -375,19 +346,13 @@ func (m *Manager) dispatcherMaintainerMessage(
 			return nil
 		}
 		maintainer := c.(*Maintainer)
-		maintainer.eventCh.In() <- &Event{
+		maintainer.pushEvent(&Event{
 			changefeedID: changefeed,
 			eventType:    EventMessage,
 			message:      msg,
-		}
+		})
 	}
 	return nil
-}
-
-func (m *Manager) updateMetricsOnce() {
-	dsMetrics := m.stream.GetMetrics()
-	metricsDSInputChanLen.Set(float64(dsMetrics.EventChanSize))
-	metricsDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 }
 
 func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) *Maintainer {
@@ -396,4 +361,8 @@ func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) *
 		return nil
 	}
 	return c.(*Maintainer)
+}
+
+func (m *Manager) isBootstrap() bool {
+	return m.coordinatorVersion > 0
 }

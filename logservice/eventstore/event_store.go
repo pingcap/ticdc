@@ -40,6 +40,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/tiflow/pkg/pdutil"
+	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -72,6 +73,7 @@ type EventStore interface {
 
 	UnregisterDispatcher(dispatcherID common.DispatcherID) error
 
+	// TODO: Implement this after checkpointTs is correctly reported by the downstream dispatcher.
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64) error
 
 	GetDispatcherDMLEventState(dispatcherID common.DispatcherID) (bool, DMLEventState)
@@ -90,6 +92,7 @@ type EventIterator interface {
 	Next() (*common.RawKVEntry, bool, error)
 
 	// Close closes the iterator.
+	// It returns the number of events that are read from the iterator.
 	Close() (eventCnt int64, err error)
 }
 
@@ -463,7 +466,14 @@ func (e *eventStore) RegisterDispatcher(
 	e.dispatcherMeta.Unlock()
 
 	consumeKVEvents := func(kvs []common.RawKVEntry, finishCallback func()) bool {
-		subStat.maxEventCommitTs.Store(kvs[len(kvs)-1].CRTs)
+		maxCommitTs := uint64(0)
+		// Must find the max commit ts in the kvs, since the kvs is not sorted yet.
+		for _, kv := range kvs {
+			if kv.CRTs > maxCommitTs {
+				maxCommitTs = kv.CRTs
+			}
+		}
+		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
 		subStat.eventCh.Push(eventWithCallback{
 			subID:    subStat.subID,
 			tableID:  subStat.tableID,

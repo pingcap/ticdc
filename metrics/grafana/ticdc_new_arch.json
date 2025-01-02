@@ -1642,9 +1642,7 @@
         },
         {
           "aliasColors": {},
-          "bars": false,
           "dashLength": 10,
-          "dashes": false,
           "datasource": "${DS_C1}",
           "description": "The total number of events that puller outputs",
           "fieldConfig": {
@@ -1654,14 +1652,12 @@
             "overrides": []
           },
           "fill": 1,
-          "fillGradient": 0,
           "gridPos": {
             "h": 4,
             "w": 12,
             "x": 12,
             "y": 3
           },
-          "hiddenSeries": false,
           "id": 229,
           "legend": {
             "alignAsTable": true,
@@ -1684,38 +1680,23 @@
             "alertThreshold": true
           },
           "paceLength": 10,
-          "percentage": false,
           "pluginVersion": "7.5.17",
           "pointradius": 2,
-          "points": false,
           "renderer": "flot",
           "seriesOverrides": [],
           "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
           "targets": [
             {
-              "exemplar": true,
-              "expr": "sum(ticdc_kvclient_pull_event_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",instance=~\"$ticdc_instance\", type=\"kv\"}) by (instance,type)",
-              "format": "time_series",
-              "interval": "",
-              "intervalFactor": 1,
+              "expr": "ticdc_kvclient_pull_event_count",
               "legendFormat": "{{instance}}-{{type}}",
+              "interval": "",
+              "exemplar": true,
+              "hide": false,
               "refId": "A"
-            },
-            {
-              "exemplar": true,
-              "expr": "sum(ticdc_kvclient_pull_event_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",instance=~\"$ticdc_instance\", type=\"resolved_ts\"}) by (instance,type)",
-              "hide": true,
-              "interval": "",
-              "legendFormat": "{{instance}}-{{type}}",
-              "refId": "B"
             }
           ],
           "thresholds": [],
-          "timeFrom": null,
           "timeRegions": [],
-          "timeShift": null,
           "title": "Puller output events",
           "tooltip": {
             "shared": true,
@@ -1753,7 +1734,17 @@
           "yaxis": {
             "align": false,
             "alignLevel": null
-          }
+          },
+          "bars": false,
+          "dashes": false,
+          "fillGradient": 0,
+          "hiddenSeries": false,
+          "percentage": false,
+          "points": false,
+          "stack": false,
+          "steppedLine": false,
+          "timeFrom": null,
+          "timeShift": null
         },
         {
           "aliasColors": {},
@@ -11123,19 +11114,11 @@
           "steppedLine": false,
           "targets": [
             {
-              "exemplar": true,
-              "expr": "ticdc_sinkmanager_memory_quota{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", component!=\"\", instance=~\"$ticdc_instance\"}",
-              "interval": "",
+              "expr": "ticdc_dynamic_stream_memory_usage{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", component!=\"\", instance=~\"$ticdc_instance\"}",
               "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-memory-{{component}}-{{type}}",
-              "refId": "A"
-            },
-            {
-              "exemplar": true,
-              "expr": "ticdc_sinkmanager_redo_event_cache{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}",
-              "hide": false,
               "interval": "",
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-redo-cache",
-              "refId": "B"
+              "exemplar": true,
+              "refId": "A"
             }
           ],
           "thresholds": [],

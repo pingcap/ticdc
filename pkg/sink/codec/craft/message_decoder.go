@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	pmodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 )
 
@@ -353,6 +354,10 @@ func DecodeTiDBType(ty byte, flag common.ColumnFlagType, bits []byte) (interface
 		fallthrough
 	case mysql.TypeGeometry:
 		return nil, nil
+	case mysql.TypeTiDBVectorFloat32:
+		if val, err := types.ParseVectorFloat32(string(bits)); err != nil {
+			return val, nil
+		}
 	}
 	return nil, nil
 }

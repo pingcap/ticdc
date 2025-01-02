@@ -15,7 +15,6 @@ package eventcollector
 
 import (
 	"context"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,9 +44,11 @@ const (
 )
 
 var (
-	handleEventDuration      = metrics.EventCollectorHandleEventDuration
-	metricsDSInputChanLen    = metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector")
-	metricsDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector")
+	metricsHandleEventDuration = metrics.EventCollectorHandleEventDuration
+	metricsDSInputChanLen      = metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector")
+	metricsDSPendingQueueLen   = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector")
+	metricsDSMaxMemoryUsage    = metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "max")
+	metricsDSUsedMemoryUsage   = metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "used")
 )
 
 type DispatcherRequest struct {
@@ -74,7 +75,6 @@ const (
 EventCollector is the relay between EventService and DispatcherManager, responsible for:
 1. Send dispatcher request to EventService.
 2. Collect the events from EvenService and dispatch them to different dispatchers.
-3. Generate SyncPoint Event for dispatchers when necessary.
 EventCollector is an instance-level component.
 */
 type EventCollector struct {
@@ -83,7 +83,7 @@ type EventCollector struct {
 	mc            messaging.MessageCenter
 	wg            sync.WaitGroup
 
-	// dispatcherRequestChan is used cached dispatcher request when some error occurs.
+	// dispatcherRequestChan cached dispatcher request when some error occurs.
 	dispatcherRequestChan *chann.DrainableChann[DispatcherRequestWithTarget]
 
 	logCoordinatorRequestChan *chann.DrainableChann[*logservicepb.ReusableEventServiceRequest]
@@ -92,7 +92,7 @@ type EventCollector struct {
 	// ds is the dynamicStream for dispatcher events.
 	// All the events from event service will be sent to ds to handle.
 	// ds will dispatch the events to different dispatchers according to the dispatcherID.
-	ds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *DispatcherStat, *EventsHandler]
+	ds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
 
 	coordinatorInfo struct {
 		sync.RWMutex
@@ -135,7 +135,6 @@ func New(ctx context.Context, serverId node.ID) *EventCollector {
 		eventCollector.processFeedback(ctx)
 	}()
 
-	// wg is not `Wait`, and not controlled by the context.
 	eventCollector.wg.Add(1)
 	go func() {
 		defer eventCollector.wg.Done()
@@ -159,12 +158,12 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	defer func() {
 		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
 	}()
-	stat := &DispatcherStat{
+	stat := &dispatcherStat{
 		dispatcherID: target.GetId(),
 		target:       target,
 	}
 	stat.reset()
-	stat.sendCommitTs.Store(target.GetStartTs())
+	stat.sentCommitTs.Store(target.GetStartTs())
 	c.dispatcherMap.Store(target.GetId(), stat)
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
@@ -198,7 +197,7 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 	if !ok {
 		return
 	}
-	stat := value.(*DispatcherStat)
+	stat := value.(*dispatcherStat)
 	stat.unregisterDispatcher(c)
 	c.dispatcherMap.Delete(target.GetId())
 
@@ -212,9 +211,22 @@ func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID) {
 	c.ds.Wake(dispatcherID)
 }
 
-func (c *EventCollector) ResetDispatcherStat(stat *DispatcherStat) {
-	stat.reset()
-	stat.resetDispatcher(c)
+// resetDispatcher is used to reset the dispatcher when it receives a out-of-order event.
+// It will send a reset request to the event service to reset the remote dispatcher.
+// And it will reset the dispatcher stat to wait for a new handshake event.
+func (c *EventCollector) resetDispatcher(d *dispatcherStat) {
+	c.addDispatcherRequestToSendingQueue(
+		d.eventServiceInfo.serverID,
+		eventServiceTopic,
+		DispatcherRequest{
+			Dispatcher: d.target,
+			StartTs:    d.sentCommitTs.Load(),
+			ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
+		})
+	d.reset()
+	log.Info("Send reset dispatcher request to event service",
+		zap.Stringer("dispatcher", d.target.GetId()),
+		zap.Uint64("startTs", d.sentCommitTs.Load()))
 }
 
 func (c *EventCollector) addDispatcherRequestToSendingQueue(serverId node.ID, topic string, req DispatcherRequest) {
@@ -231,7 +243,16 @@ func (c *EventCollector) processFeedback(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case feedback := <-c.ds.Feedback():
-			if feedback.Pause {
+			if feedback.IsAreaFeedback() {
+				if feedback.IsPauseArea() {
+					feedback.Dest.pauseChangefeed(c)
+				} else {
+					feedback.Dest.resumeChangefeed(c)
+				}
+				return
+			}
+
+			if feedback.IsPausePath() {
 				feedback.Dest.pauseDispatcher(c)
 			} else {
 				feedback.Dest.resumeDispatcher(c)
@@ -247,7 +268,6 @@ func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
 			return
 		case req := <-c.dispatcherRequestChan.Out():
 			if err := c.mustSendDispatcherRequest(req.Target, req.Topic, req.Req); err != nil {
-				log.Error("failed to process dispatcher action", zap.Error(err))
 				// Sleep a short time to avoid too many requests in a short time.
 				time.Sleep(10 * time.Millisecond)
 			}
@@ -275,8 +295,10 @@ func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) {
 }
 
 // mustSendDispatcherRequest will keep retrying to send the dispatcher request to EventService until it succeed.
-// Caller should avoid to use this method if the remote EventService maybe offline forever.
+// Caller should avoid to use this method when the remote EventService is offline forever.
 // And this method may be deprecated in the future.
+// FIXME: Add a checking mechanism to avoid sending request to offline EventService.
+// A simple way is to use a NodeManager to check if the target is online.
 func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string, req DispatcherRequest) error {
 	message := &messaging.RegisterDispatcherRequest{
 		RegisterDispatcherRequest: &eventpb.RegisterDispatcherRequest{
@@ -309,7 +331,10 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 
 	if err != nil {
 		log.Info("failed to send dispatcher request message to event service, try again later",
-			zap.Stringer("target", target),
+			zap.String("changefeedID", req.Dispatcher.GetChangefeedID().ID().String()),
+			zap.Stringer("dispatcher", req.Dispatcher.GetId()),
+			zap.Any("target", target.String()),
+			zap.Any("request", req),
 			zap.Error(err))
 		// Put the request back to the channel for later retry.
 		c.dispatcherRequestChan.In() <- DispatcherRequestWithTarget{
@@ -328,12 +353,12 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 	c.metricReceiveEventLagDuration.Observe(inflightDuration)
 	start := time.Now()
 	defer func() {
-		handleEventDuration.Observe(time.Since(start).Seconds())
+		metricsHandleEventDuration.Observe(time.Since(start).Seconds())
 	}()
 
 	// If the message is a log service event, we need to forward it to the
 	// corresponding channel to handle it in multi-thread.
-	if slices.Contains(messaging.LogServiceEventTypes, targetMessage.Type) {
+	if targetMessage.Type.IsLogServiceEvent() {
 		c.receiveChannels[targetMessage.GetGroup()%uint64(len(c.receiveChannels))] <- targetMessage
 		return nil
 	}
@@ -350,7 +375,7 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 			if !ok {
 				continue
 			}
-			value.(*DispatcherStat).setRemoteCandidates(msg.(*logservicepb.ReusableEventServiceResponse).Nodes, c)
+			value.(*dispatcherStat).setRemoteCandidates(msg.(*logservicepb.ReusableEventServiceResponse).Nodes, c)
 		default:
 			log.Panic("invalid message type", zap.Any("msg", msg))
 		}
@@ -402,6 +427,8 @@ func (c *EventCollector) updateMetrics(ctx context.Context) {
 			dsMetrics := c.ds.GetMetrics()
 			metricsDSInputChanLen.Set(float64(dsMetrics.EventChanSize))
 			metricsDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
+			metricsDSUsedMemoryUsage.Set(float64(dsMetrics.MemoryControl.UsedMemory))
+			metricsDSMaxMemoryUsage.Set(float64(dsMetrics.MemoryControl.MaxMemory))
 			c.updateResolvedTsMetric()
 		}
 	}
@@ -410,7 +437,7 @@ func (c *EventCollector) updateMetrics(ctx context.Context) {
 func (c *EventCollector) updateResolvedTsMetric() {
 	var minResolvedTs uint64
 	c.dispatcherMap.Range(func(key, value interface{}) bool {
-		if stat, ok := value.(*DispatcherStat); ok {
+		if stat, ok := value.(*dispatcherStat); ok {
 			d := stat.target
 			if minResolvedTs == 0 || d.GetResolvedTs() < minResolvedTs {
 				minResolvedTs = d.GetResolvedTs()
@@ -426,7 +453,8 @@ func (c *EventCollector) updateResolvedTsMetric() {
 	}
 }
 
-type DispatcherStat struct {
+// dispatcherStat is a helper struct to manage the state of a dispatcher.
+type dispatcherStat struct {
 	dispatcherID common.DispatcherID
 	target       dispatcher.EventDispatcher
 
@@ -438,22 +466,22 @@ type DispatcherStat struct {
 		// whether has received ready signal from `serverID`
 		readyEventReceived bool
 		// the remote event services which may contain data this dispatcher needed
-		remoteCandiates []node.ID
+		remoteCandidates []node.ID
 	}
 
 	// lastEventSeq is the sequence number of the last received DML/DDL event.
 	// It is used to ensure the order of events.
 	lastEventSeq atomic.Uint64
 
-	// waitHandshake is used to indicate whether the dispatcher is waiting for handshake event.
-	// If true, the dispatcher will drop all data events it received.
+	// waitHandshake is used to indicate whether the dispatcher is waiting for a handshake event.
+	// Dispatcher will drop all data events before receiving a handshake event.
 	waitHandshake atomic.Bool
 
-	// the largest commit ts that has been sent to the dispatcher.
-	sendCommitTs atomic.Uint64
+	// The largest commit ts that has been sent to the dispatcher.
+	sentCommitTs atomic.Uint64
 }
 
-func (d *DispatcherStat) reset() {
+func (d *dispatcherStat) reset() {
 	if d.waitHandshake.Load() {
 		return
 	}
@@ -461,7 +489,7 @@ func (d *DispatcherStat) reset() {
 	d.waitHandshake.Store(true)
 }
 
-func (d *DispatcherStat) checkEventSeq(event dispatcher.DispatcherEvent, eventCollector *EventCollector) bool {
+func (d *dispatcherStat) checkEventSeq(event dispatcher.DispatcherEvent, eventCollector *EventCollector) bool {
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
@@ -474,26 +502,16 @@ func (d *DispatcherStat) checkEventSeq(event dispatcher.DispatcherEvent, eventCo
 				zap.Uint64("receivedSeq", event.GetSeq()),
 				zap.Uint64("expectedSeq", expectedSeq),
 				zap.Uint64("commitTs", event.GetCommitTs()))
-			d.reset()
-			eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
-				Dispatcher: d.target,
-				StartTs:    d.sendCommitTs.Load(),
-				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
-			})
-			log.Info("reset dispatcher",
-				zap.Stringer("dispatcher", d.target.GetId()),
-				zap.Uint64("startTs", d.sendCommitTs.Load()))
+			eventCollector.resetDispatcher(d)
 			return false
 		}
-		return true
-	default:
-		return true
 	}
+	return true
 }
 
-func (d *DispatcherStat) shouldIgnoreDataEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) bool {
+func (d *dispatcherStat) shouldIgnoreDataEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) bool {
 	if d.eventServiceInfo.serverID != *event.From {
-		// TODO: unregister from this invalid event service if it send events for a long time
+		// FIXME: unregister from this invalid event service if it send events for a long time
 		return true
 	}
 	if d.waitHandshake.Load() {
@@ -508,25 +526,27 @@ func (d *DispatcherStat) shouldIgnoreDataEvent(event dispatcher.DispatcherEvent,
 	// Note: a commit ts may have multiple transactions.
 	// it is ok to send the same txn multiple times?
 	// (we just want to avoid send old dml after new ddl)
-	if event.GetCommitTs() < d.sendCommitTs.Load() {
-		log.Warn("Receive resolved event before sendCommitTs, ignore it",
+	if event.GetCommitTs() < d.sentCommitTs.Load() {
+		log.Warn("Receive a event older than sendCommitTs, ignore it",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Int64("tableID", d.target.GetTableSpan().TableID),
 			zap.Stringer("dispatcher", d.target.GetId()),
-			zap.Uint64("sendCommitTs", d.sendCommitTs.Load()))
+			zap.Uint64("eventCommitTs", event.GetCommitTs()),
+			zap.Uint64("sentCommitTs", d.sentCommitTs.Load()))
 		return true
 	}
-	d.sendCommitTs.Store(event.GetCommitTs())
+	d.sentCommitTs.Store(event.GetCommitTs())
 	return false
 }
 
-func (d *DispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {
+func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {
 	d.eventServiceInfo.Lock()
 	defer d.eventServiceInfo.Unlock()
 	if event.GetType() != commonEvent.TypeHandshakeEvent {
 		log.Panic("should not happen")
 	}
 	if d.eventServiceInfo.serverID == "" {
-		log.Panic("should not happen: not server ID set")
+		log.Panic("should not happen: server ID is not set")
 	}
 	if d.eventServiceInfo.serverID != *event.From {
 		// check invariant: if the handshake event is not from the current event service, we must be reading from local event service.
@@ -545,9 +565,10 @@ func (d *DispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 	d.target.SetInitialTableInfo(event.Event.(*commonEvent.HandshakeEvent).TableInfo)
 }
 
-func (d *DispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {
+func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {
 	d.eventServiceInfo.Lock()
 	defer d.eventServiceInfo.Unlock()
+
 	if event.GetType() != commonEvent.TypeReadyEvent {
 		log.Panic("should not happen")
 	}
@@ -566,7 +587,7 @@ func (d *DispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 			eventServiceTopic,
 			DispatcherRequest{
 				Dispatcher: d.target,
-				StartTs:    d.sendCommitTs.Load(),
+				StartTs:    d.sentCommitTs.Load(),
 				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
 			},
 		)
@@ -584,13 +605,13 @@ func (d *DispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 		}
 		d.eventServiceInfo.serverID = server
 		d.eventServiceInfo.readyEventReceived = true
-		d.eventServiceInfo.remoteCandiates = nil
+		d.eventServiceInfo.remoteCandidates = nil
 		eventCollector.addDispatcherRequestToSendingQueue(
 			server,
 			eventServiceTopic,
 			DispatcherRequest{
 				Dispatcher: d.target,
-				StartTs:    d.sendCommitTs.Load(),
+				StartTs:    d.sentCommitTs.Load(),
 				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
 			},
 		)
@@ -603,16 +624,16 @@ func (d *DispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 	}
 }
 
-func (d *DispatcherStat) handleNotReusableEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {
+func (d *dispatcherStat) handleNotReusableEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {
 	d.eventServiceInfo.Lock()
 	defer d.eventServiceInfo.Unlock()
 	if event.GetType() != commonEvent.TypeNotReusableEvent {
 		log.Panic("should not happen")
 	}
 	if *event.From == d.eventServiceInfo.serverID {
-		if len(d.eventServiceInfo.remoteCandiates) > 0 {
+		if len(d.eventServiceInfo.remoteCandidates) > 0 {
 			eventCollector.addDispatcherRequestToSendingQueue(
-				d.eventServiceInfo.remoteCandiates[0],
+				d.eventServiceInfo.remoteCandidates[0],
 				eventServiceTopic,
 				DispatcherRequest{
 					Dispatcher: d.target,
@@ -621,13 +642,13 @@ func (d *DispatcherStat) handleNotReusableEvent(event dispatcher.DispatcherEvent
 					OnlyUse:    true,
 				},
 			)
-			d.eventServiceInfo.serverID = d.eventServiceInfo.remoteCandiates[0]
-			d.eventServiceInfo.remoteCandiates = d.eventServiceInfo.remoteCandiates[1:]
+			d.eventServiceInfo.serverID = d.eventServiceInfo.remoteCandidates[0]
+			d.eventServiceInfo.remoteCandidates = d.eventServiceInfo.remoteCandidates[1:]
 		}
 	}
 }
 
-func (d *DispatcherStat) unregisterDispatcher(eventCollector *EventCollector) {
+func (d *dispatcherStat) unregisterDispatcher(eventCollector *EventCollector) {
 	d.eventServiceInfo.RLock()
 	defer d.eventServiceInfo.RUnlock()
 	// must unregister from local event service
@@ -636,7 +657,7 @@ func (d *DispatcherStat) unregisterDispatcher(eventCollector *EventCollector) {
 		ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
 	})
 	// unregister from remote event service if have
-	if d.eventServiceInfo.serverID != eventCollector.serverId {
+	if d.eventServiceInfo.serverID != "" && d.eventServiceInfo.serverID != eventCollector.serverId {
 		eventCollector.mustSendDispatcherRequest(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
 			Dispatcher: d.target,
 			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
@@ -644,23 +665,43 @@ func (d *DispatcherStat) unregisterDispatcher(eventCollector *EventCollector) {
 	}
 }
 
-// FIXME: Implement this method.
-func (d *DispatcherStat) resetDispatcher(eventCollector *EventCollector) {
+func (d *dispatcherStat) pauseChangefeed(eventCollector *EventCollector) {
 	d.eventServiceInfo.RLock()
 	defer d.eventServiceInfo.RUnlock()
 
 	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
-		log.Panic("should not happen: reset dispatcher before receiving ready signal")
+		// Just ignore the request if the dispatcher is not ready.
+		return
 	}
 
+	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
+		Dispatcher: d.target,
+		ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE_CHANGEFEED,
+	})
 }
 
-func (d *DispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
+func (d *dispatcherStat) resumeChangefeed(eventCollector *EventCollector) {
 	d.eventServiceInfo.RLock()
 	defer d.eventServiceInfo.RUnlock()
 
 	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
-		log.Panic("should not happen: pause dispatcher before receiving ready signal")
+		// Just ignore the request if the dispatcher is not ready.
+		return
+	}
+
+	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
+		Dispatcher: d.target,
+		ActionType: eventpb.ActionType_ACTION_TYPE_RESUME_CHANGEFEED,
+	})
+}
+
+func (d *dispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
+	d.eventServiceInfo.RLock()
+	defer d.eventServiceInfo.RUnlock()
+
+	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
+		// Just ignore the request if the dispatcher is not ready.
+		return
 	}
 
 	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
@@ -669,12 +710,13 @@ func (d *DispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
 	})
 }
 
-func (d *DispatcherStat) resumeDispatcher(eventCollector *EventCollector) {
+func (d *dispatcherStat) resumeDispatcher(eventCollector *EventCollector) {
 	d.eventServiceInfo.RLock()
 	defer d.eventServiceInfo.RUnlock()
 
 	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
-		log.Panic("should not happen: resume dispatcher before receiving ready signal")
+		// Just ignore the request if the dispatcher is not ready.
+		return
 	}
 
 	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
@@ -684,7 +726,7 @@ func (d *DispatcherStat) resumeDispatcher(eventCollector *EventCollector) {
 }
 
 // TODO: better name
-func (d *DispatcherStat) setRemoteCandidates(nodes []string, eventCollector *EventCollector) {
+func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *EventCollector) {
 	if len(nodes) == 0 {
 		return
 	}
@@ -696,7 +738,7 @@ func (d *DispatcherStat) setRemoteCandidates(nodes []string, eventCollector *Eve
 	}
 	d.eventServiceInfo.serverID = node.ID(nodes[0])
 	for i := 1; i < len(nodes); i++ {
-		d.eventServiceInfo.remoteCandiates = append(d.eventServiceInfo.remoteCandiates, node.ID(nodes[i]))
+		d.eventServiceInfo.remoteCandidates = append(d.eventServiceInfo.remoteCandidates, node.ID(nodes[i]))
 	}
 
 	eventCollector.addDispatcherRequestToSendingQueue(

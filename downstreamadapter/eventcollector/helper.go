@@ -22,13 +22,18 @@ import (
 	"go.uber.org/zap"
 )
 
-func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *DispatcherStat, *EventsHandler] {
+func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
 	option := dynstream.NewOption()
 	option.BatchCount = 128
 	option.UseBuffer = true
 	// Enable memory control for dispatcher events dynamic stream.
-	log.Info("New EventDynamicStream, memory control is enabled")
 	option.EnableMemoryControl = true
+	if option.EnableMemoryControl {
+		log.Info("New EventDynamicStream, memory control is enabled")
+	} else {
+		log.Info("New EventDynamicStream, memory control is disabled")
+	}
+
 	eventsHandler := &EventsHandler{
 		eventCollector: collector,
 	}
@@ -63,46 +68,12 @@ func (h *EventsHandler) Path(event dispatcher.DispatcherEvent) common.Dispatcher
 }
 
 // Invariant: at any times, we can receive events from at most two event service, and one of them must be local event service.
-func (h *EventsHandler) Handle(stat *DispatcherStat, events ...dispatcher.DispatcherEvent) bool {
-	// do some check for safety
+func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.DispatcherEvent) bool {
 	if len(events) == 0 {
 		return false
 	}
-	// switch events[0].GetType() {
-	// case commonEvent.TypeDDLEvent,
-	// 	commonEvent.TypeSyncPointEvent,
-	// 	commonEvent.TypeHandshakeEvent,
-	// 	commonEvent.TypeReadyEvent,
-	// 	commonEvent.TypeNotReusableEvent:
-	// 	if len(events) > 1 {
-	// 		log.Panic("receive multiple non-batchable events",
-	// 			zap.String("changefeedID", stat.target.GetChangefeedID().ID().String()),
-	// 			zap.Stringer("dispatcher", stat.target.GetId()),
-	// 			zap.Any("events", events))
-	// 	}
-	// case commonEvent.TypeResolvedEvent,
-	// 	commonEvent.TypeDMLEvent:
-	// 	// TypeResolvedEvent and TypeDMLEvent can be in the same batch
-	// 	for i := 0; i < len(events); i++ {
-	// 		if events[i].GetType() != commonEvent.TypeResolvedEvent && events[i].GetType() != commonEvent.TypeDMLEvent {
-	// 			log.Panic("receive multiple events with upexpected types",
-	// 				zap.String("changefeedID", stat.target.GetChangefeedID().ID().String()),
-	// 				zap.Stringer("dispatcher", stat.target.GetId()),
-	// 				zap.Any("events", events))
-	// 		}
-	// 	}
-	// default:
-	// 	for i := 1; i < len(events); i++ {
-	// 		if events[i].GetType() != events[0].GetType() {
-	// 			log.Panic("receive multiple events with different types",
-	// 				zap.String("changefeedID", stat.target.GetChangefeedID().ID().String()),
-	// 				zap.Stringer("dispatcher", stat.target.GetId()),
-	// 				zap.Any("events", events))
-	// 		}
-	// 	}
-	// }
 
-	// just check the first event type, because all event types should be same
+	// Only check the first event type, because all event types should be same
 	switch events[0].GetType() {
 	// note: TypeDMLEvent and TypeResolvedEvent can be in the same batch, so we should handle them together.
 	case commonEvent.TypeDMLEvent,
@@ -170,7 +141,7 @@ func (h *EventsHandler) GetSize(event dispatcher.DispatcherEvent) int { return i
 
 func (h *EventsHandler) IsPaused(event dispatcher.DispatcherEvent) bool { return event.IsPaused() }
 
-func (h *EventsHandler) GetArea(path common.DispatcherID, dest *DispatcherStat) common.GID {
+func (h *EventsHandler) GetArea(path common.DispatcherID, dest *dispatcherStat) common.GID {
 	return dest.target.GetChangefeedID().ID()
 }
 

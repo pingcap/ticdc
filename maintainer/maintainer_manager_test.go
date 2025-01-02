@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -40,6 +41,7 @@ import (
 	"google.golang.org/grpc"
 )
 
+// This is a integration test for maintainer manager, it may consume a lot of time.
 // scale out/in close, add/remove tables
 func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	ctx := context.Background()
@@ -60,9 +62,9 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	appcontext.SetService(appcontext.SchemaStore, store)
 	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig())
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	startDispatcherNode(ctx, selfNode, mc, nodeManager)
+	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
-	//discard maintainer manager messages
+	// Discard maintainer manager messages, cuz we don't need to handle them in this test
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		return nil
 	})
@@ -91,6 +93,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	data, err := json.Marshal(cfConfig)
 	require.NoError(t, err)
 
+	// Case 1: Add new changefeed
 	cfID := common.NewChangeFeedIDWithName("test")
 	_ = mc.SendCommand(messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic, &heartbeatpb.AddMaintainerRequest{
@@ -98,16 +101,26 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 			Config:       data,
 			CheckpointTs: 10,
 		}))
-	time.Sleep(5 * time.Second)
-	value, _ := manager.maintainers.Load(cfID)
+
+	value, ok := manager.maintainers.Load(cfID)
+	if !ok {
+		require.Eventually(t, func() bool {
+			value, ok = manager.maintainers.Load(cfID)
+			return ok
+		}, 20*time.Second, 200*time.Millisecond)
+	}
+	require.True(t, ok)
 	maintainer := value.(*Maintainer)
 
-	require.Equal(t, 4,
-		maintainer.controller.replicationDB.GetReplicatingSize())
+	require.Eventually(t, func() bool {
+		return maintainer.controller.replicationDB.GetReplicatingSize() == 4
+	}, 20*time.Second, 200*time.Millisecond)
 	require.Equal(t, 4,
 		maintainer.controller.GetTaskSizeByNodeID(selfNode.ID))
 
-	// add 2 new node
+	log.Info("Pass case 1: Add new changefeed")
+
+	// Case 2: Add new nodes
 	node2 := node.NewInfo("127.0.0.1:8400", "")
 	mc2 := messaging.NewMessageCenter(ctx, node2.ID, 0, config.NewDefaultMessageCenterConfig())
 
@@ -117,9 +130,9 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	node4 := node.NewInfo("127.0.0.1:8600", "")
 	mc4 := messaging.NewMessageCenter(ctx, node4.ID, 0, config.NewDefaultMessageCenterConfig())
 
-	startDispatcherNode(ctx, node2, mc2, nodeManager)
-	dn3 := startDispatcherNode(ctx, node3, mc3, nodeManager)
-	dn4 := startDispatcherNode(ctx, node4, mc4, nodeManager)
+	startDispatcherNode(t, ctx, node2, mc2, nodeManager)
+	dn3 := startDispatcherNode(t, ctx, node3, mc3, nodeManager)
+	dn4 := startDispatcherNode(t, ctx, node4, mc4, nodeManager)
 
 	// notify node changes
 	_, _ = nodeManager.Tick(ctx, &orchestrator.GlobalReactorState{
@@ -131,18 +144,25 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		}})
 
 	time.Sleep(5 * time.Second)
-	require.Equal(t, 4,
-		maintainer.controller.replicationDB.GetReplicatingSize())
-	require.Equal(t, 1,
-		maintainer.controller.GetTaskSizeByNodeID(selfNode.ID))
-	require.Equal(t, 1,
-		maintainer.controller.GetTaskSizeByNodeID(node2.ID))
-	require.Equal(t, 1,
-		maintainer.controller.GetTaskSizeByNodeID(node3.ID))
-	require.Equal(t, 1,
-		maintainer.controller.GetTaskSizeByNodeID(node4.ID))
+	require.Eventually(t, func() bool {
+		return maintainer.controller.replicationDB.GetReplicatingSize() == 4
+	}, 20*time.Second, 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return maintainer.controller.GetTaskSizeByNodeID(selfNode.ID) == 1
+	}, 20*time.Second, 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return maintainer.controller.GetTaskSizeByNodeID(node2.ID) == 1
+	}, 20*time.Second, 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return maintainer.controller.GetTaskSizeByNodeID(node3.ID) == 1
+	}, 20*time.Second, 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return maintainer.controller.GetTaskSizeByNodeID(node4.ID) == 1
+	}, 20*time.Second, 200*time.Millisecond)
 
-	// remove 2 nodes
+	log.Info("Pass case 2: Add new nodes")
+
+	// Case 3: Remove 2 nodes
 	dn3.stop()
 	dn4.stop()
 	_, _ = nodeManager.Tick(ctx, &orchestrator.GlobalReactorState{
@@ -150,25 +170,33 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 			model.CaptureID(selfNode.ID): {ID: model.CaptureID(selfNode.ID), AdvertiseAddr: selfNode.AdvertiseAddr},
 			model.CaptureID(node2.ID):    {ID: model.CaptureID(node2.ID), AdvertiseAddr: node2.AdvertiseAddr},
 		}})
-	time.Sleep(5 * time.Second)
-	require.Equal(t, 4,
-		maintainer.controller.replicationDB.GetReplicatingSize())
-	require.Equal(t, 2,
-		maintainer.controller.GetTaskSizeByNodeID(selfNode.ID))
-	require.Equal(t, 2,
-		maintainer.controller.GetTaskSizeByNodeID(node2.ID))
 
-	// remove 2 tables
+	require.Eventually(t, func() bool {
+		return maintainer.controller.replicationDB.GetReplicatingSize() == 4
+	}, 20*time.Second, 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return maintainer.controller.GetTaskSizeByNodeID(selfNode.ID) == 2
+	}, 20*time.Second, 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return maintainer.controller.GetTaskSizeByNodeID(node2.ID) == 2
+	}, 20*time.Second, 200*time.Millisecond)
+
+	log.Info("Pass case 3: Remove 2 nodes")
+
+	// Case 4: Remove 2 tables
 	maintainer.controller.RemoveTasksByTableIDs(2, 3)
-	time.Sleep(5 * time.Second)
-	require.Equal(t, 2,
-		maintainer.controller.replicationDB.GetReplicatingSize())
-	require.Equal(t, 1,
-		maintainer.controller.GetTaskSizeByNodeID(selfNode.ID))
-	require.Equal(t, 1,
-		maintainer.controller.GetTaskSizeByNodeID(node2.ID))
+	require.Eventually(t, func() bool {
+		return maintainer.controller.replicationDB.GetReplicatingSize() == 2
+	}, 20*time.Second, 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return maintainer.controller.GetTaskSizeByNodeID(selfNode.ID) == 1
+	}, 20*time.Second, 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return maintainer.controller.GetTaskSizeByNodeID(node2.ID) == 1
+	}, 20*time.Second, 200*time.Millisecond)
+	log.Info("Pass case 4: Remove 2 tables")
 
-	// add 2 tables
+	// Case 5: Add 2 tables
 	maintainer.controller.AddNewTable(commonEvent.Table{
 		SchemaID: 1,
 		TableID:  5,
@@ -177,30 +205,44 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		SchemaID: 1,
 		TableID:  6,
 	}, 3)
-	time.Sleep(5 * time.Second)
-	require.Equal(t, 4,
-		maintainer.controller.replicationDB.GetReplicatingSize())
-	require.Equal(t, 2,
-		maintainer.controller.GetTaskSizeByNodeID(selfNode.ID))
-	require.Equal(t, 2,
-		maintainer.controller.GetTaskSizeByNodeID(node2.ID))
+	require.Eventually(t, func() bool {
+		return maintainer.controller.replicationDB.GetReplicatingSize() == 4
+	}, 20*time.Second, 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return maintainer.controller.GetTaskSizeByNodeID(selfNode.ID) == 2
+	}, 20*time.Second, 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return maintainer.controller.GetTaskSizeByNodeID(node2.ID) == 2
+	}, 20*time.Second, 200*time.Millisecond)
 
-	//close maintainer
+	log.Info("Pass case 5: Add 2 tables")
+
+	// Case 6: Remove maintainer
 	err = mc.SendCommand(messaging.NewSingleTargetMessage(selfNode.ID, messaging.MaintainerManagerTopic,
 		&heartbeatpb.RemoveMaintainerRequest{Id: cfID.ToPB(), Cascade: true}))
 	require.NoError(t, err)
-	time.Sleep(2 * time.Second)
-	require.Equal(t, heartbeatpb.ComponentState_Stopped, maintainer.state)
-	_, ok := manager.maintainers.Load(cfID)
+	time.Sleep(5 * time.Second)
+
+	require.Eventually(t, func() bool {
+		return maintainer.state.Load() == int32(heartbeatpb.ComponentState_Stopped)
+	}, 20*time.Second, 200*time.Millisecond)
+
+	_, ok = manager.maintainers.Load(cfID)
+	if ok {
+		require.Eventually(t, func() bool {
+			_, ok = manager.maintainers.Load(cfID)
+			return ok == false
+		}, 20*time.Second, 200*time.Millisecond)
+	}
 	require.False(t, ok)
-	// manager.stream.Close()
+	log.Info("Pass case 6: Remove maintainer")
 	cancel()
 }
 
 func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
-	selfNode := node.NewInfo("127.0.0.1:18300", "")
+	selfNode := node.NewInfo("127.0.0.1:18301", "")
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[selfNode.ID] = selfNode
@@ -216,7 +258,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	appcontext.SetService(appcontext.SchemaStore, store)
 	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig())
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	startDispatcherNode(ctx, selfNode, mc, nodeManager)
+	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
 	//discard maintainer manager messages
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
@@ -271,15 +313,24 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 			Config:       data,
 			CheckpointTs: 10,
 		}))
-	time.Sleep(5 * time.Second)
 
-	value, _ := manager.maintainers.Load(cfID)
+	value, ok := manager.maintainers.Load(cfID)
+	if !ok {
+		require.Eventually(t, func() bool {
+			value, ok = manager.maintainers.Load(cfID)
+			return ok
+		}, 20*time.Second, 200*time.Millisecond)
+	}
+	require.True(t, ok)
 	maintainer := value.(*Maintainer)
 
-	require.Equal(t, 4,
-		maintainer.controller.replicationDB.GetReplicatingSize())
-	require.Equal(t, 4,
-		maintainer.controller.GetTaskSizeByNodeID(selfNode.ID))
+	require.Eventually(t, func() bool {
+		return maintainer.controller.replicationDB.GetReplicatingSize() == 4
+	}, 20*time.Second, 200*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return maintainer.controller.GetTaskSizeByNodeID(selfNode.ID) == 4
+	}, 20*time.Second, 200*time.Millisecond)
+
 	require.Len(t, remotedIds, 2)
 	foundSize := 0
 	hasDDLDispatcher := false
@@ -297,7 +348,6 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	}
 	require.Equal(t, 2, foundSize)
 	require.False(t, hasDDLDispatcher)
-	// manager.stream.Close()
 	cancel()
 }
 
@@ -320,7 +370,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	appcontext.SetService(appcontext.SchemaStore, store)
 	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig())
 	appcontext.SetService(appcontext.MessageCenter, mc)
-	startDispatcherNode(ctx, selfNode, mc, nodeManager)
+	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
 	//discard maintainer manager messages
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
@@ -347,8 +397,14 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 		Cascade: true,
 		Removed: true,
 	}))
-	time.Sleep(2 * time.Second)
+
 	_, ok := manager.maintainers.Load(cfID)
+	if ok {
+		require.Eventually(t, func() bool {
+			_, ok = manager.maintainers.Load(cfID)
+			return !ok
+		}, 20*time.Second, 200*time.Millisecond)
+	}
 	require.False(t, ok)
 	cancel()
 }
@@ -373,7 +429,7 @@ func (d *dispatcherNode) stop() {
 	d.cancel()
 }
 
-func startDispatcherNode(ctx context.Context,
+func startDispatcherNode(t *testing.T, ctx context.Context,
 	node *node.Info, mc messaging.MessageCenter, nodeManager *watcher.NodeManager) *dispatcherNode {
 	nodeManager.RegisterNodeChangeHandler(node.ID, mc.OnNodeChanges)
 	ctx, cancel := context.WithCancel(ctx)
@@ -384,9 +440,7 @@ func startDispatcherNode(ctx context.Context,
 		mcs := messaging.NewMessageCenterServer(mc)
 		proto.RegisterMessageCenterServer(grpcServer, mcs)
 		lis, err := net.Listen("tcp", node.AdvertiseAddr)
-		if err != nil {
-			panic(err)
-		}
+		require.NoError(t, err)
 		go func() {
 			_ = grpcServer.Serve(lis)
 		}()

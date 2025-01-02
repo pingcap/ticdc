@@ -273,21 +273,27 @@ func loadAndApplyDDLHistory(
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
 		ddlEvent := unmarshalPersistedDDLEvent(snapIter.Value())
-		if shouldSkipDDL(&ddlEvent, databaseMap, tableMap) {
-			continue
+		// Note: no need to skip ddl here
+		// 1. for create table and create tables, we always store the ddl with smaller commit ts, so the ddl won't conflict with the tables in the gc snapshot.
+		// 2. for other ddls to be ignored, they are already filtered before write to disk.
+		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
+		if !ok {
+			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
 		}
-		if tableTriggerDDLHistory, err = updateDDLHistory(
-			&ddlEvent,
-			databaseMap,
-			tableMap,
-			partitionMap,
-			tablesDDLHistory,
-			tableTriggerDDLHistory); err != nil {
-			log.Panic("updateDDLHistory error", zap.Error(err))
-		}
-		if err := updateDatabaseInfoAndTableInfo(&ddlEvent, databaseMap, tableMap, partitionMap); err != nil {
-			log.Panic("updateDatabaseInfo error", zap.Error(err))
-		}
+		tableTriggerDDLHistory = handler.updateDDLHistoryFunc(updateDDLHistoryFuncArgs{
+			ddlEvent:               &ddlEvent,
+			databaseMap:            databaseMap,
+			tableMap:               tableMap,
+			partitionMap:           partitionMap,
+			tablesDDLHistory:       tablesDDLHistory,
+			tableTriggerDDLHistory: tableTriggerDDLHistory,
+		})
+		handler.updateSchemaMetadataFunc(updateSchemaMetadataFuncArgs{
+			event:        &ddlEvent,
+			databaseMap:  databaseMap,
+			tableMap:     tableMap,
+			partitionMap: partitionMap,
+		})
 	}
 
 	return tablesDDLHistory, tableTriggerDDLHistory, nil
@@ -585,9 +591,16 @@ func loadAllPhysicalTablesAtTs(
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
 		ddlEvent := unmarshalPersistedDDLEvent(snapIter.Value())
-		if err := updateDatabaseInfoAndTableInfo(&ddlEvent, databaseMap, tableMap, partitionMap); err != nil {
-			log.Panic("updateDatabaseInfo error", zap.Error(err))
+		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
+		if !ok {
+			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
 		}
+		handler.updateSchemaMetadataFunc(updateSchemaMetadataFuncArgs{
+			event:        &ddlEvent,
+			databaseMap:  databaseMap,
+			tableMap:     tableMap,
+			partitionMap: partitionMap,
+		})
 	}
 	log.Info("after load tables from ddl",
 		zap.Int("tableMapLen", len(tableMap)),

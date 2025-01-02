@@ -34,7 +34,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -297,19 +296,8 @@ func TestMaintainerSchedule(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[n.ID] = n
-	stream := dynstream.NewDynamicStream(NewStreamHandler())
-	stream.Start()
 	cfID := common.NewChangeFeedIDWithName("test")
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-	mc.RegisterHandler(messaging.MaintainerManagerTopic,
-		func(ctx context.Context, msg *messaging.TargetMessage) error {
-			stream.Push(cfID.Id, &Event{
-				changefeedID: cfID,
-				eventType:    EventMessage,
-				message:      msg,
-			})
-			return nil
-		})
 	dispatcherManager := MockDispatcherManager(mc, n.ID)
 
 	wg := &sync.WaitGroup{}
@@ -328,15 +316,24 @@ func TestMaintainerSchedule(t *testing.T) {
 		},
 		&config.ChangeFeedInfo{
 			Config: config.GetDefaultReplicaConfig(),
-		}, n, stream, taskScheduler, nil, tsoClient, nil, 10)
-	_ = stream.AddPath(cfID.Id, maintainer)
+		}, n, taskScheduler, nil, tsoClient, nil, 10)
+
+	mc.RegisterHandler(messaging.MaintainerManagerTopic,
+		func(ctx context.Context, msg *messaging.TargetMessage) error {
+			maintainer.eventCh.In() <- &Event{
+				changefeedID: cfID,
+				eventType:    EventMessage,
+				message:      msg,
+			}
+			return nil
+		})
 
 	// send bootstrap message
 	maintainer.sendMessages(maintainer.bootstrapper.HandleNewNodes(
 		[]*node.Info{n},
 	))
 	// setup period event
-	SubmitScheduledEvent(maintainer.taskScheduler, maintainer.stream, &Event{
+	maintainer.submitScheduledEvent(maintainer.taskScheduler, &Event{
 		changefeedID: maintainer.id,
 		eventType:    EventPeriod,
 	}, time.Now().Add(time.Millisecond*500))

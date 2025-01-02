@@ -28,6 +28,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
@@ -218,6 +219,9 @@ func buildChecksumBytes(buf []byte, value interface{}, mysqlType byte) ([]byte, 
 	// this should not happen, does not take into the checksum calculation.
 	case mysql.TypeNull, mysql.TypeGeometry:
 		// do nothing
+	case mysql.TypeTiDBVectorFloat32:
+		vec, _ := types.ParseVectorFloat32(value.(string))
+		buf = vec.SerializeTo(buf)
 	default:
 		return buf, errors.New("invalid type for the checksum calculation")
 	}

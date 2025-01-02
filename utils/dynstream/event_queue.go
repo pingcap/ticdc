@@ -15,22 +15,24 @@ type eventSignal[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 type eventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	option  Option
 	handler H
-
 	// Used to reduce the block allocation in the paths' pending queue.
 	eventBlockAlloc *deque.BlockAllocator[eventWrap[A, P, T, D, H]]
 
 	// Signal queue is used to decide which path's events should be popped.
 	signalQueue        *deque.Deque[eventSignal[A, P, T, D, H]]
-	totalPendingLength atomic.Int64 // The total signal count in the queue.
+	totalPendingLength *atomic.Int64 // The total signal count in the queue.
 }
 
 func newEventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](option Option, handler H) eventQueue[A, P, T, D, H] {
-	return eventQueue[A, P, T, D, H]{
-		option:          option,
-		handler:         handler,
-		eventBlockAlloc: deque.NewBlockAllocator[eventWrap[A, P, T, D, H]](32, 1024),
-		signalQueue:     deque.NewDeque[eventSignal[A, P, T, D, H]](1024, deque.NewBlockAllocator[eventSignal[A, P, T, D, H]](1024, 32)),
+	eq := eventQueue[A, P, T, D, H]{
+		option:             option,
+		handler:            handler,
+		eventBlockAlloc:    deque.NewBlockAllocator[eventWrap[A, P, T, D, H]](32, 1024),
+		signalQueue:        deque.NewDeque(1024, deque.NewBlockAllocator[eventSignal[A, P, T, D, H]](1024, 32)),
+		totalPendingLength: &atomic.Int64{},
 	}
+
+	return eq
 }
 
 func (q *eventQueue[A, P, T, D, H]) initPath(path *pathInfo[A, P, T, D, H]) {
@@ -39,10 +41,6 @@ func (q *eventQueue[A, P, T, D, H]) initPath(path *pathInfo[A, P, T, D, H]) {
 		q.signalQueue.PushBack(eventSignal[A, P, T, D, H]{pathInfo: path, eventCount: len})
 		q.totalPendingLength.Add(int64(len))
 	}
-}
-
-func (q *eventQueue[A, P, T, D, H]) removePath(path *pathInfo[A, P, T, D, H]) {
-	// Do nothing here. Instead, we remove the path when the path is popped.
 }
 
 func (q *eventQueue[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) {
@@ -80,9 +78,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 	// Append the event to the buffer
 	appendToBuf := func(event *eventWrap[A, P, T, D, H], path *pathInfo[A, P, T, D, H]) {
 		buf = append(buf, event.event)
-
-		path.pendingQueue.PopFront()
-		path.pendingSize -= event.eventSize
+		path.popEvent()
 	}
 
 	for {
@@ -101,8 +97,8 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 		if path.blocking || path.removed {
 			// The path is blocking or removed, we should ignore the signal completely.
 			// Since when it is waked, a signal event will be added to the queue.
-			q.signalQueue.PopFront()
 			q.totalPendingLength.Add(-int64(signal.eventCount))
+			q.signalQueue.PopFront()
 			continue
 		}
 
@@ -118,6 +114,8 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 			continue
 		}
 		firstGroup := firstEvent.eventType.DataGroup
+		firstProperty := firstEvent.eventType.Property
+
 		appendToBuf(firstEvent, path)
 
 		// Try to batch events with the same data group.
@@ -130,6 +128,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 			// Only batch events with the same data group and when the event is batchable.
 			if !ok ||
 				(firstGroup != front.eventType.DataGroup) ||
+				firstProperty == NonBatchable ||
 				front.eventType.Property == NonBatchable {
 				break
 			}

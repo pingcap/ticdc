@@ -17,8 +17,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"reflect"
-	"sort"
 	"strings"
 
 	"github.com/cockroachdb/pebble"
@@ -51,7 +49,7 @@ func loadPersistentStorageForTest(db *pebble.DB, gcTs uint64, upperBound UpperBo
 }
 
 // create a persistent storage at dbPath with initailDBInfos
-func newPersistentStorageForTest(dbPath string, initailDBInfos []mockDBInfo) *persistentStorage {
+func newPersistentStorageForTest(dbPath string, initialDBInfos []mockDBInfo) *persistentStorage {
 	if err := os.RemoveAll(dbPath); err != nil {
 		log.Panic("remove path fail", zap.Error(err))
 	}
@@ -60,8 +58,8 @@ func newPersistentStorageForTest(dbPath string, initailDBInfos []mockDBInfo) *pe
 		log.Panic("create database fail", zap.Error(err))
 	}
 	gcTs := uint64(0)
-	if len(initailDBInfos) > 0 {
-		mockWriteKVSnapOnDisk(db, gcTs, initailDBInfos)
+	if len(initialDBInfos) > 0 {
+		mockWriteKVSnapOnDisk(db, gcTs, initialDBInfos)
 	}
 	upperBound := UpperBoundMeta{
 		FinishedDDLTs: gcTs,
@@ -86,6 +84,37 @@ func loadPersistentStorageFromPathForTest(dbPath string, maxFinishedDDLTs uint64
 	return loadPersistentStorageForTest(db, gcTs, upperBound)
 }
 
+func formatDDLJobsForTest(jobs []*model.Job) string {
+	var res []string
+	for _, job := range jobs {
+		res = append(res, fmt.Sprintf("type: %s, finishedTs: %d, schemaID: %d, tableID: %d", job.Type, job.BinlogInfo.FinishedTS, job.SchemaID, job.TableID))
+	}
+	return strings.Join(res, "; ")
+}
+
+func formatDDLEventsForTest(events []commonEvent.DDLEvent) string {
+	var res []string
+	for _, event := range events {
+		var blockedTableIDs string
+		if event.BlockedTables != nil {
+			blockedTableIDs = fmt.Sprintf("type: %v, schemaID: %d, tableIDs: %v", event.BlockedTables.InfluenceType, event.BlockedTables.SchemaID, event.BlockedTables.TableIDs)
+		}
+		var needDroppedTableIDs string
+		if event.NeedDroppedTables != nil {
+			needDroppedTableIDs = fmt.Sprintf("type: %v, schemaID: %d, tableIDs: %v", event.NeedDroppedTables.InfluenceType, event.NeedDroppedTables.SchemaID, event.NeedDroppedTables.TableIDs)
+		}
+		res = append(res, fmt.Sprintf("type: %s, finishedTs: %d, blocked tables: %s, updated schemas %v, need dropped tables: %s, need added tables: %v, table name change %v",
+			model.ActionType(event.Type),
+			event.FinishedTs,
+			blockedTableIDs,
+			event.UpdatedSchemas,
+			needDroppedTableIDs,
+			event.NeedAddedTables,
+			event.TableNameChange))
+	}
+	return strings.Join(res, "; ")
+}
+
 type mockDBInfo struct {
 	dbInfo *model.DBInfo
 	tables []*model.TableInfo
@@ -108,36 +137,6 @@ func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos []mockDBInfo) {
 		log.Panic("commit batch fail", zap.Error(err))
 	}
 	writeGcTs(db, snapTs)
-}
-
-func compareUnorderedTableSlices(slice1, slice2 []commonEvent.Table) bool {
-	if len(slice1) != len(slice2) {
-		return false
-	}
-
-	sort.Slice(slice1, func(i, j int) bool {
-		if slice1[i].SchemaID == slice1[j].SchemaID {
-			return slice1[i].TableID < slice1[j].TableID
-		}
-		return slice1[i].SchemaID < slice1[j].SchemaID
-	})
-
-	sort.Slice(slice2, func(i, j int) bool {
-		if slice2[i].SchemaID == slice2[j].SchemaID {
-			return slice2[i].TableID < slice2[j].TableID
-		}
-		return slice2[i].SchemaID < slice2[j].SchemaID
-	})
-
-	for i := range slice1 {
-		if slice1[i].SchemaID != slice2[i].SchemaID ||
-			slice1[i].TableID != slice2[i].TableID ||
-			!reflect.DeepEqual(slice1[i].SchemaTableName, slice2[i].SchemaTableName) {
-			return false
-		}
-	}
-
-	return true
 }
 
 func buildTableFilterByNameForTest(schemaName, tableName string) filter.Filter {
@@ -391,6 +390,94 @@ func buildExchangePartitionJobForTest(
 					Definitions: partitionDefinitions,
 				},
 			},
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildAddPrimaryKeyJobForTest(schemaID, tableID int64, finishedTs uint64, indexes ...*model.IndexInfo) *model.Job {
+	return &model.Job{
+		Type:     model.ActionAddPrimaryKey,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+			TableInfo: &model.TableInfo{
+				ID:      tableID,
+				Indices: indexes,
+			},
+		},
+	}
+}
+
+func buildAlterIndexVisibilityJobForTest(schemaID, tableID int64, finishedTs uint64, indexes ...*model.IndexInfo) *model.Job {
+	return &model.Job{
+		Type:     model.ActionAlterIndexVisibility,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+			TableInfo: &model.TableInfo{
+				ID:      tableID,
+				Indices: indexes,
+			},
+		},
+	}
+}
+
+func buildDropPrimaryKeyJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionDropPrimaryKey,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildModifyTableCharsetJobForTest(schemaID, tableID int64, finishedTs uint64, charset string) *model.Job {
+	return &model.Job{
+		Type:     model.ActionModifyTableCharsetAndCollate,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+			TableInfo: &model.TableInfo{
+				Charset: charset,
+			},
+		},
+	}
+}
+
+func buildAlterTTLJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionAlterTTLInfo,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildRemoveTTLJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionAlterTTLRemove,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildSetTiFlashReplicaJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionSetTiFlashReplica,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
 			FinishedTS: finishedTs,
 		},
 	}

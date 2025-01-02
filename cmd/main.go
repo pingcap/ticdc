@@ -15,6 +15,7 @@ package main
 
 import (
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/pingcap/log"
@@ -48,6 +49,7 @@ func addNewArchCommandTo(cmd *cobra.Command) {
 }
 
 func isNewArchEnabledByConfig(serverConfigFilePath string) bool {
+
 	cfg := config.GetDefaultServerConfig()
 	if len(serverConfigFilePath) > 0 {
 		// strict decode config file, but ignore debug item
@@ -80,6 +82,12 @@ func parseConfigFlagFromOSArgs() string {
 			serverConfigFilePath = os.Args[i+2]
 		}
 	}
+
+	// If the command is `cdc cli changefeed`, means it's not a server config file.
+	if slices.Contains(os.Args, "cli") && slices.Contains(os.Args, "changefeed") {
+		serverConfigFilePath = ""
+	}
+
 	return serverConfigFilePath
 }
 

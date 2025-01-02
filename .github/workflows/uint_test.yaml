@@ -91,7 +91,7 @@ jobs:
 
   eventservice_unit_test:
     runs-on: ubuntu-latest 
-    name: EventService Unit Test
+    name: Other Unit Tests
     steps:
       - name: Check out code
         uses: actions/checkout@v2
@@ -104,6 +104,8 @@ jobs:
       - name: Unit Test
         run: |
           go test --tags=intest -timeout 120s  github.com/pingcap/ticdc/pkg/eventservice/...
+          go test --tags=intest -timeout 120s  github.com/pingcap/ticdc/utils/dynstream...
+
 
 
 
