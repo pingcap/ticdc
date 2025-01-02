@@ -81,7 +81,6 @@ type eventBroker struct {
 	metricEventServiceReceivedResolvedTs prometheus.Gauge
 	metricEventServiceSentResolvedTs     prometheus.Gauge
 	metricEventServiceResolvedTsLag      prometheus.Gauge
-	metricScanEventDuration              prometheus.Observer
 }
 
 func newEventBroker(
@@ -124,7 +123,6 @@ func newEventBroker(
 		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
 		metricEventServiceResolvedTsLag:      metrics.EventServiceResolvedTsLagGauge.WithLabelValues("received"),
 		metricEventServiceSentResolvedTs:     metrics.EventServiceResolvedTsLagGauge.WithLabelValues("sent"),
-		metricScanEventDuration:              metrics.EventServiceScanDuration,
 	}
 
 	for i := 0; i < c.sendMessageWorkerCount; i++ {
@@ -504,7 +502,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			// Send the last dml to the dispatcher.
 			sendDML(dml)
 			sendRemainingDDLEvents()
-			c.metricScanEventDuration.Observe(time.Since(start).Seconds())
+			metrics.EventServiceScanDuration.Observe(time.Since(start).Seconds())
 			return
 		}
 
