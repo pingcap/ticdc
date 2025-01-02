@@ -64,7 +64,7 @@ function prepare() {
 }
 
 # ddl is drop database
-function failOverCaseH-1() {
+function failOverCaseI-1() {
 	prepare
 	ret=$?
 	if [ "$ret" != 0 ]; then
@@ -124,12 +124,12 @@ function failOverCaseH-1() {
 
 	cleanup_process $CDC_BINARY
 
-	echo "failOverCaseH-1 passed successfully"
+	echo "failOverCaseI-1 passed successfully"
 	export GO_FAILPOINTS=''
 }
 
 # ddl is drop table
-function failOverCaseH-2() {
+function failOverCaseI-2() {
 	prepare
 	ret=$?
 	if [ "$ret" != 0 ]; then
@@ -170,10 +170,9 @@ function failOverCaseH-2() {
     ## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1'" 
 
-	kill_cdc_pid $cdc_pid_1
+	sleep 10 # ensure dispatcher gets pass action
 
-    # ensure the ddl event is passed
-    sleep 30
+	kill_cdc_pid $cdc_pid_1
 
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
@@ -203,7 +202,7 @@ function failOverCaseH-2() {
 }
 
 # ddl is rename table
-function failOverCaseH-3() {
+function failOverCaseI-3() {
 	prepare
 	ret=$?
 	if [ "$ret" != 0 ]; then
@@ -244,10 +243,10 @@ function failOverCaseH-3() {
     ## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1' && check_contains 'test4'" 
 
+	sleep 10 # ensure dispatcher gets pass action
+
 	kill_cdc_pid $cdc_pid_1
 
-    # ensure the ddl event is passed
-    sleep 30
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 
@@ -273,11 +272,11 @@ function failOverCaseH-3() {
 	cleanup_process $CDC_BINARY
 	export GO_FAILPOINTS=''
 
-	echo "failOverCaseH-3 passed successfully"
+	echo "failOverCaseI-3 passed successfully"
 }
 
 # ddl is truncate table
-function failOverCaseH-5() {
+function failOverCaseI-5() {
 	prepare
 	ret=$?
 	if [ "$ret" != 0 ]; then
@@ -321,10 +320,10 @@ function failOverCaseH-5() {
     ## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'select id from fail_over_ddl_test.test1;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains '2'" 
 
+	sleep 10 # ensure dispatcher gets pass action
+
 	kill_cdc_pid $cdc_pid_1
 
-    # ensure the ddl event is passed
-    sleep 30
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 
@@ -349,13 +348,13 @@ function failOverCaseH-5() {
 	cleanup_process $CDC_BINARY
 	export GO_FAILPOINTS=''
 
-	echo "failOverCaseH-5 passed successfully"
+	echo "failOverCaseI-5 passed successfully"
 }
 
 trap stop_tidb_cluster EXIT
-# failOverCaseH-1
-failOverCaseH-2
-# failOverCaseH-3
-# failOverCaseH-5
+failOverCaseI-1
+failOverCaseI-2
+failOverCaseI-3
+failOverCaseI-5
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
