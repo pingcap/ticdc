@@ -14,7 +14,6 @@
 package schemastore
 
 import (
-	"context"
 	"math"
 	"sync"
 
@@ -30,8 +29,6 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/pdutil"
-	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
 
@@ -55,8 +52,6 @@ type ddlJobFetcher struct {
 
 func newDDLJobFetcher(
 	subClient *logpuller.SubscriptionClient,
-	pdCli pd.Client,
-	pdClock pdutil.Clock,
 	kvStorage kv.Storage,
 	startTs uint64,
 	cacheDDLEvent func(ddlEvent DDLJobWithCommitTs),
@@ -84,14 +79,6 @@ func newDDLJobFetcher(
 	}
 
 	return ddlJobFetcher
-}
-
-func (p *ddlJobFetcher) run(ctx context.Context) error {
-	return nil
-}
-
-func (p *ddlJobFetcher) close(ctx context.Context) error {
-	return nil
 }
 
 func (p *ddlJobFetcher) tryAdvanceResolvedTs(subID logpuller.SubscriptionID, newResolvedTs uint64) {
