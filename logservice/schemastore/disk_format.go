@@ -275,7 +275,7 @@ func loadAndApplyDDLHistory(
 		ddlEvent := unmarshalPersistedDDLEvent(snapIter.Value())
 		// Note: no need to skip ddl here
 		// 1. for create table and create tables, we always store the ddl with smaller commit ts, so the ddl won't conflict with the tables in the gc snapshot.
-		// 2. for other ddls to be ignored, they are alredy filtered before write to disk.
+		// 2. for other ddls to be ignored, they are already filtered before write to disk.
 		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
 		if !ok {
 			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
