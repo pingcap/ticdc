@@ -247,6 +247,9 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 					time.Sleep(30 * time.Second)
 				})
 			} else {
+				failpoint.Inject("WaitBeforePass", func() {
+					time.Sleep(30 * time.Second)
+				})
 				d.PassBlockEventToSink(pendingEvent)
 			}
 		}
@@ -277,6 +280,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	block = false
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
+		log.Debug("dispatcher receive all event", zap.Any("event", dispatcherEvent.Event), zap.Stringer("dispatcher", d.id))
 		failpoint.Inject("HandleEventsSlowly", func() {
 			lag := time.Duration(rand.Intn(5000)) * time.Millisecond
 			log.Warn("handle events slowly", zap.Duration("lag", lag))
@@ -293,6 +297,10 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				zap.Any("eventType", event.GetType()),
 				zap.Any("dispatcher", d.id))
 			continue
+		}
+
+		if event.GetType() != commonEvent.TypeResolvedEvent {
+			log.Debug("dispatcher receive event", zap.Any("event", event), zap.Stringer("dispatcher", d.id))
 		}
 
 		switch event.GetType() {
