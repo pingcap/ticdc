@@ -120,7 +120,7 @@ func (w *MysqlDMLWorker) Run() {
 					}
 				}
 				start := time.Now()
-				err := w.mysqlWriter.Flush(events, w.id)
+				err := w.mysqlWriter.Flush(events)
 				if err != nil {
 					return errors.Trace(err)
 				}
