@@ -250,7 +250,7 @@ function failOverCaseF-3() {
 	
 	sleep 15
 	
-	 ## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
+	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1' && check_contains 'test4'" 
 
     run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
