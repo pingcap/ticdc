@@ -93,7 +93,7 @@ jobs:
           path: |
             ./logs.tar.gz
 
-  failover_e2e_test:
+  failover_e2e_test[A-C]:
     runs-on: ubuntu-latest 
     name: Failover E2E Test [A-C]
     steps:
@@ -137,9 +137,7 @@ jobs:
         run: |
           TEMP_DIR=$(mktemp -d)
           mkdir -p "$TEMP_DIR"
-          sudo find /tmp/tidb_cdc_test -type d -name 'fail_over*' -exec sh -c '
-              find "{}" -type f -name "cdc*.log" -print0
-          ' \; | tar -czvf logs.tar.gz -C /tmp/tidb_cdc_test --null -T -
+          sudo find /tmp/tidb_cdc_test -type d -name 'fail_over*' -exec sh -c 'find "{}" -type f -name "cdc*.log" -print0' \; | tar -czvf logs.tar.gz -C /tmp/tidb_cdc_test --null -T -
       # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
       - name: Upload logs
         uses: actions/upload-artifact@v4
@@ -149,7 +147,7 @@ jobs:
           path: |
             ./logs.tar.gz
 
-  failover_e2e_test:
+  failover_e2e_test[D-G]:
     runs-on: ubuntu-latest 
     name: Failover E2E Test[D-G]
     steps:
@@ -167,11 +165,6 @@ jobs:
           go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
-
-      - name: Test fail_over
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over 
       
       - name: Test fail_over_ddl_D
         run: |
@@ -198,9 +191,7 @@ jobs:
         run: |
           TEMP_DIR=$(mktemp -d)
           mkdir -p "$TEMP_DIR"
-          sudo find /tmp/tidb_cdc_test -type d -name 'fail_over*' -exec sh -c '
-              find "{}" -type f -name "cdc*.log" -print0
-          ' \; | tar -czvf logs.tar.gz -C /tmp/tidb_cdc_test --null -T -
+          sudo find /tmp/tidb_cdc_test -type d -name 'fail_over*' -exec sh -c 'find "{}" -type f -name "cdc*.log" -print0' \; | tar -czvf logs.tar.gz -C /tmp/tidb_cdc_test --null -T -
       # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
       - name: Upload logs
         uses: actions/upload-artifact@v4
