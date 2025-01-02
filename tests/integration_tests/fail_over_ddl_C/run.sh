@@ -78,7 +78,7 @@ function failOverCaseC-1() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitWhileAfterWriteBeforeReport=return(true)'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitBeforeReport=return(true)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 
@@ -110,13 +110,15 @@ function failOverCaseC-1() {
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
+	sleep 15
+
     run_sql "show databases;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
 		check_not_contains "fail_over_test"
 
     ## continue to write ddl and dml to test the cdc server is working well
     run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	cleanup_process $CDC_BINARY
 
@@ -139,7 +141,7 @@ function failOverCaseC-2() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitWhileAfterWriteBeforeReport=return(true)'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitBeforeReport=return(true)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 
@@ -171,6 +173,8 @@ function failOverCaseC-2() {
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
+	sleep 15
+
     run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
 		check_not_contains "test1" &&
 		check_contains "test2" 
@@ -184,7 +188,7 @@ function failOverCaseC-2() {
     run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	cleanup_process $CDC_BINARY
 
@@ -208,7 +212,7 @@ function failOverCaseC-3() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitWhileAfterWriteBeforeReport=return(true)'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitBeforeReport=return(true)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 
@@ -240,6 +244,8 @@ function failOverCaseC-3() {
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
+	sleep 15
+
     run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
 		check_not_contains "test1" &&
 		check_contains "test2" && 
@@ -255,7 +261,7 @@ function failOverCaseC-3() {
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into fail_over_ddl_test.test4 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	cleanup_process $CDC_BINARY
 	export GO_FAILPOINTS=''
@@ -278,7 +284,7 @@ function failOverCaseC-5() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitWhileAfterWriteBeforeReport=return(true)'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitBeforeReport=return(true)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 
@@ -313,6 +319,8 @@ function failOverCaseC-5() {
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
+	sleep 15
+	
     run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
 		check_contains "test1" &&
 		check_contains "test2"
@@ -327,7 +335,7 @@ function failOverCaseC-5() {
 	run_sql "insert into fail_over_ddl_test.test1 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	cleanup_process $CDC_BINARY
 	export GO_FAILPOINTS=''

@@ -29,6 +29,11 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	WithoutTiDBOnly = false
+	WithTiDBOnly    = true
+)
+
 type buildPersistedDDLEventFuncArgs struct {
 	job          *model.Job
 	databaseMap  map[int64]*BasicDatabaseInfo
@@ -110,6 +115,15 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
 		buildDDLEventFunc:          buildDDLEventForDropSchema,
 	},
+	model.ActionModifyTableCharsetAndCollate: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+	},
+
 	model.ActionCreateTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
@@ -151,6 +165,30 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionDropIndex: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+	},
+	model.ActionAlterIndexVisibility: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+	},
+	model.ActionAddPrimaryKey: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+	},
+	model.ActionDropPrimaryKey: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
@@ -214,6 +252,15 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
+	model.ActionSetTiFlashReplica: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
+	},
+
 	model.ActionShardRowID: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
@@ -305,6 +352,23 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		iterateEventTablesFunc:     iterateEventTablesForReorganizePartition,
 		extractTableInfoFunc:       extractTableInfoFuncForTruncateAndReorganizePartition,
 		buildDDLEventFunc:          buildDDLEventForTruncateAndReorganizePartition,
+	},
+
+	model.ActionAlterTTLInfo: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
+	},
+	model.ActionAlterTTLRemove: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
 	},
 }
 
@@ -611,6 +675,12 @@ func updateDDLHistoryForCreateView(args updateDDLHistoryFuncArgs) []uint64 {
 	for tableID := range args.tableMap {
 		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
 	}
+	return args.tableTriggerDDLHistory
+}
+
+func updateDDLHistoryForDropView(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.PrevPartitions...)
 	return args.tableTriggerDDLHistory
 }
 
@@ -995,7 +1065,7 @@ func extractTableInfoFuncForCreateTables(event *PersistedDDLEvent, tableID int64
 // buildDDLEvent begin
 // =======
 
-func buildDDLEventCommon(rawEvent *PersistedDDLEvent, _ filter.Filter) commonEvent.DDLEvent {
+func buildDDLEventCommon(rawEvent *PersistedDDLEvent, _ filter.Filter, tiDBOnly bool) commonEvent.DDLEvent {
 	var wrapTableInfo *common.TableInfo
 	if rawEvent.TableInfo != nil {
 		wrapTableInfo = common.WrapTableInfo(
@@ -1015,12 +1085,12 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, _ filter.Filter) commonEve
 		Query:      rawEvent.Query,
 		TableInfo:  wrapTableInfo,
 		FinishedTs: rawEvent.FinishedTs,
-		TiDBOnly:   false,
+		TiDBOnly:   tiDBOnly,
 	}
 }
 
 func buildDDLEventForCreateSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
 		TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
@@ -1029,7 +1099,7 @@ func buildDDLEventForCreateSchema(rawEvent *PersistedDDLEvent, tableFilter filte
 }
 
 func buildDDLEventForDropSchema(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeDB,
 		SchemaID:      rawEvent.CurrentSchemaID,
@@ -1045,7 +1115,7 @@ func buildDDLEventForDropSchema(rawEvent *PersistedDDLEvent, tableFilter filter.
 }
 
 func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
 		TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
@@ -1079,7 +1149,7 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 }
 
 func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if isPartitionTable(rawEvent.TableInfo) {
 		allPhysicalTableIDs := getAllPartitionIDs(rawEvent.TableInfo)
 		allPhysicalTableIDsAndDDLSpanID := make([]int64, 0, len(rawEvent.TableInfo.Partition.Definitions)+1)
@@ -1115,7 +1185,16 @@ func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.F
 }
 
 func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeNormal,
+		TableIDs:      []int64{rawEvent.CurrentTableID},
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForNormalDDLOnSingleTableForTiDB(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithTiDBOnly)
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
 		TableIDs:      []int64{rawEvent.CurrentTableID},
@@ -1124,7 +1203,7 @@ func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFi
 }
 
 func buildDDLEventForTruncateTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if isPartitionTable(rawEvent.TableInfo) {
 		prevPartitionsAndDDLSpanID := make([]int64, 0, len(rawEvent.PrevPartitions)+1)
 		prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, rawEvent.PrevPartitions...)
@@ -1166,7 +1245,7 @@ func buildDDLEventForTruncateTable(rawEvent *PersistedDDLEvent, tableFilter filt
 }
 
 func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	ddlEvent.PrevSchemaName = rawEvent.PrevSchemaName
 	ddlEvent.PrevTableName = rawEvent.PrevTableName
 	ignorePrevTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.PrevSchemaName, rawEvent.PrevTableName)
@@ -1335,7 +1414,7 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 }
 
 func buildDDLEventForAddPartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	prevPartitionsAndDDLSpanID := make([]int64, 0, len(rawEvent.PrevPartitions)+1)
 	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, rawEvent.PrevPartitions...)
 	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, heartbeatpb.DDLSpan.TableID)
@@ -1356,7 +1435,7 @@ func buildDDLEventForAddPartition(rawEvent *PersistedDDLEvent, tableFilter filte
 }
 
 func buildDDLEventForDropPartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	prevPartitionsAndDDLSpanID := make([]int64, 0, len(rawEvent.PrevPartitions)+1)
 	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, rawEvent.PrevPartitions...)
 	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, heartbeatpb.DDLSpan.TableID)
@@ -1374,7 +1453,15 @@ func buildDDLEventForDropPartition(rawEvent *PersistedDDLEvent, tableFilter filt
 }
 
 func buildDDLEventForCreateView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeAll,
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForDropView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeAll,
 	}
@@ -1382,7 +1469,7 @@ func buildDDLEventForCreateView(rawEvent *PersistedDDLEvent, tableFilter filter.
 }
 
 func buildDDLEventForTruncateAndReorganizePartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	prevPartitionsAndDDLSpanID := make([]int64, 0, len(rawEvent.PrevPartitions)+1)
 	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, rawEvent.PrevPartitions...)
 	prevPartitionsAndDDLSpanID = append(prevPartitionsAndDDLSpanID, heartbeatpb.DDLSpan.TableID)
@@ -1407,7 +1494,7 @@ func buildDDLEventForTruncateAndReorganizePartition(rawEvent *PersistedDDLEvent,
 }
 
 func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	ignoreNormalTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.PrevSchemaName, rawEvent.PrevTableName)
 	ignorePartitionTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, rawEvent.CurrentTableName)
 	physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
@@ -1471,7 +1558,7 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 }
 
 func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
-	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter)
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeNormal,
 		TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},

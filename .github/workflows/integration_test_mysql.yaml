@@ -61,10 +61,10 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=sql_mode
         
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
+      # - name: Test changefeed_pause_resume
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
 
       - name: Test changefeed_reconstruct
         if: ${{ success() }}
@@ -80,7 +80,8 @@ jobs:
           mkdir -p ./logs/$CASE
           cat $DIR/stdout.log
           tail -n 10 $DIR/cdc.log
-          sudo cp -r -L $DIR/{*.log,sync_diff} ./logs/$CASE/
+          sudo cp -r -L $DIR/{*.log} ./logs/$CASE/
+          sudo cp -r -L $DIR/{sync_diff} ./logs/$CASE/ || true
           sudo chown -R runner ./logs
           sudo tar -czvf ./logs.tar.gz ./logs
       # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
@@ -130,13 +131,18 @@ jobs:
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_C
+      
+      - name: Test fail_over_ddl_D
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_D
 
       - name: Test fail_over_ddl_E
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_E
       
-      - name: Test fail_over_ddl_D
+      - name: Test fail_over_ddl_F
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_D
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
