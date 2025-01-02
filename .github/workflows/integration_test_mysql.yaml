@@ -74,7 +74,7 @@ jobs:
       - name: Copy logs to hack permission
         if: ${{ always() }}
         run: |
-          DIR=$(sudo find /tmp/tidb_cdc_test/ -type d -name 'cdc_data' -exec dirname {} \;)
+          DIR=$(sudo find /tmp/tidb_cdc_test/ -type d -name 'cdc_data*' -exec dirname {} \;)
           [ -z "$DIR" ] && exit 0
           CASE=$(basename $DIR)
           mkdir -p ./logs/$CASE
@@ -151,7 +151,7 @@ jobs:
       - name: Copy logs to hack permission
         if: ${{ always() }}
         run: |
-          DIR=$(sudo find /tmp/tidb_cdc_test/ -type d -name 'cdc_data' -exec dirname {} \;)
+          DIR=$(sudo find /tmp/tidb_cdc_test/ -type d -name 'cdc_data*' -exec dirname {} \;)
           [ -z "$DIR" ] && exit 0
           CASE=$(basename $DIR)
           mkdir -p ./logs/$CASE
