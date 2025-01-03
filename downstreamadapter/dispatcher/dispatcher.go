@@ -250,6 +250,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 				failpoint.Inject("WaitBeforePass", func() {
 					time.Sleep(30 * time.Second)
 				})
+				failpoint.Inject("BlockBeforePass", nil)
 				d.PassBlockEventToSink(pendingEvent)
 			}
 		}

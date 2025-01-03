@@ -103,9 +103,10 @@ func formatDDLEventsForTest(events []commonEvent.DDLEvent) string {
 		if event.NeedDroppedTables != nil {
 			needDroppedTableIDs = fmt.Sprintf("type: %v, schemaID: %d, tableIDs: %v", event.NeedDroppedTables.InfluenceType, event.NeedDroppedTables.SchemaID, event.NeedDroppedTables.TableIDs)
 		}
-		res = append(res, fmt.Sprintf("type: %s, finishedTs: %d, blocked tables: %s, updated schemas %v, need dropped tables: %s, need added tables: %v, table name change %v",
+		res = append(res, fmt.Sprintf("type: %s, finishedTs: %d, query %s, blocked tables: %s, updated schemas %v, need dropped tables: %s, need added tables: %v, table name change %v",
 			model.ActionType(event.Type),
 			event.FinishedTs,
+			event.Query,
 			blockedTableIDs,
 			event.UpdatedSchemas,
 			needDroppedTableIDs,
@@ -141,7 +142,6 @@ func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos []mockDBInfo) {
 
 func buildTableFilterByNameForTest(schemaName, tableName string) filter.Filter {
 	filterRule := fmt.Sprintf("%s.%s", schemaName, tableName)
-	log.Info("filterRule", zap.String("filterRule", filterRule))
 	filterConfig := &config.FilterConfig{
 		Rules: []string{filterRule},
 	}
@@ -202,12 +202,31 @@ func buildCreateTablesJobForTest(schemaID int64, tableIDs []int64, tableNames []
 			ID:   id,
 			Name: pmodel.NewCIStr(tableNames[i]),
 		})
-		querys = append(querys, fmt.Sprintf("create table %s(a int primary key)", tableNames[i]))
+		querys = append(querys, fmt.Sprintf("create table %s(a int primary key);", tableNames[i]))
 	}
 	return &model.Job{
 		Type:     model.ActionCreateTables,
 		SchemaID: schemaID,
-		Query:    strings.Join(querys, ";"),
+		Query:    strings.Join(querys, ""),
+		BinlogInfo: &model.HistoryInfo{
+			MultipleTableInfos: multiTableInfos,
+			FinishedTS:         finishedTs,
+		},
+	}
+}
+
+func buildCreateTablesJobWithQueryForTest(schemaID int64, tableIDs []int64, tableNames []string, query string, finishedTs uint64) *model.Job {
+	multiTableInfos := make([]*model.TableInfo, 0, len(tableIDs))
+	for i, id := range tableIDs {
+		multiTableInfos = append(multiTableInfos, &model.TableInfo{
+			ID:   id,
+			Name: pmodel.NewCIStr(tableNames[i]),
+		})
+	}
+	return &model.Job{
+		Type:     model.ActionCreateTables,
+		SchemaID: schemaID,
+		Query:    query,
 		BinlogInfo: &model.HistoryInfo{
 			MultipleTableInfos: multiTableInfos,
 			FinishedTS:         finishedTs,
@@ -245,8 +264,8 @@ func buildCreatePartitionTablesJobForTest(schemaID int64, tableIDs []int64, tabl
 	}
 }
 
-func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64) *model.Job {
-	return &model.Job{
+func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64, prevInfo *model.InvolvingSchemaInfo) *model.Job {
+	job := &model.Job{
 		Type:     model.ActionRenameTable,
 		SchemaID: schemaID,
 		TableID:  tableID,
@@ -258,6 +277,15 @@ func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finis
 			FinishedTS: finishedTs,
 		},
 	}
+	if prevInfo != nil {
+		job.InvolvingSchemaInfo = []model.InvolvingSchemaInfo{
+			{
+				Database: prevInfo.Database,
+				Table:    prevInfo.Table,
+			},
+		}
+	}
+	return job
 }
 
 func buildRenamePartitionTableJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
@@ -390,6 +418,127 @@ func buildExchangePartitionJobForTest(
 					Definitions: partitionDefinitions,
 				},
 			},
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildAddPrimaryKeyJobForTest(schemaID, tableID int64, finishedTs uint64, indexes ...*model.IndexInfo) *model.Job {
+	return &model.Job{
+		Type:     model.ActionAddPrimaryKey,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+			TableInfo: &model.TableInfo{
+				ID:      tableID,
+				Indices: indexes,
+			},
+		},
+	}
+}
+
+func buildAlterIndexVisibilityJobForTest(schemaID, tableID int64, finishedTs uint64, indexes ...*model.IndexInfo) *model.Job {
+	return &model.Job{
+		Type:     model.ActionAlterIndexVisibility,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+			TableInfo: &model.TableInfo{
+				ID:      tableID,
+				Indices: indexes,
+			},
+		},
+	}
+}
+
+func buildDropPrimaryKeyJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionDropPrimaryKey,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildModifyTableCharsetJobForTest(schemaID, tableID int64, finishedTs uint64, charset string) *model.Job {
+	return &model.Job{
+		Type:     model.ActionModifyTableCharsetAndCollate,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+			TableInfo: &model.TableInfo{
+				Charset: charset,
+			},
+		},
+	}
+}
+
+func buildAlterTTLJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionAlterTTLInfo,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildRemoveTTLJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionAlterTTLRemove,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildSetTiFlashReplicaJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionSetTiFlashReplica,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildMultiSchemaChangeJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionMultiSchemaChange,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildAddColumnJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionMultiSchemaChange,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildDropColumnJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionMultiSchemaChange,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
 			FinishedTS: finishedTs,
 		},
 	}

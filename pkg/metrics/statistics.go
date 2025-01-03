@@ -17,9 +17,6 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/config"
-
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -30,19 +27,17 @@ func NewStatistics(
 ) *Statistics {
 	statistics := &Statistics{
 		sinkType:     sinkType,
-		captureAddr:  config.GetGlobalServerConfig().AdvertiseAddr,
 		changefeedID: changefeed,
 	}
 
-	namespcae := statistics.changefeedID.Namespace()
-	changefeedID := statistics.changefeedID.Name()
+	namespace := changefeed.Namespace()
+	changefeedID := changefeed.Name()
 	s := sinkType
-	statistics.metricExecDDLHis = ExecDDLHistogram.WithLabelValues(namespcae, changefeedID, s)
-	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(namespcae, changefeedID, s)
-	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(namespcae, changefeedID, s)
-	statistics.metricEventSizeHis = EventSizeHistogram.WithLabelValues(namespcae, changefeedID)
-	statistics.metricExecErrCnt = ExecutionErrorCounter.WithLabelValues(namespcae, changefeedID, s)
-	statistics.metricExecDMLCnt = ExecDMLEventCounter.WithLabelValues(namespcae, changefeedID)
+	statistics.metricExecDDLHis = ExecDDLHistogram.WithLabelValues(namespace, changefeedID, s)
+	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(namespace, changefeedID, s)
+	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(namespace, changefeedID, s)
+	statistics.metricExecErrCnt = ExecutionErrorCounter.WithLabelValues(namespace, changefeedID, s)
+	statistics.metricExecDMLCnt = ExecDMLEventCounter.WithLabelValues(namespace, changefeedID)
 	return statistics
 }
 
@@ -50,29 +45,20 @@ func NewStatistics(
 // Note: All methods of Statistics should be thread-safe.
 type Statistics struct {
 	sinkType     string
-	captureAddr  string
 	changefeedID common.ChangeFeedID
 
-	// Histogram for DDL Executing duration.
+	// metricExecDDLHis record each DDL execution time duration.
 	metricExecDDLHis prometheus.Observer
-	// Histogram for DML batch size.
+	// metricExecBatchHis record the executed DML batch size.
+	// this should be only useful for the MySQL Sink, and Kafka Sink with batched protocol, such as open-protocol.
 	metricExecBatchHis prometheus.Observer
-	// Counter for total bytes of DML.
+	// metricTotalWriteBytesCnt record the executed DML event size.
 	metricTotalWriteBytesCnt prometheus.Counter
-	// Histogram for Row size.
-	metricEventSizeHis prometheus.Observer
-	// Counter for sink error.
+
+	// metricExecErrCnt record the error count of the Sink.
 	metricExecErrCnt prometheus.Counter
-
+	// metricExecDMLCnt record the executed DML event count of the Sink.
 	metricExecDMLCnt prometheus.Counter
-}
-
-// ObserveRows stats all received `RowChangedEvent`s.
-func (b *Statistics) ObserveRows(events []*commonEvent.DMLEvent) {
-	for _, event := range events {
-		b.metricEventSizeHis.Observe(float64(event.GetSize()))
-		b.metricExecDMLCnt.Inc()
-	}
 }
 
 // RecordBatchExecution stats batch executors which return (batchRowCount, error).
@@ -83,6 +69,7 @@ func (b *Statistics) RecordBatchExecution(executor func() (int, int64, error)) e
 		return err
 	}
 	b.metricExecBatchHis.Observe(float64(batchSize))
+	b.metricExecDMLCnt.Add(float64(batchSize))
 	b.metricTotalWriteBytesCnt.Add(float64(batchWriteBytes))
 	return nil
 }

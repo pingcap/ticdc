@@ -761,17 +761,11 @@ func (m *Maintainer) collectMetrics() {
 		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Absent").Set(float64(absent))
 		metrics.TableStateGauge.WithLabelValues(m.id.Namespace(), m.id.Name(), "Working").Set(float64(working))
 		m.lastPrintStatusTime = time.Now()
-		log.Info("maintainer status",
-			zap.String("changefeed", m.id.Name()),
-			zap.Int("total", total),
-			zap.Int("scheduling", scheduling),
-			zap.Int("working", working))
 	}
 }
 
 func (m *Maintainer) runUpdateMetrics(ctx context.Context) {
 	ticker := time.NewTicker(time.Second * 1)
-	log.Info("start update metrics")
 	defer ticker.Stop()
 	for {
 		select {

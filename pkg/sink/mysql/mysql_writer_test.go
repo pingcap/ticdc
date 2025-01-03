@@ -61,7 +61,7 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent, dmlEvent2}, 0)
+	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent, dmlEvent2})
 	require.NoError(t, err)
 
 	err = mock.ExpectationsWereMet()
@@ -162,7 +162,7 @@ func TestMysqlWriter_Flush_EmptyEvents(t *testing.T) {
 
 	events := []*commonEvent.DMLEvent{}
 
-	err := writer.Flush(events, 0)
+	err := writer.Flush(events)
 	require.NoError(t, err)
 
 	err = mock.ExpectationsWereMet()

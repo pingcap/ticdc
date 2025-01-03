@@ -184,9 +184,6 @@ func (c *logCoordinator) updateEventStoreState(nodeId node.ID, state *logservice
 		eventStoreState.subscriptionStates[tableId] = subStates
 	}
 	c.eventStoreStates.m[nodeId] = eventStoreState
-	log.Info("update event store state done",
-		zap.String("nodeId", nodeId.String()),
-		zap.Int("subscriptionCount", count))
 }
 
 // getCandidateNode return all nodes(exclude the request node) which may contain data for `span` from `startTs`,
