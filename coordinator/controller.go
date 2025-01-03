@@ -56,7 +56,8 @@ type Controller struct {
 	bootstrapped *atomic.Bool
 	bootstrapper *bootstrap.Bootstrapper[heartbeatpb.CoordinatorBootstrapResponse]
 
-	nodeChanged *atomic.Bool
+	mutex       sync.Mutex // protect nodeChanged and do onNodeChanged()
+	nodeChanged bool
 	nodeManager *watcher.NodeManager
 
 	stream        dynstream.DynamicStream[int, string, *Event, *Controller, *StreamHandler]
@@ -106,7 +107,7 @@ func NewController(
 		stream:              stream,
 		taskScheduler:       taskScheduler,
 		backend:             backend,
-		nodeChanged:         atomic.NewBool(false),
+		nodeChanged:         false,
 		updatedChangefeedCh: updatedChangefeedCh,
 		stateChangedCh:      stateChangedCh,
 		lastPrintStatusTime: time.Now(),
@@ -116,7 +117,9 @@ func NewController(
 	nodes := c.nodeManager.GetAliveNodes()
 	// detect the capture changes
 	c.nodeManager.RegisterNodeChangeHandler("coordinator-controller", func(allNodes map[node.ID]*node.Info) {
-		c.nodeChanged.Store(true)
+		c.mutex.Lock()
+		c.nodeChanged = true
+		c.mutex.Unlock()
 	})
 	log.Info("changefeed bootstrap initial nodes",
 		zap.Int("nodes", len(nodes)))
@@ -143,10 +146,8 @@ func (c *Controller) HandleEvent(event *Event) bool {
 		}
 	}()
 	// first check the online/offline nodes
-	if c.nodeChanged.Load() {
-		c.onNodeChanged()
-		c.nodeChanged.Store(false)
-	}
+	c.checkOnNodeChanged()
+
 	switch event.eventType {
 	case EventMessage:
 		c.onMessage(event.message)
@@ -154,6 +155,15 @@ func (c *Controller) HandleEvent(event *Event) bool {
 		c.onPeriodTask()
 	}
 	return false
+}
+
+func (c *Controller) checkOnNodeChanged() {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if c.nodeChanged {
+		c.onNodeChanged()
+		c.nodeChanged = false
+	}
 }
 
 func (c *Controller) onPeriodTask() {
