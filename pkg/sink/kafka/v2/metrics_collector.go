@@ -19,7 +19,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	pkafka "github.com/pingcap/tiflow/pkg/sink/kafka"
+	pkafka "github.com/pingcap/ticdc/pkg/sink/kafka"
 	tiv2 "github.com/pingcap/tiflow/pkg/sink/kafka/v2"
 	"go.uber.org/zap"
 )

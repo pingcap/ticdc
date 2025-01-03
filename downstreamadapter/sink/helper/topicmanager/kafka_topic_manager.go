@@ -22,10 +22,9 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	tikafka "github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/retry"
-	"github.com/pingcap/tiflow/pkg/sink/kafka"
 	"go.uber.org/zap"
 )
 
@@ -44,8 +43,7 @@ type kafkaTopicManager struct {
 	defaultTopic string
 
 	admin kafka.ClusterAdminClient
-
-	cfg *tikafka.AutoCreateTopicConfig
+	cfg   *kafka.AutoCreateTopicConfig
 
 	topics sync.Map
 
@@ -60,7 +58,7 @@ func GetTopicManagerAndTryCreateTopic(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	topic string,
-	topicCfg *tikafka.AutoCreateTopicConfig,
+	topicCfg *kafka.AutoCreateTopicConfig,
 	adminClient kafka.ClusterAdminClient,
 ) (TopicManager, error) {
 	topicManager := newKafkaTopicManager(
@@ -80,7 +78,7 @@ func newKafkaTopicManager(
 	defaultTopic string,
 	changefeedID common.ChangeFeedID,
 	admin kafka.ClusterAdminClient,
-	cfg *tikafka.AutoCreateTopicConfig,
+	cfg *kafka.AutoCreateTopicConfig,
 ) *kafkaTopicManager {
 	mgr := &kafkaTopicManager{
 		defaultTopic:      defaultTopic,
