@@ -142,7 +142,6 @@ func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos []mockDBInfo) {
 
 func buildTableFilterByNameForTest(schemaName, tableName string) filter.Filter {
 	filterRule := fmt.Sprintf("%s.%s", schemaName, tableName)
-	log.Info("filterRule", zap.String("filterRule", filterRule))
 	filterConfig := &config.FilterConfig{
 		Rules: []string{filterRule},
 	}
@@ -203,12 +202,31 @@ func buildCreateTablesJobForTest(schemaID int64, tableIDs []int64, tableNames []
 			ID:   id,
 			Name: pmodel.NewCIStr(tableNames[i]),
 		})
-		querys = append(querys, fmt.Sprintf("create table %s(a int primary key)", tableNames[i]))
+		querys = append(querys, fmt.Sprintf("create table %s(a int primary key);", tableNames[i]))
 	}
 	return &model.Job{
 		Type:     model.ActionCreateTables,
 		SchemaID: schemaID,
-		Query:    strings.Join(querys, ";"),
+		Query:    strings.Join(querys, ""),
+		BinlogInfo: &model.HistoryInfo{
+			MultipleTableInfos: multiTableInfos,
+			FinishedTS:         finishedTs,
+		},
+	}
+}
+
+func buildCreateTablesJobWithQueryForTest(schemaID int64, tableIDs []int64, tableNames []string, query string, finishedTs uint64) *model.Job {
+	multiTableInfos := make([]*model.TableInfo, 0, len(tableIDs))
+	for i, id := range tableIDs {
+		multiTableInfos = append(multiTableInfos, &model.TableInfo{
+			ID:   id,
+			Name: pmodel.NewCIStr(tableNames[i]),
+		})
+	}
+	return &model.Job{
+		Type:     model.ActionCreateTables,
+		SchemaID: schemaID,
+		Query:    query,
 		BinlogInfo: &model.HistoryInfo{
 			MultipleTableInfos: multiTableInfos,
 			FinishedTS:         finishedTs,
@@ -246,12 +264,11 @@ func buildCreatePartitionTablesJobForTest(schemaID int64, tableIDs []int64, tabl
 	}
 }
 
-func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64, query, prevSchemaName, prevTableName string) *model.Job {
-	return &model.Job{
+func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64, prevInfo *model.InvolvingSchemaInfo) *model.Job {
+	job := &model.Job{
 		Type:     model.ActionRenameTable,
 		SchemaID: schemaID,
 		TableID:  tableID,
-		Query:    query,
 		BinlogInfo: &model.HistoryInfo{
 			TableInfo: &model.TableInfo{
 				ID:   tableID,
@@ -259,13 +276,16 @@ func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finis
 			},
 			FinishedTS: finishedTs,
 		},
-		InvolvingSchemaInfo: []model.InvolvingSchemaInfo{
-			{
-				Database: prevSchemaName,
-				Table:    prevTableName,
-			},
-		},
 	}
+	if prevInfo != nil {
+		job.InvolvingSchemaInfo = []model.InvolvingSchemaInfo{
+			{
+				Database: prevInfo.Database,
+				Table:    prevInfo.Table,
+			},
+		}
+	}
+	return job
 }
 
 func buildRenamePartitionTableJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
@@ -301,7 +321,7 @@ func buildCreatePartitionTableJobForTest(schemaID, tableID int64, tableName stri
 	return buildPartitionTableRelatedJobForTest(model.ActionCreateTable, schemaID, tableID, tableName, partitionIDs, finishedTs)
 }
 
-func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64, query string) *model.Job {
+func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
 	return &model.Job{
 		Type:     model.ActionDropTable,
 		SchemaID: schemaID,
@@ -309,7 +329,6 @@ func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64, query 
 		BinlogInfo: &model.HistoryInfo{
 			FinishedTS: finishedTs,
 		},
-		Query: query,
 	}
 }
 
