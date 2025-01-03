@@ -17,16 +17,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser"
-	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/format"
 	"go.uber.org/zap"
 )
 
@@ -116,15 +112,6 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
 		buildDDLEventFunc:          buildDDLEventForDropSchema,
 	},
-	model.ActionModifyTableCharsetAndCollate: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
-		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
-		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
-	},
-
 	model.ActionCreateTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
@@ -166,30 +153,6 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionDropIndex: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
-		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
-		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
-	},
-	model.ActionAlterIndexVisibility: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
-		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
-		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
-	},
-	model.ActionAddPrimaryKey: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
-		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
-		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
-	},
-	model.ActionDropPrimaryKey: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
@@ -253,15 +216,6 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
-	model.ActionSetTiFlashReplica: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
-		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
-		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
-	},
-
 	model.ActionShardRowID: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
@@ -310,6 +264,14 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
 		buildDDLEventFunc:          buildDDLEventForCreateDropView,
 	},
+	model.ActionModifyTableCharsetAndCollate: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+	},
 	model.ActionTruncateTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForTruncatePartition,
@@ -318,7 +280,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForTruncateAndReorganizePartition,
 		buildDDLEventFunc:          buildDDLEventForTruncateAndReorganizePartition,
 	},
-
+	// TODO: model.ActionDropView
 	model.ActionRecoverTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
@@ -326,6 +288,44 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
+	},
+	// TODO: model.ActionModifySchemaCharsetAndCollate
+	// TODO: model.LockTable
+	// TODO: model.UnlockTable
+	// TODO: model.ActionRepairTable
+	model.ActionSetTiFlashReplica: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
+	},
+	// TODO: model.ActionUpdateTiFlashReplicaStatus
+	model.ActionAddPrimaryKey: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+	},
+	model.ActionDropPrimaryKey: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
+	},
+
+	model.ActionAlterIndexVisibility: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 
 	model.ActionExchangeTablePartition: {
@@ -344,6 +344,14 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		iterateEventTablesFunc:     iterateEventTablesForCreateTables,
 		extractTableInfoFunc:       extractTableInfoFuncForCreateTables,
 		buildDDLEventFunc:          buildDDLEventForCreateTables,
+	},
+	model.ActionMultiSchemaChange: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 
 	model.ActionReorganizePartition: {
@@ -370,15 +378,6 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
-	},
-
-	model.ActionMultiSchemaChange: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
-		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
-		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
-		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 }
 
@@ -417,65 +416,6 @@ func getSchemaID(tableMap map[int64]*BasicTableInfo, tableID int64) int64 {
 		log.Panic("table not found", zap.Int64("tableID", tableID))
 	}
 	return tableInfo.SchemaID
-}
-
-// transform ddl query based on sql mode.
-func transformDDLJobQuery(job *model.Job) (string, error) {
-	p := parser.New()
-	// We need to use the correct SQL mode to parse the DDL query.
-	// Otherwise, the parser may fail to parse the DDL query.
-	// For example, it is needed to parse the following DDL query:
-	//  `alter table "t" add column "c" int default 1;`
-	// by adding `ANSI_QUOTES` to the SQL mode.
-	p.SetSQLMode(job.SQLMode)
-	stmts, _, err := p.Parse(job.Query, job.Charset, job.Collate)
-	if err != nil {
-		return "", errors.Trace(err)
-	}
-	var result string
-	buildQuery := func(stmt ast.StmtNode) (string, error) {
-		var sb strings.Builder
-		// translate TiDB feature to special comment
-		restoreFlags := format.RestoreTiDBSpecialComment
-		// escape the keyword
-		restoreFlags |= format.RestoreNameBackQuotes
-		// upper case keyword
-		restoreFlags |= format.RestoreKeyWordUppercase
-		// wrap string with single quote
-		restoreFlags |= format.RestoreStringSingleQuotes
-		// remove placement rule
-		restoreFlags |= format.SkipPlacementRuleForRestore
-		// force disable ttl
-		restoreFlags |= format.RestoreWithTTLEnableOff
-		if err = stmt.Restore(format.NewRestoreCtx(restoreFlags, &sb)); err != nil {
-			return "", errors.Trace(err)
-		}
-		return sb.String(), nil
-	}
-	if len(stmts) > 1 {
-		results := make([]string, 0, len(stmts))
-		for _, stmt := range stmts {
-			query, err := buildQuery(stmt)
-			if err != nil {
-				return "", errors.Trace(err)
-			}
-			results = append(results, query)
-		}
-		result = strings.Join(results, ";")
-	} else {
-		result, err = buildQuery(stmts[0])
-		if err != nil {
-			return "", errors.Trace(err)
-		}
-	}
-
-	log.Info("transform ddl query to result",
-		zap.String("DDL", job.Query),
-		zap.String("charset", job.Charset),
-		zap.String("collate", job.Collate),
-		zap.String("result", result))
-
-	return result, nil
 }
 
 // =======
@@ -536,9 +476,7 @@ func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) Per
 	event := buildPersistedDDLEventCommon(args)
 	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
 	event.CurrentTableName = getTableName(args.tableMap, event.CurrentTableID)
-	if event.Query != "" {
-		event.Query = fmt.Sprintf("DROP TABLE `%s`.`%s`", event.CurrentSchemaName, event.CurrentTableName)
-	}
+	event.Query = fmt.Sprintf("DROP TABLE `%s`.`%s`", event.CurrentSchemaName, event.CurrentTableName)
 	return event
 }
 
@@ -583,7 +521,7 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	// we can use event.PrevSchemaID(even it is wrong) to update the internal state of the cdc.
 	// TODO: not sure whether kafka sink will use event.PrevSchemaName and event.PrevTableName
 	// But event.Query will be emit to downstream(out of cdc), we must make it correct.
-	if args.job.Query != "" {
+	if len(args.job.InvolvingSchemaInfo) > 0 {
 		event.Query = fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`",
 			args.job.InvolvingSchemaInfo[0].Database, args.job.InvolvingSchemaInfo[0].Table,
 			event.CurrentSchemaName, event.CurrentTableName)
@@ -1603,7 +1541,10 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			physicalTableCount += 1
 		}
 	}
-	querys := strings.Split(rawEvent.Query, ";")
+	querys, err := SplitQueries(rawEvent.Query)
+	if err != nil {
+		log.Panic("split queries failed", zap.Error(err))
+	}
 	ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, physicalTableCount)
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)
 	resultQuerys := make([]string, 0, logicalTableCount)
@@ -1633,7 +1574,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	ddlEvent.TableNameChange = &commonEvent.TableNameChange{
 		AddName: addName,
 	}
-	ddlEvent.Query = strings.Join(resultQuerys, ";")
+	ddlEvent.Query = strings.Join(resultQuerys, "")
 	if len(ddlEvent.NeedAddedTables) == 0 {
 		log.Fatal("should not happen")
 	}
