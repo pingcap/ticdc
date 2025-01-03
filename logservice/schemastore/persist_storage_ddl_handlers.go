@@ -257,12 +257,12 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForDropPartition,
 	},
 	model.ActionCreateView: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateDropView,
-		updateDDLHistoryFunc:       updateDDLHistoryForCreateDropView,
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateView,
+		updateDDLHistoryFunc:       updateDDLHistoryForCreateView,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
-		buildDDLEventFunc:          buildDDLEventForCreateDropView,
+		buildDDLEventFunc:          buildDDLEventForCreateView,
 	},
 	model.ActionModifyTableCharsetAndCollate: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -280,7 +280,14 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForTruncateAndReorganizePartition,
 		buildDDLEventFunc:          buildDDLEventForTruncateAndReorganizePartition,
 	},
-	// TODO: model.ActionDropView
+	model.ActionDropView: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForDropView,
+		updateDDLHistoryFunc:       updateDDLHistoryForTableTriggerOnlyDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesIgnore,
+		extractTableInfoFunc:       extractTableInfoFuncIgnore,
+		buildDDLEventFunc:          buildDDLEventForDropView,
+	},
 	model.ActionRecoverTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
@@ -459,9 +466,18 @@ func buildPersistedDDLEventForCreateDropSchema(args buildPersistedDDLEventFuncAr
 	return event
 }
 
-func buildPersistedDDLEventForCreateDropView(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
 	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
+	return event
+}
+
+func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	// TODO: does it have schema name?
+	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
+	// The query in job maybe "DROP VIEW test1.view1, test2.view2", we need rebuild it here.
+	event.Query = fmt.Sprintf("DROP VIEW `%s`.`%s`", event.CurrentSchemaName, event.CurrentTableName)
 	return event
 }
 
@@ -476,6 +492,7 @@ func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) Per
 	event := buildPersistedDDLEventCommon(args)
 	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
 	event.CurrentTableName = getTableName(args.tableMap, event.CurrentTableID)
+	// The query in job maybe "DROP TABLE test1.table1, test2.table2", we need rebuild it here.
 	event.Query = fmt.Sprintf("DROP TABLE `%s`.`%s`", event.CurrentSchemaName, event.CurrentTableName)
 	return event
 }
@@ -507,24 +524,37 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	// Note: schema id/schema name/table name may be changed or not
 	// table id does not change, we use it to get the table's prev schema id/name and table name
 	event.PrevSchemaID = getSchemaID(args.tableMap, event.CurrentTableID)
+	// TODO: check how PrevTableName will be used later
 	event.PrevTableName = getTableName(args.tableMap, event.CurrentTableID)
 	event.PrevSchemaName = getSchemaName(args.databaseMap, event.PrevSchemaID)
 	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
 	// get the table's current table name from the ddl job
 	event.CurrentTableName = event.TableInfo.Name.O
-	// Note: event.PrevSchemaID may not be accurate for rename table in some case.
-	// after pr: https://github.com/pingcap/tidb/pull/43341,
-	// assume there is a table `test.t` and a ddl: `rename table t to test2.t;`, and its commit ts is `100`.
-	// if you get a ddl snapshot at ts `99`, table `t` is already in `test2`.
-	// so event.PrevSchemaName will also be `test2`.
-	// And because SchemaStore is the source of truth of cdc,
-	// we can use event.PrevSchemaID(even it is wrong) to update the internal state of the cdc.
-	// TODO: not sure whether kafka sink will use event.PrevSchemaName and event.PrevTableName
-	// But event.Query will be emit to downstream(out of cdc), we must make it correct.
 	if len(args.job.InvolvingSchemaInfo) > 0 {
+		log.Info("buildPersistedDDLEvent for rename table",
+			zap.String("query", event.Query),
+			zap.Int64("schemaID", event.CurrentSchemaID),
+			zap.String("schemaName", event.CurrentSchemaName),
+			zap.String("tableName", event.CurrentTableName),
+			zap.Int64("prevSchemaID", event.PrevSchemaID),
+			zap.String("prevSchemaName", event.PrevSchemaName),
+			zap.String("prevTableName", event.PrevTableName),
+			zap.Any("involvingSchemaInfo", args.job.InvolvingSchemaInfo))
+		// The query in job maybe "RENAME TABLE table1 to test2.table2", we need rebuild it here.
+		//
+		// Note: Why use args.job.InvolvingSchemaInfo to build query?
+		// because event.PrevSchemaID may not be accurate for rename table in some case.
+		// after pr: https://github.com/pingcap/tidb/pull/43341,
+		// assume there is a table `test.t` and a ddl: `rename table t to test2.t;`, and its commit ts is `100`.
+		// if you get a ddl snapshot at ts `99`, table `t` is already in `test2`.
+		// so event.PrevSchemaName will also be `test2`.
+		// And because SchemaStore is the source of truth inside cdc,
+		// we can use event.PrevSchemaID(even it is wrong) to update the internal state of the cdc.
+		// But event.Query will be emit to downstream(out of cdc), we must make it correct.
 		event.Query = fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`",
 			args.job.InvolvingSchemaInfo[0].Database, args.job.InvolvingSchemaInfo[0].Table,
 			event.CurrentSchemaName, event.CurrentTableName)
+
 	}
 	return event
 }
@@ -648,7 +678,7 @@ func updateDDLHistoryForDropPartition(args updateDDLHistoryFuncArgs) []uint64 {
 	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForCreateDropView(args updateDDLHistoryFuncArgs) []uint64 {
+func updateDDLHistoryForCreateView(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	for tableID := range args.tableMap {
 		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
@@ -1425,10 +1455,19 @@ func buildDDLEventForDropPartition(rawEvent *PersistedDDLEvent, tableFilter filt
 	return ddlEvent
 }
 
-func buildDDLEventForCreateDropView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+func buildDDLEventForCreateView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
 	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 		InfluenceType: commonEvent.InfluenceTypeAll,
+	}
+	return ddlEvent
+}
+
+func buildDDLEventForDropView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+	ddlEvent := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeNormal,
+		TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
 	}
 	return ddlEvent
 }
