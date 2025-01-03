@@ -536,9 +536,7 @@ func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) Per
 	event := buildPersistedDDLEventCommon(args)
 	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
 	event.CurrentTableName = getTableName(args.tableMap, event.CurrentTableID)
-	if event.Query != "" {
-		event.Query = fmt.Sprintf("DROP TABLE `%s`.`%s`", event.CurrentSchemaName, event.CurrentTableName)
-	}
+	event.Query = fmt.Sprintf("DROP TABLE `%s`.`%s`", event.CurrentSchemaName, event.CurrentTableName)
 	return event
 }
 
@@ -583,7 +581,7 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	// we can use event.PrevSchemaID(even it is wrong) to update the internal state of the cdc.
 	// TODO: not sure whether kafka sink will use event.PrevSchemaName and event.PrevTableName
 	// But event.Query will be emit to downstream(out of cdc), we must make it correct.
-	if args.job.Query != "" {
+	if len(args.job.InvolvingSchemaInfo) > 0 {
 		event.Query = fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`",
 			args.job.InvolvingSchemaInfo[0].Database, args.job.InvolvingSchemaInfo[0].Table,
 			event.CurrentSchemaName, event.CurrentTableName)

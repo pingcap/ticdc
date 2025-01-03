@@ -93,11 +93,11 @@ func TestApplyDDLJobs(t *testing.T) {
 			nil,
 			func() []*model.Job {
 				return []*model.Job{
-					buildCreateSchemaJobForTest(100, "test", 1000),                  // create schema 100
-					buildCreateTableJobForTest(100, 200, "t1", 1010),                // create table 200
-					buildCreateTableJobForTest(100, 201, "t2", 1020),                // create table 201
-					buildDropTableJobForTest(100, 201, 1030, "drop table t2, t100"), // drop table 201
-					buildTruncateTableJobForTest(100, 200, 202, "t1", 1040),         // truncate table 200 to 202
+					buildCreateSchemaJobForTest(100, "test", 1000),          // create schema 100
+					buildCreateTableJobForTest(100, 200, "t1", 1010),        // create table 200
+					buildCreateTableJobForTest(100, 201, "t2", 1020),        // create table 201
+					buildDropTableJobForTest(100, 201, 1030),                // drop table 201
+					buildTruncateTableJobForTest(100, 200, 202, "t1", 1040), // truncate table 200 to 202
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -701,11 +701,14 @@ func TestApplyDDLJobs(t *testing.T) {
 			},
 			func() []*model.Job {
 				return []*model.Job{
-					buildCreateTableJobForTest(100, 300, "t1", 1010),                                              // create table 300
-					buildRenameTableJobForTest(105, 300, "t2", 1020, "rename table t1 to test2.t2", "test", "t1"), // rename table 300 to schema 105
+					buildCreateTableJobForTest(100, 300, "t1", 1010), // create table 300
+					buildRenameTableJobForTest(105, 300, "t2", 1020, &model.InvolvingSchemaInfo{
+						Database: "test",
+						Table:    "t1",
+					}), // rename table 300 to schema 105
 					// rename table 300 to schema 105 with the same name again
 					// check comments in buildPersistedDDLEventForRenameTable to see why this would happen
-					buildRenameTableJobForTest(105, 300, "t2", 1030, "", "", ""),
+					buildRenameTableJobForTest(105, 300, "t2", 1030, nil),
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -1679,7 +1682,7 @@ func TestRegisterTable(t *testing.T) {
 			},
 			ddlJobs: func() []*model.Job {
 				return []*model.Job{
-					buildRenameTableJobForTest(50, 99, "t2", 1000, "", "", ""),                       // rename table 99 to t2
+					buildRenameTableJobForTest(50, 99, "t2", 1000, nil),                              // rename table 99 to t2
 					buildCreateTableJobForTest(50, 100, "t3", 1010),                                  // create table 100
 					buildTruncateTableJobForTest(50, 100, 101, "t3", 1020),                           // truncate table 100 to 101
 					buildCreatePartitionTableJobForTest(50, 102, "t4", []int64{201, 202, 203}, 1030), // create partition table 102

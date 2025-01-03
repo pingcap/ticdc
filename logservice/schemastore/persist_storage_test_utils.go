@@ -246,12 +246,11 @@ func buildCreatePartitionTablesJobForTest(schemaID int64, tableIDs []int64, tabl
 	}
 }
 
-func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64, query, prevSchemaName, prevTableName string) *model.Job {
-	return &model.Job{
+func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64, prevInfo *model.InvolvingSchemaInfo) *model.Job {
+	job := &model.Job{
 		Type:     model.ActionRenameTable,
 		SchemaID: schemaID,
 		TableID:  tableID,
-		Query:    query,
 		BinlogInfo: &model.HistoryInfo{
 			TableInfo: &model.TableInfo{
 				ID:   tableID,
@@ -259,13 +258,16 @@ func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finis
 			},
 			FinishedTS: finishedTs,
 		},
-		InvolvingSchemaInfo: []model.InvolvingSchemaInfo{
-			{
-				Database: prevSchemaName,
-				Table:    prevTableName,
-			},
-		},
 	}
+	if prevInfo != nil {
+		job.InvolvingSchemaInfo = []model.InvolvingSchemaInfo{
+			{
+				Database: prevInfo.Database,
+				Table:    prevInfo.Table,
+			},
+		}
+	}
+	return job
 }
 
 func buildRenamePartitionTableJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
@@ -301,7 +303,7 @@ func buildCreatePartitionTableJobForTest(schemaID, tableID int64, tableName stri
 	return buildPartitionTableRelatedJobForTest(model.ActionCreateTable, schemaID, tableID, tableName, partitionIDs, finishedTs)
 }
 
-func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64, query string) *model.Job {
+func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
 	return &model.Job{
 		Type:     model.ActionDropTable,
 		SchemaID: schemaID,
@@ -309,7 +311,6 @@ func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64, query 
 		BinlogInfo: &model.HistoryInfo{
 			FinishedTS: finishedTs,
 		},
-		Query: query,
 	}
 }
 
