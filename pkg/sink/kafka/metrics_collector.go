@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	"github.com/rcrowley/go-metrics"
 	"go.uber.org/zap"
 )
@@ -66,7 +67,7 @@ type saramaMetricsCollector struct {
 // NewSaramaMetricsCollector return a kafka metrics collector based on sarama library.
 func NewSaramaMetricsCollector(
 	changefeedID common.ChangeFeedID,
-	adminClient ClusterAdminClient,
+	adminClient tikafka.ClusterAdminClient,
 	registry metrics.Registry,
 ) MetricsCollector {
 	return &saramaMetricsCollector{

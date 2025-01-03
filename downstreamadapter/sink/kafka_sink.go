@@ -44,14 +44,10 @@ type KafkaSink struct {
 
 	// the module used by dmlWorker and ddlWorker
 	// KafkaSink need to close it when Close() is called
-	adminClient  kafka.ClusterAdminClient
-	topicManager topicmanager.TopicManager
-	statistics   *metrics.Statistics
-	// metricsCollector is used to report metrics.
+	adminClient      kafka.ClusterAdminClient
+	topicManager     topicmanager.TopicManager
+	statistics       *metrics.Statistics
 	metricsCollector kafka.MetricsCollector
-
-	ctx    context.Context
-	cancel context.CancelFunc
 
 	errgroup *errgroup.Group
 	errCh    chan error
@@ -86,7 +82,7 @@ func NewKafkaSink(
 		return nil, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
 	}
 	dmlProducer := producer.NewKafkaDMLProducer(changefeedID, dmlAsyncProducer)
-	dmlWorker := worker.NewKafkaDMLWorker(
+	dmlWorker := worker.NewKafkaDMLWorker(ctx,
 		changefeedID,
 		protocol,
 		dmlProducer,
@@ -119,11 +115,9 @@ func NewKafkaSink(
 		adminClient:      kafkaComponent.AdminClient,
 		topicManager:     kafkaComponent.TopicManager,
 		statistics:       statistics,
-		errgroup:         errGroup,
 		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
+		errgroup:         errGroup,
 		errCh:            errCh,
-		ctx:              ctx,
-		cancel:           cancel,
 	}
 	go sink.run(ctx)
 	return sink, nil
@@ -131,9 +125,11 @@ func NewKafkaSink(
 
 func (s *KafkaSink) run(ctx context.Context) {
 	s.dmlWorker.Run(ctx)
-	s.ddlWorker.Run(ctx)
-	s.metricsCollector.Run(ctx)
-
+	s.ddlWorker.Run()
+	s.errgroup.Go(func() error {
+		s.metricsCollector.Run(ctx)
+		return nil
+	})
 	err := s.errgroup.Wait()
 	if errors.Cause(err) != context.Canceled {
 		atomic.StoreUint32(&s.isNormal, 0)
@@ -218,7 +214,6 @@ func (s *KafkaSink) Close(_ bool) error {
 func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProducer, error) {
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	errCh := make(chan error, 1)
 	openProtocol := "open-protocol"
 	sinkConfig := &config.SinkConfig{Protocol: &openProtocol}
 	uriTemplate := "kafka://%s/%s?kafka-version=0.9.0.0&max-batch-size=1" +
@@ -271,14 +266,15 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 		errGroup)
 
 	sink := &KafkaSink{
-		changefeedID: changefeedID,
-		dmlWorker:    dmlWorker,
-		ddlWorker:    ddlWorker,
-		adminClient:  kafkaComponent.AdminClient,
-		topicManager: kafkaComponent.TopicManager,
-		statistics:   statistics,
-		errgroup:     errGroup,
-		errCh:        errCh,
+		changefeedID:     changefeedID,
+		dmlWorker:        dmlWorker,
+		ddlWorker:        ddlWorker,
+		adminClient:      kafkaComponent.AdminClient,
+		topicManager:     kafkaComponent.TopicManager,
+		statistics:       statistics,
+		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
+		errgroup:         errGroup,
+		errCh:            make(chan error, 1),
 	}
 	go sink.run(ctx)
 	return sink, dmlMockProducer, ddlMockProducer, nil

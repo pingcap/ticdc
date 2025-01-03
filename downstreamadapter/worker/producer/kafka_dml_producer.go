@@ -43,7 +43,6 @@ type KafkaDMLProducer struct {
 	id commonType.ChangeFeedID
 	// asyncProducer is used to send messages to kafka asynchronously.
 	asyncProducer kafka.AsyncProducer
-
 	// closedMu is used to protect `closed`.
 	// We need to ensure that closed producers are never written to.
 	closedMu sync.RWMutex

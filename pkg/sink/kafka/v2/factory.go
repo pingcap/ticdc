@@ -220,7 +220,7 @@ func (f *factory) SyncProducer(_ context.Context) (pkafka.SyncProducer, error) {
 // AsyncProducer creates an async producer to writer message to kafka
 func (f *factory) AsyncProducer(
 	ctx context.Context,
-) (pkafka.AsyncProducer, error) {
+) (tikafka.AsyncProducer, error) {
 	w := f.newWriter(true)
 	// assume each message is 1KB,
 	// and set batch timeout to 5ms to avoid waste too much time on waiting for messages.
@@ -261,8 +261,8 @@ func (f *factory) AsyncProducer(
 
 // MetricsCollector returns the kafka metrics collector
 func (f *factory) MetricsCollector(
-	_ pkafka.ClusterAdminClient,
-) pkafka.MetricsCollector {
+	_ tikafka.ClusterAdminClient,
+) tikafka.MetricsCollector {
 	return NewMetricsCollector(f.changefeedID, f.writer)
 }
 
