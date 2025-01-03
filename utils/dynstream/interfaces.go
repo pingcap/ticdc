@@ -175,7 +175,7 @@ type PathHasher[P Path] func(path P) uint64
 const DefaultInputBufferSize = 1024
 const DefaultSchedulerInterval = 16 * time.Second
 const DefaultReportInterval = 10 * time.Second
-const DefaultMaxPendingSize = 128 * (1 << 20) // 128 MB
+const DefaultMaxPendingSize = 1024 * 1024 * 1024 // 1 GB
 const DefaultFeedbackInterval = 1000 * time.Millisecond
 
 type Option struct {

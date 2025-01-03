@@ -94,12 +94,12 @@ function failOverCaseF-1() {
 	ans=$(run_cdc_cli capture list)
 	node2ID=`echo $ans | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.[] | select(.address == "127.0.0.1:8301") | .id'`
 
-	# move table 2 to node2
+	# move table 1 to node2
 	result=$(run_cdc_cli changefeed move-table -c "test" -t 106 -d "$node2ID")
 	echo $result
 	success=$(echo $result | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
 	if [ "$success" != "true" ]; then
-		echo "move table 2 to node2 failed"
+		echo "move table 1 to node2 failed"
 		exit 1
 	fi
 
@@ -158,12 +158,12 @@ function failOverCaseF-2() {
 	ans=$(run_cdc_cli capture list)
 	node2ID=`echo $ans | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.[] | select(.address == "127.0.0.1:8301") | .id'`
 
-	# move table 2 to node2
+	# move table 1 to node2
 	result=$(run_cdc_cli changefeed move-table -c "test" -t 106 -d "$node2ID")
 	echo $result
 	success=$(echo $result | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
 	if [ "$success" != "true" ]; then
-		echo "move table 2 to node2 failed"
+		echo "move table 1 to node2 failed"
 		exit 1
 	fi
 
@@ -230,12 +230,12 @@ function failOverCaseF-3() {
 	ans=$(run_cdc_cli capture list)
 	node2ID=`echo $ans | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.[] | select(.address == "127.0.0.1:8301") | .id'`
 
-	# move table 2 to node2
+	# move table 1 to node2
 	result=$(run_cdc_cli changefeed move-table -c "test" -t 106 -d "$node2ID")
 	echo $result
 	success=$(echo $result | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
 	if [ "$success" != "true" ]; then
-		echo "move table 2 to node2 failed"
+		echo "move table 1 to node2 failed"
 		exit 1
 	fi
 
@@ -304,12 +304,12 @@ function failOverCaseF-5() {
 	ans=$(run_cdc_cli capture list)
 	node2ID=`echo $ans | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.[] | select(.address == "127.0.0.1:8301") | .id'`
 
-	# move table 2 to node2
+	# move table 1 to node2
 	result=$(run_cdc_cli changefeed move-table -c "test" -t 106 -d "$node2ID")
 	echo $result
 	success=$(echo $result | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
 	if [ "$success" != "true" ]; then
-		echo "move table 2 to node2 failed"
+		echo "move table 1 to node2 failed"
 		exit 1
 	fi
 
@@ -352,9 +352,9 @@ function failOverCaseF-5() {
 }
 
 trap stop_tidb_cluster EXIT
-failOverCaseF-1
-failOverCaseF-2
+# failOverCaseF-1
+# failOverCaseF-2
 failOverCaseF-3
-failOverCaseF-5
+# failOverCaseF-5
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

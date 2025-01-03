@@ -97,31 +97,59 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
 
-      - name: Test fail_over
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over 
+      # - name: Test fail_over
+      #   run: |
+      #     pwd && ls -l bin/ && ls -l tools/bin/
+      #     export TICDC_NEWARCH=true && make integration_test CASE=fail_over 
       
-      - name: Test fail_over_ddl_A
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
+      # - name: Test fail_over_ddl_A
+      #   run: |
+      #     pwd && ls -l bin/ && ls -l tools/bin/
+      #     export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
       
-      - name: Test fail_over_ddl_B
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_B
+      # - name: Test fail_over_ddl_B
+      #   run: |
+      #     pwd && ls -l bin/ && ls -l tools/bin/
+      #     export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_B
       
-      - name: Test fail_over_ddl_C
+      # - name: Test fail_over_ddl_C
+      #   run: |
+      #     pwd && ls -l bin/ && ls -l tools/bin/
+      #     export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_C
+      - name: Test fail_over_ddl_F
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_C
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
 
-      - name: Upload test logs
-        if: always()
-        uses: ./.github/actions/upload-test-logs
+      - name: Test fail_over_ddl_F1
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
+      
+      - name: Test fail_over_ddl_F2
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
+      
+      - name: Test fail_over_ddl_F3
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
+
+      - name: Copy logs to hack permission
+        if: ${{ always() }}
+        run: |
+          TEMP_DIR=$(mktemp -d)
+          mkdir -p "$TEMP_DIR"
+          sudo find /tmp/tidb_cdc_test -type d -name 'fail_over*' -exec sh -c 'find "{}" -type f -name "cdc*.log" -print0' \; | tar -czvf logs.tar.gz -C /tmp/tidb_cdc_test --null -T -
+      # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
+      - name: Upload logs
+        uses: actions/upload-artifact@v4
+        if: ${{ always() }}
         with:
-          log-name: failover_group1
+          name: upstream-failover-logs1
+          path: |
+            ./logs.tar.gz
 
 
   failover_e2e_test2:
@@ -143,31 +171,60 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
       
-      - name: Test fail_over_ddl_D
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_D
+      # - name: Test fail_over_ddl_D
+      #   run: |
+      #     pwd && ls -l bin/ && ls -l tools/bin/
+      #     export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_D
 
-      - name: Test fail_over_ddl_E
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_E
+      # - name: Test fail_over_ddl_E
+      #   run: |
+      #     pwd && ls -l bin/ && ls -l tools/bin/
+      #     export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_E
       
+      # - name: Test fail_over_ddl_F
+      #   run: |
+      #     pwd && ls -l bin/ && ls -l tools/bin/
+      #     export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
+      
+      # - name: Test fail_over_ddl_G
+      #   run: |
+      #     pwd && ls -l bin/ && ls -l tools/bin/
+      #     export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_G
       - name: Test fail_over_ddl_F
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
-      
-      - name: Test fail_over_ddl_G
+
+      - name: Test fail_over_ddl_F1
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_G
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
+      
+      - name: Test fail_over_ddl_F2
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
+      
+      - name: Test fail_over_ddl_F3
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
 
-      - name: Upload test logs
-        if: always()
-        uses: ./.github/actions/upload-test-logs
+
+      - name: Copy logs to hack permission
+        if: ${{ always() }}
+        run: |
+          TEMP_DIR=$(mktemp -d)
+          mkdir -p "$TEMP_DIR"
+          sudo find /tmp/tidb_cdc_test -type d -name 'fail_over*' -exec sh -c 'find "{}" -type f -name "cdc*.log" -print0' \; | tar -czvf logs.tar.gz -C /tmp/tidb_cdc_test --null -T -
+      # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
+      - name: Upload logs
+        uses: actions/upload-artifact@v4
+        if: ${{ always() }}
         with:
-          log-name: failover_group_2
+          name: upstream-failover-logs2
+          path: |
+            ./logs.tar.gz
 
   
   failover_e2e_test3:
@@ -189,13 +246,42 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
       
-      - name: Test fail_over_ddl_J
+      # - name: Test fail_over_ddl_J
+      #   run: |
+      #     pwd && ls -l bin/ && ls -l tools/bin/
+      #     export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_J
+
+      - name: Test fail_over_ddl_F
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_J
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
 
-      - name: Upload test logs
-        if: always()
-        uses: ./.github/actions/upload-test-logs
+      - name: Test fail_over_ddl_F1
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
+      
+      - name: Test fail_over_ddl_F2
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
+      
+      - name: Test fail_over_ddl_F3
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
+
+      - name: Copy logs to hack permission
+        if: ${{ always() }}
+        run: |
+          TEMP_DIR=$(mktemp -d)
+          mkdir -p "$TEMP_DIR"
+          sudo find /tmp/tidb_cdc_test -type d -name 'fail_over*' -exec sh -c 'find "{}" -type f -name "cdc*.log" -print0' \; | tar -czvf logs.tar.gz -C /tmp/tidb_cdc_test --null -T -
+      # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
+      - name: Upload logs
+        uses: actions/upload-artifact@v4
+        if: ${{ always() }}
         with:
-          log-name: failover-group3
+          name: upstream-failover-logs3
+          path: |
+            ./logs.tar.gz

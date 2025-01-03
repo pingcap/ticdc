@@ -674,6 +674,11 @@ func (d *dispatcherStat) pauseChangefeed(eventCollector *EventCollector) {
 		return
 	}
 
+	log.Info("Send pause changefeed event to event service",
+		zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+		zap.String("dispatcher", d.target.GetId().String()),
+		zap.Uint64("resolvedTs", d.target.GetResolvedTs()))
+
 	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
 		Dispatcher: d.target,
 		ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE_CHANGEFEED,
@@ -688,6 +693,10 @@ func (d *dispatcherStat) resumeChangefeed(eventCollector *EventCollector) {
 		// Just ignore the request if the dispatcher is not ready.
 		return
 	}
+	log.Info("Send resume changefeed event to event service",
+		zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+		zap.Stringer("dispatcher", d.target.GetId()),
+		zap.Uint64("resolvedTs", d.target.GetResolvedTs()))
 
 	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
 		Dispatcher: d.target,
