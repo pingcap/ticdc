@@ -225,6 +225,11 @@ jobs:
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_J
 
+      - name: Test fail_over_ddl_K
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_K
+
       - name: Copy logs to hack permission
         if: ${{ always() }}
         run: |
