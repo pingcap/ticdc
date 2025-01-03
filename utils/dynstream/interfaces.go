@@ -5,9 +5,6 @@ import (
 	"runtime"
 	"sync"
 	"time"
-
-	"github.com/pingcap/log"
-	"go.uber.org/zap"
 )
 
 // The path interface. A path is a unique identifier of a destination.
@@ -227,9 +224,6 @@ type AreaSettings struct {
 
 func (s *AreaSettings) fix() {
 	if s.MaxPendingSize <= 0 {
-		log.Info("fizz: fix area settings",
-			zap.Int("maxPendingSize", s.MaxPendingSize),
-			zap.Int("defaultMaxPendingSize", DefaultMaxPendingSize))
 		s.MaxPendingSize = DefaultMaxPendingSize
 	}
 	if s.FeedbackInterval == 0 {
