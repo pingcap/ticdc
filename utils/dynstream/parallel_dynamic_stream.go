@@ -94,7 +94,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 		queueTime: time.Now(),
 	}
 	if s.memControl != nil {
-		log.Info("fizz: add event to stream",
+		log.Debug("fizz: add event to stream",
 			zap.Any("rawSize", s.handler.GetSize(e)),
 			zap.Any("extraSize", s.eventExtraSize),
 			zap.Any("totalSize", s.eventExtraSize+s.handler.GetSize(e)),

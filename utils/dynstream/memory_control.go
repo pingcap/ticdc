@@ -110,7 +110,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 			PauseArea:    pause,
 			FeedbackType: 1,
 		}
-		log.Info("fizz: send area feedback",
+		log.Debug("fizz: send area feedback",
 			zap.Any("area", as.area),
 			zap.Any("path", path.path),
 			zap.Bool("pause", pause))
@@ -145,7 +145,7 @@ func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D,
 func (as *areaMemStat[A, P, T, D, H]) shouldPauseArea() bool {
 	memoryUsageRatio := float64(as.totalPendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
 
-	log.Info("fizz: should pause area",
+	log.Debug("fizz: should pause area",
 		zap.Any("area", as.area),
 		zap.Float64("memoryUsageRatio", memoryUsageRatio),
 		zap.Int("maxPendingSize", as.settings.Load().MaxPendingSize),
@@ -164,7 +164,7 @@ func (as *areaMemStat[A, P, T, D, H]) shouldPauseArea() bool {
 func (as *areaMemStat[A, P, T, D, H]) decPendingSize(size int64) {
 	as.totalPendingSize.Add(int64(-size))
 	if as.totalPendingSize.Load() < 0 {
-		log.Info("fizz: total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()))
+		log.Debug("fizz: total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()))
 		as.totalPendingSize.Store(0)
 	}
 }
