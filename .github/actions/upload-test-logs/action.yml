@@ -13,11 +13,11 @@ runs:
         [ -z "$DIR" ] && exit 0
         CASE=$(basename $DIR)
         mkdir -p ./logs/$CASE
-        cat $DIR/stdout.log
-        tail -n 10 $DIR/cdc.log
+        cat $DIR/stdout.log || true
+        tail -n 10 $DIR/cdc.log || true
         sudo cp -r -L $DIR/*.log ./logs/$CASE/ || true
         sudo cp -r -L $DIR/sync_diff ./logs/$CASE/ || true
-        sudo chown -R runner ./logs
+        sudo chown -R runner ./logs 
         sudo tar -czvf ./logs.tar.gz ./logs
 
     - name: Upload logs
