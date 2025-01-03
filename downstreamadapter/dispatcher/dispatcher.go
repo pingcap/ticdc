@@ -208,6 +208,7 @@ func (d *Dispatcher) InitalizeTableSchemaStore(schemaInfo []*heartbeatpb.SchemaI
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream.
 // 2. If the action is a pass, we just need to pass the event
 func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) {
+	log.Debug("dispatcher handle dispatcher status", zap.Any("dispatcherStatus", dispatcherStatus), zap.Stringer("dispatcher", d.id), zap.Any("action", dispatcherStatus.GetAction()), zap.Any("ack", dispatcherStatus.GetAck()))
 	// deal with the ack info
 	ack := dispatcherStatus.GetAck()
 	if ack != nil {
