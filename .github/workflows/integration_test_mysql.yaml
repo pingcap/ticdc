@@ -97,25 +97,25 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
 
+       - name: Test fail_over
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over 
+      
       - name: Test fail_over_ddl_A
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
       
-      - name: Test fail_over_ddl_A1
+      - name: Test fail_over_ddl_B
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_B
       
-      - name: Test fail_over_ddl_A2
+      - name: Test fail_over_ddl_C
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
-
-      - name: Test fail_over_ddl_A3
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_C
 
       - name: Copy logs to hack permission
         if: ${{ always() }}
@@ -152,44 +152,25 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
       
-      # - name: Test fail_over_ddl_D
-      #   run: |
-      #     pwd && ls -l bin/ && ls -l tools/bin/
-      #     export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_D
+      - name: Test fail_over_ddl_D
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_D
 
-      # - name: Test fail_over_ddl_E
-      #   run: |
-      #     pwd && ls -l bin/ && ls -l tools/bin/
-      #     export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_E
-      
-      # - name: Test fail_over_ddl_F
-      #   run: |
-      #     pwd && ls -l bin/ && ls -l tools/bin/
-      #     export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
-      
-      # - name: Test fail_over_ddl_G
-      #   run: |
-      #     pwd && ls -l bin/ && ls -l tools/bin/
-      #     export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_G
-      - name: Test fail_over_ddl_A
+      - name: Test fail_over_ddl_E
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_E
       
-      - name: Test fail_over_ddl_A1
+      - name: Test fail_over_ddl_F
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
       
-      - name: Test fail_over_ddl_A2
+      - name: Test fail_over_ddl_G
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
-
-      - name: Test fail_over_ddl_A3
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_G
 
       - name: Copy logs to hack permission
         if: ${{ always() }}
@@ -225,25 +206,15 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
 
-      - name: Test fail_over_ddl_A
+      - name: Test fail_over_ddl_I
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
-      
-      - name: Test fail_over_ddl_A1
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
-      
-      - name: Test fail_over_ddl_A2
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_I
 
-      - name: Test fail_over_ddl_A3
+      - name: Test fail_over_ddl_J
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_J
 
       - name: Copy logs to hack permission
         if: ${{ always() }}

@@ -280,9 +280,9 @@ function failOverCaseA-5() {
 }
 
 trap stop_tidb_cluster EXIT
-# failOverCaseA-1
-# failOverCaseA-2
+failOverCaseA-1
+failOverCaseA-2
 failOverCaseA-3
-# failOverCaseA-5
+failOverCaseA-5
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

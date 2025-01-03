@@ -137,9 +137,7 @@ func (b *Bootstrapper[T]) CheckAllNodeInitialized() bool {
 
 // return true if all node reports the bootstrap response
 func (b *Bootstrapper[T]) checkAllCaptureInitialized() bool {
-	log.Info("hyy checkAllCaptureInitialized")
-	for node, captureStatus := range b.nodes {
-		log.Info("hyy checkAllCaptureInitialized", zap.Any("captureStatus", captureStatus), zap.Any("node", node), zap.Any("state", captureStatus.state))
+	for _, captureStatus := range b.nodes {
 		// CaptureStateStopping is also considered initialized, because when
 		// a server shutdown, it becomes stopping, we need to move its tables
 		// to other captures.
@@ -155,7 +153,6 @@ func (b *Bootstrapper[T]) checkAllCaptureInitialized() bool {
 // return cached heartbeatpb.MaintainerBootstrapResponse map if it's not bootstrapped before
 // bootstrapper only return once
 func (b *Bootstrapper[T]) firstBootstrap() map[node.ID]*T {
-	log.Info("hyy firstBootstrap", zap.Any("b.bootstrapped", b.bootstrapped))
 	// first bootstrapped time, return the cached resp and clear it
 	if !b.bootstrapped && b.checkAllCaptureInitialized() {
 		b.bootstrapped = true
