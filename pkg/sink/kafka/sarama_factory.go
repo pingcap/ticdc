@@ -112,7 +112,6 @@ func (f *saramaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) 
 // it should be the caller's responsibility to close the producer
 func (f *saramaFactory) AsyncProducer(
 	ctx context.Context,
-	failpointCh chan error,
 ) (tikafka.AsyncProducer, error) {
 	config, err := NewSaramaConfig(ctx, f.option)
 	if err != nil {
@@ -132,14 +131,12 @@ func (f *saramaFactory) AsyncProducer(
 		client:       client,
 		producer:     p,
 		changefeedID: f.changefeedID,
-		failpointCh:  failpointCh,
+		failpointCh:  make(chan error, 1),
 	}, nil
 }
 
 func (f *saramaFactory) MetricsCollector(
-	role util.Role,
 	adminClient tikafka.ClusterAdminClient,
 ) tikafka.MetricsCollector {
-	return NewSaramaMetricsCollector(
-		f.changefeedID, role, adminClient, f.registry)
+	return NewSaramaMetricsCollector(f.changefeedID, adminClient, f.registry)
 }

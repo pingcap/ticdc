@@ -65,7 +65,6 @@ func (f *MockFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 // AsyncProducer creates an async producer
 func (f *MockFactory) AsyncProducer(
 	ctx context.Context,
-	failpointCh chan error,
 ) (tikafka.AsyncProducer, error) {
 	config, err := NewSaramaConfig(ctx, f.o)
 	if err != nil {
@@ -75,14 +74,12 @@ func (f *MockFactory) AsyncProducer(
 	asyncProducer := mocks.NewAsyncProducer(t, config)
 	return &MockSaramaAsyncProducer{
 		AsyncProducer: asyncProducer,
-		failpointCh:   failpointCh,
+		failpointCh:   make(chan error, 1),
 	}, nil
 }
 
 // MetricsCollector returns the metric collector
-func (f *MockFactory) MetricsCollector(
-	_ util.Role, _ tikafka.ClusterAdminClient,
-) tikafka.MetricsCollector {
+func (f *MockFactory) MetricsCollector(_ tikafka.ClusterAdminClient) tikafka.MetricsCollector {
 	return &mockMetricsCollector{}
 }
 

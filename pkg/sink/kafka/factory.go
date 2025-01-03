@@ -24,7 +24,6 @@ import (
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/sink/kafka"
-	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -35,9 +34,9 @@ type Factory interface {
 	// SyncProducer creates a sync producer to writer message to kafka
 	SyncProducer(ctx context.Context) (SyncProducer, error)
 	// AsyncProducer creates an async producer to writer message to kafka
-	AsyncProducer(ctx context.Context, failpointCh chan error) (kafka.AsyncProducer, error)
+	AsyncProducer(ctx context.Context) (kafka.AsyncProducer, error)
 	// MetricsCollector returns the kafka metrics collector
-	MetricsCollector(role util.Role, adminClient kafka.ClusterAdminClient) kafka.MetricsCollector
+	MetricsCollector(adminClient kafka.ClusterAdminClient) kafka.MetricsCollector
 }
 
 // FactoryCreator defines the type of factory creator.

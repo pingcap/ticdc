@@ -34,7 +34,6 @@ import (
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/kafka"
 	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
-	utils "github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -76,13 +75,12 @@ func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI
 		}
 	}()
 
-	failpointCh := make(chan error, 1)
-	dmlAsyncProducer, err := kafkaComponent.Factory.AsyncProducer(ctx, failpointCh)
+	dmlAsyncProducer, err := kafkaComponent.Factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
 	}
 
-	metricsCollector := kafkaComponent.Factory.MetricsCollector(utils.RoleProcessor, kafkaComponent.AdminClient)
+	metricsCollector := kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient)
 	dmlProducer := producer.NewKafkaDMLProducer(ctx, changefeedID, dmlAsyncProducer, metricsCollector)
 
 	dmlWorker := worker.NewKafkaDMLWorker(ctx,

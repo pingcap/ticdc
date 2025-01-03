@@ -26,7 +26,6 @@ import (
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -59,10 +58,9 @@ func TestProducerAck(t *testing.T) {
 
 	adminClient, err := factory.AdminClient(ctx)
 	require.NoError(t, err)
-	metricsCollector := factory.MetricsCollector(util.RoleTester, adminClient)
+	metricsCollector := factory.MetricsCollector(adminClient)
 
-	failpointCh := make(chan error, 1)
-	asyncProducer, err := factory.AsyncProducer(ctx, failpointCh)
+	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
 	producer := NewKafkaDMLProducer(ctx, changefeed, asyncProducer, metricsCollector)
@@ -133,10 +131,9 @@ func TestProducerSendMsgFailed(t *testing.T) {
 
 	adminClient, err := factory.AdminClient(ctx)
 	require.NoError(t, err)
-	metricsCollector := factory.MetricsCollector(util.RoleTester, adminClient)
+	metricsCollector := factory.MetricsCollector(adminClient)
 
-	failpointCh := make(chan error, 1)
-	asyncProducer, err := factory.AsyncProducer(ctx, failpointCh)
+	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
 	producer := NewKafkaDMLProducer(ctx, changefeed,
@@ -200,10 +197,9 @@ func TestProducerDoubleClose(t *testing.T) {
 
 	adminClient, err := factory.AdminClient(ctx)
 	require.NoError(t, err)
-	metricsCollector := factory.MetricsCollector(util.RoleTester, adminClient)
+	metricsCollector := factory.MetricsCollector(adminClient)
 
-	failpointCh := make(chan error, 1)
-	asyncProducer, err := factory.AsyncProducer(ctx, failpointCh)
+	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
 	producer := NewKafkaDMLProducer(ctx, changefeed,
