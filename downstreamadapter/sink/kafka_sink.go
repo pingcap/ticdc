@@ -50,6 +50,8 @@ type KafkaSink struct {
 	adminClient  tikafka.ClusterAdminClient
 	topicManager topicmanager.TopicManager
 	statistics   *metrics.Statistics
+	// metricsCollector is used to report metrics.
+	metricsCollector kafka.MetricsCollector
 
 	errgroup *errgroup.Group
 	errCh    chan error
@@ -94,7 +96,6 @@ func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI
 		kafkaComponent.EventRouter,
 		kafkaComponent.TopicManager,
 		statistics,
-		metricsCollector,
 		errGroup)
 
 	ddlSyncProducer, err := kafkaComponent.Factory.SyncProducer(ctx)
@@ -113,14 +114,15 @@ func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI
 		errGroup)
 
 	sink := &KafkaSink{
-		changefeedID: changefeedID,
-		dmlWorker:    dmlWorker,
-		ddlWorker:    ddlWorker,
-		adminClient:  kafkaComponent.AdminClient,
-		topicManager: kafkaComponent.TopicManager,
-		statistics:   statistics,
-		errgroup:     errGroup,
-		errCh:        errCh,
+		changefeedID:     changefeedID,
+		dmlWorker:        dmlWorker,
+		ddlWorker:        ddlWorker,
+		adminClient:      kafkaComponent.AdminClient,
+		topicManager:     kafkaComponent.TopicManager,
+		statistics:       statistics,
+		errgroup:         errGroup,
+		metricsCollector: metricsCollector,
+		errCh:            errCh,
 	}
 	go sink.run(ctx)
 	return sink, nil
@@ -129,6 +131,7 @@ func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI
 func (s *KafkaSink) run(ctx context.Context) {
 	s.dmlWorker.Run(ctx)
 	s.ddlWorker.Run()
+	s.metricsCollector.Run(ctx)
 
 	err := s.errgroup.Wait()
 	if errors.Cause(err) != context.Canceled {
@@ -250,7 +253,6 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, ddlproducer.DDLPro
 		kafkaComponent.EventRouter,
 		kafkaComponent.TopicManager,
 		statistics,
-		kafkaComponent.Factory.MetricsCollector(utils.RoleProcessor, kafkaComponent.AdminClient),
 		errGroup)
 
 	ddlMockProducer := producer.NewMockDDLProducer()

@@ -15,7 +15,6 @@ package worker
 
 import (
 	"context"
-	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/config"
@@ -68,9 +67,6 @@ type KafkaDMLWorker struct {
 	// statistics is used to record DML metrics.
 	statistics *metrics.Statistics
 
-	// metricsCollector is used to report metrics.
-	metricsCollector kafka.MetricsCollector
-
 	errGroup *errgroup.Group
 }
 
@@ -84,32 +80,25 @@ func NewKafkaDMLWorker(
 	eventRouter *eventrouter.EventRouter,
 	topicManager topicmanager.TopicManager,
 	statistics *metrics.Statistics,
-	metricsCollector kafka.MetricsCollector,
 	errGroup *errgroup.Group,
 ) *KafkaDMLWorker {
 	return &KafkaDMLWorker{
-		changeFeedID:     id,
-		protocol:         protocol,
-		eventChan:        make(chan *commonEvent.DMLEvent, 32),
-		rowChan:          make(chan *commonEvent.MQRowEvent, 32),
-		ticker:           time.NewTicker(batchInterval),
-		encoderGroup:     encoderGroup,
-		columnSelector:   columnSelector,
-		eventRouter:      eventRouter,
-		topicManager:     topicManager,
-		producer:         producer,
-		statistics:       statistics,
-		metricsCollector: metricsCollector,
-		errGroup:         errGroup,
+		changeFeedID:   id,
+		protocol:       protocol,
+		eventChan:      make(chan *commonEvent.DMLEvent, 32),
+		rowChan:        make(chan *commonEvent.MQRowEvent, 32),
+		ticker:         time.NewTicker(batchInterval),
+		encoderGroup:   encoderGroup,
+		columnSelector: columnSelector,
+		eventRouter:    eventRouter,
+		topicManager:   topicManager,
+		producer:       producer,
+		statistics:     statistics,
+		errGroup:       errGroup,
 	}
 }
 
 func (w *KafkaDMLWorker) Run(ctx context.Context) {
-	w.errGroup.Go(func() error {
-		w.metricsCollector.Run(ctx)
-		return nil
-	})
-
 	w.errGroup.Go(func() error {
 		return w.producer.Run(ctx)
 	})
