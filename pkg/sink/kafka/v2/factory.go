@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	tiv2 "github.com/pingcap/tiflow/pkg/sink/kafka/v2"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/segmentio/kafka-go"
 	"github.com/segmentio/kafka-go/sasl"
 	"github.com/segmentio/kafka-go/sasl/plain"

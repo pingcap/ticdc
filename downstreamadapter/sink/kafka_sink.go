@@ -79,7 +79,7 @@ func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI
 	if err != nil {
 		return nil, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
 	}
-	dmlProducer := producer.NewKafkaDMLProducer(ctx, changefeedID, dmlAsyncProducer)
+	dmlProducer := producer.NewKafkaDMLProducer(changefeedID, dmlAsyncProducer)
 	dmlWorker := worker.NewKafkaDMLWorker(ctx,
 		changefeedID,
 		protocol,
@@ -122,7 +122,7 @@ func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI
 }
 
 func (s *KafkaSink) run(ctx context.Context) {
-	s.dmlWorker.Run()
+	s.dmlWorker.Run(ctx)
 	s.ddlWorker.Run()
 	s.errgroup.Go(func() error {
 		s.metricsCollector.Run(ctx)

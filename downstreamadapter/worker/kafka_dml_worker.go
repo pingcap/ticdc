@@ -104,9 +104,9 @@ func NewKafkaDMLWorker(
 	}
 }
 
-func (w *KafkaDMLWorker) Run() {
+func (w *KafkaDMLWorker) Run(ctx context.Context) {
 	w.errGroup.Go(func() error {
-		return w.producer.Run()
+		return w.producer.Run(ctx)
 	})
 
 	w.errGroup.Go(func() error {

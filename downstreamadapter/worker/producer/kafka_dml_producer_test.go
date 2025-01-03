@@ -59,10 +59,10 @@ func TestProducerAck(t *testing.T) {
 	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
-	producer := NewKafkaDMLProducer(ctx, changefeed, asyncProducer)
+	producer := NewKafkaDMLProducer(changefeed, asyncProducer)
 	require.NotNil(t, producer)
 
-	go producer.Run()
+	go producer.Run(ctx)
 
 	messageCount := 20
 	for i := 0; i < messageCount; i++ {
@@ -128,11 +128,11 @@ func TestProducerSendMsgFailed(t *testing.T) {
 	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
-	producer := NewKafkaDMLProducer(ctx, changefeed, asyncProducer)
+	producer := NewKafkaDMLProducer(changefeed, asyncProducer)
 	require.NoError(t, err)
 	require.NotNil(t, producer)
 	go func() {
-		errCh <- producer.Run()
+		errCh <- producer.Run(ctx)
 	}()
 
 	defer func() {
@@ -189,8 +189,8 @@ func TestProducerDoubleClose(t *testing.T) {
 	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
-	producer := NewKafkaDMLProducer(ctx, changefeed, asyncProducer)
-	go producer.Run()
+	producer := NewKafkaDMLProducer(changefeed, asyncProducer)
+	go producer.Run(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, producer)
 

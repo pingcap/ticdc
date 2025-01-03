@@ -23,8 +23,7 @@ import (
 	ticommon "github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
-	"github.com/pingcap/tiflow/pkg/util"
+	"github.com/pingcap/tiflow/pkg/sink/kafka"
 )
 
 // MockFactory is a mock implementation of Factory interface.
@@ -44,8 +43,8 @@ func NewMockFactory(
 }
 
 // AdminClient return a mocked admin client
-func (f *MockFactory) AdminClient(_ context.Context) (tikafka.ClusterAdminClient, error) {
-	return tikafka.NewClusterAdminClientMockImpl(), nil
+func (f *MockFactory) AdminClient(_ context.Context) (kafka.ClusterAdminClient, error) {
+	return kafka.NewClusterAdminClientMockImpl(), nil
 }
 
 // SyncProducer creates a sync producer
@@ -65,7 +64,7 @@ func (f *MockFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 // AsyncProducer creates an async producer
 func (f *MockFactory) AsyncProducer(
 	ctx context.Context,
-) (tikafka.AsyncProducer, error) {
+) (kafka.AsyncProducer, error) {
 	config, err := NewSaramaConfig(ctx, f.o)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -79,7 +78,7 @@ func (f *MockFactory) AsyncProducer(
 }
 
 // MetricsCollector returns the metric collector
-func (f *MockFactory) MetricsCollector(_ tikafka.ClusterAdminClient) tikafka.MetricsCollector {
+func (f *MockFactory) MetricsCollector(_ kafka.ClusterAdminClient) kafka.MetricsCollector {
 	return &mockMetricsCollector{}
 }
 

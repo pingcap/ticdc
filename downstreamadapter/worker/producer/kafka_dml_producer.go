@@ -32,7 +32,7 @@ type DMLProducer interface {
 	AsyncSendMessage(
 		ctx context.Context, topic string, partition int32, message *common.Message,
 	) error
-	Run() error
+	Run(ctx context.Context) error
 	// Close closes the producer and client(s).
 	Close()
 }
@@ -49,35 +49,23 @@ type KafkaDMLProducer struct {
 	// closed is used to indicate whether the producer is closed.
 	// We also use it to guard against double closes.
 	closed bool
-	ctx    context.Context
-	cancel context.CancelFunc
 }
 
 // NewKafkaDMLProducer creates a new kafka producer.
 func NewKafkaDMLProducer(
-	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	asyncProducer kafka.AsyncProducer,
 ) *KafkaDMLProducer {
-	namespace := changefeedID.Namespace()
-	changefeedName := changefeedID.Name()
-	log.Info("Starting kafka DML producer ...",
-		zap.String("namespace", namespace),
-		zap.String("changefeed", changefeedName))
-
-	ctx, cancel := context.WithCancel(ctx)
 	k := &KafkaDMLProducer{
-		ctx:           ctx,
 		id:            changefeedID,
 		asyncProducer: asyncProducer,
 		closed:        false,
-		cancel:        cancel,
 	}
 	return k
 }
 
-func (k *KafkaDMLProducer) Run() error {
-	err := k.asyncProducer.AsyncRunCallback(k.ctx)
+func (k *KafkaDMLProducer) Run(ctx context.Context) error {
+	err := k.asyncProducer.AsyncRunCallback(ctx)
 	if err != nil && errors.Cause(err) != context.Canceled {
 		return err
 	}
@@ -113,10 +101,6 @@ func (k *KafkaDMLProducer) Close() {
 			zap.String("changefeed", k.id.Name()))
 		return
 	}
-	if k.cancel != nil {
-		k.cancel()
-	}
-
 	k.asyncProducer.Close()
 	k.closed = true
 }
