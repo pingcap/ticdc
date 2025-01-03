@@ -83,9 +83,9 @@ func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI
 	}
 
 	metricsCollector := kafkaComponent.Factory.MetricsCollector(utils.RoleProcessor, kafkaComponent.AdminClient)
-	dmlProducer := producer.NewKafkaDMLProducer(ctx, changefeedID, dmlAsyncProducer, metricsCollector)
+	dmlProducer := producer.NewKafkaDMLProducer(changefeedID, dmlAsyncProducer)
 
-	dmlWorker := worker.NewKafkaDMLWorker(ctx,
+	dmlWorker := worker.NewKafkaDMLWorker(
 		changefeedID,
 		protocol,
 		dmlProducer,
@@ -94,6 +94,7 @@ func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI
 		kafkaComponent.EventRouter,
 		kafkaComponent.TopicManager,
 		statistics,
+		metricsCollector,
 		errGroup)
 
 	ddlSyncProducer, err := kafkaComponent.Factory.SyncProducer(ctx)
@@ -121,12 +122,12 @@ func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI
 		errgroup:     errGroup,
 		errCh:        errCh,
 	}
-	go sink.run()
+	go sink.run(ctx)
 	return sink, nil
 }
 
-func (s *KafkaSink) run() {
-	s.dmlWorker.Run()
+func (s *KafkaSink) run(ctx context.Context) {
+	s.dmlWorker.Run(ctx)
 	s.ddlWorker.Run()
 
 	err := s.errgroup.Wait()
@@ -240,7 +241,7 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, ddlproducer.DDLPro
 
 	dmlMockProducer := producer.NewMockDMLProducer()
 
-	dmlWorker := worker.NewKafkaDMLWorker(ctx,
+	dmlWorker := worker.NewKafkaDMLWorker(
 		changefeedID,
 		protocol,
 		dmlMockProducer,
@@ -249,6 +250,7 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, ddlproducer.DDLPro
 		kafkaComponent.EventRouter,
 		kafkaComponent.TopicManager,
 		statistics,
+		kafkaComponent.Factory.MetricsCollector(utils.RoleProcessor, kafkaComponent.AdminClient),
 		errGroup)
 
 	ddlMockProducer := producer.NewMockDDLProducer()
@@ -272,6 +274,6 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, ddlproducer.DDLPro
 		errgroup:     errGroup,
 		errCh:        errCh,
 	}
-	go sink.run()
+	go sink.run(ctx)
 	return sink, dmlMockProducer, ddlMockProducer, nil
 }
