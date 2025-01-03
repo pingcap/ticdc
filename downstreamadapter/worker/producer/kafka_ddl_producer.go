@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/tiflow/cdc/model"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/sink/kafka"
@@ -40,10 +39,6 @@ type DDLProducer interface {
 	// Close closes the producer.
 	Close()
 }
-
-// Factory is a function to create a producer.
-type Factory func(ctx context.Context, changefeedID model.ChangeFeedID,
-	syncProducer kafka.SyncProducer) DDLProducer
 
 // Assert DDLEventSink implementation
 var _ DDLProducer = (*kafkaDDLProducer)(nil)
