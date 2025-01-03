@@ -152,7 +152,7 @@ func NewEventDispatcherManager(
 		}
 	}
 
-	err := manager.initSink(ctx)
+	err := manager.startSink(ctx)
 	if err != nil {
 		return nil, 0, errors.Trace(err)
 	}
@@ -201,7 +201,7 @@ func NewEventDispatcherManager(
 	return manager, tableTriggerStartTs, nil
 }
 
-func (e *EventDispatcherManager) initSink(ctx context.Context) error {
+func (e *EventDispatcherManager) startSink(ctx context.Context) error {
 	sink, err := sink.NewSink(ctx, e.config, e.changefeedID, e.errCh)
 	if err != nil {
 		return err

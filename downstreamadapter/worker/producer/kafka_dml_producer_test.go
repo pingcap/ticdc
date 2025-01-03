@@ -24,8 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -71,7 +69,7 @@ func TestProducerAck(t *testing.T) {
 
 	count := atomic.NewInt64(0)
 	for i := 0; i < 10; i++ {
-		err = producer.AsyncSendMessage(ctx, tikafka.DefaultMockTopicName, int32(0), &ticommon.Message{
+		err = producer.AsyncSendMessage(ctx, kafka.DefaultMockTopicName, int32(0), &codec.Message{
 			Key:   []byte("test-key-1"),
 			Value: []byte("test-value"),
 			Callback: func() {
@@ -79,7 +77,7 @@ func TestProducerAck(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		err = producer.AsyncSendMessage(ctx, tikafka.DefaultMockTopicName, int32(1), &ticommon.Message{
+		err = producer.AsyncSendMessage(ctx, kafka.DefaultMockTopicName, int32(1), &codec.Message{
 			Key:   []byte("test-key-1"),
 			Value: []byte("test-value"),
 			Callback: func() {
@@ -103,7 +101,7 @@ func TestProducerAck(t *testing.T) {
 	producer.Close()
 	cancel()
 	// check send messages when context is producer closed
-	err = producer.AsyncSendMessage(ctx, tikafka.DefaultMockTopicName, int32(0), &ticommon.Message{
+	err = producer.AsyncSendMessage(ctx, kafka.DefaultMockTopicName, int32(0), &codec.Message{
 		Key:   []byte("cancel"),
 		Value: nil,
 	})
@@ -149,7 +147,7 @@ func TestProducerSendMsgFailed(t *testing.T) {
 		defer wg.Done()
 
 		asyncProducer.(*kafka.MockSaramaAsyncProducer).AsyncProducer.ExpectInputAndFail(sarama.ErrMessageTooLarge)
-		err = producer.AsyncSendMessage(ctx, tikafka.DefaultMockTopicName, int32(0), &ticommon.Message{
+		err = producer.AsyncSendMessage(ctx, kafka.DefaultMockTopicName, int32(0), &codec.Message{
 			Key:   []byte("test-key-1"),
 			Value: []byte("test-value"),
 		})

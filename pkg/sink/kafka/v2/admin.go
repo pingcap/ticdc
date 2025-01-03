@@ -19,8 +19,8 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	pkafka "github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/tiflow/pkg/errors"
-	pkafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 )

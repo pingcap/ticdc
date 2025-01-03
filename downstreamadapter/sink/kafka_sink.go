@@ -29,10 +29,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	ticonfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tiflow/cdc/sink/ddlsink/mq/ddlproducer"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink/kafka"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -59,8 +58,11 @@ func (s *KafkaSink) SinkType() common.SinkType {
 	return common.KafkaSinkType
 }
 
-func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *ticonfig.SinkConfig, errCh chan error) (*KafkaSink, error) {
+func NewKafkaSink(
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *ticonfig.SinkConfig, errCh chan error,
+) (*KafkaSink, error) {
 	errGroup, ctx := errgroup.WithContext(ctx)
+	ctx, cancel := context.WithCancel(ctx)
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
 	kafkaComponent, protocol, err := worker.GetKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
@@ -161,7 +163,7 @@ func (s *KafkaSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 			event.PostFlush()
 			return nil
 		}
-		err := s.ddlWorker.WriteBlockEvent(event)
+		err := s.ddlWorker.WriteBlockEvent(s.ctx, event)
 		if err != nil {
 			atomic.StoreUint32(&s.isNormal, 0)
 			return errors.Trace(err)
@@ -189,6 +191,9 @@ func (s *KafkaSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore)
 }
 
 func (s *KafkaSink) Close(_ bool) error {
+	if s.cancel != nil {
+		s.cancel()
+	}
 	err := s.ddlWorker.Close()
 	if err != nil {
 		return errors.Trace(err)
@@ -206,7 +211,7 @@ func (s *KafkaSink) Close(_ bool) error {
 	return nil
 }
 
-func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, ddlproducer.DDLProducer, error) {
+func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProducer, error) {
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	openProtocol := "open-protocol"
@@ -238,7 +243,7 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, ddlproducer.DDLPro
 
 	dmlMockProducer := producer.NewMockDMLProducer()
 
-	dmlWorker := worker.NewKafkaDMLWorker(ctx,
+	dmlWorker := worker.NewKafkaDMLWorker(
 		changefeedID,
 		protocol,
 		dmlMockProducer,

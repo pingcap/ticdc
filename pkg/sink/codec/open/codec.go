@@ -1,3 +1,16 @@
+// Copyright 2024 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package open
 
 import (
@@ -9,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -19,6 +31,11 @@ import (
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec"
 	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
+)
+
+const (
+	// BatchVersion1 represents the version of batch format
+	BatchVersion1 uint64 = 1
 )
 
 func encodeRowChangedEvent(e *commonEvent.RowEvent, config *newcommon.Config, largeMessageOnlyHandleKeyColumns bool, claimCheckLocationName string) ([]byte, []byte, int, error) {
@@ -164,7 +181,7 @@ func encodeResolvedTs(ts uint64) ([]byte, []byte, error) {
 	var versionByte [8]byte
 	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
 	binary.BigEndian.PutUint64(valueLenByte[:], 0)
-	binary.BigEndian.PutUint64(versionByte[:], encoder.BatchVersion1)
+	binary.BigEndian.PutUint64(versionByte[:], BatchVersion1)
 
 	keyOutput := new(bytes.Buffer)
 

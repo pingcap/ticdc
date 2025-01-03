@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	common2 "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"net/url"
 
 	"github.com/pingcap/errors"
@@ -12,23 +13,21 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	ticonfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	v2 "github.com/pingcap/ticdc/pkg/sink/kafka/v2"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/br/pkg/utils"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 )
 
 type KafkaComponent struct {
 	EncoderGroup   codec.EncoderGroup
-	Encoder        encoder.EventEncoder
+	Encoder        common2.EventEncoder
 	ColumnSelector *columnselector.ColumnSelectors
 	EventRouter    *eventrouter.EventRouter
 	TopicManager   topicmanager.TopicManager
-	AdminClient    tikafka.ClusterAdminClient
+	AdminClient    kafka.ClusterAdminClient
 	Factory        kafka.Factory
 }
 
@@ -36,7 +35,8 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *ticonfig.SinkConfig,
-	factoryCreator kafka.FactoryCreator) (KafkaComponent, ticonfig.Protocol, error) {
+	factoryCreator kafka.FactoryCreator,
+) (KafkaComponent, ticonfig.Protocol, error) {
 	kafkaComponent := KafkaComponent{}
 	protocol, err := helper.GetProtocol(utils.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
@@ -49,7 +49,7 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 	scheme := sink.GetScheme(sinkURI)
 
 	options := kafka.NewOptions()
-	if err := options.Apply(changefeedID, sinkURI, sinkConfig); err != nil {
+	if err = options.Apply(changefeedID, sinkURI, sinkConfig); err != nil {
 		return kafkaComponent, protocol, cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
 	}
 
@@ -112,7 +112,8 @@ func GetKafkaSinkComponent(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
-	sinkConfig *ticonfig.SinkConfig) (KafkaComponent, ticonfig.Protocol, error) {
+	sinkConfig *ticonfig.SinkConfig,
+) (KafkaComponent, ticonfig.Protocol, error) {
 	factoryCreator := kafka.NewSaramaFactory
 	if utils.GetOrZero(sinkConfig.EnableKafkaSinkV2) {
 		factoryCreator = v2.NewFactory

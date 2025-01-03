@@ -2,20 +2,19 @@ package worker
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tiflow/cdc/sink/ddlsink/mq/ddlproducer"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -23,12 +22,12 @@ import (
 // worker will send messages to the DML producer on a batch basis.
 type KafkaDDLWorker struct {
 	// changeFeedID indicates this sink belongs to which processor(changefeed).
-	changeFeedID common.ChangeFeedID
+	changeFeedID commonType.ChangeFeedID
 	// protocol indicates the protocol used by this sink.
 	protocol         config.Protocol
 	checkpointTsChan chan uint64
 
-	encoder encoder.EventEncoder
+	encoder common.EventEncoder
 	// eventRouter used to route events to the right topic and partition.
 	eventRouter *eventrouter.EventRouter
 	// topicManager used to manage topics.
@@ -36,14 +35,12 @@ type KafkaDDLWorker struct {
 	topicManager topicmanager.TopicManager
 
 	// producer is used to send the messages to the Kafka broker.
-	producer ddlproducer.DDLProducer
+	producer producer.DDLProducer
 
 	tableSchemaStore *util.TableSchemaStore
 
 	statistics    *metrics.Statistics
 	partitionRule DDLDispatchRule
-	ctx           context.Context
-	cancel        context.CancelFunc
 	errGroup      *errgroup.Group
 }
 
@@ -69,19 +66,17 @@ func getDDLDispatchRule(protocol config.Protocol) DDLDispatchRule {
 
 // newWorker creates a new flush worker.
 func NewKafkaDDLWorker(
-	ctx context.Context,
-	id common.ChangeFeedID,
+	_ context.Context,
+	id commonType.ChangeFeedID,
 	protocol config.Protocol,
-	producer ddlproducer.DDLProducer,
-	encoder encoder.EventEncoder,
+	producer producer.DDLProducer,
+	encoder common.EventEncoder,
 	eventRouter *eventrouter.EventRouter,
 	topicManager topicmanager.TopicManager,
 	statistics *metrics.Statistics,
 	errGroup *errgroup.Group,
 ) *KafkaDDLWorker {
-	ctx, cancel := context.WithCancel(ctx)
 	return &KafkaDDLWorker{
-		ctx:              ctx,
 		changeFeedID:     id,
 		protocol:         protocol,
 		encoder:          encoder,
@@ -91,14 +86,13 @@ func NewKafkaDDLWorker(
 		statistics:       statistics,
 		partitionRule:    getDDLDispatchRule(protocol),
 		checkpointTsChan: make(chan uint64, 16),
-		cancel:           cancel,
 		errGroup:         errGroup,
 	}
 }
 
-func (w *KafkaDDLWorker) Run() {
+func (w *KafkaDDLWorker) Run(ctx context.Context) {
 	w.errGroup.Go(func() error {
-		return w.encodeAndSendCheckpointEvents()
+		return w.encodeAndSendCheckpointEvents(ctx)
 	})
 }
 
@@ -110,8 +104,8 @@ func (w *KafkaDDLWorker) SetTableSchemaStore(tableSchemaStore *util.TableSchemaS
 	w.tableSchemaStore = tableSchemaStore
 }
 
-func (w *KafkaDDLWorker) WriteBlockEvent(event *event.DDLEvent) error {
-	messages := make([]*ticommon.Message, 0)
+func (w *KafkaDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent) error {
+	messages := make([]*common.Message, 0)
 	topics := make([]string, 0)
 
 	// Some ddl event may be multi-events, we need to split it into multiple messages.
@@ -139,18 +133,18 @@ func (w *KafkaDDLWorker) WriteBlockEvent(event *event.DDLEvent) error {
 
 	for i, message := range messages {
 		topic := topics[i]
-		partitionNum, err := w.topicManager.GetPartitionNum(w.ctx, topic)
+		partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
 		if err != nil {
 			return errors.Trace(err)
 		}
 
 		if w.partitionRule == PartitionAll {
 			err = w.statistics.RecordDDLExecution(func() error {
-				return w.producer.SyncBroadcastMessage(w.ctx, topic, partitionNum, message)
+				return w.producer.SyncBroadcastMessage(ctx, topic, partitionNum, message)
 			})
 		} else {
 			err = w.statistics.RecordDDLExecution(func() error {
-				return w.producer.SyncSendMessage(w.ctx, topic, 0, message)
+				return w.producer.SyncSendMessage(ctx, topic, 0, message)
 			})
 		}
 		if err != nil {
@@ -162,7 +156,7 @@ func (w *KafkaDDLWorker) WriteBlockEvent(event *event.DDLEvent) error {
 	return nil
 }
 
-func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents() error {
+func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) error {
 	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
 	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
 
@@ -173,8 +167,8 @@ func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents() error {
 
 	for {
 		select {
-		case <-w.ctx.Done():
-			return errors.Trace(w.ctx.Err())
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
 		case ts, ok := <-w.checkpointTsChan:
 			if !ok {
 				log.Warn("MQ sink flush worker channel closed",
@@ -198,24 +192,24 @@ func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents() error {
 			// This will be compatible with the old behavior.
 			if len(tableNames) == 0 {
 				topic := w.eventRouter.GetDefaultTopic()
-				partitionNum, err := w.topicManager.GetPartitionNum(w.ctx, topic)
+				partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
 				if err != nil {
 					return errors.Trace(err)
 				}
 				log.Debug("Emit checkpointTs to default topic",
 					zap.String("topic", topic), zap.Uint64("checkpointTs", ts), zap.Any("partitionNum", partitionNum))
-				err = w.producer.SyncBroadcastMessage(w.ctx, topic, partitionNum, msg)
+				err = w.producer.SyncBroadcastMessage(ctx, topic, partitionNum, msg)
 				if err != nil {
 					return errors.Trace(err)
 				}
 			} else {
 				topics := w.eventRouter.GetActiveTopics(tableNames)
 				for _, topic := range topics {
-					partitionNum, err := w.topicManager.GetPartitionNum(w.ctx, topic)
+					partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
 					if err != nil {
 						return errors.Trace(err)
 					}
-					err = w.producer.SyncBroadcastMessage(w.ctx, topic, partitionNum, msg)
+					err = w.producer.SyncBroadcastMessage(ctx, topic, partitionNum, msg)
 					if err != nil {
 						return errors.Trace(err)
 					}
@@ -229,8 +223,6 @@ func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents() error {
 }
 
 func (w *KafkaDDLWorker) Close() error {
-	w.cancel()
 	w.producer.Close()
-
 	return nil
 }

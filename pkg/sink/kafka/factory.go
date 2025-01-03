@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2024 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/sink/kafka"
@@ -30,7 +31,7 @@ import (
 // Factory is used to produce all kafka components.
 type Factory interface {
 	// AdminClient return a kafka cluster admin client
-	AdminClient(ctx context.Context) (kafka.ClusterAdminClient, error)
+	AdminClient(ctx context.Context) (ClusterAdminClient, error)
 	// SyncProducer creates a sync producer to writer message to kafka
 	SyncProducer(ctx context.Context) (SyncProducer, error)
 	// AsyncProducer creates an async producer to writer message to kafka
@@ -63,24 +64,24 @@ type SyncProducer interface {
 	Close()
 }
 
-// // AsyncProducer is the kafka async producer
-// type AsyncProducer interface {
-// 	// Close shuts down the producer and waits for any buffered messages to be
-// 	// flushed. You must call this function before a producer object passes out of
-// 	// scope, as it may otherwise leak memory. You must call this before process
-// 	// shutting down, or you may lose messages. You must call this before calling
-// 	// Close on the underlying client.
-// 	Close()
+// AsyncProducer is the kafka async producer
+type AsyncProducer interface {
+	// Close shuts down the producer and waits for any buffered messages to be
+	// flushed. You must call this function before a producer object passes out of
+	// scope, as it may otherwise leak memory. You must call this before process
+	// shutting down, or you may lose messages. You must call this before calling
+	// Close on the underlying client.
+	Close()
 
-// 	// AsyncSend is the input channel for the user to write messages to that they
-// 	// wish to send.
-// 	AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error
+	// AsyncSend is the input channel for the user to write messages to that they
+	// wish to send.
+	AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error
 
-// 	// AsyncRunCallback process the messages that has sent to kafka,
-// 	// and run tha attached callback. the caller should call this
-// 	// method in a background goroutine
-// 	AsyncRunCallback(ctx context.Context) error
-// }
+	// AsyncRunCallback process the messages that has sent to kafka,
+	// and run tha attached callback. the caller should call this
+	// method in a background goroutine
+	AsyncRunCallback(ctx context.Context) error
+}
 
 type saramaSyncProducer struct {
 	id       commonType.ChangeFeedID
@@ -102,7 +103,9 @@ func (p *saramaSyncProducer) SendMessage(
 	return err
 }
 
-func (p *saramaSyncProducer) SendMessages(ctx context.Context, topic string, partitionNum int32, message *common.Message) error {
+func (p *saramaSyncProducer) SendMessages(
+	_ context.Context, topic string, partitionNum int32, message *common.Message,
+) error {
 	msgs := make([]*sarama.ProducerMessage, partitionNum)
 	for i := 0; i < int(partitionNum); i++ {
 		msgs[i] = &sarama.ProducerMessage{
@@ -253,7 +256,9 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 
 // AsyncSend is the input channel for the user to write messages to that they
 // wish to send.
-func (p *saramaAsyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error {
+func (p *saramaAsyncProducer) AsyncSend(
+	ctx context.Context, topic string, partition int32, message *common.Message,
+) error {
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
 		Partition: partition,

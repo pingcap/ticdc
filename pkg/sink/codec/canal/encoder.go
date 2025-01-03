@@ -24,14 +24,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/sink/codec/internal"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/config"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"go.uber.org/zap"
 	"golang.org/x/text/encoding"
@@ -373,7 +371,7 @@ func eventTypeString(e *commonEvent.RowEvent) string {
 
 // JSONRowEventEncoder encodes row event in JSON format
 type JSONRowEventEncoder struct {
-	messages     []*ticommon.Message
+	messages     []*newcommon.Message
 	bytesDecoder *encoding.Decoder
 
 	claimCheck *claimcheck.ClaimCheck
@@ -382,13 +380,13 @@ type JSONRowEventEncoder struct {
 }
 
 // newJSONRowEventEncoder creates a new JSONRowEventEncoder
-func NewJSONRowEventEncoder(ctx context.Context, config *newcommon.Config) (encoder.EventEncoder, error) {
+func NewJSONRowEventEncoder(ctx context.Context, config *newcommon.Config) (newcommon.EventEncoder, error) {
 	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	return &JSONRowEventEncoder{
-		messages:     make([]*ticommon.Message, 0, 1),
+		messages:     make([]*newcommon.Message, 0, 1),
 		bytesDecoder: charmap.ISO8859_1.NewDecoder(),
 		config:       config,
 		claimCheck:   claimCheck,
@@ -433,7 +431,7 @@ func (c *JSONRowEventEncoder) newJSONMessage4CheckpointEvent(
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
-func (c *JSONRowEventEncoder) EncodeCheckpointEvent(ts uint64) (*ticommon.Message, error) {
+func (c *JSONRowEventEncoder) EncodeCheckpointEvent(ts uint64) (*newcommon.Message, error) {
 	if !c.config.EnableTiDBExtension {
 		return nil, nil
 	}
@@ -451,7 +449,7 @@ func (c *JSONRowEventEncoder) EncodeCheckpointEvent(ts uint64) (*ticommon.Messag
 		return nil, errors.Trace(err)
 	}
 
-	return ticommon.NewResolvedMsg(config.ProtocolCanalJSON, nil, value, ts), nil
+	return newcommon.NewResolvedMsg(config.ProtocolCanalJSON, nil, value, ts), nil
 }
 
 // AppendRowChangedEvent implements the interface EventJSONBatchEncoder
@@ -471,7 +469,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 	if err != nil {
 		return errors.Trace(err)
 	}
-	m := &ticommon.Message{
+	m := &newcommon.Message{
 		Key:      nil,
 		Value:    value,
 		Ts:       e.CommitTs,
@@ -542,7 +540,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 
 func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 	event *commonEvent.RowEvent, fileName string,
-) (*ticommon.Message, error) {
+) (*newcommon.Message, error) {
 	claimCheckLocation := c.claimCheck.FileNameWithPrefix(fileName)
 	value, err := newJSONMessageForDML(event, c.config, true, claimCheckLocation)
 	if err != nil {
@@ -556,7 +554,7 @@ func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 		return nil, errors.Trace(err)
 	}
 
-	result := ticommon.NewMsg(config.ProtocolCanalJSON, nil, value, 0, model.MessageTypeRow, nil, nil)
+	result := newcommon.NewMsg(config.ProtocolCanalJSON, nil, value, 0, model.MessageTypeRow, nil, nil)
 	result.Callback = event.Callback
 	result.IncRowsCount()
 
@@ -572,7 +570,7 @@ func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 }
 
 // Build implements the RowEventEncoder interface
-func (c *JSONRowEventEncoder) Build() []*ticommon.Message {
+func (c *JSONRowEventEncoder) Build() []*newcommon.Message {
 	if len(c.messages) == 0 {
 		return nil
 	}
@@ -583,7 +581,7 @@ func (c *JSONRowEventEncoder) Build() []*ticommon.Message {
 }
 
 // EncodeDDLEvent encodes DDL events
-func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*ticommon.Message, error) {
+func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*newcommon.Message, error) {
 	message := c.newJSONMessageForDDL(e)
 	value, err := json.Marshal(message)
 	if err != nil {
@@ -596,7 +594,7 @@ func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*ticommon
 		return nil, errors.Trace(err)
 	}
 
-	return &ticommon.Message{
+	return &newcommon.Message{
 		Key:      nil,
 		Value:    value,
 		Type:     model.MessageTypeDDL,

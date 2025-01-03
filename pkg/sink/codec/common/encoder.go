@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Inc.
+// Copyright 2024 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,35 +11,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package encoder
+package common
 
 import (
 	"bytes"
 	"context"
-
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
-)
-
-const (
-	// BatchVersion1 represents the version of batch format
-	BatchVersion1 uint64 = 1
-
-	// MemBufShrinkThreshold represents the threshold of shrinking the buffer.
-	MemBufShrinkThreshold = 1024 * 1024
 )
 
 // EventEncoder is an abstraction for events encoder
 type EventEncoder interface {
 	// EncodeCheckpointEvent appends a checkpoint event into the batch.
 	// This event will be broadcast to all partitions to signal a global checkpoint.
-	EncodeCheckpointEvent(ts uint64) (*ticommon.Message, error)
+	EncodeCheckpointEvent(ts uint64) (*Message, error)
 	// EncodeDDLEvent appends a DDL event into the batch
-	EncodeDDLEvent(e *commonEvent.DDLEvent) (*ticommon.Message, error)
+	EncodeDDLEvent(e *commonEvent.DDLEvent) (*Message, error)
 	// AppendRowChangedEvent appends a row changed event into the batch or buffer.
 	AppendRowChangedEvent(context.Context, string, *commonEvent.RowEvent) error
 	// Build builds the batch messages from AppendRowChangedEvent and returns the messages.
-	Build() []*ticommon.Message
+	Build() []*Message
 	// clean the resources
 	Clean()
 }

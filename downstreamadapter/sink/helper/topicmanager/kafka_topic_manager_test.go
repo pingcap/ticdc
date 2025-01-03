@@ -19,14 +19,13 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCreateTopic(t *testing.T) {
 	t.Parallel()
 
-	adminClient := tikafka.NewClusterAdminClientMockImpl()
+	adminClient := kafka.NewClusterAdminClientMockImpl()
 	defer adminClient.Close()
 	cfg := &kafka.AutoCreateTopicConfig{
 		AutoCreate:        true,
@@ -36,9 +35,9 @@ func TestCreateTopic(t *testing.T) {
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	ctx := context.Background()
-	manager := newKafkaTopicManager(ctx, tikafka.DefaultMockTopicName, changefeedID, adminClient, cfg)
+	manager := newKafkaTopicManager(ctx, kafka.DefaultMockTopicName, changefeedID, adminClient, cfg)
 	defer manager.Close()
-	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, tikafka.DefaultMockTopicName)
+	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, kafka.DefaultMockTopicName)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
 
@@ -81,7 +80,7 @@ func TestCreateTopic(t *testing.T) {
 func TestCreateTopicWithDelay(t *testing.T) {
 	t.Parallel()
 
-	adminClient := tikafka.NewClusterAdminClientMockImpl()
+	adminClient := kafka.NewClusterAdminClientMockImpl()
 	defer adminClient.Close()
 	cfg := &kafka.AutoCreateTopicConfig{
 		AutoCreate:        true,

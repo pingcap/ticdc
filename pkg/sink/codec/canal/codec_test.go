@@ -3,13 +3,13 @@ package canal
 import (
 	"context"
 	"encoding/json"
+	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"testing"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tiflow/cdc/model"
 	ticonfig "github.com/pingcap/tiflow/pkg/config"

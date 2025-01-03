@@ -19,7 +19,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	"go.uber.org/zap"
 )
 
@@ -556,7 +555,7 @@ func NewKafkaClientID(captureAddr string,
 // AdjustOptions adjust the `Options` and `sarama.Config` by condition.
 func AdjustOptions(
 	ctx context.Context,
-	admin tikafka.ClusterAdminClient,
+	admin ClusterAdminClient,
 	options *Options,
 	topic string,
 ) error {
@@ -663,8 +662,8 @@ func AdjustOptions(
 
 func validateMinInsyncReplicas(
 	ctx context.Context,
-	admin tikafka.ClusterAdminClient,
-	topics map[string]tikafka.TopicDetail,
+	admin ClusterAdminClient,
+	topics map[string]TopicDetail,
 	topic string,
 	replicationFactor int,
 ) error {
@@ -735,7 +734,7 @@ func validateMinInsyncReplicas(
 // NOTICE: The configuration names of topic and broker may be different for the same configuration.
 func getTopicConfig(
 	ctx context.Context,
-	admin tikafka.ClusterAdminClient,
+	admin ClusterAdminClient,
 	topicName string,
 	topicConfigName string,
 	brokerConfigName string,
