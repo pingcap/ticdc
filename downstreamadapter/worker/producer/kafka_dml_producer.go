@@ -43,8 +43,6 @@ type KafkaDMLProducer struct {
 	id commonType.ChangeFeedID
 	// asyncProducer is used to send messages to kafka asynchronously.
 	asyncProducer kafka.AsyncProducer
-	// metricsCollector is used to report metrics.
-	metricsCollector kafka.MetricsCollector
 	// closedMu is used to protect `closed`.
 	// We need to ensure that closed producers are never written to.
 	closedMu sync.RWMutex
@@ -60,7 +58,6 @@ func NewKafkaDMLProducer(
 	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	asyncProducer kafka.AsyncProducer,
-	metricsCollector kafka.MetricsCollector,
 ) *KafkaDMLProducer {
 	namespace := changefeedID.Namespace()
 	changefeedName := changefeedID.Name()
@@ -70,17 +67,12 @@ func NewKafkaDMLProducer(
 
 	ctx, cancel := context.WithCancel(ctx)
 	k := &KafkaDMLProducer{
-		ctx:              ctx,
-		id:               changefeedID,
-		asyncProducer:    asyncProducer,
-		metricsCollector: metricsCollector,
-		closed:           false,
-		cancel:           cancel,
+		ctx:           ctx,
+		id:            changefeedID,
+		asyncProducer: asyncProducer,
+		closed:        false,
+		cancel:        cancel,
 	}
-
-	// Start collecting metrics.
-	go k.metricsCollector.Run(ctx)
-
 	return k
 }
 

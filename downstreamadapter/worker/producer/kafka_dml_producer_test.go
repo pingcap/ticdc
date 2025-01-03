@@ -56,14 +56,10 @@ func TestProducerAck(t *testing.T) {
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
 
-	adminClient, err := factory.AdminClient(ctx)
-	require.NoError(t, err)
-	metricsCollector := factory.MetricsCollector(adminClient)
-
 	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
-	producer := NewKafkaDMLProducer(ctx, changefeed, asyncProducer, metricsCollector)
+	producer := NewKafkaDMLProducer(ctx, changefeed, asyncProducer)
 	require.NotNil(t, producer)
 
 	go producer.Run()
@@ -129,15 +125,10 @@ func TestProducerSendMsgFailed(t *testing.T) {
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
 
-	adminClient, err := factory.AdminClient(ctx)
-	require.NoError(t, err)
-	metricsCollector := factory.MetricsCollector(adminClient)
-
 	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
-	producer := NewKafkaDMLProducer(ctx, changefeed,
-		asyncProducer, metricsCollector)
+	producer := NewKafkaDMLProducer(ctx, changefeed, asyncProducer)
 	require.NoError(t, err)
 	require.NotNil(t, producer)
 	go func() {
@@ -195,15 +186,10 @@ func TestProducerDoubleClose(t *testing.T) {
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
 
-	adminClient, err := factory.AdminClient(ctx)
-	require.NoError(t, err)
-	metricsCollector := factory.MetricsCollector(adminClient)
-
 	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
-	producer := NewKafkaDMLProducer(ctx, changefeed,
-		asyncProducer, metricsCollector)
+	producer := NewKafkaDMLProducer(ctx, changefeed, asyncProducer)
 	go producer.Run()
 	require.NoError(t, err)
 	require.NotNil(t, producer)
