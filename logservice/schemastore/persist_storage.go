@@ -733,7 +733,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 				zap.Int64("jobID", job.ID),
 				zap.Int64("schemaID", job.SchemaID),
 				zap.Int64("tableID", job.BinlogInfo.TableInfo.ID),
-				zap.Uint64("finishTs", job.BinlogInfo.FinishedTS),
+				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
 				zap.Int64("jobSchemaVersion", job.BinlogInfo.SchemaVersion))
 			return true
 		}
@@ -745,7 +745,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 				zap.Int64("jobID", job.ID),
 				zap.Int64("schemaID", job.SchemaID),
 				zap.Int64("tableID", job.BinlogInfo.MultipleTableInfos[0].ID),
-				zap.Uint64("finishTs", job.BinlogInfo.FinishedTS),
+				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
 				zap.Int64("jobSchemaVersion", job.BinlogInfo.SchemaVersion))
 			return true
 		}
@@ -758,6 +758,11 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 		model.ActionCreateResourceGroup,
 		model.ActionAlterResourceGroup,
 		model.ActionDropResourceGroup:
+		log.Info("ignore ddl",
+			zap.String("DDL", job.Query),
+			zap.Int64("jobID", job.ID),
+			zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
+			zap.Any("type", job.Type))
 		return true
 	}
 	return false
