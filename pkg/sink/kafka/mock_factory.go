@@ -23,7 +23,6 @@ import (
 	ticommon "github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	"github.com/pingcap/tiflow/pkg/util"
 )
 
@@ -44,8 +43,8 @@ func NewMockFactory(
 }
 
 // AdminClient return a mocked admin client
-func (f *MockFactory) AdminClient(_ context.Context) (tikafka.ClusterAdminClient, error) {
-	return tikafka.NewClusterAdminClientMockImpl(), nil
+func (f *MockFactory) AdminClient(_ context.Context) (ClusterAdminClient, error) {
+	return NewClusterAdminClientMockImpl(), nil
 }
 
 // SyncProducer creates a sync producer
@@ -65,8 +64,7 @@ func (f *MockFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 // AsyncProducer creates an async producer
 func (f *MockFactory) AsyncProducer(
 	ctx context.Context,
-	failpointCh chan error,
-) (tikafka.AsyncProducer, error) {
+) (AsyncProducer, error) {
 	config, err := NewSaramaConfig(ctx, f.o)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -75,14 +73,14 @@ func (f *MockFactory) AsyncProducer(
 	asyncProducer := mocks.NewAsyncProducer(t, config)
 	return &MockSaramaAsyncProducer{
 		AsyncProducer: asyncProducer,
-		failpointCh:   failpointCh,
+		failpointCh:   make(chan error, 1),
 	}, nil
 }
 
 // MetricsCollector returns the metric collector
 func (f *MockFactory) MetricsCollector(
-	_ util.Role, _ tikafka.ClusterAdminClient,
-) tikafka.MetricsCollector {
+	_ util.Role, _ ClusterAdminClient,
+) MetricsCollector {
 	return &mockMetricsCollector{}
 }
 

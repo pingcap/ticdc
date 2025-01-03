@@ -20,7 +20,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/rcrowley/go-metrics"
 	"go.uber.org/zap"
@@ -61,7 +60,7 @@ type saramaMetricsCollector struct {
 	changefeedID common.ChangeFeedID
 	role         util.Role
 	// adminClient is used to get broker infos from broker.
-	adminClient tikafka.ClusterAdminClient
+	adminClient ClusterAdminClient
 	brokers     map[int32]struct{}
 	registry    metrics.Registry
 }
@@ -70,7 +69,7 @@ type saramaMetricsCollector struct {
 func NewSaramaMetricsCollector(
 	changefeedID common.ChangeFeedID,
 	role util.Role,
-	adminClient tikafka.ClusterAdminClient,
+	adminClient ClusterAdminClient,
 	registry metrics.Registry,
 ) MetricsCollector {
 	return &saramaMetricsCollector{

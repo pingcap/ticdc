@@ -19,7 +19,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	pkafka "github.com/pingcap/tiflow/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	tiv2 "github.com/pingcap/tiflow/pkg/sink/kafka/v2"
 	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
@@ -47,7 +47,7 @@ func NewMetricsCollector(
 
 // Run implement the MetricsCollector interface
 func (m *MetricsCollector) Run(ctx context.Context) {
-	ticker := time.NewTicker(pkafka.RefreshMetricsInterval)
+	ticker := time.NewTicker(kafka.RefreshMetricsInterval)
 	defer func() {
 		ticker.Stop()
 		m.cleanupMetrics()
@@ -70,44 +70,44 @@ func (m *MetricsCollector) collectMetrics() {
 	statistics := m.writer.Stats()
 
 	// batch related metrics
-	pkafka.BatchDurationGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name()).
+	kafka.BatchDurationGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name()).
 		Set(statistics.BatchQueueTime.Avg.Seconds())
-	pkafka.BatchMessageCountGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name()).
+	kafka.BatchMessageCountGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name()).
 		Set(float64(statistics.BatchSize.Avg))
-	pkafka.BatchSizeGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name()).
+	kafka.BatchSizeGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name()).
 		Set(float64(statistics.BatchBytes.Avg))
 
 	// send request related metrics.
 	// metrics is collected each 5 seconds, divide by 5 to get per seconds average.
 	// since kafka-go does not support per broker metrics, so we add `v2` as the broker ID.
-	pkafka.RequestRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "v2").
+	kafka.RequestRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "v2").
 		Set(float64(statistics.Writes / 5))
-	pkafka.RequestLatencyGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "v2", "avg").
+	kafka.RequestLatencyGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "v2", "avg").
 		Set(statistics.WriteTime.Avg.Seconds())
-	pkafka.OutgoingByteRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "v2").
+	kafka.OutgoingByteRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "v2").
 		Set(float64(statistics.Bytes / 5))
 
-	pkafka.ClientRetryGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name()).
+	kafka.ClientRetryGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name()).
 		Set(float64(statistics.Retries))
-	pkafka.ClientErrorGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name()).
+	kafka.ClientErrorGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name()).
 		Set(float64(statistics.Errors))
 }
 
 func (m *MetricsCollector) cleanupMetrics() {
-	pkafka.BatchDurationGauge.
+	kafka.BatchDurationGauge.
 		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name())
-	pkafka.BatchMessageCountGauge.
+	kafka.BatchMessageCountGauge.
 		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name())
-	pkafka.BatchSizeGauge.
+	kafka.BatchSizeGauge.
 		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name())
 
-	pkafka.RequestRateGauge.
+	kafka.RequestRateGauge.
 		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "v2")
-	pkafka.RequestLatencyGauge.
+	kafka.RequestLatencyGauge.
 		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "v2", "avg")
-	pkafka.OutgoingByteRateGauge.
+	kafka.OutgoingByteRateGauge.
 		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "v2")
 
-	pkafka.ClientRetryGauge.DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name())
-	pkafka.ClientErrorGauge.DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name())
+	kafka.ClientRetryGauge.DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name())
+	kafka.ClientErrorGauge.DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name())
 }

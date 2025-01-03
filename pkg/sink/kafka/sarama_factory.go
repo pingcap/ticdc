@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tiflow/pkg/errors"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/rcrowley/go-metrics"
 	"go.uber.org/zap"
@@ -46,7 +45,7 @@ func NewSaramaFactory(
 	}, nil
 }
 
-func (f *saramaFactory) AdminClient(ctx context.Context) (tikafka.ClusterAdminClient, error) {
+func (f *saramaFactory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
 	start := time.Now()
 	config, err := NewSaramaConfig(ctx, f.option)
 	duration := time.Since(start).Seconds()
@@ -112,8 +111,7 @@ func (f *saramaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) 
 // it should be the caller's responsibility to close the producer
 func (f *saramaFactory) AsyncProducer(
 	ctx context.Context,
-	failpointCh chan error,
-) (tikafka.AsyncProducer, error) {
+) (AsyncProducer, error) {
 	config, err := NewSaramaConfig(ctx, f.option)
 	if err != nil {
 		return nil, err
@@ -132,14 +130,14 @@ func (f *saramaFactory) AsyncProducer(
 		client:       client,
 		producer:     p,
 		changefeedID: f.changefeedID,
-		failpointCh:  failpointCh,
+		failpointCh:  make(chan error, 1),
 	}, nil
 }
 
 func (f *saramaFactory) MetricsCollector(
 	role util.Role,
-	adminClient tikafka.ClusterAdminClient,
-) tikafka.MetricsCollector {
+	adminClient ClusterAdminClient,
+) MetricsCollector {
 	return NewSaramaMetricsCollector(
 		f.changefeedID, role, adminClient, f.registry)
 }

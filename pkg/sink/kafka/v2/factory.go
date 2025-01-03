@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	tiv2 "github.com/pingcap/tiflow/pkg/sink/kafka/v2"
 	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/segmentio/kafka-go"
@@ -203,7 +202,7 @@ func (f *factory) newWriter(async bool) *kafka.Writer {
 	return w
 }
 
-func (f *factory) AdminClient(_ context.Context) (tikafka.ClusterAdminClient, error) {
+func (f *factory) AdminClient(_ context.Context) (pkafka.ClusterAdminClient, error) {
 	return newClusterAdminClient(f.options.BrokerEndpoints, f.transport, f.changefeedID), nil
 }
 
@@ -222,8 +221,7 @@ func (f *factory) SyncProducer(_ context.Context) (pkafka.SyncProducer, error) {
 // AsyncProducer creates an async producer to writer message to kafka
 func (f *factory) AsyncProducer(
 	ctx context.Context,
-	failpointCh chan error,
-) (tikafka.AsyncProducer, error) {
+) (pkafka.AsyncProducer, error) {
 	w := f.newWriter(true)
 	// assume each message is 1KB,
 	// and set batch timeout to 5ms to avoid waste too much time on waiting for messages.
@@ -232,7 +230,7 @@ func (f *factory) AsyncProducer(
 	aw := &asyncWriter{
 		w:            w,
 		changefeedID: f.changefeedID,
-		failpointCh:  failpointCh,
+		failpointCh:  make(chan error, 1),
 		errorsChan:   make(chan error, 1),
 	}
 
@@ -265,8 +263,8 @@ func (f *factory) AsyncProducer(
 // MetricsCollector returns the kafka metrics collector
 func (f *factory) MetricsCollector(
 	role util.Role,
-	adminClient tikafka.ClusterAdminClient,
-) tikafka.MetricsCollector {
+	_ pkafka.ClusterAdminClient,
+) pkafka.MetricsCollector {
 	return NewMetricsCollector(f.changefeedID, role, f.writer)
 }
 

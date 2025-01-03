@@ -20,9 +20,9 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/pkg/sink/kafka"
 	"go.uber.org/zap"
 )
 
@@ -57,11 +57,6 @@ func NewKafkaDMLProducer(
 	changefeedID commonType.ChangeFeedID,
 	asyncProducer kafka.AsyncProducer,
 ) *KafkaDMLProducer {
-	namespace := changefeedID.Namespace()
-	changefeedName := changefeedID.Name()
-	log.Info("Starting kafka DML producer ...",
-		zap.String("namespace", namespace),
-		zap.String("changefeed", changefeedName))
 	k := &KafkaDMLProducer{
 		id:            changefeedID,
 		asyncProducer: asyncProducer,

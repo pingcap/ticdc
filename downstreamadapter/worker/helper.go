@@ -19,7 +19,6 @@ import (
 	"github.com/pingcap/tidb/br/pkg/utils"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 )
 
 type KafkaComponent struct {
@@ -28,7 +27,7 @@ type KafkaComponent struct {
 	ColumnSelector *columnselector.ColumnSelectors
 	EventRouter    *eventrouter.EventRouter
 	TopicManager   topicmanager.TopicManager
-	AdminClient    tikafka.ClusterAdminClient
+	AdminClient    kafka.ClusterAdminClient
 	Factory        kafka.Factory
 }
 

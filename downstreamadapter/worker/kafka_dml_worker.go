@@ -70,7 +70,7 @@ type KafkaDMLWorker struct {
 	errGroup *errgroup.Group
 }
 
-// NewKafkaWorker creates a dml flush worker for kafka
+// NewKafkaDMLWorker creates a dml flush worker for kafka
 func NewKafkaDMLWorker(
 	id common.ChangeFeedID,
 	protocol config.Protocol,
