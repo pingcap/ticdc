@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	common2 "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"net/url"
 
 	"github.com/pingcap/errors"
@@ -12,7 +13,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	ticonfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	v2 "github.com/pingcap/ticdc/pkg/sink/kafka/v2"
 	"github.com/pingcap/ticdc/pkg/sink/util"
@@ -23,7 +23,7 @@ import (
 
 type KafkaComponent struct {
 	EncoderGroup   codec.EncoderGroup
-	Encoder        encoder.EventEncoder
+	Encoder        common2.EventEncoder
 	ColumnSelector *columnselector.ColumnSelectors
 	EventRouter    *eventrouter.EventRouter
 	TopicManager   topicmanager.TopicManager

@@ -16,10 +16,10 @@ package debezium
 import (
 	"bytes"
 	"context"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"time"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/errors"
@@ -28,14 +28,14 @@ import (
 
 // BatchEncoder encodes message into Debezium format.
 type BatchEncoder struct {
-	messages []*ticommon.Message
+	messages []*common.Message
 
 	config *ticommon.Config
 	codec  *dbzCodec
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
-func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*ticommon.Message, error) {
+func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
 	// Currently ignored. Debezium MySQL Connector does not emit such event.
 	return nil, nil
 }
@@ -61,7 +61,7 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 	if err != nil {
 		return errors.Trace(err)
 	}
-	m := &ticommon.Message{
+	m := &common.Message{
 		Key:      nil,
 		Value:    value,
 		Ts:       e.CommitTs,
@@ -79,13 +79,13 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 
 // EncodeDDLEvent implements the RowEventEncoder interface
 // DDL message unresolved tso
-func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*ticommon.Message, error) {
+func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error) {
 	// Schema Change Events are currently not supported.
 	return nil, nil
 }
 
 // Build implements the RowEventEncoder interface
-func (d *BatchEncoder) Build() []*ticommon.Message {
+func (d *BatchEncoder) Build() []*common.Message {
 	if len(d.messages) == 0 {
 		return nil
 	}
@@ -98,7 +98,7 @@ func (d *BatchEncoder) Build() []*ticommon.Message {
 func (d *BatchEncoder) Clean() {}
 
 // newBatchEncoder creates a new Debezium BatchEncoder.
-func NewBatchEncoder(c *ticommon.Config, clusterID string) encoder.EventEncoder {
+func NewBatchEncoder(c *ticommon.Config, clusterID string) common.EventEncoder {
 	batch := &BatchEncoder{
 		messages: nil,
 		config:   c,

@@ -24,12 +24,11 @@ import (
 	"github.com/jcmturner/gokrb5/v8/keytab"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	pkafka "github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
-	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 	tiv2 "github.com/pingcap/tiflow/pkg/sink/kafka/v2"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/segmentio/kafka-go"
 	"github.com/segmentio/kafka-go/sasl"
 	"github.com/segmentio/kafka-go/sasl/plain"
@@ -262,10 +261,9 @@ func (f *factory) AsyncProducer(
 
 // MetricsCollector returns the kafka metrics collector
 func (f *factory) MetricsCollector(
-	role util.Role,
 	_ pkafka.ClusterAdminClient,
 ) pkafka.MetricsCollector {
-	return NewMetricsCollector(f.changefeedID, role, f.writer)
+	return NewMetricsCollector(f.changefeedID, f.writer)
 }
 
 type syncWriter struct {

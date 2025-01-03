@@ -21,9 +21,8 @@ import (
 	"github.com/IBM/sarama/mocks"
 	"github.com/pingcap/errors"
 	ticommon "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/pkg/util"
 )
 
 // MockFactory is a mock implementation of Factory interface.
@@ -79,7 +78,7 @@ func (f *MockFactory) AsyncProducer(
 
 // MetricsCollector returns the metric collector
 func (f *MockFactory) MetricsCollector(
-	_ util.Role, _ ClusterAdminClient,
+	_ ClusterAdminClient,
 ) MetricsCollector {
 	return &mockMetricsCollector{}
 }

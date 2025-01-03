@@ -20,7 +20,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/rcrowley/go-metrics"
 	"go.uber.org/zap"
 )
@@ -58,7 +57,6 @@ const (
 
 type saramaMetricsCollector struct {
 	changefeedID common.ChangeFeedID
-	role         util.Role
 	// adminClient is used to get broker infos from broker.
 	adminClient ClusterAdminClient
 	brokers     map[int32]struct{}
@@ -68,13 +66,11 @@ type saramaMetricsCollector struct {
 // NewSaramaMetricsCollector return a kafka metrics collector based on sarama library.
 func NewSaramaMetricsCollector(
 	changefeedID common.ChangeFeedID,
-	role util.Role,
 	adminClient ClusterAdminClient,
 	registry metrics.Registry,
 ) MetricsCollector {
 	return &saramaMetricsCollector{
 		changefeedID: changefeedID,
-		role:         role,
 		adminClient:  adminClient,
 		brokers:      make(map[int32]struct{}),
 		registry:     registry,
@@ -117,7 +113,6 @@ func (m *saramaMetricsCollector) updateBrokers(ctx context.Context) {
 			"use historical brokers to collect kafka broker level metrics",
 			zap.String("namespace", m.changefeedID.Namespace()),
 			zap.String("changefeed", m.changefeedID.Name()),
-			zap.Any("role", m.role),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
 		return

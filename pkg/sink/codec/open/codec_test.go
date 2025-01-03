@@ -1,13 +1,13 @@
 package open
 
 import (
+	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	ticonfig "github.com/pingcap/ticdc/pkg/config"
-	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"

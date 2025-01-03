@@ -32,12 +32,12 @@ func TestDDLSyncBroadcastMessage(t *testing.T) {
 		syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndSucceed()
 	}
 	err = p.SyncBroadcastMessage(ctx, kafka.DefaultMockTopicName,
-		kafka.DefaultMockPartitionNum, &ticommon.Message{Ts: 417318403368288260})
+		kafka.DefaultMockPartitionNum, &codec.Message{Ts: 417318403368288260})
 	require.NoError(t, err)
 
 	p.Close()
 	err = p.SyncBroadcastMessage(ctx, kafka.DefaultMockTopicName,
-		kafka.DefaultMockPartitionNum, &ticommon.Message{Ts: 417318403368288260})
+		kafka.DefaultMockPartitionNum, &codec.Message{Ts: 417318403368288260})
 	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
 	cancel()
 }
@@ -57,11 +57,11 @@ func TestDDLSyncSendMessage(t *testing.T) {
 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
 
 	syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndSucceed()
-	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &ticommon.Message{Ts: 417318403368288260})
+	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &codec.Message{Ts: 417318403368288260})
 	require.NoError(t, err)
 
 	p.Close()
-	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &ticommon.Message{Ts: 417318403368288260})
+	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &codec.Message{Ts: 417318403368288260})
 	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
 	cancel()
 }
@@ -87,7 +87,7 @@ func TestDDLProducerSendMsgFailed(t *testing.T) {
 	defer p.Close()
 
 	syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndFail(sarama.ErrMessageTooLarge)
-	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &ticommon.Message{Ts: 417318403368288260})
+	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &codec.Message{Ts: 417318403368288260})
 	require.ErrorIs(t, err, sarama.ErrMessageTooLarge)
 }
 

@@ -1,32 +1,43 @@
+// Copyright 2024 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package open
 
 import (
 	"context"
 	"encoding/binary"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/config"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
 
 // BatchEncoder for open protocol will batch multiple row changed events into a single message.
 // One message can contain at most MaxBatchSize events, and the total size of the message cannot exceed MaxMessageBytes.
 type BatchEncoder struct {
-	messages []*ticommon.Message
+	messages []*common.Message
 	// buff the callback of the latest message
 	callbackBuff []func()
 
 	claimCheck *claimcheck.ClaimCheck
 
-	config *newcommon.Config
+	config *common.Config
 }
 
 // AppendRowChangedEvent implements the RowEventEncoder interface
@@ -99,7 +110,7 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 }
 
 // Build implements the RowEventEncoder interface
-func (d *BatchEncoder) Build() (messages []*ticommon.Message) {
+func (d *BatchEncoder) Build() (messages []*common.Message) {
 	if len(d.messages) == 0 {
 		return nil
 	}
@@ -123,9 +134,9 @@ func (d *BatchEncoder) pushMessage(key, value []byte, callback func()) {
 		d.finalizeCallback()
 		// create a new message
 		versionHead := make([]byte, 8)
-		binary.BigEndian.PutUint64(versionHead, encoder.BatchVersion1)
+		binary.BigEndian.PutUint64(versionHead, BatchVersion1)
 
-		message := ticommon.Message{
+		message := common.Message{
 			Key:      versionHead,
 			Value:    valueLenByte[:],
 			Type:     model.MessageTypeRow,
@@ -174,7 +185,7 @@ func enhancedKeyValue(key, value []byte) ([]byte, []byte) {
 	)
 	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
 	binary.BigEndian.PutUint64(valueLenByte[:], uint64(len(value)))
-	binary.BigEndian.PutUint64(versionHead[:], encoder.BatchVersion1)
+	binary.BigEndian.PutUint64(versionHead[:], BatchVersion1)
 
 	keyOutput := versionHead[:]
 	keyOutput = append(keyOutput, keyLenByte[:]...)
@@ -185,7 +196,7 @@ func enhancedKeyValue(key, value []byte) ([]byte, []byte) {
 }
 
 // NewBatchEncoder creates a new BatchEncoder.
-func NewBatchEncoder(ctx context.Context, config *newcommon.Config) (encoder.EventEncoder, error) {
+func NewBatchEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
 	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -202,13 +213,13 @@ func (d *BatchEncoder) Clean() {
 	}
 }
 
-func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*ticommon.Message, error) {
+func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error) {
 	key, value, err := encodeDDLEvent(e, d.config)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	return &ticommon.Message{
+	return &common.Message{
 		Key:      key,
 		Value:    value,
 		Type:     model.MessageTypeDDL,
@@ -217,14 +228,14 @@ func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*ticommon.Messag
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
-func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*ticommon.Message, error) {
+func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
 	key, value, err := encodeResolvedTs(ts)
 
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	return &ticommon.Message{
+	return &common.Message{
 		Key:      key,
 		Value:    value,
 		Type:     model.MessageTypeResolved,

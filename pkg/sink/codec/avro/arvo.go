@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"math/big"
 	"sort"
 	"strconv"
@@ -29,14 +30,13 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"github.com/pingcap/tiflow/cdc/model"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
@@ -45,9 +45,9 @@ import (
 type BatchEncoder struct {
 	namespace string
 	schemaM   SchemaManager
-	result    []*ticommon.Message
+	result    []*codecCommon.Message
 
-	config *ticommon.Config
+	config *codecCommon.Config
 }
 
 type avroEncodeInput struct {
@@ -76,7 +76,7 @@ type avroEncodeResult struct {
 	header []byte
 }
 
-func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *commonEvent.RowChangedEvent) ([]byte, error) {
+func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *commonEvent.RowEvent) ([]byte, error) {
 	cols, colInfos := e.HandleKeyColInfos()
 	// result may be nil if the event has no handle key columns, this may happen in the force replicate mode.
 	// todo: disallow force replicate mode if using the avro.
@@ -121,7 +121,7 @@ func topicName2SchemaSubjects(topicName, subjectSuffix string) string {
 }
 
 func (a *BatchEncoder) getValueSchemaCodec(
-	ctx context.Context, topic string, tableName *common.TableName, tableVersion uint64, input *avroEncodeInput,
+	ctx context.Context, topic string, tableName *common.TableName, tableVersion uint16, input *avroEncodeInput,
 ) (*goavro.Codec, []byte, error) {
 	schemaGen := func() (string, error) {
 		schema, err := a.value2AvroSchema(tableName, input)
@@ -141,7 +141,7 @@ func (a *BatchEncoder) getValueSchemaCodec(
 }
 
 func (a *BatchEncoder) getKeySchemaCodec(
-	ctx context.Context, topic string, tableName *common.TableName, tableVersion uint64, keyColumns *avroEncodeInput,
+	ctx context.Context, topic string, tableName *common.TableName, tableVersion uint16, keyColumns *avroEncodeInput,
 ) (*goavro.Codec, []byte, error) {
 	schemaGen := func() (string, error) {
 		schema, err := a.key2AvroSchema(tableName, keyColumns)
@@ -209,7 +209,7 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *commonE
 func (a *BatchEncoder) AppendRowChangedEvent(
 	ctx context.Context,
 	topic string,
-	e *commonEvent.RowChangedEvent,
+	e *commonEvent.RowEvent,
 	callback func(),
 ) error {
 	topic = sanitizeTopic(topic)
@@ -226,7 +226,7 @@ func (a *BatchEncoder) AppendRowChangedEvent(
 		return errors.Trace(err)
 	}
 
-	message := ticommon.NewMsg(
+	message := codecCommon.NewMsg(
 		config.ProtocolAvro,
 		key,
 		value,
@@ -252,7 +252,7 @@ func (a *BatchEncoder) AppendRowChangedEvent(
 
 // EncodeCheckpointEvent only encode checkpoint event if the watermark event is enabled
 // it's only used for the testing purpose.
-func (a *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*ticommon.Message, error) {
+func (a *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*codecCommon.Message, error) {
 	if a.config.EnableTiDBExtension && a.config.AvroEnableWatermark {
 		buf := new(bytes.Buffer)
 		data := []interface{}{checkpointByte, ts}
@@ -264,7 +264,7 @@ func (a *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*ticommon.Message, erro
 		}
 
 		value := buf.Bytes()
-		return ticommon.NewResolvedMsg(config.ProtocolAvro, nil, value, ts), nil
+		return codecCommon.NewResolvedMsg(config.ProtocolAvro, nil, value, ts), nil
 	}
 	return nil, nil
 }
@@ -279,7 +279,7 @@ type ddlEvent struct {
 
 // EncodeDDLEvent only encode DDL event if the watermark event is enabled
 // it's only used for the testing purpose.
-func (a *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*ticommon.Message, error) {
+func (a *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*codecCommon.Message, error) {
 	// if a.config.EnableTiDBExtension && a.config.AvroEnableWatermark {
 	// 	buf := new(bytes.Buffer)
 	// 	_ = binary.Write(buf, binary.BigEndian, ddlByte)
@@ -305,7 +305,7 @@ func (a *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*ticommon.Messag
 }
 
 // Build Messages
-func (a *BatchEncoder) Build() (messages []*ticommon.Message) {
+func (a *BatchEncoder) Build() (messages []*codecCommon.Message) {
 	result := a.result
 	a.result = nil
 	return result
@@ -1022,7 +1022,7 @@ const (
 )
 
 // NewAvroEncoder return a avro encoder.
-func NewAvroEncoder(ctx context.Context, config *ticommon.Config) (encoder.EventEncoder, error) {
+func NewAvroEncoder(ctx context.Context, config *codecCommon.Config) (codecCommon.EventEncoder, error) {
 	var schemaM SchemaManager
 	var err error
 
@@ -1044,7 +1044,7 @@ func NewAvroEncoder(ctx context.Context, config *ticommon.Config) (encoder.Event
 	return &BatchEncoder{
 		namespace: config.ChangefeedID.Namespace,
 		schemaM:   schemaM,
-		result:    make([]*ticommon.Message, 0, 1),
+		result:    make([]*codecCommon.Message, 0, 1),
 		config:    config,
 	}, nil
 }
@@ -1063,7 +1063,7 @@ func NewAvroEncoder(ctx context.Context, config *ticommon.Config) (encoder.Event
 // 	return &BatchEncoder{
 // 		namespace: model.DefaultNamespace,
 // 		schemaM:   schemaM,
-// 		result:    make([]*ticommon.Message, 0, 1),
+// 		result:    make([]*codec.Message, 0, 1),
 // 		config:    config,
 // 	}, nil
 // }

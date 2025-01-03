@@ -21,9 +21,8 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -36,7 +35,7 @@ type Factory interface {
 	// AsyncProducer creates an async producer to writer message to kafka
 	AsyncProducer(ctx context.Context) (AsyncProducer, error)
 	// MetricsCollector returns the kafka metrics collector
-	MetricsCollector(role util.Role, adminClient ClusterAdminClient) MetricsCollector
+	MetricsCollector(adminClient ClusterAdminClient) MetricsCollector
 }
 
 // FactoryCreator defines the type of factory creator.
@@ -102,7 +101,9 @@ func (p *saramaSyncProducer) SendMessage(
 	return err
 }
 
-func (p *saramaSyncProducer) SendMessages(ctx context.Context, topic string, partitionNum int32, message *common.Message) error {
+func (p *saramaSyncProducer) SendMessages(
+	_ context.Context, topic string, partitionNum int32, message *common.Message,
+) error {
 	msgs := make([]*sarama.ProducerMessage, partitionNum)
 	for i := 0; i < int(partitionNum); i++ {
 		msgs[i] = &sarama.ProducerMessage{
@@ -253,7 +254,9 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 
 // AsyncSend is the input channel for the user to write messages to that they
 // wish to send.
-func (p *saramaAsyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error {
+func (p *saramaAsyncProducer) AsyncSend(
+	ctx context.Context, topic string, partition int32, message *common.Message,
+) error {
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
 		Partition: partition,

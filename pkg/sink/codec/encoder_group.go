@@ -25,9 +25,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	newCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/tiflow/cdc/model"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -58,7 +56,7 @@ type encoderGroup struct {
 	inputCh []chan *future
 	index   uint64
 
-	rowEventEncoders []encoder.EventEncoder
+	rowEventEncoders []newCommon.EventEncoder
 
 	outputCh chan *future
 
@@ -77,7 +75,7 @@ func NewEncoderGroup(
 		concurrency = config.DefaultEncoderGroupConcurrency
 	}
 	inputCh := make([]chan *future, concurrency)
-	rowEventEncoders := make([]encoder.EventEncoder, concurrency)
+	rowEventEncoders := make([]newCommon.EventEncoder, concurrency)
 	var err error
 	for i := 0; i < concurrency; i++ {
 		inputCh[i] = make(chan *future, defaultInputChanSize)
@@ -216,7 +214,7 @@ func (g *encoderGroup) cleanMetrics() {
 type future struct {
 	Key      model.TopicPartitionKey
 	events   []*commonEvent.RowEvent
-	Messages []*ticommon.Message
+	Messages []*newCommon.Message
 	done     chan struct{}
 }
 

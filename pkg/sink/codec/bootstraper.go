@@ -15,6 +15,7 @@ package codec
 
 import (
 	"context"
+	common2 "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,9 +24,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/tiflow/cdc/model"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
 
@@ -41,7 +40,7 @@ const (
 type bootstrapWorker struct {
 	changefeedID                common.ChangeFeedID
 	activeTables                sync.Map
-	rowEventEncoder             encoder.EventEncoder
+	rowEventEncoder             common2.EventEncoder
 	sendBootstrapInterval       time.Duration
 	sendBootstrapInMsgCount     int32
 	sendBootstrapToAllPartition bool
@@ -54,7 +53,7 @@ type bootstrapWorker struct {
 func newBootstrapWorker(
 	changefeedID common.ChangeFeedID,
 	outCh chan<- *future,
-	rowEventEncoder encoder.EventEncoder,
+	rowEventEncoder common2.EventEncoder,
 	sendBootstrapInterval int64,
 	sendBootstrapInMsgCount int32,
 	sendBootstrapToAllPartition bool,
@@ -184,7 +183,7 @@ func (b *bootstrapWorker) generateEvents(
 				Partition: i,
 			},
 			done:     make(chan struct{}),
-			Messages: []*ticommon.Message{msg},
+			Messages: []*common2.Message{msg},
 		}
 		close(f.done)
 		res = append(res, f)

@@ -20,15 +20,33 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/pingcap/tiflow/cdc/sink/ddlsink/mq/ddlproducer"
+	"github.com/pingcap/tiflow/cdc/model"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
 
+// DDLProducer is the interface for DDL message producer.
+type DDLProducer interface {
+	// SyncBroadcastMessage broadcasts a message synchronously.
+	SyncBroadcastMessage(
+		ctx context.Context, topic string, totalPartitionsNum int32, message *common.Message,
+	) error
+	// SyncSendMessage sends a message for a partition synchronously.
+	SyncSendMessage(
+		ctx context.Context, topic string, partitionNum int32, message *common.Message,
+	) error
+	// Close closes the producer.
+	Close()
+}
+
+// Factory is a function to create a producer.
+type Factory func(ctx context.Context, changefeedID model.ChangeFeedID,
+	syncProducer kafka.SyncProducer) DDLProducer
+
 // Assert DDLEventSink implementation
-var _ ddlproducer.DDLProducer = (*kafkaDDLProducer)(nil)
+var _ DDLProducer = (*kafkaDDLProducer)(nil)
 
 // kafkaDDLProducer is used to send messages to kafka synchronously.
 type kafkaDDLProducer struct {
@@ -48,7 +66,7 @@ type kafkaDDLProducer struct {
 func NewKafkaDDLProducer(_ context.Context,
 	changefeedID commonType.ChangeFeedID,
 	syncProducer kafka.SyncProducer,
-) ddlproducer.DDLProducer {
+) DDLProducer {
 	return &kafkaDDLProducer{
 		id:           changefeedID,
 		syncProducer: syncProducer,

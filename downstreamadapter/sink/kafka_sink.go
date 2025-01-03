@@ -31,9 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tiflow/cdc/sink/ddlsink/mq/ddlproducer"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	utils "github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -122,7 +120,7 @@ func NewKafkaSink(
 		topicManager:     kafkaComponent.TopicManager,
 		statistics:       statistics,
 		errgroup:         errGroup,
-		metricsCollector: kafkaComponent.Factory.MetricsCollector(utils.RoleProcessor, kafkaComponent.AdminClient),
+		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
 		errCh:            errCh,
 		ctx:              ctx,
 		cancel:           cancel,
@@ -217,7 +215,7 @@ func (s *KafkaSink) Close(_ bool) error {
 	return nil
 }
 
-func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, ddlproducer.DDLProducer, error) {
+func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProducer, error) {
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	errCh := make(chan error, 1)

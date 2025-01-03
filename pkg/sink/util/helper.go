@@ -1,6 +1,7 @@
 package util
 
 import (
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"net/url"
 	"sync"
 
@@ -10,7 +11,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	ticonfig "github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink"
 	"github.com/pingcap/tiflow/pkg/util"

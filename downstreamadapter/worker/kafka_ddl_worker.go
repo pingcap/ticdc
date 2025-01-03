@@ -2,20 +2,19 @@ package worker
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tiflow/cdc/sink/ddlsink/mq/ddlproducer"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -23,12 +22,12 @@ import (
 // worker will send messages to the DML producer on a batch basis.
 type KafkaDDLWorker struct {
 	// changeFeedID indicates this sink belongs to which processor(changefeed).
-	changeFeedID common.ChangeFeedID
+	changeFeedID commonType.ChangeFeedID
 	// protocol indicates the protocol used by this sink.
 	protocol         config.Protocol
 	checkpointTsChan chan uint64
 
-	encoder encoder.EventEncoder
+	encoder common.EventEncoder
 	// eventRouter used to route events to the right topic and partition.
 	eventRouter *eventrouter.EventRouter
 	// topicManager used to manage topics.
@@ -36,7 +35,7 @@ type KafkaDDLWorker struct {
 	topicManager topicmanager.TopicManager
 
 	// producer is used to send the messages to the Kafka broker.
-	producer ddlproducer.DDLProducer
+	producer producer.DDLProducer
 
 	tableSchemaStore *util.TableSchemaStore
 
@@ -67,11 +66,11 @@ func getDDLDispatchRule(protocol config.Protocol) DDLDispatchRule {
 
 // newWorker creates a new flush worker.
 func NewKafkaDDLWorker(
-	ctx context.Context,
-	id common.ChangeFeedID,
+	_ context.Context,
+	id commonType.ChangeFeedID,
 	protocol config.Protocol,
-	producer ddlproducer.DDLProducer,
-	encoder encoder.EventEncoder,
+	producer producer.DDLProducer,
+	encoder common.EventEncoder,
 	eventRouter *eventrouter.EventRouter,
 	topicManager topicmanager.TopicManager,
 	statistics *metrics.Statistics,
@@ -106,7 +105,7 @@ func (w *KafkaDDLWorker) SetTableSchemaStore(tableSchemaStore *util.TableSchemaS
 }
 
 func (w *KafkaDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent) error {
-	messages := make([]*ticommon.Message, 0)
+	messages := make([]*common.Message, 0)
 	topics := make([]string, 0)
 
 	// Some ddl event may be multi-events, we need to split it into multiple messages.

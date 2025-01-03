@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/rcrowley/go-metrics"
 	"go.uber.org/zap"
 )
@@ -134,10 +133,6 @@ func (f *saramaFactory) AsyncProducer(
 	}, nil
 }
 
-func (f *saramaFactory) MetricsCollector(
-	role util.Role,
-	adminClient ClusterAdminClient,
-) MetricsCollector {
-	return NewSaramaMetricsCollector(
-		f.changefeedID, role, adminClient, f.registry)
+func (f *saramaFactory) MetricsCollector(adminClient ClusterAdminClient) MetricsCollector {
+	return NewSaramaMetricsCollector(f.changefeedID, adminClient, f.registry)
 }

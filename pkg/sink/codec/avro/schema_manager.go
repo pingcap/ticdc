@@ -24,7 +24,7 @@ type SchemaManager interface {
 	Register(ctx context.Context, schemaName string, schemaDefinition string) (schemaID, error)
 	Lookup(ctx context.Context, schemaName string, schemaID schemaID) (*goavro.Codec, error)
 	GetCachedOrRegister(ctx context.Context, topicName string,
-		tableVersion uint64, schemaGen SchemaGenerator) (*goavro.Codec, []byte, error)
+		tableVersion uint16, schemaGen SchemaGenerator) (*goavro.Codec, []byte, error)
 	RegistryType() string
 	ClearRegistry(ctx context.Context, schemaName string) error
 }

@@ -15,11 +15,11 @@ package simple
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/config"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
@@ -29,13 +29,13 @@ import (
 )
 
 type Encoder struct {
-	messages   []*ticommon.Message
+	messages   []*common.Message
 	config     *ticommon.Config
 	claimCheck *claimcheck.ClaimCheck
 	marshaller marshaller
 }
 
-func NewEncoder(ctx context.Context, config *ticommon.Config) (encoder.EventEncoder, error) {
+func NewEncoder(ctx context.Context, config *ticommon.Config) (common.EventEncoder, error) {
 	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -45,7 +45,7 @@ func NewEncoder(ctx context.Context, config *ticommon.Config) (encoder.EventEnco
 		return nil, errors.Trace(err)
 	}
 	return &Encoder{
-		messages:   make([]*ticommon.Message, 0, 1),
+		messages:   make([]*common.Message, 0, 1),
 		config:     config,
 		claimCheck: claimCheck,
 		marshaller: marshaller,
@@ -64,7 +64,7 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 		return err
 	}
 
-	result := &ticommon.Message{
+	result := &common.Message{
 		Value:    value,
 		Ts:       event.CommitTs,
 		Schema:   event.TableInfo.GetSchemaNamePtr(),
@@ -126,8 +126,8 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 }
 
 // Build implement the RowEventEncoder interface
-func (e *Encoder) Build() []*ticommon.Message {
-	var result []*ticommon.Message
+func (e *Encoder) Build() []*common.Message {
+	var result []*common.Message
 	if len(e.messages) != 0 {
 		result = e.messages
 		e.messages = nil
@@ -136,7 +136,7 @@ func (e *Encoder) Build() []*ticommon.Message {
 }
 
 // EncodeCheckpointEvent implement the DDLEventBatchEncoder interface
-func (e *Encoder) EncodeCheckpointEvent(ts uint64) (*ticommon.Message, error) {
+func (e *Encoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
 	value, err := e.marshaller.MarshalCheckpoint(ts)
 	if err != nil {
 		return nil, err
@@ -148,7 +148,7 @@ func (e *Encoder) EncodeCheckpointEvent(ts uint64) (*ticommon.Message, error) {
 }
 
 // EncodeDDLEvent implement the DDLEventBatchEncoder interface
-func (e *Encoder) EncodeDDLEvent(event *commonEvent.DDLEvent) (*ticommon.Message, error) {
+func (e *Encoder) EncodeDDLEvent(event *commonEvent.DDLEvent) (*common.Message, error) {
 	// value, err := e.marshaller.MarshalDDLEvent(event)
 	// if err != nil {
 	// 	return nil, err
