@@ -475,6 +475,7 @@ func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) Pe
 func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
 	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
+	// We don't store the relationship: view_id -> table_name, get table name from args.job
 	event.CurrentTableName = args.job.TableName
 	// The query in job maybe "DROP VIEW test1.view1, test2.view2", we need rebuild it here.
 	event.Query = fmt.Sprintf("DROP VIEW `%s`.`%s`", event.CurrentSchemaName, event.CurrentTableName)
