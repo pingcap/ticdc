@@ -469,6 +469,7 @@ func buildPersistedDDLEventForCreateDropSchema(args buildPersistedDDLEventFuncAr
 func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
 	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
+	event.CurrentTableName = args.job.TableName
 	return event
 }
 
