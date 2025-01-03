@@ -245,7 +245,7 @@ jobs:
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
 
-     - name: Copy logs to hack permission
+      - name: Copy logs to hack permission
         if: ${{ always() }}
         run: |
           TEMP_DIR=$(mktemp -d)
