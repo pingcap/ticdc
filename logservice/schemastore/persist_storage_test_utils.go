@@ -142,7 +142,6 @@ func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos []mockDBInfo) {
 
 func buildTableFilterByNameForTest(schemaName, tableName string) filter.Filter {
 	filterRule := fmt.Sprintf("%s.%s", schemaName, tableName)
-	log.Info("filterRule", zap.String("filterRule", filterRule))
 	filterConfig := &config.FilterConfig{
 		Rules: []string{filterRule},
 	}
@@ -203,12 +202,31 @@ func buildCreateTablesJobForTest(schemaID int64, tableIDs []int64, tableNames []
 			ID:   id,
 			Name: pmodel.NewCIStr(tableNames[i]),
 		})
-		querys = append(querys, fmt.Sprintf("create table %s(a int primary key)", tableNames[i]))
+		querys = append(querys, fmt.Sprintf("create table %s(a int primary key);", tableNames[i]))
 	}
 	return &model.Job{
 		Type:     model.ActionCreateTables,
 		SchemaID: schemaID,
-		Query:    strings.Join(querys, ";"),
+		Query:    strings.Join(querys, ""),
+		BinlogInfo: &model.HistoryInfo{
+			MultipleTableInfos: multiTableInfos,
+			FinishedTS:         finishedTs,
+		},
+	}
+}
+
+func buildCreateTablesJobWithQueryForTest(schemaID int64, tableIDs []int64, tableNames []string, query string, finishedTs uint64) *model.Job {
+	multiTableInfos := make([]*model.TableInfo, 0, len(tableIDs))
+	for i, id := range tableIDs {
+		multiTableInfos = append(multiTableInfos, &model.TableInfo{
+			ID:   id,
+			Name: pmodel.NewCIStr(tableNames[i]),
+		})
+	}
+	return &model.Job{
+		Type:     model.ActionCreateTables,
+		SchemaID: schemaID,
+		Query:    query,
 		BinlogInfo: &model.HistoryInfo{
 			MultipleTableInfos: multiTableInfos,
 			FinishedTS:         finishedTs,

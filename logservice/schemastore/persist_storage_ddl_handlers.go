@@ -17,16 +17,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser"
-	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/format"
 	"go.uber.org/zap"
 )
 
@@ -417,65 +413,6 @@ func getSchemaID(tableMap map[int64]*BasicTableInfo, tableID int64) int64 {
 		log.Panic("table not found", zap.Int64("tableID", tableID))
 	}
 	return tableInfo.SchemaID
-}
-
-// transform ddl query based on sql mode.
-func transformDDLJobQuery(job *model.Job) (string, error) {
-	p := parser.New()
-	// We need to use the correct SQL mode to parse the DDL query.
-	// Otherwise, the parser may fail to parse the DDL query.
-	// For example, it is needed to parse the following DDL query:
-	//  `alter table "t" add column "c" int default 1;`
-	// by adding `ANSI_QUOTES` to the SQL mode.
-	p.SetSQLMode(job.SQLMode)
-	stmts, _, err := p.Parse(job.Query, job.Charset, job.Collate)
-	if err != nil {
-		return "", errors.Trace(err)
-	}
-	var result string
-	buildQuery := func(stmt ast.StmtNode) (string, error) {
-		var sb strings.Builder
-		// translate TiDB feature to special comment
-		restoreFlags := format.RestoreTiDBSpecialComment
-		// escape the keyword
-		restoreFlags |= format.RestoreNameBackQuotes
-		// upper case keyword
-		restoreFlags |= format.RestoreKeyWordUppercase
-		// wrap string with single quote
-		restoreFlags |= format.RestoreStringSingleQuotes
-		// remove placement rule
-		restoreFlags |= format.SkipPlacementRuleForRestore
-		// force disable ttl
-		restoreFlags |= format.RestoreWithTTLEnableOff
-		if err = stmt.Restore(format.NewRestoreCtx(restoreFlags, &sb)); err != nil {
-			return "", errors.Trace(err)
-		}
-		return sb.String(), nil
-	}
-	if len(stmts) > 1 {
-		results := make([]string, 0, len(stmts))
-		for _, stmt := range stmts {
-			query, err := buildQuery(stmt)
-			if err != nil {
-				return "", errors.Trace(err)
-			}
-			results = append(results, query)
-		}
-		result = strings.Join(results, ";")
-	} else {
-		result, err = buildQuery(stmts[0])
-		if err != nil {
-			return "", errors.Trace(err)
-		}
-	}
-
-	log.Info("transform ddl query to result",
-		zap.String("DDL", job.Query),
-		zap.String("charset", job.Charset),
-		zap.String("collate", job.Collate),
-		zap.String("result", result))
-
-	return result, nil
 }
 
 // =======
@@ -1601,7 +1538,10 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			physicalTableCount += 1
 		}
 	}
-	querys := strings.Split(rawEvent.Query, ";")
+	querys, err := SplitQueries(rawEvent.Query)
+	if err != nil {
+		log.Panic("split queries failed", zap.Error(err))
+	}
 	ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, physicalTableCount)
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)
 	resultQuerys := make([]string, 0, logicalTableCount)
@@ -1631,7 +1571,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	ddlEvent.TableNameChange = &commonEvent.TableNameChange{
 		AddName: addName,
 	}
-	ddlEvent.Query = strings.Join(resultQuerys, ";")
+	ddlEvent.Query = strings.Join(resultQuerys, "")
 	if len(ddlEvent.NeedAddedTables) == 0 {
 		log.Fatal("should not happen")
 	}

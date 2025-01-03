@@ -1028,6 +1028,12 @@ func TestApplyDDLJobs(t *testing.T) {
 			func() []*model.Job {
 				return []*model.Job{
 					buildCreateTablesJobForTest(100, []int64{301, 302, 303}, []string{"t1", "t2", "t3"}, 1010), // create table 301, 302, 303
+					buildCreateTablesJobWithQueryForTest(
+						100,
+						[]int64{304, 305},
+						[]string{"t4", "t5"},
+						"CREATE TABLE t4 (COL1 VARBINARY(10) NOT NULL, PRIMARY KEY(COL1)); CREATE TABLE t5 (COL2 ENUM('ABC','IRG','KT;J'), COL3 TINYINT(50) NOT NULL, PRIMARY KEY(COL3));",
+						1020), // create table 304, 305, 306 with query
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -1043,6 +1049,14 @@ func TestApplyDDLJobs(t *testing.T) {
 					SchemaID: 100,
 					Name:     "t3",
 				},
+				304: {
+					SchemaID: 100,
+					Name:     "t4",
+				},
+				305: {
+					SchemaID: 100,
+					Name:     "t5",
+				},
 			},
 			nil,
 			map[int64]*BasicDatabaseInfo{
@@ -1052,6 +1066,8 @@ func TestApplyDDLJobs(t *testing.T) {
 						301: true,
 						302: true,
 						303: true,
+						304: true,
+						305: true,
 					},
 				},
 			},
@@ -1059,8 +1075,10 @@ func TestApplyDDLJobs(t *testing.T) {
 				301: {1010},
 				302: {1010},
 				303: {1010},
+				304: {1020},
+				305: {1020},
 			},
-			[]uint64{1010},
+			[]uint64{1010, 1020},
 			nil,
 			nil,
 			[]FetchTableTriggerDDLEventsTestCase{
@@ -1106,17 +1124,49 @@ func TestApplyDDLJobs(t *testing.T) {
 								},
 							},
 						},
+						{
+							Type:       byte(model.ActionCreateTables),
+							FinishedTs: 1020,
+							Query:      "CREATE TABLE `t4` (`COL1` VARBINARY(10) NOT NULL,PRIMARY KEY(`COL1`));CREATE TABLE `t5` (`COL2` ENUM('ABC','IRG','KT;J'),`COL3` TINYINT(50) NOT NULL,PRIMARY KEY(`COL3`));",
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  304,
+								},
+								{
+									SchemaID: 100,
+									TableID:  305,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t4",
+									},
+									{
+										SchemaName: "test",
+										TableName:  "t5",
+									},
+								},
+							},
+						},
 					},
 				},
 				// filter t2 and t3
 				{
 					tableFilter: buildTableFilterByNameForTest("test", "t1"),
 					startTs:     1000,
-					limit:       10,
+					limit:       1,
 					result: []commonEvent.DDLEvent{
 						{
 							Type:       byte(model.ActionCreateTables),
 							FinishedTs: 1010,
+							Query:      "CREATE TABLE `t1` (`a` INT PRIMARY KEY);",
 							BlockedTables: &commonEvent.InfluencedTables{
 								InfluenceType: commonEvent.InfluenceTypeNormal,
 								TableIDs:      []int64{0},
