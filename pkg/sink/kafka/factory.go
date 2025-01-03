@@ -34,7 +34,7 @@ type Factory interface {
 	// SyncProducer creates a sync producer to writer message to kafka
 	SyncProducer(ctx context.Context) (SyncProducer, error)
 	// AsyncProducer creates an async producer to writer message to kafka
-	AsyncProducer(ctx context.Context) (kafka.AsyncProducer, error)
+	AsyncProducer(ctx context.Context) (AsyncProducer, error)
 	// MetricsCollector returns the kafka metrics collector
 	MetricsCollector(adminClient kafka.ClusterAdminClient) kafka.MetricsCollector
 }
@@ -63,24 +63,24 @@ type SyncProducer interface {
 	Close()
 }
 
-// // AsyncProducer is the kafka async producer
-// type AsyncProducer interface {
-// 	// Close shuts down the producer and waits for any buffered messages to be
-// 	// flushed. You must call this function before a producer object passes out of
-// 	// scope, as it may otherwise leak memory. You must call this before process
-// 	// shutting down, or you may lose messages. You must call this before calling
-// 	// Close on the underlying client.
-// 	Close()
+// AsyncProducer is the kafka async producer
+type AsyncProducer interface {
+	// Close shuts down the producer and waits for any buffered messages to be
+	// flushed. You must call this function before a producer object passes out of
+	// scope, as it may otherwise leak memory. You must call this before process
+	// shutting down, or you may lose messages. You must call this before calling
+	// Close on the underlying client.
+	Close()
 
-// 	// AsyncSend is the input channel for the user to write messages to that they
-// 	// wish to send.
-// 	AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error
+	// AsyncSend is the input channel for the user to write messages to that they
+	// wish to send.
+	AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error
 
-// 	// AsyncRunCallback process the messages that has sent to kafka,
-// 	// and run tha attached callback. the caller should call this
-// 	// method in a background goroutine
-// 	AsyncRunCallback(ctx context.Context) error
-// }
+	// AsyncRunCallback process the messages that has sent to kafka,
+	// and run tha attached callback. the caller should call this
+	// method in a background goroutine
+	AsyncRunCallback(ctx context.Context) error
+}
 
 type saramaSyncProducer struct {
 	id       commonType.ChangeFeedID

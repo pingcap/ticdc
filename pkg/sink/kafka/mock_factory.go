@@ -64,7 +64,7 @@ func (f *MockFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 // AsyncProducer creates an async producer
 func (f *MockFactory) AsyncProducer(
 	ctx context.Context,
-) (kafka.AsyncProducer, error) {
+) (AsyncProducer, error) {
 	config, err := NewSaramaConfig(ctx, f.o)
 	if err != nil {
 		return nil, errors.Trace(err)

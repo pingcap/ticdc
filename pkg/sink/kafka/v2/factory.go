@@ -221,7 +221,7 @@ func (f *factory) SyncProducer(_ context.Context) (pkafka.SyncProducer, error) {
 // AsyncProducer creates an async producer to writer message to kafka
 func (f *factory) AsyncProducer(
 	ctx context.Context,
-) (tikafka.AsyncProducer, error) {
+) (pkafka.AsyncProducer, error) {
 	w := f.newWriter(true)
 	// assume each message is 1KB,
 	// and set batch timeout to 5ms to avoid waste too much time on waiting for messages.

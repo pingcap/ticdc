@@ -111,7 +111,7 @@ func (f *saramaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) 
 // it should be the caller's responsibility to close the producer
 func (f *saramaFactory) AsyncProducer(
 	ctx context.Context,
-) (kafka.AsyncProducer, error) {
+) (AsyncProducer, error) {
 	config, err := NewSaramaConfig(ctx, f.option)
 	if err != nil {
 		return nil, err
