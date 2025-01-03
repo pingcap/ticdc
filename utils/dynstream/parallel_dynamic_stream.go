@@ -9,6 +9,7 @@ import (
 
 	"github.com/pingcap/log"
 	. "github.com/pingcap/ticdc/pkg/apperror"
+	"go.uber.org/zap"
 )
 
 // Use a hasher to select target stream for the path.
@@ -91,6 +92,14 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 		eventSize: s.eventExtraSize + s.handler.GetSize(e),
 		timestamp: s.handler.GetTimestamp(e),
 		queueTime: time.Now(),
+	}
+	if s.memControl != nil {
+		log.Info("fizz: add event to stream",
+			zap.Any("rawSize", s.handler.GetSize(e)),
+			zap.Any("extraSize", s.eventExtraSize),
+			zap.Any("totalSize", s.eventExtraSize+s.handler.GetSize(e)),
+			zap.Any("event", e),
+		)
 	}
 	pi.stream.in() <- ew
 }
