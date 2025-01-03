@@ -79,7 +79,7 @@ var (
 		})
 )
 
-// InitMetrics registers all metrics in this file.
+// InitEventServiceMetrics registers all metrics in this file.
 func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceSendEventCount)
 	registry.MustRegister(EventServiceSendEventDuration)

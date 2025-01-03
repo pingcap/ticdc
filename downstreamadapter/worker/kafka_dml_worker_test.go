@@ -63,7 +63,7 @@ func TestWriteEvents(t *testing.T) {
 	dmlEvent.CommitTs = 2
 
 	dmlWorker := kafkaDMLWorkerForTest(t)
-	dmlWorker.Run()
+	dmlWorker.Run(context.Background())
 	dmlWorker.GetEventChan() <- dmlEvent
 
 	// Wait for the events to be received by the worker.

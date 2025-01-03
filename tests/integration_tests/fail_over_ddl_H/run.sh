@@ -78,7 +78,7 @@ function failOverCaseH-1() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitBeforePass=return(true)'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitBeforePass=sleep(30)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
@@ -144,7 +144,7 @@ function failOverCaseH-2() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitBeforePass=return(true)'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitBeforePass=sleep(30)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
@@ -218,7 +218,7 @@ function failOverCaseH-3() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitBeforePass=return(true)'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitBeforePass=sleep(30)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
@@ -292,7 +292,7 @@ function failOverCaseH-5() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitBeforePass=return(true)'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/WaitBeforePass=sleep(30)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')

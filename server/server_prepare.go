@@ -123,7 +123,7 @@ func (c *server) prepare(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	if err := c.initDir(); err != nil {
+	if err = c.initDir(); err != nil {
 		return errors.Trace(err)
 	}
 	c.setMemoryLimit()

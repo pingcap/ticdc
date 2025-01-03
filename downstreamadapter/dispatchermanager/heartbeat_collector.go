@@ -178,4 +178,5 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 
 func (c *HeartBeatCollector) Close() {
 	c.mc.DeRegisterHandler(messaging.HeartbeatCollectorTopic)
+	c.wg.Wait()
 }

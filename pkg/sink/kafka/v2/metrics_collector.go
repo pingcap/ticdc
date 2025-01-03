@@ -21,26 +21,22 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	pkafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	tiv2 "github.com/pingcap/tiflow/pkg/sink/kafka/v2"
-	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
 
 // MetricsCollector is the kafka metrics collector based on kafka-go library.
 type MetricsCollector struct {
 	changefeedID common.ChangeFeedID
-	role         util.Role
 	writer       tiv2.Writer
 }
 
 // NewMetricsCollector return a kafka metrics collector
 func NewMetricsCollector(
 	changefeedID common.ChangeFeedID,
-	role util.Role,
 	writer tiv2.Writer,
 ) *MetricsCollector {
 	return &MetricsCollector{
 		changefeedID: changefeedID,
-		role:         role,
 		writer:       writer,
 	}
 }

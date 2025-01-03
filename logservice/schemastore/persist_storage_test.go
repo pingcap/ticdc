@@ -26,6 +26,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/charset"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -244,6 +245,7 @@ func TestApplyDDLJobs(t *testing.T) {
 									},
 								},
 							},
+							Query: "DROP TABLE `test`.`t2`",
 						},
 						{
 							Type:       byte(model.ActionTruncateTable),
@@ -700,7 +702,13 @@ func TestApplyDDLJobs(t *testing.T) {
 			func() []*model.Job {
 				return []*model.Job{
 					buildCreateTableJobForTest(100, 300, "t1", 1010), // create table 300
-					buildRenameTableJobForTest(105, 300, "t2", 1020), // rename table 300 to schema 105
+					buildRenameTableJobForTest(105, 300, "t2", 1020, &model.InvolvingSchemaInfo{
+						Database: "test",
+						Table:    "t1",
+					}), // rename table 300 to schema 105
+					// rename table 300 to schema 105 with the same name again
+					// check comments in buildPersistedDDLEventForRenameTable to see why this would happen
+					buildRenameTableJobForTest(105, 300, "t2", 1030, nil),
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -723,9 +731,9 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 			map[int64][]uint64{
-				300: {1010, 1020},
+				300: {1010, 1020, 1030},
 			},
-			[]uint64{1010, 1020},
+			[]uint64{1010, 1020, 1030},
 			nil,
 			[]FetchTableDDLEventsTestCase{
 				{
@@ -735,6 +743,7 @@ func TestApplyDDLJobs(t *testing.T) {
 					result: []commonEvent.DDLEvent{
 						{
 							Type:       byte(model.ActionRenameTable),
+							Query:      "RENAME TABLE `test`.`t1` TO `test2`.`t2`",
 							FinishedTs: 1020,
 							BlockedTables: &commonEvent.InfluencedTables{
 								InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -799,7 +808,7 @@ func TestApplyDDLJobs(t *testing.T) {
 				{
 					tableFilter: buildTableFilterByNameForTest("test2", "*"),
 					startTs:     1010,
-					limit:       10,
+					limit:       1,
 					result: []commonEvent.DDLEvent{
 						{
 							Type:       byte(model.ActionRenameTable),
@@ -1019,6 +1028,12 @@ func TestApplyDDLJobs(t *testing.T) {
 			func() []*model.Job {
 				return []*model.Job{
 					buildCreateTablesJobForTest(100, []int64{301, 302, 303}, []string{"t1", "t2", "t3"}, 1010), // create table 301, 302, 303
+					buildCreateTablesJobWithQueryForTest(
+						100,
+						[]int64{304, 305},
+						[]string{"t4", "t5"},
+						"CREATE TABLE t4 (COL1 VARBINARY(10) NOT NULL, PRIMARY KEY(COL1)); CREATE TABLE t5 (COL2 ENUM('ABC','IRG','KT;J'), COL3 TINYINT(50) NOT NULL, PRIMARY KEY(COL3));",
+						1020), // create table 304, 305, 306 with query
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -1034,6 +1049,14 @@ func TestApplyDDLJobs(t *testing.T) {
 					SchemaID: 100,
 					Name:     "t3",
 				},
+				304: {
+					SchemaID: 100,
+					Name:     "t4",
+				},
+				305: {
+					SchemaID: 100,
+					Name:     "t5",
+				},
 			},
 			nil,
 			map[int64]*BasicDatabaseInfo{
@@ -1043,6 +1066,8 @@ func TestApplyDDLJobs(t *testing.T) {
 						301: true,
 						302: true,
 						303: true,
+						304: true,
+						305: true,
 					},
 				},
 			},
@@ -1050,8 +1075,10 @@ func TestApplyDDLJobs(t *testing.T) {
 				301: {1010},
 				302: {1010},
 				303: {1010},
+				304: {1020},
+				305: {1020},
 			},
-			[]uint64{1010},
+			[]uint64{1010, 1020},
 			nil,
 			nil,
 			[]FetchTableTriggerDDLEventsTestCase{
@@ -1097,17 +1124,49 @@ func TestApplyDDLJobs(t *testing.T) {
 								},
 							},
 						},
+						{
+							Type:       byte(model.ActionCreateTables),
+							FinishedTs: 1020,
+							Query:      "CREATE TABLE `t4` (`COL1` VARBINARY(10) NOT NULL,PRIMARY KEY(`COL1`));CREATE TABLE `t5` (`COL2` ENUM('ABC','IRG','KT;J'),`COL3` TINYINT(50) NOT NULL,PRIMARY KEY(`COL3`));",
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  304,
+								},
+								{
+									SchemaID: 100,
+									TableID:  305,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t4",
+									},
+									{
+										SchemaName: "test",
+										TableName:  "t5",
+									},
+								},
+							},
+						},
 					},
 				},
 				// filter t2 and t3
 				{
 					tableFilter: buildTableFilterByNameForTest("test", "t1"),
 					startTs:     1000,
-					limit:       10,
+					limit:       1,
 					result: []commonEvent.DDLEvent{
 						{
 							Type:       byte(model.ActionCreateTables),
 							FinishedTs: 1010,
+							Query:      "CREATE TABLE `t1` (`a` INT PRIMARY KEY);",
 							BlockedTables: &commonEvent.InfluencedTables{
 								InfluenceType: commonEvent.InfluenceTypeNormal,
 								TableIDs:      []int64{0},
@@ -1314,6 +1373,79 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 		},
+		// trivial ddls
+		// test add/drop primary key and alter index visibility for table
+		// test modify table charset
+		// test alter table ttl/remove ttl
+		// test set TiFlash replica
+		// test multi schema change
+		// test add/drop column
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+					tables: []*model.TableInfo{
+						{
+							ID:   300,
+							Name: pmodel.NewCIStr("t1"),
+						},
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildAddPrimaryKeyJobForTest(100, 300, 1010, &model.IndexInfo{
+						ID:        500,
+						Name:      pmodel.NewCIStr("idx1"),
+						Table:     pmodel.NewCIStr("t1"),
+						Primary:   true,
+						Invisible: true,
+					}),
+					buildAlterIndexVisibilityJobForTest(100, 300, 1020, &model.IndexInfo{
+						ID:        500,
+						Name:      pmodel.NewCIStr("idx1"),
+						Table:     pmodel.NewCIStr("t1"),
+						Primary:   true,
+						Invisible: false,
+					}),
+					buildDropPrimaryKeyJobForTest(100, 300, 1030),
+					buildModifyTableCharsetJobForTest(100, 300, 1040, charset.CharsetUTF8MB4),
+					buildAlterTTLJobForTest(100, 300, 1050),
+					buildRemoveTTLJobForTest(100, 300, 1060),
+					buildSetTiFlashReplicaJobForTest(100, 300, 1070),
+					buildMultiSchemaChangeJobForTest(100, 300, 1080),
+					buildAddColumnJobForTest(100, 300, 1090),
+					buildDropColumnJobForTest(100, 300, 1100),
+					buildCreateViewJobForTest(100, 1110),
+					buildDropViewJobForTest(100, 1120),
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				300: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+			},
+			nil,
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						300: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				300: {1010, 1020, 1030, 1040, 1050, 1060, 1070, 1080, 1090, 1100, 1110},
+			},
+			[]uint64{1110, 1120},
+			nil,
+			nil,
+			nil,
+		},
 	}
 
 	for index, tt := range testCases {
@@ -1322,7 +1454,8 @@ func TestApplyDDLJobs(t *testing.T) {
 		checkState := func(fromDisk bool) {
 			if (tt.tableMap != nil && !reflect.DeepEqual(tt.tableMap, pStorage.tableMap)) ||
 				(tt.tableMap == nil && len(pStorage.tableMap) != 0) {
-				log.Warn("tableMap not equal", zap.Int("testIndex", index), zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap), zap.Bool("fromDisk", fromDisk))
+				log.Warn("tableMap not equal", zap.Int("testIndex", index),
+					zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap), zap.Bool("fromDisk", fromDisk))
 				t.Fatalf("tableMap not equal")
 			}
 			if (tt.partitionMap != nil && !reflect.DeepEqual(tt.partitionMap, pStorage.partitionMap)) ||
@@ -1384,6 +1517,10 @@ func TestApplyDDLJobs(t *testing.T) {
 					expectedDDLEvent := expected[i]
 					actualDDLEvent := actual[i]
 					if expectedDDLEvent.Type != actualDDLEvent.Type || expectedDDLEvent.FinishedTs != actualDDLEvent.FinishedTs {
+						return false
+					}
+					// check query
+					if expectedDDLEvent.Query != "" && expectedDDLEvent.Query != actualDDLEvent.Query {
 						return false
 					}
 					// check BlockedTables
@@ -1599,7 +1736,7 @@ func TestRegisterTable(t *testing.T) {
 			},
 			ddlJobs: func() []*model.Job {
 				return []*model.Job{
-					buildRenameTableJobForTest(50, 99, "t2", 1000),                                   // rename table 99 to t2
+					buildRenameTableJobForTest(50, 99, "t2", 1000, nil),                              // rename table 99 to t2
 					buildCreateTableJobForTest(50, 100, "t3", 1010),                                  // create table 100
 					buildTruncateTableJobForTest(50, 100, 101, "t3", 1020),                           // truncate table 100 to 101
 					buildCreatePartitionTableJobForTest(50, 102, "t4", []int64{201, 202, 203}, 1030), // create partition table 102

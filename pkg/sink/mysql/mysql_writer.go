@@ -749,8 +749,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 	return dmls, nil
 }
 
-func (w *MysqlWriter) Flush(events []*commonEvent.DMLEvent, workerNum int) error {
-	w.statistics.ObserveRows(events)
+func (w *MysqlWriter) Flush(events []*commonEvent.DMLEvent) error {
 	dmls, err := w.prepareDMLs(events)
 	if err != nil {
 		return errors.Trace(err)
@@ -762,13 +761,15 @@ func (w *MysqlWriter) Flush(events []*commonEvent.DMLEvent, workerNum int) error
 	}
 
 	if !w.cfg.DryRun {
-		if err := w.execDMLWithMaxRetries(dmls); err != nil {
+		if err = w.execDMLWithMaxRetries(dmls); err != nil {
 			return errors.Trace(err)
 		}
 	} else {
-		w.statistics.RecordBatchExecution(func() (int, int64, error) {
+		if err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
 			return dmls.rowCount, dmls.approximateSize, nil
-		})
+		}); err != nil {
+			return errors.Trace(err)
+		}
 	}
 
 	for _, event := range events {

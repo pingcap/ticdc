@@ -104,9 +104,9 @@ func NewKafkaDMLWorker(
 	}
 }
 
-func (w *KafkaDMLWorker) Run() {
+func (w *KafkaDMLWorker) Run(ctx context.Context) {
 	w.errGroup.Go(func() error {
-		return w.producer.Run()
+		return w.producer.Run(ctx)
 	})
 
 	w.errGroup.Go(func() error {
@@ -343,7 +343,7 @@ func (w *KafkaDMLWorker) sendMessages() error {
 				start := time.Now()
 				if err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
-					if err := w.producer.AsyncSendMessage(
+					if err = w.producer.AsyncSendMessage(
 						w.ctx,
 						future.Key.Topic,
 						future.Key.Partition,

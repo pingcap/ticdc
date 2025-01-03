@@ -703,8 +703,8 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 	batch := db.NewBatch()
 	kvCount := 0
 	for _, event := range events {
+		kvCount += len(event.kvs)
 		for _, kv := range event.kvs {
-			kvCount += 1
 			key := EncodeKey(uint64(event.subID), event.tableID, &kv)
 			value := kv.Encode()
 			compressedValue := e.encoder.EncodeAll(value, nil)

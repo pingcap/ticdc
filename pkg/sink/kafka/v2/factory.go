@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	tiv2 "github.com/pingcap/tiflow/pkg/sink/kafka/v2"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/segmentio/kafka-go"
 	"github.com/segmentio/kafka-go/sasl"
 	"github.com/segmentio/kafka-go/sasl/plain"
@@ -222,7 +221,6 @@ func (f *factory) SyncProducer(_ context.Context) (pkafka.SyncProducer, error) {
 // AsyncProducer creates an async producer to writer message to kafka
 func (f *factory) AsyncProducer(
 	ctx context.Context,
-	failpointCh chan error,
 ) (tikafka.AsyncProducer, error) {
 	w := f.newWriter(true)
 	// assume each message is 1KB,
@@ -232,7 +230,7 @@ func (f *factory) AsyncProducer(
 	aw := &asyncWriter{
 		w:            w,
 		changefeedID: f.changefeedID,
-		failpointCh:  failpointCh,
+		failpointCh:  make(chan error, 1),
 		errorsChan:   make(chan error, 1),
 	}
 
@@ -264,10 +262,9 @@ func (f *factory) AsyncProducer(
 
 // MetricsCollector returns the kafka metrics collector
 func (f *factory) MetricsCollector(
-	role util.Role,
-	adminClient tikafka.ClusterAdminClient,
+	_ tikafka.ClusterAdminClient,
 ) tikafka.MetricsCollector {
-	return NewMetricsCollector(f.changefeedID, role, f.writer)
+	return NewMetricsCollector(f.changefeedID, f.writer)
 }
 
 type syncWriter struct {
