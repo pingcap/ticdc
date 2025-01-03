@@ -103,9 +103,10 @@ func formatDDLEventsForTest(events []commonEvent.DDLEvent) string {
 		if event.NeedDroppedTables != nil {
 			needDroppedTableIDs = fmt.Sprintf("type: %v, schemaID: %d, tableIDs: %v", event.NeedDroppedTables.InfluenceType, event.NeedDroppedTables.SchemaID, event.NeedDroppedTables.TableIDs)
 		}
-		res = append(res, fmt.Sprintf("type: %s, finishedTs: %d, blocked tables: %s, updated schemas %v, need dropped tables: %s, need added tables: %v, table name change %v",
+		res = append(res, fmt.Sprintf("type: %s, finishedTs: %d, query %s, blocked tables: %s, updated schemas %v, need dropped tables: %s, need added tables: %v, table name change %v",
 			model.ActionType(event.Type),
 			event.FinishedTs,
+			event.Query,
 			blockedTableIDs,
 			event.UpdatedSchemas,
 			needDroppedTableIDs,
@@ -245,17 +246,24 @@ func buildCreatePartitionTablesJobForTest(schemaID int64, tableIDs []int64, tabl
 	}
 }
 
-func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64) *model.Job {
+func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64, query, prevSchemaName, prevTableName string) *model.Job {
 	return &model.Job{
 		Type:     model.ActionRenameTable,
 		SchemaID: schemaID,
 		TableID:  tableID,
+		Query:    query,
 		BinlogInfo: &model.HistoryInfo{
 			TableInfo: &model.TableInfo{
 				ID:   tableID,
 				Name: pmodel.NewCIStr(tableName),
 			},
 			FinishedTS: finishedTs,
+		},
+		InvolvingSchemaInfo: []model.InvolvingSchemaInfo{
+			{
+				Database: prevSchemaName,
+				Table:    prevTableName,
+			},
 		},
 	}
 }
@@ -293,7 +301,7 @@ func buildCreatePartitionTableJobForTest(schemaID, tableID int64, tableName stri
 	return buildPartitionTableRelatedJobForTest(model.ActionCreateTable, schemaID, tableID, tableName, partitionIDs, finishedTs)
 }
 
-func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64, query string) *model.Job {
 	return &model.Job{
 		Type:     model.ActionDropTable,
 		SchemaID: schemaID,
@@ -301,6 +309,7 @@ func buildDropTableJobForTest(schemaID, tableID int64, finishedTs uint64) *model
 		BinlogInfo: &model.HistoryInfo{
 			FinishedTS: finishedTs,
 		},
+		Query: query,
 	}
 }
 

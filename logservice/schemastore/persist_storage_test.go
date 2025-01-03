@@ -93,11 +93,11 @@ func TestApplyDDLJobs(t *testing.T) {
 			nil,
 			func() []*model.Job {
 				return []*model.Job{
-					buildCreateSchemaJobForTest(100, "test", 1000),          // create schema 100
-					buildCreateTableJobForTest(100, 200, "t1", 1010),        // create table 200
-					buildCreateTableJobForTest(100, 201, "t2", 1020),        // create table 201
-					buildDropTableJobForTest(100, 201, 1030),                // drop table 201
-					buildTruncateTableJobForTest(100, 200, 202, "t1", 1040), // truncate table 200 to 202
+					buildCreateSchemaJobForTest(100, "test", 1000),                  // create schema 100
+					buildCreateTableJobForTest(100, 200, "t1", 1010),                // create table 200
+					buildCreateTableJobForTest(100, 201, "t2", 1020),                // create table 201
+					buildDropTableJobForTest(100, 201, 1030, "drop table t2, t100"), // drop table 201
+					buildTruncateTableJobForTest(100, 200, 202, "t1", 1040),         // truncate table 200 to 202
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -245,6 +245,7 @@ func TestApplyDDLJobs(t *testing.T) {
 									},
 								},
 							},
+							Query: "DROP TABLE `test`.`t2`",
 						},
 						{
 							Type:       byte(model.ActionTruncateTable),
@@ -700,8 +701,11 @@ func TestApplyDDLJobs(t *testing.T) {
 			},
 			func() []*model.Job {
 				return []*model.Job{
-					buildCreateTableJobForTest(100, 300, "t1", 1010), // create table 300
-					buildRenameTableJobForTest(105, 300, "t2", 1020), // rename table 300 to schema 105
+					buildCreateTableJobForTest(100, 300, "t1", 1010),                                              // create table 300
+					buildRenameTableJobForTest(105, 300, "t2", 1020, "rename table t1 to test2.t2", "test", "t1"), // rename table 300 to schema 105
+					// rename table 300 to schema 105 with the same name again
+					// check comments in buildPersistedDDLEventForRenameTable to see why this would happen
+					buildRenameTableJobForTest(105, 300, "t2", 1030, "", "", ""),
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -724,9 +728,9 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 			map[int64][]uint64{
-				300: {1010, 1020},
+				300: {1010, 1020, 1030},
 			},
-			[]uint64{1010, 1020},
+			[]uint64{1010, 1020, 1030},
 			nil,
 			[]FetchTableDDLEventsTestCase{
 				{
@@ -736,6 +740,7 @@ func TestApplyDDLJobs(t *testing.T) {
 					result: []commonEvent.DDLEvent{
 						{
 							Type:       byte(model.ActionRenameTable),
+							Query:      "RENAME TABLE `test`.`t1` TO `test2`.`t2`",
 							FinishedTs: 1020,
 							BlockedTables: &commonEvent.InfluencedTables{
 								InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -800,7 +805,7 @@ func TestApplyDDLJobs(t *testing.T) {
 				{
 					tableFilter: buildTableFilterByNameForTest("test2", "*"),
 					startTs:     1010,
-					limit:       10,
+					limit:       1,
 					result: []commonEvent.DDLEvent{
 						{
 							Type:       byte(model.ActionRenameTable),
@@ -1457,6 +1462,10 @@ func TestApplyDDLJobs(t *testing.T) {
 					if expectedDDLEvent.Type != actualDDLEvent.Type || expectedDDLEvent.FinishedTs != actualDDLEvent.FinishedTs {
 						return false
 					}
+					// check query
+					if expectedDDLEvent.Query != "" && expectedDDLEvent.Query != actualDDLEvent.Query {
+						return false
+					}
 					// check BlockedTables
 					if expectedDDLEvent.BlockedTables == nil && actualDDLEvent.BlockedTables != nil {
 						return false
@@ -1670,7 +1679,7 @@ func TestRegisterTable(t *testing.T) {
 			},
 			ddlJobs: func() []*model.Job {
 				return []*model.Job{
-					buildRenameTableJobForTest(50, 99, "t2", 1000),                                   // rename table 99 to t2
+					buildRenameTableJobForTest(50, 99, "t2", 1000, "", "", ""),                       // rename table 99 to t2
 					buildCreateTableJobForTest(50, 100, "t3", 1010),                                  // create table 100
 					buildTruncateTableJobForTest(50, 100, 101, "t3", 1020),                           // truncate table 100 to 101
 					buildCreatePartitionTableJobForTest(50, 102, "t4", []int64{201, 202, 203}, 1030), // create partition table 102
