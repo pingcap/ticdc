@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	tiv2 "github.com/pingcap/tiflow/pkg/sink/kafka/v2"
 	"github.com/segmentio/kafka-go"
 	"github.com/segmentio/kafka-go/sasl"
@@ -202,7 +201,7 @@ func (f *factory) newWriter(async bool) *kafka.Writer {
 	return w
 }
 
-func (f *factory) AdminClient(_ context.Context) (tikafka.ClusterAdminClient, error) {
+func (f *factory) AdminClient(_ context.Context) (pkafka.ClusterAdminClient, error) {
 	return newClusterAdminClient(f.options.BrokerEndpoints, f.transport, f.changefeedID), nil
 }
 
@@ -262,8 +261,8 @@ func (f *factory) AsyncProducer(
 
 // MetricsCollector returns the kafka metrics collector
 func (f *factory) MetricsCollector(
-	_ tikafka.ClusterAdminClient,
-) tikafka.MetricsCollector {
+	_ pkafka.ClusterAdminClient,
+) pkafka.MetricsCollector {
 	return NewMetricsCollector(f.changefeedID, f.writer)
 }
 

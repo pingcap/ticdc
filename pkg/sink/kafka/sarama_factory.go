@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink/kafka"
 	"github.com/rcrowley/go-metrics"
 	"go.uber.org/zap"
 )
@@ -45,7 +44,7 @@ func NewSaramaFactory(
 	}, nil
 }
 
-func (f *saramaFactory) AdminClient(ctx context.Context) (kafka.ClusterAdminClient, error) {
+func (f *saramaFactory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
 	start := time.Now()
 	config, err := NewSaramaConfig(ctx, f.option)
 	duration := time.Since(start).Seconds()
@@ -135,7 +134,7 @@ func (f *saramaFactory) AsyncProducer(
 }
 
 func (f *saramaFactory) MetricsCollector(
-	adminClient kafka.ClusterAdminClient,
-) kafka.MetricsCollector {
+	adminClient ClusterAdminClient,
+) MetricsCollector {
 	return NewSaramaMetricsCollector(f.changefeedID, adminClient, f.registry)
 }

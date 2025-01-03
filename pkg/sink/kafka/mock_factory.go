@@ -23,7 +23,6 @@ import (
 	ticommon "github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/pkg/sink/kafka"
 )
 
 // MockFactory is a mock implementation of Factory interface.
@@ -43,8 +42,8 @@ func NewMockFactory(
 }
 
 // AdminClient return a mocked admin client
-func (f *MockFactory) AdminClient(_ context.Context) (kafka.ClusterAdminClient, error) {
-	return kafka.NewClusterAdminClientMockImpl(), nil
+func (f *MockFactory) AdminClient(_ context.Context) (ClusterAdminClient, error) {
+	return NewClusterAdminClientMockImpl(), nil
 }
 
 // SyncProducer creates a sync producer
@@ -78,7 +77,7 @@ func (f *MockFactory) AsyncProducer(
 }
 
 // MetricsCollector returns the metric collector
-func (f *MockFactory) MetricsCollector(_ kafka.ClusterAdminClient) kafka.MetricsCollector {
+func (f *MockFactory) MetricsCollector(_ ClusterAdminClient) MetricsCollector {
 	return &mockMetricsCollector{}
 }
 
@@ -103,7 +102,7 @@ func (m *MockSaramaSyncProducer) SendMessage(
 }
 
 // SendMessages implement the SyncProducer interface.
-func (m *MockSaramaSyncProducer) SendMessages(ctx context.Context, topic string, partitionNum int32, message *common.Message) error {
+func (m *MockSaramaSyncProducer) SendMessages(_ context.Context, topic string, partitionNum int32, message *common.Message) error {
 	msgs := make([]*sarama.ProducerMessage, partitionNum)
 	for i := 0; i < int(partitionNum); i++ {
 		msgs[i] = &sarama.ProducerMessage{
