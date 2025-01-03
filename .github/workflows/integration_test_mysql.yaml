@@ -71,27 +71,12 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=changefeed_reconstruct
 
-      - name: Copy logs to hack permission
-        if: ${{ always() }}
-        run: |
-          DIR=$(sudo find /tmp/tidb_cdc_test/ -type d -name 'cdc_data' -exec dirname {} \;)
-          [ -z "$DIR" ] && exit 0
-          CASE=$(basename $DIR)
-          mkdir -p ./logs/$CASE
-          cat $DIR/stdout.log
-          tail -n 10 $DIR/cdc.log
-          sudo cp -r -L $DIR/{*.log} ./logs/$CASE/
-          sudo cp -r -L $DIR/{sync_diff} ./logs/$CASE/ || true
-          sudo chown -R runner ./logs
-          sudo tar -czvf ./logs.tar.gz ./logs
-      # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
-      - name: Upload logs
-        uses: actions/upload-artifact@v4
-        if: ${{ always() }}
+      - name: Upload test logs
+        if: always()
+        uses: ./.github/actions/upload-test-logs
         with:
-          name: upstream-switch-logs
-          path: |
-            ./logs.tar.gz
+          log-name: basic_e2e_group1
+
 
   failover_e2e_test1:
     runs-on: ubuntu-latest 
@@ -132,20 +117,12 @@ jobs:
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_C
 
-      - name: Copy logs to hack permission
-        if: ${{ always() }}
-        run: |
-          TEMP_DIR=$(mktemp -d)
-          mkdir -p "$TEMP_DIR"
-          sudo find /tmp/tidb_cdc_test -type d -name 'fail_over*' -exec sh -c 'find "{}" -type f -name "cdc*.log" -print0' \; | tar -czvf logs.tar.gz -C /tmp/tidb_cdc_test --null -T -
-      # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
-      - name: Upload logs
-        uses: actions/upload-artifact@v4
-        if: ${{ always() }}
+      - name: Upload test logs
+        if: always()
+        uses: ./.github/actions/upload-test-logs
         with:
-          name: upstream-failover-logs1
-          path: |
-            ./logs.tar.gz
+          log-name: failover_group1
+
 
   failover_e2e_test2:
     runs-on: ubuntu-latest 
@@ -186,20 +163,12 @@ jobs:
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_G
 
-      - name: Copy logs to hack permission
-        if: ${{ always() }}
-        run: |
-          TEMP_DIR=$(mktemp -d)
-          mkdir -p "$TEMP_DIR"
-          sudo find /tmp/tidb_cdc_test -type d -name 'fail_over*' -exec sh -c 'find "{}" -type f -name "cdc*.log" -print0' \; | tar -czvf logs.tar.gz -C /tmp/tidb_cdc_test --null -T -
-      # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
-      - name: Upload logs
-        uses: actions/upload-artifact@v4
-        if: ${{ always() }}
+      - name: Upload test logs
+        if: always()
+        uses: ./.github/actions/upload-test-logs
         with:
-          name: upstream-failover-logs2
-          path: |
-            ./logs.tar.gz
+          log-name: failover_group_2
+
   
   failover_e2e_test3:
     runs-on: ubuntu-latest 
@@ -230,17 +199,8 @@ jobs:
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_K
 
-      - name: Copy logs to hack permission
-        if: ${{ always() }}
-        run: |
-          TEMP_DIR=$(mktemp -d)
-          mkdir -p "$TEMP_DIR"
-          sudo find /tmp/tidb_cdc_test -type d -name 'fail_over*' -exec sh -c 'find "{}" -type f -name "cdc*.log" -print0' \; | tar -czvf logs.tar.gz -C /tmp/tidb_cdc_test --null -T -
-      # Update logs as artifact seems not stable, so we set `continue-on-error: true` here.
-      - name: Upload logs
-        uses: actions/upload-artifact@v4
-        if: ${{ always() }}
+      - name: Upload test logs
+        if: always()
+        uses: ./.github/actions/upload-test-logs
         with:
-          name: upstream-failover-logs3
-          path: |
-            ./logs.tar.gz
+          log-name: failover-group3

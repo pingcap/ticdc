@@ -19,8 +19,6 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (encoder.EventEnco
 	// 	return avro.NewAvroEncoder(ctx, cfg)
 	case config.ProtocolCanalJSON:
 		return canal.NewJSONRowEventEncoder(ctx, cfg)
-	// case config.ProtocolCraft:
-	// 	return craft.NewBatchEncoder(cfg), nil
 	// case config.ProtocolDebezium:
 	// 	return debezium.NewBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID), nil
 	// case config.ProtocolSimple:

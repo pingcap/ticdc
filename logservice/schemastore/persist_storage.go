@@ -700,6 +700,13 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	handler.iterateEventTablesFunc(&ddlEvent, func(tableIDs ...int64) {
 		for _, tableID := range tableIDs {
 			if store, ok := p.tableInfoStoreMap[tableID]; ok {
+				// do some safety check
+				switch model.ActionType(job.Type) {
+				case model.ActionCreateTable, model.ActionCreateTables:
+					// newly created tables should not be registered before this ddl are handled
+					log.Panic("should not be registered", zap.Int64("tableID", tableID))
+				default:
+				}
 				store.applyDDL(&ddlEvent)
 			}
 		}
@@ -743,8 +750,14 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 			return true
 		}
 	// DDLs ignored
-	case model.ActionAlterTableAttributes,
-		model.ActionAlterTablePartitionAttributes:
+	case model.ActionCreateSequence,
+		model.ActionAlterSequence,
+		model.ActionDropSequence,
+		model.ActionAlterTableAttributes,
+		model.ActionAlterTablePartitionAttributes,
+		model.ActionCreateResourceGroup,
+		model.ActionAlterResourceGroup,
+		model.ActionDropResourceGroup:
 		return true
 	}
 	return false

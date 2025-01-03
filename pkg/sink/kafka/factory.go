@@ -23,21 +23,20 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
-	"github.com/pingcap/tiflow/pkg/util"
+	"github.com/pingcap/tiflow/pkg/sink/kafka"
 	"go.uber.org/zap"
 )
 
 // Factory is used to produce all kafka components.
 type Factory interface {
 	// AdminClient return a kafka cluster admin client
-	AdminClient(ctx context.Context) (tikafka.ClusterAdminClient, error)
+	AdminClient(ctx context.Context) (kafka.ClusterAdminClient, error)
 	// SyncProducer creates a sync producer to writer message to kafka
 	SyncProducer(ctx context.Context) (SyncProducer, error)
 	// AsyncProducer creates an async producer to writer message to kafka
-	AsyncProducer(ctx context.Context, failpointCh chan error) (tikafka.AsyncProducer, error)
+	AsyncProducer(ctx context.Context) (kafka.AsyncProducer, error)
 	// MetricsCollector returns the kafka metrics collector
-	MetricsCollector(role util.Role, adminClient tikafka.ClusterAdminClient) tikafka.MetricsCollector
+	MetricsCollector(adminClient kafka.ClusterAdminClient) kafka.MetricsCollector
 }
 
 // FactoryCreator defines the type of factory creator.

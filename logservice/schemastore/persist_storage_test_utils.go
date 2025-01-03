@@ -543,3 +543,23 @@ func buildDropColumnJobForTest(schemaID, tableID int64, finishedTs uint64) *mode
 		},
 	}
 }
+
+func buildCreateViewJobForTest(schemaID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionCreateView,
+		SchemaID: schemaID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildDropViewJobForTest(schemaID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionDropView,
+		SchemaID: schemaID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
