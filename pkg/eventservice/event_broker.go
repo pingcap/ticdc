@@ -2,10 +2,11 @@ package eventservice
 
 import (
 	"context"
-	"golang.org/x/sync/errgroup"
 	"strconv"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"

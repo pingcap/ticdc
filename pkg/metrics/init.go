@@ -15,6 +15,8 @@ package metrics
 
 import (
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec"
+	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -34,4 +36,6 @@ func InitMetrics(registry *prometheus.Registry) {
 	InitLogPullerMetrics(registry)
 	common.InitCommonMetrics(registry)
 	InitDynamicStreamMetrics(registry)
+	kafka.InitMetrics(registry)
+	codec.InitMetrics(registry)
 }

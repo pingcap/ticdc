@@ -1419,6 +1419,8 @@ func TestApplyDDLJobs(t *testing.T) {
 					buildMultiSchemaChangeJobForTest(100, 300, 1080),
 					buildAddColumnJobForTest(100, 300, 1090),
 					buildDropColumnJobForTest(100, 300, 1100),
+					buildCreateViewJobForTest(100, 1110),
+					buildDropViewJobForTest(100, 1120),
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -1436,8 +1438,10 @@ func TestApplyDDLJobs(t *testing.T) {
 					},
 				},
 			},
-			map[int64][]uint64{300: {1010, 1020, 1030, 1040, 1050, 1060, 1070, 1080, 1090, 1100}},
-			nil,
+			map[int64][]uint64{
+				300: {1010, 1020, 1030, 1040, 1050, 1060, 1070, 1080, 1090, 1100, 1110},
+			},
+			[]uint64{1110, 1120},
 			nil,
 			nil,
 			nil,

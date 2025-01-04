@@ -26,7 +26,6 @@ import (
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -57,18 +56,13 @@ func TestProducerAck(t *testing.T) {
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
 
-	adminClient, err := factory.AdminClient(ctx)
-	require.NoError(t, err)
-	metricsCollector := factory.MetricsCollector(util.RoleTester, adminClient)
-
-	failpointCh := make(chan error, 1)
-	asyncProducer, err := factory.AsyncProducer(ctx, failpointCh)
+	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
-	producer := NewKafkaDMLProducer(ctx, changefeed, asyncProducer, metricsCollector)
+	producer := NewKafkaDMLProducer(changefeed, asyncProducer)
 	require.NotNil(t, producer)
 
-	go producer.Run()
+	go producer.Run(ctx)
 
 	messageCount := 20
 	for i := 0; i < messageCount; i++ {
@@ -131,20 +125,14 @@ func TestProducerSendMsgFailed(t *testing.T) {
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
 
-	adminClient, err := factory.AdminClient(ctx)
-	require.NoError(t, err)
-	metricsCollector := factory.MetricsCollector(util.RoleTester, adminClient)
-
-	failpointCh := make(chan error, 1)
-	asyncProducer, err := factory.AsyncProducer(ctx, failpointCh)
+	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
-	producer := NewKafkaDMLProducer(ctx, changefeed,
-		asyncProducer, metricsCollector)
+	producer := NewKafkaDMLProducer(changefeed, asyncProducer)
 	require.NoError(t, err)
 	require.NotNil(t, producer)
 	go func() {
-		errCh <- producer.Run()
+		errCh <- producer.Run(ctx)
 	}()
 
 	defer func() {
@@ -198,17 +186,11 @@ func TestProducerDoubleClose(t *testing.T) {
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
 
-	adminClient, err := factory.AdminClient(ctx)
-	require.NoError(t, err)
-	metricsCollector := factory.MetricsCollector(util.RoleTester, adminClient)
-
-	failpointCh := make(chan error, 1)
-	asyncProducer, err := factory.AsyncProducer(ctx, failpointCh)
+	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
-	producer := NewKafkaDMLProducer(ctx, changefeed,
-		asyncProducer, metricsCollector)
-	go producer.Run()
+	producer := NewKafkaDMLProducer(changefeed, asyncProducer)
+	go producer.Run(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, producer)
 

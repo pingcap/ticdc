@@ -208,6 +208,7 @@ func (d *Dispatcher) InitalizeTableSchemaStore(schemaInfo []*heartbeatpb.SchemaI
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream.
 // 2. If the action is a pass, we just need to pass the event
 func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) {
+	log.Debug("dispatcher handle dispatcher status", zap.Any("dispatcherStatus", dispatcherStatus), zap.Stringer("dispatcher", d.id), zap.Any("action", dispatcherStatus.GetAction()), zap.Any("ack", dispatcherStatus.GetAck()))
 	// deal with the ack info
 	ack := dispatcherStatus.GetAck()
 	if ack != nil {
@@ -222,6 +223,10 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 	action := dispatcherStatus.GetAction()
 	if action != nil {
 		pendingEvent, blockStatus := d.blockEventStatus.getEventAndStage()
+		if pendingEvent == nil && action.CommitTs > d.GetResolvedTs() {
+			// we have not receive the block event, and the action is for the future event, so just ignore
+			return
+		}
 		if pendingEvent != nil && action.CommitTs == pendingEvent.GetCommitTs() && blockStatus == heartbeatpb.BlockStage_WAITING {
 			d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
 			if action.Action == heartbeatpb.Action_Write {
@@ -247,10 +252,13 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 					time.Sleep(30 * time.Second)
 				})
 			} else {
+				failpoint.Inject("WaitBeforePass", nil)
 				failpoint.Inject("BlockBeforePass", nil)
 				d.PassBlockEventToSink(pendingEvent)
 				failpoint.Inject("BlockAfterPass", nil)
 			}
+
+			d.blockEventStatus.clear()
 		}
 
 		// whether the outdate message or not, we need to return message show we have finished the event.
@@ -263,8 +271,6 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 				Stage:       heartbeatpb.BlockStage_DONE,
 			},
 		}
-
-		d.blockEventStatus.clear()
 	}
 }
 
@@ -279,6 +285,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	block = false
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
+		log.Debug("dispatcher receive all event", zap.Any("event", dispatcherEvent.Event), zap.Stringer("dispatcher", d.id))
 		failpoint.Inject("HandleEventsSlowly", func() {
 			lag := time.Duration(rand.Intn(5000)) * time.Millisecond
 			log.Warn("handle events slowly", zap.Duration("lag", lag))
@@ -295,6 +302,10 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				zap.Any("eventType", event.GetType()),
 				zap.Any("dispatcher", d.id))
 			continue
+		}
+
+		if event.GetType() != commonEvent.TypeResolvedEvent {
+			log.Debug("dispatcher receive event", zap.Any("event", event), zap.Stringer("dispatcher", d.id))
 		}
 
 		switch event.GetType() {

@@ -45,7 +45,7 @@ func (m *MockProducer) AsyncSendMessage(_ context.Context, topic string,
 	return nil
 }
 
-func (m *MockProducer) Run() error {
+func (m *MockProducer) Run(_ context.Context) error {
 	// do nothing
 	return nil
 }

@@ -147,13 +147,13 @@ func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {
 	for id := range c.nodes.m {
 		if _, ok := allNodes[id]; !ok {
 			delete(c.nodes.m, id)
-			log.Info("log coordinaotr detect node removed", zap.String("nodeId", id.String()))
+			log.Info("log coordinator detect node removed", zap.String("nodeId", id.String()))
 		}
 	}
 	for id, node := range allNodes {
 		if _, ok := c.nodes.m[id]; !ok {
 			c.nodes.m[id] = node
-			log.Info("log coordinaotr detect node added", zap.String("nodeId", id.String()))
+			log.Info("log coordinator detect node added", zap.String("nodeId", id.String()))
 		}
 	}
 }
