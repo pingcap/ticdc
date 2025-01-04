@@ -223,6 +223,10 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 	action := dispatcherStatus.GetAction()
 	if action != nil {
 		pendingEvent, blockStatus := d.blockEventStatus.getEventAndStage()
+		if pendingEvent == nil && action.CommitTs > d.GetResolvedTs() {
+			// we have not receive the block event, and the action is for the future event, so just ignore
+			return
+		}
 		if pendingEvent != nil && action.CommitTs == pendingEvent.GetCommitTs() && blockStatus == heartbeatpb.BlockStage_WAITING {
 			d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
 			if action.Action == heartbeatpb.Action_Write {
@@ -252,6 +256,8 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 				failpoint.Inject("BlockBeforePass", nil)
 				d.PassBlockEventToSink(pendingEvent)
 			}
+
+			d.blockEventStatus.clear()
 		}
 
 		// whether the outdate message or not, we need to return message show we have finished the event.
@@ -264,8 +270,6 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 				Stage:       heartbeatpb.BlockStage_DONE,
 			},
 		}
-
-		d.blockEventStatus.clear()
 	}
 }
 
