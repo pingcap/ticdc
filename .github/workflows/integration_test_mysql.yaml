@@ -210,7 +210,6 @@ jobs:
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
 
-
       - name: Copy logs to hack permission
         if: ${{ always() }}
         run: |
@@ -226,7 +225,6 @@ jobs:
           path: |
             ./logs.tar.gz
 
-  
   failover_e2e_test3:
     runs-on: ubuntu-latest 
     name: Failover E2E Test[H-K]
