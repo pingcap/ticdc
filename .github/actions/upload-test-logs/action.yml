@@ -4,6 +4,15 @@ description: 'Copy and upload test logs'
 runs:
   using: "composite"
   steps:
+    - name: Check test directory exists
+      if: always()
+      shell: bash
+      run: |
+        if [ ! -d "/tmp/tidb_cdc_test" ]; then
+          echo "Directory /tmp/tidb_cdc_test does not exist, skipping log collection"
+          exit 0
+        fi
+
     - name: Copy logs to hack permission
       if: always()
       shell: bash
