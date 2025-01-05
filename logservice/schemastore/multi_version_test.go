@@ -66,7 +66,7 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 				},
 			},
 		},
-		// test exchange partition
+		// test exchange partition for partition table
 		{
 			tableID: 101,
 			ddlEvents: func() []*PersistedDDLEvent {
@@ -83,6 +83,26 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 				{
 					snapTs: 1020,
 					name:   "normal_table",
+				},
+			},
+		},
+		// test exchange partition for normal table
+		{
+			tableID: 200,
+			ddlEvents: func() []*PersistedDDLEvent {
+				return []*PersistedDDLEvent{
+					buildCreateTableEventForTest(10, 200, "test", "normal_table", 1010),                                                                                                // create table 200
+					buildExchangePartitionTableEventForTest(10, 200, 10, 100, "test", "normal_table", "test", "partition_table", []int64{101, 102, 103}, []int64{200, 102, 103}, 1020), // rename table 101
+				}
+			}(),
+			queryCases: []QueryTableInfoTestCase{
+				{
+					snapTs: 1010,
+					name:   "normal_table",
+				},
+				{
+					snapTs: 1020,
+					name:   "partition_table",
 				},
 			},
 		},
