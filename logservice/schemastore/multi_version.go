@@ -217,7 +217,6 @@ func (v *versionedTableInfoStore) doApplyDDL(event *PersistedDDLEvent) {
 		return
 	}
 
-	// TODO: add func to check invariant for every ddl type
 	handler, ok := allDDLHandlers[model.ActionType(event.Type)]
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", event.Type), zap.String("query", event.Query))
