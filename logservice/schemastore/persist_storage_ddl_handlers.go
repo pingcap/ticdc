@@ -23,6 +23,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"go.uber.org/zap"
 )
 
@@ -340,7 +341,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateDDLHistoryFunc:       updateDDLHistoryForExchangeTablePartition,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForExchangeTablePartition,
 		iterateEventTablesFunc:     iterateEventTablesForExchangeTablePartition,
-		extractTableInfoFunc:       nil, // this func should not be called
+		extractTableInfoFunc:       extractTableInfoFuncForExchangeTablePartition,
 		buildDDLEventFunc:          buildDDLEventForExchangeTablePartition,
 	},
 
@@ -977,6 +978,34 @@ func extractTableInfoFuncForSingleTableDDL(event *PersistedDDLEvent, tableID int
 	}
 	log.Panic("should not reach here", zap.Any("event", event), zap.Int64("tableID", tableID))
 	return nil, false
+}
+
+func extractTableInfoFuncForExchangeTablePartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
+	if tableID == event.PrevTableID {
+		// old normal table id, return the table info of the partition table
+		return common.WrapTableInfo(event.CurrentSchemaID, event.CurrentSchemaName, event.TableInfo), false
+	} else {
+		physicalIDs := getAllPartitionIDs(event.TableInfo)
+		droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
+		if len(droppedIDs) != 1 {
+			log.Panic("exchange table partition should only drop one partition",
+				zap.Int64s("droppedIDs", droppedIDs))
+		}
+		if tableID != droppedIDs[0] {
+			log.Panic("should not reach here", zap.Int64("tableID", tableID), zap.Int64("expectedPartitionID", droppedIDs[0]))
+		}
+		// old partition id, return the table info of the normal table
+		columnSchema := event.PreTableInfo.ShadowCopyColumnSchema()
+		tableInfo := common.NewTableInfo(
+			event.PrevSchemaID,
+			event.PrevSchemaName,
+			pmodel.NewCIStr(event.PrevTableName).O,
+			tableID,
+			false,
+			event.PreTableInfo.Version,
+			columnSchema)
+		return tableInfo, false
+	}
 }
 
 func extractTableInfoFuncIgnore(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {

@@ -66,6 +66,26 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 				},
 			},
 		},
+		// test exchange partition
+		{
+			tableID: 101,
+			ddlEvents: func() []*PersistedDDLEvent {
+				return []*PersistedDDLEvent{
+					buildCreatePartitionTableEventForTest(10, 100, "test", "partition_table", []int64{101, 102, 103}, 1010),                                                            // create partition table 100 with partitions 101, 102, 103
+					buildExchangePartitionTableEventForTest(10, 200, 10, 100, "test", "normal_table", "test", "partition_table", []int64{101, 102, 103}, []int64{200, 102, 103}, 1020), // rename table 101
+				}
+			}(),
+			queryCases: []QueryTableInfoTestCase{
+				{
+					snapTs: 1010,
+					name:   "partition_table",
+				},
+				{
+					snapTs: 1020,
+					name:   "normal_table",
+				},
+			},
+		},
 	}
 	for _, tt := range testCases {
 		store := newEmptyVersionedTableInfoStore(tt.tableID)
@@ -77,6 +97,9 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 			tableInfo, err := store.getTableInfo(c.snapTs)
 			require.Nil(t, err)
 			require.Equal(t, c.name, tableInfo.TableName.Table)
+			if !tableInfo.TableName.IsPartition {
+				require.Equal(t, tt.tableID, tableInfo.TableName.TableID)
+			}
 		}
 		if tt.deleteVersion != 0 {
 			require.Equal(t, tt.deleteVersion, store.deleteVersion)
