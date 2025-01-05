@@ -4,7 +4,7 @@ description: 'Copy and upload test logs'
 runs:
   using: "composite"
   steps:
-    - name: Check test directory exists
+    - name: Copy logs to hack permission
       if: always()
       shell: bash
       run: |
@@ -12,11 +12,6 @@ runs:
           echo "Directory /tmp/tidb_cdc_test does not exist, skipping log collection"
           exit 0
         fi
-
-    - name: Copy logs to hack permission
-      if: always()
-      shell: bash
-      run: |
         DIR=$(sudo find /tmp/tidb_cdc_test/ -type d -name 'cdc_data*' -exec dirname {} \; | tail -n 1)
         echo "Found the last dir: $DIR"
         [ -z "$DIR" ] && exit 0
