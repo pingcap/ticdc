@@ -178,7 +178,7 @@ func assertNonEmpty(infos []*tableInfoItem, event *PersistedDDLEvent) {
 
 func assertNonDeleted(v *versionedTableInfoStore) {
 	if v.deleteVersion != uint64(math.MaxUint64) {
-		log.Panic("shouldn't happen")
+		log.Panic("shouldn't happen", zap.Uint64("deleteVersion", v.deleteVersion))
 	}
 }
 
@@ -224,10 +224,10 @@ func (v *versionedTableInfoStore) doApplyDDL(event *PersistedDDLEvent) {
 	tableInfo, deleted := handler.extractTableInfoFunc(event, v.tableID)
 	if tableInfo != nil {
 		v.infos = append(v.infos, &tableInfoItem{version: uint64(event.FinishedTs), info: tableInfo})
+		if ddlType == model.ActionRecoverTable {
+			v.deleteVersion = uint64(math.MaxUint64)
+		}
 	} else if deleted {
 		v.deleteVersion = uint64(event.FinishedTs)
-	}
-	if ddlType == model.ActionRecoverTable || ddlType == model.ActionRecoverSchema {
-		v.deleteVersion = uint64(math.MaxUint64)
 	}
 }
