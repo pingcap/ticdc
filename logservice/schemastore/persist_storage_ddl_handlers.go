@@ -1741,14 +1741,20 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		InfluenceType: commonEvent.InfluenceTypeNormal,
 		TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
 	}
+	querys, err := SplitQueries(rawEvent.Query)
+	if err != nil {
+		log.Panic("split queries failed", zap.Error(err))
+	}
 	var addNames, dropNames []commonEvent.SchemaTableName
 	allFiltered := true
+	resultQuerys := make([]string, 0)
 	for i, tableInfo := range rawEvent.MultipleTableInfos {
 		ignorePrevTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.PrevSchemaNames[i], rawEvent.PrevTableNames[i])
 		ignoreCurrentTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaNames[i], tableInfo.Name.O)
 		if ignorePrevTable && ignoreCurrentTable {
 			continue
 		}
+		resultQuerys = append(resultQuerys, querys[i])
 		allFiltered = false
 		if isPartitionTable(rawEvent.TableInfo) {
 			allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
@@ -1839,6 +1845,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			DropName: dropNames,
 		}
 	}
+	ddlEvent.Query = strings.Join(resultQuerys, "")
 	return ddlEvent, true
 }
 

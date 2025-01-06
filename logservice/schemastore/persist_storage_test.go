@@ -1112,91 +1112,121 @@ func TestApplyDDLJobs(t *testing.T) {
 			[]uint64{1010},
 			nil,
 			[]FetchTableDDLEventsTestCase{
-				// {
-				// 	tableID: 200,
-				// 	startTs: 1000,
-				// 	endTs:   1010,
-				// 	result: []commonEvent.DDLEvent{
-				// 		{
-				// 			Type: byte(model.ActionRenameTables),
-				// 			// Query:      "RENAME TABLE `test`.`t1` TO `test`.`t101`;RENAME TABLE `test`.`t2` TO `test2`.`t102`;",
-				// 			FinishedTs: 1010,
-				// 			BlockedTables: &commonEvent.InfluencedTables{
-				// 				InfluenceType: commonEvent.InfluenceTypeNormal,
-				// 				TableIDs:      []int64{0, 200, 201},
-				// 			},
-				// 			UpdatedSchemas: []commonEvent.SchemaIDChange{
-				// 				{
-				// 					TableID:     201,
-				// 					OldSchemaID: 100,
-				// 					NewSchemaID: 105,
-				// 				},
-				// 			},
-				// 			TableNameChange: &commonEvent.TableNameChange{
-				// 				AddName: []commonEvent.SchemaTableName{
-				// 					{
-				// 						SchemaName: "test",
-				// 						TableName:  "t101",
-				// 					},
-				// 					{
-				// 						SchemaName: "test2",
-				// 						TableName:  "t102",
-				// 					},
-				// 				},
-				// 				DropName: []commonEvent.SchemaTableName{
-				// 					{
-				// 						SchemaName: "test",
-				// 						TableName:  "t1",
-				// 					},
-				// 					{
-				// 						SchemaName: "test",
-				// 						TableName:  "t2",
-				// 					},
-				// 				},
-				// 			},
-				// 		},
-				// 	},
-				// },
+				{
+					tableID: 200,
+					startTs: 1000,
+					endTs:   1010,
+					result: []commonEvent.DDLEvent{
+						{
+							Type: byte(model.ActionRenameTables),
+							// Query:      "RENAME TABLE `test`.`t1` TO `test`.`t101`;RENAME TABLE `test`.`t2` TO `test2`.`t102`;",
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 200, 201},
+							},
+							UpdatedSchemas: []commonEvent.SchemaIDChange{
+								{
+									TableID:     201,
+									OldSchemaID: 100,
+									NewSchemaID: 105,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t101",
+									},
+									{
+										SchemaName: "test2",
+										TableName:  "t102",
+									},
+								},
+								DropName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+									{
+										SchemaName: "test",
+										TableName:  "t2",
+									},
+								},
+							},
+						},
+					},
+				},
 				// test filter: after rename, t102 is filtered out
-				// {
-				// 	tableID:     200,
-				// 	tableFilter: buildTableFilterByNameForTest("test", "*"),
-				// 	startTs:     1000,
-				// 	endTs:       1010,
-				// 	result: []commonEvent.DDLEvent{
-				// 		{
-				// 			Type:       byte(model.ActionRenameTables),
-				// 			Query:      "RENAME TABLE `test`.`t1` TO `test`.`t101`;",
-				// 			FinishedTs: 1010,
-				// 			BlockedTables: &commonEvent.InfluencedTables{
-				// 				InfluenceType: commonEvent.InfluenceTypeNormal,
-				// 				TableIDs:      []int64{0, 200, 201},
-				// 			},
-				// 			NeedDroppedTables: &commonEvent.InfluencedTables{
-				// 				InfluenceType: commonEvent.InfluenceTypeNormal,
-				// 				TableIDs:      []int64{201},
-				// 			},
-				// 			TableNameChange: &commonEvent.TableNameChange{
-				// 				AddName: []commonEvent.SchemaTableName{
-				// 					{
-				// 						SchemaName: "test",
-				// 						TableName:  "t101",
-				// 					},
-				// 				},
-				// 				DropName: []commonEvent.SchemaTableName{
-				// 					{
-				// 						SchemaName: "test",
-				// 						TableName:  "t1",
-				// 					},
-				// 					{
-				// 						SchemaName: "test",
-				// 						TableName:  "t2",
-				// 					},
-				// 				},
-				// 			},
-				// 		},
-				// 	},
-				// },
+				{
+					tableID:     200,
+					tableFilter: buildTableFilterByNameForTest("test", "*"),
+					startTs:     1000,
+					endTs:       1010,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionRenameTables),
+							Query:      "RENAME TABLE `test`.`t1` TO `test`.`t101`;RENAME TABLE `test`.`t2` TO `test2`.`t102`;",
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 200, 201},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{201},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t101",
+									},
+								},
+								DropName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+									{
+										SchemaName: "test",
+										TableName:  "t2",
+									},
+								},
+							},
+						},
+					},
+				},
+				// test filter: only test.t1 is qualified and is filtered out after rename
+				{
+					tableID:     200,
+					tableFilter: buildTableFilterByNameForTest("test", "t1"),
+					startTs:     1000,
+					endTs:       1010,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionRenameTables),
+							Query:      "RENAME TABLE `test`.`t1` TO `test`.`t101`;",
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 200},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{200},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								DropName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+								},
+							},
+						},
+					},
+				},
 			},
 			nil,
 		},
