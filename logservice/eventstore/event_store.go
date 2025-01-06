@@ -325,6 +325,18 @@ func (p *writeTaskPool) run(_ context.Context) {
 	}
 }
 
+func (e *eventStore) setCoordinatorInfo(id node.ID) {
+	e.coordinatorInfo.Lock()
+	defer e.coordinatorInfo.Unlock()
+	e.coordinatorInfo.id = id
+}
+
+func (e *eventStore) getCoordinatorInfo() node.ID {
+	e.coordinatorInfo.RLock()
+	defer e.coordinatorInfo.RUnlock()
+	return e.coordinatorInfo.id
+}
+
 func (e *eventStore) Name() string {
 	return appcontext.EventStore
 }
@@ -797,9 +809,7 @@ func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.T
 	for _, msg := range targetMessage.Message {
 		switch msg.(type) {
 		case *common.LogCoordinatorBroadcastRequest:
-			e.coordinatorInfo.Lock()
-			e.coordinatorInfo.id = targetMessage.From
-			e.coordinatorInfo.Unlock()
+			e.setCoordinatorInfo(targetMessage.From)
 		default:
 			log.Panic("invalid message type", zap.Any("msg", msg))
 		}
@@ -844,7 +854,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 				}
 			}
 
-			message := messaging.NewSingleTargetMessage(e.coordinatorInfo.id, messaging.LogCoordinatorTopic, state)
+			message := messaging.NewSingleTargetMessage(e.getCoordinatorInfo(), messaging.LogCoordinatorTopic, state)
 			e.dispatcherMeta.RUnlock()
 			// just ignore messagees fail to send
 			if err := e.messageCenter.SendEvent(message); err != nil {
