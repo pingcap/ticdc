@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"go.uber.org/zap"
 )
 
@@ -179,7 +178,7 @@ func assertNonEmpty(infos []*tableInfoItem, event *PersistedDDLEvent) {
 
 func assertNonDeleted(v *versionedTableInfoStore) {
 	if v.deleteVersion != uint64(math.MaxUint64) {
-		log.Panic("shouldn't happen")
+		log.Panic("shouldn't happen", zap.Uint64("deleteVersion", v.deleteVersion))
 	}
 }
 
@@ -196,8 +195,10 @@ func (v *versionedTableInfoStore) applyDDLFromPersistStorage(event *PersistedDDL
 func (v *versionedTableInfoStore) applyDDL(event *PersistedDDLEvent) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	// delete table should not receive more ddl
-	assertNonDeleted(v)
+	// delete table should not receive more ddl except recover table
+	if model.ActionType(event.Type) != model.ActionRecoverTable {
+		assertNonDeleted(v)
+	}
 
 	if !v.initialized {
 		// The usage of the parameter `event` may outlive the function call, so we copy it.
@@ -217,44 +218,18 @@ func (v *versionedTableInfoStore) doApplyDDL(event *PersistedDDLEvent) {
 			zap.Int("infosLen", len(v.infos)))
 		return
 	}
-	if model.ActionType(event.Type) == model.ActionExchangeTablePartition {
-		assertNonEmpty(v.infos, event)
-		columnSchema := v.infos[len(v.infos)-1].info.ShadowCopyColumnSchema()
-		// the previous normal table
-		if v.tableID == event.PrevTableID {
-			tableInfo := common.NewTableInfo(
-				event.CurrentSchemaID,
-				event.CurrentSchemaName,
-				pmodel.NewCIStr(event.CurrentTableName).O,
-				v.infos[len(v.infos)-1].info.TableName.TableID,
-				v.infos[len(v.infos)-1].info.TableName.IsPartition,
-				v.infos[len(v.infos)-1].info.Version,
-				columnSchema,
-			)
-			v.infos = append(v.infos, &tableInfoItem{version: uint64(event.FinishedTs), info: tableInfo})
-		} else {
-			tableInfo := common.NewTableInfo(
-				event.CurrentSchemaID,
-				event.CurrentSchemaName,
-				pmodel.NewCIStr(event.PrevTableName).O,
-				v.infos[len(v.infos)-1].info.TableName.TableID,
-				v.infos[len(v.infos)-1].info.TableName.IsPartition,
-				v.infos[len(v.infos)-1].info.Version,
-				columnSchema,
-			)
-			v.infos = append(v.infos, &tableInfoItem{version: uint64(event.FinishedTs), info: tableInfo})
+	ddlType := model.ActionType(event.Type)
+	handler, ok := allDDLHandlers[ddlType]
+	if !ok {
+		log.Panic("unknown ddl type", zap.Any("ddlType", ddlType), zap.String("query", event.Query))
+	}
+	tableInfo, deleted := handler.extractTableInfoFunc(event, v.tableID)
+	if tableInfo != nil {
+		v.infos = append(v.infos, &tableInfoItem{version: uint64(event.FinishedTs), info: tableInfo})
+		if ddlType == model.ActionRecoverTable {
+			v.deleteVersion = uint64(math.MaxUint64)
 		}
-	} else {
-		// TODO: add func to check invariant for every ddl type
-		handler, ok := allDDLHandlers[model.ActionType(event.Type)]
-		if !ok {
-			log.Panic("unknown ddl type", zap.Any("ddlType", event.Type), zap.String("query", event.Query))
-		}
-		tableInfo, deleted := handler.extractTableInfoFunc(event, v.tableID)
-		if tableInfo != nil {
-			v.infos = append(v.infos, &tableInfoItem{version: uint64(event.FinishedTs), info: tableInfo})
-		} else if deleted {
-			v.deleteVersion = uint64(event.FinishedTs)
-		}
+	} else if deleted {
+		v.deleteVersion = uint64(event.FinishedTs)
 	}
 }

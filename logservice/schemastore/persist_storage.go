@@ -323,6 +323,20 @@ func (p *persistentStorage) getTableInfo(tableID int64, ts uint64) (*common.Tabl
 	return store.getTableInfo(ts)
 }
 
+func (p *persistentStorage) forceGetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error) {
+	p.mu.RLock()
+	// if there is already a store, it must contain all table info on disk, so we can use it directly
+	if store, ok := p.tableInfoStoreMap[tableID]; ok {
+		p.mu.RUnlock()
+		return store.getTableInfo(ts)
+	}
+	p.mu.RUnlock()
+	// build a temp store to get table info
+	store := newEmptyVersionedTableInfoStore(tableID)
+	p.buildVersionedTableInfoStore(store)
+	return store.getTableInfo(ts)
+}
+
 // TODO: this may consider some shouldn't be send ddl, like create table, does it matter?
 func (p *persistentStorage) getMaxEventCommitTs(tableID int64, ts uint64) uint64 {
 	p.mu.RLock()
@@ -473,9 +487,7 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 	}
 }
 
-func (p *persistentStorage) buildVersionedTableInfoStore(
-	store *versionedTableInfoStore,
-) error {
+func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableInfoStore) error {
 	tableID := store.getTableID()
 	// get snapshot from disk before get current gc ts to make sure data is not deleted by gc process
 	storageSnap := p.db.NewSnapshot()
@@ -672,6 +684,10 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	p.mu.Unlock()
 
+	if ddlEvent.Type == byte(model.ActionExchangeTablePartition) {
+		ddlEvent.PreTableInfo, _ = p.forceGetTableInfo(ddlEvent.PrevTableID, ddlEvent.FinishedTs)
+	}
+
 	// Note: need write ddl event to disk before update ddl history,
 	// becuase other goroutines may read ddl events from disk according to ddl history
 	writePersistedDDLEvent(p.db, &ddlEvent)
@@ -733,7 +749,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 				zap.Int64("jobID", job.ID),
 				zap.Int64("schemaID", job.SchemaID),
 				zap.Int64("tableID", job.BinlogInfo.TableInfo.ID),
-				zap.Uint64("finishTs", job.BinlogInfo.FinishedTS),
+				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
 				zap.Int64("jobSchemaVersion", job.BinlogInfo.SchemaVersion))
 			return true
 		}
@@ -745,7 +761,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 				zap.Int64("jobID", job.ID),
 				zap.Int64("schemaID", job.SchemaID),
 				zap.Int64("tableID", job.BinlogInfo.MultipleTableInfos[0].ID),
-				zap.Uint64("finishTs", job.BinlogInfo.FinishedTS),
+				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
 				zap.Int64("jobSchemaVersion", job.BinlogInfo.SchemaVersion))
 			return true
 		}
@@ -758,6 +774,11 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 		model.ActionCreateResourceGroup,
 		model.ActionAlterResourceGroup,
 		model.ActionDropResourceGroup:
+		log.Info("ignore ddl",
+			zap.String("DDL", job.Query),
+			zap.Int64("jobID", job.ID),
+			zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
+			zap.Any("type", job.Type))
 		return true
 	}
 	return false

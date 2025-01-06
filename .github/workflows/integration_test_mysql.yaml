@@ -121,7 +121,7 @@ jobs:
         if: always()
         uses: ./.github/actions/upload-test-logs
         with:
-          log-name: failover_group1
+          log-name: failover_e2e_test1
 
 
   failover_e2e_test2:
@@ -167,9 +167,9 @@ jobs:
         if: always()
         uses: ./.github/actions/upload-test-logs
         with:
-          log-name: failover_group_2
+          log-name: failover_e2e_test2
 
-  
+
   failover_e2e_test3:
     runs-on: ubuntu-latest 
     name: Failover E2E Test[H-K]
@@ -188,14 +188,29 @@ jobs:
           go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
+
+      - name: Test fail_over_ddl_H
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_H
+
+      - name: Test fail_over_ddl_I
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_I
       
       - name: Test fail_over_ddl_J
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_J
 
+      - name: Test fail_over_ddl_K
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_K
+
       - name: Upload test logs
         if: always()
         uses: ./.github/actions/upload-test-logs
         with:
-          log-name: failover-group3
+          log-name: failover_e2e_test3

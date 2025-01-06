@@ -1,6 +1,7 @@
 package schemastore
 
 import (
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 )
 
@@ -27,10 +28,13 @@ type PersistedDDLEvent struct {
 	// The following fields are only set when the ddl job involves a partition table
 	PrevPartitions []int64 `msg:"prev_partitions"`
 
-	Query         string           `msg:"query"`
-	SchemaVersion int64            `msg:"schema_version"`
-	DBInfo        *model.DBInfo    `msg:"-"`
-	TableInfo     *model.TableInfo `msg:"-"`
+	Query         string        `msg:"query"`
+	SchemaVersion int64         `msg:"schema_version"`
+	DBInfo        *model.DBInfo `msg:"-"`
+	// for exchange partition, it is the info of the partition table
+	TableInfo *model.TableInfo `msg:"-"`
+	// for exchange partition, it is the info of the normal table
+	PreTableInfo *common.TableInfo `msg:"-"`
 	// TODO: use a custom struct to store the table info?
 	TableInfoValue []byte `msg:"table_info_value"`
 	FinishedTs     uint64 `msg:"finished_ts"`

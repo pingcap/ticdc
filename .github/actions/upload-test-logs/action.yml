@@ -8,6 +8,10 @@ runs:
       if: always()
       shell: bash
       run: |
+        if [ ! -d "/tmp/tidb_cdc_test" ]; then
+          echo "Directory /tmp/tidb_cdc_test does not exist, skipping log collection"
+          exit 0
+        fi
         DIR=$(sudo find /tmp/tidb_cdc_test/ -type d -name 'cdc_data*' -exec dirname {} \; | tail -n 1)
         echo "Found the last dir: $DIR"
         [ -z "$DIR" ] && exit 0
@@ -24,11 +28,11 @@ runs:
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: ${{ inputs.log-name }}
+        name: ${{ inputs.log-name || 'test-logs' }}
         path: |
           ./logs.tar.gz
 
 inputs:
   log-name:
     description: 'Name of the log artifact'
-    required: true 
+    required: false

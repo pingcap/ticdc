@@ -37,10 +37,6 @@ func newEventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](optio
 
 func (q *eventQueue[A, P, T, D, H]) initPath(path *pathInfo[A, P, T, D, H]) {
 	path.pendingQueue.SetBlockAllocator(q.eventBlockAlloc)
-	if len := path.pendingQueue.Length(); len > 0 {
-		q.signalQueue.PushBack(eventSignal[A, P, T, D, H]{pathInfo: path, eventCount: len})
-		q.totalPendingLength.Add(int64(len))
-	}
 }
 
 func (q *eventQueue[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) {

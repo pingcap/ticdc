@@ -249,6 +249,7 @@ func buildCreatePartitionTablesJobForTest(schemaID int64, tableIDs []int64, tabl
 			Name: pmodel.NewCIStr(tableNames[i]),
 			Partition: &model.PartitionInfo{
 				Definitions: partitionDefinitions,
+				Enable:      true,
 			},
 		})
 		querys = append(querys, fmt.Sprintf("create table %s(a int primary key)", tableNames[i]))
@@ -310,6 +311,7 @@ func buildPartitionTableRelatedJobForTest(jobType model.ActionType, schemaID, ta
 				Name: pmodel.NewCIStr(tableName),
 				Partition: &model.PartitionInfo{
 					Definitions: partitionDefinitions,
+					Enable:      true,
 				},
 			},
 			FinishedTS: finishedTs,
@@ -369,6 +371,7 @@ func buildTruncatePartitionTableJobForTest(schemaID, oldTableID, newTableID int6
 				Name: pmodel.NewCIStr(tableName),
 				Partition: &model.PartitionInfo{
 					Definitions: partitionDefinitions,
+					Enable:      true,
 				},
 			},
 			FinishedTS: finishedTs,
@@ -416,6 +419,7 @@ func buildExchangePartitionJobForTest(
 				Name: pmodel.NewCIStr(partitionTableName),
 				Partition: &model.PartitionInfo{
 					Definitions: partitionDefinitions,
+					Enable:      true,
 				},
 			},
 			FinishedTS: finishedTs,

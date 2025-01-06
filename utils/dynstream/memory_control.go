@@ -4,6 +4,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // areaMemStat is used to store the memory statistics of an area.
@@ -40,15 +43,16 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	return res
 }
 
-// This method is called by streams' handleLoop concurrently.
-// Although the method is called concurrently, we don't need a mutex here. Because we only change totalPendingSize,
-// which is an atomic variable. Although the settings could be updated concurrently, we don't really care about the accuracy.
+// appendEvent try to append an event to the path's pending queue.
+// It returns true if the event is appended successfully.
+// This method is called by streams' handleLoop concurrently, but it is thread safe.
+// We use atomic operations to update the totalPendingSize and the path's pendingSize.
 func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	path *pathInfo[A, P, T, D, H],
 	event eventWrap[A, P, T, D, H],
 	handler H,
 ) bool {
-	defer as.updatePathPauseState(path, event)
+	defer as.updatePathPauseState(path)
 	defer as.updateAreaPauseState(path)
 
 	// Check if we should merge periodic signals.
@@ -73,7 +77,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 // updatePathPauseState determines the pause state of a path and sends feedback to handler if the state is changed.
 // It needs to be called after a event is appended.
 // Note: Our gaol is to fast pause, and lazy resume.
-func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, T, D, H], event eventWrap[A, P, T, D, H]) {
+func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, T, D, H]) {
 	shouldPause := as.shouldPausePath(path)
 
 	sendFeedback := func(pause bool) {
@@ -107,6 +111,14 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 			PauseArea:    pause,
 			FeedbackType: 1,
 		}
+		log.Debug("fizz: send area feedback",
+			zap.Any("area", as.area),
+			zap.Any("path", path.path),
+			zap.Bool("pause", pause),
+			zap.Int64("totalPendingSize", as.totalPendingSize.Load()),
+			zap.Int64("maxPendingSize", int64(as.settings.Load().MaxPendingSize)),
+		)
+		as.lastSendFeedbackTime.Store(time.Now())
 	}
 
 	prevPaused := as.paused.Load()
@@ -138,6 +150,13 @@ func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D,
 func (as *areaMemStat[A, P, T, D, H]) shouldPauseArea() bool {
 	memoryUsageRatio := float64(as.totalPendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
 
+	log.Debug("fizz: should pause area",
+		zap.Any("area", as.area),
+		zap.Float64("memoryUsageRatio", memoryUsageRatio),
+		zap.Int("maxPendingSize", as.settings.Load().MaxPendingSize),
+		zap.Int64("totalPendingSize", as.totalPendingSize.Load()),
+		zap.Bool("paused", as.paused.Load()))
+
 	// If the area is paused, we only need to resume it when the memory usage is less than 50%.
 	if as.paused.Load() {
 		return memoryUsageRatio >= 0.5
@@ -145,6 +164,14 @@ func (as *areaMemStat[A, P, T, D, H]) shouldPauseArea() bool {
 
 	// If the area is not paused, we need to pause it when the memory usage is greater than 80% of max pending size.
 	return memoryUsageRatio >= 0.8
+}
+
+func (as *areaMemStat[A, P, T, D, H]) decPendingSize(size int64) {
+	as.totalPendingSize.Add(int64(-size))
+	if as.totalPendingSize.Load() < 0 {
+		log.Debug("fizz: total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()))
+		as.totalPendingSize.Store(0)
+	}
 }
 
 // A memControl is used to control the memory usage of the dynamic stream.
@@ -191,7 +218,7 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 // This method is called after the path is removed.
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
-	area.totalPendingSize.Add(int64(-path.pendingSize.Load()))
+	area.decPendingSize(int64(path.pendingSize.Load()))
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()

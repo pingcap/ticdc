@@ -316,7 +316,7 @@ func (b *Barrier) checkEvent(be *BarrierEvent,
 	if !be.allDispatcherReported() {
 		return nil
 	}
-	if be.selected {
+	if be.selected && be.allDispatcherReported() {
 		log.Info("the all dispatchers reported event done, remove event and schedule it",
 			zap.String("changefeed", be.cfID.Name()),
 			zap.Uint64("committs", be.commitTs))
