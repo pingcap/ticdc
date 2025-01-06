@@ -80,8 +80,8 @@ func main() {
 		}
 	}()
 
-	util.MustExec(sourceDB0, "drop database mark;")
-	util.MustExec(sourceDB0, "create database mark;")
+	util.MustExec(sourceDB0, "DROP DATABASE IF EXISTS mark;")
+	util.MustExec(sourceDB0, "CREATE DATABASE IF NOT EXISTS mark;")
 
 	var wg sync.WaitGroup
 	start := time.Now()
