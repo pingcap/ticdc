@@ -3,7 +3,7 @@
 # we start two TiCDC servers, and use failpoint to block the block event ddl execution of different situations
 # and do restart to test the fail-over.
 
-# This is the case-G of fail-over with ddl events.
+# This is the case-K of fail-over with ddl events.
 # when dispatchers are all meet the block event ddl, and report the status to maintainer, 
 # and maintainer ask table trigger to write ddl,  and table trigger is finished the ddl event.
 # Then maintainer ask the other dispatcher to pass the ddl event, 

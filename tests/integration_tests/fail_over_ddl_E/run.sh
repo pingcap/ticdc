@@ -77,7 +77,7 @@ function failOverCaseE-1() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeWrite=pause'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockorWaitBeforeWrite=pause'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
@@ -90,14 +90,8 @@ function failOverCaseE-1() {
 	ans=$(run_cdc_cli capture list)
 	node2ID=`echo $ans | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.[] | select(.address == "127.0.0.1:8301") | .id'`
 
-	# move table 1 to node2
-	result=$(run_cdc_cli changefeed move-table -c "test" -t 106 -d "$node2ID")
-	echo $result
-	success=$(echo $result | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
-	if [ "$success" != "true" ]; then
-		echo "move table 1 to node2 failed"
-		exit 1
-	fi
+	# move table 1 to node 2
+    move_table_with_retry "127.0.0.1:8301" 106 "test" 10
 
     run_sql "drop database fail_over_ddl_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -139,7 +133,7 @@ function failOverCaseE-2() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeWrite=pause'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockorWaitBeforeWrite=pause'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
@@ -149,17 +143,8 @@ function failOverCaseE-2() {
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
-	ans=$(run_cdc_cli capture list)
-	node2ID=`echo $ans | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.[] | select(.address == "127.0.0.1:8301") | .id'`
-
-	# move table 1 to node2
-	result=$(run_cdc_cli changefeed move-table -c "test" -t 106 -d "$node2ID")
-	echo $result
-	success=$(echo $result | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
-	if [ "$success" != "true" ]; then
-		echo "move table 1 to node2 failed"
-		exit 1
-	fi
+	# move table 1 to node 2
+    move_table_with_retry "127.0.0.1:8301" 106 "test" 10
 
     run_sql "drop table fail_over_ddl_test.test1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -211,7 +196,7 @@ function failOverCaseE-3() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeWrite=pause'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockorWaitBeforeWrite=pause'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
@@ -221,17 +206,8 @@ function failOverCaseE-3() {
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
-	ans=$(run_cdc_cli capture list)
-	node2ID=`echo $ans | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.[] | select(.address == "127.0.0.1:8301") | .id'`
-
-	# move table 1 to node2
-	result=$(run_cdc_cli changefeed move-table -c "test" -t 106 -d "$node2ID")
-	echo $result
-	success=$(echo $result | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
-	if [ "$success" != "true" ]; then
-		echo "move table 1 to node2 failed"
-		exit 1
-	fi
+	# move table 1 to node 2
+    move_table_with_retry "127.0.0.1:8301" 106 "test" 10
 
     run_sql "rename table fail_over_ddl_test.test1 to fail_over_ddl_test.test4;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -284,7 +260,7 @@ function failOverCaseE-5() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeWrite=pause'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockorWaitBeforeWrite=pause'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
@@ -294,17 +270,8 @@ function failOverCaseE-5() {
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
-	ans=$(run_cdc_cli capture list)
-	node2ID=`echo $ans | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.[] | select(.address == "127.0.0.1:8301") | .id'`
-
-	# move table 1 to node2
-	result=$(run_cdc_cli changefeed move-table -c "test" -t 106 -d "$node2ID")
-	echo $result
-	success=$(echo $result | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
-	if [ "$success" != "true" ]; then
-		echo "move table 1 to node2 failed"
-		exit 1
-	fi
+	# move table 1 to node 2
+    move_table_with_retry "127.0.0.1:8301" 106 "test" 10
 
 	run_sql "insert into fail_over_ddl_test.test1 values (2, 2);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	ensure 10 "run_sql 'select id from fail_over_ddl_test.test1;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_contains '2'" 
