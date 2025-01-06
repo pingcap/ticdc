@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils/conn"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -17,7 +18,6 @@ import (
 	. "github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
-	"github.com/pingcap/ticdc/utils/conn"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
 	"go.uber.org/zap"
@@ -51,7 +51,10 @@ type remoteMessageTarget struct {
 	commandSender *sendStreamWrapper
 
 	// For receiving events and commands
-	conn              *grpc.ClientConn
+	conn struct {
+		sync.RWMutex
+		c *grpc.ClientConn
+	}
 	eventRecvStream   grpcReceiver
 	commandRecvStream grpcReceiver
 
@@ -180,10 +183,7 @@ func newRemoteMessageTarget(
 // close stops the grpc stream and the goroutine spawned by remoteMessageTarget.
 func (s *remoteMessageTarget) close() {
 	log.Info("Closing remote target", zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Any("addr", s.targetAddr))
-	if s.conn != nil {
-		s.conn.Close()
-		s.conn = nil
-	}
+	s.closeConn()
 	s.cancel()
 	s.wg.Wait()
 	log.Info("Close remote target done", zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId))
@@ -227,9 +227,10 @@ func (s *remoteMessageTarget) collectErr(err AppError) {
 }
 
 func (s *remoteMessageTarget) connect() {
-	if s.conn != nil {
+	if _, ok := s.getConn(); ok {
 		return
 	}
+
 	conn, err := conn.Connect(string(s.targetAddr), &security.Credential{})
 	if err != nil {
 		log.Info("Cannot create grpc client",
@@ -268,7 +269,7 @@ func (s *remoteMessageTarget) connect() {
 		return
 	}
 
-	s.conn = conn
+	s.setConn(conn)
 	s.eventRecvStream = eventStream
 	s.commandRecvStream = commandStream
 	s.runReceiveMessages(eventStream, s.recvEventCh)
@@ -284,11 +285,7 @@ func (s *remoteMessageTarget) resetConnect() {
 		zap.Any("messageCenterID", s.messageCenterID),
 		zap.Any("remote", s.targetId))
 	// Close the old streams
-	if s.conn != nil {
-		s.conn.Close()
-		s.conn = nil
-	}
-
+	s.closeConn()
 	s.eventRecvStream = nil
 	s.commandRecvStream = nil
 	// Clear the error channel
@@ -409,6 +406,25 @@ func (s *remoteMessageTarget) newMessage(msg ...*TargetMessage) *proto.Message {
 		Payload: msgBytes,
 	}
 	return protoMsg
+}
+
+func (s *remoteMessageTarget) getConn() (*grpc.ClientConn, bool) {
+	s.conn.RLock()
+	defer s.conn.RUnlock()
+	return s.conn.c, s.conn.c != nil
+}
+
+func (s *remoteMessageTarget) setConn(conn *grpc.ClientConn) {
+	s.conn.Lock()
+	defer s.conn.Unlock()
+	s.conn.c = conn
+}
+
+func (s *remoteMessageTarget) closeConn() {
+	if conn, ok := s.getConn(); ok {
+		conn.Close()
+		s.setConn(nil)
+	}
 }
 
 // localMessageTarget implements the SendMessageChannel interface.
