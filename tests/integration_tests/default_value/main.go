@@ -67,7 +67,9 @@ func main() {
 		}
 	}()
 
+	util.MustExec(sourceDB0, "drop database mark;")
 	util.MustExec(sourceDB0, "create database mark;")
+
 	var wg sync.WaitGroup
 	start := time.Now()
 	defer func() {
@@ -104,7 +106,7 @@ func testGetDefaultValue(srcs []*sql.DB, wg *sync.WaitGroup) {
 			for idx, src := range srcs {
 				wg1.Add(1)
 				go func(i int, s *sql.DB) {
-					dml(ctx, s, testName, i, nil)
+					runDMLWorker(ctx, s, testName, i, nil)
 					defer wg1.Done()
 				}(idx, src)
 			}
@@ -131,11 +133,16 @@ func getFunctionName(i interface{}) string {
 	return strs[len(strs)-1]
 }
 
-func ignoreableError(err error) bool {
+func shouldIgnoreError(err error) bool {
+	if err == nil {
+		return true
+	}
 	knownErrorList := []string{
 		"Error 1146", // table doesn't exist
 		"Error 1049", // database doesn't exist
 		"Error 1054", // unknown column
+		"Error 1062", // duplicate entry
+		"Error 1366", // Incorrect int value
 	}
 	for _, e := range knownErrorList {
 		if strings.HasPrefix(err.Error(), e) {
@@ -146,7 +153,7 @@ func ignoreableError(err error) bool {
 }
 
 // TODO: need cover the scenarios: update existing old value
-func dml(ctx context.Context, db *sql.DB, table string, id int, defaultValue interface{}) {
+func runDMLWorker(ctx context.Context, db *sql.DB, table string, id int, defaultValue interface{}) {
 	var err error
 	var i int
 	var insertSuccess int
@@ -167,25 +174,31 @@ func dml(ctx context.Context, db *sql.DB, table string, id int, defaultValue int
 	}
 
 	for i = 0; ; i++ {
+		args := []any{i + id*10000000, i + id*10000000 + 1}
 		if defaultValue != nil {
-			_, err = db.Exec(insertSQL, i+id*10000000, i+id*10000000+1, defaultValue)
-		} else {
-			_, err = db.Exec(insertSQL, i+id*10000000, i+id*10000000+1)
+			args = append(args, defaultValue)
 		}
+		_, err = db.Exec(insertSQL, args...)
 		if err == nil {
 			insertSuccess++
 			if insertSuccess%100 == 0 {
 				log.S().Info(id, " insert success: ", insertSuccess)
 			}
 		}
-		if err != nil && !ignoreableError(err) {
-			log.Fatal("unexpected error when executing sql", zap.Error(err))
+
+		if !shouldIgnoreError(err) {
+			// get table struct
+			tableStruct := getTableStruct(db, table)
+			log.Fatal("unexpected error when executing sql", zap.Error(err),
+				zap.String("sql", insertSQL),
+				zap.Any("args", args),
+				zap.String("tableStruct", tableStruct))
 		}
 
 		if i%2 == 0 {
 			if defaultValue == nil {
 				_, err := db.Exec(updateSQL, i+id*100000000, i+id*100000000+1)
-				if err != nil && !ignoreableError(err) {
+				if !shouldIgnoreError(err) {
 					log.Fatal("unexpected error when executing sql", zap.Error(err))
 				}
 			}
@@ -200,7 +213,7 @@ func dml(ctx context.Context, db *sql.DB, table string, id int, defaultValue int
 					}
 				}
 			}
-			if err != nil && !ignoreableError(err) {
+			if !shouldIgnoreError(err) {
 				log.Fatal("unexpected error when executing sql", zap.Error(err))
 			}
 		}
@@ -340,6 +353,35 @@ func ddlDefaultValueFunc(ctx context.Context, db *sql.DB, format string, table s
 		util.MustExec(db, sql, defaultValue)
 		time.Sleep(3 * time.Millisecond)
 	}
+}
+
+func getTableStruct(db *sql.DB, table string) string {
+	sql := fmt.Sprintf("show create table test.`%s`", table)
+	rows, err := db.Query(sql)
+	if err != nil {
+		log.Fatal("failed to get table struct", zap.Error(err), zap.String("sql", sql))
+	}
+	defer rows.Close()
+
+	var tableName, tableStruct string
+	if rows.Next() {
+		if err := rows.Scan(&tableName, &tableStruct); err != nil {
+			log.Fatal("failed to scan table struct", zap.Error(err))
+		}
+	}
+
+	// Beautify the table struct
+	lines := strings.Split(tableStruct, "\n")
+	var beautified []string
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if i > 0 && i < len(lines)-1 {
+			line = "  " + line
+		}
+		beautified = append(beautified, line)
+	}
+
+	return strings.Join(beautified, "\n")
 }
 
 func testMultiDDLs(srcs []*sql.DB, wg *sync.WaitGroup) {
@@ -832,7 +874,7 @@ func testMultiDDLs(srcs []*sql.DB, wg *sync.WaitGroup) {
 			uuid = strings.ReplaceAll(uuid, "-", "_")
 			newTbName := testName + uuid
 			mustCreateTable(srcs[0], newTbName)
-			log.S().Info("running ddl test: ", newTbName)
+			log.S().Info("running ddl test: ", newTbName, "table struct: ", getTableStruct(srcs[0], newTbName))
 
 			var wg2 sync.WaitGroup
 			ctx, cancel2 := context.WithCancel(context.Background())
@@ -842,9 +884,10 @@ func testMultiDDLs(srcs []*sql.DB, wg *sync.WaitGroup) {
 				wg2.Add(1)
 				go func(i int, s *sql.DB) {
 					if unit.NoDMLParas {
-						dml(ctx, s, newTbName, i, nil)
+						runDMLWorker(ctx, s, newTbName, i, nil)
 					} else {
-						dml(ctx, s, newTbName, i, unit.DefaultValue)
+						log.Info("Use default value", zap.Any("value", unit.DefaultValue))
+						runDMLWorker(ctx, s, newTbName, i, unit.DefaultValue)
 					}
 					wg2.Done()
 				}(idx+i*2, src)
@@ -885,10 +928,4 @@ func mustCreateTable(db *sql.DB, tableName string) {
 	util.MustExec(db, createDatabaseSQL)
 	sql := fmt.Sprintf(createTableSQL, tableName)
 	util.MustExec(db, sql)
-}
-
-func mustCreateTableWithConn(ctx context.Context, conn *sql.Conn, tableName string) {
-	util.MustExecWithConn(ctx, conn, createDatabaseSQL)
-	sql := fmt.Sprintf(createTableSQL, tableName)
-	util.MustExecWithConn(ctx, conn, sql)
 }
