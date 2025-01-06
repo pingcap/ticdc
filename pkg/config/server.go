@@ -88,7 +88,7 @@ type LogConfig struct {
 }
 
 var defaultServerConfig = &ServerConfig{
-	Newarch:       false,
+	Newarch:       true,
 	Addr:          "127.0.0.1:8300",
 	AdvertiseAddr: "",
 	LogFile:       "",
