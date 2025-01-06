@@ -664,7 +664,6 @@ func (w *MysqlWriter) execDDL(event *commonEvent.DDLEvent) error {
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Query info: %s; ", event.GetDDLQuery())))
 	}
 
-	log.Info("Exec DDL succeeded", zap.String("sql", event.GetDDLQuery()))
 	return nil
 }
 
@@ -685,6 +684,9 @@ func (w *MysqlWriter) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 				zap.Error(err))
 			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Execute DDL failed, Query info: %s; ", event.GetDDLQuery())))
 		}
+		log.Info("Execute DDL succeeded",
+			zap.String("changefeed", w.ChangefeedID.String()),
+			zap.Any("ddl", event))
 		return nil
 	}, retry.WithBackoffBaseDelay(pmysql.BackoffBaseDelay.Milliseconds()),
 		retry.WithBackoffMaxDelay(pmysql.BackoffMaxDelay.Milliseconds()),

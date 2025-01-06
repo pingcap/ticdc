@@ -41,11 +41,11 @@ SINK_URI="mysql://root@127.0.0.1:3306/"
 
 function check_ts_forward() {
 	changefeedid=$1
-	rts1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | jq '.resolved_ts')
-	checkpoint1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | jq '.checkpoint_tso')
+	rts1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc"| jq '.resolved_ts')
+	checkpoint1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc"| jq '.checkpoint_tso')
 	sleep 1
-	rts2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | jq '.resolved_ts')
-	checkpoint2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | jq '.checkpoint_tso')
+	rts2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc"| jq '.resolved_ts')
+	checkpoint2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc"| jq '.checkpoint_tso')
 	if [[ "$rts1" != "null" ]] && [[ "$rts1" != "0" ]]; then
 		if [[ "$rts1" -ne "$rts2" ]] || [[ "$checkpoint1" -ne "$checkpoint2" ]]; then
 			echo "changefeed is working normally rts: ${rts1}->${rts2} checkpoint: ${checkpoint1}->${checkpoint2}"
@@ -60,7 +60,7 @@ function check_ddl_executed() {
 	ddl=$(cat $2)
 	success="$3"
 	if [[ $success == "true" ]]; then
-		key_word="Exec DDL succeeded"
+		key_word="Execute DDL succeeded"
 	else
 		key_word="Execute DDL failed, but error can be ignored"
 	fi
@@ -92,7 +92,7 @@ function ddl_test() {
 
 	echo $restored_sql >${WORK_DIR}/ddl_temp.sql
 	ensure 10 check_ddl_executed "${WORK_DIR}/cdc.log" "${WORK_DIR}/ddl_temp.sql" true
-	ddl_finished_ts=$(grep "Execute DDL succeeded" ${WORK_DIR}/cdc.log | tail -n 1 | grep -oE '"CommitTs\\":[0-9]{18}' | awk -F: '{print $(NF)}')
+	ddl_finished_ts=$(grep "Execute DDL succeeded" ${WORK_DIR}/cdc.log | tail -n 1 | grep -oE '"finished_ts\\":[0-9]{18}' | awk -F: '{print $(NF)}')
 	cdc cli changefeed pause --changefeed-id=${changefeedid}
 	cdc cli changefeed resume --no-confirm --changefeed-id=${changefeedid} --overwrite-checkpoint-ts=${ddl_finished_ts}
 	echo "resume changefeed ${changefeedid} from ${ddl_finished_ts}"
