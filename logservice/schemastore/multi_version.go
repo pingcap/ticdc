@@ -196,7 +196,9 @@ func (v *versionedTableInfoStore) applyDDL(event *PersistedDDLEvent) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	// delete table should not receive more ddl
-	assertNonDeleted(v)
+	if event.Type != byte(model.ActionRecoverTable) {
+		assertNonDeleted(v)
+	}
 
 	if !v.initialized {
 		// The usage of the parameter `event` may outlive the function call, so we copy it.
