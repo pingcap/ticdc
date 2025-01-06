@@ -243,4 +243,4 @@ jobs:
         if: always()
         uses: ./.github/actions/upload-test-logs
         with:
-          log-name: failover_e2e_test3
+          log-name: failover_e2e_test4
