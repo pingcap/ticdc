@@ -61,10 +61,10 @@ type schemaStore struct {
 
 	notifyCh chan interface{}
 
-	// resolved ts pending for apply
+	// pendingResolvedTs is the largest resolvedTs the pending ddl events
 	pendingResolvedTs atomic.Uint64
-
-	// max resolvedTs of all applied ddl events
+	// resolvedTs is the largest resolvedTs of all applied ddl events
+	// Invariant: resolvedTs >= pendingResolvedTs
 	resolvedTs atomic.Uint64
 
 	// the following two fields are used to filter out duplicate ddl events
@@ -107,7 +107,7 @@ func New(
 		kvStorage,
 		upperBound.ResolvedTs,
 		s.writeDDLEvent,
-		s.advanceResolvedTs)
+		s.advancePendingResolvedTs)
 	return s
 }
 
@@ -138,9 +138,6 @@ func (s *schemaStore) updateResolvedTsPeriodically(ctx context.Context) error {
 			resolvedPhyTs := oracle.ExtractPhysical(pendingTs)
 			resolvedLag := float64(currentPhyTs-resolvedPhyTs) / 1e3
 			metrics.SchemaStoreResolvedTsLagGauge.Set(float64(resolvedLag))
-			// log.Info("advance resolved ts",
-			// 	zap.Uint64("resolveTs", pendingTs),
-			// 	zap.Float64("lag(s)", resolvedLag))
 		}()
 
 		if pendingTs <= s.resolvedTs.Load() {
@@ -308,7 +305,9 @@ func (s *schemaStore) writeDDLEvent(ddlEvent DDLJobWithCommitTs) {
 	}
 }
 
-func (s *schemaStore) advanceResolvedTs(resolvedTs uint64) {
+// advancePendingResolvedTs will be call by ddlJobFetcher when it fetched a new ddl event
+// it will update the pendingResolvedTs and notify the updateResolvedTs goroutine to apply the ddl event
+func (s *schemaStore) advancePendingResolvedTs(resolvedTs uint64) {
 	for {
 		currentTs := s.pendingResolvedTs.Load()
 		if resolvedTs <= currentTs {
@@ -325,6 +324,7 @@ func (s *schemaStore) advanceResolvedTs(resolvedTs uint64) {
 }
 
 // TODO: use notify instead of sleep
+// waitResolvedTs will wait until the schemaStore resolved ts is greater than or equal to ts.
 func (s *schemaStore) waitResolvedTs(tableID int64, ts uint64, logInterval time.Duration) {
 	start := time.Now()
 	lastLogTime := time.Now()

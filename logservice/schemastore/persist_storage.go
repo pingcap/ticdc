@@ -670,7 +670,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	}
 
 	// Note: need write ddl event to disk before update ddl history,
-	// becuase other goroutines may read ddl events from disk according to ddl history
+	// because other goroutines may read ddl events from disk according to ddl history
 	writePersistedDDLEvent(p.db, &ddlEvent)
 
 	p.mu.Lock()

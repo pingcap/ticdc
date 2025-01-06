@@ -88,7 +88,9 @@ type persistStorageDDLHandler struct {
 	updateDDLHistoryFunc func(args updateDDLHistoryFuncArgs) []uint64
 	// updateSchemaMetadataFunc update database info, table info and partition info according to the ddl event
 	updateSchemaMetadataFunc func(args updateSchemaMetadataFuncArgs)
-	// iteratehEventTablesFunc call `apply` for all tables related to the ddl event
+	// iterateEventTablesFunc iterates through all physical table IDs affected by the DDL event
+	// and calls the provided `apply` function with those IDs. For partition tables, it includes
+	// all partition IDs.
 	iterateEventTablesFunc func(event *PersistedDDLEvent, apply func(tableIDs ...int64))
 	// extractTableInfoFunc extract (table info, deleted) for the specified `tableID` from ddl event
 	extractTableInfoFunc func(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool)

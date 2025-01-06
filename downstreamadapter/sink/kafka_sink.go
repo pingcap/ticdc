@@ -29,10 +29,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	ticonfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tiflow/cdc/sink/ddlsink/mq/ddlproducer"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink/kafka"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
