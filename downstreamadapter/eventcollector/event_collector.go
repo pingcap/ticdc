@@ -238,6 +238,8 @@ func (c *EventCollector) addDispatcherRequestToSendingQueue(serverId node.ID, to
 }
 
 func (c *EventCollector) processFeedback(ctx context.Context) {
+	log.Info("Start process feedback from dynamic stream")
+	defer log.Info("Stop process feedback from dynamic stream")
 	for {
 		select {
 		case <-ctx.Done():
@@ -249,7 +251,6 @@ func (c *EventCollector) processFeedback(ctx context.Context) {
 				} else {
 					feedback.Dest.resumeChangefeed(c)
 				}
-				return
 			}
 
 			if feedback.IsPausePath() {
