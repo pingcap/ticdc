@@ -34,6 +34,19 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	createDatabaseSQL = "create database if not exists test"
+	createTableSQL    = `
+create table if not exists test.%s
+(
+    id1 int unique key not null,
+    id2 int unique key not null,
+    v0 int default 11,
+    v1  int default null
+)
+`
+)
+
 var finishIdx int32
 
 func main() {
@@ -910,19 +923,6 @@ func testMultiDDLs(srcs []*sql.DB, wg *sync.WaitGroup) {
 	wg1.Wait()
 	util.MustExec(srcs[0], fmt.Sprintf("create table mark.finish_mark_%d(a int primary key);", atomic.AddInt32(&finishIdx, 1)))
 }
-
-const (
-	createDatabaseSQL = "create database if not exists test"
-	createTableSQL    = `
-create table if not exists test.%s
-(
-    id1 int unique key not null,
-    id2 int unique key not null,
-    v0 int default 11,
-    v1  int default null
-)
-`
-)
 
 func mustCreateTable(db *sql.DB, tableName string) {
 	util.MustExec(db, createDatabaseSQL)
