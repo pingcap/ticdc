@@ -706,15 +706,19 @@ func TestApplyDDLJobs(t *testing.T) {
 						Database: "test",
 						Table:    "t1",
 					}), // rename table 300 to schema 105
+					buildRenameTableJobForTest(105, 300, "t3", 1030, &model.InvolvingSchemaInfo{
+						Database: "test2",
+						Table:    "t2",
+					}), // rename table 300 in the same schema
 					// rename table 300 to schema 105 with the same name again
 					// check comments in buildPersistedDDLEventForRenameTable to see why this would happen
-					buildRenameTableJobForTest(105, 300, "t2", 1030, nil),
+					buildRenameTableJobForTest(105, 300, "t3", 1040, nil),
 				}
 			}(),
 			map[int64]*BasicTableInfo{
 				300: {
 					SchemaID: 105,
-					Name:     "t2",
+					Name:     "t3",
 				},
 			},
 			nil,
@@ -731,15 +735,15 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 			map[int64][]uint64{
-				300: {1010, 1020, 1030},
+				300: {1010, 1020, 1030, 1040},
 			},
-			[]uint64{1010, 1020, 1030},
+			[]uint64{1010, 1020, 1030, 1040},
 			nil,
 			[]FetchTableDDLEventsTestCase{
 				{
 					tableID: 300,
 					startTs: 1010,
-					endTs:   1020,
+					endTs:   1030,
 					result: []commonEvent.DDLEvent{
 						{
 							Type:       byte(model.ActionRenameTable),
@@ -767,6 +771,29 @@ func TestApplyDDLJobs(t *testing.T) {
 									{
 										SchemaName: "test",
 										TableName:  "t1",
+									},
+								},
+							},
+						},
+						{
+							Type:       byte(model.ActionRenameTable),
+							Query:      "RENAME TABLE `test2`.`t2` TO `test2`.`t3`",
+							FinishedTs: 1030,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 300},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test2",
+										TableName:  "t3",
+									},
+								},
+								DropName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test2",
+										TableName:  "t2",
 									},
 								},
 							},
