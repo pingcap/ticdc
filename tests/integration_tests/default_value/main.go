@@ -47,7 +47,7 @@ create table if not exists test.%s
 `
 )
 
-var finishIdx int32
+var finishIdx atomic.Int32
 
 func main() {
 	cfg := util.NewConfig()
@@ -135,7 +135,7 @@ func testGetDefaultValue(srcs []*sql.DB, wg *sync.WaitGroup) {
 
 			wg1.Wait()
 
-			util.MustExec(srcs[0], fmt.Sprintf("create table mark.finish_mark_%d(a int primary key);", atomic.AddInt32(&finishIdx, 1)))
+			util.MustExec(srcs[0], fmt.Sprintf("create table mark.finish_mark_%d(a int primary key);", finishIdx.Add(1)))
 		}(i, ddlFunc)
 	}
 	wg2.Wait()
@@ -921,7 +921,7 @@ func testMultiDDLs(srcs []*sql.DB, wg *sync.WaitGroup) {
 	}
 
 	wg1.Wait()
-	util.MustExec(srcs[0], fmt.Sprintf("create table mark.finish_mark_%d(a int primary key);", atomic.AddInt32(&finishIdx, 1)))
+	util.MustExec(srcs[0], fmt.Sprintf("create table mark.finish_mark_%d(a int primary key);", finishIdx.Add(1)))
 }
 
 func mustCreateTable(db *sql.DB, tableName string) {

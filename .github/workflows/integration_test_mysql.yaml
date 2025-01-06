@@ -27,7 +27,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  basic_e2e_test:
+  # To boost the test speed, we split every 10 test cases into a group.
+  e2e_test_group_1:
     runs-on: ubuntu-latest 
     name: E2E Test
     steps:
@@ -71,11 +72,21 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=changefeed_reconstruct
 
+      - name: Test common_1
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=common_1
+
+      - name: Test foreign_key
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=foreign_key
+
       - name: Upload test logs
         if: always()
         uses: ./.github/actions/upload-test-logs
         with:
-          log-name: basic_e2e_group1
+          log-name: e2e_test_group_1
 
 
   failover_e2e_test1:
