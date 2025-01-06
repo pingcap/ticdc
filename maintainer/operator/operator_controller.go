@@ -297,12 +297,6 @@ func (oc *Controller) NewRemoveOperator(replicaSet *replica.SpanReplication) ope
 	}
 }
 
-func (oc *Controller) NewSplitOperator(
-	replicaSet *replica.SpanReplication, originNode node.ID, splitSpans []*heartbeatpb.TableSpan,
-) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return NewSplitDispatcherOperator(oc.replicationDB, replicaSet, originNode, splitSpans)
-}
-
 // AddMergeSplitOperator adds a merge split operator to the controller.
 //  1. Merge Operator: len(affectedReplicaSets) > 1, len(splitSpans) == 1
 //  2. Split Operator: len(affectedReplicaSets) == 1, len(splitSpans) > 1
