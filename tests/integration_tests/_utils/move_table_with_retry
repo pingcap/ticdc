@@ -27,9 +27,9 @@ while [[ $count -lt $retryCount ]]; do
     echo $result
     success=$(echo $result | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
 
-    # if [ "$success" == "true" ]; then
-    #     exit 0
-    # fi
+    if [ "$success" == "true" ]; then
+        exit 0
+    fi
 
     count=$((count + 1))
 done
