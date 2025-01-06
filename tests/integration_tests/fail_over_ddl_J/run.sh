@@ -77,13 +77,14 @@ function failOverCaseJ-1() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforePass=pause'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 
 	# make it be the coordinator, todo fix it
 	sleep 15
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforePass=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	# move table 1 to node 2
@@ -97,7 +98,9 @@ function failOverCaseJ-1() {
 	sleep 10 # ensure dispatcher gets pass action
 
 	cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
-     # restart cdc server
+	kill_cdc_pid $cdc_pid_2
+    # restart cdc server
+	export GO_FAILPOINTS=''
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
 	sleep 15
@@ -113,7 +116,6 @@ function failOverCaseJ-1() {
 	cleanup_process $CDC_BINARY
 
 	echo "failOverCaseJ-1 passed successfully"
-	export GO_FAILPOINTS=''
 }
 
 # ddl is drop table
@@ -131,13 +133,13 @@ function failOverCaseJ-2() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforePass=pause'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 
 	# make it be the coordinator, todo fix it
 	sleep 15
-
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforePass=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	# move table 1 to node 2
@@ -150,8 +152,9 @@ function failOverCaseJ-2() {
 
 	sleep 10 # ensure dispatcher gets pass action
 
-	kill_cdc_pid $cdc_pid_1
-
+	cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+	kill_cdc_pid $cdc_pid_2
+	export GO_FAILPOINTS=''
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 
@@ -174,8 +177,6 @@ function failOverCaseJ-2() {
 
 	cleanup_process $CDC_BINARY
 
-	export GO_FAILPOINTS=''
-
 	echo "failOverCase-2 passed successfully"
 }
 
@@ -194,13 +195,13 @@ function failOverCaseJ-3() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforePass=pause'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 
 	# make it be the coordinator, todo fix it
 	sleep 15
-
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforePass=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	# move table 1 to node 2
@@ -216,6 +217,7 @@ function failOverCaseJ-3() {
 	cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
     kill_cdc_pid $cdc_pid_2
     # restart cdc server
+	export GO_FAILPOINTS=''
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
 	sleep 15
@@ -238,8 +240,7 @@ function failOverCaseJ-3() {
     check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	cleanup_process $CDC_BINARY
-	export GO_FAILPOINTS=''
-
+	
 	echo "failOverCaseJ-3 passed successfully"
 }
 
@@ -258,13 +259,13 @@ function failOverCaseJ-5() {
 
 	sleep 10
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforePass=pause'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 
 	# make it be the coordinator, todo fix it
 	sleep 15
-
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforePass=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	# move table 1 to node 2
@@ -282,6 +283,8 @@ function failOverCaseJ-5() {
 
 	cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
     kill_cdc_pid $cdc_pid_2
+
+	export GO_FAILPOINTS=''
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
@@ -304,7 +307,6 @@ function failOverCaseJ-5() {
     check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
 	cleanup_process $CDC_BINARY
-	export GO_FAILPOINTS=''
 
 	echo "failOverCaseJ-5 passed successfully"
 }
