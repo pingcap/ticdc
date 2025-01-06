@@ -289,6 +289,41 @@ func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finis
 	return job
 }
 
+func buildRenameTablesJobForTest(
+	oldSchemaIDs, newSchemaIDs, tableIDs []int64,
+	oldSchemaNames, oldTableNames, newTableNames []string,
+	finishedTs uint64) *model.Job {
+
+	args := &model.RenameTablesArgs{
+		RenameTableInfos: make([]*model.RenameTableArgs, 0, len(tableIDs)),
+	}
+	multiTableInfos := make([]*model.TableInfo, 0, len(tableIDs))
+	for i := 0; i < len(tableIDs); i++ {
+		args.RenameTableInfos = append(args.RenameTableInfos, &model.RenameTableArgs{
+			OldSchemaID:   oldSchemaIDs[i],
+			NewSchemaID:   newSchemaIDs[i],
+			TableID:       tableIDs[i],
+			NewTableName:  pmodel.NewCIStr(newTableNames[i]),
+			OldSchemaName: pmodel.NewCIStr(oldSchemaNames[i]),
+			OldTableName:  pmodel.NewCIStr(oldTableNames[i]),
+		})
+		multiTableInfos = append(multiTableInfos, &model.TableInfo{
+			ID:   tableIDs[i],
+			Name: pmodel.NewCIStr(newTableNames[i]),
+		})
+	}
+	job := &model.Job{
+		Type: model.ActionRenameTables,
+		BinlogInfo: &model.HistoryInfo{
+			MultipleTableInfos: multiTableInfos,
+			FinishedTS:         finishedTs,
+		},
+		Version: model.JobVersion2,
+	}
+	job.FillArgs(args)
+	return job
+}
+
 func buildRenamePartitionTableJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
 	return buildPartitionTableRelatedJobForTest(model.ActionRenameTable, schemaID, tableID, tableName, partitionIDs, finishedTs)
 }

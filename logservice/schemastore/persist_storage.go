@@ -392,13 +392,10 @@ func (p *persistentStorage) fetchTableDDLEvents(tableID int64, tableFilter filte
 	events := make([]commonEvent.DDLEvent, 0, len(allTargetTs))
 	for _, ts := range allTargetTs {
 		rawEvent := readPersistedDDLEvent(storageSnap, ts)
-		// TODO: if ExtraSchemaName and other fields are empty, does it cause any problem?
-		if tableFilter != nil &&
-			tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.CurrentSchemaName, rawEvent.CurrentTableName) &&
-			tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.PrevSchemaName, rawEvent.PrevTableName) {
-			continue
+		ddlEvent, ok := buildDDLEvent(&rawEvent, tableFilter)
+		if ok {
+			events = append(events, ddlEvent)
 		}
-		events = append(events, buildDDLEvent(&rawEvent, tableFilter))
 	}
 	// log.Info("fetchTableDDLEvents",
 	// 	zap.Int64("tableID", tableID),
@@ -458,26 +455,10 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
-			if tableFilter != nil {
-				if rawEvent.Type == byte(model.ActionCreateTables) {
-					allFiltered := true
-					for _, tableInfo := range rawEvent.MultipleTableInfos {
-						if !tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.CurrentSchemaName, tableInfo.Name.O) {
-							allFiltered = false
-							break
-						}
-					}
-					if allFiltered {
-						continue
-					}
-				} else {
-					if tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.CurrentSchemaName, rawEvent.CurrentTableName) &&
-						tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.PrevSchemaName, rawEvent.PrevTableName) {
-						continue
-					}
-				}
+			ddlEvent, ok := buildDDLEvent(&rawEvent, tableFilter)
+			if ok {
+				events = append(events, ddlEvent)
 			}
-			events = append(events, buildDDLEvent(&rawEvent, tableFilter))
 		}
 		storageSnap.Close()
 		if len(events) >= limit {
@@ -784,7 +765,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	return false
 }
 
-func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool) {
 	handler, ok := allDDLHandlers[model.ActionType(rawEvent.Type)]
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", rawEvent.Type), zap.String("query", rawEvent.Query))
