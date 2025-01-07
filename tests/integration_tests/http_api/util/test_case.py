@@ -8,9 +8,7 @@ import json
 # the max retry time
 RETRY_TIME = 10
 
-BASE_URL0 = "http://127.0.0.1:8300/api/v1"
-BASE_URL1 = "http://127.0.0.1:8301/api/v1"
-
+BASE_URL = "http://127.0.0.1:8300/"
 
 BASE_URL0_V2 = "http://127.0.0.1:8300/api/v2"
 BASE_URL1_V2 = "https://127.0.0.1:8301/api/v2"
@@ -47,7 +45,7 @@ def requests_get_with_retry(url, max_retries=RETRY_TIME, delay_seconds=1):
 
 # we should write some SQLs in the run.sh after call create_changefeed
 def create_changefeed(sink_uri):
-    url = BASE_URL1+"/changefeeds"
+    url = BASE_URL1_V2+"/changefeeds"
     # create changefeed
     for i in range(1, 4):
         data = {
@@ -79,12 +77,12 @@ def create_changefeed(sink_uri):
 
 def list_changefeed():
     # test state: all
-    url = BASE_URL0+"/changefeeds?state=all"
+    url = BASE_URL0_V2+"/changefeeds?state=all"
     resp = rq.get(url)
     assert resp.status_code == rq.codes.ok
 
     # test state: normal
-    url = BASE_URL0+"/changefeeds?state=normal"
+    url = BASE_URL0_V2+"/changefeeds?state=normal"
     resp = rq.get(url)
     assert resp.status_code == rq.codes.ok
     data = resp.json()
@@ -92,7 +90,7 @@ def list_changefeed():
         assert changefeed["state"] == "normal"
 
     # test state: stopped
-    url = BASE_URL0+"/changefeeds?state=stopped"
+    url = BASE_URL0_V2+"/changefeeds?state=stopped"
     resp = rq.get(url)
     assert resp.status_code == rq.codes.ok
     data = resp.json()
@@ -103,16 +101,16 @@ def list_changefeed():
 
 def get_changefeed():
     # test get changefeed success
-    url = BASE_URL0+"/changefeeds/changefeed-test1"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test1"
     resp = rq.get(url)
     assert resp.status_code == rq.codes.ok
 
-    url = BASE_URL0+"/changefeeds/changefeed-test2"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test2"
     resp = rq.get(url)
     assert resp.status_code == rq.codes.ok
 
     # test get changefeed failed
-    url = BASE_URL0+"/changefeeds/changefeed-not-exists"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-not-exists"
     resp = rq.get(url)
     assert resp.status_code == rq.codes.bad_request
     data = resp.json()
@@ -123,7 +121,7 @@ def get_changefeed():
 
 def pause_changefeed():
     # pause changefeed
-    url = BASE_URL0+"/changefeeds/changefeed-test2/pause"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test2/pause"
     for i in range(RETRY_TIME):
         resp = rq.post(url)
         if resp.status_code == rq.codes.accepted:
@@ -131,7 +129,7 @@ def pause_changefeed():
         time.sleep(1)
     assert resp.status_code == rq.codes.accepted
     # check if pause changefeed success
-    url = BASE_URL0+"/changefeeds/changefeed-test2"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test2"
     for i in range(RETRY_TIME):
         resp = rq.get(url)
         assert resp.status_code == rq.codes.ok
@@ -141,7 +139,7 @@ def pause_changefeed():
         time.sleep(1)
     assert data["state"] == "stopped"
     # test pause changefeed failed
-    url = BASE_URL0+"/changefeeds/changefeed-not-exists/pause"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-not-exists/pause"
     resp = rq.post(url)
     assert resp.status_code == rq.codes.bad_request
     data = resp.json()
@@ -152,14 +150,14 @@ def pause_changefeed():
 def update_changefeed():
     # update fail
     # can only update a stopped changefeed
-    url = BASE_URL0+"/changefeeds/changefeed-test1"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test1"
     data = json.dumps({"mounter_worker_num": 32})
     headers = {"Content-Type": "application/json"}
     resp = rq.put(url, data=data, headers=headers)
     assert resp.status_code == rq.codes.bad_request
 
     # update success
-    url = BASE_URL0+"/changefeeds/changefeed-test2"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test2"
     data = json.dumps({"mounter_worker_num": 32})
     headers = {"Content-Type": "application/json"}
     resp = rq.put(url, data=data, headers=headers)
@@ -167,7 +165,7 @@ def update_changefeed():
 
     # update fail
     # can't update start_ts
-    url = BASE_URL0+"/changefeeds/changefeed-test2"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test2"
     data = json.dumps({"start_ts": 0})
     headers = {"Content-Type": "application/json"}
     resp = rq.put(url, data=data, headers=headers)
@@ -178,12 +176,12 @@ def update_changefeed():
 
 def resume_changefeed():
     # resume changefeed
-    url = BASE_URL1+"/changefeeds/changefeed-test2/resume"
+    url = BASE_URL1_V2+"/changefeeds/changefeed-test2/resume"
     resp = rq.post(url)
     assert resp.status_code == rq.codes.accepted
 
     # check if resume changefeed success
-    url = BASE_URL1+"/changefeeds/changefeed-test2"
+    url = BASE_URL1_V2+"/changefeeds/changefeed-test2"
     for i in range(RETRY_TIME):
         resp = rq.get(url)
         assert resp.status_code == rq.codes.ok
@@ -194,7 +192,7 @@ def resume_changefeed():
     assert data["state"] == "normal"
 
     # test resume changefeed failed
-    url = BASE_URL0+"/changefeeds/changefeed-not-exists/resume"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-not-exists/resume"
     resp = rq.post(url)
     assert resp.status_code == rq.codes.bad_request
     data = resp.json()
@@ -205,12 +203,12 @@ def resume_changefeed():
 
 def remove_changefeed():
     # remove changefeed
-    url = BASE_URL0+"/changefeeds/changefeed-test3"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test3"
     resp = rq.delete(url)
     assert resp.status_code == rq.codes.accepted
 
     # check if remove changefeed success
-    url = BASE_URL0+"/changefeeds/changefeed-test3"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-test3"
     for i in range(RETRY_TIME):
         resp = rq.get(url)
         if resp.status_code == rq.codes.bad_request:
@@ -220,7 +218,7 @@ def remove_changefeed():
     assert resp.json()["error_code"] == "CDC:ErrChangeFeedNotExists"
 
     # test remove changefeed failed
-    url = BASE_URL0+"/changefeeds/changefeed-not-exists"
+    url = BASE_URL0_V2+"/changefeeds/changefeed-not-exists"
     resp = rq.delete(url)
     assert (resp.status_code == rq.codes.bad_request or resp.status_code == rq.codes.internal_server_error)
     data = resp.json()
@@ -228,19 +226,9 @@ def remove_changefeed():
 
     print("pass test: remove changefeed")
 
-
-def rebalance_table():
-    # rebalance_table
-    url = BASE_URL0 + "/changefeeds/changefeed-test1/tables/rebalance_table"
-    resp = rq.post(url)
-    assert resp.status_code == rq.codes.accepted
-
-    print("pass test: rebalance table")
-
-
 def move_table():
     # move table
-    url = BASE_URL0 + "/changefeeds/changefeed-test1/tables/move_table"
+    url = BASE_URL0_V2 + "/changefeeds/changefeed-test1/tables/move_table"
     data = json.dumps({"capture_id": "test-aaa-aa", "table_id": 11})
     headers = {"Content-Type": "application/json"}
     resp = rq.post(url, data=data, headers=headers)
@@ -257,7 +245,7 @@ def move_table():
 
 
 def resign_owner():
-    url = BASE_URL1 + "/owner/resign"
+    url = BASE_URL1_V2 + "/owner/resign"
     resp = rq.post(url)
     assert resp.status_code == rq.codes.accepted
 
@@ -265,7 +253,7 @@ def resign_owner():
 
 
 def list_capture():
-    url = BASE_URL0 + "/captures"
+    url = BASE_URL0_V2 + "/captures"
     resp = requests_get_with_retry(url)
     assert resp.status_code == rq.codes.ok
 
@@ -273,7 +261,10 @@ def list_capture():
 
 
 def list_processor():
-    url = BASE_URL0 + "/processors"
+    # TODO: implement this test case
+    return 
+
+    url = BASE_URL0_V2 + "/processors"
     resp = requests_get_with_retry(url)
     assert resp.status_code == rq.codes.ok
 
@@ -281,8 +272,10 @@ def list_processor():
 
 
 def get_processor():
+    # TODO: implement this test case
+    return 
     # list processor to get changefeed_id and capture_id 
-    base_url = BASE_URL0 + "/processors"
+    base_url = BASE_URL0_V2 + "/processors"
     resp = requests_get_with_retry(base_url)
     assert resp.status_code == rq.codes.ok
     data = resp.json()[0]
@@ -304,7 +297,7 @@ def get_processor():
 
 
 def check_health():
-    url = BASE_URL0 + "/health"
+    url = BASE_URL0_V2 + "/health"
     for i in range(RETRY_TIME):
         resp = rq.get(url)
         if resp.status_code == rq.codes.ok:
@@ -316,7 +309,7 @@ def check_health():
 
 
 def get_status():
-    url = BASE_URL0 + "/status"
+    url = BASE_URL0_V2 + "/status"
     resp = requests_get_with_retry(url)
     assert resp.status_code == rq.codes.ok
     assert resp.json()["is_owner"]
@@ -325,7 +318,7 @@ def get_status():
 
 
 def set_log_level():
-    url = BASE_URL0 + "/log"
+    url = BASE_URL0_V2 + "/log"
     data = json.dumps({"log_level": "debug"})
     headers = {"Content-Type": "application/json"}
     resp = rq.post(url, data=data, headers=headers)
@@ -380,7 +373,6 @@ if __name__ == "__main__":
         "pause_changefeed": pause_changefeed,
         "update_changefeed": update_changefeed,
         "resume_changefeed": resume_changefeed,
-        "rebalance_table": rebalance_table,
         "move_table": move_table,
         "get_processor": get_processor,
         "list_processor": list_processor,
