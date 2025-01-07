@@ -7,26 +7,24 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/config"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
 
 // BatchEncoder for open protocol will batch multiple row changed events into a single message.
 // One message can contain at most MaxBatchSize events, and the total size of the message cannot exceed MaxMessageBytes.
 type BatchEncoder struct {
-	messages []*ticommon.Message
+	messages []*common.Message
 	// buff the callback of the latest message
 	callbackBuff []func()
 
 	claimCheck *claimcheck.ClaimCheck
 
-	config *newcommon.Config
+	config *common.Config
 }
 
 // AppendRowChangedEvent implements the RowEventEncoder interface
@@ -77,7 +75,7 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 		}
 
 		if d.config.LargeMessageHandle.HandleKeyOnly() {
-			// it's must that `LargeMessageHandle == LargeMessageHandleOnlyHandleKeyColumns` here.
+			// it must that `LargeMessageHandle == LargeMessageHandleOnlyHandleKeyColumns` here.
 			key, value, length, err = encodeRowChangedEvent(e, d.config, true, "")
 			if err != nil {
 				return errors.Trace(err)
@@ -99,7 +97,7 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 }
 
 // Build implements the RowEventEncoder interface
-func (d *BatchEncoder) Build() (messages []*ticommon.Message) {
+func (d *BatchEncoder) Build() (messages []*common.Message) {
 	if len(d.messages) == 0 {
 		return nil
 	}
@@ -125,7 +123,7 @@ func (d *BatchEncoder) pushMessage(key, value []byte, callback func()) {
 		versionHead := make([]byte, 8)
 		binary.BigEndian.PutUint64(versionHead, encoder.BatchVersion1)
 
-		message := ticommon.NewMsg(config.ProtocolOpen, versionHead, valueLenByte[:], 0, model.MessageTypeRow, nil, nil)
+		message := common.NewMsg(config.ProtocolOpen, versionHead, valueLenByte[:], 0, common.MessageTypeRow, nil, nil)
 		message.Key = append(message.Key, keyLenByte[:]...)
 		message.Key = append(message.Key, key...)
 		message.Value = append(message.Value, value...)
@@ -180,7 +178,7 @@ func enhancedKeyValue(key, value []byte) ([]byte, []byte) {
 }
 
 // NewBatchEncoder creates a new BatchEncoder.
-func NewBatchEncoder(ctx context.Context, config *newcommon.Config) (encoder.EventEncoder, error) {
+func NewBatchEncoder(ctx context.Context, config *common.Config) (encoder.EventEncoder, error) {
 	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -197,22 +195,22 @@ func (d *BatchEncoder) Clean() {
 	}
 }
 
-func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*ticommon.Message, error) {
+func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error) {
 	key, value, err := encodeDDLEvent(e, d.config)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	return ticommon.NewDDLMsg(config.ProtocolOpen, key, value, nil), nil
+	return common.NewDDLMsg(config.ProtocolOpen, key, value, nil), nil
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
-func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*ticommon.Message, error) {
+func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
 	key, value, err := encodeResolvedTs(ts)
 
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	return ticommon.NewResolvedMsg(config.ProtocolOpen, key, value, ts), nil
+	return common.NewResolvedMsg(config.ProtocolOpen, key, value, ts), nil
 }

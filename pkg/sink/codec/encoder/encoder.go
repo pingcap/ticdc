@@ -16,9 +16,8 @@ package encoder
 import (
 	"bytes"
 	"context"
-
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
 const (
@@ -33,13 +32,13 @@ const (
 type EventEncoder interface {
 	// EncodeCheckpointEvent appends a checkpoint event into the batch.
 	// This event will be broadcast to all partitions to signal a global checkpoint.
-	EncodeCheckpointEvent(ts uint64) (*ticommon.Message, error)
+	EncodeCheckpointEvent(ts uint64) (*common.Message, error)
 	// EncodeDDLEvent appends a DDL event into the batch
-	EncodeDDLEvent(e *commonEvent.DDLEvent) (*ticommon.Message, error)
+	EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error)
 	// AppendRowChangedEvent appends a row changed event into the batch or buffer.
 	AppendRowChangedEvent(context.Context, string, *commonEvent.RowEvent) error
 	// Build builds the batch messages from AppendRowChangedEvent and returns the messages.
-	Build() []*ticommon.Message
+	Build() []*common.Message
 	// clean the resources
 	Clean()
 }
