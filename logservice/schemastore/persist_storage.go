@@ -499,7 +499,7 @@ func addTableInfoFromKVSnap(
 ) error {
 	tableInfo := readTableInfoInKVSnap(snap, store.getTableID(), kvSnapVersion)
 	if tableInfo != nil {
-		store.addInitialTableInfo(tableInfo)
+		store.addInitialTableInfo(tableInfo, kvSnapVersion)
 	}
 	return nil
 }

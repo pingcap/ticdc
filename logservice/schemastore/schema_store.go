@@ -174,9 +174,6 @@ func (s *schemaStore) updateResolvedTsPeriodically(ctx context.Context) error {
 					zap.Uint64("jobCommitTs", event.CommitTs),
 					zap.Any("storeSchemaVersion", s.schemaVersion),
 					zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
-				if event.Job.BinlogInfo.TableInfo != nil {
-					log.Info("table info", zap.Uint16("version", event.Job.BinlogInfo.TableInfo.Version))
-				}
 
 				// need to update the following two members for every event to filter out later duplicate events
 				s.schemaVersion = event.Job.BinlogInfo.SchemaVersion

@@ -1080,7 +1080,6 @@ func extractTableInfoFuncForExchangeTablePartition(event *PersistedDDLEvent, tab
 			pmodel.NewCIStr(event.PrevTableName).O,
 			tableID,
 			false,
-			event.PreTableInfo.Version,
 			columnSchema)
 		return tableInfo, false
 	}
