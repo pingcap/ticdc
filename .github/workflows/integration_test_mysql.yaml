@@ -91,6 +91,12 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=generate_column
+      
+      # The 8th case in this group
+      - name: Test many_pk_or_uk
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=many_pk_or_uk
 
       - name: Upload test logs
         if: always()
