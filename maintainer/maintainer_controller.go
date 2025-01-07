@@ -288,15 +288,18 @@ func (c *Controller) FinishBootstrap(
 			delete(workingMap, table.TableID)
 		}
 	}
-	// tables that not included in init table map we get from tikv at checkpoint ts
-	// that can happen if a table is created after checkpoint ts
-	// the initial table map only contains real physical tables,
-	// ddl table is special table id (0), can be included in the bootstrap response message
-	for tableID, tableMap := range workingMap {
-		log.Info("found a tables not in initial table map",
+	// tables that not included in init table map, but we get from different nodes.
+	// that can happen such as:
+	// node1 with table trigger event dispatcher, node2 with table1, and both receive drop table1 ddl
+	// table trigger event dispatcher write the ddl, while node2 not pass it yet
+	// then node1 restarts.
+	// node1 will get the startTs = ddl1.ts, and then the table1 will not be included in the initial table map
+	// so we just ignore the table1 dispatcher.
+	// here tableID is physical table id
+	for tableID, _ := range workingMap {
+		log.Warn("found a tables not in initial table map",
 			zap.String("changefeed", c.changefeedID.Name()),
 			zap.Int64("id", tableID))
-		c.addWorkingSpans(tableMap)
 	}
 
 	// rebuild barrier status
