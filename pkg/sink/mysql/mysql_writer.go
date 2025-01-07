@@ -755,8 +755,6 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 		log.Debug("prepareDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
 	}
 
-	log.Info("fizz prepareDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
-
 	return dmls, nil
 }
 
