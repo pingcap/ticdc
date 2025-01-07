@@ -13,7 +13,7 @@ MAX_RETRIES=10
 function check_capture_count() {
 	pd=$1
 	expected=$2
-	count=$(cdc cli capture list --pd=$pd 2>&1 | jq '.|length')
+	count=$(cdc cli capture list --pd=$pd 2>&1 | grep -v "Command to ticdc" | jq '.|length')
 	if [[ ! "$count" -eq "$expected" ]]; then
 		echo "count: $count expected: $expected"
 		exit 1
@@ -26,7 +26,7 @@ function kill_cdc_and_restart() {
 	cdc_binary=$3
 	MAX_RETRIES=10
 	status=$(curl -s http://127.0.0.1:8300/status)
-	cdc_pid=$(echo "$status" | jq '.pid')
+	cdc_pid=$(echo "$status" | grep -v "Command to ticdc" | jq '.pid')
 
 	kill_cdc_pid $cdc_pid
 	ensure $MAX_RETRIES check_capture_count $pd_addr 0
