@@ -73,6 +73,8 @@ function failOverCaseM-1() {
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	kill_cdc_pid $cdc_pid_1
 
+	sleep 5
+
     export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
     cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
@@ -96,6 +98,10 @@ function failOverCaseM-1() {
     export GO_FAILPOINTS=''
     # restart cdc server
     run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
+	
+	# make it be the coordinator
+	sleep 15
+
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
     sleep 15
@@ -106,6 +112,8 @@ function failOverCaseM-1() {
     run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
     check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
+
+	query_dispatcher_count "127.0.0.1:8300" "test" 3 10
 
 	cleanup_process $CDC_BINARY
 
@@ -123,6 +131,8 @@ function failOverCaseM-2() {
 	# restart cdc server to enable failpoint
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	kill_cdc_pid $cdc_pid_1
+
+	sleep 5
     
     export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
@@ -148,6 +158,10 @@ function failOverCaseM-2() {
 
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
+
+	# make it be the coordinator
+	sleep 15
+
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
     sleep 15
@@ -169,6 +183,8 @@ function failOverCaseM-2() {
 	
     check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
+	query_dispatcher_count "127.0.0.1:8300" "test" 4 10
+
 	cleanup_process $CDC_BINARY
 
 	echo "failOverCaseM-2 passed successfully"
@@ -185,6 +201,8 @@ function failOverCaseM-3() {
 	# restart cdc server to enable failpoint
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	kill_cdc_pid $cdc_pid_1
+
+	sleep 5
     
     export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
@@ -210,6 +228,10 @@ function failOverCaseM-3() {
 
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
+
+	# make it be the coordinator
+	sleep 15
+
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
     
     sleep 15
@@ -234,6 +256,8 @@ function failOverCaseM-3() {
 	
     check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
+	query_dispatcher_count "127.0.0.1:8300" "test" 5 10
+
 	cleanup_process $CDC_BINARY
 
 	echo "failOverCaseM-3 passed successfully"
@@ -250,11 +274,13 @@ function failOverCaseM-5() {
 	# restart cdc server to enable failpoint
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	kill_cdc_pid $cdc_pid_1
+
+	sleep 5
     
     export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
     cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-    # make it be the coordinator, todo fix it
+    # make it be the coordinator
 	sleep 15
 
     export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeDealWithDDL=pause'
@@ -278,6 +304,10 @@ function failOverCaseM-5() {
 
     # restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
+
+	# make it be the coordinator
+	sleep 15
+
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
     sleep 15
@@ -300,6 +330,8 @@ function failOverCaseM-5() {
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
     check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
+
+	query_dispatcher_count "127.0.0.1:8300" "test" 5 10
 
 	cleanup_process $CDC_BINARY
 
