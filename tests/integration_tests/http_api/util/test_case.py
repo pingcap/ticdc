@@ -43,7 +43,7 @@ def requests_get_with_retry(url, max_retries=RETRY_TIME, delay_seconds=1):
             time.sleep(delay_seconds)
     return None
 
-# we should write some SQLs in the run.sh after call create_changefeed
+# we write some SQLs in the run.sh after call create_changefeed
 def create_changefeed(sink_uri):
     print("Start to create changefeed!")
     url = BASE_URL1_V2+"/changefeeds"
@@ -60,6 +60,8 @@ def create_changefeed(sink_uri):
 
         data = json.dumps(data)
         headers = {"Content-Type": "application/json"}
+        print("Start to post request, URL:", url)
+        print("Request body:", data)
         resp = rq.post(url, data=data, headers=headers)
         assert resp.status_code == rq.codes.accepted
 
