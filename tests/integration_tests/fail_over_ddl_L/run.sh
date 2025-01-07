@@ -107,6 +107,8 @@ function failOverCaseL-1() {
 	
     check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
+	query_dispatcher_count "127.0.0.1:8300" "test" 3 10
+
 	cleanup_process $CDC_BINARY
 
 	echo "failOverCaseL-1 passed successfully"
@@ -167,6 +169,8 @@ function failOverCaseL-2() {
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
     check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
+
+	query_dispatcher_count "127.0.0.1:8300" "test" 4 10
 
 	cleanup_process $CDC_BINARY
 
@@ -231,6 +235,8 @@ function failOverCaseL-3() {
 	run_sql "insert into fail_over_ddl_test.test4 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
     check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
+
+	query_dispatcher_count "127.0.0.1:8300" "test" 5 10
 
 	cleanup_process $CDC_BINARY
 
@@ -297,6 +303,8 @@ function failOverCaseL-5() {
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	
     check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
+
+	query_dispatcher_count "127.0.0.1:8300" "test" 5 10
 
 	cleanup_process $CDC_BINARY
 
