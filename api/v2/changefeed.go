@@ -663,7 +663,6 @@ func (h *OpenAPIV2) moveTable(c *gin.Context) {
 // getDispatcherCount returns the count of dispatcher.
 // getDispatcherCount is just for inner test use, not public use.
 func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
-	log.Info("hyy OpenAPIV2 getDispatcherCount")
 	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), getNamespaceValueWithDefault(c))
 	if err := model.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
