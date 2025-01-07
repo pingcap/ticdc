@@ -14,6 +14,7 @@
 package mysql
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 
@@ -31,6 +32,10 @@ type preparedDMLs struct {
 	rowCount        int
 	approximateSize int64
 	startTs         []uint64
+}
+
+func (d *preparedDMLs) String() string {
+	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v", d.sqls, d.values, d.rowCount, d.approximateSize, d.startTs)
 }
 
 var dmlsPool = sync.Pool{

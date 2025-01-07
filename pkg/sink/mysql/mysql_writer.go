@@ -753,6 +753,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 
 func (w *MysqlWriter) Flush(events []*commonEvent.DMLEvent) error {
 	dmls, err := w.prepareDMLs(events)
+	log.Info("fizz prepareDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
 	if err != nil {
 		return errors.Trace(err)
 	}

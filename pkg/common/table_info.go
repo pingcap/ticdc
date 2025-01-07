@@ -74,6 +74,11 @@ const (
 	UnsignedFlag
 )
 
+func NewColumnFlagType(flag ColumnFlagType) *ColumnFlagType {
+	f := ColumnFlagType(flag)
+	return &f
+}
+
 // SetIsBinary sets BinaryFlag
 func (b *ColumnFlagType) SetIsBinary() {
 	(*Flag)(b).Add(Flag(BinaryFlag))
