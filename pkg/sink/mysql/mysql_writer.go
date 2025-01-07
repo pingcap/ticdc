@@ -730,7 +730,20 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 
 			switch row.RowType {
 			case commonEvent.RowTypeUpdate:
-				query, args, err = buildUpdate(event.TableInfo, row)
+				if translateToInsert {
+					query, args, err = buildUpdate(event.TableInfo, row)
+				} else {
+					query, args, err = buildDelete(event.TableInfo, row)
+					if err != nil {
+						dmlsPool.Put(dmls) // Return to pool on error
+						return nil, errors.Trace(err)
+					}
+					if query != "" {
+						dmls.sqls = append(dmls.sqls, query)
+						dmls.values = append(dmls.values, args)
+					}
+					query, args, err = buildInsert(event.TableInfo, row, translateToInsert)
+				}
 			case commonEvent.RowTypeDelete:
 				query, args, err = buildDelete(event.TableInfo, row)
 			case commonEvent.RowTypeInsert:
