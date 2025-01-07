@@ -83,6 +83,12 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=foreign_key
 
+      # The 7th case in this group
+      - name: Test generate_column
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=generate_column
+
       - name: Upload test logs
         if: always()
         uses: ./.github/actions/upload-test-logs
