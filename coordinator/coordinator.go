@@ -73,7 +73,8 @@ func New(node *node.Info,
 	clusterID string,
 	version int64,
 	batchSize int,
-	balanceCheckInterval time.Duration) server.Coordinator {
+	balanceCheckInterval time.Duration,
+) server.Coordinator {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	c := &coordinator{
 		version:             version,

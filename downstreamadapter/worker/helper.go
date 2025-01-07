@@ -48,7 +48,8 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *ticonfig.SinkConfig,
-	factoryCreator kafka.FactoryCreator) (KafkaComponent, ticonfig.Protocol, error) {
+	factoryCreator kafka.FactoryCreator,
+) (KafkaComponent, ticonfig.Protocol, error) {
 	kafkaComponent := KafkaComponent{}
 	protocol, err := helper.GetProtocol(utils.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
@@ -124,7 +125,8 @@ func GetKafkaSinkComponent(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
-	sinkConfig *ticonfig.SinkConfig) (KafkaComponent, ticonfig.Protocol, error) {
+	sinkConfig *ticonfig.SinkConfig,
+) (KafkaComponent, ticonfig.Protocol, error) {
 	factoryCreator := kafka.NewSaramaFactory
 	if utils.GetOrZero(sinkConfig.EnableKafkaSinkV2) {
 		factoryCreator = v2.NewFactory
@@ -136,6 +138,7 @@ func GetKafkaSinkComponentForTest(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
-	sinkConfig *ticonfig.SinkConfig) (KafkaComponent, ticonfig.Protocol, error) {
+	sinkConfig *ticonfig.SinkConfig,
+) (KafkaComponent, ticonfig.Protocol, error) {
 	return getKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, kafka.NewMockFactory)
 }

@@ -54,7 +54,8 @@ func TestBasicTypes(t *testing.T) {
 		CommitTs:       1,
 		Event:          row,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
 	value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
@@ -127,7 +128,8 @@ func TestAllTypes(t *testing.T) {
 		CommitTs:       1,
 		Event:          row,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
 	value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
@@ -193,7 +195,8 @@ func TestGeneralDMLEvent(t *testing.T) {
 			CommitTs:       1,
 			Event:          row,
 			ColumnSelector: selectors.GetSelector("test", "t"),
-			Callback:       func() {}}
+			Callback:       func() {},
+		}
 
 		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
 		value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
@@ -247,7 +250,8 @@ func TestGeneralDMLEvent(t *testing.T) {
 			CommitTs:       1,
 			Event:          row,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {}}
+			Callback:       func() {},
+		}
 
 		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
 		protocolConfig.EnableTiDBExtension = true
@@ -306,7 +310,8 @@ func TestGeneralDMLEvent(t *testing.T) {
 			CommitTs:       1,
 			Event:          row,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {}}
+			Callback:       func() {},
+		}
 
 		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
 		value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
@@ -392,7 +397,8 @@ func TestGeneralDMLEvent(t *testing.T) {
 			CommitTs:       1,
 			Event:          row,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {}}
+			Callback:       func() {},
+		}
 
 		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
 		protocolConfig = protocolConfig.WithMaxMessageBytes(300)
@@ -459,7 +465,8 @@ func TestGeneralDMLEvent(t *testing.T) {
 			CommitTs:       1,
 			Event:          row,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {}}
+			Callback:       func() {},
+		}
 
 		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
 		protocolConfig = protocolConfig.WithMaxMessageBytes(300)
@@ -527,7 +534,8 @@ func TestDMLTypeEvent(t *testing.T) {
 		CommitTs:       1,
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	err = encoder.AppendRowChangedEvent(context.Background(), "", rowEvent)
 	require.NoError(t, err)
@@ -576,7 +584,8 @@ func TestDMLTypeEvent(t *testing.T) {
 		CommitTs:       2,
 		Event:          updateRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	err = encoder.AppendRowChangedEvent(context.Background(), "", updateRowEvent)
 	require.NoError(t, err)
@@ -621,7 +630,8 @@ func TestDMLTypeEvent(t *testing.T) {
 		CommitTs:       3,
 		Event:          deleteRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	err = encoder.AppendRowChangedEvent(context.Background(), "", deleteRowEvent)
 	require.NoError(t, err)

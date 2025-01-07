@@ -86,6 +86,7 @@ func (h *mockHandler) IsPaused(event *mockEvent) bool          { return false }
 func (h *mockHandler) OnDrop(event *mockEvent) {
 	h.droppedEvents = append(h.droppedEvents, event)
 }
+
 func (h *mockHandler) drainDroppedEvents() []*mockEvent {
 	events := h.droppedEvents
 	h.droppedEvents = nil

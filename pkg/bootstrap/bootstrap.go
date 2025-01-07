@@ -56,7 +56,8 @@ func NewBootstrapper[T any](id string, newBootstrapMsg NewBootstrapMessageFn) *B
 // return cached bootstrap response if all node are initialized
 func (b *Bootstrapper[T]) HandleBootstrapResponse(
 	from node.ID,
-	msg *T) map[node.ID]*T {
+	msg *T,
+) map[node.ID]*T {
 	status, ok := b.nodes[from]
 	if !ok {
 		log.Warn("node is not found, ignore",

@@ -201,5 +201,4 @@ func TestTableSchemaStoreWhenNonMysqlSink(t *testing.T) {
 	tableSchemaStore.AddEvent(event3)
 	tableNames = tableSchemaStore.GetAllTableNames(7)
 	require.Equal(t, 3, len(tableNames))
-
 }

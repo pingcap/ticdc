@@ -141,7 +141,6 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 		sendFeedback(shouldPause)
 		return
 	}
-
 }
 
 // shouldPausePath determines if a path should be paused based on memory usage.

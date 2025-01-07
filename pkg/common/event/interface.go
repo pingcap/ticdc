@@ -112,6 +112,7 @@ func (i *InfluencedTables) ToPB() *heartbeatpb.InfluencedTables {
 		SchemaID:      i.SchemaID,
 	}
 }
+
 func ToTablesPB(tables []Table) []*heartbeatpb.Table {
 	res := make([]*heartbeatpb.Table, len(tables))
 	for i, t := range tables {

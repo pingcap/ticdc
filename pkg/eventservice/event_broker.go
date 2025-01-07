@@ -404,7 +404,8 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 			remoteID,
 			&pevent.SyncPointEvent{
 				DispatcherID: d.id,
-				CommitTs:     ts},
+				CommitTs:     ts,
+			},
 			d.getEventSenderState())
 		c.getMessageCh(d.workerIndex) <- syncPointEvent
 		d.nextSyncPoint = oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint).Add(d.syncPointInterval))
@@ -457,7 +458,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		task.updateSentResolvedTs(dataRange.EndTs)
 	}
 
-	//2. Get event iterator from eventStore.
+	// 2. Get event iterator from eventStore.
 	iter, err := c.eventStore.GetIterator(dispatcherID, dataRange)
 	if err != nil {
 		log.Panic("read events failed", zap.Error(err))
@@ -518,7 +519,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// 3. Send the events to the dispatcher.
 	var dml *pevent.DMLEvent
 	for {
-		//Node: The first event of the txn must return isNewTxn as true.
+		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
 		if err != nil {
 			log.Panic("read events failed", zap.Error(err))

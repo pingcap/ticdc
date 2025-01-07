@@ -125,5 +125,4 @@ func TestWriteCheckpointTs(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	require.Len(t, ddlWorker.producer.(*producer.MockProducer).GetAllEvents(), 2)
-
 }

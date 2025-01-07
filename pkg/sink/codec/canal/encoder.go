@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/sink/codec/internal"
@@ -36,9 +35,7 @@ import (
 	"golang.org/x/text/encoding/charmap"
 )
 
-var (
-	bytesDecoder = charmap.ISO8859_1.NewDecoder()
-)
+var bytesDecoder = charmap.ISO8859_1.NewDecoder()
 
 // TODO: we need to reorg this code later, including use util.jsonWriter and other unreasonable code
 func fillColumns(
@@ -449,7 +446,7 @@ func (c *JSONRowEventEncoder) EncodeCheckpointEvent(ts uint64) (*ticommon.Messag
 		return nil, errors.Trace(err)
 	}
 
-	return ticommon.NewResolvedMsg(config.ProtocolCanalJSON, nil, value, ts), nil
+	return ticommon.NewMsg(nil, value), nil
 }
 
 // AppendRowChangedEvent implements the interface EventJSONBatchEncoder
@@ -470,7 +467,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 		return errors.Trace(err)
 	}
 
-	m := ticommon.NewMsg(config.ProtocolCanalJSON, nil, value, e.CommitTs, ticommon.MessageTypeRow, e.TableInfo.GetSchemaNamePtr(), e.TableInfo.GetTableNamePtr())
+	m := ticommon.NewMsg(nil, value)
 	m.Callback = e.Callback
 	m.IncRowsCount()
 
@@ -547,7 +544,7 @@ func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 		return nil, errors.Trace(err)
 	}
 
-	result := ticommon.NewMsg(config.ProtocolCanalJSON, nil, value, 0, ticommon.MessageTypeRow, nil, nil)
+	result := ticommon.NewMsg(nil, value)
 	result.Callback = event.Callback
 	result.IncRowsCount()
 
@@ -587,7 +584,7 @@ func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*ticommon
 		return nil, errors.Trace(err)
 	}
 
-	return ticommon.NewDDLMsg(config.ProtocolCanalJSON, nil, value, nil), nil
+	return ticommon.NewMsg(nil, value), nil
 }
 
 func (b *JSONRowEventEncoder) Clean() {

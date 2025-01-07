@@ -78,7 +78,7 @@ const (
 	ErrorTypeTargetNotFound       ErrorType = 207
 	ErrorTypeInvalidMessage       ErrorType = 208
 
-	//ErrorTypeCreateEventDispatcherManagerFailed ErrorType = 300
+	// ErrorTypeCreateEventDispatcherManagerFailed ErrorType = 300
 
 	ErrorInvalidDDLEvent ErrorType = 301
 )

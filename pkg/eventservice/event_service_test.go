@@ -141,7 +141,6 @@ func TestEventServiceBasic(t *testing.T) {
 			break
 		}
 	}
-
 }
 
 var _ messaging.MessageCenter = &mockMessageCenter{}
@@ -158,7 +157,6 @@ func newMockMessageCenter() *mockMessageCenter {
 }
 
 func (m *mockMessageCenter) OnNodeChanges(nodeInfos map[node.ID]*node.Info) {
-
 }
 
 func (m *mockMessageCenter) SendEvent(event *messaging.TargetMessage) error {
@@ -386,7 +384,6 @@ func (m *mockSchemaStore) RegisterTable(
 	tableID int64,
 	startTS common.Ts,
 ) error {
-
 	return nil
 }
 
@@ -396,7 +393,6 @@ func (m *mockSchemaStore) UnregisterTable(tableID int64) error {
 
 // GetNextDDLEvents returns the next ddl event which finishedTs is within the range (start, end]
 func (m *mockSchemaStore) FetchTableDDLEvents(tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
-
 	events := m.DDLEvents[tableID]
 	if len(events) == 0 {
 		return nil, nil

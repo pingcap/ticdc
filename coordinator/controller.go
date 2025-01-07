@@ -87,7 +87,8 @@ func NewController(
 	backend changefeed.Backend,
 	stream dynstream.DynamicStream[int, string, *Event, *Controller, *StreamHandler],
 	taskScheduler threadpool.ThreadPool,
-	batchSize int, balanceInterval time.Duration) *Controller {
+	batchSize int, balanceInterval time.Duration,
+) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	changefeedDB := changefeed.NewChangefeedDB(version)
 
@@ -123,7 +124,7 @@ func NewController(
 	})
 	log.Info("changefeed bootstrap initial nodes",
 		zap.Int("nodes", len(nodes)))
-	var newNodes = make([]*node.Info, 0, len(nodes))
+	newNodes := make([]*node.Info, 0, len(nodes))
 	for _, n := range nodes {
 		newNodes = append(newNodes, n)
 	}
@@ -191,14 +192,14 @@ func (c *Controller) onNodeChanged() {
 	currentNodes := c.bootstrapper.GetAllNodes()
 
 	activeNodes := c.nodeManager.GetAliveNodes()
-	var newNodes = make([]*node.Info, 0, len(activeNodes))
+	newNodes := make([]*node.Info, 0, len(activeNodes))
 	for id, n := range activeNodes {
 		if _, ok := currentNodes[id]; !ok {
 			newNodes = append(newNodes, n)
 		}
 	}
 	var removedNodes []node.ID
-	for id, _ := range currentNodes {
+	for id := range currentNodes {
 		if _, ok := activeNodes[id]; !ok {
 			removedNodes = append(removedNodes, id)
 			c.RemoveNode(id)

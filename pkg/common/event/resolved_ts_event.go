@@ -106,7 +106,8 @@ type ResolvedEvent struct {
 
 func NewResolvedEvent(
 	resolvedTs common.Ts,
-	dispatcherID common.DispatcherID) ResolvedEvent {
+	dispatcherID common.DispatcherID,
+) ResolvedEvent {
 	return ResolvedEvent{
 		DispatcherID: dispatcherID,
 		ResolvedTs:   resolvedTs,

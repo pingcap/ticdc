@@ -38,7 +38,8 @@ type AddMaintainerOperator struct {
 func NewAddMaintainerOperator(
 	db *changefeed.ChangefeedDB,
 	cf *changefeed.Changefeed,
-	dest node.ID) *AddMaintainerOperator {
+	dest node.ID,
+) *AddMaintainerOperator {
 	return &AddMaintainerOperator{
 		cf:   cf,
 		dest: dest,

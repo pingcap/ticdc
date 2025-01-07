@@ -185,11 +185,13 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 // PathHasher is used to select target stream for the path.
 type PathHasher[P Path] func(path P) uint64
 
-const DefaultInputBufferSize = 1024
-const DefaultSchedulerInterval = 16 * time.Second
-const DefaultReportInterval = 10 * time.Second
-const DefaultMaxPendingSize = 1024 * 1024 * 1024 // 1 GB
-const DefaultFeedbackInterval = 1000 * time.Millisecond
+const (
+	DefaultInputBufferSize   = 1024
+	DefaultSchedulerInterval = 16 * time.Second
+	DefaultReportInterval    = 10 * time.Second
+	DefaultMaxPendingSize    = 1024 * 1024 * 1024 // 1 GB
+	DefaultFeedbackInterval  = 1000 * time.Millisecond
+)
 
 type Option struct {
 	InputChanSize int // The buffer size of the input channel. By default 0, means 1024.

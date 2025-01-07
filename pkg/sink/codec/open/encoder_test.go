@@ -71,7 +71,8 @@ func TestEncoderOneMessage(t *testing.T) {
 		CommitTs:       1,
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() { count += 1 }}
+		Callback:       func() { count += 1 },
+	}
 
 	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.NoError(t, err)
@@ -124,7 +125,8 @@ func TestEncoderMultipleMessage(t *testing.T) {
 			CommitTs:       1,
 			Event:          insertRow,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() { count += 1 }}
+			Callback:       func() { count += 1 },
+		}
 
 		err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 		require.NoError(t, err)
@@ -193,7 +195,8 @@ func TestLargeMessage(t *testing.T) {
 		CommitTs:       1,
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() { count += 1 }}
+		Callback:       func() { count += 1 },
+	}
 
 	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.ErrorIs(t, err, cerror.ErrMessageTooLarge)
@@ -224,7 +227,8 @@ func TestLargeMessageWithHandle(t *testing.T) {
 		CommitTs:       1,
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.NoError(t, err)
@@ -268,7 +272,8 @@ func TestLargeMessageWithoutHandle(t *testing.T) {
 		CommitTs:       1,
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.ErrorIs(t, err, cerror.ErrOpenProtocolCodecInvalidData)

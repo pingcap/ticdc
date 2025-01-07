@@ -116,8 +116,8 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dis
 			SyncPointInterval:  time.Duration(5 * time.Second),
 			SyncPointRetention: time.Duration(10 * time.Minute),
 		}, // syncPointConfig
-		nil,          //filterConfig
-		common.Ts(0), //pdTs
+		nil,          // filterConfig
+		common.Ts(0), // pdTs
 		make(chan error, 1),
 	)
 }
@@ -484,7 +484,6 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	checkpointTs = dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(1), checkpointTs)
 	require.Equal(t, 1, count)
-
 }
 
 func TestTableTriggerEventDispatcherInMysql(t *testing.T) {

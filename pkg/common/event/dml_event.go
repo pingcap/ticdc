@@ -78,7 +78,8 @@ func NewDMLEvent(
 	tableID int64,
 	startTs,
 	commitTs uint64,
-	tableInfo *common.TableInfo) *DMLEvent {
+	tableInfo *common.TableInfo,
+) *DMLEvent {
 	// FIXME: check if chk isFull in the future
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount)
 	return &DMLEvent{

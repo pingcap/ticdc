@@ -316,7 +316,6 @@ func (mc *messageCenter) touchRemoteTarget(id node.ID, epoch uint64, addr string
 		mc.receiveCmdCh, mc.cfg)
 	mc.remoteTargets.m[id] = newTarget
 	return newTarget
-
 }
 
 func (mc *messageCenter) updateMetrics(ctx context.Context) {

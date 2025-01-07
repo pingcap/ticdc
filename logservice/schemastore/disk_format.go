@@ -46,8 +46,10 @@ import (
 //     and ddl jobs in the range (snapshot_ts, max_finished_ddl_ts]
 //     and we will pull ddl job from `resolved_ts` at restart if the current gc ts is smaller than resolved_ts.
 
-const snapshotSchemaKeyPrefix = "ss_"
-const snapshotTableKeyPrefix = "st_"
+const (
+	snapshotSchemaKeyPrefix = "ss_"
+	snapshotTableKeyPrefix  = "st_"
+)
 
 const ddlKeyPrefix = "ds_"
 

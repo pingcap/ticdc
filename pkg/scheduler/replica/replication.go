@@ -128,7 +128,7 @@ func (db *replicationDB[T, R]) GetGroupChecker(groupID GroupID) (ret GroupChecke
 }
 
 func (db *replicationDB[T, R]) GetAbsent() []R {
-	var absent = make([]R, 0)
+	absent := make([]R, 0)
 	db.withRLock(func() {
 		for _, g := range db.taskGroups {
 			absent = append(absent, g.GetAbsent()...)

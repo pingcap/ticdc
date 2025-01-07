@@ -650,6 +650,7 @@ func getCreatedIDs(oldIDs []int64, newIDs []int64) []int64 {
 	}
 	return createdIDs
 }
+
 func getDroppedIDs(oldIDs []int64, newIDs []int64) []int64 {
 	return getCreatedIDs(newIDs, oldIDs)
 }

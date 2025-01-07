@@ -51,7 +51,8 @@ func TestBasicType(t *testing.T) {
 		CommitTs:       1,
 		Event:          row,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	protocolConfig := newcommon.NewConfig(config.ProtocolOpen)
 	key, value, _, err := encodeRowChangedEvent(rowEvent, protocolConfig, false, "")
@@ -83,7 +84,8 @@ func TestDMLEvent(t *testing.T) {
 		CommitTs:       1,
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	key, value, length, err := encodeRowChangedEvent(insertRowEvent, protocolConfig, false, "")
 	require.NoError(t, err)
@@ -104,7 +106,8 @@ func TestDMLEvent(t *testing.T) {
 		CommitTs:       2,
 		Event:          updateRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	key, value, _, err = encodeRowChangedEvent(updateRowEvent, protocolConfig, false, "")
 	require.NoError(t, err)
@@ -124,7 +127,8 @@ func TestDMLEvent(t *testing.T) {
 			CommitTs:       3,
 			Event:          deleteRow,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {}}
+			Callback:       func() {},
+		}
 
 		key, value, _, err := encodeRowChangedEvent(updateRowEvent, protocolConfig, false, "")
 		require.NoError(t, err)
@@ -132,7 +136,6 @@ func TestDMLEvent(t *testing.T) {
 		require.Equal(t, `{"ts":3,"scm":"test","tbl":"t","t":1}`, string(key))
 		require.Equal(t, `{"d":{"a":{"t":1,"h":true,"f":11,"v":1},"b":{"t":3,"f":65,"v":456}}}`, string(value))
 	}
-
 }
 
 func TestOnlyOutputUpdatedEvent(t *testing.T) {
@@ -159,7 +162,8 @@ func TestOnlyOutputUpdatedEvent(t *testing.T) {
 			CommitTs:       1,
 			Event:          row,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {}}
+			Callback:       func() {},
+		}
 
 		_, value, _, err := encodeRowChangedEvent(updateRowEvent, protocolConfig, false, "")
 		require.NoError(t, err)
@@ -191,7 +195,8 @@ func TestHandleOnlyEvent(t *testing.T) {
 		CommitTs:       1,
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	key, value, _, err := encodeRowChangedEvent(insertRowEvent, protocolConfig, true, "")
 	require.NoError(t, err)
@@ -222,7 +227,6 @@ func TestDDLEvent(t *testing.T) {
 
 	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":2}`, string(key)[16:])
 	require.Equal(t, `{"q":"create table test.t(a tinyint primary key, b int)","t":3}`, string(value)[8:]) // ?
-
 }
 
 func TestResolvedTsEvent(t *testing.T) {
@@ -231,7 +235,6 @@ func TestResolvedTsEvent(t *testing.T) {
 
 	require.Equal(t, `{"ts":12345678,"t":3}`, string(key)[16:])
 	require.Equal(t, 8, len(string(value)))
-
 }
 
 func TestEncodeWithColumnSelector(t *testing.T) {
@@ -265,7 +268,8 @@ func TestEncodeWithColumnSelector(t *testing.T) {
 		CommitTs:       1,
 		Event:          insertRow,
 		ColumnSelector: selector,
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	key, value, _, err := encodeRowChangedEvent(insertRowEvent, protocolConfig, false, "")
 	require.NoError(t, err)

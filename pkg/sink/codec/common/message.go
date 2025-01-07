@@ -16,8 +16,6 @@ package common
 import (
 	"encoding/binary"
 	"encoding/json"
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/tiflow/cdc/model"
 )
 
 // MaxRecordOverhead is used to calculate message size by sarama kafka client.
@@ -69,24 +67,6 @@ func (m *Message) SetRowsCount(cnt int) {
 // IncRowsCount increase the number of rows
 func (m *Message) IncRowsCount() {
 	m.rowsCount++
-}
-
-// NewDDLMsg creates a DDL message.
-func NewDDLMsg(proto config.Protocol, key, value []byte, event *model.DDLEvent) *Message {
-	return NewMsg(
-		proto,
-		key,
-		value,
-		event.CommitTs,
-		MessageTypeDDL,
-		&event.TableInfo.TableName.Schema,
-		&event.TableInfo.TableName.Table,
-	)
-}
-
-// NewResolvedMsg creates a resolved ts message.
-func NewResolvedMsg(proto config.Protocol, key, value []byte, ts uint64) *Message {
-	return NewMsg(proto, key, value, ts, MessageTypeResolved, nil, nil)
 }
 
 // NewMsg should be used when creating a Message struct.

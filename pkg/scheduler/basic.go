@@ -105,7 +105,8 @@ func BasicSchedule[T replica.ReplicationID, R replica.Replication[T]](
 	availableSize int,
 	absent []R,
 	nodeTasks map[node.ID]int,
-	schedule func(R, node.ID) bool) {
+	schedule func(R, node.ID) bool,
+) {
 	if len(nodeTasks) == 0 {
 		log.Warn("scheduler: no node available, skip")
 		return

@@ -82,7 +82,8 @@ func NewSplitter(
 func (s *Splitter) SplitSpans(ctx context.Context,
 	span *heartbeatpb.TableSpan,
 	totalCaptures int,
-	expectedSpanNum int) []*heartbeatpb.TableSpan {
+	expectedSpanNum int,
+) []*heartbeatpb.TableSpan {
 	spans := []*heartbeatpb.TableSpan{span}
 	for _, sp := range s.splitters {
 		spans = sp.split(ctx, span, totalCaptures, expectedSpanNum)

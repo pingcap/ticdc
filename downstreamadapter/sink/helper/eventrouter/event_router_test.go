@@ -217,7 +217,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(0), p)
 
-	//table partition
+	// table partition
 	tableInfo = &common.TableInfo{
 		TableName: common.TableName{Schema: "test_table", Table: "table"},
 	}

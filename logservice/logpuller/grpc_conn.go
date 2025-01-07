@@ -94,7 +94,7 @@ func createGRPCConn(ctx context.Context, credential *security.Credential, target
 
 	return grpc.DialContext(ctx, target, dialOptions...)
 
-	//return grpc.NewClient(target, dialOptions...)
+	// return grpc.NewClient(target, dialOptions...)
 }
 
 func getContextFromFeatures(ctx context.Context, features []string) context.Context {

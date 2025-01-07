@@ -116,8 +116,10 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 	return ToDigest(hash)
 }
 
-var once sync.Once
-var storage *SharedColumnSchemaStorage
+var (
+	once    sync.Once
+	storage *SharedColumnSchemaStorage
+)
 
 func GetSharedColumnSchemaStorage() *SharedColumnSchemaStorage {
 	once.Do(func() {

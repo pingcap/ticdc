@@ -127,7 +127,8 @@ func (m *mounter) rawKVToChunkV1(value []byte, tableInfo *common.TableInfo, chk 
 }
 
 func tryDecodeFromHandle(tableInfo *common.TableInfo, schemaColIdx int, col *model.ColumnInfo, handle kv.Handle, chk *chunk.Chunk,
-	decoder *codec.Decoder, pkCols []int64, prefixColIDs []int64) (bool, error) {
+	decoder *codec.Decoder, pkCols []int64, prefixColIDs []int64,
+) (bool, error) {
 	if tableInfo.PKIsHandle() && mysql.HasPriKeyFlag(col.FieldType.GetFlag()) {
 		chk.AppendInt64(schemaColIdx, handle.IntValue())
 		return true, nil

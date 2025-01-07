@@ -341,7 +341,6 @@ func (w *KafkaDMLWorker) sendMessages() error {
 			for _, message := range future.Messages {
 				start := time.Now()
 				if err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
-					message.SetPartitionKey(future.Key.PartitionKey)
 					if err = w.producer.AsyncSendMessage(
 						w.ctx,
 						future.Key.Topic,

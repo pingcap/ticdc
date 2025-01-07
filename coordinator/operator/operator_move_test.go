@@ -26,9 +26,11 @@ import (
 func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test")
-	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{ChangefeedID: cfID,
-		Config:  config.GetDefaultReplicaConfig(),
-		SinkURI: "mysql://127.0.0.1:3306"},
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
 		1)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 
@@ -50,9 +52,11 @@ func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 	require.Nil(t, op.Schedule())
 
 	cf2ID := common.NewChangeFeedIDWithName("test")
-	cf2 := changefeed.NewChangefeed(cf2ID, &config.ChangeFeedInfo{ChangefeedID: cf2ID,
-		Config:  config.GetDefaultReplicaConfig(),
-		SinkURI: "mysql://127.0.0.1:3306"},
+	cf2 := changefeed.NewChangefeed(cf2ID, &config.ChangeFeedInfo{
+		ChangefeedID: cf2ID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
 		1)
 	changefeedDB.AddReplicatingMaintainer(cf2, "n1")
 	op2 := NewMoveMaintainerOperator(changefeedDB, cf2, "n1", "n2")

@@ -37,7 +37,8 @@ func TestRetry(t *testing.T) {
 	changefeed, state, err := backoff.CheckStatus(&heartbeatpb.MaintainerStatus{
 		CheckpointTs: 1,
 		Err: []*heartbeatpb.RunningError{
-			{Message: "test"}},
+			{Message: "test"},
+		},
 	})
 	require.True(t, changefeed)
 	require.Equal(t, model.StateWarning, state)
@@ -56,12 +57,13 @@ func TestRetry(t *testing.T) {
 	require.True(t, backoff.ShouldRun())
 	require.False(t, backoff.retrying.Load())
 
-	//fail
+	// fail
 	changefeed, state, err = backoff.CheckStatus(&heartbeatpb.MaintainerStatus{
 		CheckpointTs: 1,
 		Err: []*heartbeatpb.RunningError{
 			{Message: "test"},
-			{Code: "CDC:ErrSnapshotLostByGC", Message: "snapshot lost by gc"}},
+			{Code: "CDC:ErrSnapshotLostByGC", Message: "snapshot lost by gc"},
+		},
 	})
 
 	require.True(t, changefeed)
@@ -101,7 +103,8 @@ func TestErrorReportedWhenRetrying(t *testing.T) {
 	changefeed, state, err := backoff.CheckStatus(&heartbeatpb.MaintainerStatus{
 		CheckpointTs: 1,
 		Err: []*heartbeatpb.RunningError{
-			{Message: "test"}},
+			{Message: "test"},
+		},
 	})
 	require.NotNil(t, err)
 	require.True(t, changefeed)
@@ -114,7 +117,8 @@ func TestErrorReportedWhenRetrying(t *testing.T) {
 	changefeed, state, err = backoff.CheckStatus(&heartbeatpb.MaintainerStatus{
 		CheckpointTs: 1,
 		Err: []*heartbeatpb.RunningError{
-			{Message: "test"}},
+			{Message: "test"},
+		},
 	})
 	require.NotNil(t, err)
 	require.True(t, changefeed)
@@ -136,7 +140,8 @@ func TestFailedWhenRetry(t *testing.T) {
 	changefeed, state, err := backoff.CheckStatus(&heartbeatpb.MaintainerStatus{
 		CheckpointTs: 1,
 		Err: []*heartbeatpb.RunningError{
-			{Message: "test"}},
+			{Message: "test"},
+		},
 	})
 	require.NotNil(t, err)
 	require.True(t, changefeed)
@@ -149,7 +154,8 @@ func TestFailedWhenRetry(t *testing.T) {
 	changefeed, state, err = backoff.CheckStatus(&heartbeatpb.MaintainerStatus{
 		CheckpointTs: 1,
 		Err: []*heartbeatpb.RunningError{
-			{Message: "test"}},
+			{Message: "test"},
+		},
 	})
 	require.NotNil(t, err)
 	require.True(t, changefeed)

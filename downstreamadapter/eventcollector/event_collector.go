@@ -328,7 +328,6 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 		Type:    typeRegisterDispatcherReq,
 		Message: []messaging.IOTypeT{message},
 	})
-
 	if err != nil {
 		log.Info("failed to send dispatcher request message to event service, try again later",
 			zap.String("changefeedID", req.Dispatcher.GetChangefeedID().ID().String()),

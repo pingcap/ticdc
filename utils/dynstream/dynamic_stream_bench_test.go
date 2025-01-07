@@ -36,6 +36,7 @@ type intEventHandler struct {
 func (h *intEventHandler) Path(event intEvent) int {
 	return int(event)
 }
+
 func (h *intEventHandler) Handle(dest D, events ...intEvent) (await bool) {
 	for i := 0; i < h.times; i++ {
 		h.inc.Add(1)
@@ -59,7 +60,8 @@ func prepareDynamicStream(pathCount int, eventCount int, times int) (DynamicStre
 	handler := &intEventHandler{
 		inc:   inc,
 		times: times,
-		wg:    wg}
+		wg:    wg,
+	}
 
 	ds := NewParallelDynamicStream(func(p int) uint64 { return uint64(p) }, handler)
 	ds.Start()

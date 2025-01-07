@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
@@ -140,7 +139,7 @@ func (d *BatchEncoder) pushMessage(key, value []byte, callback func()) {
 		versionHead := make([]byte, 8)
 		binary.BigEndian.PutUint64(versionHead, batchVersion1)
 
-		message := common.NewMsg(config.ProtocolOpen, versionHead, valueLenByte[:], 0, common.MessageTypeRow, nil, nil)
+		message := common.NewMsg(versionHead, valueLenByte[:])
 		message.Key = append(message.Key, keyLenByte[:]...)
 		message.Key = append(message.Key, key...)
 		message.Value = append(message.Value, value...)
@@ -158,7 +157,6 @@ func (d *BatchEncoder) pushMessage(key, value []byte, callback func()) {
 	latestMessage.Value = append(latestMessage.Value, value...)
 	d.callbackBuff = append(d.callbackBuff, callback)
 	latestMessage.IncRowsCount()
-
 }
 
 func (d *BatchEncoder) finalizeCallback() {
@@ -218,16 +216,15 @@ func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 		return nil, errors.Trace(err)
 	}
 
-	return common.NewDDLMsg(config.ProtocolOpen, key, value, nil), nil
+	return common.NewMsg(key, value), nil
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
 func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
 	key, value, err := encodeResolvedTs(ts)
-
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	return common.NewResolvedMsg(config.ProtocolOpen, key, value, ts), nil
+	return common.NewMsg(key, value), nil
 }

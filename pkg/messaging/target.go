@@ -247,7 +247,8 @@ func (s *remoteMessageTarget) connect() {
 			zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))
 		s.collectErr(AppError{
 			Type:   ErrorTypeConnectionFailed,
-			Reason: fmt.Sprintf("Cannot create grpc client on address %s, error: %s", s.targetAddr, err.Error())})
+			Reason: fmt.Sprintf("Cannot create grpc client on address %s, error: %s", s.targetAddr, err.Error()),
+		})
 		return
 	}
 
@@ -265,7 +266,8 @@ func (s *remoteMessageTarget) connect() {
 			zap.Any("messageCenterID", s.messageCenterID), zap.Stringer("remote", s.targetId), zap.Error(err))
 		s.collectErr(AppError{
 			Type:   ErrorTypeConnectionFailed,
-			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error())})
+			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error()),
+		})
 		return
 	}
 
@@ -275,7 +277,8 @@ func (s *remoteMessageTarget) connect() {
 			zap.Any("messageCenterID", s.messageCenterID), zap.Stringer("remote", s.targetId), zap.Error(err))
 		s.collectErr(AppError{
 			Type:   ErrorTypeConnectionFailed,
-			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error())})
+			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error()),
+		})
 		return
 	}
 
@@ -481,7 +484,8 @@ func (s *localMessageTarget) sendCommand(msg *TargetMessage) error {
 
 func newLocalMessageTarget(id node.ID,
 	gatherRecvEventChan chan *TargetMessage,
-	gatherRecvCmdChan chan *TargetMessage) *localMessageTarget {
+	gatherRecvCmdChan chan *TargetMessage,
+) *localMessageTarget {
 	return &localMessageTarget{
 		localId:            id,
 		recvEventCh:        gatherRecvEventChan,

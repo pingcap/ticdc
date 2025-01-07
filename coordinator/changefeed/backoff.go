@@ -167,7 +167,7 @@ func (m *Backoff) HandleError(errs []*heartbeatpb.RunningError) (bool, *heartbea
 		}
 	}
 
-	var lastError = errs[len(errs)-1]
+	lastError := errs[len(errs)-1]
 
 	if !m.retrying.Load() {
 		// errBackoff may be stopped, reset it before the first retry.

@@ -43,9 +43,11 @@ func NewHeap[T Item[T]]() *Heap[T] {
 // Notice: Don't call those methods below directly! They are only called by heap package.
 
 func (h Heap[T]) Len() int { return len(h.items) }
+
 func (h Heap[T]) Less(i, j int) bool {
 	return h.items[i].LessThan(h.items[j])
 }
+
 func (h Heap[T]) Swap(i, j int) {
 	h.items[i], h.items[j] = h.items[j], h.items[i]
 	h.items[i].SetHeapIndex(i + 1)

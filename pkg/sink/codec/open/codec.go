@@ -308,7 +308,6 @@ func writeColumnFieldValues(
 				writeColumnFieldValue(jWriter, col, row, idx, tableInfo)
 			})
 		}
-
 	}
 	if !flag {
 		return cerror.ErrOpenProtocolCodecInvalidData.GenWithStack("not found handle key columns for the delete event")
@@ -487,5 +486,4 @@ func writeColumnFieldValueIfUpdated(
 		}
 	}
 	return nil
-
 }

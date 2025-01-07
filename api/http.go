@@ -29,7 +29,6 @@ func RegisterRoutes(
 	server server.Server,
 	registry prometheus.Gatherer,
 ) {
-
 	// Open API V2
 	v2.RegisterOpenAPIV2Routes(router, v2.NewOpenAPIV2(server))
 

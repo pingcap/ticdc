@@ -27,12 +27,15 @@ type inc struct {
 	path string
 }
 
-type D struct{}
-type incHandler struct{}
+type (
+	D          struct{}
+	incHandler struct{}
+)
 
 func (h *incHandler) Path(event *inc) string {
 	return event.path
 }
+
 func (h *incHandler) Handle(dest D, events ...*inc) (await bool) {
 	event := events[0]
 	for i := 0; i < event.times; i++ {
@@ -66,7 +69,6 @@ func runStream(eventCount int, times int) {
 
 	done.Wait()
 	stream.close()
-
 }
 
 func runLoop(eventCount int, times int) {

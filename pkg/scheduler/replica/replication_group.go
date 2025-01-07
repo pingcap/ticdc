@@ -133,7 +133,7 @@ func (g *replicationGroup[T, R]) BindReplicaToNode(old, new node.ID, replica R) 
 
 // updateNodeMap updates the node map, it will remove the task from the old node and add it to the new node
 func (g *replicationGroup[T, R]) updateNodeMap(old, new node.ID, replica R) {
-	//clear from the old node
+	// clear from the old node
 	if old != "" {
 		oldMap, ok := g.nodeTasks[old]
 		if ok {

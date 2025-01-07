@@ -118,7 +118,8 @@ func NewEventDispatcherManager(
 	cfConfig *config.ChangefeedConfig,
 	tableTriggerEventDispatcherID *heartbeatpb.DispatcherID,
 	startTs uint64,
-	maintainerID node.ID) (*EventDispatcherManager, uint64, error) {
+	maintainerID node.ID,
+) (*EventDispatcherManager, uint64, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &EventDispatcherManager{
 		dispatcherMap:                          newDispatcherMap(),

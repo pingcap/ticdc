@@ -96,7 +96,6 @@ func (s *stream[A, P, T, D, H]) in() chan eventWrap[A, P, T, D, H] {
 	} else {
 		return s.eventChan
 	}
-
 }
 
 // Start the stream.

@@ -161,7 +161,6 @@ func TestDequeReverse(t *testing.T) {
 		}
 		assert.Equal(t, []int{1, 2, 3, 4, 5, 6}, items)
 	}
-
 }
 
 func TestDequeBlockIt(t *testing.T) {

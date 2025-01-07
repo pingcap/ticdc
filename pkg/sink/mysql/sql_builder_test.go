@@ -163,7 +163,9 @@ func TestBuildInsert(t *testing.T) {
 		// json
 		"{\"key1\": \"value1\", \"key2\": \"value2\", \"key3\": \"123\"}",
 		// gbk: varchar, char, text, text, tinyblob
-		"测试", "中国", "上海", "你好,世界", []uint8{0xc4, 0xe3, 0xba, 0xc3, 0xca, 0xc0, 0xbd, 0xe7}}
+		"测试", "中国", "上海", "你好,世界",
+		[]uint8{0xc4, 0xe3, 0xba, 0xc3, 0xca, 0xc0, 0xbd, 0xe7},
+	}
 
 	// case 1: Convert to INSERT INTO
 	exportedSQL := "INSERT INTO `test`.`t` (`id`,`c_tinyint`,`c_smallint`,`c_mediumint`,`c_int`,`c_bigint`,`c_unsigned_tinyint`,`c_unsigned_smallint`,`c_unsigned_mediumint`,`c_unsigned_int`,`c_unsigned_bigint`,`c_float`,`c_double`,`c_decimal`,`c_decimal_2`,`c_unsigned_float`,`c_unsigned_double`,`c_unsigned_decimal`,`c_unsigned_decimal_2`,`c_date`,`c_datetime`,`c_timestamp`,`c_time`,`c_year`,`c_tinytext`,`c_text`,`c_mediumtext`,`c_longtext`,`c_tinyblob`,`c_blob`,`c_mediumblob`,`c_longblob`,`c_char`,`c_varchar`,`c_binary`,`c_varbinary`,`c_enum`,`c_set`,`c_bit`,`c_json`,`name`,`country`,`city`,`description`,`image`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
@@ -368,5 +370,4 @@ func TestBuildUpdate(t *testing.T) {
 	require.Equal(t, expectedSQL, sql)
 	require.Len(t, args, 5)
 	require.Equal(t, expectedArgs, args)
-
 }
