@@ -454,7 +454,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 			ID:            col.ID,
 			IsPKHandle:    pkIsHandle,
 			Ft:            col.FieldType.Clone(),
-			VirtualGenCol: col.IsGenerated(),
+			VirtualGenCol: !IsColCDCVisible(col),
 		}
 		colSchema.RowColFieldTps[col.ID] = colSchema.RowColInfos[i].Ft
 		colSchema.RowColFieldTpsSlice = append(colSchema.RowColFieldTpsSlice, colSchema.RowColInfos[i].Ft)

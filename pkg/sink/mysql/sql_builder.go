@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/quotes"
+	"go.uber.org/zap"
 )
 
 type preparedDMLs struct {
@@ -35,7 +36,16 @@ type preparedDMLs struct {
 }
 
 func (d *preparedDMLs) String() string {
-	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v", d.sqls, d.values, d.rowCount, d.approximateSize, d.startTs)
+	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v", d.fmtSqls(), d.values, d.rowCount, d.approximateSize, d.startTs)
+}
+
+func (d *preparedDMLs) fmtSqls() string {
+	builder := strings.Builder{}
+	for _, sql := range d.sqls {
+		builder.WriteString(sql)
+		builder.WriteString(";")
+	}
+	return builder.String()
 }
 
 var dmlsPool = sync.Pool{
@@ -192,6 +202,7 @@ func whereSlice(row *chunk.Row, tableInfo *common.TableInfo) ([]string, []interf
 		if err != nil {
 			return nil, nil, errors.Trace(err)
 		}
+		log.Info("fizz whereSlice", zap.Any("col", col.Name.O), zap.Any("col.Value", v))
 		args = append(args, v)
 	}
 
@@ -206,5 +217,6 @@ func whereSlice(row *chunk.Row, tableInfo *common.TableInfo) ([]string, []interf
 			args = append(args, v)
 		}
 	}
+	log.Info("fizz row", zap.Any("row", row.ToString(tableInfo.GetFieldSlice())))
 	return colNames, args, nil
 }
