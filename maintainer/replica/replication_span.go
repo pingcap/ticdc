@@ -217,7 +217,6 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.Ta
 		return nil, errors.Trace(err)
 	}
 
-	log.Info("hyy NewAddDispatcherMessage", zap.Any("startTs", r.status.Load().CheckpointTs), zap.Any("span", r.Span))
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
