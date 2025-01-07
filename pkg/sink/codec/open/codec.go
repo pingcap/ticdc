@@ -9,7 +9,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -164,7 +163,7 @@ func encodeResolvedTs(ts uint64) ([]byte, []byte, error) {
 	var versionByte [8]byte
 	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
 	binary.BigEndian.PutUint64(valueLenByte[:], 0)
-	binary.BigEndian.PutUint64(versionByte[:], encoder.BatchVersion1)
+	binary.BigEndian.PutUint64(versionByte[:], batchVersion1)
 
 	keyOutput := new(bytes.Buffer)
 

@@ -15,6 +15,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	batchVersion1 uint64 = 1
+)
+
 // BatchEncoder for open protocol will batch multiple row changed events into a single message.
 // One message can contain at most MaxBatchSize events, and the total size of the message cannot exceed MaxMessageBytes.
 type BatchEncoder struct {
@@ -121,7 +125,7 @@ func (d *BatchEncoder) pushMessage(key, value []byte, callback func()) {
 		d.finalizeCallback()
 		// create a new message
 		versionHead := make([]byte, 8)
-		binary.BigEndian.PutUint64(versionHead, encoder.BatchVersion1)
+		binary.BigEndian.PutUint64(versionHead, batchVersion1)
 
 		message := common.NewMsg(config.ProtocolOpen, versionHead, valueLenByte[:], 0, common.MessageTypeRow, nil, nil)
 		message.Key = append(message.Key, keyLenByte[:]...)
@@ -167,7 +171,7 @@ func enhancedKeyValue(key, value []byte) ([]byte, []byte) {
 	)
 	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
 	binary.BigEndian.PutUint64(valueLenByte[:], uint64(len(value)))
-	binary.BigEndian.PutUint64(versionHead[:], encoder.BatchVersion1)
+	binary.BigEndian.PutUint64(versionHead[:], batchVersion1)
 
 	keyOutput := versionHead[:]
 	keyOutput = append(keyOutput, keyLenByte[:]...)

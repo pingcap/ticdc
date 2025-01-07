@@ -20,14 +20,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
-const (
-	// BatchVersion1 represents the version of batch format
-	BatchVersion1 uint64 = 1
-
-	// MemBufShrinkThreshold represents the threshold of shrinking the buffer.
-	MemBufShrinkThreshold = 1024 * 1024
-)
-
 // EventEncoder is an abstraction for events encoder
 type EventEncoder interface {
 	// EncodeCheckpointEvent appends a checkpoint event into the batch.

@@ -11,7 +11,6 @@ import (
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	ticonfig "github.com/pingcap/tiflow/pkg/config"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
@@ -70,7 +69,7 @@ func TestEncoderOneMessage(t *testing.T) {
 	require.Equal(t, 1, messages[0].GetRowsCount())
 
 	message := messages[0]
-	require.Equal(t, uint64(encoder.BatchVersion1), readByteToUint(message.Key[:8]))
+	require.Equal(t, uint64(batchVersion1), readByteToUint(message.Key[:8]))
 	require.Equal(t, uint64(len(message.Key[16:])), readByteToUint(message.Key[8:16]))
 	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message.Key[16:]))
 
@@ -126,7 +125,7 @@ func TestEncoderMultipleMessage(t *testing.T) {
 
 	// message1
 	message1 := messages[0]
-	require.Equal(t, uint64(encoder.BatchVersion1), readByteToUint(message1.Key[:8]))
+	require.Equal(t, uint64(batchVersion1), readByteToUint(message1.Key[:8]))
 	length1 := readByteToUint(message1.Key[8:16])
 	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message1.Key[16:16+length1]))
 	length2 := readByteToUint(message1.Key[16+length1 : 24+length1])
@@ -141,7 +140,7 @@ func TestEncoderMultipleMessage(t *testing.T) {
 
 	// message2
 	message2 := messages[1]
-	require.Equal(t, uint64(encoder.BatchVersion1), readByteToUint(message2.Key[:8]))
+	require.Equal(t, uint64(batchVersion1), readByteToUint(message2.Key[:8]))
 	require.Equal(t, uint64(len(message2.Key[16:])), readByteToUint(message2.Key[8:16]))
 	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message2.Key[16:]))
 
@@ -223,7 +222,7 @@ func TestLargeMessageWithHandle(t *testing.T) {
 	require.Equal(t, 1, messages[0].GetRowsCount())
 
 	message := messages[0]
-	require.Equal(t, uint64(encoder.BatchVersion1), readByteToUint(message.Key[:8]))
+	require.Equal(t, uint64(batchVersion1), readByteToUint(message.Key[:8]))
 	require.Equal(t, uint64(len(message.Key[16:])), readByteToUint(message.Key[8:16]))
 	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message.Key[16:]))
 
