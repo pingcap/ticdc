@@ -8,6 +8,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
+	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -15,7 +16,6 @@ import (
 	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tiflow/cdc/sink/ddlsink/mq/ddlproducer"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -36,7 +36,7 @@ type KafkaDDLWorker struct {
 	topicManager topicmanager.TopicManager
 
 	// producer is used to send the messages to the Kafka broker.
-	producer ddlproducer.DDLProducer
+	producer producer.DDLProducer
 
 	tableSchemaStore *util.TableSchemaStore
 
@@ -72,7 +72,7 @@ func NewKafkaDDLWorker(
 	ctx context.Context,
 	id common.ChangeFeedID,
 	protocol config.Protocol,
-	producer ddlproducer.DDLProducer,
+	producer producer.DDLProducer,
 	encoder encoder.EventEncoder,
 	eventRouter *eventrouter.EventRouter,
 	topicManager topicmanager.TopicManager,

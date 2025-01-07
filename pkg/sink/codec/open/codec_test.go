@@ -8,8 +8,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	ticonfig "github.com/pingcap/ticdc/pkg/config"
 	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
 

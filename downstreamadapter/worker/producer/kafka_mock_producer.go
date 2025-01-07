@@ -5,8 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/pingcap/tiflow/cdc/sink/ddlsink/mq/ddlproducer"
-	"github.com/pingcap/tiflow/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
 func NewMockDMLProducer() DMLProducer {
@@ -15,7 +14,7 @@ func NewMockDMLProducer() DMLProducer {
 	}
 }
 
-func NewMockDDLProducer() ddlproducer.DDLProducer {
+func NewMockDDLProducer() DDLProducer {
 	return &MockProducer{
 		events: make(map[string][]*common.Message),
 	}

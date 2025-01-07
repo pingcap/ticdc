@@ -7,9 +7,9 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/pingcap/ticdc/pkg/common"
+	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 )
