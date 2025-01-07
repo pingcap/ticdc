@@ -16,11 +16,8 @@ package common
 import (
 	"encoding/binary"
 	"encoding/json"
-	"time"
-
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/tikv/client-go/v2/oracle"
 )
 
 // MaxRecordOverhead is used to calculate message size by sarama kafka client.
@@ -48,16 +45,8 @@ const (
 type Message struct {
 	Key       []byte
 	Value     []byte
-	Ts        uint64          // reserved for possible output sorting
-	Schema    *string         // schema
-	Table     *string         // table
-	Type      MessageType     // type
-	Protocol  config.Protocol // protocol
-	rowsCount int             // rows in one Message
-	Callback  func()          // Callback function will be called when the message is sent to the sink.
-
-	// PartitionKey for pulsar, route messages to one or different partitions
-	PartitionKey *string
+	rowsCount int    // rows in one Message
+	Callback  func() // Callback function will be called when the message is sent to the sink.
 }
 
 // Length returns the expected size of the Kafka message
@@ -65,11 +54,6 @@ type Message struct {
 // If `ProducerMessage` Headers fields used, this method should also adjust.
 func (m *Message) Length() int {
 	return len(m.Key) + len(m.Value) + MaxRecordOverhead
-}
-
-// PhysicalTime returns physical time part of Ts in time.Time
-func (m *Message) PhysicalTime() time.Time {
-	return oracle.GetTimeFromTS(m.Ts)
 }
 
 // GetRowsCount returns the number of rows batched in one Message
@@ -85,36 +69,6 @@ func (m *Message) SetRowsCount(cnt int) {
 // IncRowsCount increase the number of rows
 func (m *Message) IncRowsCount() {
 	m.rowsCount++
-}
-
-// GetSchema returns schema string
-func (m *Message) GetSchema() string {
-	if m.Schema == nil {
-		return ""
-	}
-	return *m.Schema
-}
-
-// GetTable returns the Table string
-func (m *Message) GetTable() string {
-	if m.Table == nil {
-		return ""
-	}
-	return *m.Table
-}
-
-// SetPartitionKey sets the PartitionKey for a message
-// PartitionKey is used for pulsar producer, route messages to one or different partitions
-func (m *Message) SetPartitionKey(key string) {
-	m.PartitionKey = &key
-}
-
-// GetPartitionKey returns the GetPartitionKey
-func (m *Message) GetPartitionKey() string {
-	if m.PartitionKey == nil {
-		return ""
-	}
-	return *m.PartitionKey
 }
 
 // NewDDLMsg creates a DDL message.
@@ -138,21 +92,12 @@ func NewResolvedMsg(proto config.Protocol, key, value []byte, ts uint64) *Messag
 // NewMsg should be used when creating a Message struct.
 // It copies the input byte slices to avoid any surprises in asynchronous MQ writes.
 func NewMsg(
-	proto config.Protocol,
 	key []byte,
 	value []byte,
-	ts uint64,
-	ty MessageType,
-	schema, table *string,
 ) *Message {
 	ret := &Message{
 		Key:       nil,
 		Value:     nil,
-		Ts:        ts,
-		Schema:    schema,
-		Table:     table,
-		Type:      ty,
-		Protocol:  proto,
 		rowsCount: 0,
 	}
 

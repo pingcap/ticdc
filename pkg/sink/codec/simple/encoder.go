@@ -66,11 +66,6 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 
 	result := &ticommon.Message{
 		Value:    value,
-		Ts:       event.CommitTs,
-		Schema:   event.TableInfo.GetSchemaNamePtr(),
-		Table:    event.TableInfo.GetTableNamePtr(),
-		Type:     model.MessageTypeRow,
-		Protocol: config.ProtocolSimple,
 		Callback: callback,
 	}
 

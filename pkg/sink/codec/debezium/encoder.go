@@ -64,11 +64,6 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 	m := &ticommon.Message{
 		Key:      nil,
 		Value:    value,
-		Ts:       e.CommitTs,
-		Schema:   e.TableInfo.GetSchemaNamePtr(),
-		Table:    e.TableInfo.GetTableNamePtr(),
-		Type:     model.MessageTypeRow,
-		Protocol: config.ProtocolDebezium,
 		Callback: callback,
 	}
 	m.IncRowsCount()

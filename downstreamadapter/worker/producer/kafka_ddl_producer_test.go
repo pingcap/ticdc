@@ -46,12 +46,12 @@ func TestDDLSyncBroadcastMessage(t *testing.T) {
 		syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndSucceed()
 	}
 	err = p.SyncBroadcastMessage(ctx, tikafka.DefaultMockTopicName,
-		tikafka.DefaultMockPartitionNum, &ticommon.Message{Ts: 417318403368288260})
+		tikafka.DefaultMockPartitionNum, &ticommon.Message{})
 	require.NoError(t, err)
 
 	p.Close()
 	err = p.SyncBroadcastMessage(ctx, tikafka.DefaultMockTopicName,
-		tikafka.DefaultMockPartitionNum, &ticommon.Message{Ts: 417318403368288260})
+		tikafka.DefaultMockPartitionNum, &ticommon.Message{})
 	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
 	cancel()
 }
@@ -71,11 +71,11 @@ func TestDDLSyncSendMessage(t *testing.T) {
 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
 
 	syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndSucceed()
-	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{Ts: 417318403368288260})
+	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{})
 	require.NoError(t, err)
 
 	p.Close()
-	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{Ts: 417318403368288260})
+	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{})
 	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
 	cancel()
 }
@@ -101,7 +101,7 @@ func TestDDLProducerSendMsgFailed(t *testing.T) {
 	defer p.Close()
 
 	syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndFail(sarama.ErrMessageTooLarge)
-	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{Ts: 417318403368288260})
+	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{})
 	require.ErrorIs(t, err, sarama.ErrMessageTooLarge)
 }
 
