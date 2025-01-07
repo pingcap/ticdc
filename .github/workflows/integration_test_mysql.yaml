@@ -30,6 +30,9 @@ concurrency:
 jobs:
   # To boost the test speed, we split every 10 test cases into a group.
   e2e_test_group_1:
+    ## Only run ci when PR is not draft
+    if: github.event.pull_request.draft == false
+
     runs-on: ubuntu-latest 
     name: E2E Test Group 1
     steps:
@@ -97,6 +100,9 @@ jobs:
 
 
   failover_e2e_test1:
+      ## Only run ci when PR is not draft
+    if: github.event.pull_request.draft == false
+
     runs-on: ubuntu-latest 
     name: Failover E2E Test [A-C]
     steps:
@@ -143,6 +149,9 @@ jobs:
 
 
   failover_e2e_test2:
+      ## Only run ci when PR is not draft
+    if: github.event.pull_request.draft == false
+
     runs-on: ubuntu-latest 
     name: Failover E2E Test[D-G]
     steps:
@@ -189,6 +198,9 @@ jobs:
 
 
   failover_e2e_test3:
+      ## Only run ci when PR is not draft
+    if: github.event.pull_request.draft == false
+
     runs-on: ubuntu-latest 
     name: Failover E2E Test[H-K]
     steps:
@@ -233,7 +245,11 @@ jobs:
         with:
           log-name: failover_e2e_test3
 
+
   failover_e2e_test4:
+      ## Only run ci when PR is not draft
+    if: github.event.pull_request.draft == false
+    
     runs-on: ubuntu-latest 
     name: Failover E2E Test[L-O]
     steps:
