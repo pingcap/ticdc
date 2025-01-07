@@ -16,10 +16,10 @@ package common
 import (
 	"encoding/binary"
 	"encoding/json"
+	"github.com/pingcap/tiflow/cdc/model"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/tikv/client-go/v2/oracle"
 )
 
@@ -30,17 +30,31 @@ import (
 // which will be treated as `version = 2` by sarama producer.
 const MaxRecordOverhead = 5*binary.MaxVarintLen32 + binary.MaxVarintLen64 + 1
 
+// MessageType is the type of message, which is used by MqSink and RedoLog.
+type MessageType int
+
+const (
+	// MessageTypeUnknown is unknown type of message key
+	MessageTypeUnknown MessageType = iota
+	// MessageTypeRow is row type of message key
+	MessageTypeRow
+	// MessageTypeDDL is ddl type of message key
+	MessageTypeDDL
+	// MessageTypeResolved is resolved type of message key
+	MessageTypeResolved
+)
+
 // Message represents an message to the sink
 type Message struct {
 	Key       []byte
 	Value     []byte
-	Ts        uint64            // reserved for possible output sorting
-	Schema    *string           // schema
-	Table     *string           // table
-	Type      model.MessageType // type
-	Protocol  config.Protocol   // protocol
-	rowsCount int               // rows in one Message
-	Callback  func()            // Callback function will be called when the message is sent to the sink.
+	Ts        uint64          // reserved for possible output sorting
+	Schema    *string         // schema
+	Table     *string         // table
+	Type      MessageType     // type
+	Protocol  config.Protocol // protocol
+	rowsCount int             // rows in one Message
+	Callback  func()          // Callback function will be called when the message is sent to the sink.
 
 	// PartitionKey for pulsar, route messages to one or different partitions
 	PartitionKey *string
@@ -110,7 +124,7 @@ func NewDDLMsg(proto config.Protocol, key, value []byte, event *model.DDLEvent) 
 		key,
 		value,
 		event.CommitTs,
-		model.MessageTypeDDL,
+		MessageTypeDDL,
 		&event.TableInfo.TableName.Schema,
 		&event.TableInfo.TableName.Table,
 	)
@@ -118,7 +132,7 @@ func NewDDLMsg(proto config.Protocol, key, value []byte, event *model.DDLEvent) 
 
 // NewResolvedMsg creates a resolved ts message.
 func NewResolvedMsg(proto config.Protocol, key, value []byte, ts uint64) *Message {
-	return NewMsg(proto, key, value, ts, model.MessageTypeResolved, nil, nil)
+	return NewMsg(proto, key, value, ts, MessageTypeResolved, nil, nil)
 }
 
 // NewMsg should be used when creating a Message struct.
@@ -128,7 +142,7 @@ func NewMsg(
 	key []byte,
 	value []byte,
 	ts uint64,
-	ty model.MessageType,
+	ty MessageType,
 	schema, table *string,
 ) *Message {
 	ret := &Message{

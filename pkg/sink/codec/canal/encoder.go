@@ -471,16 +471,9 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 	if err != nil {
 		return errors.Trace(err)
 	}
-	m := &ticommon.Message{
-		Key:      nil,
-		Value:    value,
-		Ts:       e.CommitTs,
-		Schema:   e.TableInfo.GetSchemaNamePtr(),
-		Table:    e.TableInfo.GetTableNamePtr(),
-		Type:     model.MessageTypeRow,
-		Protocol: config.ProtocolCanalJSON,
-		Callback: e.Callback,
-	}
+
+	m := ticommon.NewMsg(config.ProtocolCanalJSON, nil, value, e.CommitTs, model.MessageTypeRow, e.TableInfo.GetSchemaNamePtr(), e.TableInfo.GetTableNamePtr())
+	m.Callback = e.Callback
 	m.IncRowsCount()
 
 	originLength := m.Length()
@@ -596,15 +589,7 @@ func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*ticommon
 		return nil, errors.Trace(err)
 	}
 
-	return &ticommon.Message{
-		Key:      nil,
-		Value:    value,
-		Type:     model.MessageTypeDDL,
-		Protocol: config.ProtocolCanalJSON,
-		Table:    &e.TableName,
-		Schema:   &e.SchemaName,
-		Ts:       e.GetCommitTs(),
-	}, nil
+	return ticommon.NewDDLMsg(config.ProtocolCanalJSON, nil, value, nil), nil
 }
 
 func (b *JSONRowEventEncoder) Clean() {

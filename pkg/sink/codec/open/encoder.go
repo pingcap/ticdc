@@ -125,18 +125,13 @@ func (d *BatchEncoder) pushMessage(key, value []byte, callback func()) {
 		versionHead := make([]byte, 8)
 		binary.BigEndian.PutUint64(versionHead, encoder.BatchVersion1)
 
-		message := ticommon.Message{
-			Key:      versionHead,
-			Value:    valueLenByte[:],
-			Type:     model.MessageTypeRow,
-			Protocol: config.ProtocolOpen,
-		}
+		message := ticommon.NewMsg(config.ProtocolOpen, versionHead, valueLenByte[:], 0, model.MessageTypeRow, nil, nil)
 		message.Key = append(message.Key, keyLenByte[:]...)
 		message.Key = append(message.Key, key...)
 		message.Value = append(message.Value, value...)
 		message.IncRowsCount()
 		d.callbackBuff = append(d.callbackBuff, callback)
-		d.messages = append(d.messages, &message)
+		d.messages = append(d.messages, message)
 		return
 	}
 
@@ -208,12 +203,7 @@ func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*ticommon.Messag
 		return nil, errors.Trace(err)
 	}
 
-	return &ticommon.Message{
-		Key:      key,
-		Value:    value,
-		Type:     model.MessageTypeDDL,
-		Protocol: config.ProtocolOpen,
-	}, nil
+	return ticommon.NewDDLMsg(config.ProtocolOpen, key, value, nil), nil
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
@@ -224,10 +214,5 @@ func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*ticommon.Message, erro
 		return nil, errors.Trace(err)
 	}
 
-	return &ticommon.Message{
-		Key:      key,
-		Value:    value,
-		Type:     model.MessageTypeResolved,
-		Protocol: config.ProtocolOpen,
-	}, nil
+	return ticommon.NewResolvedMsg(config.ProtocolOpen, key, value, ts), nil
 }
