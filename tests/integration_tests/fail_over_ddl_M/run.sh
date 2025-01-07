@@ -3,12 +3,10 @@
 # we start two TiCDC servers, and use failpoint to block the block event ddl execution of different situations
 # and do restart to test the fail-over.
 
-# This is the case-L of fail-over with ddl events.
-# when dispatchers are all meet the block event ddl, and report the status to maintainer,
-# and maintainer ask table trigger to write ddl,  and table trigger is finished the ddl event.
-# Then maintainer ask the other dispatcher to pass the ddl event,
-# When the other dispatcher finished pass the ddl event, but not finish report to maintainer,
-# The node with the other dispatcher is restarted, the node with maintainer and table trigger is not restarted.
+# This is the case-M of fail-over with ddl events.
+# when the table trigger event dispatcher meet the block event ddl, and report the status to maintainer,
+# while the other dispatcher is not meet the block event ddl yet,
+# the two nodes are both restartes.
 # --> we expect the cluster will get the correct table count and continue to sync the following events successfully.
 #     1 ddl is drop databases
 #     2 ddl is drop table
@@ -64,7 +62,7 @@ function prepare() {
 }
 
 # ddl is drop database
-function failOverCaseL-1() {
+function failOverCaseM-1() {
 	prepare
 	ret=$?
 	if [ "$ret" != 0 ]; then
@@ -74,33 +72,35 @@ function failOverCaseL-1() {
 	# restart cdc server to enable failpoint
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	kill_cdc_pid $cdc_pid_1
-	sleep 5
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAfterPass=pause'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-
+	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	# make it be the coordinator, todo fix it
 	sleep 15
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeDealWithDDL=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 	# move table 1 to node 2
 	move_table_with_retry "127.0.0.1:8301" 106 "test" 10
 
 	run_sql "drop database fail_over_ddl_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	ensure 30 "run_sql 'show databases;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'fail_over_ddl_test'"
-
-	# ensure the dispatcher pass the ddl event
+	# ensure the ddl event reach the dispatchers
 	sleep 15
 
-	cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+	kill_cdc_pid $cdc_pid_1
+	cdc_pid_2=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
 	# restart cdc server
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
 	sleep 15
+
+	ensure 30 "run_sql 'show databases;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'fail_over_ddl_test'"
 
 	## continue to write ddl and dml to test the cdc server is working well
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -109,11 +109,11 @@ function failOverCaseL-1() {
 
 	cleanup_process $CDC_BINARY
 
-	echo "failOverCaseL-1 passed successfully"
+	echo "failOverCaseM-1 passed successfully"
 }
 
 # ddl is drop table
-function failOverCaseL-2() {
+function failOverCaseM-2() {
 	prepare
 	ret=$?
 	if [ "$ret" != 0 ]; then
@@ -123,35 +123,36 @@ function failOverCaseL-2() {
 	# restart cdc server to enable failpoint
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	kill_cdc_pid $cdc_pid_1
-	sleep 5
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAfterPass=pause'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-
+	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	# make it be the coordinator, todo fix it
 	sleep 15
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeDealWithDDL=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
-
 	# move table 1 to node 2
 	move_table_with_retry "127.0.0.1:8301" 106 "test" 10
 
 	run_sql "drop table fail_over_ddl_test.test1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1'"
-
-	# ensure the dispatcher pass the ddl event
+	# ensure the ddl event reach the dispatchers
 	sleep 15
 
-	cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+	kill_cdc_pid $cdc_pid_1
+	cdc_pid_2=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
 
 	# restart cdc server
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
 	sleep 15
+
+	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1'"
 
 	run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
 		check_not_contains "test1" &&
@@ -169,11 +170,11 @@ function failOverCaseL-2() {
 
 	cleanup_process $CDC_BINARY
 
-	echo "failOverCaseL-2 passed successfully"
+	echo "failOverCaseM-2 passed successfully"
 }
 
 # ddl is rename table
-function failOverCaseL-3() {
+function failOverCaseM-3() {
 	prepare
 	ret=$?
 	if [ "$ret" != 0 ]; then
@@ -183,36 +184,37 @@ function failOverCaseL-3() {
 	# restart cdc server to enable failpoint
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	kill_cdc_pid $cdc_pid_1
-	sleep 5
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAfterPass=pause'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-
+	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	# make it be the coordinator, todo fix it
 	sleep 15
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeDealWithDDL=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
-
 	# move table 1 to node 2
 	move_table_with_retry "127.0.0.1:8301" 106 "test" 10
 
 	run_sql "rename table fail_over_ddl_test.test1 to fail_over_ddl_test.test4;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
-	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1' && check_contains 'test4'"
-
-	# ensure the dispatcher pass the ddl event
+	# ensure the ddl event reach the dispatchers
 	sleep 15
 
-	cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+	kill_cdc_pid $cdc_pid_1
+	cdc_pid_2=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
 
 	# restart cdc server
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
 	sleep 15
+
+	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
+	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1' && check_contains 'test4'"
 
 	run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
 		check_not_contains "test1" &&
@@ -233,11 +235,11 @@ function failOverCaseL-3() {
 
 	cleanup_process $CDC_BINARY
 
-	echo "failOverCaseL-3 passed successfully"
+	echo "failOverCaseM-3 passed successfully"
 }
 
 # ddl is truncate table
-function failOverCaseL-5() {
+function failOverCaseM-5() {
 	prepare
 	ret=$?
 	if [ "$ret" != 0 ]; then
@@ -247,16 +249,15 @@ function failOverCaseL-5() {
 	# restart cdc server to enable failpoint
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	kill_cdc_pid $cdc_pid_1
-	sleep 5
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAfterPass=pause'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
-
+	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	# make it be the coordinator, todo fix it
 	sleep 15
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeDealWithDDL=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
-
 	# move table 1 to node 2
 	move_table_with_retry "127.0.0.1:8301" 106 "test" 10
 
@@ -265,27 +266,23 @@ function failOverCaseL-5() {
 
 	run_sql "truncate table fail_over_ddl_test.test1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
-	ensure 30 "run_sql 'select id from fail_over_ddl_test.test1;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains '2'"
-
-	# ensure the dispatcher pass the ddl event
+	# ensure the ddl event reach the dispatchers
 	sleep 15
 
-	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
-	ensure 30 "run_sql 'select id from fail_over_ddl_test.test1;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains '2'"
-
-	# ensure the dispatcher pass the ddl event
-	sleep 15
-
-	cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+	kill_cdc_pid $cdc_pid_1
+	cdc_pid_2=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
 
 	# restart cdc server
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
 	sleep 15
+
+	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
+	ensure 30 "run_sql 'select id from fail_over_ddl_test.test1;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains '2'"
 
 	run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
 		check_contains "test1" &&
@@ -305,13 +302,13 @@ function failOverCaseL-5() {
 
 	cleanup_process $CDC_BINARY
 
-	echo "failOverCaseL-5 passed successfully"
+	echo "failOverCaseM-5 passed successfully"
 }
 
 trap stop_tidb_cluster EXIT
-failOverCaseL-1
-failOverCaseL-2
-failOverCaseL-3
-failOverCaseL-5
+failOverCaseM-1
+failOverCaseM-2
+failOverCaseM-3
+failOverCaseM-5
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
