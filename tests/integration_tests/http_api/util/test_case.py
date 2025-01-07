@@ -45,6 +45,7 @@ def requests_get_with_retry(url, max_retries=RETRY_TIME, delay_seconds=1):
 
 # we should write some SQLs in the run.sh after call create_changefeed
 def create_changefeed(sink_uri):
+    print("Start to create changefeed!")
     url = BASE_URL1_V2+"/changefeeds"
     # create changefeed
     for i in range(1, 4):
@@ -53,7 +54,7 @@ def create_changefeed(sink_uri):
             "sink_uri": "blackhole://",
             "ignore_ineligible_table": True
         }
-        # set sink_uri
+        # set sink_uri for the first changefeed
         if i == 1 and sink_uri != "":
             data["sink_uri"] = sink_uri
 

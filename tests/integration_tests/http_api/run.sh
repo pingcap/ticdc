@@ -78,7 +78,6 @@ function run() {
 		"get_changefeed"
 		"pause_changefeed"
 		"resume_changefeed"
-		"rebalance_table"
 		"move_table"
 		"get_processor"
 		"list_processor"
