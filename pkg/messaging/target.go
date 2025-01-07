@@ -20,19 +20,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/utils/conn"
-
-	"github.com/prometheus/client_golang/prometheus"
-
-	"github.com/pingcap/ticdc/pkg/metrics"
-
 	"github.com/pingcap/log"
 	. "github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils/conn"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )

@@ -29,11 +29,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
+	utils "github.com/pingcap/tiflow/pkg/util"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-
-	utils "github.com/pingcap/tiflow/pkg/util"
 )
 
 const (

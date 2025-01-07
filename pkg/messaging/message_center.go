@@ -16,11 +16,8 @@ package messaging
 import (
 	"context"
 	"fmt"
-	"golang.org/x/sync/errgroup"
 	"sync"
 	"time"
-
-	"github.com/pingcap/ticdc/pkg/node"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -28,7 +25,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 )
 

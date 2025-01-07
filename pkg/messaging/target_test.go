@@ -16,10 +16,9 @@ package messaging
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/node"
-
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )

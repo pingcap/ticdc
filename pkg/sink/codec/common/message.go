@@ -16,10 +16,10 @@ package common
 import (
 	"encoding/binary"
 	"encoding/json"
-	"github.com/pingcap/tiflow/cdc/model"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/tikv/client-go/v2/oracle"
 )
 
