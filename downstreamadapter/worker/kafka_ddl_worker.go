@@ -12,10 +12,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tiflow/cdc/sink/ddlsink/mq/ddlproducer"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
