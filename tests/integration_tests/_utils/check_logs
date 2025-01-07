@@ -9,7 +9,7 @@ if [ ! -f $WORK_DIR/stdout.log ]; then
 	exit 0
 fi
 
-grep -q -i 'DATA RACE' $WORK_DIR/stdout.log
+grep -q -i 'DATA RACE' $WORK_DIR/stdout*.log
 
 if [ $? -eq 0 ]; then
 	echo "found DATA RACE, please check the logs"
