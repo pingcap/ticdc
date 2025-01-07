@@ -454,7 +454,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 			ID:            col.ID,
 			IsPKHandle:    pkIsHandle,
 			Ft:            col.FieldType.Clone(),
-			VirtualGenCol: col.IsGenerated(),
+			VirtualGenCol: !IsColCDCVisible(col),
 		}
 		colSchema.RowColFieldTps[col.ID] = colSchema.RowColInfos[i].Ft
 		colSchema.RowColFieldTpsSlice = append(colSchema.RowColFieldTpsSlice, colSchema.RowColInfos[i].Ft)
@@ -751,12 +751,13 @@ func (s *columnSchema) genPreSQLInsert(isReplace bool, needPlaceHolder bool) str
 		builder.WriteString("INSERT INTO %s")
 	}
 	builder.WriteString(" (")
-	builder.WriteString(s.getColumnList(false))
+	nonGeneratedColumnCount, columnList := s.getColumnList(false)
+	builder.WriteString(columnList)
 	builder.WriteString(") VALUES ")
 
 	if needPlaceHolder {
 		builder.WriteString("(")
-		builder.WriteString(placeHolder(len(s.Columns) - s.VirtualColumnCount))
+		builder.WriteString(placeHolder(nonGeneratedColumnCount))
 		builder.WriteString(")")
 	}
 	return builder.String()
@@ -766,7 +767,8 @@ func (s *columnSchema) genPreSQLUpdate() string {
 	var builder strings.Builder
 	builder.WriteString("UPDATE %s")
 	builder.WriteString(" SET ")
-	builder.WriteString(s.getColumnList(true))
+	_, columnList := s.getColumnList(true)
+	builder.WriteString(columnList)
 	return builder.String()
 }
 
@@ -784,12 +786,15 @@ func placeHolder(n int) string {
 	return builder.String()
 }
 
-func (s *columnSchema) getColumnList(isUpdate bool) string {
+// getColumnList returns non-generated columns number and column names
+func (s *columnSchema) getColumnList(isUpdate bool) (int, string) {
 	var b strings.Builder
+	nonGeneratedColumnCount := 0
 	for i, col := range s.Columns {
 		if col == nil || s.ColumnsFlag[col.ID].IsGeneratedColumn() {
 			continue
 		}
+		nonGeneratedColumnCount++
 		if i > 0 {
 			b.WriteString(",")
 		}
@@ -798,5 +803,5 @@ func (s *columnSchema) getColumnList(isUpdate bool) string {
 			b.WriteString(" = ?")
 		}
 	}
-	return b.String()
+	return nonGeneratedColumnCount, b.String()
 }

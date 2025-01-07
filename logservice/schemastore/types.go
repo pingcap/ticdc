@@ -25,6 +25,13 @@ type PersistedDDLEvent struct {
 	PrevSchemaName string `msg:"prev_schema_name"`
 	PrevTableName  string `msg:"prev_table_name"`
 
+	// only used for rename tables
+	PrevSchemaIDs      []int64  `msg:prev_schema_ids`
+	PrevSchemaNames    []string `msg:prev_schema_names`
+	PrevTableNames     []string `msg:prev_table_names`
+	CurrentSchemaIDs   []int64  `msg:current_schema_ids`
+	CurrentSchemaNames []string `msg:current_schema_names`
+
 	// The following fields are only set when the ddl job involves a partition table
 	PrevPartitions []int64 `msg:"prev_partitions"`
 

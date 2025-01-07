@@ -16,17 +16,12 @@ ddls=("create database ddl_reentrant" false 'CREATE DATABASE `ddl_reentrant`'
 )
 
 function complete_ddls() {
-	# TODO: refine the release detection after 5.0 tag of TiDB is ready
-	if [[ ! $tidb_build_branch =~ master ]]; then
-		echo "skip some DDLs in tidb v4.0.x"
-	else
-		echo "complete all DDLs in master"
-		# DDLs that are supportted since 5.0
-		# ddls+=("alter table ddl_reentrant.t2 add column c1 int, add column c2 int, add column c3 int" false 'ALTER TABLE `ddl_reentrant`.`t2` ADD COLUMN `c1` INT, ADD COLUMN `c2` INT, ADD COLUMN `c3` INT')
-		# ddls+=("alter table ddl_reentrant.t2 drop column c1, drop column c2, drop column c3" false 'ALTER TABLE `ddl_reentrant`.`t2` DROP COLUMN `c1`, DROP COLUMN `c2`, DROP COLUMN `c3`')
-		# ddls+=("rename table ddl_reentrant.t2 to ddl_reentrant.tt2, ddl_reentrant.t3 to ddl_reentrant.tt3" false 'RENAME TABLE `ddl_reentrant`.`t2` TO `ddl_reentrant`.`tt2`, `ddl_reentrant`.`t3` TO `ddl_reentrant`.`tt3`')
-		# ddls+=("rename table ddl_reentrant.tt2 to ddl_reentrant.t2, ddl_reentrant.tt3 to ddl_reentrant.t3" false 'RENAME TABLE `ddl_reentrant`.`tt2` TO `ddl_reentrant`.`t2`, `ddl_reentrant`.`tt3` TO `ddl_reentrant`.`t3`')
-	fi
+	# DDLs that are supportted since 5.0
+	# ddls+=("alter table ddl_reentrant.t2 add column c1 int, add column c2 int, add column c3 int" false 'ALTER TABLE `ddl_reentrant`.`t2` ADD COLUMN `c1` INT, ADD COLUMN `c2` INT, ADD COLUMN `c3` INT')
+	# ddls+=("alter table ddl_reentrant.t2 drop column c1, drop column c2, drop column c3" false 'ALTER TABLE `ddl_reentrant`.`t2` DROP COLUMN `c1`, DROP COLUMN `c2`, DROP COLUMN `c3`')
+	# ddls+=("rename table ddl_reentrant.t2 to ddl_reentrant.tt2, ddl_reentrant.t3 to ddl_reentrant.tt3" false 'RENAME TABLE `ddl_reentrant`.`t2` TO `ddl_reentrant`.`tt2`, `ddl_reentrant`.`t3` TO `ddl_reentrant`.`tt3`')
+	# ddls+=("rename table ddl_reentrant.tt2 to ddl_reentrant.t2, ddl_reentrant.tt3 to ddl_reentrant.t3" false 'RENAME TABLE `ddl_reentrant`.`tt2` TO `ddl_reentrant`.`t2`, `ddl_reentrant`.`tt3` TO `ddl_reentrant`.`t3`')
+	
 	# ddls+=("alter table ddl_reentrant.t2 drop primary key" false 'ALTER TABLE `ddl_reentrant`.`t2` DROP PRIMARY KEY')
 	# ddls+=("alter table ddl_reentrant.t2 add primary key pk(id)" false 'ALTER TABLE `ddl_reentrant`.`t2` ADD PRIMARY KEY `pk`(`id`)')
 	# ddls+=("drop table ddl_reentrant.t2" false 'DROP TABLE `ddl_reentrant`.`t2`')
@@ -41,11 +36,11 @@ SINK_URI="mysql://root@127.0.0.1:3306/"
 
 function check_ts_forward() {
 	changefeedid=$1
-	rts1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | jq '.resolved_ts')
-	checkpoint1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | jq '.checkpoint_tso')
+	rts1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc"| jq '.resolved_ts')
+	checkpoint1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc"| jq '.checkpoint_tso')
 	sleep 1
-	rts2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | jq '.resolved_ts')
-	checkpoint2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | jq '.checkpoint_tso')
+	rts2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc"| jq '.resolved_ts')
+	checkpoint2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc"| jq '.checkpoint_tso')
 	if [[ "$rts1" != "null" ]] && [[ "$rts1" != "0" ]]; then
 		if [[ "$rts1" -ne "$rts2" ]] || [[ "$checkpoint1" -ne "$checkpoint2" ]]; then
 			echo "changefeed is working normally rts: ${rts1}->${rts2} checkpoint: ${checkpoint1}->${checkpoint2}"
@@ -60,7 +55,7 @@ function check_ddl_executed() {
 	ddl=$(cat $2)
 	success="$3"
 	if [[ $success == "true" ]]; then
-		key_word="Exec DDL succeeded"
+		key_word="Execute DDL succeeded"
 	else
 		key_word="Execute DDL failed, but error can be ignored"
 	fi
@@ -92,7 +87,7 @@ function ddl_test() {
 
 	echo $restored_sql >${WORK_DIR}/ddl_temp.sql
 	ensure 10 check_ddl_executed "${WORK_DIR}/cdc.log" "${WORK_DIR}/ddl_temp.sql" true
-	ddl_finished_ts=$(grep "Execute DDL succeeded" ${WORK_DIR}/cdc.log | tail -n 1 | grep -oE '"CommitTs\\":[0-9]{18}' | awk -F: '{print $(NF)}')
+	ddl_finished_ts=$(grep "Execute DDL succeeded" ${WORK_DIR}/cdc.log | tail -n 1 | grep -oE '"finished_ts\\":[0-9]{18}' | awk -F: '{print $(NF)}')
 	cdc cli changefeed pause --changefeed-id=${changefeedid}
 	cdc cli changefeed resume --no-confirm --changefeed-id=${changefeedid} --overwrite-checkpoint-ts=${ddl_finished_ts}
 	echo "resume changefeed ${changefeedid} from ${ddl_finished_ts}"
@@ -111,18 +106,6 @@ function run() {
 	start_tidb_cluster --workdir $WORK_DIR --tidb-config $CUR/conf/tidb_config.toml
 
 	complete_ddls
-	# TODO: refine the release detection after 5.0 tag of TiDB is ready
-	if [[ $tidb_build_branch =~ master ]]; then
-		# https://github.com/pingcap/tidb/pull/21533 disables multi_schema change
-		# feature by default, turn it on first
-		run_sql "set @@global.tidb_enable_exchange_partition=on" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-		run_sql "set global tidb_enable_change_multi_schema = on" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-		# This must be set before cdc server starts
-		run_sql "set @@global.tidb_enable_exchange_partition=on" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-		run_sql "set global tidb_enable_change_multi_schema = on" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-		# TiDB global variables cache 2 seconds at most
-		sleep 2
-	fi
 
 	cd $WORK_DIR
 

@@ -230,11 +230,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 		if pendingEvent != nil && action.CommitTs == pendingEvent.GetCommitTs() && blockStatus == heartbeatpb.BlockStage_WAITING {
 			d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
 			if action.Action == heartbeatpb.Action_Write {
-				failpoint.Inject("WaitBeforeWrite", func() {
-					// we use the failpoint to make the ddl event is not written to downstream before the other node finish restarting
-					time.Sleep(30 * time.Second)
-				})
-				failpoint.Inject("BlockBeforeWrite", nil)
+				failpoint.Inject("BlockOrWaitBeforeWrite", nil)
 				err := d.AddBlockEventToSink(pendingEvent)
 				if err != nil {
 					select {
@@ -247,13 +243,9 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 					}
 					return
 				}
-				failpoint.Inject("BlockReportAfterWrite", nil)
-				failpoint.Inject("WaitBeforeReport", func() {
-					time.Sleep(30 * time.Second)
-				})
+				failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
 			} else {
-				failpoint.Inject("WaitBeforePass", nil)
-				failpoint.Inject("BlockBeforePass", nil)
+				failpoint.Inject("BlockOrWaitBeforePass", nil)
 				d.PassBlockEventToSink(pendingEvent)
 				failpoint.Inject("BlockAfterPass", nil)
 			}

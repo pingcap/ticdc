@@ -6,13 +6,13 @@ export-fix-sql = true
 check-struct-only = false
 
 [task]
-output-dir = "/tmp/tidb_cdc_test/ddl_manager/sync_diff/output"
+output-dir = "/tmp/tidb_cdc_test/fail_over_ddl_L/sync_diff/output"
 
 source-instances = ["mysql1"]
 
 target-instance = "tidb0"
 
-target-check-tables = ["ddl_manager.*", "cross_db_1.*", "cross_db_2.*"]
+target-check-tables = ["fail_over_ddl_test2.*", "fail_over_ddl_test.*"]
 
 [data-sources]
 [data-sources.mysql1]

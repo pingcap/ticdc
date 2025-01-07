@@ -39,6 +39,7 @@ import (
 	"github.com/pingcap/tiflow/pkg/retry"
 	pmysql "github.com/pingcap/tiflow/pkg/sink/mysql"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -664,7 +665,6 @@ func (w *MysqlWriter) execDDL(event *commonEvent.DDLEvent) error {
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Query info: %s; ", event.GetDDLQuery())))
 	}
 
-	log.Info("Exec DDL succeeded", zap.String("sql", event.GetDDLQuery()))
 	return nil
 }
 
@@ -685,6 +685,9 @@ func (w *MysqlWriter) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 				zap.Error(err))
 			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Execute DDL failed, Query info: %s; ", event.GetDDLQuery())))
 		}
+		log.Info("Execute DDL succeeded",
+			zap.String("changefeed", w.ChangefeedID.String()),
+			zap.Any("ddl", event))
 		return nil
 	}, retry.WithBackoffBaseDelay(pmysql.BackoffBaseDelay.Milliseconds()),
 		retry.WithBackoffMaxDelay(pmysql.BackoffMaxDelay.Milliseconds()),
@@ -744,6 +747,12 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 				dmls.values = append(dmls.values, args)
 			}
 		}
+	}
+
+	// Pre-check log level to avoid dmls.String() being called unnecessarily
+	// This method is expensive, so we only log it when the log level is debug.
+	if log.GetLevel() == zapcore.DebugLevel {
+		log.Debug("prepareDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
 	}
 
 	return dmls, nil
