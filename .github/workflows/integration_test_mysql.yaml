@@ -28,7 +28,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # To boost the test speed, we split every 10 test cases into a group.
+  # To boost the test speed, we split every 15 test cases into a group.
   e2e_test_group_1:
     ## Only run ci when PR is not draft
     if: github.event.pull_request.draft == false
@@ -98,11 +98,23 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=many_pk_or_uk
       
+      # The 9th case in this group
       - name: Test drop_many_tables
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=drop_many_tables
-      
+
+      # The 10th case in this group     
+      - name: Test new_ci_collation
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=new_ci_collation
+
+      # The 11th case in this group     
+      - name: Test region_merge
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=region_merge
 
       - name: Upload test logs
         if: always()
