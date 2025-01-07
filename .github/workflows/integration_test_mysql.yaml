@@ -97,6 +97,12 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=many_pk_or_uk
+      
+      - name: Test drop_many_tables
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=drop_many_tables
+      
 
       - name: Upload test logs
         if: always()
