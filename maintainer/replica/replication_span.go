@@ -151,6 +151,18 @@ func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
 
 func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) {
 	if newStatus != nil {
+		// we don't update the status when there exist block status and block status's checkpointTs is less than newStatus's checkpointTs
+		// It's ensure the checkpointTs can be forward until the block event is finished;
+		// It can avoid the corner case that:
+		// When node 1 with table trigger and node 2 with table1 meet the drop table 1 ddl
+		// and table trigger finish write the ddl, node2 just pass the ddl but not report the block status yet
+		// while the node 2 report the latest table span
+		// (because the ddl is passed, the table1's checkpointTs is updated, so the replication's checkpoint is updaetd)
+		// Then the node2 is crashed. So the maintainer will add new dispatcher based on the latest checkpointTs, which is unexcpeted.
+		blockState := r.blockState.Load()
+		if blockState != nil && blockState.Stage == heartbeatpb.BlockStage_WAITING && blockState.BlockTs <= newStatus.CheckpointTs {
+			return
+		}
 		oldStatus := r.status.Load()
 		if newStatus.CheckpointTs >= oldStatus.CheckpointTs {
 			r.status.Store(newStatus)
@@ -160,19 +172,6 @@ func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) {
 
 func (r *SpanReplication) ShouldRun() bool {
 	return true
-	// state := r.blockState.Load()
-	// if state != nil && state.NeedDroppedTables != nil {
-	// 	status := r.status.Load()
-	// 	if status == nil || state.BlockTs != status.CheckpointTs+1 {
-	// 		return false
-	// 	}
-	// 	for _, tableID := range state.NeedDroppedTables.TableIDs {
-	// 		if tableID == r.Span.TableID {
-	// 			return true
-	// 		}
-	// 	}
-	// }
-	// return false
 }
 
 func (r *SpanReplication) IsWorking() bool {
@@ -217,6 +216,8 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.Ta
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+
+	log.Info("hyy NewAddDispatcherMessage", zap.Any("startTs", r.status.Load().CheckpointTs), zap.Any("span", r.Span))
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
