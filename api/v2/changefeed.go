@@ -15,6 +15,7 @@ package v2
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -441,10 +442,14 @@ func (h *OpenAPIV2) resumeChangefeed(c *gin.Context) {
 	}
 
 	cfg := new(ResumeChangefeedConfig)
-	if err := c.BindJSON(&cfg); err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
-		return
+	if err := c.BindJSON(cfg); err != nil {
+		// If the body is empty, means no config is provided, it's ok.
+		if err != io.EOF {
+			_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
+			return
+		}
 	}
+
 	coordinator, err := h.server.GetCoordinator()
 	if err != nil {
 		_ = c.Error(err)
