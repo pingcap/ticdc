@@ -451,6 +451,7 @@ func (h *OpenAPIV2) resumeChangefeed(c *gin.Context) {
 			_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 			return
 		}
+		err = nil
 	}
 
 	coordinator, err := h.server.GetCoordinator()
