@@ -389,6 +389,7 @@ if __name__ == "__main__":
     
     # get the test case name
     test_case_name = sys.argv[1]
+    arg = sys.argv[2:]
     # check if the test case name is in the FUNC_MAP
     if test_case_name not in FUNC_MAP:
         logging.error(f"Test case {test_case_name} not found")
@@ -398,7 +399,7 @@ if __name__ == "__main__":
     test_case_func = FUNC_MAP[test_case_name]
     # run the test case
     logging.info(f"Start to run test case: {test_case_name}")
-    test_case_func()
+    test_case_func(*arg)
     logging.info(f"Test case {test_case_name} finished")
 
 
