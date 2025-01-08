@@ -1327,3 +1327,7 @@ type OpenProtocolConfig struct {
 type DebeziumConfig struct {
 	OutputOldValue bool `json:"output_old_value"`
 }
+
+type DispatcherCount struct {
+	Count int `json:"count"`
+}

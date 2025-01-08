@@ -1,0 +1,18 @@
+#!/bin/bash
+# parameter 1: ip addr with port
+# parameter 2: changefeed id
+# parameter 3: retry count
+
+# this script is used to check the coordinator and maintainer is all existed in the target node.
+# we use query_dispatcher_count to check when we query, there is no maintainer is not found error.
+# which means the maintainer and the coordinator exists in the node.
+
+set -ex
+
+ipAddr=${1}
+changefeedID=${2}
+retryCount=${3}
+
+echo "check coordinator and maintainer"
+
+query_dispatcher_count ${ipAddr} ${changefeedID} -1 ${retryCount}

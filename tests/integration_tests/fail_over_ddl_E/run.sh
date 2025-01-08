@@ -4,10 +4,11 @@
 # and do restart to test the fail-over.
 
 # This is the case-E of fail-over with ddl events.
+# Node1 with the table trigger event dispatcher, and the Node2 with the other related dispatcher.
 # when dispatchers are all meet the block event ddl, and report the status to maintainer,
 # and maintainer ask table trigger to write ddl,
 # when the table trigger event dispatcher have not write the ddl yet,
-# and then the node with table trigger event dispatcher restart, the node with the related table is not restarted.
+# and then the node with table trigger event dispatcher(Node1) restart, the node with the related table(Node2) is not restarted.
 # --> we expect the cluster will get the correct table count and continue to sync the following events successfully.
 #     1 ddl is drop databases
 #     2 ddl is drop table
@@ -74,14 +75,12 @@ function failOverCaseE-1() {
 	kill_cdc_pid $cdc_pid_1
 	cleanup_process $CDC_BINARY
 
-	sleep 10
-
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockorWaitBeforeWrite=pause'
-
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-	# make it be the coordinator, todo fix it
-	sleep 15
+	
+	# make node1 to be the coordinator and maintainer
+	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
@@ -90,7 +89,8 @@ function failOverCaseE-1() {
 	node2ID=$(echo $ans | sed 's/ PASS.*//' | grep -v "Command to ticdc" | jq -r '.[] | select(.address == "127.0.0.1:8301") | .id')
 
 	# move table 1 to node 2
-	move_table_with_retry "127.0.0.1:8301" 106 "test" 10
+	table_id=$(get_table_id "fail_over_ddl_test" "test1")
+	move_table_with_retry "127.0.0.1:8301" $table_id "test" 10
 
 	run_sql "drop database fail_over_ddl_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -98,6 +98,9 @@ function failOverCaseE-1() {
 	sleep 20
 
 	kill_cdc_pid $cdc_pid_1
+
+	# make node2 to be the coordinator and maintainer
+	check_coordinator_and_maintainer "127.0.0.1:8301" "test" 60
 	# restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 
@@ -110,6 +113,8 @@ function failOverCaseE-1() {
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
+
+	query_dispatcher_count "127.0.0.1:8301" "test" 3 10
 
 	cleanup_process $CDC_BINARY
 
@@ -130,20 +135,19 @@ function failOverCaseE-2() {
 	kill_cdc_pid $cdc_pid_1
 	cleanup_process $CDC_BINARY
 
-	sleep 10
-
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockorWaitBeforeWrite=pause'
-
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-	# make it be the coordinator, todo fix it
-	sleep 15
+	
+	# make node1 to be the coordinator and maintainer
+	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	# move table 1 to node 2
-	move_table_with_retry "127.0.0.1:8301" 106 "test" 10
+	table_id=$(get_table_id "fail_over_ddl_test" "test1")
+	move_table_with_retry "127.0.0.1:8301" $table_id "test" 10
 
 	run_sql "drop table fail_over_ddl_test.test1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -151,6 +155,10 @@ function failOverCaseE-2() {
 	sleep 20
 
 	kill_cdc_pid $cdc_pid_1
+
+	# make node2 to be the coordinator and maintainer
+	check_coordinator_and_maintainer "127.0.0.1:8301" "test" 60
+
 	# restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 
@@ -173,6 +181,8 @@ function failOverCaseE-2() {
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
+	query_dispatcher_count "127.0.0.1:8301" "test" 4 10
+
 	cleanup_process $CDC_BINARY
 
 	export GO_FAILPOINTS=''
@@ -193,20 +203,19 @@ function failOverCaseE-3() {
 	kill_cdc_pid $cdc_pid_1
 	cleanup_process $CDC_BINARY
 
-	sleep 10
-
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockorWaitBeforeWrite=pause'
-
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-	# make it be the coordinator, todo fix it
-	sleep 15
+	
+	# make node1 to be the coordinator and maintainer
+	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	# move table 1 to node 2
-	move_table_with_retry "127.0.0.1:8301" 106 "test" 10
+	table_id=$(get_table_id "fail_over_ddl_test" "test1")
+	move_table_with_retry "127.0.0.1:8301" $table_id "test" 10
 
 	run_sql "rename table fail_over_ddl_test.test1 to fail_over_ddl_test.test4;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -214,6 +223,10 @@ function failOverCaseE-3() {
 	sleep 20
 
 	kill_cdc_pid $cdc_pid_1
+
+	# make node2 to be the coordinator and maintainer
+	check_coordinator_and_maintainer "127.0.0.1:8301" "test" 60
+
 	# restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 
@@ -238,6 +251,8 @@ function failOverCaseE-3() {
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
+	query_dispatcher_count "127.0.0.1:8301" "test" 5 10
+
 	cleanup_process $CDC_BINARY
 	export GO_FAILPOINTS=''
 
@@ -257,20 +272,20 @@ function failOverCaseE-4() {
 	kill_cdc_pid $cdc_pid_1
 	cleanup_process $CDC_BINARY
 
-	sleep 10
-
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockorWaitBeforeWrite=pause'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 
-	# make it be the coordinator, todo fix it
-	sleep 15
+    # make node1 to be the coordinator and maintainer
+	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
+
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	# move table 1 to node 2
-	move_table_with_retry "127.0.0.1:8301" 106 "test" 10
+	table_id=$(get_table_id "fail_over_ddl_test" "test1")
+	move_table_with_retry "127.0.0.1:8301" $table_id "test" 10
 
 	run_sql "insert into fail_over_ddl_test.test1 values (2, 2);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	ensure 10 "run_sql 'select id from fail_over_ddl_test.test1;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_contains '2'"
@@ -281,6 +296,9 @@ function failOverCaseE-4() {
 	sleep 20
 
 	kill_cdc_pid $cdc_pid_1
+
+	# make node2 to be the coordinator and maintainer
+	check_coordinator_and_maintainer "127.0.0.1:8301" "test" 60
 	# restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
 
@@ -303,6 +321,8 @@ function failOverCaseE-4() {
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
+
+	query_dispatcher_count "127.0.0.1:8301" "test" 5 10
 
 	cleanup_process $CDC_BINARY
 	export GO_FAILPOINTS=''

@@ -4,6 +4,7 @@
 # and do restart to test the fail-over.
 
 # This is the case-D of fail-over with ddl events.
+# Node1 with the table trigger event dispatcher, and the Node2 with the other related dispatcher.
 # when dispatchers are all meet the block event ddl, and report the status to maintainer,
 # and maintainer ask table trigger to write ddl,
 # when the table trigger event dispatcher have not write the ddl yet, the two node are both restarted.
@@ -89,6 +90,10 @@ function failOverCaseD-1() {
 
 	# restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
+
+	# make node1 to be the coordinator and maintainer
+	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
+
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
 	sleep 15
@@ -99,6 +104,8 @@ function failOverCaseD-1() {
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
+
+	query_dispatcher_count "127.0.0.1:8300" "test" 3 10
 
 	cleanup_process $CDC_BINARY
 
@@ -134,6 +141,10 @@ function failOverCaseD-2() {
 
 	# restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
+
+	# make node1 to be the coordinator and maintainer
+	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
+
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
 	sleep 15
@@ -153,6 +164,8 @@ function failOverCaseD-2() {
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
+
+	query_dispatcher_count "127.0.0.1:8300" "test" 4 10
 
 	cleanup_process $CDC_BINARY
 
@@ -188,6 +201,10 @@ function failOverCaseD-3() {
 
 	# restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
+
+	# make node1 to be the coordinator and maintainer
+	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
+
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
 	sleep 15
@@ -211,6 +228,8 @@ function failOverCaseD-3() {
 	run_sql "insert into fail_over_ddl_test.test4 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
+
+	query_dispatcher_count "127.0.0.1:8300" "test" 5 10
 
 	cleanup_process $CDC_BINARY
 
@@ -249,6 +268,10 @@ function failOverCaseD-4() {
 
 	# restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
+
+	# make node1 to be the coordinator and maintainer
+	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
+	
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
 	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
@@ -271,6 +294,8 @@ function failOverCaseD-4() {
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
+
+	query_dispatcher_count "127.0.0.1:8300" "test" 5 10
 
 	cleanup_process $CDC_BINARY
 
