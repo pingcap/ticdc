@@ -245,11 +245,18 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 		}
 	}
 
-	e.heartBeatTask.Cancel()
 	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(e)
 	if err != nil {
 		log.Error("remove event dispatcher manager from heartbeat collector failed", zap.Error(err))
 		return
+	}
+
+	// heartbeatTask only will be generated when create new dispatchers.
+	// We check heartBeatTask after we remove the stream in heartbeat collector,
+	// so we won't get add dispatcher messages to create heartbeatTask.
+	// Thus there will not data race when we check heartBeatTask.
+	if e.heartBeatTask != nil {
+		e.heartBeatTask.Cancel()
 	}
 
 	err = e.sink.Close(removeChangefeed)
@@ -506,18 +513,24 @@ func (e *EventDispatcherManager) collectBlockStatusRequest(ctx context.Context) 
 func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.Context) {
 	for {
 		statusMessage := make([]*heartbeatpb.TableSpanStatus, 0)
+		// why we need compare with latest watermark? for not backward the watermark?
 		watermark := e.latestWatermark.Get()
+		newWatermark := &heartbeatpb.Watermark{
+			CheckpointTs: watermark.CheckpointTs,
+			ResolvedTs:   watermark.ResolvedTs,
+			Seq:          watermark.Seq,
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case tableSpanStatus := <-e.statusesChan:
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-			watermark.Seq = tableSpanStatus.Seq
-			if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < watermark.CheckpointTs {
-				watermark.CheckpointTs = tableSpanStatus.StartTs
+			newWatermark.Seq = tableSpanStatus.Seq
+			if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < newWatermark.CheckpointTs {
+				newWatermark.CheckpointTs = tableSpanStatus.StartTs
 			}
-			if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < watermark.ResolvedTs {
-				watermark.ResolvedTs = tableSpanStatus.StartTs
+			if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < newWatermark.ResolvedTs {
+				newWatermark.ResolvedTs = tableSpanStatus.StartTs
 			}
 			delay := time.NewTimer(10 * time.Millisecond)
 		loop:
@@ -525,14 +538,14 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 				select {
 				case tableSpanStatus := <-e.statusesChan:
 					statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-					if watermark.Seq < tableSpanStatus.Seq {
-						watermark.Seq = tableSpanStatus.Seq
+					if newWatermark.Seq < tableSpanStatus.Seq {
+						newWatermark.Seq = tableSpanStatus.Seq
 					}
-					if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < watermark.CheckpointTs {
-						watermark.CheckpointTs = tableSpanStatus.StartTs
+					if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < newWatermark.CheckpointTs {
+						newWatermark.CheckpointTs = tableSpanStatus.StartTs
 					}
-					if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < watermark.ResolvedTs {
-						watermark.ResolvedTs = tableSpanStatus.StartTs
+					if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < newWatermark.ResolvedTs {
+						newWatermark.ResolvedTs = tableSpanStatus.StartTs
 					}
 				case <-delay.C:
 					break loop
@@ -548,7 +561,7 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 			var message heartbeatpb.HeartBeatRequest
 			message.ChangefeedID = e.changefeedID.ToPB()
 			message.Statuses = statusMessage
-			message.Watermark = watermark
+			message.Watermark = newWatermark
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 		}
 	}

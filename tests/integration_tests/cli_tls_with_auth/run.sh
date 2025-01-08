@@ -18,7 +18,7 @@ export TICDC_KEY_PATH=$TLS_DIR/client-key.pem
 function check_changefeed_count() {
 	pd_addr=$1
 	expected=$2
-	feed_count=$(cdc cli changefeed list --pd=$pd_addr | jq '.|length')
+	feed_count=$(cdc cli changefeed list --pd=$pd_addr | grep -v "Command to ticdc" | jq '.|length')
 	if [[ "$feed_count" != "$expected" ]]; then
 		echo "[$(date)] <<<<< unexpect changefeed count! expect ${expected} got ${feed_count} >>>>>"
 		exit 1
