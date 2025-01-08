@@ -195,4 +195,11 @@ format-makefiles: $(MAKE_FILES)
 check: check-copyright fmt tidy errdoc check-diff-line-width check-ticdc-dashboard check-makefiles
 	@git --no-pager diff --exit-code || (echo "Please add changed files!" && false)
 
+clean:
+	go clean -i ./...
+	rm -rf *.out
+	rm -rf bin
+	rm -rf tools/bin
+	rm -rf tools/include
+
 workload: tools/bin/workload
