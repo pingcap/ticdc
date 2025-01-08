@@ -15,7 +15,7 @@ logging.basicConfig(
 )
 
 # the max retry time
-RETRY_TIME = 10
+RETRY_TIME = 20
 
 BASE_URL = "http://127.0.0.1:8300/"
 
@@ -107,9 +107,20 @@ def create_changefeed(sink_uri):
 def list_changefeed():
     # test state: all
     url = BASE_URL0_V2+"/changefeeds?state=all"
-    resp = rq.get(url)
-    assert_status_code(resp, rq.codes.ok, url)
-
+    
+    # Add retry logic to wait for changefeeds
+    # We need to retry because the coordinator need some time to sync the changefeed infos from etcd
+    for _ in range(RETRY_TIME):
+        resp = rq.get(url)
+        assert_status_code(resp, rq.codes.ok, url)
+        changefeeds = resp.json()["items"]
+        if len(changefeeds) > 0:
+            break
+        logging.info("No changefeeds found, retrying...")
+        time.sleep(1)
+    
+    assert len(changefeeds) > 0, "No changefeeds found after retries"
+    
     # test state: normal
     url = BASE_URL0_V2+"/changefeeds?state=normal"
     resp = rq.get(url)
