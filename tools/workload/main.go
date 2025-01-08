@@ -251,10 +251,10 @@ func handlePrepareAction(dbs []*sql.DB, insertConcurrency int, workload schema.W
 
 func handleWorkloadExecution(dbs []*sql.DB, insertConcurrency, updateConcurrency int, workload schema.Workload, wg *sync.WaitGroup) {
 	log.Info("start running workload",
-		zap.String("workload_type", workloadType),
-		zap.Float64("large-ratio", largeRowRatio),
-		zap.Int("total_thread", thread),
-		zap.Int("batch-size", batchSize),
+		zap.String("workloadType", workloadType),
+		zap.Float64("largeRatio", largeRowRatio),
+		zap.Int("totalThread", thread),
+		zap.Int("batchSize", batchSize),
 		zap.String("action", action),
 	)
 
@@ -286,7 +286,7 @@ func executeUpdateWorkers(dbs []*sql.DB, updateConcurrency int, workload schema.
 	if updateConcurrency == 0 {
 		log.Info("skip update workload",
 			zap.String("action", action),
-			zap.Int("total_thread", thread),
+			zap.Int("totalThread", thread),
 			zap.Float64("percentageForUpdate", percentageForUpdate))
 		return
 	}

@@ -54,9 +54,11 @@ type DDLEvent struct {
 	MultipleTableInfos []*common.TableInfo `json:"-"`
 
 	BlockedTables     *InfluencedTables `json:"blocked_tables"`
-	UpdatedSchemas    []SchemaIDChange  `json:"updated_schemas"`
 	NeedDroppedTables *InfluencedTables `json:"need_dropped_tables"`
 	NeedAddedTables   []Table           `json:"need_added_tables"`
+
+	// Only set when tables moves between databases
+	UpdatedSchemas []SchemaIDChange `json:"updated_schemas"`
 
 	// DDLs which may change table name:
 	//   Create Table

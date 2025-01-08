@@ -226,7 +226,7 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 		if dispatcher.IsTableTriggerEventDispatcher() && e.sink.SinkType() != common.MysqlSinkType {
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(e.changefeedID)
 			if err != nil {
-				log.Error("remove checkpointTs message failed", zap.Error(err), zap.Any("changefeedID", e.changefeedID))
+				log.Error("remove checkpointTs message failed", zap.Any("changefeedID", e.changefeedID), zap.Error(err))
 			}
 		}
 		dispatcher.Remove()
@@ -313,7 +313,7 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 	if e.tableTriggerEventDispatcher == nil {
 		return nil
 	}
-	err := e.tableTriggerEventDispatcher.InitalizeTableSchemaStore(schemaInfo)
+	err := e.tableTriggerEventDispatcher.InitializeTableSchemaStore(schemaInfo)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -367,7 +367,8 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo) er
 		if err != nil {
 			return errors.Trace(err)
 		}
-		log.Info("calculate real startTs for dispatchers", zap.Any("receive startTs", startTsList), zap.Any("real startTs", newStartTsList))
+		log.Info("calculate real startTs for dispatchers",
+			zap.Any("receiveStartTs", startTsList), zap.Any("realStartTs", newStartTsList))
 	} else {
 		newStartTsList = startTsList
 	}
@@ -677,7 +678,8 @@ func (e *EventDispatcherManager) cleanDispatcher(id common.DispatcherID, schemaI
 	} else {
 		e.metricEventDispatcherCount.Dec()
 	}
-	log.Info("table event dispatcher completely stopped, and delete it from event dispatcher manager", zap.Any("dispatcher id", id))
+	log.Info("table event dispatcher completely stopped, and delete it from event dispatcher manager",
+		zap.Any("dispatcherID", id))
 }
 
 func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap {

@@ -111,8 +111,8 @@ func NewBlockEvent(cfID common.ChangeFeedID, controller *Controller,
 	}
 	log.Info("new block event is created",
 		zap.String("changefeedID", cfID.Name()),
-		zap.Uint64("block-ts", event.commitTs),
-		zap.Bool("sync-point", event.isSyncPoint),
+		zap.Uint64("blockTs", event.commitTs),
+		zap.Bool("syncPoint", event.isSyncPoint),
 		zap.Any("detail", status))
 	return event
 }

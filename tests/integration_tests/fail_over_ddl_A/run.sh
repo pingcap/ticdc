@@ -10,9 +10,8 @@
 # --> we expect the cluster will get the correct table count and continue to sync the following events successfully.
 #     1 ddl is drop databases
 #     2 ddl is drop table
-#     3 ddl is rename table //
-#     4 ddl is recover table // not support yet
-#     5 ddl is truncate table
+#     3 ddl is rename table 
+#     4 ddl is truncate table
 
 set -eu
 
@@ -221,7 +220,7 @@ function failOverCaseA-3() {
 }
 
 # ddl is truncate table
-function failOverCaseA-5() {
+function failOverCaseA-4() {
 	prepare
 	ret=$?
 	if [ "$ret" != 0 ]; then
@@ -276,13 +275,13 @@ function failOverCaseA-5() {
 
 	cleanup_process $CDC_BINARY
 
-	echo "failOverCaseA-5 passed successfully"
+	echo "failOverCaseA-4 passed successfully"
 }
 
 trap stop_tidb_cluster EXIT
 failOverCaseA-1
 failOverCaseA-2
 failOverCaseA-3
-failOverCaseA-5
+failOverCaseA-4
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

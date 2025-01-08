@@ -10,9 +10,8 @@
 # --> we expect the cluster will get the correct table count and continue to sync the following events successfully.
 #     1 ddl is drop databases
 #     2 ddl is drop table
-#     3 ddl is rename table //
-#     4 ddl is recover table // not support yet
-#     5 ddl is truncate table
+#     3 ddl is rename table
+#     4 ddl is truncate table
 # We use a failpoint to sleep for a time after write the ddl and before report to maintainer, to simulate
 # the timing the other node restarted.
 
@@ -78,7 +77,7 @@ function failOverCaseC-1() {
 
 	sleep 10
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitReportAfterWrite=sleep(30)'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitReportAfterWrite=sleep(30000)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 
@@ -132,7 +131,7 @@ function failOverCaseC-2() {
 
 	sleep 10
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitReportAfterWrite=sleep(30)'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitReportAfterWrite=sleep(30000)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 
@@ -194,7 +193,7 @@ function failOverCaseC-3() {
 
 	sleep 10
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitReportAfterWrite=sleep(30)'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitReportAfterWrite=sleep(30000)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 
@@ -243,7 +242,7 @@ function failOverCaseC-3() {
 }
 
 # ddl is truncate table
-function failOverCaseC-5() {
+function failOverCaseC-4() {
 	prepare
 	ret=$?
 	if [ "$ret" != 0 ]; then
@@ -257,7 +256,7 @@ function failOverCaseC-5() {
 
 	sleep 10
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitReportAfterWrite=sleep(30)'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitReportAfterWrite=sleep(30000)'
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 
@@ -304,13 +303,13 @@ function failOverCaseC-5() {
 	cleanup_process $CDC_BINARY
 	export GO_FAILPOINTS=''
 
-	echo "failOverCaseC-5 passed successfully"
+	echo "failOverCaseC-4 passed successfully"
 }
 
 trap stop_tidb_cluster EXIT
 failOverCaseC-1
 failOverCaseC-2
 failOverCaseC-3
-failOverCaseC-5
+failOverCaseC-4
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

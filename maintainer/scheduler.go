@@ -141,7 +141,7 @@ func (s *splitScheduler) doCheck(ret pkgReplica.GroupCheckResult, start time.Tim
 				log.Info("split span",
 					zap.String("changefeed", s.changefeedID.Name()),
 					zap.String("span", totalSpan.String()),
-					zap.Int("span szie", len(spans)))
+					zap.Int("spanSize", len(spans)))
 				s.opController.AddMergeSplitOperator(ret.Replications, spans)
 			}
 		}
