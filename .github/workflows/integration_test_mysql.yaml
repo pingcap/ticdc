@@ -51,94 +51,25 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
 
-      - name: Test charset_gbk
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
-
-      - name: Test changefeed_finish
+      - name: Test changefeed_pause_resume
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_finish
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
+
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
+
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
       
-      - name: Test sql_mode
+      - name: Test changefeed_pause_resume
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=sql_mode
-        
-      # - name: Test changefeed_pause_resume
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-
-      - name: Test changefeed_reconstruct
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_reconstruct
-
-      - name: Test common_1
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=common_1
-
-      - name: Test foreign_key
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=foreign_key
-
-      # The 7th case in this group
-      - name: Test generate_column
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=generate_column
-      
-      # The 8th case in this group
-      - name: Test many_pk_or_uk
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=many_pk_or_uk
-      
-      # The 9th case in this group
-      - name: Test drop_many_tables
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=drop_many_tables
-
-      # The 10th case in this group     
-      - name: Test new_ci_collation
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=new_ci_collation
-
-      # The 11th case in this group     
-      - name: Test region_merge
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=region_merge
-
-      # The 12th case in this group     
-      - name: Test safe mode
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=safe_mode
-
-      # The 13th case in this group     
-      - name: Test savepoint
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=savepoint
-
-      # The 14th case in this group     
-      - name: Test server config compatibility
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=server_config_compatibility
-
-      # The 15th case in this group     
-      - name: Test split region
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=split_region
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
 
       - name: Upload test logs
         if: always()
@@ -168,76 +99,25 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
 
-      - name: Test api_v2
+      - name: Test changefeed_pause_resume
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=api_v2
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
 
-      - name: Test autorandom
+      - name: Test changefeed_pause_resume
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=autorandom
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
 
-      - name: Test availability
+      - name: Test changefeed_pause_resume
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=availability
-
-      - name: Test bank
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
+      
+      - name: Test changefeed_pause_resume
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=bank
-
-      - name: Test batch_add_table
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=batch_add_table
-
-      - name: Test batch_update_to_no_batch
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=batch_update_to_no_batch
-
-      - name: Test ci_collation_compatibility
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ci_collation_compatibility
-
-      - name: Test multi_capture
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=multi_capture
-
-      - name: Test multi_cdc_cluster
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=multi_cdc_cluster
-
-      - name: Test multi_rocks
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=multi_rocks
-
-      - name: Test resourcecontrol
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=resourcecontrol
-
-      - name: Test row_format
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=row_format
-
-      - name: Test tiflash
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=tiflash
-
-      # The 14th case in this group     
-      - name: Test vector
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=vector
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
 
       - name: Upload test logs
         if: always()
@@ -268,25 +148,25 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
 
-      - name: Test fail_over
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
         run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over 
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
+
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
+
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
       
-      - name: Test fail_over_ddl_A
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
         run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
-      
-      - name: Test fail_over_ddl_B
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_B
-      
-      - name: Test fail_over_ddl_C
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_C
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
 
       - name: Upload test logs
         if: always()
@@ -317,25 +197,25 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
       
-      - name: Test fail_over_ddl_D
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
         run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_D
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
 
-      - name: Test fail_over_ddl_E
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
         run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_E
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
+
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
       
-      - name: Test fail_over_ddl_F
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
         run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
-      
-      - name: Test fail_over_ddl_G
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_G
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
 
       - name: Upload test logs
         if: always()
@@ -366,25 +246,25 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
 
-      - name: Test fail_over_ddl_H
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
         run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_H
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
 
-      - name: Test fail_over_ddl_I
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
         run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_I
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
+
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
       
-      - name: Test fail_over_ddl_J
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
         run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_J
-
-      - name: Test fail_over_ddl_K
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_K
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
 
       - name: Upload test logs
         if: always()
@@ -408,25 +288,30 @@ jobs:
         with:
           go-version: '1.23'
 
-      - name: Integration Build
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
         run: |
-          tests/scripts/download-integration-test-binaries.sh master true
-          go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
-          make integration_test_build
-          ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
 
-      - name: Test fail_over_ddl_L
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
         run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_L
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
+
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
       
-      - name: Test fail_over_ddl_M
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
         run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_M
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
 
       - name: Upload test logs
         if: always()
         uses: ./.github/actions/upload-test-logs
         with:
           log-name: failover_e2e_test4
+
+
