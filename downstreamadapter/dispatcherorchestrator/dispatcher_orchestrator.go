@@ -69,23 +69,25 @@ func (m *DispatcherOrchestrator) handlePostBootstrap(from node.ID, req *heartbea
 	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
 	manager, exists := m.dispatcherManagers[cfId]
 	if !exists || manager.GetTableTriggerEventDispatcher() == nil {
-		log.Error("Receive post bootstrap request but there is no table trigger event dispatcher", zap.Any("ChangefeedID", cfId.Name()))
+		log.Error("Receive post bootstrap request but there is no table trigger event dispatcher",
+			zap.Any("changefeedID", cfId.Name()))
 		return nil
 	}
 	if manager.GetTableTriggerEventDispatcher().GetId() != common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId) {
 		log.Error("Receive post bootstrap request but the table trigger event dispatcher id is not match",
-			zap.Any("ChangefeedID", cfId.Name()),
-			zap.String("expected table trigger event dispatcher id", manager.GetTableTriggerEventDispatcher().GetId().String()),
-			zap.String("actual table trigger event dispatcher id", common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId).String()))
+			zap.Any("changefeedID", cfId.Name()),
+			zap.String("expectedDispatcherID", manager.GetTableTriggerEventDispatcher().GetId().String()),
+			zap.String("actualDispatcherID", common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId).String()))
 
-		error := apperror.ErrChangefeedInitTableTriggerEventDispatcherFailed.GenWithStackByArgs("Receive post bootstrap request but the table trigger event dispatcher id is not match")
+		err := apperror.ErrChangefeedInitTableTriggerEventDispatcherFailed.
+			GenWithStackByArgs("Receive post bootstrap request but the table trigger event dispatcher id is not match")
 		response := &heartbeatpb.MaintainerPostBootstrapResponse{
 			ChangefeedID: req.ChangefeedID,
 			Err: &heartbeatpb.RunningError{
 				Time:    time.Now().String(),
 				Node:    from.String(),
-				Code:    string(apperror.ErrorCode(error)),
-				Message: error.Error(),
+				Code:    string(apperror.ErrorCode(err)),
+				Message: err.Error(),
 			},
 		}
 		return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
@@ -94,7 +96,8 @@ func (m *DispatcherOrchestrator) handlePostBootstrap(from node.ID, req *heartbea
 	// init table schema store
 	err := manager.InitalizeTableTriggerEventDispatcher(req.Schemas)
 	if err != nil {
-		log.Error("failed to initalize table trigger event dispatcher", zap.Error(err), zap.Any("ChangefeedID", cfId.Name()))
+		log.Error("failed to initialize table trigger event dispatcher",
+			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 
 		response := &heartbeatpb.MaintainerPostBootstrapResponse{
 			ChangefeedID: req.ChangefeedID,
@@ -122,14 +125,16 @@ func (m *DispatcherOrchestrator) handleAddDispatcherManager(from node.ID, req *h
 	var startTs uint64
 	if !exists {
 		cfConfig := &config.ChangefeedConfig{}
-		if err := json.Unmarshal(req.Config, cfConfig); err != nil {
-			log.Panic("failed to unmarshal changefeed config", zap.String("changefeed id", cfId.Name()), zap.Error(err))
+		if err = json.Unmarshal(req.Config, cfConfig); err != nil {
+			log.Panic("failed to unmarshal changefeed config",
+				zap.String("changefeedID", cfId.Name()), zap.Error(err))
 			return err
 		}
 		manager, startTs, err = dispatchermanager.NewEventDispatcherManager(cfId, cfConfig, req.TableTriggerEventDispatcherId, req.StartTs, from)
 		// Fast return the error to maintainer.
 		if err != nil {
-			log.Error("failed to create new dispatcher manager", zap.Error(err), zap.Any("ChangefeedID", cfId.Name()))
+			log.Error("failed to create new dispatcher manager",
+				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 
 			response := &heartbeatpb.MaintainerBootstrapResponse{
 				ChangefeedID: req.ChangefeedID,
@@ -151,7 +156,8 @@ func (m *DispatcherOrchestrator) handleAddDispatcherManager(from node.ID, req *h
 		if manager.GetTableTriggerEventDispatcher() == nil && req.TableTriggerEventDispatcherId != nil {
 			startTs, err = manager.NewTableTriggerEventDispatcher(req.TableTriggerEventDispatcherId, req.StartTs)
 			if err != nil {
-				log.Error("failed to create new table trigger event dispatcher", zap.Error(err), zap.Any("ChangefeedID", cfId.Name()))
+				log.Error("failed to create new table trigger event dispatcher",
+					zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 
 				response := &heartbeatpb.MaintainerBootstrapResponse{
 					ChangefeedID: req.ChangefeedID,
@@ -169,7 +175,8 @@ func (m *DispatcherOrchestrator) handleAddDispatcherManager(from node.ID, req *h
 
 	if manager.GetMaintainerID() != from {
 		manager.SetMaintainerID(from)
-		log.Info("maintainer changed", zap.String("changefeed", cfId.Name()), zap.String("maintainer", from.String()))
+		log.Info("maintainer changed",
+			zap.String("changefeed", cfId.Name()), zap.String("maintainer", from.String()))
 	}
 
 	response := createBootstrapResponse(req.ChangefeedID, manager, startTs)
@@ -193,7 +200,8 @@ func (m *DispatcherOrchestrator) handleRemoveDispatcherManager(from node.ID, req
 		}
 	}
 
-	log.Info("try close dispatcher manager", zap.String("changefeed", cfId.Name()), zap.Bool("success", response.Success))
+	log.Info("try close dispatcher manager",
+		zap.String("changefeed", cfId.Name()), zap.Bool("success", response.Success))
 	return m.sendResponse(from, messaging.MaintainerTopic, response)
 }
 

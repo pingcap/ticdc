@@ -151,7 +151,7 @@ func TestDownstream(t *testing.T) {
 	}
 
 	wg.Wait()
-	log.Warn("test begin", zap.Any("create dispatcher cost time", time.Since(start)))
+	log.Warn("test begin", zap.Any("duration", time.Since(start)))
 
 	// 插入数据, 先固定 data 格式
 	go pushDataIntoDispatchers(dispatcherIDSet, helper)

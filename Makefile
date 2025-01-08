@@ -192,7 +192,7 @@ check-makefiles: format-makefiles
 format-makefiles: $(MAKE_FILES)
 	$(SED_IN_PLACE) -e 's/^\(\t*\)  /\1\t/g' -e 's/^\(\t*\) /\1/' -- $?
 
-check: check-copyright fmt tidy errdoc check-diff-line-width check-ticdc-dashboard check-makefiles
+check: check-copyright fmt check-static tidy errdoc check-diff-line-width check-ticdc-dashboard check-makefiles
 	@git --no-pager diff --exit-code || (echo "Please add changed files!" && false)
 
 clean:
