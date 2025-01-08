@@ -444,9 +444,10 @@ func (h *OpenAPIV2) resumeChangefeed(c *gin.Context) {
 
 	cfg := new(ResumeChangefeedConfig)
 	if err := c.BindJSON(cfg); err != nil {
-		log.Error("failed to bind resume changefeed config", zap.Error(err))
 		// If the body is empty, means no config is provided, it's ok.
-		if err != io.EOF || strings.Contains(err.Error(), "EOF") {
+		isEmptyBody := (err == io.EOF || strings.Contains(err.Error(), "EOF"))
+		if !isEmptyBody {
+			log.Info("failed to bind resume changefeed config", zap.Error(err))
 			_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 			return
 		}
