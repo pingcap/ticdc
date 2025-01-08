@@ -98,16 +98,18 @@ def list_changefeed():
     resp = rq.get(url)
     assert resp.status_code == rq.codes.ok
     data = resp.json()
-    for changefeed in data:
-        assert changefeed["state"] == "normal"
+    changefeeds = data["items"]
+    for cf in changefeeds:
+        assert cf["state"] == "normal"
 
     # test state: stopped
     url = BASE_URL0_V2+"/changefeeds?state=stopped"
     resp = rq.get(url)
     assert resp.status_code == rq.codes.ok
     data = resp.json()
-    for changefeed in data:
-        assert changefeed["state"] == "stopped"
+    changefeeds = data["items"]
+    for cf in changefeeds:
+        assert cf["state"] == "stopped"
 
 
 def get_changefeed():
@@ -134,10 +136,10 @@ def pause_changefeed():
     url = BASE_URL0_V2+"/changefeeds/changefeed-test2/pause"
     for i in range(RETRY_TIME):
         resp = rq.post(url)
-        if resp.status_code == rq.codes.accepted:
+        if resp.status_code == rq.codes.ok:
             break
         time.sleep(1)
-    assert resp.status_code == rq.codes.accepted
+    assert resp.status_code == rq.codes.ok
     # check if pause changefeed success
     url = BASE_URL0_V2+"/changefeeds/changefeed-test2"
     for i in range(RETRY_TIME):
@@ -170,7 +172,7 @@ def update_changefeed():
     data = json.dumps({"mounter_worker_num": 32})
     headers = {"Content-Type": "application/json"}
     resp = rq.put(url, data=data, headers=headers)
-    assert resp.status_code == rq.codes.accepted
+    assert resp.status_code == rq.codes.ok
 
     # update fail
     # can't update start_ts
@@ -186,7 +188,7 @@ def resume_changefeed():
     # resume changefeed
     url = BASE_URL1_V2+"/changefeeds/changefeed-test2/resume"
     resp = rq.post(url)
-    assert resp.status_code == rq.codes.accepted
+    assert resp.status_code == rq.codes.ok
 
     # check if resume changefeed success
     url = BASE_URL1_V2+"/changefeeds/changefeed-test2"
@@ -212,7 +214,7 @@ def remove_changefeed():
     # remove changefeed
     url = BASE_URL0_V2+"/changefeeds/changefeed-test3"
     resp = rq.delete(url)
-    assert resp.status_code == rq.codes.accepted
+    assert resp.status_code == rq.codes.ok
 
     # check if remove changefeed success
     url = BASE_URL0_V2+"/changefeeds/changefeed-test3"
@@ -238,7 +240,7 @@ def move_table():
     data = json.dumps({"capture_id": "test-aaa-aa", "table_id": 11})
     headers = {"Content-Type": "application/json"}
     resp = rq.post(url, data=data, headers=headers)
-    assert resp.status_code == rq.codes.accepted
+    assert resp.status_code == rq.codes.ok
 
     # move table fail
     # not allow empty capture_id
@@ -252,7 +254,7 @@ def move_table():
 def resign_owner():
     url = BASE_URL1_V2 + "/owner/resign"
     resp = rq.post(url)
-    assert resp.status_code == rq.codes.accepted
+    assert resp.status_code == rq.codes.ok
 
 
 
