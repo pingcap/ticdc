@@ -1856,17 +1856,19 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{rawEvent.PrevTableID, targetPartitionID, heartbeatpb.DDLSpan.TableID},
 		}
-		ddlEvent.UpdatedSchemas = []commonEvent.SchemaIDChange{
-			{
-				TableID:     targetPartitionID,
-				OldSchemaID: rawEvent.CurrentSchemaID,
-				NewSchemaID: rawEvent.PrevSchemaID,
-			},
-			{
-				TableID:     rawEvent.PrevTableID,
-				OldSchemaID: rawEvent.PrevSchemaID,
-				NewSchemaID: rawEvent.CurrentSchemaID,
-			},
+		if rawEvent.CurrentSchemaID != rawEvent.PrevSchemaID {
+			ddlEvent.UpdatedSchemas = []commonEvent.SchemaIDChange{
+				{
+					TableID:     targetPartitionID,
+					OldSchemaID: rawEvent.CurrentSchemaID,
+					NewSchemaID: rawEvent.PrevSchemaID,
+				},
+				{
+					TableID:     rawEvent.PrevTableID,
+					OldSchemaID: rawEvent.PrevSchemaID,
+					NewSchemaID: rawEvent.CurrentSchemaID,
+				},
+			}
 		}
 	} else if !ignoreNormalTable {
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
