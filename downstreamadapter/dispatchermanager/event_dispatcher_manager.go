@@ -519,7 +519,7 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 			return
 		case tableSpanStatus := <-e.statusesChan:
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-			watermark.Seq = tableSpanStatus.Seq
+			newWatermark.Seq = tableSpanStatus.Seq
 			if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < newWatermark.CheckpointTs {
 				newWatermark.CheckpointTs = tableSpanStatus.StartTs
 			}
@@ -532,8 +532,8 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 				select {
 				case tableSpanStatus := <-e.statusesChan:
 					statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-					if watermark.Seq < tableSpanStatus.Seq {
-						watermark.Seq = tableSpanStatus.Seq
+					if newWatermark.Seq < tableSpanStatus.Seq {
+						newWatermark.Seq = tableSpanStatus.Seq
 					}
 					if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < newWatermark.CheckpointTs {
 						newWatermark.CheckpointTs = tableSpanStatus.StartTs
