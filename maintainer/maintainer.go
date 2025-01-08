@@ -702,23 +702,8 @@ func (m *Maintainer) handleError(err error) {
 // getNewBootstrapFn returns a function that creates a new bootstrap message to initialize
 // a changefeed dispatcher manager.
 func (m *Maintainer) getNewBootstrapFn() bootstrap.NewBootstrapMessageFn {
-	cfg := m.config
-	changefeedConfig := config.ChangefeedConfig{
-		ChangefeedID:       cfg.ChangefeedID,
-		StartTS:            cfg.StartTs,
-		TargetTS:           cfg.TargetTs,
-		SinkURI:            cfg.SinkURI,
-		ForceReplicate:     cfg.Config.ForceReplicate,
-		SinkConfig:         cfg.Config.Sink,
-		Filter:             cfg.Config.Filter,
-		EnableSyncPoint:    *cfg.Config.EnableSyncPoint,
-		SyncPointInterval:  cfg.Config.SyncPointInterval,
-		SyncPointRetention: cfg.Config.SyncPointRetention,
-		MemoryQuota:        cfg.Config.MemoryQuota,
-		// other fields are not necessary for maintainer
-	}
 	// cfgBytes only holds necessary fields to initialize a changefeed dispatcher.
-	cfgBytes, err := json.Marshal(changefeedConfig)
+	cfgBytes, err := json.Marshal(m.config.ToChangefeedConfig())
 	if err != nil {
 		log.Panic("marshal changefeed config failed",
 			zap.String("changefeed", m.id.Name()),

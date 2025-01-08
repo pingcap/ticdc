@@ -65,6 +65,23 @@ type ChangeFeedInfo struct {
 	Epoch uint64 `json:"epoch"`
 }
 
+func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
+	return &ChangefeedConfig{
+		ChangefeedID:       info.ChangefeedID,
+		StartTS:            info.StartTs,
+		TargetTS:           info.TargetTs,
+		SinkURI:            info.SinkURI,
+		ForceReplicate:     info.Config.ForceReplicate,
+		SinkConfig:         info.Config.Sink,
+		Filter:             info.Config.Filter,
+		EnableSyncPoint:    *info.Config.EnableSyncPoint,
+		SyncPointInterval:  info.Config.SyncPointInterval,
+		SyncPointRetention: info.Config.SyncPointRetention,
+		MemoryQuota:        info.Config.MemoryQuota,
+		// other fields are not necessary for maintainer
+	}
+}
+
 // NeedBlockGC returns true if the changefeed need to block the GC safepoint.
 // Note: if the changefeed is failed by GC, it should not block the GC safepoint.
 func (info *ChangeFeedInfo) NeedBlockGC() bool {

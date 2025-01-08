@@ -22,6 +22,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	apperror "github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -137,7 +138,7 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 	}
 	err = replicaCfg.ValidateAndAdjust(sinkURIParsed)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
+		_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
 		return
 	}
 
@@ -154,6 +155,16 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 		CreatorVersion: version.ReleaseVersion,
 		Epoch:          owner.GenerateChangefeedEpoch(ctx, pdClient),
 	}
+
+	// verify sinkURI
+	cfID := common.NewChangeFeedIDWithName("sink-uri-verify-changefeed-id")
+	cfConfig := info.ToChangefeedConfig()
+	sink, err := sink.NewSink(ctx, cfConfig, cfID, nil)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
+		return
+	}
+	sink.Close(true)
 
 	needRemoveGCSafePoint := false
 	defer func() {
