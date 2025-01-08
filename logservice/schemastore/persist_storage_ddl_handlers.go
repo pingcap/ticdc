@@ -1202,6 +1202,9 @@ func extractTableInfoFuncForExchangeTablePartition(event *PersistedDDLEvent, tab
 		if tableID != droppedIDs[0] {
 			log.Panic("should not reach here", zap.Int64("tableID", tableID), zap.Int64("expectedPartitionID", droppedIDs[0]))
 		}
+		if event.PreTableInfo == nil {
+			log.Panic("cannot find pre table info", zap.Int64("tableID", tableID))
+		}
 		// old partition id, return the table info of the normal table
 		columnSchema := event.PreTableInfo.ShadowCopyColumnSchema()
 		tableInfo := common.NewTableInfo(
