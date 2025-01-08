@@ -88,7 +88,7 @@ function failOverCaseE-1() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	ans=$(run_cdc_cli capture list)
-	node2ID=`echo $ans | sed 's/ PASS.*//' | grep -v "Command to ticdc" | jq -r '.[] | select(.address == "127.0.0.1:8301") | .id'`
+	node2ID=$(echo $ans | sed 's/ PASS.*//' | grep -v "Command to ticdc" | jq -r '.[] | select(.address == "127.0.0.1:8301") | .id')
 
 	# move table 1 to node 2
 	move_table_with_retry "127.0.0.1:8301" 106 "test" 10
