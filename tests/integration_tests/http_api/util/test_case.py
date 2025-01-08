@@ -46,7 +46,7 @@ def requests_get_with_retry(url, max_retries=RETRY_TIME, delay_seconds=1):
 # we write some SQLs in the run.sh after call create_changefeed
 def create_changefeed(sink_uri):
     print("Start to create changefeed!")
-    url = BASE_URL0_V2+"/changefeeds"
+    url = BASE_URL1_V2+"/changefeeds"
     # create changefeed
     for i in range(1, 4):
         data = {
@@ -65,7 +65,7 @@ def create_changefeed(sink_uri):
         resp = rq.post(url, data=data, headers=headers)
         print("Response status code:", resp.status_code)
         print("Response body:", resp.json())
-        assert resp.status_code == rq.codes.accepted
+        assert resp.status_code == rq.codes.ok
 
     # create changefeed fail because sink_uri is invalid
     data = json.dumps({
