@@ -451,7 +451,8 @@ func (h *OpenAPIV2) resumeChangefeed(c *gin.Context) {
 			_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 			return
 		}
-		err = nil
+		_ = c.Error(nil)
+		log.Info("resume changefeed config is empty")
 	}
 
 	coordinator, err := h.server.GetCoordinator()
@@ -496,6 +497,7 @@ func (h *OpenAPIV2) resumeChangefeed(c *gin.Context) {
 			return
 		}
 	}()
+
 	err = coordinator.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs)
 	if err != nil {
 		_ = c.Error(err)
