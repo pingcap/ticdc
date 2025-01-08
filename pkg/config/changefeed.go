@@ -55,10 +55,11 @@ type ChangeFeedInfo struct {
 	// but can be fetched for backward compatibility
 	SortDir string `json:"sort-dir"`
 
-	Config  *ReplicaConfig      `json:"config"`
-	State   model.FeedState     `json:"state"`
-	Error   *model.RunningError `json:"error"`
-	Warning *model.RunningError `json:"warning"`
+	UpstreamInfo *UpstreamInfo       `json:"upstream-info"`
+	Config       *ReplicaConfig      `json:"config"`
+	State        model.FeedState     `json:"state"`
+	Error        *model.RunningError `json:"error"`
+	Warning      *model.RunningError `json:"warning"`
 
 	CreatorVersion string `json:"creator-version"`
 	// Epoch is the epoch of a changefeed, changes on every restart.

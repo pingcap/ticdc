@@ -157,9 +157,9 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 	}
 
 	// verify sinkURI
-	cfID := common.NewChangeFeedIDWithName("sink-uri-verify-changefeed-id")
+	tempChangefeedID := common.NewChangeFeedIDWithName("sink-uri-verify-changefeed-id")
 	cfConfig := info.ToChangefeedConfig()
-	sink, err := sink.NewSink(ctx, cfConfig, cfID, nil)
+	sink, err := sink.NewSink(ctx, cfConfig, tempChangefeedID, nil)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
 		return
@@ -564,6 +564,10 @@ func (h *OpenAPIV2) updateChangefeed(c *gin.Context) {
 	if updateCfConfig.SinkURI != "" {
 		oldCfInfo.SinkURI = updateCfConfig.SinkURI
 	}
+	if updateCfConfig.StartTs != 0 {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("start_ts can not be updated"))
+		return
+	}
 
 	// verify changefeed filter
 	_, err = filter.NewFilter(oldCfInfo.Config.Filter, "", oldCfInfo.Config.CaseSensitive)
@@ -572,10 +576,21 @@ func (h *OpenAPIV2) updateChangefeed(c *gin.Context) {
 			GenWithStackByArgs(errors.Cause(err).Error()))
 		return
 	}
+
+	// verify sink
+	tempChangefeedID := common.NewChangeFeedIDWithName("sink-uri-verify-changefeed-id")
+	sink, err := sink.NewSink(ctx, oldCfInfo.ToChangefeedConfig(), tempChangefeedID, nil)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
+		return
+	}
+	sink.Close(true)
+
 	if err := coordinator.UpdateChangefeed(ctx, oldCfInfo); err != nil {
 		_ = c.Error(err)
 		return
 	}
+
 	c.JSON(http.StatusOK, toAPIModel(oldCfInfo, status.CheckpointTs, status.CheckpointTs, nil))
 }
 
