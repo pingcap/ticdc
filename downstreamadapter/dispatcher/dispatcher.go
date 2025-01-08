@@ -322,7 +322,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			})
 			d.AddDMLEventToSink(dml)
 		case commonEvent.TypeDDLEvent:
-			failpoint.Inject("BlockBeforeDealWithDDL", nil)
+			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			if len(dispatcherEvents) != 1 {
 				log.Panic("ddl event should only be singly handled", zap.Any("dispatcherID", d.id))
 			}
