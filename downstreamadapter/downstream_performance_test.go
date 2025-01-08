@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
@@ -9,8 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/node"
-
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
@@ -21,6 +32,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
 )
 
@@ -29,9 +41,11 @@ import (
 // 2. memory quota 直接硬编码写死
 // 3. 注释掉 shouldIgnoreDataEvent 的检查
 
-const totalCount = 40
-const dispatcherCount = 1000
-const databaseCount = 1
+const (
+	totalCount      = 40
+	dispatcherCount = 1000
+	databaseCount   = 1
+)
 
 func initContext(serverId node.ID) {
 	appcontext.SetService(appcontext.MessageCenter, messaging.NewMessageCenter(context.Background(), serverId, 100, config.NewDefaultMessageCenterConfig()))
@@ -47,7 +61,7 @@ func pushDataIntoDispatchers(dispatcherIDSet map[common.DispatcherID]interface{}
 	var wg sync.WaitGroup
 	var listMutex sync.Mutex
 	eventList := make([]*commonEvent.DMLEvent, 0, totalCount*dispatcherCount)
-	for id, _ := range dispatcherIDSet {
+	for id := range dispatcherIDSet {
 		wg.Add(1)
 		go func(idx int, id common.DispatcherID) {
 			defer wg.Done()
@@ -88,7 +102,7 @@ func TestDownstream(t *testing.T) {
 	go func() {
 		http.ListenAndServe("0.0.0.0:6100", nil)
 	}()
-	//createTables(dispatcherCount/100, databaseCount)
+	// createTables(dispatcherCount/100, databaseCount)
 
 	serverId := node.ID("test")
 	initContext(serverId)
@@ -165,7 +179,6 @@ func TestDownstream(t *testing.T) {
 			}
 		}
 	}
-
 }
 
 /*

@@ -27,8 +27,10 @@ const (
 	clearCacheDelayInSecond = 5
 )
 
-var prewriteCacheRowNum = metrics.LogPullerPrewriteCacheRowNum
-var matcherCount = metrics.LogPullerMatcherCount
+var (
+	prewriteCacheRowNum = metrics.LogPullerPrewriteCacheRowNum
+	matcherCount        = metrics.LogPullerMatcherCount
+)
 
 type matchKey struct {
 	startTs uint64

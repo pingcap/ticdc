@@ -125,7 +125,8 @@ func (b *EtcdBackend) GetAllChangefeeds(ctx context.Context) (map[common.ChangeF
 }
 
 func (b *EtcdBackend) CreateChangefeed(ctx context.Context,
-	info *config.ChangeFeedInfo) error {
+	info *config.ChangeFeedInfo,
+) error {
 	infoKey := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), info.ChangefeedID.DisplayName)
 	infoValue, err := info.Marshal()
 	if err != nil {
@@ -229,7 +230,8 @@ func (b *EtcdBackend) PauseChangefeed(ctx context.Context, id common.ChangeFeedI
 }
 
 func (b *EtcdBackend) DeleteChangefeed(ctx context.Context,
-	changefeedID common.ChangeFeedID) error {
+	changefeedID common.ChangeFeedID,
+) error {
 	infoKey := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), changefeedID.DisplayName)
 	jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), changefeedID.DisplayName)
 	opsThen := []clientv3.Op{}
@@ -247,7 +249,8 @@ func (b *EtcdBackend) DeleteChangefeed(ctx context.Context,
 }
 
 func (b *EtcdBackend) ResumeChangefeed(ctx context.Context,
-	id common.ChangeFeedID, newCheckpointTs uint64) error {
+	id common.ChangeFeedID, newCheckpointTs uint64,
+) error {
 	info, err := b.etcdClient.GetChangeFeedInfo(ctx, id.DisplayName)
 	if err != nil {
 		return errors.Trace(err)

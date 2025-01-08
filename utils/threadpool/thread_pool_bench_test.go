@@ -49,12 +49,15 @@ func benchmarkCPUThreadPoolWithWaitReactor(addCount int, sleepTime int, b *testi
 func BenchmarkCPUThreadPoolWithWaitReactor10000x1(b *testing.B) {
 	benchmarkCPUThreadPoolWithWaitReactor(10000, 1, b)
 }
+
 func BenchmarkCPUThreadPoolWithWaitReactor10000x10(b *testing.B) {
 	benchmarkCPUThreadPoolWithWaitReactor(10000, 10, b)
 }
+
 func BenchmarkCPUThreadPoolWithWaitReactor10000x100(b *testing.B) {
 	benchmarkCPUThreadPoolWithWaitReactor(10000, 100, b)
 }
+
 func BenchmarkCPUThreadPoolWithWaitReactor10000x1000(b *testing.B) {
 	benchmarkCPUThreadPoolWithWaitReactor(10000, 1000, b)
 }

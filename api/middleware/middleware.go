@@ -15,6 +15,7 @@ package middleware
 
 import (
 	"bufio"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -98,7 +99,7 @@ func LogMiddleware() gin.HandlerFunc {
 func ForwardToCoordinatorMiddleware(server server.Server) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		if !server.IsCoordinator() {
-			ForwardToOwner(ctx, server)
+			ForwardToCoordinator(ctx, server)
 
 			// Without calling Abort(), Gin will continue to process the next handler,
 			// execute code which should only be run by the owner, and cause a panic.
@@ -110,8 +111,8 @@ func ForwardToCoordinatorMiddleware(server server.Server) gin.HandlerFunc {
 	}
 }
 
-// ForwardToOwner forwards a request to the controller
-func ForwardToOwner(c *gin.Context, server server.Server) {
+// ForwardToCoordinator forwards a request to the coordinator
+func ForwardToCoordinator(c *gin.Context, server server.Server) {
 	ctx := c.Request.Context()
 	info, err := server.SelfInfo()
 	if err != nil {
@@ -130,7 +131,7 @@ func ForwardToOwner(c *gin.Context, server server.Server) {
 	ForwardToServer(c, info.ID, node.AdvertiseAddr)
 }
 
-// ForwardToServer forward request to another
+// ForwardToServer forward request to another server
 func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 	ctx := c.Request.Context()
 
@@ -146,6 +147,7 @@ func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 			return
 		}
 		if lastForwardTimes > maxForwardTimes {
+			err := errors.New("TiCDC cluster is unavailable, please try again later")
 			_ = c.Error(err)
 			return
 		}
@@ -174,16 +176,16 @@ func ForwardToServer(c *gin.Context, fromID node.ID, toAddr string) {
 			req.Header.Add(k, vv)
 		}
 	}
-	log.Info("forwarding request to server",
+	log.Info("forwarding request to another server",
 		zap.String("url", c.Request.RequestURI),
 		zap.String("method", c.Request.Method),
 		zap.Any("fromID", fromID),
 		zap.String("toAddr", toAddr),
 		zap.String("forwardTimes", timeStr))
 
-	req.Header.Add(forwardFrom, string(fromID))
+	req.Header.Set(forwardFrom, string(fromID))
 	lastForwardTimes++
-	req.Header.Add(forwardTimes, strconv.Itoa(int(lastForwardTimes)))
+	req.Header.Set(forwardTimes, strconv.Itoa(int(lastForwardTimes)))
 	// forward toAddr owner
 	cli, err := httputil.NewClient(security)
 	if err != nil {

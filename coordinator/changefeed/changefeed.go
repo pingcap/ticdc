@@ -48,7 +48,8 @@ type Changefeed struct {
 // NewChangefeed creates a new changefeed instance
 func NewChangefeed(cfID common.ChangeFeedID,
 	info *config.ChangeFeedInfo,
-	checkpointTs uint64) *Changefeed {
+	checkpointTs uint64,
+) *Changefeed {
 	uri, err := url.Parse(info.SinkURI)
 	if err != nil {
 		log.Panic("unable to marshal changefeed config",

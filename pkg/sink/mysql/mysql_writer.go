@@ -297,7 +297,7 @@ func (w *MysqlWriter) SendDDLTs(event *commonEvent.DDLEvent) error {
 
 	if len(tableIds) > 0 {
 		// generate query
-		//INSERT INTO `tidb_cdc`.`ddl_ts` (ticdc_cluster_id, changefeed, ddl_ts, table_id) values(...) ON DUPLICATE KEY UPDATE ddl_ts=VALUES(ddl_ts), created_at=CURRENT_TIMESTAMP;
+		// INSERT INTO `tidb_cdc`.`ddl_ts` (ticdc_cluster_id, changefeed, ddl_ts, table_id) values(...) ON DUPLICATE KEY UPDATE ddl_ts=VALUES(ddl_ts), created_at=CURRENT_TIMESTAMP;
 		var builder strings.Builder
 		builder.WriteString("INSERT INTO ")
 		builder.WriteString(filter.TiCDCSystemSchema)
@@ -376,7 +376,6 @@ func (w *MysqlWriter) SendDDLTs(event *commonEvent.DDLEvent) error {
 
 	err = tx.Commit()
 	return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "failed to write ddl ts table; Commit Fail;"))
-
 }
 
 // GetStartTsList return the startTs list for each table in the tableIDs list.
@@ -446,7 +445,6 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, error) {
 
 func (w *MysqlWriter) RemoveDDLTsItem() error {
 	tx, err := w.db.BeginTx(w.ctx, nil)
-
 	if err != nil {
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "select ddl ts table: begin Tx fail;"))
 	}
@@ -525,7 +523,6 @@ func (w *MysqlWriter) isDDLExecuted(tableID int64, ddlTs uint64) (bool, error) {
 		return true, nil
 	}
 	return false, nil
-
 }
 
 func (w *MysqlWriter) CreateDDLTsTable() error {
@@ -730,7 +727,20 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 
 			switch row.RowType {
 			case commonEvent.RowTypeUpdate:
-				query, args, err = buildUpdate(event.TableInfo, row)
+				if translateToInsert {
+					query, args, err = buildUpdate(event.TableInfo, row)
+				} else {
+					query, args, err = buildDelete(event.TableInfo, row)
+					if err != nil {
+						dmlsPool.Put(dmls) // Return to pool on error
+						return nil, errors.Trace(err)
+					}
+					if query != "" {
+						dmls.sqls = append(dmls.sqls, query)
+						dmls.values = append(dmls.values, args)
+					}
+					query, args, err = buildInsert(event.TableInfo, row, translateToInsert)
+				}
 			case commonEvent.RowTypeDelete:
 				query, args, err = buildDelete(event.TableInfo, row)
 			case commonEvent.RowTypeInsert:

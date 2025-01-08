@@ -56,7 +56,8 @@ func NewReplicaSet(cfID common.ChangeFeedID,
 	tsoClient TSOClient,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
-	checkpointTs uint64) *SpanReplication {
+	checkpointTs uint64,
+) *SpanReplication {
 	r := &SpanReplication{
 		ID:           id,
 		tsoClient:    tsoClient,

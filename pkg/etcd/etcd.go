@@ -667,5 +667,4 @@ func extractKeySuffix(key string) (string, error) {
 	return subs[len(subs)-1], nil
 }
 
-type Etcd interface {
-}
+type Etcd interface{}

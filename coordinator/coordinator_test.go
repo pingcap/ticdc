@@ -84,7 +84,7 @@ func (m *mockMaintainerManager) Run(ctx context.Context) error {
 		case msg := <-m.msgCh:
 			m.handleMessage(msg)
 		case <-tick.C:
-			//1.  try to send heartbeat to coordinator
+			// 1.  try to send heartbeat to coordinator
 			m.sendHeartbeat()
 		}
 	}
@@ -110,6 +110,7 @@ func (m *mockMaintainerManager) handleMessage(msg *messaging.TargetMessage) {
 		}
 	}
 }
+
 func (m *mockMaintainerManager) sendMessages(msg *heartbeatpb.MaintainerHeartbeat) {
 	target := messaging.NewSingleTargetMessage(
 		m.coordinatorID,
@@ -121,6 +122,7 @@ func (m *mockMaintainerManager) sendMessages(msg *heartbeatpb.MaintainerHeartbea
 		log.Warn("send command failed", zap.Error(err))
 	}
 }
+
 func (m *mockMaintainerManager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
 	switch msg.Type {
 	// receive message from coordinator
@@ -138,6 +140,7 @@ func (m *mockMaintainerManager) recvMessages(ctx context.Context, msg *messaging
 	}
 	return nil
 }
+
 func (m *mockMaintainerManager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	req := msg.Message[0].(*heartbeatpb.CoordinatorBootstrapRequest)
 	if m.coordinatorVersion > req.Version {
@@ -163,6 +166,7 @@ func (m *mockMaintainerManager) onCoordinatorBootstrapRequest(msg *messaging.Tar
 	log.Info("New coordinator online",
 		zap.Int64("version", m.coordinatorVersion))
 }
+
 func (m *mockMaintainerManager) onDispatchMaintainerRequest(
 	msg *messaging.TargetMessage,
 ) *heartbeatpb.ChangefeedID {
@@ -203,6 +207,7 @@ func (m *mockMaintainerManager) onDispatchMaintainerRequest(
 	}
 	return nil
 }
+
 func (m *mockMaintainerManager) sendHeartbeat() {
 	if m.coordinatorVersion > 0 {
 		response := &heartbeatpb.MaintainerHeartbeat{}
@@ -339,7 +344,8 @@ func TestScaleNode(t *testing.T) {
 			model.CaptureID(info.ID):  {ID: model.CaptureID(info.ID), AdvertiseAddr: info.AdvertiseAddr},
 			model.CaptureID(info2.ID): {ID: model.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
 			model.CaptureID(info3.ID): {ID: model.CaptureID(info3.ID), AdvertiseAddr: info3.AdvertiseAddr},
-		}})
+		},
+	})
 	time.Sleep(time.Second * 5)
 	require.Equal(t, cfSize, co.controller.changefeedDB.GetReplicatingSize())
 	require.Equal(t, 2, len(co.controller.changefeedDB.GetByNodeID(info.ID)))
@@ -351,7 +357,8 @@ func TestScaleNode(t *testing.T) {
 		Captures: map[model.CaptureID]*model.CaptureInfo{
 			model.CaptureID(info.ID):  {ID: model.CaptureID(info.ID), AdvertiseAddr: info.AdvertiseAddr},
 			model.CaptureID(info2.ID): {ID: model.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
-		}})
+		},
+	})
 	time.Sleep(time.Second * 5)
 	require.Equal(t, cfSize, co.controller.changefeedDB.GetReplicatingSize())
 	require.Equal(t, 3, len(co.controller.changefeedDB.GetByNodeID(info.ID)))
@@ -452,7 +459,8 @@ func (d *maintainNode) stop() {
 
 func startMaintainerNode(ctx context.Context,
 	node *node.Info, mc messaging.MessageCenter,
-	nodeManager *watcher.NodeManager) *maintainNode {
+	nodeManager *watcher.NodeManager,
+) *maintainNode {
 	nodeManager.RegisterNodeChangeHandler(node.ID, mc.OnNodeChanges)
 	ctx, cancel := context.WithCancel(ctx)
 	maintainerM := NewMaintainerManager(mc)

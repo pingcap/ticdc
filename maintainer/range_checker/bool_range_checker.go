@@ -28,7 +28,6 @@ func NewBoolRangeChecker(covered bool) *BoolRangeChecker {
 
 // AddSubRange adds a sub table pan to the range checker.
 func (f *BoolRangeChecker) AddSubRange(_ int64, _, _ []byte) {
-
 }
 
 // IsFullyCovered checks if the entire range from start to end is covered.
@@ -38,7 +37,6 @@ func (f *BoolRangeChecker) IsFullyCovered() bool {
 
 // Reset resets the range checker reported sub spans
 func (f *BoolRangeChecker) Reset() {
-
 }
 
 func (f *BoolRangeChecker) Detail() string {

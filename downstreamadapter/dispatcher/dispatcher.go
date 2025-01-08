@@ -156,7 +156,8 @@ func NewDispatcher(
 	syncPointConfig *syncpoint.SyncPointConfig,
 	filterConfig *eventpb.FilterConfig,
 	currentPdTs uint64,
-	errCh chan error) *Dispatcher {
+	errCh chan error,
+) *Dispatcher {
 	dispatcher := &Dispatcher{
 		changefeedID:          changefeedID,
 		id:                    id,
@@ -570,7 +571,6 @@ func (d *Dispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 
 	task.Cancel()
 	d.resendTaskMap.Delete(identifier)
-
 }
 
 func (d *Dispatcher) GetSchemaID() int64 {

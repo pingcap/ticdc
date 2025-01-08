@@ -18,12 +18,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/fatih/color"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/logger"
-
-	"github.com/fatih/color"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/server"
 	"github.com/pingcap/ticdc/version"
 	"github.com/pingcap/tiflow/pkg/cmd/util"

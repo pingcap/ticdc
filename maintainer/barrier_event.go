@@ -55,7 +55,8 @@ type BarrierEvent struct {
 }
 
 func NewBlockEvent(cfID common.ChangeFeedID, controller *Controller,
-	status *heartbeatpb.State, dynamicSplitEnabled bool) *BarrierEvent {
+	status *heartbeatpb.State, dynamicSplitEnabled bool,
+) *BarrierEvent {
 	event := &BarrierEvent{
 		controller:          controller,
 		selected:            false,
@@ -268,7 +269,7 @@ func (be *BarrierEvent) sendPassAction() []*messaging.TargetMessage {
 			influencedDispatchers.DispatcherIDs = append(influencedDispatchers.DispatcherIDs, dispatcherID.ToPB())
 		}
 	}
-	var msgs = make([]*messaging.TargetMessage, 0, len(msgMap))
+	msgs := make([]*messaging.TargetMessage, 0, len(msgMap))
 	for _, msg := range msgMap {
 		msgs = append(msgs, msg)
 	}
@@ -303,7 +304,7 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 	be.lastResendTime = time.Now()
 	// we select a dispatcher as the writer, still waiting for that dispatcher advance its checkpoint ts
 	if !be.writerDispatcherAdvanced {
-		//resend write action
+		// resend write action
 		stm := be.controller.GetTask(be.writerDispatcher)
 		if stm == nil || stm.GetNodeID() == "" {
 			log.Warn("writer dispatcher not found",
@@ -335,7 +336,8 @@ func (be *BarrierEvent) newWriterActionMessage(capture node.ID) *messaging.Targe
 						},
 					},
 				},
-			}})
+			},
+		})
 }
 
 func (be *BarrierEvent) newPassActionMessage(capture node.ID) *messaging.TargetMessage {
@@ -351,7 +353,8 @@ func (be *BarrierEvent) newPassActionMessage(capture node.ID) *messaging.TargetM
 						ExcludeDispatcherId: be.writerDispatcher.ToPB(),
 					},
 				},
-			}})
+			},
+		})
 }
 
 func (be *BarrierEvent) action(action heartbeatpb.Action) *heartbeatpb.DispatcherAction {

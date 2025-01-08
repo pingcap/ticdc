@@ -115,7 +115,7 @@ type Maintainer struct {
 	changefeedRemoved bool
 
 	lastPrintStatusTime time.Time
-	//lastCheckpointTsTime time.Time
+	// lastCheckpointTsTime time.Time
 
 	errLock             sync.Mutex
 	runningErrors       map[node.ID]*heartbeatpb.RunningError
@@ -321,7 +321,7 @@ func (m *Maintainer) initialize() error {
 	nodes := m.nodeManager.GetAliveNodes()
 	log.Info("changefeed bootstrap initial nodes",
 		zap.Int("nodes", len(nodes)))
-	var newNodes = make([]*node.Info, 0, len(nodes))
+	newNodes := make([]*node.Info, 0, len(nodes))
 	for _, n := range nodes {
 		newNodes = append(newNodes, n)
 	}
@@ -406,7 +406,7 @@ func (m *Maintainer) onNodeChanged() {
 	currentNodes := m.bootstrapper.GetAllNodes()
 
 	activeNodes := m.nodeManager.GetAliveNodes()
-	var newNodes = make([]*node.Info, 0, len(activeNodes))
+	newNodes := make([]*node.Info, 0, len(activeNodes))
 	for id, n := range activeNodes {
 		if _, ok := currentNodes[id]; !ok {
 			newNodes = append(newNodes, n)
@@ -811,7 +811,8 @@ func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
 func (m *Maintainer) submitScheduledEvent(
 	scheduler threadpool.ThreadPool,
 	event *Event,
-	scheduleTime time.Time) {
+	scheduleTime time.Time,
+) {
 	task := func() time.Time {
 		m.pushEvent(event)
 		return time.Time{}

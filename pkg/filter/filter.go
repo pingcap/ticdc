@@ -239,8 +239,10 @@ func IsSchemaDDL(actionType timodel.ActionType) bool {
 	}
 }
 
-var once sync.Once
-var storage *SharedFilterStorage
+var (
+	once    sync.Once
+	storage *SharedFilterStorage
+)
 
 type SharedFilterStorage struct {
 	// Each dispatcher in the same changefeed will share the same filter storage.
@@ -288,7 +290,7 @@ func (s *SharedFilterStorage) GetOrSetFilter(
 
 		filterCfg.EventFilters = append(filterCfg.EventFilters, f)
 	}
-	//generate table filter
+	// generate table filter
 	f, err := NewFilter(filterCfg, tz, caseSensitive)
 	if err != nil {
 		return nil, err

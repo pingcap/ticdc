@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package heap
 
 import (
@@ -30,9 +43,11 @@ func NewHeap[T Item[T]]() *Heap[T] {
 // Notice: Don't call those methods below directly! They are only called by heap package.
 
 func (h Heap[T]) Len() int { return len(h.items) }
+
 func (h Heap[T]) Less(i, j int) bool {
 	return h.items[i].LessThan(h.items[j])
 }
+
 func (h Heap[T]) Swap(i, j int) {
 	h.items[i], h.items[j] = h.items[j], h.items[i]
 	h.items[i].SetHeapIndex(i + 1)

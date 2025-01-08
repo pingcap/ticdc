@@ -32,8 +32,10 @@ import (
 	"go.uber.org/zap"
 )
 
-var once sync.Once
-var ddlTableInfo *event.DDLTableInfo
+var (
+	once         sync.Once
+	ddlTableInfo *event.DDLTableInfo
+)
 
 type ddlJobFetcher struct {
 	resolvedTsTracker struct {

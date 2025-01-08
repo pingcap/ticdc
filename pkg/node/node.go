@@ -97,5 +97,4 @@ func CaptureInfosToNodeInfos(captureInfos map[model.CaptureID]*model.CaptureInfo
 		nodeInfos[ID(ci.ID)] = CaptureInfoToNodeInfo(ci)
 	}
 	return nodeInfos
-
 }

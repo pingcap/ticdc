@@ -14,7 +14,7 @@
 package codec
 
 import (
-	"github.com/pingcap/tiflow/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
