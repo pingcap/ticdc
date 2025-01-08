@@ -42,10 +42,15 @@ def assert_status_code(resp, expected_code, url):
         expected_code: Expected status code
         url: Request URL
     """
+    try:
+        body = resp.json() if resp.content else "Empty response"
+    except ValueError:
+        body = resp.text
+
     assert resp.status_code == expected_code, f"""
     Expected status code: {expected_code}
     Actual status code: {resp.status_code}
-    Response body: {resp.json()}
+    Response body: {body}
     URL: {url}
     """
 
