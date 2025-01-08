@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	ticonfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
@@ -50,6 +49,7 @@ type KafkaSink struct {
 	metricsCollector kafka.MetricsCollector
 
 	errgroup *errgroup.Group
+	ctx      context.Context
 	cancel   context.CancelFunc
 
 	errCh    chan error
@@ -61,7 +61,11 @@ func (s *KafkaSink) SinkType() common.SinkType {
 }
 
 func NewKafkaSink(
-	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *ticonfig.SinkConfig, errCh chan error,
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	sinkURI *url.URL,
+	sinkConfig *config.SinkConfig,
+	errCh chan error,
 ) (*KafkaSink, error) {
 	errGroup, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
@@ -119,6 +123,7 @@ func NewKafkaSink(
 		statistics:       statistics,
 		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
 		errgroup:         errGroup,
+		ctx:              ctx,
 		cancel:           cancel,
 		errCh:            errCh,
 	}
