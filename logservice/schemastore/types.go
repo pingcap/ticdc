@@ -53,11 +53,12 @@ type PersistedDDLEvent struct {
 	DBInfo        *model.DBInfo `msg:"-"`
 	// for exchange partition, it is the info of the partition table
 	TableInfo *model.TableInfo `msg:"-"`
-	// for exchange partition, it is the info of the normal table
-	PreTableInfo *common.TableInfo `msg:"-"`
 	// TODO: use a custom struct to store the table info?
 	TableInfoValue []byte `msg:"table_info_value"`
-	FinishedTs     uint64 `msg:"finished_ts"`
+	// for exchange partition, it is the info of the normal table
+	PreTableInfo      *common.TableInfo `msg:"-"`
+	PreTableInfoValue []byte            `msg:"pre_table_info_value"`
+	FinishedTs        uint64            `msg:"finished_ts"`
 
 	MultipleTableInfos      []*model.TableInfo `msg:"-"`
 	MultipleTableInfosValue [][]byte           `msg:"multi_table_info_value"`
