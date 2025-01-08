@@ -50,6 +50,8 @@ type KafkaSink struct {
 	metricsCollector kafka.MetricsCollector
 
 	errgroup *errgroup.Group
+	cancel   context.CancelFunc
+
 	errCh    chan error
 	isNormal uint32 // if sink is normal, isNormal is 1, otherwise is 0
 }
@@ -82,7 +84,7 @@ func NewKafkaSink(
 		return nil, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
 	}
 	dmlProducer := producer.NewKafkaDMLProducer(changefeedID, dmlAsyncProducer)
-	dmlWorker := worker.NewKafkaDMLWorker(ctx,
+	dmlWorker := worker.NewKafkaDMLWorker(
 		changefeedID,
 		protocol,
 		dmlProducer,
@@ -117,6 +119,7 @@ func NewKafkaSink(
 		statistics:       statistics,
 		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
 		errgroup:         errGroup,
+		cancel:           cancel,
 		errCh:            errCh,
 	}
 	go sink.run(ctx)
@@ -125,7 +128,7 @@ func NewKafkaSink(
 
 func (s *KafkaSink) run(ctx context.Context) {
 	s.dmlWorker.Run(ctx)
-	s.ddlWorker.Run()
+	s.ddlWorker.Run(ctx)
 	s.errgroup.Go(func() error {
 		s.metricsCollector.Run(ctx)
 		return nil
