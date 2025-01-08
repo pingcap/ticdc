@@ -128,7 +128,7 @@ func (db *replicationDB[T, R]) GetGroupChecker(groupID GroupID) (ret GroupChecke
 }
 
 func (db *replicationDB[T, R]) GetAbsent() []R {
-	var absent = make([]R, 0)
+	absent := make([]R, 0)
 	db.withRLock(func() {
 		for _, g := range db.taskGroups {
 			absent = append(absent, g.GetAbsent()...)
@@ -152,11 +152,6 @@ func (db *replicationDB[T, R]) GetAbsentByGroup(id GroupID, batch int) []R {
 	db.withRLock(func() {
 		g := db.mustGetGroup(id)
 		for _, stm := range g.GetAbsent() {
-			// IsDropped is not implemented yet, it filter the dropped table and
-			// prevent unexpected scheduling behavior
-			// if !stm.IsDropped() {
-			// 	buffer = append(buffer, stm)
-			// }
 			buffer = append(buffer, stm)
 			if len(buffer) >= batch {
 				break

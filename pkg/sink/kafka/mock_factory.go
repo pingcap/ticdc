@@ -23,7 +23,6 @@ import (
 	ticommon "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 )
 
 // MockFactory is a mock implementation of Factory interface.

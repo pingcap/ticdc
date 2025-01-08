@@ -47,7 +47,8 @@ type SplitDispatcherOperator struct {
 func NewSplitDispatcherOperator(db *replica.ReplicationDB,
 	replicaSet *replica.SpanReplication,
 	originNode node.ID,
-	splitSpans []*heartbeatpb.TableSpan) *SplitDispatcherOperator {
+	splitSpans []*heartbeatpb.TableSpan,
+) *SplitDispatcherOperator {
 	spansInfo := ""
 	for _, span := range splitSpans {
 		spansInfo += fmt.Sprintf("[%s,%s]",

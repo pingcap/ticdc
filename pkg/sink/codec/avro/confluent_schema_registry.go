@@ -30,10 +30,10 @@ import (
 	"github.com/linkedin/goavro/v2"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/httputil"
 	"github.com/pingcap/tiflow/pkg/security"
-	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
 
@@ -180,7 +180,6 @@ func (m *confluentSchemaManager) Register(
 
 	var jsonResp registerResponse
 	err = json.Unmarshal(body, &jsonResp)
-
 	if err != nil {
 		log.Error("Failed to parse result from Registry", zap.Error(err))
 		return id, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
@@ -439,7 +438,6 @@ func httpRetry(
 			r.Body = io.NopCloser(bytes.NewReader(data))
 		}
 		resp, err = httpCli.Do(r)
-
 		if err != nil {
 			log.Warn("HTTP request failed", zap.String("msg", err.Error()))
 			goto checkCtx

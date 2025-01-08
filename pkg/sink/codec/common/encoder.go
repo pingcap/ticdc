@@ -16,6 +16,7 @@ package common
 import (
 	"bytes"
 	"context"
+
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 )
 

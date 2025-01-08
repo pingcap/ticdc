@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 // Copyright 2024 PingCAP, Inc.
+=======
+// Copyright 2025 PingCAP, Inc.
+>>>>>>> master
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +26,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+<<<<<<< HEAD
+=======
+	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+>>>>>>> master
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -30,7 +38,6 @@ import (
 	"github.com/pingcap/tiflow/cdc/model"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 )
 
 const (
@@ -181,7 +188,11 @@ func encodeResolvedTs(ts uint64) ([]byte, []byte, error) {
 	var versionByte [8]byte
 	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
 	binary.BigEndian.PutUint64(valueLenByte[:], 0)
+<<<<<<< HEAD
 	binary.BigEndian.PutUint64(versionByte[:], BatchVersion1)
+=======
+	binary.BigEndian.PutUint64(versionByte[:], batchVersion1)
+>>>>>>> master
 
 	keyOutput := new(bytes.Buffer)
 
@@ -313,7 +324,6 @@ func writeColumnFieldValues(
 				writeColumnFieldValue(jWriter, col, row, idx, tableInfo)
 			})
 		}
-
 	}
 	if !flag {
 		return cerror.ErrOpenProtocolCodecInvalidData.GenWithStack("not found handle key columns for the delete event")
@@ -492,5 +502,4 @@ func writeColumnFieldValueIfUpdated(
 		}
 	}
 	return nil
-
 }

@@ -31,8 +31,7 @@ type Event struct {
 }
 
 // StreamHandler implements the dynstream Handler, no real logic, just forward event
-type StreamHandler struct {
-}
+type StreamHandler struct{}
 
 func NewStreamHandler() *StreamHandler {
 	return &StreamHandler{}

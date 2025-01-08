@@ -165,10 +165,6 @@ tidy:
 	@echo "go mod tidy"
 	./tools/check/check-tidy.sh
 
-errdoc: tools/bin/errdoc-gen
-	@echo "generator errors.toml"
-	./tools/check/check-errdoc.sh
-
 check-copyright:
 	@echo "check-copyright"
 	@./scripts/check-copyright.sh
@@ -192,7 +188,14 @@ check-makefiles: format-makefiles
 format-makefiles: $(MAKE_FILES)
 	$(SED_IN_PLACE) -e 's/^\(\t*\)  /\1\t/g' -e 's/^\(\t*\) /\1/' -- $?
 
-check: check-copyright fmt tidy errdoc check-diff-line-width check-ticdc-dashboard check-makefiles
+check: check-copyright fmt tidy check-diff-line-width check-ticdc-dashboard check-makefiles
 	@git --no-pager diff --exit-code || (echo "Please add changed files!" && false)
+
+clean:
+	go clean -i ./...
+	rm -rf *.out
+	rm -rf bin
+	rm -rf tools/bin
+	rm -rf tools/include
 
 workload: tools/bin/workload

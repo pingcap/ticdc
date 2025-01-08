@@ -21,14 +21,12 @@ import (
 	"github.com/mailru/easyjson/jwriter"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
-	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/sink/codec/internal"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
-	"github.com/pingcap/tiflow/cdc/model"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"go.uber.org/zap"
@@ -36,14 +34,12 @@ import (
 	"golang.org/x/text/encoding/charmap"
 )
 
-var (
-	bytesDecoder = charmap.ISO8859_1.NewDecoder()
-)
+var bytesDecoder = charmap.ISO8859_1.NewDecoder()
 
 // TODO: we need to reorg this code later, including use util.jsonWriter and other unreasonable code
 func fillColumns(
 	valueMap map[int64]string,
-	tableInfo *common.TableInfo,
+	tableInfo *commonType.TableInfo,
 	onlyHandleKeyColumn bool,
 	out *jwriter.Writer,
 	columnSelector columnselector.Selector,
@@ -129,7 +125,7 @@ func fillUpdateColumns(
 
 func newJSONMessageForDML(
 	e *commonEvent.RowEvent,
-	config *newcommon.Config,
+	config *common.Config,
 	messageTooLarge bool,
 	claimCheckFileName string,
 ) ([]byte, error) {
@@ -371,22 +367,22 @@ func eventTypeString(e *commonEvent.RowEvent) string {
 
 // JSONRowEventEncoder encodes row event in JSON format
 type JSONRowEventEncoder struct {
-	messages     []*newcommon.Message
+	messages     []*common.Message
 	bytesDecoder *encoding.Decoder
 
 	claimCheck *claimcheck.ClaimCheck
 
-	config *newcommon.Config
+	config *common.Config
 }
 
 // newJSONRowEventEncoder creates a new JSONRowEventEncoder
-func NewJSONRowEventEncoder(ctx context.Context, config *newcommon.Config) (newcommon.EventEncoder, error) {
+func NewJSONRowEventEncoder(ctx context.Context, config *common.Config) (encoder.EventEncoder, error) {
 	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	return &JSONRowEventEncoder{
-		messages:     make([]*newcommon.Message, 0, 1),
+		messages:     make([]*common.Message, 0, 1),
 		bytesDecoder: charmap.ISO8859_1.NewDecoder(),
 		config:       config,
 		claimCheck:   claimCheck,
@@ -431,7 +427,7 @@ func (c *JSONRowEventEncoder) newJSONMessage4CheckpointEvent(
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
-func (c *JSONRowEventEncoder) EncodeCheckpointEvent(ts uint64) (*newcommon.Message, error) {
+func (c *JSONRowEventEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
 	if !c.config.EnableTiDBExtension {
 		return nil, nil
 	}
@@ -442,14 +438,14 @@ func (c *JSONRowEventEncoder) EncodeCheckpointEvent(ts uint64) (*newcommon.Messa
 		return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
 	}
 
-	value, err = newcommon.Compress(
+	value, err = common.Compress(
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 	)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	return newcommon.NewResolvedMsg(config.ProtocolCanalJSON, nil, value, ts), nil
+	return common.NewMsg(nil, value), nil
 }
 
 // AppendRowChangedEvent implements the interface EventJSONBatchEncoder
@@ -463,22 +459,15 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 		return errors.Trace(err)
 	}
 
-	value, err = newcommon.Compress(
+	value, err = common.Compress(
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 	)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	m := &newcommon.Message{
-		Key:      nil,
-		Value:    value,
-		Ts:       e.CommitTs,
-		Schema:   e.TableInfo.GetSchemaNamePtr(),
-		Table:    e.TableInfo.GetTableNamePtr(),
-		Type:     model.MessageTypeRow,
-		Protocol: config.ProtocolCanalJSON,
-		Callback: e.Callback,
-	}
+
+	m := common.NewMsg(nil, value)
+	m.Callback = e.Callback
 	m.IncRowsCount()
 
 	originLength := m.Length()
@@ -497,7 +486,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 			if err != nil {
 				return cerror.ErrMessageTooLarge.GenWithStackByArgs()
 			}
-			value, err = newcommon.Compress(
+			value, err = common.Compress(
 				c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 			)
 			if err != nil {
@@ -540,21 +529,21 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 
 func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 	event *commonEvent.RowEvent, fileName string,
-) (*newcommon.Message, error) {
+) (*common.Message, error) {
 	claimCheckLocation := c.claimCheck.FileNameWithPrefix(fileName)
 	value, err := newJSONMessageForDML(event, c.config, true, claimCheckLocation)
 	if err != nil {
 		return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
 	}
 
-	value, err = newcommon.Compress(
+	value, err = common.Compress(
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 	)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	result := newcommon.NewMsg(config.ProtocolCanalJSON, nil, value, 0, model.MessageTypeRow, nil, nil)
+	result := common.NewMsg(nil, value)
 	result.Callback = event.Callback
 	result.IncRowsCount()
 
@@ -570,7 +559,7 @@ func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 }
 
 // Build implements the RowEventEncoder interface
-func (c *JSONRowEventEncoder) Build() []*newcommon.Message {
+func (c *JSONRowEventEncoder) Build() []*common.Message {
 	if len(c.messages) == 0 {
 		return nil
 	}
@@ -581,28 +570,20 @@ func (c *JSONRowEventEncoder) Build() []*newcommon.Message {
 }
 
 // EncodeDDLEvent encodes DDL events
-func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*newcommon.Message, error) {
+func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error) {
 	message := c.newJSONMessageForDDL(e)
 	value, err := json.Marshal(message)
 	if err != nil {
 		return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
 	}
-	value, err = newcommon.Compress(
+	value, err = common.Compress(
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 	)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	return &newcommon.Message{
-		Key:      nil,
-		Value:    value,
-		Type:     model.MessageTypeDDL,
-		Protocol: config.ProtocolCanalJSON,
-		Table:    &e.TableName,
-		Schema:   &e.SchemaName,
-		Ts:       e.GetCommitTs(),
-	}, nil
+	return common.NewMsg(nil, value), nil
 }
 
 func (b *JSONRowEventEncoder) Clean() {

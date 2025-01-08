@@ -49,7 +49,6 @@ func addNewArchCommandTo(cmd *cobra.Command) {
 }
 
 func isNewArchEnabledByConfig(serverConfigFilePath string) bool {
-
 	cfg := config.GetDefaultServerConfig()
 	if len(serverConfigFilePath) > 0 {
 		// strict decode config file, but ignore debug item

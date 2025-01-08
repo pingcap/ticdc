@@ -51,7 +51,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		limit       int
 		result      []commonEvent.DDLEvent // Note: not all fields in DDLEvent are compared
 	}
-	var testCases = []struct {
+	testCases := []struct {
 		initailDBInfos              []mockDBInfo
 		ddlJobs                     []*model.Job
 		tableMap                    map[int64]*BasicTableInfo
@@ -1929,7 +1929,7 @@ func TestRegisterTable(t *testing.T) {
 		snapTs  uint64
 		name    string
 	}
-	var testCases = []struct {
+	testCases := []struct {
 		initailDBInfos []mockDBInfo // tables in initailDBInfos will be registered before apply ddl
 		ddlJobs        []*model.Job
 		queryCases     []QueryTableInfoTestCase

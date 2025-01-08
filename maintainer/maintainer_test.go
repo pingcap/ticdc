@@ -95,6 +95,7 @@ func (m *mockDispatcherManager) handleMessage(msg *messaging.TargetMessage) {
 		log.Panic("unknown msg type", zap.Any("msg", msg))
 	}
 }
+
 func (m *mockDispatcherManager) sendMessages(msg *heartbeatpb.HeartBeatRequest) {
 	target := messaging.NewSingleTargetMessage(
 		m.maintainerID,
@@ -106,6 +107,7 @@ func (m *mockDispatcherManager) sendMessages(msg *heartbeatpb.HeartBeatRequest) 
 		log.Warn("send command failed", zap.Error(err))
 	}
 }
+
 func (m *mockDispatcherManager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
 	switch msg.Type {
 	// receive message from maintainer
@@ -124,6 +126,7 @@ func (m *mockDispatcherManager) recvMessages(ctx context.Context, msg *messaging
 	}
 	return nil
 }
+
 func (m *mockDispatcherManager) onBootstrapRequest(msg *messaging.TargetMessage) {
 	req := msg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
 	m.maintainerID = msg.From
@@ -279,7 +282,7 @@ func TestMaintainerSchedule(t *testing.T) {
 		sleepTime, _ = strconv.Atoi(argList[1])
 	}
 
-	var tables = make([]commonEvent.Table, 0, tableSize)
+	tables := make([]commonEvent.Table, 0, tableSize)
 	for id := 1; id <= tableSize; id++ {
 		tables = append(tables, commonEvent.Table{
 			SchemaID:        1,

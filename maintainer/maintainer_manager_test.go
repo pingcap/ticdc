@@ -141,7 +141,8 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 			model.CaptureID(node2.ID):    {ID: model.CaptureID(node2.ID), AdvertiseAddr: node2.AdvertiseAddr},
 			model.CaptureID(node3.ID):    {ID: model.CaptureID(node3.ID), AdvertiseAddr: node3.AdvertiseAddr},
 			model.CaptureID(node4.ID):    {ID: model.CaptureID(node4.ID), AdvertiseAddr: node4.AdvertiseAddr},
-		}})
+		},
+	})
 
 	time.Sleep(5 * time.Second)
 	require.Eventually(t, func() bool {
@@ -169,7 +170,8 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		Captures: map[model.CaptureID]*model.CaptureInfo{
 			model.CaptureID(selfNode.ID): {ID: model.CaptureID(selfNode.ID), AdvertiseAddr: selfNode.AdvertiseAddr},
 			model.CaptureID(node2.ID):    {ID: model.CaptureID(node2.ID), AdvertiseAddr: node2.AdvertiseAddr},
-		}})
+		},
+	})
 
 	require.Eventually(t, func() bool {
 		return maintainer.controller.replicationDB.GetReplicatingSize() == 4
@@ -260,7 +262,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
-	//discard maintainer manager messages
+	// discard maintainer manager messages
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		return nil
 	})
@@ -289,9 +291,11 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 		dispManager.bootstrapTables = append(dispManager.bootstrapTables, &heartbeatpb.BootstrapTableSpan{
 			ID:       dispatcherID.ToPB(),
 			SchemaID: 1,
-			Span: &heartbeatpb.TableSpan{TableID: tableSpan.TableID,
+			Span: &heartbeatpb.TableSpan{
+				TableID:  tableSpan.TableID,
 				StartKey: tableSpan.StartKey,
-				EndKey:   tableSpan.EndKey},
+				EndKey:   tableSpan.EndKey,
+			},
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    10,
 		})
@@ -372,7 +376,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
-	//discard maintainer manager messages
+	// discard maintainer manager messages
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		return nil
 	})
@@ -430,7 +434,8 @@ func (d *dispatcherNode) stop() {
 }
 
 func startDispatcherNode(t *testing.T, ctx context.Context,
-	node *node.Info, mc messaging.MessageCenter, nodeManager *watcher.NodeManager) *dispatcherNode {
+	node *node.Info, mc messaging.MessageCenter, nodeManager *watcher.NodeManager,
+) *dispatcherNode {
 	nodeManager.RegisterNodeChangeHandler(node.ID, mc.OnNodeChanges)
 	ctx, cancel := context.WithCancel(ctx)
 	dispManager := MockDispatcherManager(mc, node.ID)

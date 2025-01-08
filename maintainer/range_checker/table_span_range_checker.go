@@ -64,7 +64,7 @@ func (rc *TableSpanRangeChecker) Reset() {
 }
 
 func (rc *TableSpanRangeChecker) Detail() string {
-	var buf = &strings.Builder{}
+	buf := &strings.Builder{}
 	buf.WriteString("uncovered tables: ")
 	for id, span := range rc.tableSpans {
 		if !span.IsFullyCovered() {

@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package messaging
 
 import (
@@ -7,19 +20,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/utils/conn"
-
-	"github.com/prometheus/client_golang/prometheus"
-
-	"github.com/pingcap/ticdc/pkg/metrics"
-
 	"github.com/pingcap/log"
 	. "github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils/conn"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -237,7 +247,8 @@ func (s *remoteMessageTarget) connect() {
 			zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))
 		s.collectErr(AppError{
 			Type:   ErrorTypeConnectionFailed,
-			Reason: fmt.Sprintf("Cannot create grpc client on address %s, error: %s", s.targetAddr, err.Error())})
+			Reason: fmt.Sprintf("Cannot create grpc client on address %s, error: %s", s.targetAddr, err.Error()),
+		})
 		return
 	}
 
@@ -255,7 +266,8 @@ func (s *remoteMessageTarget) connect() {
 			zap.Any("messageCenterID", s.messageCenterID), zap.Stringer("remote", s.targetId), zap.Error(err))
 		s.collectErr(AppError{
 			Type:   ErrorTypeConnectionFailed,
-			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error())})
+			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error()),
+		})
 		return
 	}
 
@@ -265,7 +277,8 @@ func (s *remoteMessageTarget) connect() {
 			zap.Any("messageCenterID", s.messageCenterID), zap.Stringer("remote", s.targetId), zap.Error(err))
 		s.collectErr(AppError{
 			Type:   ErrorTypeConnectionFailed,
-			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error())})
+			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error()),
+		})
 		return
 	}
 
@@ -471,7 +484,8 @@ func (s *localMessageTarget) sendCommand(msg *TargetMessage) error {
 
 func newLocalMessageTarget(id node.ID,
 	gatherRecvEventChan chan *TargetMessage,
-	gatherRecvCmdChan chan *TargetMessage) *localMessageTarget {
+	gatherRecvCmdChan chan *TargetMessage,
+) *localMessageTarget {
 	return &localMessageTarget{
 		localId:            id,
 		recvEventCh:        gatherRecvEventChan,

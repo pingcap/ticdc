@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/tiflow/pkg/spanz"
-
 	"github.com/stretchr/testify/assert"
 )
 
@@ -45,7 +44,7 @@ func TestGetCandidateNodes(t *testing.T) {
 	span2.StartKey, span2.EndKey = spanz.GetTableRange(span2.TableID)
 
 	coordinator.eventStoreStates.m = map[node.ID]*eventStoreState{
-		nodeID1: &eventStoreState{
+		nodeID1: {
 			subscriptionStates: map[int64]subscriptionStates{
 				tableID1: {
 					{
@@ -57,7 +56,7 @@ func TestGetCandidateNodes(t *testing.T) {
 				},
 			},
 		},
-		nodeID2: &eventStoreState{
+		nodeID2: {
 			subscriptionStates: map[int64]subscriptionStates{
 				tableID1: {
 					{
@@ -95,7 +94,7 @@ func TestGetCandidateNodes(t *testing.T) {
 				},
 			},
 		},
-		nodeID3: &eventStoreState{
+		nodeID3: {
 			subscriptionStates: map[int64]subscriptionStates{
 				tableID2: {
 					{

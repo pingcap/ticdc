@@ -102,8 +102,11 @@ type Maintainer struct {
 	// closedNodes is used to record the nodes that dispatcherManager is closed
 	closedNodes map[node.ID]struct{}
 
-	statusChanged  *atomic.Bool
-	nodeChanged    *atomic.Bool
+	statusChanged *atomic.Bool
+
+	mutex       sync.Mutex // protect nodeChanged and do onNodeChanged()
+	nodeChanged bool
+
 	lastReportTime time.Time
 
 	removing        bool
@@ -112,7 +115,7 @@ type Maintainer struct {
 	changefeedRemoved bool
 
 	lastPrintStatusTime time.Time
-	//lastCheckpointTsTime time.Time
+	// lastCheckpointTsTime time.Time
 
 	errLock             sync.Mutex
 	runningErrors       map[node.ID]*heartbeatpb.RunningError
@@ -163,7 +166,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		nodeManager:     nodeManager,
 		closedNodes:     make(map[node.ID]struct{}),
 		statusChanged:   atomic.NewBool(true),
-		nodeChanged:     atomic.NewBool(false),
+		nodeChanged:     false,
 		cascadeRemoving: false,
 		config:          cfg,
 
@@ -190,7 +193,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	m.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](m.id.Name(), m.getNewBootstrapFn())
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("ddl dispatcher", tableTriggerEventDispatcherID.String()))
+		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()))
 	metrics.MaintainerGauge.WithLabelValues(cfID.Namespace(), cfID.Name()).Inc()
 	// Should update metrics immediately when maintainer is created
 	// FIXME: Use a correct context
@@ -246,11 +249,10 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 			zap.String("changefeed", m.id.String()))
 		return false
 	}
+
 	// first check the online/offline nodes
-	if m.nodeChanged.Load() {
-		m.onNodeChanged()
-		m.nodeChanged.Store(false)
-	}
+	m.checkOnNodeChanged()
+
 	switch event.eventType {
 	case EventInit:
 		return m.onInit()
@@ -260,6 +262,15 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 		m.onPeriodTask()
 	}
 	return false
+}
+
+func (m *Maintainer) checkOnNodeChanged() {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if m.nodeChanged {
+		m.onNodeChanged()
+		m.nodeChanged = false
+	}
 }
 
 // Close cleanup resources
@@ -302,13 +313,15 @@ func (m *Maintainer) initialize() error {
 
 	// detect the capture changes
 	m.nodeManager.RegisterNodeChangeHandler(node.ID("maintainer-"+m.id.Name()), func(allNodes map[node.ID]*node.Info) {
-		m.nodeChanged.Store(true)
+		m.mutex.Lock()
+		m.nodeChanged = true
+		m.mutex.Unlock()
 	})
 	// init bootstrapper nodes
 	nodes := m.nodeManager.GetAliveNodes()
 	log.Info("changefeed bootstrap initial nodes",
 		zap.Int("nodes", len(nodes)))
-	var newNodes = make([]*node.Info, 0, len(nodes))
+	newNodes := make([]*node.Info, 0, len(nodes))
 	for _, n := range nodes {
 		newNodes = append(newNodes, n)
 	}
@@ -393,7 +406,7 @@ func (m *Maintainer) onNodeChanged() {
 	currentNodes := m.bootstrapper.GetAllNodes()
 
 	activeNodes := m.nodeManager.GetAliveNodes()
-	var newNodes = make([]*node.Info, 0, len(activeNodes))
+	newNodes := make([]*node.Info, 0, len(activeNodes))
 	for id, n := range activeNodes {
 		if _, ok := currentNodes[id]; !ok {
 			newNodes = append(newNodes, n)
@@ -723,7 +736,7 @@ func (m *Maintainer) getNewBootstrapFn() bootstrap.NewBootstrapMessageFn {
 		if id == m.selfNode.ID {
 			log.Info("create table event trigger dispatcher", zap.String("changefeed", m.id.String()),
 				zap.String("server", id.String()),
-				zap.String("dispatcher id", m.ddlSpan.ID.String()))
+				zap.String("dispatcherID", m.ddlSpan.ID.String()))
 			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
 		}
 		log.Info("send maintainer bootstrap message",
@@ -798,7 +811,8 @@ func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
 func (m *Maintainer) submitScheduledEvent(
 	scheduler threadpool.ThreadPool,
 	event *Event,
-	scheduleTime time.Time) {
+	scheduleTime time.Time,
+) {
 	task := func() time.Time {
 		m.pushEvent(event)
 		return time.Time{}

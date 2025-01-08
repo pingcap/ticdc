@@ -29,11 +29,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
+	utils "github.com/pingcap/tiflow/pkg/util"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-
-	utils "github.com/pingcap/tiflow/pkg/util"
 )
 
 const (
@@ -69,7 +68,7 @@ func NewMysqlSink(ctx context.Context, changefeedID common.ChangeFeedID, workerC
 		isNormal:     1,
 	}
 
-	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI)
+	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
 	}

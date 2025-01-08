@@ -43,7 +43,8 @@ type MoveMaintainerOperator struct {
 }
 
 func NewMoveMaintainerOperator(db *changefeed.ChangefeedDB, changefeed *changefeed.Changefeed,
-	origin, dest node.ID) *MoveMaintainerOperator {
+	origin, dest node.ID,
+) *MoveMaintainerOperator {
 	return &MoveMaintainerOperator{
 		changefeed: changefeed,
 		origin:     origin,

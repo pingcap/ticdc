@@ -15,27 +15,25 @@ package simple
 
 import (
 	"context"
+
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/config"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/sink/kafka/claimcheck"
 	"go.uber.org/zap"
 )
 
 type Encoder struct {
 	messages   []*common.Message
-	config     *ticommon.Config
+	config     *common.Config
 	claimCheck *claimcheck.ClaimCheck
 	marshaller marshaller
 }
 
-func NewEncoder(ctx context.Context, config *ticommon.Config) (common.EventEncoder, error) {
+func NewEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
 	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -59,18 +57,13 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 		return err
 	}
 
-	value, err = ticommon.Compress(e.config.ChangefeedID, e.config.LargeMessageHandle.LargeMessageHandleCompression, value)
+	value, err = common.Compress(e.config.ChangefeedID, e.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
 		return err
 	}
 
 	result := &common.Message{
 		Value:    value,
-		Ts:       event.CommitTs,
-		Schema:   event.TableInfo.GetSchemaNamePtr(),
-		Table:    event.TableInfo.GetTableNamePtr(),
-		Type:     model.MessageTypeRow,
-		Protocol: config.ProtocolSimple,
 		Callback: callback,
 	}
 
@@ -102,7 +95,7 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 	if err != nil {
 		return err
 	}
-	value, err = ticommon.Compress(e.config.ChangefeedID, e.config.LargeMessageHandle.LargeMessageHandleCompression, value)
+	value, err = common.Compress(e.config.ChangefeedID, e.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
 		return err
 	}
@@ -142,9 +135,9 @@ func (e *Encoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
 		return nil, err
 	}
 
-	value, err = ticommon.Compress(e.config.ChangefeedID,
+	value, err = common.Compress(e.config.ChangefeedID,
 		e.config.LargeMessageHandle.LargeMessageHandleCompression, value)
-	return ticommon.NewResolvedMsg(config.ProtocolSimple, nil, value, ts), err
+	return common.NewMsg(nil, value), err
 }
 
 // EncodeDDLEvent implement the DDLEventBatchEncoder interface

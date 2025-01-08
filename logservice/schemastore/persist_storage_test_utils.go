@@ -292,8 +292,8 @@ func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finis
 func buildRenameTablesJobForTest(
 	oldSchemaIDs, newSchemaIDs, tableIDs []int64,
 	oldSchemaNames, oldTableNames, newTableNames []string,
-	finishedTs uint64) *model.Job {
-
+	finishedTs uint64,
+) *model.Job {
 	args := &model.RenameTablesArgs{
 		RenameTableInfos: make([]*model.RenameTableArgs, 0, len(tableIDs)),
 	}

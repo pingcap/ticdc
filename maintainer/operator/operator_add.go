@@ -38,7 +38,8 @@ type AddDispatcherOperator struct {
 func NewAddDispatcherOperator(
 	db *replica.ReplicationDB,
 	replicaSet *replica.SpanReplication,
-	dest node.ID) *AddDispatcherOperator {
+	dest node.ID,
+) *AddDispatcherOperator {
 	return &AddDispatcherOperator{
 		replicaSet: replicaSet,
 		dest:       dest,
@@ -113,7 +114,7 @@ func (m *AddDispatcherOperator) PostFinish() {
 	if !m.removed.Load() {
 		m.db.MarkSpanReplicating(m.replicaSet)
 	} else {
-		if m.db.GetTaskByID(m.replicaSet.ID) != nil {
+		if m.db.GetTaskByID(m.replicaSet.ID) != nil { // TODO:what that is ?
 			m.db.MarkSpanAbsent(m.replicaSet)
 		}
 	}

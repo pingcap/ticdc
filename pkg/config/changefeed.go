@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package config
 
 import (
@@ -29,7 +42,7 @@ type ChangefeedConfig struct {
 	ForceReplicate bool          `json:"force_replicate" default:"false"`
 	Filter         *FilterConfig `toml:"filter" json:"filter"`
 	MemoryQuota    uint64        `toml:"memory-quota" json:"memory-quota"`
-	//sync point related
+	// sync point related
 	// TODO:syncPointRetention|default 可以不要吗
 	EnableSyncPoint    bool           `json:"enable_sync_point" default:"false"`
 	SyncPointInterval  *time.Duration `json:"sync_point_interval" default:"1m"`

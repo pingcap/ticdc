@@ -25,7 +25,7 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 		snapTs uint64
 		name   string
 	}
-	var testCases = []struct {
+	testCases := []struct {
 		tableID       int64
 		ddlEvents     []*PersistedDDLEvent
 		queryCases    []QueryTableInfoTestCase

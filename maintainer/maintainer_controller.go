@@ -73,7 +73,8 @@ func NewController(changefeedID common.ChangeFeedID,
 	taskScheduler threadpool.ThreadPool,
 	cfConfig *config.ReplicaConfig,
 	ddlSpan *replica.SpanReplication,
-	batchSize int, balanceInterval time.Duration) *Controller {
+	batchSize int, balanceInterval time.Duration,
+) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	enableTableAcrossNodes := false
 	var splitter *split.Splitter
@@ -149,7 +150,7 @@ func (c *Controller) GetTaskSizeBySchemaID(schemaID int64) int {
 
 func (c *Controller) GetAllNodes() []node.ID {
 	aliveNodes := c.nodeManager.GetAliveNodes()
-	var nodes = make([]node.ID, 0, len(aliveNodes))
+	nodes := make([]node.ID, 0, len(aliveNodes))
 	for id := range aliveNodes {
 		nodes = append(nodes, id)
 	}
@@ -172,7 +173,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
 	if c.enableTableAcrossNodes {
-		//split the whole table span base on the configuration, todo: background split table
+		// split the whole table span base on the configuration, todo: background split table
 		tableSpans = c.splitter.SplitSpans(context.Background(), tableSpan, len(c.nodeManager.GetAliveNodes()), 0)
 	}
 	c.addNewSpans(table.SchemaID, tableSpans, startTs)
@@ -246,7 +247,7 @@ func (c *Controller) FinishBootstrap(
 			}
 			span := info.Span
 
-			//working on remote, the state must be absent or working since it's reported by remote
+			// working on remote, the state must be absent or working since it's reported by remote
 			stm := replica.NewWorkingReplicaSet(c.changefeedID, dispatcherID, c.tsoClient, info.SchemaID, span, status, server)
 			tableMap, ok := workingMap[span.TableID]
 			if !ok {

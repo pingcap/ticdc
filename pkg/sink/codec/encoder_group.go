@@ -21,10 +21,10 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	newCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
@@ -48,7 +48,7 @@ type EncoderGroup interface {
 }
 
 type encoderGroup struct {
-	changefeedID common.ChangeFeedID
+	changefeedID commonType.ChangeFeedID
 
 	// concurrency is the number of encoder pipelines to run
 	concurrency int
@@ -56,7 +56,7 @@ type encoderGroup struct {
 	inputCh []chan *future
 	index   uint64
 
-	rowEventEncoders []newCommon.EventEncoder
+	rowEventEncoders []common.EventEncoder
 
 	outputCh chan *future
 
@@ -67,15 +67,15 @@ type encoderGroup struct {
 func NewEncoderGroup(
 	ctx context.Context,
 	cfg *config.SinkConfig,
-	encoderConfig *newCommon.Config,
-	changefeedID common.ChangeFeedID,
+	encoderConfig *common.Config,
+	changefeedID commonType.ChangeFeedID,
 ) *encoderGroup {
 	concurrency := util.GetOrZero(cfg.EncoderConcurrency)
 	if concurrency <= 0 {
 		concurrency = config.DefaultEncoderGroupConcurrency
 	}
 	inputCh := make([]chan *future, concurrency)
-	rowEventEncoders := make([]newCommon.EventEncoder, concurrency)
+	rowEventEncoders := make([]common.EventEncoder, concurrency)
 	var err error
 	for i := 0; i < concurrency; i++ {
 		inputCh[i] = make(chan *future, defaultInputChanSize)
@@ -205,7 +205,7 @@ func (g *encoderGroup) cleanMetrics() {
 	for _, encoder := range g.rowEventEncoders {
 		encoder.Clean()
 	}
-	newCommon.CleanMetrics(g.changefeedID)
+	common.CleanMetrics(g.changefeedID)
 }
 
 // future is a wrapper of the result of encoding events
@@ -214,7 +214,7 @@ func (g *encoderGroup) cleanMetrics() {
 type future struct {
 	Key      model.TopicPartitionKey
 	events   []*commonEvent.RowEvent
-	Messages []*newCommon.Message
+	Messages []*common.Message
 	done     chan struct{}
 }
 
