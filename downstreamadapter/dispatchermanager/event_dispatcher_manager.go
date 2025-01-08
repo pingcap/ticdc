@@ -246,11 +246,18 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 		}
 	}
 
-	e.heartBeatTask.Cancel()
 	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(e)
 	if err != nil {
 		log.Error("remove event dispatcher manager from heartbeat collector failed", zap.Error(err))
 		return
+	}
+
+	// heartbeatTask only will be generated when create new dispatchers.
+	// We check heartBeatTask after we remove the stream in heartbeat collector,
+	// so we won't get add dispatcher messages to create heartbeatTask.
+	// Thus there will not data race when we check heartBeatTask.
+	if e.heartBeatTask != nil {
+		e.heartBeatTask.Cancel()
 	}
 
 	err = e.sink.Close(removeChangefeed)
@@ -519,7 +526,7 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 			return
 		case tableSpanStatus := <-e.statusesChan:
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-			watermark.Seq = tableSpanStatus.Seq
+			newWatermark.Seq = tableSpanStatus.Seq
 			if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < newWatermark.CheckpointTs {
 				newWatermark.CheckpointTs = tableSpanStatus.StartTs
 			}
@@ -532,8 +539,8 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 				select {
 				case tableSpanStatus := <-e.statusesChan:
 					statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-					if watermark.Seq < tableSpanStatus.Seq {
-						watermark.Seq = tableSpanStatus.Seq
+					if newWatermark.Seq < tableSpanStatus.Seq {
+						newWatermark.Seq = tableSpanStatus.Seq
 					}
 					if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < newWatermark.CheckpointTs {
 						newWatermark.CheckpointTs = tableSpanStatus.StartTs

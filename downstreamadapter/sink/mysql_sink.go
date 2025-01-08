@@ -69,7 +69,7 @@ func NewMysqlSink(ctx context.Context, changefeedID common.ChangeFeedID, workerC
 		isNormal:     1,
 	}
 
-	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI)
+	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
 	}
