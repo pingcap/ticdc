@@ -1639,7 +1639,84 @@ func TestApplyDDLJobs(t *testing.T) {
 			[]uint64{1010, 1020, 1030},
 			nil,
 			nil,
-			nil,
+			[]FetchTableTriggerDDLEventsTestCase{
+				{
+					startTs: 1000,
+					limit:   10,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionAlterTablePartitioning),
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 300},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{300},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  501,
+								},
+								{
+									SchemaID: 100,
+									TableID:  502,
+								},
+								{
+									SchemaID: 100,
+									TableID:  503,
+								},
+							},
+						},
+						{
+							Type:       byte(model.ActionAlterTablePartitioning),
+							FinishedTs: 1020,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 501, 502, 503},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{501, 502, 503},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  504,
+								},
+								{
+									SchemaID: 100,
+									TableID:  505,
+								},
+								{
+									SchemaID: 100,
+									TableID:  506,
+								},
+							},
+						},
+						{
+							Type:       byte(model.ActionRemovePartitioning),
+							FinishedTs: 1030,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 504, 505, 506},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{504, 505, 506},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  303,
+								},
+							},
+						},
+					},
+				},
+			},
 		},
 		// trivial ddls
 		// test add/drop primary key and alter index visibility for table
