@@ -4,6 +4,14 @@ import requests as rq
 from requests.exceptions import RequestException
 import time
 import json
+import logging
+
+# init logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 # the max retry time
 RETRY_TIME = 10
@@ -39,13 +47,12 @@ def requests_get_with_retry(url, max_retries=RETRY_TIME, delay_seconds=1):
             if response.status_code == 200 or response.status_code == 202:
                 return response
         except RequestException as e:
-            print(f"request fails {retry + 1}/{max_retries} time retry...")
+            logging.info(f"request fails {retry + 1}/{max_retries} time retry...")
             time.sleep(delay_seconds)
     return None
 
 # we write some SQLs in the run.sh after call create_changefeed
 def create_changefeed(sink_uri):
-    print("Start to create changefeed!")
     url = BASE_URL1_V2+"/changefeeds"
     # create changefeed
     for i in range(1, 4):
@@ -60,11 +67,11 @@ def create_changefeed(sink_uri):
 
         data = json.dumps(data)
         headers = {"Content-Type": "application/json"}
-        print("Start to post request, URL:", url)
-        print("Request body:", data)
+        logging.info(f"Start to post request, URL: {url}")
+        logging.info(f"Request body: {data}")
         resp = rq.post(url, data=data, headers=headers)
-        print("Response status code:", resp.status_code)
-        print("Response body:", resp.json())
+        logging.info(f"Response status code: {resp.status_code}")
+        logging.info(f"Response body: {resp.json()}")
         assert resp.status_code == rq.codes.ok
 
     # create changefeed fail because sink_uri is invalid
@@ -75,9 +82,9 @@ def create_changefeed(sink_uri):
     })
     headers = {"Content-Type": "application/json"}
     resp = rq.post(url, data=data, headers=headers)
+    logging.info(f"response status code: {resp.status_code}")
+    logging.info(f"response body: {resp.json()}")
     assert resp.status_code == rq.codes.bad_request
-
-    print("pass test: create changefeed")
 
 
 def list_changefeed():
@@ -102,7 +109,6 @@ def list_changefeed():
     for changefeed in data:
         assert changefeed["state"] == "stopped"
 
-    print("pass test: list changefeed")
 
 def get_changefeed():
     # test get changefeed success
@@ -121,7 +127,6 @@ def get_changefeed():
     data = resp.json()
     assert data["error_code"] == "CDC:ErrChangeFeedNotExists"
 
-    print("pass test: get changefeed")
 
 
 def pause_changefeed():
@@ -150,7 +155,6 @@ def pause_changefeed():
     data = resp.json()
     assert data["error_code"] == "CDC:ErrChangeFeedNotExists"
 
-    print("pass test: pause changefeed")
 
 def update_changefeed():
     # update fail
@@ -176,7 +180,6 @@ def update_changefeed():
     resp = rq.put(url, data=data, headers=headers)
     assert resp.status_code == rq.codes.bad_request
 
-    print("pass test: update changefeed")
 
 
 def resume_changefeed():
@@ -203,7 +206,6 @@ def resume_changefeed():
     data = resp.json()
     assert data["error_code"] == "CDC:ErrChangeFeedNotExists"
 
-    print("pass test: resume changefeed")
 
 
 def remove_changefeed():
@@ -229,7 +231,6 @@ def remove_changefeed():
     data = resp.json()
     assert data["error_code"] == "CDC:ErrChangeFeedNotExists"
 
-    print("pass test: remove changefeed")
 
 def move_table():
     # move table
@@ -246,7 +247,6 @@ def move_table():
     resp = rq.post(url, data=data, headers=headers)
     assert resp.status_code == rq.codes.bad_request
 
-    print("pass test: move table")
 
 
 def resign_owner():
@@ -254,7 +254,6 @@ def resign_owner():
     resp = rq.post(url)
     assert resp.status_code == rq.codes.accepted
 
-    print("pass test: resign owner")
 
 
 def list_capture():
@@ -262,7 +261,6 @@ def list_capture():
     resp = requests_get_with_retry(url)
     assert resp.status_code == rq.codes.ok
 
-    print("pass test: list captures")
 
 
 def list_processor():
@@ -310,7 +308,6 @@ def check_health():
         time.sleep(1)
     assert resp.status_code == rq.codes.ok
 
-    print("pass test: check health")
 
 
 def get_status():
@@ -319,7 +316,6 @@ def get_status():
     assert resp.status_code == rq.codes.ok
     assert resp.json()["is_owner"]
 
-    print("pass test: get status")
 
 
 def set_log_level():
@@ -333,7 +329,6 @@ def set_log_level():
     resp = rq.post(url, data=data, headers=headers)
     assert resp.status_code == rq.codes.ok
 
-    print("pass test: set log level")
 
 def get_tso():
     # test state: all
@@ -354,7 +349,6 @@ def get_tso():
     resp = rq.post(url, data=data, headers=headers)
     assert resp.status_code != rq.codes.ok
 
-    print("pass test: get tso")
 
 # util functions define belows
 
@@ -388,9 +382,23 @@ if __name__ == "__main__":
         "get_tso": get_tso
     }
 
-    func = FUNC_MAP[sys.argv[1]]
-    if len(sys.argv) >= 2:
-        func(*sys.argv[2:])
-    else:
-        func()
+    # check the test case name
+    if len(sys.argv) < 2:
+        logging.error("Please provide a test case name")
+        sys.exit(1)
+    
+    # get the test case name
+    test_case_name = sys.argv[1]
+    # check if the test case name is in the FUNC_MAP
+    if test_case_name not in FUNC_MAP:
+        logging.error(f"Test case {test_case_name} not found")
+        sys.exit(1)
+    
+    # get the test case function
+    test_case_func = FUNC_MAP[test_case_name]
+    # run the test case
+    logging.info(f"Start to run test case: {test_case_name}")
+    test_case_func()
+    logging.info(f"Test case {test_case_name} finished")
+
 

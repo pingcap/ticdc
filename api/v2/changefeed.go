@@ -137,7 +137,7 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 	}
 	err = replicaCfg.ValidateAndAdjust(sinkURIParsed)
 	if err != nil {
-		_ = c.Error(err)
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
 		return
 	}
 
