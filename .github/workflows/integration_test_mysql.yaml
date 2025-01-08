@@ -239,6 +239,12 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=vector
 
+      # The 15th case in this group     
+      - name: Test simple
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=simple
+
       - name: Upload test logs
         if: always()
         uses: ./.github/actions/upload-test-logs
