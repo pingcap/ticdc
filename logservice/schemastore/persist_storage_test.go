@@ -1405,189 +1405,189 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 		},
-		// // test create tables for partition table
-		// {
-		// 	[]mockDBInfo{
-		// 		{
-		// 			dbInfo: &model.DBInfo{
-		// 				ID:   100,
-		// 				Name: pmodel.NewCIStr("test"),
-		// 			},
-		// 		},
-		// 	},
-		// 	func() []*model.Job {
-		// 		return []*model.Job{
-		// 			buildCreatePartitionTablesJobForTest(100,
-		// 				[]int64{300, 400, 500},
-		// 				[]string{"t1", "t2", "t3"},
-		// 				[][]int64{{301, 302, 303}, {401, 402, 403}, {501, 502, 503}},
-		// 				1010), // create table 301, 302, 303
-		// 		}
-		// 	}(),
-		// 	map[int64]*BasicTableInfo{
-		// 		300: {
-		// 			SchemaID: 100,
-		// 			Name:     "t1",
-		// 		},
-		// 		400: {
-		// 			SchemaID: 100,
-		// 			Name:     "t2",
-		// 		},
-		// 		500: {
-		// 			SchemaID: 100,
-		// 			Name:     "t3",
-		// 		},
-		// 	},
-		// 	map[int64]BasicPartitionInfo{
-		// 		300: {
-		// 			301: nil,
-		// 			302: nil,
-		// 			303: nil,
-		// 		},
-		// 		400: {
-		// 			401: nil,
-		// 			402: nil,
-		// 			403: nil,
-		// 		},
-		// 		500: {
-		// 			501: nil,
-		// 			502: nil,
-		// 			503: nil,
-		// 		},
-		// 	},
-		// 	map[int64]*BasicDatabaseInfo{
-		// 		100: {
-		// 			Name: "test",
-		// 			Tables: map[int64]bool{
-		// 				300: true,
-		// 				400: true,
-		// 				500: true,
-		// 			},
-		// 		},
-		// 	},
-		// 	map[int64][]uint64{
-		// 		301: {1010},
-		// 		302: {1010},
-		// 		303: {1010},
-		// 		401: {1010},
-		// 		402: {1010},
-		// 		403: {1010},
-		// 		501: {1010},
-		// 		502: {1010},
-		// 		503: {1010},
-		// 	},
-		// 	[]uint64{1010},
-		// 	nil,
-		// 	nil,
-		// 	[]FetchTableTriggerDDLEventsTestCase{
-		// 		{
-		// 			startTs: 1000,
-		// 			limit:   10,
-		// 			result: []commonEvent.DDLEvent{
-		// 				{
-		// 					Type:       byte(model.ActionCreateTables),
-		// 					FinishedTs: 1010,
-		// 					BlockedTables: &commonEvent.InfluencedTables{
-		// 						InfluenceType: commonEvent.InfluenceTypeNormal,
-		// 						TableIDs:      []int64{0},
-		// 					},
-		// 					NeedAddedTables: []commonEvent.Table{
-		// 						{
-		// 							SchemaID: 100,
-		// 							TableID:  301,
-		// 						},
-		// 						{
-		// 							SchemaID: 100,
-		// 							TableID:  302,
-		// 						},
-		// 						{
-		// 							SchemaID: 100,
-		// 							TableID:  303,
-		// 						},
-		// 						{
-		// 							SchemaID: 100,
-		// 							TableID:  401,
-		// 						},
-		// 						{
-		// 							SchemaID: 100,
-		// 							TableID:  402,
-		// 						},
-		// 						{
-		// 							SchemaID: 100,
-		// 							TableID:  403,
-		// 						},
-		// 						{
-		// 							SchemaID: 100,
-		// 							TableID:  501,
-		// 						},
-		// 						{
-		// 							SchemaID: 100,
-		// 							TableID:  502,
-		// 						},
-		// 						{
-		// 							SchemaID: 100,
-		// 							TableID:  503,
-		// 						},
-		// 					},
-		// 					TableNameChange: &commonEvent.TableNameChange{
-		// 						AddName: []commonEvent.SchemaTableName{
-		// 							{
-		// 								SchemaName: "test",
-		// 								TableName:  "t1",
-		// 							},
-		// 							{
-		// 								SchemaName: "test",
-		// 								TableName:  "t2",
-		// 							},
-		// 							{
-		// 								SchemaName: "test",
-		// 								TableName:  "t3",
-		// 							},
-		// 						},
-		// 					},
-		// 				},
-		// 			},
-		// 		},
-		// 		// filter t2 and t3
-		// 		{
-		// 			tableFilter: buildTableFilterByNameForTest("test", "t1"),
-		// 			startTs:     1000,
-		// 			limit:       10,
-		// 			result: []commonEvent.DDLEvent{
-		// 				{
-		// 					Type:       byte(model.ActionCreateTables),
-		// 					FinishedTs: 1010,
-		// 					BlockedTables: &commonEvent.InfluencedTables{
-		// 						InfluenceType: commonEvent.InfluenceTypeNormal,
-		// 						TableIDs:      []int64{0},
-		// 					},
-		// 					NeedAddedTables: []commonEvent.Table{
-		// 						{
-		// 							SchemaID: 100,
-		// 							TableID:  301,
-		// 						},
-		// 						{
-		// 							SchemaID: 100,
-		// 							TableID:  302,
-		// 						},
-		// 						{
-		// 							SchemaID: 100,
-		// 							TableID:  303,
-		// 						},
-		// 					},
-		// 					TableNameChange: &commonEvent.TableNameChange{
-		// 						AddName: []commonEvent.SchemaTableName{
-		// 							{
-		// 								SchemaName: "test",
-		// 								TableName:  "t1",
-		// 							},
-		// 						},
-		// 					},
-		// 				},
-		// 			},
-		// 		},
-		// 	},
-		// },
+		// test create tables for partition table
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreatePartitionTablesJobForTest(100,
+						[]int64{300, 400, 500},
+						[]string{"t1", "t2", "t3"},
+						[][]int64{{301, 302, 303}, {401, 402, 403}, {501, 502, 503}},
+						1010), // create table 301, 302, 303
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				300: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+				400: {
+					SchemaID: 100,
+					Name:     "t2",
+				},
+				500: {
+					SchemaID: 100,
+					Name:     "t3",
+				},
+			},
+			map[int64]BasicPartitionInfo{
+				300: {
+					301: nil,
+					302: nil,
+					303: nil,
+				},
+				400: {
+					401: nil,
+					402: nil,
+					403: nil,
+				},
+				500: {
+					501: nil,
+					502: nil,
+					503: nil,
+				},
+			},
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						300: true,
+						400: true,
+						500: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				301: {1010},
+				302: {1010},
+				303: {1010},
+				401: {1010},
+				402: {1010},
+				403: {1010},
+				501: {1010},
+				502: {1010},
+				503: {1010},
+			},
+			[]uint64{1010},
+			nil,
+			nil,
+			[]FetchTableTriggerDDLEventsTestCase{
+				{
+					startTs: 1000,
+					limit:   10,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionCreateTables),
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  301,
+								},
+								{
+									SchemaID: 100,
+									TableID:  302,
+								},
+								{
+									SchemaID: 100,
+									TableID:  303,
+								},
+								{
+									SchemaID: 100,
+									TableID:  401,
+								},
+								{
+									SchemaID: 100,
+									TableID:  402,
+								},
+								{
+									SchemaID: 100,
+									TableID:  403,
+								},
+								{
+									SchemaID: 100,
+									TableID:  501,
+								},
+								{
+									SchemaID: 100,
+									TableID:  502,
+								},
+								{
+									SchemaID: 100,
+									TableID:  503,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+									{
+										SchemaName: "test",
+										TableName:  "t2",
+									},
+									{
+										SchemaName: "test",
+										TableName:  "t3",
+									},
+								},
+							},
+						},
+					},
+				},
+				// filter t2 and t3
+				{
+					tableFilter: buildTableFilterByNameForTest("test", "t1"),
+					startTs:     1000,
+					limit:       10,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionCreateTables),
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  301,
+								},
+								{
+									SchemaID: 100,
+									TableID:  302,
+								},
+								{
+									SchemaID: 100,
+									TableID:  303,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 		// trivial ddls
 		// test add/drop primary key and alter index visibility for table
 		// test modify table charset
@@ -1661,6 +1661,7 @@ func TestApplyDDLJobs(t *testing.T) {
 			nil,
 			nil,
 		},
+		// test alter/remove partitioning
 	}
 
 	for index, tt := range testCases {
