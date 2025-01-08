@@ -188,7 +188,7 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 	log.Info("Create changefeed successfully!",
 		zap.String("id", info.ChangefeedID.Name()),
 		zap.String("changefeed", info.String()))
-	c.JSON(http.StatusOK, toAPIModel(info,
+	c.JSON(http.StatusAccepted, toAPIModel(info,
 		info.StartTs, info.StartTs,
 		nil))
 }
