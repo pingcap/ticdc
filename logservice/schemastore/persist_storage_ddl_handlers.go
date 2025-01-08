@@ -851,12 +851,14 @@ func updateDDLHistoryForAlterTablePartitioning(args updateDDLHistoryFuncArgs) []
 	} else {
 		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.PrevTableID)
 	}
+	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, getAllPartitionIDs(args.ddlEvent.TableInfo)...)
 	return args.tableTriggerDDLHistory
 }
 
 func updateDDLHistoryForRemovePartitioning(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.PrevPartitions...)
+	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.CurrentTableID)
 	return args.tableTriggerDDLHistory
 }
 
@@ -1050,6 +1052,7 @@ func updateSchemaMetadataForAlterTablePartitioning(args updateSchemaMetadataFunc
 		SchemaID: args.event.CurrentSchemaID,
 		Name:     args.event.CurrentTableName,
 	}
+	args.partitionMap[newTableID] = make(BasicPartitionInfo)
 	for _, id := range getAllPartitionIDs(args.event.TableInfo) {
 		args.partitionMap[newTableID][id] = nil
 	}

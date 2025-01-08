@@ -1588,6 +1588,59 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 		},
+		// test alter/remove partitioning
+		{
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+					tables: []*model.TableInfo{
+						{
+							ID:   300,
+							Name: pmodel.NewCIStr("t1"),
+						},
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildAlterTablePartitioningJobForTest(100, 300, 301, []int64{501, 502, 503}, "t1", 1010), // alter table 300 partition
+					buildAlterTablePartitioningJobForTest(100, 301, 302, []int64{504, 505, 506}, "t1", 1020), // alter table 301 partition
+					buildRemovePartitioningJobForTest(100, 302, 303, "t1", 1030),                             // remove partition
+				}
+			}(),
+			map[int64]*BasicTableInfo{
+				303: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+			},
+			nil,
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "test",
+					Tables: map[int64]bool{
+						303: true,
+					},
+				},
+			},
+			map[int64][]uint64{
+				300: {1010},
+				303: {1030},
+				501: {1010, 1020},
+				502: {1010, 1020},
+				503: {1010, 1020},
+				504: {1020, 1030},
+				505: {1020, 1030},
+				506: {1020, 1030},
+			},
+			[]uint64{1010, 1020, 1030},
+			nil,
+			nil,
+			nil,
+		},
 		// trivial ddls
 		// test add/drop primary key and alter index visibility for table
 		// test modify table charset
@@ -1661,7 +1714,6 @@ func TestApplyDDLJobs(t *testing.T) {
 			nil,
 			nil,
 		},
-		// test alter/remove partitioning
 	}
 
 	for index, tt := range testCases {
