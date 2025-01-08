@@ -79,7 +79,7 @@ function failOverCaseM-1() {
 	# make it be the coordinator, todo fix it
 	sleep 15
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeDealWithDDL=pause'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeDealWithDDL=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 	# move table 1 to node 2
 	move_table_with_retry "127.0.0.1:8301" 106 "test" 10
@@ -130,7 +130,7 @@ function failOverCaseM-2() {
 	# make it be the coordinator, todo fix it
 	sleep 15
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeDealWithDDL=pause'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeDealWithDDL=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 	# move table 1 to node 2
 	move_table_with_retry "127.0.0.1:8301" 106 "test" 10
@@ -191,7 +191,7 @@ function failOverCaseM-3() {
 	# make it be the coordinator, todo fix it
 	sleep 15
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeDealWithDDL=pause'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeDealWithDDL=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 	# move table 1 to node 2
 	move_table_with_retry "127.0.0.1:8301" 106 "test" 10
@@ -256,7 +256,7 @@ function failOverCaseM-5() {
 	# make it be the coordinator, todo fix it
 	sleep 15
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockBeforeDealWithDDL=pause'
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeDealWithDDL=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 	# move table 1 to node 2
 	move_table_with_retry "127.0.0.1:8301" 106 "test" 10

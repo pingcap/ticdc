@@ -494,7 +494,7 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	tableTriggerEventDispatcher := newDispatcherForTest(sink, ddlTableSpan)
 	require.Nil(t, tableTriggerEventDispatcher.tableSchemaStore)
 
-	err := tableTriggerEventDispatcher.InitalizeTableSchemaStore([]*heartbeatpb.SchemaInfo{})
+	err := tableTriggerEventDispatcher.InitializeTableSchemaStore([]*heartbeatpb.SchemaInfo{})
 	require.NoError(t, err)
 
 	helper := commonEvent.NewEventTestHelper(t)
@@ -573,7 +573,7 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	tableTriggerEventDispatcher := newDispatcherForTest(sink, ddlTableSpan)
 	require.Nil(t, tableTriggerEventDispatcher.tableSchemaStore)
 
-	err := tableTriggerEventDispatcher.InitalizeTableSchemaStore([]*heartbeatpb.SchemaInfo{})
+	err := tableTriggerEventDispatcher.InitializeTableSchemaStore([]*heartbeatpb.SchemaInfo{})
 	require.NoError(t, err)
 
 	helper := commonEvent.NewEventTestHelper(t)

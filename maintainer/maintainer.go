@@ -193,7 +193,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	m.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](m.id.Name(), m.getNewBootstrapFn())
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("ddl dispatcher", tableTriggerEventDispatcherID.String()))
+		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()))
 	metrics.MaintainerGauge.WithLabelValues(cfID.Namespace(), cfID.Name()).Inc()
 	// Should update metrics immediately when maintainer is created
 	// FIXME: Use a correct context
@@ -736,7 +736,7 @@ func (m *Maintainer) getNewBootstrapFn() bootstrap.NewBootstrapMessageFn {
 		if id == m.selfNode.ID {
 			log.Info("create table event trigger dispatcher", zap.String("changefeed", m.id.String()),
 				zap.String("server", id.String()),
-				zap.String("dispatcher id", m.ddlSpan.ID.String()))
+				zap.String("dispatcherID", m.ddlSpan.ID.String()))
 			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
 		}
 		log.Info("send maintainer bootstrap message",

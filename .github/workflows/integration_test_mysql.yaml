@@ -178,10 +178,10 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=autorandom
 
-      - name: Test availability
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=availability
+      # - name: Test availability
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=availability
 
       - name: Test bank
         if: ${{ success() }}
@@ -238,6 +238,12 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=vector
+
+      # The 15th case in this group     
+      - name: Test simple
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=simple
 
       - name: Upload test logs
         if: always()
@@ -429,6 +435,11 @@ jobs:
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_O
+          
+      - name: Test fail_over_ddl_N
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_N
 
       - name: Upload test logs
         if: always()

@@ -76,14 +76,13 @@ function failOverCaseB-1() {
 
 	sleep 10
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitReportAfterWrite=pause'
-
+    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitReportAfterWrite=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 
 	# make it be the coordinator, todo fix it
 	sleep 15
-
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	# move table 1 to node 2
@@ -138,6 +137,7 @@ function failOverCaseB-2() {
 	# make it be the coordinator, todo fix it
 	sleep 15
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	# move table 1 to node 2
@@ -174,7 +174,7 @@ function failOverCaseB-2() {
 
 	export GO_FAILPOINTS=''
 
-	echo "failOverCase-2 passed successfully"
+	echo "failOverCaseB-2 passed successfully"
 }
 
 # ddl is rename table
@@ -200,6 +200,7 @@ function failOverCaseB-3() {
 	# make it be the coordinator, todo fix it
 	sleep 15
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	# move table 1 to node 2
@@ -263,6 +264,7 @@ function failOverCaseB-5() {
 	# make it be the coordinator, todo fix it
 	sleep 15
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	# move table 1 to node 2
