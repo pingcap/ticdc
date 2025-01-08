@@ -100,8 +100,6 @@ function failOverCaseF-1() {
 	# restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
-	sleep 15
-
 	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'show databases;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'fail_over_ddl_test'"
 
@@ -156,7 +154,6 @@ function failOverCaseF-2() {
 	# restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
-	sleep 15
 	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1'"
 
@@ -218,8 +215,6 @@ function failOverCaseF-3() {
 	kill_cdc_pid $cdc_pid_2
 	# restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
-
-	sleep 15
 
 	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'use fail_over_ddl_test;show tables;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains 'test1' && check_contains 'test4'"
@@ -287,7 +282,6 @@ function failOverCaseF-4() {
 	# restart cdc server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
-	sleep 15
 	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer
 	ensure 30 "run_sql 'select id from fail_over_ddl_test.test1;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} && check_not_contains '2'"
 
@@ -316,9 +310,9 @@ function failOverCaseF-4() {
 }
 
 trap stop_tidb_cluster EXIT
-# failOverCaseF-1
-# failOverCaseF-2
+failOverCaseF-1
+failOverCaseF-2
 failOverCaseF-3
-# failOverCaseF-4
+failOverCaseF-4
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

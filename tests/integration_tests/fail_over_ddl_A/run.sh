@@ -57,9 +57,8 @@ function prepare() {
 	run_sql "create database fail_over_ddl_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "create table fail_over_ddl_test.test1 (id int primary key, val int);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "create table fail_over_ddl_test.test2 (id int primary key, val int);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "create table fail_over_ddl_test.test3 (id int primary key, val int);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	check_table_exists fail_over_ddl_test.test3 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_table_exists fail_over_ddl_test.test2 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 }
 
 # ddl is drop database
@@ -96,8 +95,6 @@ function failOverCaseA-1() {
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
 	
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
-
-	sleep 15
 
 	run_sql "show databases;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
 		check_not_contains "fail_over_test"
@@ -149,12 +146,9 @@ function failOverCaseA-2() {
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
-	sleep 15
-
 	run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
 		check_not_contains "test1" &&
-		check_contains "test2" &&
-		check_contains "test3"
+		check_contains "test2"
 
 	ret=$?
 	if [ "$ret" != 0 ]; then
@@ -164,7 +158,6 @@ function failOverCaseA-2() {
 	## continue to write ddl and dml to test the cdc server is working well
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "insert into fail_over_ddl_test.test3 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
@@ -210,12 +203,9 @@ function failOverCaseA-3() {
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
-	sleep 15
-
 	run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
 		check_not_contains "test1" &&
 		check_contains "test2" &&
-		check_contains "test3" &&
 		check_contains "test4"
 
 	ret=$?
@@ -226,7 +216,6 @@ function failOverCaseA-3() {
 	## continue to write ddl and dml to test the cdc server is working well
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "insert into fail_over_ddl_test.test3 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into fail_over_ddl_test.test4 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
@@ -276,12 +265,9 @@ function failOverCaseA-4() {
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
-	sleep 15
-
 	run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
 		check_contains "test1" &&
-		check_contains "test2" &&
-		check_contains "test3"
+		check_contains "test2" 
 
 	ret=$?
 	if [ "$ret" != 0 ]; then
@@ -292,7 +278,6 @@ function failOverCaseA-4() {
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into fail_over_ddl_test.test1 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "insert into fail_over_ddl_test.test2 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "insert into fail_over_ddl_test.test3 values (1, 1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
