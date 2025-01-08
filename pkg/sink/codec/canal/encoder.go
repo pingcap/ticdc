@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/sink/codec/internal"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
@@ -376,8 +375,8 @@ type JSONRowEventEncoder struct {
 	config *common.Config
 }
 
-// newJSONRowEventEncoder creates a new JSONRowEventEncoder
-func NewJSONRowEventEncoder(ctx context.Context, config *common.Config) (encoder.EventEncoder, error) {
+// NewJSONRowEventEncoder creates a new JSONRowEventEncoder
+func NewJSONRowEventEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
 	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
 	if err != nil {
 		return nil, errors.Trace(err)

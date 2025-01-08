@@ -26,8 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	common "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -84,7 +83,7 @@ func NewKafkaDDLWorker(
 	id commonType.ChangeFeedID,
 	protocol config.Protocol,
 	producer producer.DDLProducer,
-	encoder encoder.EventEncoder,
+	encoder common.EventEncoder,
 	eventRouter *eventrouter.EventRouter,
 	topicManager topicmanager.TopicManager,
 	statistics *metrics.Statistics,

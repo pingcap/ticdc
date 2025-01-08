@@ -20,8 +20,8 @@ import (
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink/kafka/claimcheck"
 	"go.uber.org/zap"
 )
 
@@ -50,7 +50,7 @@ func NewEncoder(ctx context.Context, config *common.Config) (common.EventEncoder
 }
 
 // AppendRowChangedEvent implement the RowEventEncoder interface
-func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *commonEvent.RowChangedEvent, callback func()) error {
+func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *commonEvent.RowEvent) error {
 	value, err := e.marshaller.MarshalRowChangedEvent(event, false, "")
 	if err != nil {
 		return err
@@ -63,7 +63,7 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 
 	result := &common.Message{
 		Value:    value,
-		Callback: callback,
+		Callback: event.Callback,
 	}
 
 	result.IncRowsCount()
