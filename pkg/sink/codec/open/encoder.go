@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-// Copyright 2024 PingCAP, Inc.
-=======
 // Copyright 2025 PingCAP, Inc.
->>>>>>> master
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,20 +16,13 @@ package open
 import (
 	"context"
 	"encoding/binary"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-<<<<<<< HEAD
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
-	"github.com/pingcap/tiflow/cdc/model"
-=======
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
->>>>>>> master
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
@@ -148,20 +137,9 @@ func (d *BatchEncoder) pushMessage(key, value []byte, callback func()) {
 		d.finalizeCallback()
 		// create a new message
 		versionHead := make([]byte, 8)
-<<<<<<< HEAD
-		binary.BigEndian.PutUint64(versionHead, BatchVersion1)
-
-		message := common.Message{
-			Key:      versionHead,
-			Value:    valueLenByte[:],
-			Type:     model.MessageTypeRow,
-			Protocol: config.ProtocolOpen,
-		}
-=======
 		binary.BigEndian.PutUint64(versionHead, batchVersion1)
 
 		message := common.NewMsg(versionHead, valueLenByte[:])
->>>>>>> master
 		message.Key = append(message.Key, keyLenByte[:]...)
 		message.Key = append(message.Key, key...)
 		message.Value = append(message.Value, value...)
@@ -204,11 +182,7 @@ func enhancedKeyValue(key, value []byte) ([]byte, []byte) {
 	)
 	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
 	binary.BigEndian.PutUint64(valueLenByte[:], uint64(len(value)))
-<<<<<<< HEAD
-	binary.BigEndian.PutUint64(versionHead[:], BatchVersion1)
-=======
 	binary.BigEndian.PutUint64(versionHead[:], batchVersion1)
->>>>>>> master
 
 	keyOutput := versionHead[:]
 	keyOutput = append(keyOutput, keyLenByte[:]...)
@@ -219,11 +193,7 @@ func enhancedKeyValue(key, value []byte) ([]byte, []byte) {
 }
 
 // NewBatchEncoder creates a new BatchEncoder.
-<<<<<<< HEAD
-func NewBatchEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
-=======
 func NewBatchEncoder(ctx context.Context, config *common.Config) (encoder.EventEncoder, error) {
->>>>>>> master
 	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -246,16 +216,7 @@ func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 		return nil, errors.Trace(err)
 	}
 
-<<<<<<< HEAD
-	return &common.Message{
-		Key:      key,
-		Value:    value,
-		Type:     model.MessageTypeDDL,
-		Protocol: config.ProtocolOpen,
-	}, nil
-=======
 	return common.NewMsg(key, value), nil
->>>>>>> master
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
@@ -265,14 +226,5 @@ func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error)
 		return nil, errors.Trace(err)
 	}
 
-<<<<<<< HEAD
-	return &common.Message{
-		Key:      key,
-		Value:    value,
-		Type:     model.MessageTypeResolved,
-		Protocol: config.ProtocolOpen,
-	}, nil
-=======
 	return common.NewMsg(key, value), nil
->>>>>>> master
 }

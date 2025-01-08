@@ -43,8 +43,7 @@ type kafkaTopicManager struct {
 	defaultTopic string
 
 	admin kafka.ClusterAdminClient
-
-	cfg *kafka.AutoCreateTopicConfig
+	cfg   *kafka.AutoCreateTopicConfig
 
 	topics sync.Map
 

@@ -15,10 +15,10 @@ package codec
 
 import (
 	"context"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 )

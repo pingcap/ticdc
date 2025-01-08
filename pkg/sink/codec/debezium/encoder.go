@@ -16,17 +16,10 @@ package debezium
 import (
 	"bytes"
 	"context"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"time"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-<<<<<<< HEAD
-=======
-	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
->>>>>>> master
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/config"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/errors"
 )
 
@@ -34,7 +27,7 @@ import (
 type BatchEncoder struct {
 	messages []*common.Message
 
-	config *ticommon.Config
+	config *common.Config
 	codec  *dbzCodec
 }
 
@@ -57,7 +50,7 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 		return errors.Trace(err)
 	}
 	// TODO: Use a streaming compression is better.
-	value, err := ticommon.Compress(
+	value, err := common.Compress(
 		d.config.ChangefeedID,
 		d.config.LargeMessageHandle.LargeMessageHandleCompression,
 		valueBuf.Bytes(),
@@ -97,7 +90,7 @@ func (d *BatchEncoder) Build() []*common.Message {
 func (d *BatchEncoder) Clean() {}
 
 // newBatchEncoder creates a new Debezium BatchEncoder.
-func NewBatchEncoder(c *ticommon.Config, clusterID string) common.EventEncoder {
+func NewBatchEncoder(c *common.Config, clusterID string) common.EventEncoder {
 	batch := &BatchEncoder{
 		messages: nil,
 		config:   c,

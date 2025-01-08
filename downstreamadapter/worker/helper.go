@@ -15,17 +15,17 @@ package worker
 
 import (
 	"context"
-	common2 "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"net/url"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	ticonfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	v2 "github.com/pingcap/ticdc/pkg/sink/kafka/v2"
 	"github.com/pingcap/ticdc/pkg/sink/util"
@@ -36,7 +36,7 @@ import (
 
 type KafkaComponent struct {
 	EncoderGroup   codec.EncoderGroup
-	Encoder        common2.EventEncoder
+	Encoder        common.EventEncoder
 	ColumnSelector *columnselector.ColumnSelectors
 	EventRouter    *eventrouter.EventRouter
 	TopicManager   topicmanager.TopicManager
@@ -45,7 +45,7 @@ type KafkaComponent struct {
 }
 
 func getKafkaSinkComponentWithFactory(ctx context.Context,
-	changefeedID common.ChangeFeedID,
+	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *ticonfig.SinkConfig,
 	factoryCreator kafka.FactoryCreator,
@@ -123,7 +123,7 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 
 func GetKafkaSinkComponent(
 	ctx context.Context,
-	changefeedID common.ChangeFeedID,
+	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *ticonfig.SinkConfig,
 ) (KafkaComponent, ticonfig.Protocol, error) {
@@ -136,7 +136,7 @@ func GetKafkaSinkComponent(
 
 func GetKafkaSinkComponentForTest(
 	ctx context.Context,
-	changefeedID common.ChangeFeedID,
+	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *ticonfig.SinkConfig,
 ) (KafkaComponent, ticonfig.Protocol, error) {

@@ -20,20 +20,19 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	tiv2 "github.com/pingcap/tiflow/pkg/sink/kafka/v2"
 	"go.uber.org/zap"
 )
 
 // MetricsCollector is the kafka metrics collector based on kafka-go library.
 type MetricsCollector struct {
 	changefeedID common.ChangeFeedID
-	writer       tiv2.Writer
+	writer       Writer
 }
 
 // NewMetricsCollector return a kafka metrics collector
 func NewMetricsCollector(
 	changefeedID common.ChangeFeedID,
-	writer tiv2.Writer,
+	writer Writer,
 ) *MetricsCollector {
 	return &MetricsCollector{
 		changefeedID: changefeedID,

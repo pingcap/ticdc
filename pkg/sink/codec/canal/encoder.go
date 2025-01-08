@@ -21,6 +21,7 @@ import (
 	"github.com/mailru/easyjson/jwriter"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -82,7 +83,7 @@ func fillColumns(
 func fillUpdateColumns(
 	newValueMap map[int64]string,
 	oldValueMap map[int64]string,
-	tableInfo *common.TableInfo,
+	tableInfo *commonType.TableInfo,
 	onlyHandleKeyColumn bool,
 	onlyOutputUpdatedColumn bool,
 	out *jwriter.Writer,

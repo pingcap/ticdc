@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-// Copyright 2024 PingCAP, Inc.
-=======
 // Copyright 2025 PingCAP, Inc.
->>>>>>> master
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,14 +18,10 @@ import (
 	"encoding/binary"
 	"strconv"
 
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-<<<<<<< HEAD
-=======
-	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
->>>>>>> master
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -45,7 +37,7 @@ const (
 	BatchVersion1 uint64 = 1
 )
 
-func encodeRowChangedEvent(e *commonEvent.RowEvent, config *newcommon.Config, largeMessageOnlyHandleKeyColumns bool, claimCheckLocationName string) ([]byte, []byte, int, error) {
+func encodeRowChangedEvent(e *commonEvent.RowEvent, config *common.Config, largeMessageOnlyHandleKeyColumns bool, claimCheckLocationName string) ([]byte, []byte, int, error) {
 	keyBuf := &bytes.Buffer{}
 	valueBuf := &bytes.Buffer{}
 	keyWriter := util.BorrowJSONWriter(keyBuf)
@@ -106,7 +98,7 @@ func encodeRowChangedEvent(e *commonEvent.RowEvent, config *newcommon.Config, la
 	key := keyBuf.Bytes()
 	value := valueBuf.Bytes()
 
-	valueCompressed, err := newcommon.Compress(
+	valueCompressed, err := common.Compress(
 		config.ChangefeedID, config.LargeMessageHandle.LargeMessageHandleCompression, value,
 	)
 	if err != nil {
@@ -115,12 +107,12 @@ func encodeRowChangedEvent(e *commonEvent.RowEvent, config *newcommon.Config, la
 
 	// for single message that is longer than max-message-bytes
 	// 16 is the length of `keyLenByte` and `valueLenByte`, 8 is the length of `versionHead`
-	length := len(key) + len(valueCompressed) + ticommon.MaxRecordOverhead + 16 + 8
+	length := len(key) + len(valueCompressed) + common.MaxRecordOverhead + 16 + 8
 
 	return key, valueCompressed, length, nil
 }
 
-func encodeDDLEvent(e *commonEvent.DDLEvent, config *newcommon.Config) ([]byte, []byte, error) {
+func encodeDDLEvent(e *commonEvent.DDLEvent, config *common.Config) ([]byte, []byte, error) {
 	keyBuf := &bytes.Buffer{}
 	valueBuf := &bytes.Buffer{}
 	keyWriter := util.BorrowJSONWriter(keyBuf)
@@ -141,7 +133,7 @@ func encodeDDLEvent(e *commonEvent.DDLEvent, config *newcommon.Config) ([]byte, 
 	util.ReturnJSONWriter(keyWriter)
 	util.ReturnJSONWriter(valueWriter)
 
-	value, err := newcommon.Compress(
+	value, err := common.Compress(
 		config.ChangefeedID, config.LargeMessageHandle.LargeMessageHandleCompression, valueBuf.Bytes(),
 	)
 	if err != nil {
@@ -188,11 +180,7 @@ func encodeResolvedTs(ts uint64) ([]byte, []byte, error) {
 	var versionByte [8]byte
 	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
 	binary.BigEndian.PutUint64(valueLenByte[:], 0)
-<<<<<<< HEAD
-	binary.BigEndian.PutUint64(versionByte[:], BatchVersion1)
-=======
 	binary.BigEndian.PutUint64(versionByte[:], batchVersion1)
->>>>>>> master
 
 	keyOutput := new(bytes.Buffer)
 
@@ -206,7 +194,9 @@ func encodeResolvedTs(ts uint64) ([]byte, []byte, error) {
 	return keyOutput.Bytes(), valueOutput.Bytes(), nil
 }
 
-func writeColumnFieldValue(writer *util.JSONWriter, col *timodel.ColumnInfo, row *chunk.Row, idx int, tableInfo *common.TableInfo) error {
+func writeColumnFieldValue(
+	writer *util.JSONWriter, col *timodel.ColumnInfo, row *chunk.Row, idx int, tableInfo *commonType.TableInfo,
+) error {
 	colType := col.GetType()
 	flag := *tableInfo.GetColumnFlags()[col.ID]
 	whereHandle := flag.IsHandleKey()
@@ -306,7 +296,7 @@ func writeColumnFieldValue(writer *util.JSONWriter, col *timodel.ColumnInfo, row
 func writeColumnFieldValues(
 	jWriter *util.JSONWriter,
 	row *chunk.Row,
-	tableInfo *common.TableInfo,
+	tableInfo *commonType.TableInfo,
 	selector columnselector.Selector,
 	onlyHandleKeyColumns bool,
 ) error {
@@ -335,7 +325,7 @@ func writeUpdatedColumnFieldValues(
 	jWriter *util.JSONWriter,
 	preRow *chunk.Row,
 	row *chunk.Row,
-	tableInfo *common.TableInfo,
+	tableInfo *commonType.TableInfo,
 	selector columnselector.Selector,
 	onlyHandleKeyColumns bool,
 ) {
@@ -359,7 +349,7 @@ func writeColumnFieldValueIfUpdated(
 	preRow *chunk.Row,
 	row *chunk.Row,
 	idx int,
-	tableInfo *common.TableInfo,
+	tableInfo *commonType.TableInfo,
 ) error {
 	colType := col.GetType()
 	flag := *tableInfo.GetColumnFlags()[col.ID]
