@@ -660,7 +660,9 @@ func buildPersistedDDLEventForAlterTablePartitioning(args buildPersistedDDLEvent
 	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
 	event.CurrentTableName = getTableName(args.tableMap, event.PrevTableID)
 	if event.CurrentTableName != event.TableInfo.Name.O {
-		log.Panic("table name should not change", zap.String("prevTableName", event.CurrentTableName), zap.String("tableName", event.TableInfo.Name.O))
+		log.Panic("table name should not change",
+			zap.String("prevTableName", event.CurrentTableName),
+			zap.String("tableName", event.TableInfo.Name.O))
 	}
 	// prev table may be a normal table or a partition table
 	if partitions, ok := args.partitionMap[event.PrevTableID]; ok {
@@ -678,7 +680,9 @@ func buildPersistedDDLEventForRemovePartitioning(args buildPersistedDDLEventFunc
 	event.CurrentSchemaName = getSchemaName(args.databaseMap, event.CurrentSchemaID)
 	event.CurrentTableName = getTableName(args.tableMap, event.PrevTableID)
 	if event.CurrentTableName != event.TableInfo.Name.O {
-		log.Panic("table name should not change", zap.String("prevTableName", event.CurrentTableName), zap.String("tableName", event.TableInfo.Name.O))
+		log.Panic("table name should not change",
+			zap.String("prevTableName", event.CurrentTableName),
+			zap.String("tableName", event.TableInfo.Name.O))
 	}
 	partitions, ok := args.partitionMap[event.PrevTableID]
 	if !ok {
