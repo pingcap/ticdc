@@ -245,14 +245,14 @@ def resume_changefeed():
 
 
 
-def remove_changefeed():
+def remove_changefeed(cfID = "changefeed-test3"):
     # remove changefeed
-    url = BASE_URL0_V2+"/changefeeds/changefeed-test3"
+    url = BASE_URL0_V2+"/changefeeds/" + cfID
     resp = rq.delete(url)
     assert_status_code(resp, rq.codes.ok, url)
 
     # check if remove changefeed success
-    url = BASE_URL0_V2+"/changefeeds/changefeed-test3"
+    url = BASE_URL0_V2+"/changefeeds/" + cfID
     resp = requests_get_with_retry(url)
     assert_status_code(resp, rq.codes.bad_request, url)
     assert resp.json()["error_code"] == "CDC:ErrChangeFeedNotExists"
@@ -265,20 +265,36 @@ def remove_changefeed():
     assert data["error_code"] == "CDC:ErrChangeFeedNotExists"
 
 
-def move_table():
-    # move table
-    url = BASE_URL0_V2 + "/changefeeds/changefeed-test1/tables/move_table"
-    data = json.dumps({"capture_id": "test-aaa-aa", "table_id": 11})
-    headers = {"Content-Type": "application/json"}
-    resp = rq.post(url, data=data, headers=headers)
+def move_table(cfID = "changefeed-test1"):
+    # sleep 5 seconds to make sure all tables is scheduled
+    #time.sleep(5)
+    
+    # find the node id
+    url = BASE_URL0_V2 + "/captures"
+    resp = rq.get(url)
     assert_status_code(resp, rq.codes.ok, url)
+    data = resp.json()
+    capture_id = data["items"][0]["id"]
+    logging.info(f"Find target capture_id: {capture_id}")
+    
+    # find the table id
+    url = BASE_URL0_V2 + "/changefeeds/" + cfID + "/tables"
+    resp = rq.get(url)
+    assert_status_code(resp, rq.codes.ok, url)
+    data = resp.json()
+    table_id = data[0]["table_ids"][0]
+    logging.info(f"Find target table_id: {table_id}")
 
+    # move table
+    url = BASE_URL0_V2 + "/changefeeds/" + cfID + "/move_table?targetNodeID=" + capture_id + "&tableID=" + str(table_id)
+    resp = rq.post(url)
+    assert_status_code(resp, rq.codes.ok, url)
+    logging.info(f"Move table success")
     # move table fail
-    # not allow empty capture_id
-    data = json.dumps({"capture_id": "", "table_id": 11})
-    headers = {"Content-Type": "application/json"}
-    resp = rq.post(url, data=data, headers=headers)
-    assert_status_code(resp, rq.codes.bad_request, url)
+    # The target node is not found
+    url = BASE_URL0_V2 + "/changefeeds/" + cfID + "/move_table?targetNodeID=&tableID=" + str(table_id)
+    resp = rq.post(url)
+    assert_status_code(resp, rq.codes.internal_server_error, url)
 
 
 

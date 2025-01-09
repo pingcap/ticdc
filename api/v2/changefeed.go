@@ -659,10 +659,10 @@ func verifyResumeChangefeedConfig(
 // it returns the move result(success or err)
 // This api is for inner test use, not public use. It may be removed in the future.
 // Usage:
-// curl -X POST http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/move_table -d '{"table_id": 11, "target_node_id": x}'
+// curl -X POST http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/move_table?tableID={tableID}&targetNodeID={targetNodeID}
 // Note:
-// 1. table_id is the table id in the changefeed
-// 2. target_node_id is the node id to move the table to
+// 1. tableID is the table id in the changefeed
+// 2. targetNodeID is the node id to move the table to
 // You can find the node id by using the list_captures api
 func (h *OpenAPIV2) moveTable(c *gin.Context) {
 	tableIdStr := c.Query("tableID")
@@ -704,6 +704,7 @@ func (h *OpenAPIV2) moveTable(c *gin.Context) {
 	targetNodeID := c.Query("targetNodeID")
 	err = maintainer.MoveTable(int64(tableId), node.ID(targetNodeID))
 	if err != nil {
+		log.Error("failed to move table", zap.Error(err), zap.Int64("tableID", tableId), zap.String("targetNodeID", targetNodeID))
 		_ = c.Error(err)
 		return
 	}
