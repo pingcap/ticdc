@@ -69,7 +69,7 @@ func NewEncoderGroup(
 	cfg *config.SinkConfig,
 	encoderConfig *common.Config,
 	changefeedID commonType.ChangeFeedID,
-) *encoderGroup {
+) (*encoderGroup, error) {
 	concurrency := util.GetOrZero(cfg.EncoderConcurrency)
 	if concurrency <= 0 {
 		concurrency = config.DefaultEncoderGroupConcurrency
@@ -82,22 +82,22 @@ func NewEncoderGroup(
 		rowEventEncoders[i], err = NewEventEncoder(ctx, encoderConfig)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
-			return nil
+			return nil, errors.Trace(err)
 		}
 	}
 	outCh := make(chan *future, defaultInputChanSize*concurrency)
 
-	var bootstrapWorker *bootstrapWorker
+	var bw *bootstrapWorker
 	if cfg.ShouldSendBootstrapMsg() {
-		rowEventEncoder, err := NewEventEncoder(ctx, encoderConfig)
+		encoder, err := NewEventEncoder(ctx, encoderConfig)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
-			return nil
+			return nil, errors.Trace(err)
 		}
-		bootstrapWorker = newBootstrapWorker(
+		bw = newBootstrapWorker(
 			changefeedID,
 			outCh,
-			rowEventEncoder,
+			encoder,
 			util.GetOrZero(cfg.SendBootstrapIntervalInSec),
 			util.GetOrZero(cfg.SendBootstrapInMsgCount),
 			util.GetOrZero(cfg.SendBootstrapToAllPartition),
@@ -112,8 +112,8 @@ func NewEncoderGroup(
 		inputCh:          inputCh,
 		index:            0,
 		outputCh:         outCh,
-		bootstrapWorker:  bootstrapWorker,
-	}
+		bootstrapWorker:  bw,
+	}, nil
 }
 
 func (g *encoderGroup) Run(ctx context.Context) error {

@@ -42,7 +42,7 @@ const (
 	batchInterval = 15 * time.Millisecond
 )
 
-// worker will send messages to the DML producer on a batch basis.
+// KafkaDMLWorker worker will send messages to the DML producer on a batch basis.
 type KafkaDMLWorker struct {
 	changeFeedID common.ChangeFeedID
 	protocol     config.Protocol

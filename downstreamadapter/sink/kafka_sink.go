@@ -67,9 +67,6 @@ func NewKafkaSink(
 	sinkConfig *config.SinkConfig,
 	errCh chan error,
 ) (*KafkaSink, error) {
-	errGroup, ctx := errgroup.WithContext(ctx)
-	ctx, cancel := context.WithCancel(ctx)
-	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
 	kafkaComponent, protocol, err := worker.GetKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -83,6 +80,9 @@ func NewKafkaSink(
 		}
 	}()
 
+	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
+	errGroup, ctx := errgroup.WithContext(ctx)
+	ctx, cancel := context.WithCancel(ctx)
 	dmlAsyncProducer, err := kafkaComponent.Factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, cerror.WrapError(cerror.ErrKafkaNewProducer, err)

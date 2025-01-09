@@ -55,11 +55,6 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 	if err != nil {
 		return kafkaComponent, ticonfig.ProtocolUnknown, errors.Trace(err)
 	}
-	topic, err := helper.GetTopic(sinkURI)
-	if err != nil {
-		return kafkaComponent, protocol, errors.Trace(err)
-	}
-	scheme := sink.GetScheme(sinkURI)
 
 	options := kafka.NewOptions()
 	if err = options.Apply(changefeedID, sinkURI, sinkConfig); err != nil {
@@ -84,6 +79,10 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 		}
 	}()
 
+	topic, err := helper.GetTopic(sinkURI)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
 	// adjust the option configuration before creating the kafka client
 	if err = kafka.AdjustOptions(ctx, kafkaComponent.AdminClient, options, topic); err != nil {
 		return kafkaComponent, protocol, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
@@ -97,6 +96,7 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 		kafkaComponent.AdminClient,
 	)
 
+	scheme := sink.GetScheme(sinkURI)
 	kafkaComponent.EventRouter, err = eventrouter.NewEventRouter(sinkConfig, protocol, topic, scheme)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
@@ -112,7 +112,10 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	kafkaComponent.EncoderGroup = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
+	kafkaComponent.EncoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
 
 	kafkaComponent.Encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
 	if err != nil {
