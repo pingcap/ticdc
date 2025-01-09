@@ -1331,3 +1331,19 @@ type DebeziumConfig struct {
 type DispatcherCount struct {
 	Count int `json:"count"`
 }
+
+type NodeTableInfo struct {
+	NodeID   string  `json:"node_id"`
+	TableIDs []int64 `json:"table_ids"`
+}
+
+func newNodeTableInfo(nodeID string) *NodeTableInfo {
+	return &NodeTableInfo{
+		NodeID:   nodeID,
+		TableIDs: []int64{},
+	}
+}
+
+func (t *NodeTableInfo) addTableID(tableID int64) {
+	t.TableIDs = append(t.TableIDs, tableID)
+}

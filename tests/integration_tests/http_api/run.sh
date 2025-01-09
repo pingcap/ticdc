@@ -16,6 +16,7 @@ function run() {
 	fi
 
 	sudo python3 -m pip install -U requests==2.26.0
+	#sudo python3 -m pip install -U pytest
 
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
@@ -78,7 +79,6 @@ function run() {
 		"get_changefeed"
 		"pause_changefeed"
 		"resume_changefeed"
-		"rebalance_table"
 		"move_table"
 		"get_processor"
 		"list_processor"

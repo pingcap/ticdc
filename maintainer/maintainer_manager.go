@@ -355,12 +355,12 @@ func (m *Manager) dispatcherMaintainerMessage(
 	return nil
 }
 
-func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) *Maintainer {
+func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) (*Maintainer, bool) {
 	c, ok := m.maintainers.Load(changefeedID)
 	if !ok {
-		return nil
+		return nil, false
 	}
-	return c.(*Maintainer)
+	return c.(*Maintainer), true
 }
 
 func (m *Manager) isBootstrap() bool {

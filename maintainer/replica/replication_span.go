@@ -37,6 +37,7 @@ import (
 // SpanReplication is responsible for a table span replication status
 // It is used to manage the replication status of a table span,
 // the status is updated by the heartbeat collector
+// It implements the replica.Replication interface
 type SpanReplication struct {
 	ID           common.DispatcherID
 	Span         *heartbeatpb.TableSpan

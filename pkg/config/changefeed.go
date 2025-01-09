@@ -68,14 +68,32 @@ type ChangeFeedInfo struct {
 	// but can be fetched for backward compatibility
 	SortDir string `json:"sort-dir"`
 
-	Config  *ReplicaConfig      `json:"config"`
-	State   model.FeedState     `json:"state"`
-	Error   *model.RunningError `json:"error"`
-	Warning *model.RunningError `json:"warning"`
+	UpstreamInfo *UpstreamInfo       `json:"upstream-info"`
+	Config       *ReplicaConfig      `json:"config"`
+	State        model.FeedState     `json:"state"`
+	Error        *model.RunningError `json:"error"`
+	Warning      *model.RunningError `json:"warning"`
 
 	CreatorVersion string `json:"creator-version"`
 	// Epoch is the epoch of a changefeed, changes on every restart.
 	Epoch uint64 `json:"epoch"`
+}
+
+func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
+	return &ChangefeedConfig{
+		ChangefeedID:       info.ChangefeedID,
+		StartTS:            info.StartTs,
+		TargetTS:           info.TargetTs,
+		SinkURI:            info.SinkURI,
+		ForceReplicate:     info.Config.ForceReplicate,
+		SinkConfig:         info.Config.Sink,
+		Filter:             info.Config.Filter,
+		EnableSyncPoint:    *info.Config.EnableSyncPoint,
+		SyncPointInterval:  info.Config.SyncPointInterval,
+		SyncPointRetention: info.Config.SyncPointRetention,
+		MemoryQuota:        info.Config.MemoryQuota,
+		// other fields are not necessary for maintainer
+	}
 }
 
 // NeedBlockGC returns true if the changefeed need to block the GC safepoint.

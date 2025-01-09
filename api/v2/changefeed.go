@@ -15,6 +15,8 @@ package v2
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -22,6 +24,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	apperror "github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -137,7 +140,7 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 	}
 	err = replicaCfg.ValidateAndAdjust(sinkURIParsed)
 	if err != nil {
-		_ = c.Error(err)
+		_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
 		return
 	}
 
@@ -154,6 +157,16 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 		CreatorVersion: version.ReleaseVersion,
 		Epoch:          owner.GenerateChangefeedEpoch(ctx, pdClient),
 	}
+
+	// verify sinkURI
+	tempChangefeedID := common.NewChangeFeedIDWithName("sink-uri-verify-changefeed-id")
+	cfConfig := info.ToChangefeedConfig()
+	sink, err := sink.NewSink(ctx, cfConfig, tempChangefeedID, nil)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
+		return
+	}
+	sink.Close(true)
 
 	needRemoveGCSafePoint := false
 	defer func() {
@@ -193,7 +206,7 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 		nil))
 }
 
-// listChangeFeeds lists all changgefeeds in cdc cluster
+// listChangeFeeds lists all changefeeds in cdc cluster
 // @Summary List changefeed
 // @Description list all changefeeds in cdc cluster
 // @Tags changefeed,v2
@@ -248,6 +261,7 @@ func (h *OpenAPIV2) listChangeFeeds(c *gin.Context) {
 }
 
 // verifyTable verify table, return ineligibleTables and EligibleTables.
+// FIXME: this is a dummy implementation, we need to implement it in the future
 func (h *OpenAPIV2) verifyTable(c *gin.Context) {
 	tables := &Tables{}
 	c.JSON(http.StatusOK, tables)
@@ -430,10 +444,23 @@ func (h *OpenAPIV2) resumeChangefeed(c *gin.Context) {
 	}
 
 	cfg := new(ResumeChangefeedConfig)
-	if err := c.BindJSON(&cfg); err != nil {
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 		return
 	}
+
+	// Check if body is empty
+	if len(body) == 0 {
+		log.Info("resume changefeed config is empty, using defaults")
+	} else {
+		if err := json.Unmarshal(body, cfg); err != nil {
+			log.Error("failed to bind resume changefeed config", zap.Error(err), zap.String("body", string(body)))
+			_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
+			return
+		}
+	}
+
 	coordinator, err := h.server.GetCoordinator()
 	if err != nil {
 		_ = c.Error(err)
@@ -476,11 +503,13 @@ func (h *OpenAPIV2) resumeChangefeed(c *gin.Context) {
 			return
 		}
 	}()
+
 	err = coordinator.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
+	c.Errors = nil
 	c.JSON(http.StatusOK, &EmptyResponse{})
 }
 
@@ -553,6 +582,10 @@ func (h *OpenAPIV2) updateChangefeed(c *gin.Context) {
 	if updateCfConfig.SinkURI != "" {
 		oldCfInfo.SinkURI = updateCfConfig.SinkURI
 	}
+	if updateCfConfig.StartTs != 0 {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("start_ts can not be updated"))
+		return
+	}
 
 	// verify changefeed filter
 	_, err = filter.NewFilter(oldCfInfo.Config.Filter, "", oldCfInfo.Config.CaseSensitive)
@@ -561,10 +594,21 @@ func (h *OpenAPIV2) updateChangefeed(c *gin.Context) {
 			GenWithStackByArgs(errors.Cause(err).Error()))
 		return
 	}
+
+	// verify sink
+	tempChangefeedID := common.NewChangeFeedIDWithName("sink-uri-verify-changefeed-id")
+	sink, err := sink.NewSink(ctx, oldCfInfo.ToChangefeedConfig(), tempChangefeedID, nil)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
+		return
+	}
+	sink.Close(true)
+
 	if err := coordinator.UpdateChangefeed(ctx, oldCfInfo); err != nil {
 		_ = c.Error(err)
 		return
 	}
+
 	c.JSON(http.StatusOK, toAPIModel(oldCfInfo, status.CheckpointTs, status.CheckpointTs, nil))
 }
 
@@ -613,7 +657,13 @@ func verifyResumeChangefeedConfig(
 
 // moveTable handles move table in changefeed to target node,
 // it returns the move result(success or err)
-// moveTable is just for inner test use, not public use.
+// This api is for inner test use, not public use. It may be removed in the future.
+// Usage:
+// curl -X POST http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/move_table?tableID={tableID}&targetNodeID={targetNodeID}
+// Note:
+// 1. tableID is the table id in the changefeed
+// 2. targetNodeID is the node id to move the table to
+// You can find the node id by using the list_captures api
 func (h *OpenAPIV2) moveTable(c *gin.Context) {
 	tableIdStr := c.Query("tableID")
 	tableId, err := strconv.ParseInt(tableIdStr, 10, 64)
@@ -622,7 +672,6 @@ func (h *OpenAPIV2) moveTable(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	targetNodeID := c.Query("targetNodeID")
 
 	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), getNamespaceValueWithDefault(c))
 	if err := model.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
@@ -630,7 +679,7 @@ func (h *OpenAPIV2) moveTable(c *gin.Context) {
 			changefeedDisplayName.Name))
 		return
 	}
-	// get changefeefID first
+	// get changefeedID first
 	coordinator, err := h.server.GetCoordinator()
 	if err != nil {
 		_ = c.Error(err)
@@ -644,20 +693,77 @@ func (h *OpenAPIV2) moveTable(c *gin.Context) {
 	changefeedID := cfInfo.ChangefeedID
 
 	maintainerManager := h.server.GetMaintainerManager()
-	maintainer := maintainerManager.GetMaintainerForChangefeed(changefeedID)
+	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
 
-	if maintainer == nil {
+	if !ok {
 		log.Error("maintainer not found for changefeed in this node", zap.String("changefeed", changefeedID.String()))
 		_ = c.Error(apperror.ErrMaintainerNotFounded)
 		return
 	}
 
+	targetNodeID := c.Query("targetNodeID")
 	err = maintainer.MoveTable(int64(tableId), node.ID(targetNodeID))
 	if err != nil {
+		log.Error("failed to move table", zap.Error(err), zap.Int64("tableID", tableId), zap.String("targetNodeID", targetNodeID))
 		_ = c.Error(err)
 		return
 	}
 	c.JSON(http.StatusOK, &EmptyResponse{})
+}
+
+// listTables lists all tables in a changefeed
+// Usage:
+// curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/tables
+// Note: This api is for inner test use, not public use. It may be removed in the future.
+func (h *OpenAPIV2) listTables(c *gin.Context) {
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), getNamespaceValueWithDefault(c))
+	if err := model.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
+			changefeedDisplayName.Name))
+		return
+	}
+
+	coordinator, err := h.server.GetCoordinator()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	cfInfo, _, err := coordinator.GetChangefeed(c, changefeedDisplayName)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	changefeedID := cfInfo.ChangefeedID
+
+	maintainerManager := h.server.GetMaintainerManager()
+	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
+	if !ok {
+		log.Error("maintainer not found for changefeed in this node", zap.String("changefeed", changefeedID.String()))
+		_ = c.Error(apperror.ErrMaintainerNotFounded)
+		return
+	}
+
+	tables := maintainer.GetTables()
+
+	nodeTableInfoMap := make(map[string]*NodeTableInfo)
+
+	for _, table := range tables {
+		nodeID := table.GetNodeID().String()
+		nodeTableInfo, ok := nodeTableInfoMap[nodeID]
+		if !ok {
+			nodeTableInfo = newNodeTableInfo(nodeID)
+			nodeTableInfoMap[nodeID] = nodeTableInfo
+		}
+		nodeTableInfo.addTableID(table.Span.TableID)
+	}
+
+	infos := make([]*NodeTableInfo, 0, len(nodeTableInfoMap))
+	for _, nodeTableInfo := range nodeTableInfoMap {
+		infos = append(infos, nodeTableInfo)
+	}
+	c.JSON(http.StatusOK, infos)
 }
 
 // getDispatcherCount returns the count of dispatcher.
@@ -683,9 +789,9 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 	changefeedID := cfInfo.ChangefeedID
 
 	maintainerManager := h.server.GetMaintainerManager()
-	maintainer := maintainerManager.GetMaintainerForChangefeed(changefeedID)
+	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
 
-	if maintainer == nil {
+	if !ok {
 		log.Error("maintainer not found for changefeed in this node", zap.String("changefeed", changefeedID.String()))
 		_ = c.Error(apperror.ErrMaintainerNotFounded)
 		return

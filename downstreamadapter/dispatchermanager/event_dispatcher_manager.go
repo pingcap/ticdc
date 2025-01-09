@@ -210,15 +210,20 @@ func (e *EventDispatcherManager) startSink(ctx context.Context) error {
 }
 
 func (e *EventDispatcherManager) TryClose(removeChangefeed bool) bool {
-	if !e.closing.Load() {
-		e.closing.Store(true)
-		go e.close(removeChangefeed)
+	if e.closed.Load() {
+		return true
 	}
-	return e.closed.Load()
+	if e.closing.Load() {
+		return e.closed.Load()
+	}
+	e.closing.Store(true)
+	go e.close(removeChangefeed)
+	return false
 }
 
 func (e *EventDispatcherManager) close(removeChangefeed bool) {
 	log.Info("closing event dispatcher manager", zap.Stringer("changefeedID", e.changefeedID))
+	defer e.closing.Store(false)
 
 	toCloseDispatchers := make([]*dispatcher.Dispatcher, 0)
 	e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
