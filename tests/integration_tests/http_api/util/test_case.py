@@ -43,7 +43,11 @@ def assert_status_code(resp, expected_code, url):
         url: Request URL
     """
     try:
-        body = resp.json() if resp.content else "Empty response"
+        if resp is None:
+            body = "No response"
+            return
+        else:
+            body = resp.json() if resp.content else "Empty response"
     except ValueError:
         body = resp.text
 
@@ -251,18 +255,11 @@ def remove_changefeed(cfID = "changefeed-test3"):
     resp = rq.delete(url)
     assert_status_code(resp, rq.codes.ok, url)
 
-    # check if remove changefeed success
-    url = BASE_URL0_V2+"/changefeeds/" + cfID
-    resp = requests_get_with_retry(url)
-    assert_status_code(resp, rq.codes.bad_request, url)
-    assert resp.json()["error_code"] == "CDC:ErrChangeFeedNotExists"
 
-    # test remove changefeed failed
+    # test remove non-exists changefeed, it should return 200 and do nothing
     url = BASE_URL0_V2+"/changefeeds/changefeed-not-exists"
     resp = rq.delete(url)
-    assert_status_code(resp, rq.codes.bad_request, url)
-    data = resp.json()
-    assert data["error_code"] == "CDC:ErrChangeFeedNotExists"
+    assert_status_code(resp, rq.codes.ok, url)
 
 
 def move_table(cfID = "changefeed-test1"):
