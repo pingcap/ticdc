@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
+	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/model"
@@ -111,6 +112,18 @@ func New(node *node.Info,
 	}
 	// receive messages
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+
+	nodeManager.RegisterOwnerChangeHandler(string(c.nodeInfo.ID), func(newCoordinatorID string) {
+		if newCoordinatorID != string(c.nodeInfo.ID) {
+			log.Info("Coordinator changed, and I am not the coordinator, stop myself",
+				zap.String("selfID", string(c.nodeInfo.ID)),
+				zap.String("newCoordinatorID", newCoordinatorID))
+			c.AsyncStop()
+		}
+	})
+
 	return c
 }
 
@@ -222,6 +235,9 @@ func (c *coordinator) saveCheckpointTs(ctx context.Context, cfs map[common.Chang
 		}
 	}
 	return nil
+}
+
+func (c *coordinator) handleNodeChange(nodes map[node.ID]*node.Info) {
 }
 
 func (c *coordinator) CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error {

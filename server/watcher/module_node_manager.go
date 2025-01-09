@@ -26,22 +26,30 @@ import (
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/orchestrator"
 	"go.etcd.io/etcd/client/v3/concurrency"
+	"go.uber.org/zap"
 )
 
 const NodeManagerName = "node-manager"
 
 type NodeChangeHandler func(map[node.ID]*node.Info)
+type OwnerChangeHandler func(newOwnerKeys string)
 
 // NodeManager manager the read view of all captures, other modules can get the captures information from it
 // and register server update event handler
 type NodeManager struct {
 	session    *concurrency.Session
 	etcdClient etcd.CDCEtcdClient
+	owner      atomic.Value
 	nodes      atomic.Pointer[map[node.ID]*node.Info]
 
 	nodeChangeHandlers struct {
 		sync.RWMutex
 		m map[node.ID]NodeChangeHandler
+	}
+
+	ownerChangeHandlers struct {
+		sync.RWMutex
+		m map[string]OwnerChangeHandler
 	}
 }
 
@@ -56,8 +64,13 @@ func NewNodeManager(
 			sync.RWMutex
 			m map[node.ID]NodeChangeHandler
 		}{m: make(map[node.ID]NodeChangeHandler)},
+		ownerChangeHandlers: struct {
+			sync.RWMutex
+			m map[string]OwnerChangeHandler
+		}{m: make(map[string]OwnerChangeHandler)},
 	}
 	m.nodes.Store(&map[node.ID]*node.Info{})
+	m.owner.Store("")
 	return m
 }
 
@@ -74,8 +87,21 @@ func (c *NodeManager) Tick(
 	// find changes
 	changed := false
 	allNodes := make(map[node.ID]*node.Info, len(state.Captures))
-
 	oldMap := *c.nodes.Load()
+
+	ownerChanged := false
+	oldOwnerKeys := c.owner.Load().(string)
+	newOwnerKeys, err := c.etcdClient.GetOwnerID(context.Background())
+	if err != nil {
+		log.Error("fizz get owner id failed", zap.Error(err))
+	}
+
+	if newOwnerKeys != oldOwnerKeys {
+		log.Info("fizz owner leaseID changed", zap.String("old", oldOwnerKeys), zap.String("new", newOwnerKeys))
+		ownerChanged = true
+		c.owner.Store(newOwnerKeys)
+	}
+
 	for _, info := range oldMap {
 		if _, exist := state.Captures[model.CaptureID(info.ID)]; !exist {
 			changed = true
@@ -89,6 +115,7 @@ func (c *NodeManager) Tick(
 		allNodes[node.ID(capture.ID)] = node.CaptureInfoToNodeInfo(capture)
 	}
 	c.nodes.Store(&allNodes)
+
 	if changed {
 		log.Info("server change detected")
 		// handle info change event
@@ -98,6 +125,17 @@ func (c *NodeManager) Tick(
 			handler(allNodes)
 		}
 	}
+
+	if ownerChanged {
+		log.Info("owner change detected")
+		// handle owner change event
+		c.ownerChangeHandlers.RLock()
+		defer c.ownerChangeHandlers.RUnlock()
+		for _, handler := range c.ownerChangeHandlers.m {
+			handler(newOwnerKeys)
+		}
+	}
+
 	return state, nil
 }
 
@@ -123,6 +161,12 @@ func (c *NodeManager) RegisterNodeChangeHandler(name node.ID, handler NodeChange
 	c.nodeChangeHandlers.Lock()
 	defer c.nodeChangeHandlers.Unlock()
 	c.nodeChangeHandlers.m[name] = handler
+}
+
+func (c *NodeManager) RegisterOwnerChangeHandler(leaseID string, handler OwnerChangeHandler) {
+	c.ownerChangeHandlers.Lock()
+	defer c.ownerChangeHandlers.Unlock()
+	c.ownerChangeHandlers.m[leaseID] = handler
 }
 
 func (c *NodeManager) Close(_ context.Context) error {

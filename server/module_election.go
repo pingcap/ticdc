@@ -130,8 +130,13 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		e.svr.setCoordinator(co)
 		err = co.Run(ctx)
 
+		log.Info("fizz coordinator return error",
+			zap.String("captureID", string(e.svr.info.ID)),
+			zap.Error(err))
 		// When coordinator exits, we need to stop it.
 		e.svr.coordinator.AsyncStop()
+		log.Info("coordinator stop", zap.String("captureID", string(e.svr.info.ID)),
+			zap.Int64("coordinatorVersion", coordinatorVersion))
 		e.svr.setCoordinator(nil)
 
 		if !cerror.ErrNotOwner.Equal(err) {
