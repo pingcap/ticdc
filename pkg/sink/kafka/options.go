@@ -565,7 +565,7 @@ func NewKafkaClientID(captureAddr string,
 	return
 }
 
-// AdjustOptions adjust the `Options` and `sarama.Config` by condition.
+// AdjustOptions adjust the `Options` and `Config` by condition.
 func AdjustOptions(
 	ctx context.Context,
 	admin ClusterAdminClient,

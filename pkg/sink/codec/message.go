@@ -23,11 +23,9 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 )
 
-// MaxRecordOverhead is used to calculate message size by sarama kafka client.
-// reference: https://github.com/IBM/sarama/blob/
-// 66521126c71c522c15a36663ae9cddc2b024c799/async_producer.go#L233
+// MaxRecordOverhead is used to calculate message size by.
 // For TiCDC, minimum supported kafka version is `0.11.0.2`,
-// which will be treated as `version = 2` by sarama producer.
+// which will be treated as `version = 2` by producer.
 const MaxRecordOverhead = 5*binary.MaxVarintLen32 + binary.MaxVarintLen64 + 1
 
 // Message represents an message to the sink
