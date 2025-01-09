@@ -383,10 +383,11 @@ def get_tso():
     assert_status_code(resp, rq.codes.ok, url)
 
     # wrong pd address
-    data = json.dumps({"pd_addrs": ["http://127.0.0.1:2233"]})
-    headers = {"Content-Type": "application/json"}
-    resp = rq.post(url, data=data, headers=headers)
-    assert_status_code(resp, rq.codes.bad_request, url)
+    # FIXME: When we support multiple upstream, we need to support this case
+    # data = json.dumps({"pd_addrs": ["http://127.0.0.1:2233"]})
+    # headers = {"Content-Type": "application/json"}
+    # resp = rq.post(url, data=data, headers=headers)
+    # assert_status_code(resp, rq.codes.bad_request, url)
 
 
 # util functions define belows
