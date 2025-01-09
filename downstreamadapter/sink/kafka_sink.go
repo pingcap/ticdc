@@ -79,11 +79,11 @@ func NewKafkaSink(
 	}()
 
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	dmlAsyncProducer, err := kafkaComponent.Factory.AsyncProducer(ctx)
+	asyncProducer, err := kafkaComponent.Factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
 	}
-	dmlProducer := producer.NewKafkaDMLProducer(changefeedID, dmlAsyncProducer)
+	dmlProducer := producer.NewKafkaDMLProducer(changefeedID, asyncProducer)
 	dmlWorker := worker.NewKafkaDMLWorker(
 		changefeedID,
 		protocol,
@@ -94,11 +94,11 @@ func NewKafkaSink(
 		kafkaComponent.TopicManager,
 		statistics)
 
-	ddlSyncProducer, err := kafkaComponent.Factory.SyncProducer()
+	syncProducer, err := kafkaComponent.Factory.SyncProducer()
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	ddlProducer := producer.NewKafkaDDLProducer(ctx, changefeedID, ddlSyncProducer)
+	ddlProducer := producer.NewKafkaDDLProducer(ctx, changefeedID, syncProducer)
 	ddlWorker := worker.NewKafkaDDLWorker(
 		changefeedID,
 		protocol,
