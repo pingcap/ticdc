@@ -218,8 +218,6 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 	if err != nil {
 		return nil, nil, nil, errors.Trace(err)
 	}
-
-	errGroup, ctx := errgroup.WithContext(ctx)
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
 	kafkaComponent, protocol, err := worker.GetKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
@@ -264,7 +262,6 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 		topicManager:     kafkaComponent.TopicManager,
 		statistics:       statistics,
 		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
-		errgroup:         errGroup,
 		errCh:            make(chan error, 1),
 	}
 	go sink.run(ctx)
