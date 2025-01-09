@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Inc.
+// Copyright 2024 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,48 +15,93 @@ package kafka
 
 import (
 	"context"
-	"testing"
+	"fmt"
 
-	"github.com/IBM/sarama"
-	"github.com/IBM/sarama/mocks"
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/errors"
-	ticommon "github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 )
 
+const (
+	// DefaultMockTopicName specifies the default mock topic name.
+	DefaultMockTopicName = "mock_topic"
+	// DefaultMockPartitionNum is the default partition number of default mock topic.
+	DefaultMockPartitionNum = 3
+	// defaultMockControllerID specifies the default mock controller ID.
+	defaultMockControllerID = 1
+	// topic replication factor must be 3 for Confluent Cloud Kafka.
+	defaultReplicationFactor = 3
+)
+
+const (
+	// defaultMaxMessageBytes specifies the default max message bytes,
+	// default to 1048576, identical to kafka broker's `message.max.bytes` and topic's `max.message.bytes`
+	// see: https://kafka.apache.org/documentation/#brokerconfigs_message.max.bytes
+	// see: https://kafka.apache.org/documentation/#topicconfigs_max.message.bytes
+	defaultMaxMessageBytes = "1048588"
+
+	// defaultMinInsyncReplicas specifies the default `min.insync.replicas` for broker and topic.
+	defaultMinInsyncReplicas = "1"
+)
+
+var (
+	// BrokerMessageMaxBytes is the broker's `message.max.bytes`
+	BrokerMessageMaxBytes = defaultMaxMessageBytes
+	// TopicMaxMessageBytes is the topic's `max.message.bytes`
+	TopicMaxMessageBytes = defaultMaxMessageBytes
+	// MinInSyncReplicas is the `min.insync.replicas`
+	MinInSyncReplicas = defaultMinInsyncReplicas
+)
+
 // MockFactory is a mock implementation of Factory interface.
 type MockFactory struct {
-	o            *Options
-	changefeedID ticommon.ChangeFeedID
+	config       *kafka.ConfigMap
+	changefeedID commonType.ChangeFeedID
+	mockCluster  *kafka.MockCluster
 }
 
 // NewMockFactory constructs a Factory with mock implementation.
 func NewMockFactory(
-	o *Options, changefeedID ticommon.ChangeFeedID,
+	o *Options, changefeedID commonType.ChangeFeedID,
 ) (Factory, error) {
+	// The broker ids will start at 1 up to and including brokerCount.
+	mockCluster, err := kafka.NewMockCluster(defaultReplicationFactor)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	config := NewConfig(o)
+	config.SetKey("bootstrap.servers", mockCluster.BootstrapServers())
 	return &MockFactory{
-		o:            o,
+		config:       config,
 		changefeedID: changefeedID,
+		mockCluster:  mockCluster,
 	}, nil
 }
 
 // AdminClient return a mocked admin client
 func (f *MockFactory) AdminClient(_ context.Context) (ClusterAdminClient, error) {
-	return NewClusterAdminClientMockImpl(), nil
+	client, err := kafka.NewAdminClient(f.config)
+	if err != nil {
+		return nil, err
+	}
+	// f.mockCluster.CreateTopic()
+	return &MockClusterAdmin{
+		ClusterAdminClient: newClusterAdminClient(client, f.changefeedID, defaultTimeoutMs),
+		topics:             make(map[string]*MockTopicDetail),
+	}, nil
 }
 
 // SyncProducer creates a sync producer
 func (f *MockFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	config, err := NewSaramaConfig(ctx, f.o)
+	syncProducer, err := kafka.NewProducer(f.config)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
-
-	t := ctx.Value("testing.T").(*testing.T)
-	syncProducer := mocks.NewSyncProducer(t, config)
-	return &MockSaramaSyncProducer{
-		Producer: syncProducer,
+	return &MockSyncProducer{
+		Producer:     syncProducer,
+		deliveryChan: make(chan kafka.Event),
 	}, nil
 }
 
@@ -64,125 +109,126 @@ func (f *MockFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 func (f *MockFactory) AsyncProducer(
 	ctx context.Context,
 ) (AsyncProducer, error) {
-	config, err := NewSaramaConfig(ctx, f.o)
+	asyncProducer, err := kafka.NewProducer(f.config)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
-	t := ctx.Value("testing.T").(*testing.T)
-	asyncProducer := mocks.NewAsyncProducer(t, config)
-	return &MockSaramaAsyncProducer{
+	return &MockAsyncProducer{
 		AsyncProducer: asyncProducer,
-		failpointCh:   make(chan error, 1),
 	}, nil
 }
 
 // MetricsCollector returns the metric collector
-func (f *MockFactory) MetricsCollector(_ ClusterAdminClient) MetricsCollector {
+func (f *MockFactory) MetricsCollector() MetricsCollector {
 	return &mockMetricsCollector{}
 }
 
-// MockSaramaSyncProducer is a mock implementation of SyncProducer interface.
-type MockSaramaSyncProducer struct {
-	Producer *mocks.SyncProducer
+type MockClusterAdmin struct {
+	ClusterAdminClient
+	topics map[string]*MockTopicDetail
+}
+type MockTopicDetail struct {
+	TopicDetail
+	fetchesRemainingUntilVisible int
 }
 
-// SendMessage implement the SyncProducer interface.
-func (m *MockSaramaSyncProducer) SendMessage(
-	_ context.Context,
+// SetRemainingFetchesUntilTopicVisible is used to control the visibility of a specific topic.
+// It is used to mock the topic creation delay.
+func (c *MockClusterAdmin) SetRemainingFetchesUntilTopicVisible(
+	topicName string,
+	fetchesRemainingUntilVisible int,
+) error {
+	topic, ok := c.topics[topicName]
+	if !ok {
+		return fmt.Errorf("no such topic as %s", topicName)
+	}
+	topic.fetchesRemainingUntilVisible = fetchesRemainingUntilVisible
+	return nil
+}
+
+// MockSyncProducer is a mock implementation of SyncProducer interface.
+type MockSyncProducer struct {
+	Producer     *kafka.Producer
+	deliveryChan chan kafka.Event
+}
+
+func (s *MockSyncProducer) SendMessage(
+	ctx context.Context,
 	topic string, partitionNum int32,
 	message *common.Message,
 ) error {
-	_, _, err := m.Producer.SendMessage(&sarama.ProducerMessage{
-		Topic:     topic,
-		Key:       sarama.ByteEncoder(message.Key),
-		Value:     sarama.ByteEncoder(message.Value),
-		Partition: partitionNum,
-	})
-	return err
+	msg := &kafka.Message{}
+	s.Producer.Produce(msg, s.deliveryChan)
+	event := <-s.deliveryChan
+	switch e := event.(type) {
+	case *kafka.Error:
+		return e
+	}
+	return nil
 }
 
 // SendMessages implement the SyncProducer interface.
-func (m *MockSaramaSyncProducer) SendMessages(_ context.Context, topic string, partitionNum int32, message *common.Message) error {
-	msgs := make([]*sarama.ProducerMessage, partitionNum)
+func (s *MockSyncProducer) SendMessages(ctx context.Context, topic string, partitionNum int32, message *common.Message) error {
+	var err error
 	for i := 0; i < int(partitionNum); i++ {
-		msgs[i] = &sarama.ProducerMessage{
-			Topic:     topic,
-			Key:       sarama.ByteEncoder(message.Key),
-			Value:     sarama.ByteEncoder(message.Value),
-			Partition: int32(i),
+		e := s.SendMessage(ctx, topic, int32(i), message)
+		if e != nil {
+			err = e
 		}
 	}
-	return m.Producer.SendMessages(msgs)
+	return err
 }
 
 // Close implement the SyncProducer interface.
-func (m *MockSaramaSyncProducer) Close() {
-	m.Producer.Close()
+func (s *MockSyncProducer) Close() {
+	s.Producer.Close()
+	close(s.deliveryChan)
 }
 
-// MockSaramaAsyncProducer is a mock implementation of AsyncProducer interface.
-type MockSaramaAsyncProducer struct {
-	AsyncProducer *mocks.AsyncProducer
-	failpointCh   chan error
+// MockAsyncProducer is a mock implementation of AsyncProducer interface.
+type MockAsyncProducer struct {
+	AsyncProducer *kafka.Producer
+	closed        bool
+}
 
-	closed bool
+// Close implement the AsyncProducer interface.
+func (a *MockAsyncProducer) Close() {
+	if a.closed {
+		return
+	}
+	a.AsyncProducer.Close()
+	a.closed = true
 }
 
 // AsyncRunCallback implement the AsyncProducer interface.
-func (p *MockSaramaAsyncProducer) AsyncRunCallback(
-	ctx context.Context,
-) error {
+func (a *MockAsyncProducer) AsyncRunCallback(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case err := <-p.failpointCh:
-			return errors.Trace(err)
-		case ack := <-p.AsyncProducer.Successes():
-			if ack != nil {
-				callback := ack.Metadata.(func())
-				if callback != nil {
-					callback()
-				}
+		case event := <-a.AsyncProducer.Events():
+			switch e := event.(type) {
+			case *kafka.Message:
+			case *kafka.Error:
+				return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, e)
 			}
-		case err := <-p.AsyncProducer.Errors():
-			// We should not wrap a nil pointer if the pointer
-			// is of a subtype of `error` because Go would store the type info
-			// and the resulted `error` variable would not be nil,
-			// which will cause the pkg/error library to malfunction.
-			// See: https://go.dev/doc/faq#nil_error
-			if err == nil {
-				return nil
-			}
-			return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, err)
 		}
 	}
 }
 
 // AsyncSend implement the AsyncProducer interface.
-func (p *MockSaramaAsyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error {
-	msg := &sarama.ProducerMessage{
-		Topic:     topic,
-		Partition: partition,
-		Key:       sarama.StringEncoder(message.Key),
-		Value:     sarama.ByteEncoder(message.Value),
-		Metadata:  message.Callback,
-	}
+func (a *MockAsyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error {
 	select {
 	case <-ctx.Done():
 		return errors.Trace(ctx.Err())
-	case p.AsyncProducer.Input() <- msg:
+	default:
 	}
-	return nil
-}
-
-// Close implement the AsyncProducer interface.
-func (p *MockSaramaAsyncProducer) Close() {
-	if p.closed {
-		return
-	}
-	_ = p.AsyncProducer.Close()
-	p.closed = true
+	return a.AsyncProducer.Produce(&kafka.Message{
+		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: partition},
+		Key:            message.Key,
+		Value:          message.Value,
+		Opaque:         message.Callback,
+	}, nil)
 }
 
 type mockMetricsCollector struct{}

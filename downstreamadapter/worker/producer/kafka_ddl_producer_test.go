@@ -18,8 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
+	confluentKafka "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/ticdc/pkg/common"
+
 	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
@@ -42,9 +43,6 @@ func TestDDLSyncBroadcastMessage(t *testing.T) {
 
 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
 
-	for i := 0; i < tikafka.DefaultMockPartitionNum; i++ {
-		syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndSucceed()
-	}
 	err = p.SyncBroadcastMessage(ctx, tikafka.DefaultMockTopicName,
 		tikafka.DefaultMockPartitionNum, &ticommon.Message{})
 	require.NoError(t, err)
@@ -70,7 +68,6 @@ func TestDDLSyncSendMessage(t *testing.T) {
 
 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
 
-	syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndSucceed()
 	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{})
 	require.NoError(t, err)
 
@@ -100,9 +97,9 @@ func TestDDLProducerSendMsgFailed(t *testing.T) {
 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
 	defer p.Close()
 
-	syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndFail(sarama.ErrMessageTooLarge)
 	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{})
-	require.ErrorIs(t, err, sarama.ErrMessageTooLarge)
+	err.(confluentKafka.Error).Code()
+	require.ErrorIs(t, err, confluentKafka.NewError(confluentKafka.ErrMsgSizeTooLarge, "", true))
 }
 
 func TestDDLProducerDoubleClose(t *testing.T) {

@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2024 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,225 +15,137 @@ package kafka
 
 import (
 	"context"
-	"strconv"
+	"encoding/json"
 	"time"
 
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/rcrowley/go-metrics"
 	"go.uber.org/zap"
 )
-
-// MetricsCollector is the interface for kafka metrics collector.
-type MetricsCollector interface {
-	Run(ctx context.Context)
-}
 
 const (
 	// RefreshMetricsInterval specifies the interval of refresh kafka client metrics.
 	RefreshMetricsInterval = 5 * time.Second
-	// refreshClusterMetaInterval specifies the interval of refresh kafka cluster meta.
-	// Do not set it too small, because it will cause too many requests to kafka cluster.
-	// Every request will get all topics and all brokers information.
-	refreshClusterMetaInterval = 30 * time.Minute
 )
 
-// Sarama metrics names, see https://pkg.go.dev/github.com/IBM/sarama#pkg-overview.
-const (
-	// Producer level.
-	compressionRatioMetricName  = "compression-ratio"
-	recordsPerRequestMetricName = "records-per-request"
+// The stats are provided as a JSON object string, see https://github.com/confluentinc/librdkafka/blob/master/STATISTICS.md
+type kafkaMetrics struct {
+	// Instance type (producer or consumer)
+	Role string `json:"type"`
+	// Wall clock time in seconds since the epoch
+	Time int `json:"time"`
+	// Number of ops (callbacks, events, etc) waiting in queue for application to serve with rd_kafka_poll()
+	Ops int `json:"replyq"`
+	// Current number of messages in producer queues
+	MsgCount int `json:"msg_cnt"`
+	// Current total size of messages in producer queues
+	MsgSize int `json:"msg_size"`
 
-	// Broker level.
-	outgoingByteRateMetricNamePrefix   = "outgoing-byte-rate-for-broker-"
-	requestRateMetricNamePrefix        = "request-rate-for-broker-"
-	requestLatencyInMsMetricNamePrefix = "request-latency-in-ms-for-broker-"
-	requestsInFlightMetricNamePrefix   = "requests-in-flight-for-broker-"
-	responseRateMetricNamePrefix       = "response-rate-for-broker-"
+	// Total number of requests sent to Kafka brokers
+	Tx int `json:"tx"`
+	// Total number of bytes transmitted to Kafka brokers
+	TxBytes int `json:"tx_bytes"`
+	// Total number of responses received from Kafka brokers
+	Rx int `json:"rx"`
+	// Total number of bytes received from Kafka brokers
+	RxBytes int `json:"rx_bytes"`
+	// Number of topics in the metadata cache.
+	MetadataCacheCnt int `json:"metadata_cache_cnt"`
 
-	p99 = "p99"
-	avg = "avg"
-)
+	Brokers []broker `json:"brokers"`
+}
 
-type saramaMetricsCollector struct {
+type broker struct {
+	Name     string `json:"name"`
+	Nodeid   int    `json:"nodeid"`
+	Nodename string `json:"nodename"`
+	State    string `json:"state"`
+	Rtt      window `json:"rtt"`
+}
+
+type window struct {
+	Min int `json:"min"`
+	Max int `json:"max"`
+	Avg int `json:"avg"`
+	P99 int `json:"p99"`
+}
+
+type metricsCollector struct {
 	changefeedID common.ChangeFeedID
-	// adminClient is used to get broker infos from broker.
-	adminClient ClusterAdminClient
-	brokers     map[int32]struct{}
-	registry    metrics.Registry
+	config       *kafka.ConfigMap
 }
 
-// NewSaramaMetricsCollector return a kafka metrics collector based on sarama library.
-func NewSaramaMetricsCollector(
+// NewMetricsCollector return a kafka metrics collector based on  library.
+func NewMetricsCollector(
 	changefeedID common.ChangeFeedID,
-	adminClient ClusterAdminClient,
-	registry metrics.Registry,
+	config *kafka.ConfigMap,
 ) MetricsCollector {
-	return &saramaMetricsCollector{
-		changefeedID: changefeedID,
-		adminClient:  adminClient,
-		brokers:      make(map[int32]struct{}),
-		registry:     registry,
-	}
+	return &metricsCollector{changefeedID: changefeedID, config: config}
 }
 
-func (m *saramaMetricsCollector) Run(ctx context.Context) {
-	// Initialize brokers.
-	m.updateBrokers(ctx)
-
-	refreshMetricsTicker := time.NewTicker(RefreshMetricsInterval)
-	refreshClusterMetaTicker := time.NewTicker(refreshClusterMetaInterval)
-	defer func() {
-		refreshMetricsTicker.Stop()
-		refreshClusterMetaTicker.Stop()
-		m.cleanupMetrics()
-	}()
-
+func (m *metricsCollector) Run(ctx context.Context) {
+	_ = m.config.SetKey("statistics.interval.ms", RefreshMetricsInterval.Milliseconds())
+	_ = m.config.SetKey("stats_cb", m.collect)
+	client, err := kafka.NewAdminClient(m.config)
+	if err != nil {
+		log.Error("create client failed", zap.Error(err))
+		return
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info("Kafka metrics collector stopped",
-				zap.String("namespace", m.changefeedID.Namespace()),
-				zap.String("changefeed", m.changefeedID.Name()))
+				zap.String("namespace", m.changefeedID.String()))
+			client.Close()
+			m.cleanupMetrics()
 			return
-		case <-refreshMetricsTicker.C:
-			m.collectBrokerMetrics()
-			m.collectProducerMetrics()
-		case <-refreshClusterMetaTicker.C:
-			m.updateBrokers(ctx)
 		}
 	}
 }
-
-func (m *saramaMetricsCollector) updateBrokers(ctx context.Context) {
-	start := time.Now()
-	brokers, err := m.adminClient.GetAllBrokers(ctx)
-	if err != nil {
-		log.Warn("Get Kafka brokers failed, "+
-			"use historical brokers to collect kafka broker level metrics",
-			zap.String("namespace", m.changefeedID.Namespace()),
-			zap.String("changefeed", m.changefeedID.Name()),
-			zap.Duration("duration", time.Since(start)),
-			zap.Error(err))
-		return
+func (m *metricsCollector) collect(data string) {
+	var statistics kafkaMetrics
+	if err := json.Unmarshal([]byte(data), &statistics); err != nil {
+		log.Error("kafka metrics collect failed", zap.Error(err))
 	}
+	// metrics is collected each 5 seconds, divide by 5 to get per seconds average.
+	// compressionRatioGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
+	// 	Set(float64(statistics.Writes / 5))
+	recordsPerRequestGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
+		Set(float64(statistics.Tx) / 5)
+	requestsInFlightGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
+		Set(float64(statistics.MsgCount) / 5)
+	responseRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
+		Set(float64(statistics.Rx) / 5)
+	// RequestRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
+	// 	Set(float64(statistics.Writes / 5))
 
-	for _, b := range brokers {
-		m.brokers[b.ID] = struct{}{}
+	latency := 0
+	for _, broker := range statistics.Brokers {
+		latency += broker.Rtt.Avg
 	}
+	latency = latency / len(statistics.Brokers)
+	// latency is in milliseconds
+	RequestLatencyGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
+		Set(float64(latency) * 1000 / 5)
+	// OutgoingByteRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
+	// 	Set(float64(statistics.Bytes / 5))
 }
 
-func (m *saramaMetricsCollector) collectProducerMetrics() {
-	namespace := m.changefeedID.Namespace()
-	changefeedID := m.changefeedID.Name()
-	compressionRatioMetric := m.registry.Get(compressionRatioMetricName)
-	if histogram, ok := compressionRatioMetric.(metrics.Histogram); ok {
-		compressionRatioGauge.
-			WithLabelValues(namespace, changefeedID, avg).
-			Set(histogram.Snapshot().Mean())
-		compressionRatioGauge.WithLabelValues(namespace, changefeedID, p99).
-			Set(histogram.Snapshot().Percentile(0.99))
-	}
-
-	recordsPerRequestMetric := m.registry.Get(recordsPerRequestMetricName)
-	if histogram, ok := recordsPerRequestMetric.(metrics.Histogram); ok {
-		recordsPerRequestGauge.
-			WithLabelValues(namespace, changefeedID, avg).
-			Set(histogram.Snapshot().Mean())
-		recordsPerRequestGauge.
-			WithLabelValues(namespace, changefeedID, p99).
-			Set(histogram.Snapshot().Percentile(0.99))
-	}
-}
-
-func (m *saramaMetricsCollector) collectBrokerMetrics() {
-	namespace := m.changefeedID.Namespace()
-	changefeedID := m.changefeedID.Name()
-	for id := range m.brokers {
-		brokerID := strconv.Itoa(int(id))
-		outgoingByteRateMetric := m.registry.Get(
-			getBrokerMetricName(outgoingByteRateMetricNamePrefix, brokerID))
-		if meter, ok := outgoingByteRateMetric.(metrics.Meter); ok {
-			OutgoingByteRateGauge.
-				WithLabelValues(namespace, changefeedID, brokerID).
-				Set(meter.Snapshot().Rate1())
-		}
-
-		requestRateMetric := m.registry.Get(
-			getBrokerMetricName(requestRateMetricNamePrefix, brokerID))
-		if meter, ok := requestRateMetric.(metrics.Meter); ok {
-			RequestRateGauge.
-				WithLabelValues(namespace, changefeedID, brokerID).
-				Set(meter.Snapshot().Rate1())
-		}
-
-		requestLatencyMetric := m.registry.Get(
-			getBrokerMetricName(requestLatencyInMsMetricNamePrefix, brokerID))
-		if histogram, ok := requestLatencyMetric.(metrics.Histogram); ok {
-			RequestLatencyGauge.
-				WithLabelValues(namespace, changefeedID, brokerID, avg).
-				Set(histogram.Snapshot().Mean() / 1000)
-			RequestLatencyGauge.
-				WithLabelValues(namespace, changefeedID, brokerID, p99).
-				Set(histogram.Snapshot().Percentile(0.99) / 1000)
-		}
-
-		requestsInFlightMetric := m.registry.Get(getBrokerMetricName(
-			requestsInFlightMetricNamePrefix, brokerID))
-		if counter, ok := requestsInFlightMetric.(metrics.Counter); ok {
-			requestsInFlightGauge.
-				WithLabelValues(namespace, changefeedID, brokerID).
-				Set(float64(counter.Snapshot().Count()))
-		}
-
-		responseRateMetric := m.registry.Get(getBrokerMetricName(
-			responseRateMetricNamePrefix, brokerID))
-		if meter, ok := responseRateMetric.(metrics.Meter); ok {
-			responseRateGauge.
-				WithLabelValues(namespace, changefeedID, brokerID).
-				Set(meter.Snapshot().Rate1())
-		}
-	}
-}
-
-func getBrokerMetricName(prefix, brokerID string) string {
-	return prefix + brokerID
-}
-
-func (m *saramaMetricsCollector) cleanupProducerMetrics() {
-	compressionRatioGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), avg)
-	compressionRatioGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), p99)
-
+func (m *metricsCollector) cleanupMetrics() {
+	// compressionRatioGauge.
+	// 	DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String())
 	recordsPerRequestGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), avg)
-	recordsPerRequestGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), p99)
-}
+		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String())
+	requestsInFlightGauge.
+		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String())
+	responseRateGauge.
+		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String())
+	// RequestRateGauge.
+	// 	DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String())
 
-func (m *saramaMetricsCollector) cleanupBrokerMetrics() {
-	namespace := m.changefeedID.Namespace()
-	changefeedID := m.changefeedID.Name()
-	for id := range m.brokers {
-		brokerID := strconv.Itoa(int(id))
-		OutgoingByteRateGauge.
-			DeleteLabelValues(namespace, changefeedID, brokerID)
-		RequestRateGauge.
-			DeleteLabelValues(namespace, changefeedID, brokerID)
-		RequestLatencyGauge.
-			DeleteLabelValues(namespace, changefeedID, brokerID, avg)
-		RequestLatencyGauge.
-			DeleteLabelValues(namespace, changefeedID, brokerID, p99)
-		requestsInFlightGauge.
-			DeleteLabelValues(namespace, changefeedID, brokerID)
-		responseRateGauge.
-			DeleteLabelValues(namespace, changefeedID, brokerID)
-
-	}
-}
-
-func (m *saramaMetricsCollector) cleanupMetrics() {
-	m.cleanupProducerMetrics()
-	m.cleanupBrokerMetrics()
+	RequestLatencyGauge.
+		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
+	OutgoingByteRateGauge.
+		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String())
 }

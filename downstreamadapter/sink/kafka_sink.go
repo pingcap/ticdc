@@ -112,7 +112,7 @@ func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI
 		adminClient:      kafkaComponent.AdminClient,
 		topicManager:     kafkaComponent.TopicManager,
 		statistics:       statistics,
-		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
+		metricsCollector: kafkaComponent.Factory.MetricsCollector(),
 		errgroup:         errGroup,
 		errCh:            errCh,
 	}
@@ -266,7 +266,7 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 		adminClient:      kafkaComponent.AdminClient,
 		topicManager:     kafkaComponent.TopicManager,
 		statistics:       statistics,
-		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
+		metricsCollector: kafkaComponent.Factory.MetricsCollector(),
 		errgroup:         errGroup,
 		errCh:            make(chan error, 1),
 	}

@@ -29,19 +29,12 @@ GITHASH := $(shell git rev-parse HEAD)
 GITBRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 GOVERSION := $(shell go version)
 
-# Since TiDB add a new dependency on github.com/cloudfoundry/gosigar,
-# We need to add CGO_ENABLED=1 to make it work when build TiCDC in Darwin OS.
-# These logic is to check if the OS is Darwin, if so, add CGO_ENABLED=1.
-# ref: https://github.com/cloudfoundry/gosigar/issues/58#issuecomment-1150925711
-# ref: https://github.com/pingcap/tidb/pull/39526#issuecomment-1407952955
 OS := "$(shell go env GOOS)"
 SED_IN_PLACE ?= $(shell which sed)
 IS_ALPINE := $(shell grep -qi Alpine /etc/os-release && echo 1)
 ifeq (${OS}, "linux")
-	CGO := 0
 	SED_IN_PLACE += -i
 else ifeq (${OS}, "darwin")
-	CGO := 1
 	SED_IN_PLACE += -i ''
 endif
 
@@ -52,7 +45,6 @@ GOEXPERIMENT=
 ifeq ("${ENABLE_FIPS}", "1")
 	BUILD_FLAG = -tags boringcrypto
 	GOEXPERIMENT = GOEXPERIMENT=boringcrypto
-	CGO = 1
 endif
 
 RELEASE_VERSION =
@@ -89,7 +81,7 @@ CONSUMER_BUILD_FLAG=
 ifeq ("${IS_ALPINE}", "1")
 	CONSUMER_BUILD_FLAG = -tags musl
 endif
-GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=$(CGO) $(GO) build $(BUILD_FLAG) -trimpath $(GOVENDORFLAG)
+GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=1 $(GO) build $(BUILD_FLAG) -trimpath $(GOVENDORFLAG)
 
 PACKAGE_LIST := go list ./... | grep -vE 'vendor|proto|ticdc/tests|integration|testing_utils|pb|pbmock|ticdc/bin'
 PACKAGES := $$($(PACKAGE_LIST))

@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
+	confluentKafka "github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/ticdc/pkg/common"
 	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
@@ -47,9 +47,10 @@ func TestProducerAck(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	ctx, cancel := context.WithCancel(context.Background())
-	config, err := kafka.NewSaramaConfig(ctx, options)
-	require.Nil(t, err)
-	require.Equal(t, 1, config.Producer.Flush.MaxMessages)
+	config := kafka.NewConfig(options)
+	value, err := config.Get("", 1)
+	require.NoError(t, err)
+	require.Equal(t, 1, value)
 
 	ctx = context.WithValue(ctx, "testing.T", t)
 	changefeed := common.NewChangefeedID4Test("test", "test")
@@ -63,11 +64,6 @@ func TestProducerAck(t *testing.T) {
 	require.NotNil(t, producer)
 
 	go producer.Run(ctx)
-
-	messageCount := 20
-	for i := 0; i < messageCount; i++ {
-		asyncProducer.(*kafka.MockSaramaAsyncProducer).AsyncProducer.ExpectInputAndSucceed()
-	}
 
 	count := atomic.NewInt64(0)
 	for i := 0; i < 10; i++ {
@@ -115,8 +111,6 @@ func TestProducerSendMsgFailed(t *testing.T) {
 	errCh := make(chan error, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
-	_, err := kafka.NewSaramaConfig(ctx, options)
-	require.Nil(t, err)
 	options.MaxMessages = 1
 	options.MaxMessageBytes = 1
 
@@ -148,7 +142,6 @@ func TestProducerSendMsgFailed(t *testing.T) {
 	go func(t *testing.T) {
 		defer wg.Done()
 
-		asyncProducer.(*kafka.MockSaramaAsyncProducer).AsyncProducer.ExpectInputAndFail(sarama.ErrMessageTooLarge)
 		err = producer.AsyncSendMessage(ctx, tikafka.DefaultMockTopicName, int32(0), &ticommon.Message{
 			Key:   []byte("test-key-1"),
 			Value: []byte("test-value"),
@@ -168,7 +161,8 @@ func TestProducerSendMsgFailed(t *testing.T) {
 		case <-ctx.Done():
 			t.Errorf("TestProducerSendMessageFailed timed out")
 		case err := <-errCh:
-			require.ErrorIs(t, err, sarama.ErrMessageTooLarge)
+			require.ErrorIs(t, err, confluentKafka.NewError(confluentKafka.ErrMsgSizeTooLarge, "", true))
+
 		}
 	}()
 
