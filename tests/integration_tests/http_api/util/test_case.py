@@ -277,7 +277,14 @@ def move_table(cfID = "changefeed-test1"):
     resp = rq.get(url)
     assert_status_code(resp, rq.codes.ok, url)
     data = resp.json()
-    table_id = data[0]["table_ids"][0]
+    table_ids = data[0]["table_ids"]
+    table_id = 0
+    for id in table_ids:
+        if id > 0:
+            table_id = id
+            break
+    
+    
     logging.info(f"Find target table_id: {table_id}")
 
     # move table
