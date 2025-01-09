@@ -1328,6 +1328,10 @@ type DebeziumConfig struct {
 	OutputOldValue bool `json:"output_old_value"`
 }
 
+type DispatcherCount struct {
+	Count int `json:"count"`
+}
+
 type NodeTableInfo struct {
 	NodeID   string  `json:"node_id"`
 	TableIDs []int64 `json:"table_ids"`

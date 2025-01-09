@@ -766,6 +766,41 @@ func (h *OpenAPIV2) listTables(c *gin.Context) {
 	c.JSON(http.StatusOK, infos)
 }
 
+// getDispatcherCount returns the count of dispatcher.
+// getDispatcherCount is just for inner test use, not public use.
+func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), getNamespaceValueWithDefault(c))
+	if err := model.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
+			changefeedDisplayName.Name))
+		return
+	}
+	// get changefeefID first
+	coordinator, err := h.server.GetCoordinator()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	cfInfo, _, err := coordinator.GetChangefeed(c, changefeedDisplayName)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	changefeedID := cfInfo.ChangefeedID
+
+	maintainerManager := h.server.GetMaintainerManager()
+	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
+
+	if !ok {
+		log.Error("maintainer not found for changefeed in this node", zap.String("changefeed", changefeedID.String()))
+		_ = c.Error(apperror.ErrMaintainerNotFounded)
+		return
+	}
+
+	number := maintainer.GetDispatcherCount()
+	c.JSON(http.StatusOK, &DispatcherCount{Count: number})
+}
+
 func getNamespaceValueWithDefault(c *gin.Context) string {
 	namespace := c.Query(api.APIOpVarNamespace)
 	if namespace == "" {

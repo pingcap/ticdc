@@ -80,9 +80,9 @@ LDFLAGS += -X "$(CDC_PKG)/version.GoVersion=$(GOVERSION)"
 LDFLAGS += -X "github.com/pingcap/tidb/pkg/parser/mysql.TiDBReleaseVersion=$(RELEASE_VERSION)"
 
 # For Tiflow CDC
-LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.ReleaseVersion=v8.4.0-alpha-44-gdd2d54ad4"
-LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitHash=dd2d54ad4c196606d038da6686462cbfe1109894"
-LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitBranch=master"
+LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.ReleaseVersion=$(RELEASE_VERSION)"
+LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitHash=$(GITHASH)"
+LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitBranch=$(GITBRANCH)"
 LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.BuildTS=$(BUILDTS)"
 
 CONSUMER_BUILD_FLAG=
