@@ -693,9 +693,9 @@ func (h *OpenAPIV2) moveTable(c *gin.Context) {
 	changefeedID := cfInfo.ChangefeedID
 
 	maintainerManager := h.server.GetMaintainerManager()
-	maintainer := maintainerManager.GetMaintainerForChangefeed(changefeedID)
+	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
 
-	if maintainer == nil {
+	if !ok {
 		log.Error("maintainer not found for changefeed in this node", zap.String("changefeed", changefeedID.String()))
 		_ = c.Error(apperror.ErrMaintainerNotFounded)
 		return
@@ -738,7 +738,12 @@ func (h *OpenAPIV2) listTables(c *gin.Context) {
 	changefeedID := cfInfo.ChangefeedID
 
 	maintainerManager := h.server.GetMaintainerManager()
-	maintainer := maintainerManager.GetMaintainerForChangefeed(changefeedID)
+	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
+	if !ok {
+		log.Error("maintainer not found for changefeed in this node", zap.String("changefeed", changefeedID.String()))
+		_ = c.Error(apperror.ErrMaintainerNotFounded)
+		return
+	}
 
 	tables := maintainer.GetTables()
 

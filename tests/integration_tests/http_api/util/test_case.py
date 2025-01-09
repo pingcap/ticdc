@@ -262,20 +262,18 @@ def remove_changefeed(cfID = "changefeed-test3"):
 
 def move_table(cfID = "changefeed-test1"):
     # sleep 5 seconds to make sure all tables is scheduled
-    #time.sleep(5)
+    time.sleep(5)
     
     # find the node id
     url = BASE_URL0_V2 + "/captures"
-    resp = rq.get(url)
-    assert_status_code(resp, rq.codes.ok, url)
+    resp = requests_get_with_retry(url)
     data = resp.json()
     capture_id = data["items"][0]["id"]
     logging.info(f"Find target capture_id: {capture_id}")
     
     # find the table id
     url = BASE_URL0_V2 + "/changefeeds/" + cfID + "/tables"
-    resp = rq.get(url)
-    assert_status_code(resp, rq.codes.ok, url)
+    resp = requests_get_with_retry(url)
     data = resp.json()
     table_ids = data[0]["table_ids"]
     table_id = 0
