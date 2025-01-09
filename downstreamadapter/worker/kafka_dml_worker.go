@@ -65,8 +65,6 @@ type KafkaDMLWorker struct {
 
 	// statistics is used to record DML metrics.
 	statistics *metrics.Statistics
-
-	errGroup *errgroup.Group
 }
 
 // NewKafkaDMLWorker creates a dml flush worker for kafka
@@ -79,7 +77,6 @@ func NewKafkaDMLWorker(
 	eventRouter *eventrouter.EventRouter,
 	topicManager topicmanager.TopicManager,
 	statistics *metrics.Statistics,
-	errGroup *errgroup.Group,
 ) *KafkaDMLWorker {
 	return &KafkaDMLWorker{
 		changeFeedID:   id,
@@ -93,33 +90,34 @@ func NewKafkaDMLWorker(
 		topicManager:   topicManager,
 		producer:       producer,
 		statistics:     statistics,
-		errGroup:       errGroup,
 	}
 }
 
-func (w *KafkaDMLWorker) Run(ctx context.Context) {
-	w.errGroup.Go(func() error {
+func (w *KafkaDMLWorker) Run(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
 		return w.producer.Run(ctx)
 	})
 
-	w.errGroup.Go(func() error {
+	g.Go(func() error {
 		return w.calculateKeyPartitions(ctx)
 	})
 
-	w.errGroup.Go(func() error {
+	g.Go(func() error {
 		return w.encoderGroup.Run(ctx)
 	})
 
-	w.errGroup.Go(func() error {
+	g.Go(func() error {
 		if w.protocol.IsBatchEncode() {
 			return w.batchEncodeRun(ctx)
 		}
 		return w.nonBatchEncodeRun(ctx)
 	})
 
-	w.errGroup.Go(func() error {
+	g.Go(func() error {
 		return w.sendMessages(ctx)
 	})
+	return g.Wait()
 }
 
 func (w *KafkaDMLWorker) calculateKeyPartitions(ctx context.Context) error {
@@ -352,8 +350,7 @@ func (w *KafkaDMLWorker) sendMessages(ctx context.Context) error {
 	}
 }
 
-func (w *KafkaDMLWorker) Close() error {
+func (w *KafkaDMLWorker) Close() {
 	w.ticker.Stop()
 	w.producer.Close()
-	return nil
 }

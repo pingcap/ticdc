@@ -259,11 +259,7 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 		e.heartBeatTask.Cancel()
 	}
 
-	err = e.sink.Close(removeChangefeed)
-	if err != nil && errors.Cause(err) != context.Canceled {
-		log.Error("close sink failed", zap.Error(err))
-		return
-	}
+	e.sink.Close(removeChangefeed)
 
 	e.cancel()
 	e.wg.Wait()

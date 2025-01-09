@@ -55,9 +55,7 @@ func (s *mockSink) AddCheckpointTs(ts uint64) {
 func (s *mockSink) SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore) {
 }
 
-func (s *mockSink) Close(bool) error {
-	return nil
-}
+func (s *mockSink) Close(bool) {}
 
 func (s *mockSink) SinkType() common.SinkType {
 	return s.sinkType

@@ -53,7 +53,7 @@ func kafkaDDLWorkerForTest(t *testing.T) *KafkaDDLWorker {
 	errGroup, ctx := errgroup.WithContext(ctx)
 	ddlMockProducer := producer.NewMockDDLProducer()
 
-	ddlWorker := NewKafkaDDLWorker(ctx, changefeedID, protocol, ddlMockProducer,
+	ddlWorker := NewKafkaDDLWorker(changefeedID, protocol, ddlMockProducer,
 		kafkaComponent.Encoder, kafkaComponent.EventRouter, kafkaComponent.TopicManager,
 		statistics, errGroup)
 	return ddlWorker

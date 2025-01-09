@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 // worker will send messages to the DML producer on a batch basis.
@@ -54,7 +53,6 @@ type KafkaDDLWorker struct {
 
 	statistics    *metrics.Statistics
 	partitionRule DDLDispatchRule
-	errGroup      *errgroup.Group
 }
 
 // DDLDispatchRule is the dispatch rule for DDL event.
@@ -79,7 +77,6 @@ func getDDLDispatchRule(protocol config.Protocol) DDLDispatchRule {
 
 // newWorker creates a new flush worker.
 func NewKafkaDDLWorker(
-	_ context.Context,
 	id commonType.ChangeFeedID,
 	protocol config.Protocol,
 	producer producer.DDLProducer,
@@ -87,7 +84,6 @@ func NewKafkaDDLWorker(
 	eventRouter *eventrouter.EventRouter,
 	topicManager topicmanager.TopicManager,
 	statistics *metrics.Statistics,
-	errGroup *errgroup.Group,
 ) *KafkaDDLWorker {
 	return &KafkaDDLWorker{
 		changeFeedID:     id,
@@ -99,14 +95,11 @@ func NewKafkaDDLWorker(
 		statistics:       statistics,
 		partitionRule:    getDDLDispatchRule(protocol),
 		checkpointTsChan: make(chan uint64, 16),
-		errGroup:         errGroup,
 	}
 }
 
-func (w *KafkaDDLWorker) Run(ctx context.Context) {
-	w.errGroup.Go(func() error {
-		return w.encodeAndSendCheckpointEvents(ctx)
-	})
+func (w *KafkaDDLWorker) Run(ctx context.Context) error {
+	return w.encodeAndSendCheckpointEvents(ctx)
 }
 
 func (w *KafkaDDLWorker) GetCheckpointTsChan() chan<- uint64 {
@@ -235,7 +228,6 @@ func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) erro
 	}
 }
 
-func (w *KafkaDDLWorker) Close() error {
+func (w *KafkaDDLWorker) Close() {
 	w.producer.Close()
-	return nil
 }

@@ -35,7 +35,7 @@ type Sink interface {
 	AddCheckpointTs(ts uint64)
 
 	SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore)
-	Close(removeChangefeed bool) error
+	Close(removeChangefeed bool)
 }
 
 func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID common.ChangeFeedID, errCh chan error) (Sink, error) {
