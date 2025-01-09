@@ -57,7 +57,8 @@ func NewReplicaSet(cfID common.ChangeFeedID,
 	tsoClient TSOClient,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
-	checkpointTs uint64) *SpanReplication {
+	checkpointTs uint64,
+) *SpanReplication {
 	r := &SpanReplication{
 		ID:           id,
 		tsoClient:    tsoClient,
@@ -73,11 +74,11 @@ func NewReplicaSet(cfID common.ChangeFeedID,
 		CheckpointTs: checkpointTs,
 	})
 	log.Info("new replica set created",
-		zap.String("changefeed id", cfID.Name()),
+		zap.String("changefeedID", cfID.Name()),
 		zap.String("id", id.String()),
-		zap.Int64("schema id", SchemaID),
-		zap.Int64("table id", span.TableID),
-		zap.String("group id", replica.GetGroupName(r.groupID)),
+		zap.Int64("schemaID", SchemaID),
+		zap.Int64("tableID", span.TableID),
+		zap.String("groupID", replica.GetGroupName(r.groupID)),
 		zap.String("start", hex.EncodeToString(span.StartKey)),
 		zap.String("end", hex.EncodeToString(span.EndKey)))
 	return r
@@ -105,14 +106,14 @@ func NewWorkingReplicaSet(
 	r.initGroupID()
 	r.initStatus(status)
 	log.Info("new working replica set created",
-		zap.String("changefeed id", cfID.Name()),
+		zap.String("changefeedID", cfID.Name()),
 		zap.String("id", id.String()),
-		zap.String("node id", nodeID.String()),
-		zap.Uint64("checkpoint ts", status.CheckpointTs),
-		zap.String("component status", status.ComponentStatus.String()),
-		zap.Int64("schema id", SchemaID),
-		zap.Int64("table id", span.TableID),
-		zap.String("group id", replica.GetGroupName(r.groupID)),
+		zap.String("nodeID", nodeID.String()),
+		zap.Uint64("checkpointTs", status.CheckpointTs),
+		zap.String("componentStatus", status.ComponentStatus.String()),
+		zap.Int64("schemaID", SchemaID),
+		zap.Int64("tableID", span.TableID),
+		zap.String("groupID", replica.GetGroupName(r.groupID)),
 		zap.String("start", hex.EncodeToString(span.StartKey)),
 		zap.String("end", hex.EncodeToString(span.EndKey)))
 	return r
@@ -121,9 +122,9 @@ func NewWorkingReplicaSet(
 func (r *SpanReplication) initStatus(status *heartbeatpb.TableSpanStatus) {
 	if status == nil || status.CheckpointTs == 0 {
 		log.Panic("add replica with invalid checkpoint ts",
-			zap.String("changefeed id", r.ChangefeedID.Name()),
+			zap.String("changefeedID", r.ChangefeedID.Name()),
 			zap.String("id", r.ID.String()),
-			zap.Uint64("checkpoint ts", status.CheckpointTs),
+			zap.Uint64("checkpointTs", status.CheckpointTs),
 		)
 	}
 	r.status.Store(status)
@@ -135,8 +136,8 @@ func (r *SpanReplication) initGroupID() {
 	// check if the table is split
 	totalSpan := spanz.TableIDToComparableSpan(span.TableID)
 	if !spanz.IsSubSpan(span, totalSpan) {
-		log.Warn("invalid span range", zap.String("changefeed id", r.ChangefeedID.Name()),
-			zap.String("id", r.ID.String()), zap.Int64("table id", span.TableID),
+		log.Warn("invalid span range", zap.String("changefeedID", r.ChangefeedID.Name()),
+			zap.String("id", r.ID.String()), zap.Int64("tableID", span.TableID),
 			zap.String("totalSpan", totalSpan.String()),
 			zap.String("start", hex.EncodeToString(span.StartKey)),
 			zap.String("end", hex.EncodeToString(span.EndKey)))

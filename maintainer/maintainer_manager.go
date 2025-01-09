@@ -140,9 +140,9 @@ func (m *Manager) Run(ctx context.Context) error {
 		case msg := <-m.msgCh:
 			m.handleMessage(msg)
 		case <-ticker.C:
-			//1.  try to send heartbeat to coordinator
+			// 1.  try to send heartbeat to coordinator
 			m.sendHeartbeat()
-			//2. cleanup removed maintainers
+			// 2. cleanup removed maintainers
 			m.maintainers.Range(func(key, value interface{}) bool {
 				cf := value.(*Maintainer)
 				if cf.removed.Load() {

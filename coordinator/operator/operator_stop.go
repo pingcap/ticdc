@@ -42,7 +42,8 @@ func NewStopChangefeedOperator(cfID common.ChangeFeedID,
 	nodeID node.ID,
 	coordinatorNode node.ID,
 	backend changefeed.Backend,
-	removed bool) *StopChangefeedOperator {
+	removed bool,
+) *StopChangefeedOperator {
 	return &StopChangefeedOperator{
 		cfID:                cfID,
 		nodeID:              nodeID,

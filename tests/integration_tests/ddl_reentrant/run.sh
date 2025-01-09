@@ -21,7 +21,7 @@ function complete_ddls() {
 	# ddls+=("alter table ddl_reentrant.t2 drop column c1, drop column c2, drop column c3" false 'ALTER TABLE `ddl_reentrant`.`t2` DROP COLUMN `c1`, DROP COLUMN `c2`, DROP COLUMN `c3`')
 	# ddls+=("rename table ddl_reentrant.t2 to ddl_reentrant.tt2, ddl_reentrant.t3 to ddl_reentrant.tt3" false 'RENAME TABLE `ddl_reentrant`.`t2` TO `ddl_reentrant`.`tt2`, `ddl_reentrant`.`t3` TO `ddl_reentrant`.`tt3`')
 	# ddls+=("rename table ddl_reentrant.tt2 to ddl_reentrant.t2, ddl_reentrant.tt3 to ddl_reentrant.t3" false 'RENAME TABLE `ddl_reentrant`.`tt2` TO `ddl_reentrant`.`t2`, `ddl_reentrant`.`tt3` TO `ddl_reentrant`.`t3`')
-	
+
 	# ddls+=("alter table ddl_reentrant.t2 drop primary key" false 'ALTER TABLE `ddl_reentrant`.`t2` DROP PRIMARY KEY')
 	# ddls+=("alter table ddl_reentrant.t2 add primary key pk(id)" false 'ALTER TABLE `ddl_reentrant`.`t2` ADD PRIMARY KEY `pk`(`id`)')
 	# ddls+=("drop table ddl_reentrant.t2" false 'DROP TABLE `ddl_reentrant`.`t2`')
@@ -36,11 +36,11 @@ SINK_URI="mysql://root@127.0.0.1:3306/"
 
 function check_ts_forward() {
 	changefeedid=$1
-	rts1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc"| jq '.resolved_ts')
-	checkpoint1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc"| jq '.checkpoint_tso')
+	rts1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.resolved_ts')
+	checkpoint1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
 	sleep 1
-	rts2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc"| jq '.resolved_ts')
-	checkpoint2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc"| jq '.checkpoint_tso')
+	rts2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.resolved_ts')
+	checkpoint2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
 	if [[ "$rts1" != "null" ]] && [[ "$rts1" != "0" ]]; then
 		if [[ "$rts1" -ne "$rts2" ]] || [[ "$checkpoint1" -ne "$checkpoint2" ]]; then
 			echo "changefeed is working normally rts: ${rts1}->${rts2} checkpoint: ${checkpoint1}->${checkpoint2}"

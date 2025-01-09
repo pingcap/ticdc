@@ -46,8 +46,7 @@ type regionEvent struct {
 	err        *cdcpb.Event_Error
 }
 
-type pathHasher struct {
-}
+type pathHasher struct{}
 
 func (h pathHasher) HashPath(subID SubscriptionID) uint64 {
 	return uint64(subID)
@@ -103,6 +102,7 @@ func (h *regionEventHandler) GetSize(event regionEvent) int { return 0 }
 func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) int {
 	return 0
 }
+
 func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp {
 	if event.entries != nil {
 		entries := event.entries.Entries.GetEntries()

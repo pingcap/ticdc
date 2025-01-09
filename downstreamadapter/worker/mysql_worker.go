@@ -50,7 +50,8 @@ func NewMysqlDMLWorker(
 	id int,
 	changefeedID common.ChangeFeedID,
 	errGroup *errgroup.Group,
-	statistics *metrics.Statistics) *MysqlDMLWorker {
+	statistics *metrics.Statistics,
+) *MysqlDMLWorker {
 	return &MysqlDMLWorker{
 		ctx:          ctx,
 		mysqlWriter:  mysql.NewMysqlWriter(ctx, db, config, changefeedID, statistics),
@@ -155,7 +156,8 @@ func NewMysqlDDLWorker(
 	config *mysql.MysqlConfig,
 	changefeedID common.ChangeFeedID,
 	errGroup *errgroup.Group,
-	statistics *metrics.Statistics) *MysqlDDLWorker {
+	statistics *metrics.Statistics,
+) *MysqlDDLWorker {
 	return &MysqlDDLWorker{
 		ctx:          ctx,
 		changefeedID: changefeedID,

@@ -112,6 +112,15 @@ func (c *server) prepare(ctx context.Context) error {
 	}
 	c.pdEndpoints = append(c.pdEndpoints, allPDEndpoints...)
 
+	// Update meta-region label to ensure that meta region isolated from data regions.
+	err = pdAPIClient.UpdateMetaLabel(ctx)
+	if err != nil {
+		log.Warn("Fail to verify region label rule",
+			zap.Error(err),
+			zap.Stringer("upstreamID", c.info.ID),
+			zap.Strings("upstreamEndpoints", c.pdEndpoints))
+	}
+
 	c.KVStorage, err = kv.CreateTiStore(strings.Join(allPDEndpoints, ","), conf.Security)
 	if err != nil {
 		return errors.Trace(err)

@@ -28,9 +28,11 @@ import (
 func TestStopChangefeedOperator_OnNodeRemove(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test")
-	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{ChangefeedID: cfID,
-		Config:  config.GetDefaultReplicaConfig(),
-		SinkURI: "mysql://127.0.0.1:3306"},
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
 		1)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 
@@ -45,9 +47,11 @@ func TestStopChangefeedOperator_OnNodeRemove(t *testing.T) {
 func TestStopChangefeedOperator_OnTaskRemoved(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test")
-	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{ChangefeedID: cfID,
-		Config:  config.GetDefaultReplicaConfig(),
-		SinkURI: "mysql://127.0.0.1:3306"},
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
 		1)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 	op := NewStopChangefeedOperator(cfID, "n1", "n2", nil, true)
@@ -58,9 +62,11 @@ func TestStopChangefeedOperator_OnTaskRemoved(t *testing.T) {
 func TestStopChangefeedOperator_PostFinish(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test")
-	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{ChangefeedID: cfID,
-		Config:  config.GetDefaultReplicaConfig(),
-		SinkURI: "mysql://127.0.0.1:3306"},
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
 		1)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 

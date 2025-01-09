@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package canal
 
 import (
@@ -11,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/cdc/model"
 	ticonfig "github.com/pingcap/tiflow/pkg/config"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
@@ -42,7 +54,8 @@ func TestBasicTypes(t *testing.T) {
 		CommitTs:       1,
 		Event:          row,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
 	value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
@@ -115,7 +128,8 @@ func TestAllTypes(t *testing.T) {
 		CommitTs:       1,
 		Event:          row,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
 	value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
@@ -181,7 +195,8 @@ func TestGeneralDMLEvent(t *testing.T) {
 			CommitTs:       1,
 			Event:          row,
 			ColumnSelector: selectors.GetSelector("test", "t"),
-			Callback:       func() {}}
+			Callback:       func() {},
+		}
 
 		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
 		value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
@@ -235,7 +250,8 @@ func TestGeneralDMLEvent(t *testing.T) {
 			CommitTs:       1,
 			Event:          row,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {}}
+			Callback:       func() {},
+		}
 
 		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
 		protocolConfig.EnableTiDBExtension = true
@@ -294,7 +310,8 @@ func TestGeneralDMLEvent(t *testing.T) {
 			CommitTs:       1,
 			Event:          row,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {}}
+			Callback:       func() {},
+		}
 
 		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
 		value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
@@ -380,7 +397,8 @@ func TestGeneralDMLEvent(t *testing.T) {
 			CommitTs:       1,
 			Event:          row,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {}}
+			Callback:       func() {},
+		}
 
 		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
 		protocolConfig = protocolConfig.WithMaxMessageBytes(300)
@@ -447,7 +465,8 @@ func TestGeneralDMLEvent(t *testing.T) {
 			CommitTs:       1,
 			Event:          row,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {}}
+			Callback:       func() {},
+		}
 
 		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
 		protocolConfig = protocolConfig.WithMaxMessageBytes(300)
@@ -460,10 +479,6 @@ func TestGeneralDMLEvent(t *testing.T) {
 
 		messages := encoder.Build()
 		require.Equal(t, 1, len(messages))
-		require.Equal(t, uint64(1), messages[0].Ts)
-		require.Equal(t, "test", *messages[0].Schema)
-		require.Equal(t, "t", *messages[0].Table)
-		require.Equal(t, model.MessageTypeRow, messages[0].Type)
 		require.NotNil(t, messages[0].Callback)
 
 		value := messages[0].Value
@@ -519,17 +534,14 @@ func TestDMLTypeEvent(t *testing.T) {
 		CommitTs:       1,
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	err = encoder.AppendRowChangedEvent(context.Background(), "", rowEvent)
 	require.NoError(t, err)
 
 	messages := encoder.Build()
 	require.Equal(t, 1, len(messages))
-	require.Equal(t, uint64(1), messages[0].Ts)
-	require.Equal(t, "test", *messages[0].Schema)
-	require.Equal(t, "t", *messages[0].Table)
-	require.Equal(t, model.MessageTypeRow, messages[0].Type)
 
 	var value JSONMessage
 
@@ -572,17 +584,14 @@ func TestDMLTypeEvent(t *testing.T) {
 		CommitTs:       2,
 		Event:          updateRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	err = encoder.AppendRowChangedEvent(context.Background(), "", updateRowEvent)
 	require.NoError(t, err)
 
 	messages = encoder.Build()
 	require.Equal(t, 1, len(messages))
-	require.Equal(t, uint64(2), messages[0].Ts)
-	require.Equal(t, "test", *messages[0].Schema)
-	require.Equal(t, "t", *messages[0].Table)
-	require.Equal(t, model.MessageTypeRow, messages[0].Type)
 
 	err = json.Unmarshal(messages[0].Value, &value)
 	require.NoError(t, err)
@@ -621,17 +630,14 @@ func TestDMLTypeEvent(t *testing.T) {
 		CommitTs:       3,
 		Event:          deleteRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	err = encoder.AppendRowChangedEvent(context.Background(), "", deleteRowEvent)
 	require.NoError(t, err)
 
 	messages = encoder.Build()
 	require.Equal(t, 1, len(messages))
-	require.Equal(t, uint64(3), messages[0].Ts)
-	require.Equal(t, "test", *messages[0].Schema)
-	require.Equal(t, "t", *messages[0].Table)
-	require.Equal(t, model.MessageTypeRow, messages[0].Type)
 
 	err = json.Unmarshal(messages[0].Value, &value)
 	require.NoError(t, err)
@@ -670,10 +676,6 @@ func TestDMLTypeEvent(t *testing.T) {
 
 	messages = encoder.Build()
 	require.Equal(t, 1, len(messages))
-	require.Equal(t, uint64(2), messages[0].Ts)
-	require.Equal(t, "test", *messages[0].Schema)
-	require.Equal(t, "t", *messages[0].Table)
-	require.Equal(t, model.MessageTypeRow, messages[0].Type)
 
 	err = json.Unmarshal(messages[0].Value, &value)
 	require.NoError(t, err)
@@ -726,10 +728,6 @@ func TestDDLTypeEvent(t *testing.T) {
 
 	message, err := encoder.EncodeDDLEvent(ddlEvent)
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), message.Ts)
-	require.Equal(t, "test", *message.Schema)
-	require.Equal(t, "t", *message.Table)
-	require.Equal(t, model.MessageTypeDDL, message.Type)
 
 	var value JSONMessage
 	err = json.Unmarshal(message.Value, &value)
@@ -777,11 +775,6 @@ func TestCheckpointTs(t *testing.T) {
 	require.NoError(t, err)
 	message, err = encoder.EncodeCheckpointEvent(1)
 	require.NoError(t, err)
-
-	require.Equal(t, ticonfig.ProtocolCanalJSON, message.Protocol)
-	require.Nil(t, message.Schema)
-	require.Nil(t, message.Table)
-	require.Equal(t, uint64(1), message.Ts)
 
 	var value canalJSONMessageWithTiDBExtension
 	err = json.Unmarshal(message.Value, &value)

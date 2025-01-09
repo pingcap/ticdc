@@ -292,8 +292,8 @@ func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finis
 func buildRenameTablesJobForTest(
 	oldSchemaIDs, newSchemaIDs, tableIDs []int64,
 	oldSchemaNames, oldTableNames, newTableNames []string,
-	finishedTs uint64) *model.Job {
-
+	finishedTs uint64,
+) *model.Job {
 	args := &model.RenameTablesArgs{
 		RenameTableInfos: make([]*model.RenameTableArgs, 0, len(tableIDs)),
 	}
@@ -598,6 +598,55 @@ func buildDropViewJobForTest(schemaID int64, finishedTs uint64) *model.Job {
 		Type:     model.ActionDropView,
 		SchemaID: schemaID,
 		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+// old table can be a normal table or a partition table
+// `tableName` args is just to pass some safety check for the ddl handler
+func buildAlterTablePartitioningJobForTest(
+	schemaID, oldTableID, newTableID int64, newPartitions []int64,
+	tableName string, finishedTs uint64,
+) *model.Job {
+	partitionDefinitions := make([]model.PartitionDefinition, 0, len(newPartitions))
+	for _, partitionID := range newPartitions {
+		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
+			ID: partitionID,
+		})
+	}
+	return &model.Job{
+		Type:     model.ActionAlterTablePartitioning,
+		SchemaID: schemaID,
+		TableID:  oldTableID,
+		BinlogInfo: &model.HistoryInfo{
+			TableInfo: &model.TableInfo{
+				ID:   newTableID,
+				Name: pmodel.NewCIStr(tableName),
+				Partition: &model.PartitionInfo{
+					Definitions: partitionDefinitions,
+					Enable:      true,
+				},
+			},
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+// `tableName` args is just to pass some safety check for the ddl handler
+func buildRemovePartitioningJobForTest(
+	schemaID, oldTableID, newTableID int64,
+	tableName string, finishedTs uint64,
+) *model.Job {
+	return &model.Job{
+		Type:     model.ActionRemovePartitioning,
+		SchemaID: schemaID,
+		TableID:  oldTableID,
+		BinlogInfo: &model.HistoryInfo{
+			TableInfo: &model.TableInfo{
+				ID:   newTableID,
+				Name: pmodel.NewCIStr(tableName),
+			},
 			FinishedTS: finishedTs,
 		},
 	}

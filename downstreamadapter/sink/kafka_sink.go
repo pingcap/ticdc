@@ -31,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tiflow/cdc/sink/ddlsink/mq/ddlproducer"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -135,7 +134,7 @@ func (s *KafkaSink) run(ctx context.Context) {
 		case s.errCh <- err:
 		default:
 			log.Error("error channel is full, discard error",
-				zap.Any("ChangefeedID", s.changefeedID.String()),
+				zap.Any("changefeedID", s.changefeedID.String()),
 				zap.Error(err))
 		}
 	}
@@ -175,7 +174,7 @@ func (s *KafkaSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		log.Error("KafkaSink doesn't support this type of block event",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Any("event type", event.GetType()))
+			zap.Any("eventType", event.GetType()))
 	}
 	return nil
 }
@@ -206,7 +205,7 @@ func (s *KafkaSink) Close(_ bool) error {
 	return nil
 }
 
-func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, ddlproducer.DDLProducer, error) {
+func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProducer, error) {
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	openProtocol := "open-protocol"

@@ -51,8 +51,8 @@ function run() {
 		check_table_exists "capture_suicide_while_balance_table.t$i" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	done
 
-	capture1_id=$(cdc cli capture list | grep -v "Command to ticdc"| jq -r '.[]|select(.address=="127.0.0.1:8300")|.id')
-	capture2_id=$(cdc cli capture list | grep -v "Command to ticdc"| jq -r '.[]|select(.address=="127.0.0.1:8301")|.id')
+	capture1_id=$(cdc cli capture list | grep -v "Command to ticdc" | jq -r '.[]|select(.address=="127.0.0.1:8300")|.id')
+	capture2_id=$(cdc cli capture list | grep -v "Command to ticdc" | jq -r '.[]|select(.address=="127.0.0.1:8301")|.id')
 
 	target_capture=$capture1_id
 	one_table_id=$(cdc cli processor query -c $changefeed_id -p $capture2_id | grep -v "Command to ticdc" | jq -r '.status.tables|keys[0]')

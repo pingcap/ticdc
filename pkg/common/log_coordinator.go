@@ -13,8 +13,7 @@
 
 package common
 
-type LogCoordinatorBroadcastRequest struct {
-}
+type LogCoordinatorBroadcastRequest struct{}
 
 func (l *LogCoordinatorBroadcastRequest) Marshal() ([]byte, error) {
 	return nil, nil

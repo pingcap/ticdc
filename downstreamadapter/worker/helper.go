@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package worker
 
 import (
@@ -35,7 +48,8 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *ticonfig.SinkConfig,
-	factoryCreator kafka.FactoryCreator) (KafkaComponent, ticonfig.Protocol, error) {
+	factoryCreator kafka.FactoryCreator,
+) (KafkaComponent, ticonfig.Protocol, error) {
 	kafkaComponent := KafkaComponent{}
 	protocol, err := helper.GetProtocol(utils.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
@@ -111,7 +125,8 @@ func GetKafkaSinkComponent(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
-	sinkConfig *ticonfig.SinkConfig) (KafkaComponent, ticonfig.Protocol, error) {
+	sinkConfig *ticonfig.SinkConfig,
+) (KafkaComponent, ticonfig.Protocol, error) {
 	factoryCreator := kafka.NewSaramaFactory
 	if utils.GetOrZero(sinkConfig.EnableKafkaSinkV2) {
 		factoryCreator = v2.NewFactory
@@ -123,6 +138,7 @@ func GetKafkaSinkComponentForTest(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	sinkURI *url.URL,
-	sinkConfig *ticonfig.SinkConfig) (KafkaComponent, ticonfig.Protocol, error) {
+	sinkConfig *ticonfig.SinkConfig,
+) (KafkaComponent, ticonfig.Protocol, error) {
 	return getKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, kafka.NewMockFactory)
 }

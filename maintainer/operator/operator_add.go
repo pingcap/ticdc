@@ -38,7 +38,8 @@ type AddDispatcherOperator struct {
 func NewAddDispatcherOperator(
 	db *replica.ReplicationDB,
 	replicaSet *replica.SpanReplication,
-	dest node.ID) *AddDispatcherOperator {
+	dest node.ID,
+) *AddDispatcherOperator {
 	return &AddDispatcherOperator{
 		replicaSet: replicaSet,
 		dest:       dest,

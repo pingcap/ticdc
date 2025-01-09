@@ -62,7 +62,7 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 	ret=$?
 	if [ "$ret" == 0 ]; then
 		echo "check data successfully"
-	else 
+	else
 		exit 1
 	fi
 fi
@@ -81,7 +81,7 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 	ret=$?
 	if [ "$ret" == 0 ]; then
 		echo "check data successfully"
-	else 
+	else
 		exit 1
 	fi
 fi

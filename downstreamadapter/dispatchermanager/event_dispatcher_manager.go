@@ -19,25 +19,23 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/ticdc/eventpb"
-	"github.com/pingcap/ticdc/pkg/apperror"
-	"github.com/pingcap/ticdc/pkg/node"
-
-	"github.com/pingcap/log"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/tikv/client-go/v2/oracle"
-
 	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
+	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/tiflow/pkg/util"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -120,7 +118,8 @@ func NewEventDispatcherManager(
 	cfConfig *config.ChangefeedConfig,
 	tableTriggerEventDispatcherID *heartbeatpb.DispatcherID,
 	startTs uint64,
-	maintainerID node.ID) (*EventDispatcherManager, uint64, error) {
+	maintainerID node.ID,
+) (*EventDispatcherManager, uint64, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &EventDispatcherManager{
 		dispatcherMap:                          newDispatcherMap(),
@@ -232,7 +231,7 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 		if dispatcher.IsTableTriggerEventDispatcher() && e.sink.SinkType() != common.MysqlSinkType {
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(e.changefeedID)
 			if err != nil {
-				log.Error("remove checkpointTs message failed", zap.Error(err), zap.Any("changefeedID", e.changefeedID))
+				log.Error("remove checkpointTs message failed", zap.Any("changefeedID", e.changefeedID), zap.Error(err))
 			}
 		}
 		dispatcher.Remove()
@@ -319,7 +318,7 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 	if e.tableTriggerEventDispatcher == nil {
 		return nil
 	}
-	err := e.tableTriggerEventDispatcher.InitalizeTableSchemaStore(schemaInfo)
+	err := e.tableTriggerEventDispatcher.InitializeTableSchemaStore(schemaInfo)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -373,7 +372,8 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo) er
 		if err != nil {
 			return errors.Trace(err)
 		}
-		log.Info("calculate real startTs for dispatchers", zap.Any("receive startTs", startTsList), zap.Any("real startTs", newStartTsList))
+		log.Info("calculate real startTs for dispatchers",
+			zap.Any("receiveStartTs", startTsList), zap.Any("realStartTs", newStartTsList))
 	} else {
 		newStartTsList = startTsList
 	}
@@ -683,7 +683,8 @@ func (e *EventDispatcherManager) cleanDispatcher(id common.DispatcherID, schemaI
 	} else {
 		e.metricEventDispatcherCount.Dec()
 	}
-	log.Info("table event dispatcher completely stopped, and delete it from event dispatcher manager", zap.Any("dispatcher id", id))
+	log.Info("table event dispatcher completely stopped, and delete it from event dispatcher manager",
+		zap.Any("dispatcherID", id))
 }
 
 func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap {

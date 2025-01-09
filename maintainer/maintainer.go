@@ -115,7 +115,7 @@ type Maintainer struct {
 	changefeedRemoved bool
 
 	lastPrintStatusTime time.Time
-	//lastCheckpointTsTime time.Time
+	// lastCheckpointTsTime time.Time
 
 	errLock             sync.Mutex
 	runningErrors       map[node.ID]*heartbeatpb.RunningError
@@ -193,7 +193,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	m.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](m.id.Name(), m.getNewBootstrapFn())
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("ddl dispatcher", tableTriggerEventDispatcherID.String()))
+		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()))
 	metrics.MaintainerGauge.WithLabelValues(cfID.Namespace(), cfID.Name()).Inc()
 	// Should update metrics immediately when maintainer is created
 	// FIXME: Use a correct context
@@ -321,7 +321,7 @@ func (m *Maintainer) initialize() error {
 	nodes := m.nodeManager.GetAliveNodes()
 	log.Info("changefeed bootstrap initial nodes",
 		zap.Int("nodes", len(nodes)))
-	var newNodes = make([]*node.Info, 0, len(nodes))
+	newNodes := make([]*node.Info, 0, len(nodes))
 	for _, n := range nodes {
 		newNodes = append(newNodes, n)
 	}
@@ -406,7 +406,7 @@ func (m *Maintainer) onNodeChanged() {
 	currentNodes := m.bootstrapper.GetAllNodes()
 
 	activeNodes := m.nodeManager.GetAliveNodes()
-	var newNodes = make([]*node.Info, 0, len(activeNodes))
+	newNodes := make([]*node.Info, 0, len(activeNodes))
 	for id, n := range activeNodes {
 		if _, ok := currentNodes[id]; !ok {
 			newNodes = append(newNodes, n)
@@ -721,7 +721,7 @@ func (m *Maintainer) getNewBootstrapFn() bootstrap.NewBootstrapMessageFn {
 		if id == m.selfNode.ID {
 			log.Info("create table event trigger dispatcher", zap.String("changefeed", m.id.String()),
 				zap.String("server", id.String()),
-				zap.String("dispatcher id", m.ddlSpan.ID.String()))
+				zap.String("dispatcherID", m.ddlSpan.ID.String()))
 			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
 		}
 		log.Info("send maintainer bootstrap message",
@@ -800,7 +800,8 @@ func (m *Maintainer) GetTables() []*replica.SpanReplication {
 func (m *Maintainer) submitScheduledEvent(
 	scheduler threadpool.ThreadPool,
 	event *Event,
-	scheduleTime time.Time) {
+	scheduleTime time.Time,
+) {
 	task := func() time.Time {
 		m.pushEvent(event)
 		return time.Time{}

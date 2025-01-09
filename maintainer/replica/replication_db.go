@@ -81,7 +81,7 @@ func (db *ReplicationDB) TryRemoveAll() []*SpanReplication {
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
-	var tasks = make([]*SpanReplication, 0)
+	tasks := make([]*SpanReplication, 0)
 	// we need to add the replicating and scheduling tasks to the list, and then reset the db
 	tasks = append(tasks, db.GetReplicatingWithoutLock()...)
 	tasks = append(tasks, db.GetSchedulingWithoutLock()...)
@@ -96,7 +96,7 @@ func (db *ReplicationDB) TryRemoveByTableIDs(tableIDs ...int64) []*SpanReplicati
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
-	var tasks = make([]*SpanReplication, 0)
+	tasks := make([]*SpanReplication, 0)
 	for _, tblID := range tableIDs {
 		for _, task := range db.tableTasks[tblID] {
 			db.removeSpanUnLock(task)
@@ -114,9 +114,15 @@ func (db *ReplicationDB) TryRemoveBySchemaID(schemaID int64) []*SpanReplication 
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
+<<<<<<< HEAD
 	var tasks = make([]*SpanReplication, 0)
 	for _, task := range db.schemaTasks[schemaID] {
 		db.removeSpanUnLock(task)
+=======
+	tasks := make([]*SpanReplication, 0)
+	for _, stm := range db.schemaTasks[schemaID] {
+		db.removeSpanUnLock(stm)
+>>>>>>> upstream/master
 		// the task is scheduled
 		if task.GetNodeID() != "" {
 			tasks = append(tasks, task)
@@ -181,7 +187,7 @@ func (db *ReplicationDB) GetTasksBySchemaID(schemaID int64) []*SpanReplication {
 	if !ok {
 		return nil
 	}
-	var replicaSets = make([]*SpanReplication, 0, len(sm))
+	replicaSets := make([]*SpanReplication, 0, len(sm))
 	for _, v := range sm {
 		replicaSets = append(replicaSets, v)
 	}
@@ -288,11 +294,11 @@ func (db *ReplicationDB) UpdateSchemaID(tableID, newSchemaID int64) {
 		// update schemaID
 		replicaSet.SetSchemaID(newSchemaID)
 
-		//update schema map
+		// update schema map
 		schemaMap, ok := db.schemaTasks[oldSchemaID]
 		if ok {
 			delete(schemaMap, replicaSet.ID)
-			//clear the map if empty
+			// clear the map if empty
 			if len(schemaMap) == 0 {
 				delete(db.schemaTasks, oldSchemaID)
 			}
