@@ -417,7 +417,7 @@ if __name__ == "__main__":
         "pause_changefeed": pause_changefeed,
         "update_changefeed": update_changefeed,
         "resume_changefeed": resume_changefeed,
-        "move_table": move_table,
+        #"move_table": move_table,
         "get_processor": get_processor,
         "list_processor": list_processor,
         "set_log_level": set_log_level,
