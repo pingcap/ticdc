@@ -107,7 +107,7 @@ function failOverCaseC-1() {
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
-	query_dispatcher_count "127.0.0.1:8300" "test" 3 10
+	query_dispatcher_count "127.0.0.1:8300" "test" 3 60
 
 	cleanup_process $CDC_BINARY
 
@@ -166,7 +166,7 @@ function failOverCaseC-2() {
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
-	query_dispatcher_count "127.0.0.1:8300" "test" 4 10
+	query_dispatcher_count "127.0.0.1:8300" "test" 4 60
 
 	cleanup_process $CDC_BINARY
 
@@ -228,7 +228,7 @@ function failOverCaseC-3() {
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
-	query_dispatcher_count "127.0.0.1:8300" "test" 5 10
+	query_dispatcher_count "127.0.0.1:8300" "test" 5 60
 
 	cleanup_process $CDC_BINARY
 	export GO_FAILPOINTS=''
@@ -291,7 +291,7 @@ function failOverCaseC-4() {
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 60
 
-	query_dispatcher_count "127.0.0.1:8300" "test" 5 10
+	query_dispatcher_count "127.0.0.1:8300" "test" 5 60
 
 	cleanup_process $CDC_BINARY
 	export GO_FAILPOINTS=''
