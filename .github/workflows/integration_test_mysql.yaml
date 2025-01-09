@@ -256,7 +256,7 @@ jobs:
     if: github.event.pull_request.draft == false
 
     runs-on: ubuntu-latest 
-    name: E2E Test Group 2
+    name: E2E Test Group 3
     steps:
       - name: Check out code
         uses: actions/checkout@v2
@@ -282,6 +282,11 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=partition_table
+        
+      - name: Test multi_tables_ddl
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
 
       - name: Upload test logs
         if: always()
