@@ -835,3 +835,7 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 		m.watermark.ResolvedTs = newWatermark.ResolvedTs
 	}
 }
+
+func (m *Maintainer) GetDispatcherCount() int {
+	return len(m.controller.GetAllTasks())
+}

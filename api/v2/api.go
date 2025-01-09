@@ -57,6 +57,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, api.pauseChangefeed)
 	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, api.deleteChangefeed)
 	changefeedGroup.POST("/:changefeed_id/move_table", coordinatorMiddleware, api.moveTable)
+	changefeedGroup.GET("/:changefeed_id/get_dispatcher_count", coordinatorMiddleware, api.getDispatcherCount)
 	changefeedGroup.GET("/:changefeed_id/tables", coordinatorMiddleware, api.listTables)
 
 	// capture apis
