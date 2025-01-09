@@ -29,9 +29,9 @@ import (
 // Factory is used to produce all kafka components.
 type Factory interface {
 	// AdminClient return a kafka cluster admin client
-	AdminClient(ctx context.Context) (ClusterAdminClient, error)
+	AdminClient() (ClusterAdminClient, error)
 	// SyncProducer creates a sync producer to writer message to kafka
-	SyncProducer(ctx context.Context) (SyncProducer, error)
+	SyncProducer() (SyncProducer, error)
 	// AsyncProducer creates an async producer to writer message to kafka
 	AsyncProducer(ctx context.Context) (AsyncProducer, error)
 	// MetricsCollector returns the kafka metrics collector
@@ -39,7 +39,7 @@ type Factory interface {
 }
 
 // FactoryCreator defines the type of factory creator.
-type FactoryCreator func(*Options, commonType.ChangeFeedID) (Factory, error)
+type FactoryCreator func(context.Context, *Options, commonType.ChangeFeedID) (Factory, error)
 
 // SyncProducer is the kafka sync producer
 type SyncProducer interface {

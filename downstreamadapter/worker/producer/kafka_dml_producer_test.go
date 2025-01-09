@@ -50,10 +50,10 @@ func TestProducerAck(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, 1, config.Producer.Flush.MaxMessages)
 
-	ctx = context.WithValue(ctx, "testing.T", t)
 	changefeed := commonType.NewChangefeedID4Test("test", "test")
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
+	factory.(*kafka.MockFactory).ErrorReporter = t
 
 	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
@@ -115,14 +115,14 @@ func TestProducerSendMsgFailed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 	_, err := kafka.NewSaramaConfig(ctx, options)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	options.MaxMessages = 1
 	options.MaxMessageBytes = 1
 
-	ctx = context.WithValue(ctx, "testing.T", t)
 	changefeed := commonType.NewChangefeedID4Test("test", "test")
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
+	factory.(*kafka.MockFactory).ErrorReporter = t
 
 	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
@@ -180,10 +180,10 @@ func TestProducerDoubleClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	ctx = context.WithValue(ctx, "testing.T", t)
 	changefeed := commonType.NewChangefeedID4Test("test", "test")
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
+	factory.(*kafka.MockFactory).ErrorReporter = t
 
 	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)

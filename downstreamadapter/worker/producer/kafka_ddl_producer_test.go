@@ -31,12 +31,12 @@ func TestDDLSyncBroadcastMessage(t *testing.T) {
 	options := getOptions()
 	options.MaxMessages = 1
 
-	ctx = context.WithValue(ctx, "testing.T", t)
 	changefeed := common.NewChangefeedID4Test("test", "test")
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
+	factory.(*kafka.MockFactory).ErrorReporter = t
 
-	syncProducer, err := factory.SyncProducer(ctx)
+	syncProducer, err := factory.SyncProducer()
 	require.NoError(t, err)
 
 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
@@ -59,12 +59,12 @@ func TestDDLSyncSendMessage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	options := getOptions()
 
-	ctx = context.WithValue(ctx, "testing.T", t)
 	changefeed := common.NewChangefeedID4Test("test", "test")
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
+	factory.(*kafka.MockFactory).ErrorReporter = t
 
-	syncProducer, err := factory.SyncProducer(ctx)
+	syncProducer, err := factory.SyncProducer()
 	require.NoError(t, err)
 
 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
@@ -92,8 +92,9 @@ func TestDDLProducerSendMsgFailed(t *testing.T) {
 	changefeed := common.NewChangefeedID4Test("test", "test")
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
+	factory.(*kafka.MockFactory).ErrorReporter = t
 
-	syncProducer, err := factory.SyncProducer(ctx)
+	syncProducer, err := factory.SyncProducer()
 	require.NoError(t, err)
 
 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
@@ -109,12 +110,12 @@ func TestDDLProducerDoubleClose(t *testing.T) {
 	defer cancel()
 	options := getOptions()
 
-	ctx = context.WithValue(ctx, "testing.T", t)
 	changefeed := common.NewChangefeedID4Test("test", "test")
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
+	factory.(*kafka.MockFactory).ErrorReporter = t
 
-	syncProducer, err := factory.SyncProducer(ctx)
+	syncProducer, err := factory.SyncProducer()
 	require.NoError(t, err)
 
 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
