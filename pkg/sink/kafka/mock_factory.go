@@ -16,12 +16,13 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	"go.uber.org/zap"
 )
 
 const (
@@ -32,7 +33,7 @@ const (
 	// defaultMockControllerID specifies the default mock controller ID.
 	defaultMockControllerID = 1
 	// topic replication factor must be 3 for Confluent Cloud Kafka.
-	defaultReplicationFactor = 3
+	// defaultReplicationFactor = 3
 )
 
 const (
@@ -57,9 +58,19 @@ var (
 
 // MockFactory is a mock implementation of Factory interface.
 type MockFactory struct {
+	Factory
 	config       *kafka.ConfigMap
 	changefeedID commonType.ChangeFeedID
 	mockCluster  *kafka.MockCluster
+}
+type MockClusterAdmin struct {
+	ClusterAdminClient
+	mockCluster *kafka.MockCluster
+	topics      map[string]*MockTopicDetail
+}
+type MockTopicDetail struct {
+	TopicDetail
+	fetchesRemainingUntilVisible int
 }
 
 // NewMockFactory constructs a Factory with mock implementation.
@@ -67,14 +78,12 @@ func NewMockFactory(
 	o *Options, changefeedID commonType.ChangeFeedID,
 ) (Factory, error) {
 	// The broker ids will start at 1 up to and including brokerCount.
-	mockCluster, err := kafka.NewMockCluster(defaultReplicationFactor)
+	mockCluster, err := kafka.NewMockCluster(defaultMockControllerID)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	config := NewConfig(o)
-	config.SetKey("bootstrap.servers", mockCluster.BootstrapServers())
 	return &MockFactory{
-		config:       config,
+		config:       NewConfig(o),
 		changefeedID: changefeedID,
 		mockCluster:  mockCluster,
 	}, nil
@@ -82,54 +91,56 @@ func NewMockFactory(
 
 // AdminClient return a mocked admin client
 func (f *MockFactory) AdminClient(_ context.Context) (ClusterAdminClient, error) {
-	client, err := kafka.NewAdminClient(f.config)
-	if err != nil {
-		return nil, err
-	}
-	// f.mockCluster.CreateTopic()
 	return &MockClusterAdmin{
-		ClusterAdminClient: newClusterAdminClient(client, f.changefeedID, defaultTimeoutMs),
-		topics:             make(map[string]*MockTopicDetail),
+		mockCluster: f.mockCluster,
+		topics:      make(map[string]*MockTopicDetail),
 	}, nil
 }
 
-// SyncProducer creates a sync producer
-func (f *MockFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	syncProducer, err := kafka.NewProducer(f.config)
-	if err != nil {
-		return nil, err
+func (c *MockClusterAdmin) GetAllBrokers(ctx context.Context) ([]Broker, error) {
+	bootstrapServers := c.mockCluster.BootstrapServers()
+	n := len(strings.Split(bootstrapServers, ","))
+	brokers := make([]Broker, 0, n)
+	for i := 0; i < n; i++ {
+		brokers = append(brokers, Broker{ID: int32(i)})
 	}
-	return &MockSyncProducer{
-		Producer:     syncProducer,
-		deliveryChan: make(chan kafka.Event),
-	}, nil
+	return brokers, nil
 }
 
-// AsyncProducer creates an async producer
-func (f *MockFactory) AsyncProducer(
-	ctx context.Context,
-) (AsyncProducer, error) {
-	asyncProducer, err := kafka.NewProducer(f.config)
-	if err != nil {
-		return nil, err
+func (c *MockClusterAdmin) GetTopicsMeta(ctx context.Context,
+	topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
+	topicsMeta := make(map[string]TopicDetail)
+	for key, val := range c.topics {
+		topicsMeta[key] = val.TopicDetail
 	}
-	return &MockAsyncProducer{
-		AsyncProducer: asyncProducer,
-	}, nil
+	return topicsMeta, nil
 }
 
-// MetricsCollector returns the metric collector
-func (f *MockFactory) MetricsCollector() MetricsCollector {
-	return &mockMetricsCollector{}
+func (c *MockClusterAdmin) GetTopicsPartitionsNum(
+	ctx context.Context, topics []string,
+) (map[string]int32, error) {
+	result := make(map[string]int32, len(topics))
+	for _, topic := range topics {
+		msg, ok := c.topics[topic]
+		if !ok {
+			log.Warn("fetch topic meta failed",
+				zap.String("topic", topic), zap.Any("msg", msg))
+			continue
+		}
+		result[topic] = msg.NumPartitions
+	}
+	return result, nil
 }
 
-type MockClusterAdmin struct {
-	ClusterAdminClient
-	topics map[string]*MockTopicDetail
-}
-type MockTopicDetail struct {
-	TopicDetail
-	fetchesRemainingUntilVisible int
+func (c *MockClusterAdmin) CreateTopic(ctx context.Context, detail *TopicDetail, validateOnly bool) error {
+	bootstrapServers := c.mockCluster.BootstrapServers()
+	n := len(strings.Split(bootstrapServers, ","))
+	if int(detail.ReplicationFactor) > n {
+		return kafka.NewError(kafka.ErrInvalidReplicationFactor, "kafka create topic failed: kafka server: Replication-factor is invalid", false)
+	}
+	c.mockCluster.CreateTopic(detail.Name, int(detail.NumPartitions), int(detail.ReplicationFactor))
+	c.topics[detail.Name] = &MockTopicDetail{TopicDetail: *detail}
+	return nil
 }
 
 // SetRemainingFetchesUntilTopicVisible is used to control the visibility of a specific topic.
@@ -146,93 +157,6 @@ func (c *MockClusterAdmin) SetRemainingFetchesUntilTopicVisible(
 	return nil
 }
 
-// MockSyncProducer is a mock implementation of SyncProducer interface.
-type MockSyncProducer struct {
-	Producer     *kafka.Producer
-	deliveryChan chan kafka.Event
-}
-
-func (s *MockSyncProducer) SendMessage(
-	ctx context.Context,
-	topic string, partitionNum int32,
-	message *common.Message,
-) error {
-	msg := &kafka.Message{}
-	s.Producer.Produce(msg, s.deliveryChan)
-	event := <-s.deliveryChan
-	switch e := event.(type) {
-	case *kafka.Error:
-		return e
-	}
-	return nil
-}
-
-// SendMessages implement the SyncProducer interface.
-func (s *MockSyncProducer) SendMessages(ctx context.Context, topic string, partitionNum int32, message *common.Message) error {
-	var err error
-	for i := 0; i < int(partitionNum); i++ {
-		e := s.SendMessage(ctx, topic, int32(i), message)
-		if e != nil {
-			err = e
-		}
-	}
-	return err
-}
-
-// Close implement the SyncProducer interface.
-func (s *MockSyncProducer) Close() {
-	s.Producer.Close()
-	close(s.deliveryChan)
-}
-
-// MockAsyncProducer is a mock implementation of AsyncProducer interface.
-type MockAsyncProducer struct {
-	AsyncProducer *kafka.Producer
-	closed        bool
-}
-
-// Close implement the AsyncProducer interface.
-func (a *MockAsyncProducer) Close() {
-	if a.closed {
-		return
-	}
-	a.AsyncProducer.Close()
-	a.closed = true
-}
-
-// AsyncRunCallback implement the AsyncProducer interface.
-func (a *MockAsyncProducer) AsyncRunCallback(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
-		case event := <-a.AsyncProducer.Events():
-			switch e := event.(type) {
-			case *kafka.Message:
-			case *kafka.Error:
-				return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, e)
-			}
-		}
-	}
-}
-
-// AsyncSend implement the AsyncProducer interface.
-func (a *MockAsyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error {
-	select {
-	case <-ctx.Done():
-		return errors.Trace(ctx.Err())
-	default:
-	}
-	return a.AsyncProducer.Produce(&kafka.Message{
-		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: partition},
-		Key:            message.Key,
-		Value:          message.Value,
-		Opaque:         message.Callback,
-	}, nil)
-}
-
-type mockMetricsCollector struct{}
-
-// Run implements the MetricsCollector interface.
-func (m *mockMetricsCollector) Run(ctx context.Context) {
+func (c *MockClusterAdmin) Close() {
+	c.mockCluster.Close()
 }

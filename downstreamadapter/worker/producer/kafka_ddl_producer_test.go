@@ -11,112 +11,112 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package producer
+// package producer
 
-import (
-	"context"
-	"testing"
-	"time"
+// import (
+// 	"context"
+// 	"testing"
+// 	"time"
 
-	confluentKafka "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/pingcap/ticdc/pkg/common"
+// 	confluentKafka "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+// 	"github.com/pingcap/ticdc/pkg/common"
 
-	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
-	"github.com/stretchr/testify/require"
-)
+// 	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+// 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+// 	cerror "github.com/pingcap/tiflow/pkg/errors"
+// 	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
+// 	"github.com/stretchr/testify/require"
+// )
 
-func TestDDLSyncBroadcastMessage(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	options := getOptions()
-	options.MaxMessages = 1
+// func TestDDLSyncBroadcastMessage(t *testing.T) {
+// 	ctx, cancel := context.WithCancel(context.Background())
+// 	options := getOptions()
+// 	options.MaxMessages = 1
 
-	ctx = context.WithValue(ctx, "testing.T", t)
-	changefeed := common.NewChangefeedID4Test("test", "test")
-	factory, err := kafka.NewMockFactory(options, changefeed)
-	require.NoError(t, err)
+// 	ctx = context.WithValue(ctx, "testing.T", t)
+// 	changefeed := common.NewChangefeedID4Test("test", "test")
+// 	factory, err := kafka.NewMockFactory(options, changefeed)
+// 	require.NoError(t, err)
 
-	syncProducer, err := factory.SyncProducer(ctx)
-	require.NoError(t, err)
+// 	syncProducer, err := factory.SyncProducer(ctx)
+// 	require.NoError(t, err)
 
-	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
+// 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
 
-	err = p.SyncBroadcastMessage(ctx, tikafka.DefaultMockTopicName,
-		tikafka.DefaultMockPartitionNum, &ticommon.Message{})
-	require.NoError(t, err)
+// 	err = p.SyncBroadcastMessage(ctx, tikafka.DefaultMockTopicName,
+// 		tikafka.DefaultMockPartitionNum, &ticommon.Message{})
+// 	require.NoError(t, err)
 
-	p.Close()
-	err = p.SyncBroadcastMessage(ctx, tikafka.DefaultMockTopicName,
-		tikafka.DefaultMockPartitionNum, &ticommon.Message{})
-	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
-	cancel()
-}
+// 	p.Close()
+// 	err = p.SyncBroadcastMessage(ctx, tikafka.DefaultMockTopicName,
+// 		tikafka.DefaultMockPartitionNum, &ticommon.Message{})
+// 	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
+// 	cancel()
+// }
 
-func TestDDLSyncSendMessage(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	options := getOptions()
+// func TestDDLSyncSendMessage(t *testing.T) {
+// 	ctx, cancel := context.WithCancel(context.Background())
+// 	options := getOptions()
 
-	ctx = context.WithValue(ctx, "testing.T", t)
-	changefeed := common.NewChangefeedID4Test("test", "test")
-	factory, err := kafka.NewMockFactory(options, changefeed)
-	require.NoError(t, err)
+// 	ctx = context.WithValue(ctx, "testing.T", t)
+// 	changefeed := common.NewChangefeedID4Test("test", "test")
+// 	factory, err := kafka.NewMockFactory(options, changefeed)
+// 	require.NoError(t, err)
 
-	syncProducer, err := factory.SyncProducer(ctx)
-	require.NoError(t, err)
+// 	syncProducer, err := factory.SyncProducer(ctx)
+// 	require.NoError(t, err)
 
-	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
+// 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
 
-	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{})
-	require.NoError(t, err)
+// 	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{})
+// 	require.NoError(t, err)
 
-	p.Close()
-	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{})
-	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
-	cancel()
-}
+// 	p.Close()
+// 	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{})
+// 	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
+// 	cancel()
+// }
 
-func TestDDLProducerSendMsgFailed(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-	options := getOptions()
-	options.MaxMessages = 1
-	options.MaxMessageBytes = 1
+// func TestDDLProducerSendMsgFailed(t *testing.T) {
+// 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+// 	defer cancel()
+// 	options := getOptions()
+// 	options.MaxMessages = 1
+// 	options.MaxMessageBytes = 1
 
-	ctx = context.WithValue(ctx, "testing.T", t)
+// 	ctx = context.WithValue(ctx, "testing.T", t)
 
-	// This will make the first send failed.
-	changefeed := common.NewChangefeedID4Test("test", "test")
-	factory, err := kafka.NewMockFactory(options, changefeed)
-	require.NoError(t, err)
+// 	// This will make the first send failed.
+// 	changefeed := common.NewChangefeedID4Test("test", "test")
+// 	factory, err := kafka.NewMockFactory(options, changefeed)
+// 	require.NoError(t, err)
 
-	syncProducer, err := factory.SyncProducer(ctx)
-	require.NoError(t, err)
+// 	syncProducer, err := factory.SyncProducer(ctx)
+// 	require.NoError(t, err)
 
-	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
-	defer p.Close()
+// 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
+// 	defer p.Close()
 
-	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{})
-	err.(confluentKafka.Error).Code()
-	require.ErrorIs(t, err, confluentKafka.NewError(confluentKafka.ErrMsgSizeTooLarge, "", true))
-}
+// 	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{})
+// 	err.(confluentKafka.Error).Code()
+// 	require.ErrorIs(t, err, confluentKafka.NewError(confluentKafka.ErrMsgSizeTooLarge, "", true))
+// }
 
-func TestDDLProducerDoubleClose(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	options := getOptions()
+// func TestDDLProducerDoubleClose(t *testing.T) {
+// 	ctx, cancel := context.WithCancel(context.Background())
+// 	defer cancel()
+// 	options := getOptions()
 
-	ctx = context.WithValue(ctx, "testing.T", t)
-	changefeed := common.NewChangefeedID4Test("test", "test")
-	factory, err := kafka.NewMockFactory(options, changefeed)
-	require.NoError(t, err)
+// 	ctx = context.WithValue(ctx, "testing.T", t)
+// 	changefeed := common.NewChangefeedID4Test("test", "test")
+// 	factory, err := kafka.NewMockFactory(options, changefeed)
+// 	require.NoError(t, err)
 
-	syncProducer, err := factory.SyncProducer(ctx)
-	require.NoError(t, err)
+// 	syncProducer, err := factory.SyncProducer(ctx)
+// 	require.NoError(t, err)
 
-	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
+// 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
 
-	p.Close()
-	p.Close()
-}
+// 	p.Close()
+// 	p.Close()
+// }

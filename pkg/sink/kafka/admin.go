@@ -25,6 +25,7 @@ import (
 )
 
 type admin struct {
+	ClusterAdminClient
 	client       *kafka.AdminClient
 	changefeedID common.ChangeFeedID
 	timeoutMs    int
@@ -231,8 +232,4 @@ func (a *admin) Close() {
 	log.Info("kafka admin client is fully closed",
 		zap.String("namespace", a.changefeedID.Namespace()),
 		zap.String("changefeed", a.changefeedID.Name()))
-}
-
-func (a *admin) SetRemainingFetchesUntilTopicVisible(topic string, num int) error {
-	return nil
 }
