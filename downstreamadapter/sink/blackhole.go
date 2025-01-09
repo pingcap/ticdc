@@ -79,9 +79,7 @@ func (s *BlackHoleSink) GetStartTsList(tableIds []int64, startTsList []int64) ([
 	return []int64{}, nil
 }
 
-func (s *BlackHoleSink) Close(removeChangefeed bool) error {
-	return nil
-}
+func (s *BlackHoleSink) Close(_ bool) {}
 
 func (s *BlackHoleSink) Run(_ context.Context) error {
 	return nil

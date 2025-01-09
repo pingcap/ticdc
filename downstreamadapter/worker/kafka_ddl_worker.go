@@ -241,9 +241,7 @@ func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents() error {
 	}
 }
 
-func (w *KafkaDDLWorker) Close() error {
+func (w *KafkaDDLWorker) Close() {
 	w.cancel()
 	w.producer.Close()
-
-	return nil
 }

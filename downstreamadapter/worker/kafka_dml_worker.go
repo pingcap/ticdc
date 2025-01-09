@@ -358,10 +358,8 @@ func (w *KafkaDMLWorker) sendMessages() error {
 	}
 }
 
-func (w *KafkaDMLWorker) Close() error {
+func (w *KafkaDMLWorker) Close() {
 	w.ticker.Stop()
 	w.cancel()
 	w.producer.Close()
-
-	return nil
 }

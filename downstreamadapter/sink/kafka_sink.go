@@ -187,22 +187,12 @@ func (s *KafkaSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore)
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *KafkaSink) Close(_ bool) error {
-	err := s.ddlWorker.Close()
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	err = s.dmlWorker.Close()
-	if err != nil {
-		return errors.Trace(err)
-	}
-
+func (s *KafkaSink) Close(_ bool) {
+	s.ddlWorker.Close()
+	s.dmlWorker.Close()
 	s.adminClient.Close()
 	s.topicManager.Close()
 	s.statistics.Close()
-
-	return nil
 }
 
 func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProducer, error) {

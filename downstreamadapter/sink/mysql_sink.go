@@ -167,10 +167,13 @@ func (s *MysqlSink) GetStartTsList(tableIds []int64, startTsList []int64) ([]int
 	return startTsList, nil
 }
 
-func (s *MysqlSink) Close(removeChangefeed bool) error {
+func (s *MysqlSink) Close(removeChangefeed bool) {
 	// when remove the changefeed, we need to remove the ddl ts item in the ddl worker
 	if removeChangefeed {
-		return s.ddlWorker.RemoveDDLTsItem()
+		if err := s.ddlWorker.RemoveDDLTsItem(); err != nil {
+			log.Warn("close mysql sink, remove changefeed meet error",
+				zap.Any("changefeed", s.changefeedID.String()), zap.Error(err))
+		}
 	}
 	for i := 0; i < s.workerCount; i++ {
 		s.dmlWorker[i].Close()
@@ -178,9 +181,10 @@ func (s *MysqlSink) Close(removeChangefeed bool) error {
 
 	s.ddlWorker.Close()
 
-	s.db.Close()
+	if err := s.db.Close(); err != nil {
+		log.Warn("close mysql sink db meet error", zap.Any("changefeed", s.changefeedID.String()), zap.Error(err))
+	}
 	s.statistics.Close()
-	return nil
 }
 
 func MysqlSinkForTest() (*MysqlSink, sqlmock.Sqlmock) {
