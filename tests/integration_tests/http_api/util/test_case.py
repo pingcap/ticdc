@@ -1,11 +1,9 @@
 import sys
-import os
 import requests as rq
 from requests.exceptions import RequestException
 import time
 import json
 import logging
-import pytest
 
 # init logging
 logging.basicConfig(
