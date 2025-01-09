@@ -792,6 +792,10 @@ func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
 	return m.controller.moveTable(tableId, targetNode)
 }
 
+func (m *Maintainer) GetTables() []*replica.SpanReplication {
+	return m.controller.replicationDB.GetAllTasks()
+}
+
 // SubmitScheduledEvent submits a task to controller pool to send a future event
 func (m *Maintainer) submitScheduledEvent(
 	scheduler threadpool.ThreadPool,
