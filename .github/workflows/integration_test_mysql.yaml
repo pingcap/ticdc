@@ -278,6 +278,11 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=http_api
 
+      - name: Test partition_table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=partition_table
+
       - name: Upload test logs
         if: always()
         uses: ./.github/actions/upload-test-logs
