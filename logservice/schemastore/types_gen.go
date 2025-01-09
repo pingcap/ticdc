@@ -84,7 +84,7 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 				err = msgp.WrapError(err, "PrevTableName")
 				return
 			}
-		case "PrevSchemaIDs":
+		case "prev_schema_ids":
 			var zb0002 uint32
 			zb0002, err = dc.ReadArrayHeader()
 			if err != nil {
@@ -103,7 +103,7 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 					return
 				}
 			}
-		case "PrevSchemaNames":
+		case "prev_schema_names":
 			var zb0003 uint32
 			zb0003, err = dc.ReadArrayHeader()
 			if err != nil {
@@ -122,7 +122,7 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 					return
 				}
 			}
-		case "PrevTableNames":
+		case "prev_table_names":
 			var zb0004 uint32
 			zb0004, err = dc.ReadArrayHeader()
 			if err != nil {
@@ -141,7 +141,7 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 					return
 				}
 			}
-		case "CurrentSchemaIDs":
+		case "current_schema_ids":
 			var zb0005 uint32
 			zb0005, err = dc.ReadArrayHeader()
 			if err != nil {
@@ -160,7 +160,7 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 					return
 				}
 			}
-		case "CurrentSchemaNames":
+		case "s":
 			var zb0006 uint32
 			zb0006, err = dc.ReadArrayHeader()
 			if err != nil {
@@ -373,8 +373,8 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 		err = msgp.WrapError(err, "PrevTableName")
 		return
 	}
-	// write "PrevSchemaIDs"
-	err = en.Append(0xad, 0x50, 0x72, 0x65, 0x76, 0x53, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x49, 0x44, 0x73)
+	// write "prev_schema_ids"
+	err = en.Append(0xaf, 0x70, 0x72, 0x65, 0x76, 0x5f, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x69, 0x64, 0x73)
 	if err != nil {
 		return
 	}
@@ -390,8 +390,8 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 			return
 		}
 	}
-	// write "PrevSchemaNames"
-	err = en.Append(0xaf, 0x50, 0x72, 0x65, 0x76, 0x53, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x4e, 0x61, 0x6d, 0x65, 0x73)
+	// write "prev_schema_names"
+	err = en.Append(0xb1, 0x70, 0x72, 0x65, 0x76, 0x5f, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x73)
 	if err != nil {
 		return
 	}
@@ -407,8 +407,8 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 			return
 		}
 	}
-	// write "PrevTableNames"
-	err = en.Append(0xae, 0x50, 0x72, 0x65, 0x76, 0x54, 0x61, 0x62, 0x6c, 0x65, 0x4e, 0x61, 0x6d, 0x65, 0x73)
+	// write "prev_table_names"
+	err = en.Append(0xb0, 0x70, 0x72, 0x65, 0x76, 0x5f, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x73)
 	if err != nil {
 		return
 	}
@@ -424,8 +424,8 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 			return
 		}
 	}
-	// write "CurrentSchemaIDs"
-	err = en.Append(0xb0, 0x43, 0x75, 0x72, 0x72, 0x65, 0x6e, 0x74, 0x53, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x49, 0x44, 0x73)
+	// write "current_schema_ids"
+	err = en.Append(0xb2, 0x63, 0x75, 0x72, 0x72, 0x65, 0x6e, 0x74, 0x5f, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x69, 0x64, 0x73)
 	if err != nil {
 		return
 	}
@@ -441,8 +441,8 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 			return
 		}
 	}
-	// write "CurrentSchemaNames"
-	err = en.Append(0xb2, 0x43, 0x75, 0x72, 0x72, 0x65, 0x6e, 0x74, 0x53, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x4e, 0x61, 0x6d, 0x65, 0x73)
+	// write "s"
+	err = en.Append(0xa1, 0x73)
 	if err != nil {
 		return
 	}
@@ -599,32 +599,32 @@ func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	// string "prev_table_name"
 	o = append(o, 0xaf, 0x70, 0x72, 0x65, 0x76, 0x5f, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x6e, 0x61, 0x6d, 0x65)
 	o = msgp.AppendString(o, z.PrevTableName)
-	// string "PrevSchemaIDs"
-	o = append(o, 0xad, 0x50, 0x72, 0x65, 0x76, 0x53, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x49, 0x44, 0x73)
+	// string "prev_schema_ids"
+	o = append(o, 0xaf, 0x70, 0x72, 0x65, 0x76, 0x5f, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x69, 0x64, 0x73)
 	o = msgp.AppendArrayHeader(o, uint32(len(z.PrevSchemaIDs)))
 	for za0001 := range z.PrevSchemaIDs {
 		o = msgp.AppendInt64(o, z.PrevSchemaIDs[za0001])
 	}
-	// string "PrevSchemaNames"
-	o = append(o, 0xaf, 0x50, 0x72, 0x65, 0x76, 0x53, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x4e, 0x61, 0x6d, 0x65, 0x73)
+	// string "prev_schema_names"
+	o = append(o, 0xb1, 0x70, 0x72, 0x65, 0x76, 0x5f, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x73)
 	o = msgp.AppendArrayHeader(o, uint32(len(z.PrevSchemaNames)))
 	for za0002 := range z.PrevSchemaNames {
 		o = msgp.AppendString(o, z.PrevSchemaNames[za0002])
 	}
-	// string "PrevTableNames"
-	o = append(o, 0xae, 0x50, 0x72, 0x65, 0x76, 0x54, 0x61, 0x62, 0x6c, 0x65, 0x4e, 0x61, 0x6d, 0x65, 0x73)
+	// string "prev_table_names"
+	o = append(o, 0xb0, 0x70, 0x72, 0x65, 0x76, 0x5f, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x73)
 	o = msgp.AppendArrayHeader(o, uint32(len(z.PrevTableNames)))
 	for za0003 := range z.PrevTableNames {
 		o = msgp.AppendString(o, z.PrevTableNames[za0003])
 	}
-	// string "CurrentSchemaIDs"
-	o = append(o, 0xb0, 0x43, 0x75, 0x72, 0x72, 0x65, 0x6e, 0x74, 0x53, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x49, 0x44, 0x73)
+	// string "current_schema_ids"
+	o = append(o, 0xb2, 0x63, 0x75, 0x72, 0x72, 0x65, 0x6e, 0x74, 0x5f, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x69, 0x64, 0x73)
 	o = msgp.AppendArrayHeader(o, uint32(len(z.CurrentSchemaIDs)))
 	for za0004 := range z.CurrentSchemaIDs {
 		o = msgp.AppendInt64(o, z.CurrentSchemaIDs[za0004])
 	}
-	// string "CurrentSchemaNames"
-	o = append(o, 0xb2, 0x43, 0x75, 0x72, 0x72, 0x65, 0x6e, 0x74, 0x53, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x4e, 0x61, 0x6d, 0x65, 0x73)
+	// string "s"
+	o = append(o, 0xa1, 0x73)
 	o = msgp.AppendArrayHeader(o, uint32(len(z.CurrentSchemaNames)))
 	for za0005 := range z.CurrentSchemaNames {
 		o = msgp.AppendString(o, z.CurrentSchemaNames[za0005])
@@ -743,7 +743,7 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 				err = msgp.WrapError(err, "PrevTableName")
 				return
 			}
-		case "PrevSchemaIDs":
+		case "prev_schema_ids":
 			var zb0002 uint32
 			zb0002, bts, err = msgp.ReadArrayHeaderBytes(bts)
 			if err != nil {
@@ -762,7 +762,7 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 					return
 				}
 			}
-		case "PrevSchemaNames":
+		case "prev_schema_names":
 			var zb0003 uint32
 			zb0003, bts, err = msgp.ReadArrayHeaderBytes(bts)
 			if err != nil {
@@ -781,7 +781,7 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 					return
 				}
 			}
-		case "PrevTableNames":
+		case "prev_table_names":
 			var zb0004 uint32
 			zb0004, bts, err = msgp.ReadArrayHeaderBytes(bts)
 			if err != nil {
@@ -800,7 +800,7 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 					return
 				}
 			}
-		case "CurrentSchemaIDs":
+		case "current_schema_ids":
 			var zb0005 uint32
 			zb0005, bts, err = msgp.ReadArrayHeaderBytes(bts)
 			if err != nil {
@@ -819,7 +819,7 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 					return
 				}
 			}
-		case "CurrentSchemaNames":
+		case "s":
 			var zb0006 uint32
 			zb0006, bts, err = msgp.ReadArrayHeaderBytes(bts)
 			if err != nil {
@@ -932,15 +932,15 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 
 // Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
 func (z *PersistedDDLEvent) Msgsize() (s int) {
-	s = 3 + 3 + msgp.Int64Size + 5 + msgp.ByteSize + 18 + msgp.Int64Size + 17 + msgp.Int64Size + 20 + msgp.StringPrefixSize + len(z.CurrentSchemaName) + 19 + msgp.StringPrefixSize + len(z.CurrentTableName) + 15 + msgp.Int64Size + 14 + msgp.Int64Size + 17 + msgp.StringPrefixSize + len(z.PrevSchemaName) + 16 + msgp.StringPrefixSize + len(z.PrevTableName) + 14 + msgp.ArrayHeaderSize + (len(z.PrevSchemaIDs) * (msgp.Int64Size)) + 16 + msgp.ArrayHeaderSize
+	s = 3 + 3 + msgp.Int64Size + 5 + msgp.ByteSize + 18 + msgp.Int64Size + 17 + msgp.Int64Size + 20 + msgp.StringPrefixSize + len(z.CurrentSchemaName) + 19 + msgp.StringPrefixSize + len(z.CurrentTableName) + 15 + msgp.Int64Size + 14 + msgp.Int64Size + 17 + msgp.StringPrefixSize + len(z.PrevSchemaName) + 16 + msgp.StringPrefixSize + len(z.PrevTableName) + 16 + msgp.ArrayHeaderSize + (len(z.PrevSchemaIDs) * (msgp.Int64Size)) + 18 + msgp.ArrayHeaderSize
 	for za0002 := range z.PrevSchemaNames {
 		s += msgp.StringPrefixSize + len(z.PrevSchemaNames[za0002])
 	}
-	s += 15 + msgp.ArrayHeaderSize
+	s += 17 + msgp.ArrayHeaderSize
 	for za0003 := range z.PrevTableNames {
 		s += msgp.StringPrefixSize + len(z.PrevTableNames[za0003])
 	}
-	s += 17 + msgp.ArrayHeaderSize + (len(z.CurrentSchemaIDs) * (msgp.Int64Size)) + 19 + msgp.ArrayHeaderSize
+	s += 19 + msgp.ArrayHeaderSize + (len(z.CurrentSchemaIDs) * (msgp.Int64Size)) + 2 + msgp.ArrayHeaderSize
 	for za0005 := range z.CurrentSchemaNames {
 		s += msgp.StringPrefixSize + len(z.CurrentSchemaNames[za0005])
 	}

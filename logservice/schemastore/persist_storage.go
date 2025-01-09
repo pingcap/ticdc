@@ -666,6 +666,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	p.mu.Unlock()
 
+	// TODO: do we have a better way to do this?
 	if ddlEvent.Type == byte(model.ActionExchangeTablePartition) {
 		ddlEvent.PreTableInfo, _ = p.forceGetTableInfo(ddlEvent.PrevTableID, ddlEvent.FinishedTs)
 	}
