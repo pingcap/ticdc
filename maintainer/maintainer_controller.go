@@ -297,7 +297,7 @@ func (c *Controller) FinishBootstrap(
 	// node1 will get the startTs = ddl1.ts, and then the table1 will not be included in the initial table map
 	// so we just ignore the table1 dispatcher.
 	// here tableID is physical table id
-	for tableID, _ := range workingMap {
+	for tableID := range workingMap {
 		log.Warn("found a tables not in initial table map",
 			zap.String("changefeed", c.changefeedID.Name()),
 			zap.Int64("id", tableID))
