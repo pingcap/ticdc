@@ -114,15 +114,9 @@ func (db *ReplicationDB) TryRemoveBySchemaID(schemaID int64) []*SpanReplication 
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
-<<<<<<< HEAD
 	var tasks = make([]*SpanReplication, 0)
 	for _, task := range db.schemaTasks[schemaID] {
 		db.removeSpanUnLock(task)
-=======
-	tasks := make([]*SpanReplication, 0)
-	for _, stm := range db.schemaTasks[schemaID] {
-		db.removeSpanUnLock(stm)
->>>>>>> upstream/master
 		// the task is scheduled
 		if task.GetNodeID() != "" {
 			tasks = append(tasks, task)
