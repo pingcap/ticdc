@@ -282,7 +282,8 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=partition_table
-        
+      
+      # The 3th case in this group
       - name: Test multi_tables_ddl
         if: ${{ success() }}
         run: |

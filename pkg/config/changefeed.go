@@ -44,10 +44,10 @@ type ChangefeedConfig struct {
 	MemoryQuota    uint64        `toml:"memory-quota" json:"memory-quota"`
 	// sync point related
 	// TODO:syncPointRetention|default 可以不要吗
-	EnableSyncPoint    bool           `json:"enable_sync_point" default:"false"`
-	SyncPointInterval  *time.Duration `json:"sync_point_interval" default:"1m"`
-	SyncPointRetention *time.Duration `json:"sync_point_retention" default:"24h"`
-	SinkConfig         *SinkConfig    `json:"sink_config"`
+	EnableSyncPoint    bool          `json:"enable_sync_point" default:"false"`
+	SyncPointInterval  time.Duration `json:"sync_point_interval" default:"1m"`
+	SyncPointRetention time.Duration `json:"sync_point_retention" default:"24h"`
+	SinkConfig         *SinkConfig   `json:"sink_config"`
 }
 
 // ChangeFeedInfo describes the detail of a ChangeFeed
@@ -88,9 +88,9 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		ForceReplicate:     info.Config.ForceReplicate,
 		SinkConfig:         info.Config.Sink,
 		Filter:             info.Config.Filter,
-		EnableSyncPoint:    *info.Config.EnableSyncPoint,
-		SyncPointInterval:  info.Config.SyncPointInterval,
-		SyncPointRetention: info.Config.SyncPointRetention,
+		EnableSyncPoint:    util.GetOrZero(info.Config.EnableSyncPoint),
+		SyncPointInterval:  util.GetOrZero(info.Config.SyncPointInterval),
+		SyncPointRetention: util.GetOrZero(info.Config.SyncPointRetention),
 		MemoryQuota:        info.Config.MemoryQuota,
 		// other fields are not necessary for maintainer
 	}

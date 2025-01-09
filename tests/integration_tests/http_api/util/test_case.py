@@ -260,7 +260,9 @@ def remove_changefeed(cfID = "changefeed-test3"):
     assert_status_code(resp, rq.codes.ok, url)
 
 
+# FIXME: Enable this test case after we fully support move table API
 def move_table(cfID = "changefeed-test1"):
+    return 
     # sleep 5 seconds to make sure all tables is scheduled
     time.sleep(5)
     
@@ -417,7 +419,7 @@ if __name__ == "__main__":
         "pause_changefeed": pause_changefeed,
         "update_changefeed": update_changefeed,
         "resume_changefeed": resume_changefeed,
-        #"move_table": move_table,
+        "move_table": move_table,
         "get_processor": get_processor,
         "list_processor": list_processor,
         "set_log_level": set_log_level,
