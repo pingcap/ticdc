@@ -32,7 +32,7 @@ var (
 func NewConfig(options *Options) *kafka.ConfigMap {
 	config := &kafka.ConfigMap{
 		"bootstrap.servers": strings.Join(options.BrokerEndpoints, ","),
-		// "log_level",options.
+		"log_level":         int(options.LogLevel),
 	}
 	if options.EnableTLS {
 		_ = config.SetKey("security.protocol", ProtocolSSL)
