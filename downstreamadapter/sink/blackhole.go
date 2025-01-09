@@ -14,6 +14,7 @@
 package sink
 
 import (
+	"context"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -79,5 +80,9 @@ func (s *BlackHoleSink) GetStartTsList(tableIds []int64, startTsList []int64) ([
 }
 
 func (s *BlackHoleSink) Close(removeChangefeed bool) error {
+	return nil
+}
+
+func (s *BlackHoleSink) Run(_ context.Context) error {
 	return nil
 }

@@ -27,13 +27,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
-// MysqlDMLWorker is use to flush the dml event downstream
+// MysqlDMLWorker is used to flush the dml event downstream
 type MysqlDMLWorker struct {
 	ctx          context.Context
-	errGroup     *errgroup.Group
 	changefeedID common.ChangeFeedID
 
 	eventChan   chan *commonEvent.DMLEvent
@@ -49,7 +47,6 @@ func NewMysqlDMLWorker(
 	config *mysql.MysqlConfig,
 	id int,
 	changefeedID common.ChangeFeedID,
-	errGroup *errgroup.Group,
 	statistics *metrics.Statistics,
 ) *MysqlDMLWorker {
 	return &MysqlDMLWorker{
@@ -59,7 +56,6 @@ func NewMysqlDMLWorker(
 		maxRows:      config.MaxTxnRow,
 		eventChan:    make(chan *commonEvent.DMLEvent, 16),
 		changefeedID: changefeedID,
-		errGroup:     errGroup,
 	}
 }
 
@@ -67,75 +63,72 @@ func (w *MysqlDMLWorker) GetEventChan() chan *commonEvent.DMLEvent {
 	return w.eventChan
 }
 
-func (w *MysqlDMLWorker) Run() {
-	w.errGroup.Go(func() error {
-		namespace := w.changefeedID.Namespace()
-		changefeed := w.changefeedID.Name()
+func (w *MysqlDMLWorker) Run() error {
+	namespace := w.changefeedID.Namespace()
+	changefeed := w.changefeedID.Name()
 
-		workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(w.id))
-		workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(w.id))
-		workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(namespace, changefeed, strconv.Itoa(w.id))
+	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(w.id))
+	workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(w.id))
+	workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(namespace, changefeed, strconv.Itoa(w.id))
 
-		defer func() {
-			metrics.WorkerFlushDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(w.id))
-			metrics.WorkerTotalDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(w.id))
-			metrics.WorkerHandledRows.DeleteLabelValues(namespace, changefeed, strconv.Itoa(w.id))
-		}()
+	defer func() {
+		metrics.WorkerFlushDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(w.id))
+		metrics.WorkerTotalDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(w.id))
+		metrics.WorkerHandledRows.DeleteLabelValues(namespace, changefeed, strconv.Itoa(w.id))
+	}()
 
-		totalStart := time.Now()
-
-		events := make([]*commonEvent.DMLEvent, 0)
-		rows := 0
-		for {
-			needFlush := false
-			select {
-			case <-w.ctx.Done():
-				return errors.Trace(w.ctx.Err())
-			case txnEvent := <-w.eventChan:
-				events = append(events, txnEvent)
-				rows += int(txnEvent.Len())
-				if rows > w.maxRows {
-					needFlush = true
-				}
-				if !needFlush {
-					delay := time.NewTimer(10 * time.Millisecond)
-					for !needFlush {
-						select {
-						case txnEvent := <-w.eventChan:
-							workerHandledRows.Add(float64(txnEvent.Len()))
-							events = append(events, txnEvent)
-							rows += int(txnEvent.Len())
-							if rows > w.maxRows {
-								needFlush = true
-							}
-						case <-delay.C:
+	totalStart := time.Now()
+	events := make([]*commonEvent.DMLEvent, 0)
+	rows := 0
+	for {
+		needFlush := false
+		select {
+		case <-w.ctx.Done():
+			return errors.Trace(w.ctx.Err())
+		case txnEvent := <-w.eventChan:
+			events = append(events, txnEvent)
+			rows += int(txnEvent.Len())
+			if rows > w.maxRows {
+				needFlush = true
+			}
+			if !needFlush {
+				delay := time.NewTimer(10 * time.Millisecond)
+				for !needFlush {
+					select {
+					case txnEvent := <-w.eventChan:
+						workerHandledRows.Add(float64(txnEvent.Len()))
+						events = append(events, txnEvent)
+						rows += int(txnEvent.Len())
+						if rows > w.maxRows {
 							needFlush = true
 						}
-					}
-					// Release resources promptly
-					if !delay.Stop() {
-						select {
-						case <-delay.C:
-						default:
-						}
+					case <-delay.C:
+						needFlush = true
 					}
 				}
-				start := time.Now()
-				err := w.mysqlWriter.Flush(events)
-				if err != nil {
-					return errors.Trace(err)
+				// Release resources promptly
+				if !delay.Stop() {
+					select {
+					case <-delay.C:
+					default:
+					}
 				}
-				workerFlushDuration.Observe(time.Since(start).Seconds())
-				// we record total time to calcuate the worker busy ratio.
-				// so we record the total time after flushing, to unified statistics on
-				// flush time and total time
-				workerTotalDuration.Observe(time.Since(totalStart).Seconds())
-				totalStart = time.Now()
-				events = events[:0]
-				rows = 0
 			}
+			start := time.Now()
+			err := w.mysqlWriter.Flush(events)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			workerFlushDuration.Observe(time.Since(start).Seconds())
+			// we record total time to calcuate the worker busy ratio.
+			// so we record the total time after flushing, to unified statistics on
+			// flush time and total time
+			workerTotalDuration.Observe(time.Since(totalStart).Seconds())
+			totalStart = time.Now()
+			events = events[:0]
+			rows = 0
 		}
-	})
+	}
 }
 
 func (w *MysqlDMLWorker) Close() {
@@ -144,10 +137,8 @@ func (w *MysqlDMLWorker) Close() {
 
 // MysqlDDLWorker is use to flush the ddl event and sync point eventdownstream
 type MysqlDDLWorker struct {
-	ctx          context.Context
 	changefeedID common.ChangeFeedID
 	mysqlWriter  *mysql.MysqlWriter
-	errgroup     *errgroup.Group
 }
 
 func NewMysqlDDLWorker(
@@ -155,14 +146,11 @@ func NewMysqlDDLWorker(
 	db *sql.DB,
 	config *mysql.MysqlConfig,
 	changefeedID common.ChangeFeedID,
-	errGroup *errgroup.Group,
 	statistics *metrics.Statistics,
 ) *MysqlDDLWorker {
 	return &MysqlDDLWorker{
-		ctx:          ctx,
 		changefeedID: changefeedID,
 		mysqlWriter:  mysql.NewMysqlWriter(ctx, db, config, changefeedID, statistics),
-		errgroup:     errGroup,
 	}
 }
 

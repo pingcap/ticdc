@@ -36,6 +36,7 @@ type Sink interface {
 
 	SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore)
 	Close(removeChangefeed bool) error
+	Run(ctx context.Context) error
 }
 
 func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID common.ChangeFeedID, errCh chan error) (Sink, error) {

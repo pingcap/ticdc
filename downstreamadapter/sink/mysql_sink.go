@@ -49,7 +49,6 @@ type MysqlSink struct {
 	workerCount int
 
 	db         *sql.DB
-	errgroup   *errgroup.Group
 	statistics *metrics.Statistics
 
 	errCh    chan error
@@ -57,63 +56,37 @@ type MysqlSink struct {
 }
 
 func NewMysqlSink(ctx context.Context, changefeedID common.ChangeFeedID, workerCount int, config *config.ChangefeedConfig, sinkURI *url.URL, errCh chan error) (*MysqlSink, error) {
-	errgroup, ctx := errgroup.WithContext(ctx)
-	mysqlSink := MysqlSink{
-		changefeedID: changefeedID,
-		dmlWorker:    make([]*worker.MysqlDMLWorker, workerCount),
-		workerCount:  workerCount,
-		errgroup:     errgroup,
-		statistics:   metrics.NewStatistics(changefeedID, "TxnSink"),
-		errCh:        errCh,
-		isNormal:     1,
-	}
-
 	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
 	}
 	cfg.SyncPointRetention = utils.GetOrZero(config.SyncPointRetention)
-
-	for i := 0; i < workerCount; i++ {
-		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, mysqlSink.changefeedID, errgroup, mysqlSink.statistics)
-	}
-	mysqlSink.ddlWorker = worker.NewMysqlDDLWorker(ctx, db, cfg, mysqlSink.changefeedID, errgroup, mysqlSink.statistics)
-	mysqlSink.db = db
-
-	go mysqlSink.run()
-
-	return &mysqlSink, nil
-}
-
-// for test
-func NewMysqlSinkWithDBAndConfig(ctx context.Context, changefeedID common.ChangeFeedID, workerCount int, cfg *mysql.MysqlConfig, db *sql.DB, errCh chan error) (*MysqlSink, error) {
-	errgroup, ctx := errgroup.WithContext(ctx)
 	mysqlSink := MysqlSink{
 		changefeedID: changefeedID,
+		db:           db,
 		dmlWorker:    make([]*worker.MysqlDMLWorker, workerCount),
 		workerCount:  workerCount,
-		errgroup:     errgroup,
 		statistics:   metrics.NewStatistics(changefeedID, "TxnSink"),
 		errCh:        errCh,
 		isNormal:     1,
 	}
-
 	for i := 0; i < workerCount; i++ {
-		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, mysqlSink.changefeedID, errgroup, mysqlSink.statistics)
+		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, mysqlSink.changefeedID, mysqlSink.statistics)
 	}
-	mysqlSink.ddlWorker = worker.NewMysqlDDLWorker(ctx, db, cfg, mysqlSink.changefeedID, errgroup, mysqlSink.statistics)
-	mysqlSink.db = db
-
-	go mysqlSink.run()
-
+	mysqlSink.ddlWorker = worker.NewMysqlDDLWorker(ctx, db, cfg, mysqlSink.changefeedID, mysqlSink.statistics)
 	return &mysqlSink, nil
 }
 
-func (s *MysqlSink) run() {
+func (s *MysqlSink) Run(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
 	for i := 0; i < s.workerCount; i++ {
-		s.dmlWorker[i].Run()
+		g.Go(func() error {
+			return s.dmlWorker[i].Run()
+		})
 	}
-	err := s.errgroup.Wait()
+	err := g.Wait()
+	// todo: why set is normal to 0 only error is not canceled ?
+	// todo: can we return the error directly to the caller ?
 	if errors.Cause(err) != context.Canceled {
 		atomic.StoreUint32(&s.isNormal, 0)
 		select {
@@ -124,6 +97,29 @@ func (s *MysqlSink) run() {
 				zap.Error(err))
 		}
 	}
+	return nil
+}
+
+// for test
+func NewMysqlSinkWithDBAndConfig(ctx context.Context, changefeedID common.ChangeFeedID, workerCount int, cfg *mysql.MysqlConfig, db *sql.DB, errCh chan error) (*MysqlSink, error) {
+	mysqlSink := MysqlSink{
+		changefeedID: changefeedID,
+		dmlWorker:    make([]*worker.MysqlDMLWorker, workerCount),
+		workerCount:  workerCount,
+		statistics:   metrics.NewStatistics(changefeedID, "TxnSink"),
+		errCh:        errCh,
+		isNormal:     1,
+	}
+
+	for i := 0; i < workerCount; i++ {
+		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, mysqlSink.changefeedID, mysqlSink.statistics)
+	}
+	mysqlSink.ddlWorker = worker.NewMysqlDDLWorker(ctx, db, cfg, mysqlSink.changefeedID, mysqlSink.statistics)
+	mysqlSink.db = db
+
+	go mysqlSink.Run(ctx)
+
+	return &mysqlSink, nil
 }
 
 func (s *MysqlSink) IsNormal() bool {

@@ -116,11 +116,10 @@ func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI
 		errgroup:         errGroup,
 		errCh:            errCh,
 	}
-	go sink.run(ctx)
 	return sink, nil
 }
 
-func (s *KafkaSink) run(ctx context.Context) {
+func (s *KafkaSink) Run(ctx context.Context) error {
 	s.dmlWorker.Run(ctx)
 	s.ddlWorker.Run()
 	s.errgroup.Go(func() error {
@@ -138,6 +137,7 @@ func (s *KafkaSink) run(ctx context.Context) {
 				zap.Error(err))
 		}
 	}
+	return nil
 }
 
 func (s *KafkaSink) IsNormal() bool {

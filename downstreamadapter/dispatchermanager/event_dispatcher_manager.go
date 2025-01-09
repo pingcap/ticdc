@@ -151,7 +151,8 @@ func NewEventDispatcherManager(
 		}
 	}
 
-	err := manager.startSink(ctx)
+	var err error
+	manager.sink, err = sink.NewSink(ctx, manager.config, manager.changefeedID, manager.errCh)
 	if err != nil {
 		return nil, 0, errors.Trace(err)
 	}
@@ -162,6 +163,12 @@ func NewEventDispatcherManager(
 	if err != nil {
 		return nil, 0, errors.Trace(err)
 	}
+
+	manager.wg.Add(1)
+	go func() {
+		defer manager.wg.Done()
+		manager.sink.Run(ctx)
+	}()
 
 	// collect errors from error channel
 	manager.wg.Add(1)
@@ -198,15 +205,6 @@ func NewEventDispatcherManager(
 		zap.Uint64("startTs", startTs),
 		zap.Uint64("tableTriggerStartTs", tableTriggerStartTs))
 	return manager, tableTriggerStartTs, nil
-}
-
-func (e *EventDispatcherManager) startSink(ctx context.Context) error {
-	sink, err := sink.NewSink(ctx, e.config, e.changefeedID, e.errCh)
-	if err != nil {
-		return err
-	}
-	e.sink = sink
-	return nil
 }
 
 func (e *EventDispatcherManager) TryClose(removeChangefeed bool) bool {
