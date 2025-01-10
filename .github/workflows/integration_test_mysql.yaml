@@ -288,6 +288,11 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
 
+      - name: Test multi_tables_ddl
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+
       - name: Upload test logs
         if: always()
         uses: ./.github/actions/upload-test-logs
