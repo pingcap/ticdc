@@ -26,7 +26,7 @@ trap stop_tidb_cluster EXIT
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare $*
 	test_owner_ha $*
-	# test_capture_ha $*
+	test_capture_ha $*
 fi
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
