@@ -169,12 +169,14 @@ func NewEventDispatcherManager(
 	go func() {
 		defer wg.Done()
 		err = manager.sink.Run(ctx)
-		select {
-		case <-ctx.Done():
-			return
-		case manager.errCh <- err:
-		default:
-			log.Error("error channel is full, discard error", zap.Any("changefeedID", changefeedID.String()), zap.Error(err))
+		if err != nil && errors.Cause(err) != context.Canceled {
+			select {
+			case <-ctx.Done():
+				return
+			case manager.errCh <- err:
+			default:
+				log.Error("error channel is full, discard error", zap.Any("changefeedID", changefeedID.String()), zap.Error(err))
+			}
 		}
 	}()
 
