@@ -29,7 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/errors"
@@ -55,13 +55,13 @@ type coordinator struct {
 	controller *Controller
 
 	mc            messaging.MessageCenter
-	stream        dynstream.DynamicStream[int, string, *Event, *Controller, *StreamHandler]
 	taskScheduler threadpool.ThreadPool
 
 	gcManager gc.Manager
 	pdClient  pd.Client
 	pdClock   pdutil.Clock
 
+	eventCh             *chann.DrainableChann[*Event]
 	updatedChangefeedCh chan map[common.ChangeFeedID]*changefeed.Changefeed
 	stateChangedCh      chan *ChangefeedStateChangeEvent
 	backend             changefeed.Backend
@@ -85,6 +85,7 @@ func New(node *node.Info,
 		nodeInfo:            node,
 		lastTickTime:        time.Now(),
 		gcManager:           gc.NewManager(clusterID, pdClient, pdClock),
+		eventCh:             chann.NewAutoDrainChann[*Event](),
 		pdClient:            pdClient,
 		pdClock:             pdClock,
 		mc:                  mc,
@@ -92,8 +93,6 @@ func New(node *node.Info,
 		stateChangedCh:      make(chan *ChangefeedStateChangeEvent, 8),
 		backend:             backend,
 	}
-	c.stream = dynstream.NewDynamicStream(NewStreamHandler())
-	c.stream.Start()
 	c.taskScheduler = threadpool.NewThreadPoolDefault()
 	c.closed.Store(false)
 
@@ -103,17 +102,14 @@ func New(node *node.Info,
 		c.updatedChangefeedCh,
 		c.stateChangedCh,
 		backend,
-		c.stream,
+		c.eventCh,
 		c.taskScheduler,
 		batchSize,
 		balanceCheckInterval,
 	)
 
 	c.controller = controller
-	if err := c.stream.AddPath("coordinator", controller); err != nil {
-		log.Panic("failed to add path",
-			zap.Error(err))
-	}
+
 	// receive messages
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
 
@@ -135,7 +131,7 @@ func (c *coordinator) recvMessages(_ context.Context, msg *messaging.TargetMessa
 	if c.closed.Load() {
 		return nil
 	}
-	c.stream.Push("coordinator", &Event{message: msg})
+	c.eventCh.In() <- &Event{message: msg}
 	return nil
 }
 
@@ -152,6 +148,8 @@ func (c *coordinator) Run(ctx context.Context) error {
 	defer gcTick.Stop()
 	updateMetricsTicker := time.NewTicker(time.Second * 1)
 	defer updateMetricsTicker.Stop()
+
+	go c.runHandleEvent(ctx)
 
 	failpoint.Inject("coordinator-run-with-error", func() error {
 		return errors.New("coordinator run with error")
@@ -177,8 +175,17 @@ func (c *coordinator) Run(ctx context.Context) error {
 			if err := c.handleStateChangedEvent(ctx, event); err != nil {
 				return errors.Trace(err)
 			}
-		case <-updateMetricsTicker.C:
-			c.updateMetricsOnce()
+		}
+	}
+}
+
+func (c *coordinator) runHandleEvent(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case event := <-c.eventCh.Out():
+			c.controller.HandleEvent(event)
 		}
 	}
 }
@@ -289,7 +296,7 @@ func (c *coordinator) AsyncStop() {
 		c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
 		c.controller.Stop()
 		c.taskScheduler.Stop()
-		c.stream.Close()
+		c.eventCh.CloseAndDrain()
 		c.cancel()
 	}
 }
@@ -319,10 +326,4 @@ func (c *coordinator) updateGCSafepoint(
 	gcSafepointUpperBound := minCheckpointTs - 1
 	err := c.gcManager.TryUpdateGCSafePoint(ctx, gcSafepointUpperBound, false)
 	return errors.Trace(err)
-}
-
-func (c *coordinator) updateMetricsOnce() {
-	dsMetrics := c.stream.GetMetrics()
-	metricsDSInputChanLen.Set(float64(dsMetrics.EventChanSize))
-	metricsDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 }
