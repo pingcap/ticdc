@@ -37,6 +37,7 @@ import (
 	"github.com/pingcap/tiflow/pkg/txnutil/gc"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -66,6 +67,7 @@ type coordinator struct {
 	backend             changefeed.Backend
 
 	cancel func()
+	closed atomic.Bool
 }
 
 func New(node *node.Info,
@@ -93,6 +95,7 @@ func New(node *node.Info,
 	c.stream = dynstream.NewDynamicStream(NewStreamHandler())
 	c.stream.Start()
 	c.taskScheduler = threadpool.NewThreadPoolDefault()
+	c.closed.Store(false)
 
 	controller := NewController(
 		c.version,
@@ -129,6 +132,9 @@ func New(node *node.Info,
 }
 
 func (c *coordinator) recvMessages(_ context.Context, msg *messaging.TargetMessage) error {
+	if c.closed.Load() {
+		return nil
+	}
 	c.stream.Push("coordinator", &Event{message: msg})
 	return nil
 }
@@ -242,9 +248,6 @@ func (c *coordinator) saveCheckpointTs(ctx context.Context, cfs map[common.Chang
 	return nil
 }
 
-func (c *coordinator) handleNodeChange(nodes map[node.ID]*node.Info) {
-}
-
 func (c *coordinator) CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error {
 	return c.controller.CreateChangefeed(ctx, info)
 }
@@ -282,11 +285,13 @@ func shouldRunChangefeed(state model.FeedState) bool {
 }
 
 func (c *coordinator) AsyncStop() {
-	c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
-	c.controller.Stop()
-	c.taskScheduler.Stop()
-	c.stream.Close()
-	c.cancel()
+	if c.closed.CompareAndSwap(false, true) {
+		c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
+		c.controller.Stop()
+		c.taskScheduler.Stop()
+		c.stream.Close()
+		c.cancel()
+	}
 }
 
 func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
