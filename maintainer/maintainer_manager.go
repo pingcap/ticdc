@@ -226,12 +226,13 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 			zap.Any("config", cfConfig))
 	}
 	cf := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.taskScheduler,
-		m.pdAPI, m.tsoClient, m.regionCache, req.CheckpointTs)
+		m.pdAPI, m.tsoClient, m.regionCache, req.CheckpointTs, req.IsNewChangfeed)
 	if err != nil {
 		log.Warn("add path to dynstream failed, coordinator will retry later", zap.Error(err))
 		return
 	}
-	cf.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
+
+	cf.pushEvent(&Event{changefeedID: cfID, eventType: EventInit}) // 改了这个顺便
 	m.maintainers.Store(cfID, cf)
 }
 

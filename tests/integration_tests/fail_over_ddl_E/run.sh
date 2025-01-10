@@ -12,7 +12,7 @@
 # --> we expect the cluster will get the correct table count and continue to sync the following events successfully.
 #     1 ddl is drop databases
 #     2 ddl is drop table
-#     3 ddl is rename table 
+#     3 ddl is rename table
 #     4 ddl is truncate table
 
 set -eu
@@ -78,7 +78,7 @@ function failOverCaseE-1() {
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockorWaitBeforeWrite=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-	
+
 	# make node1 to be the coordinator and maintainer
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
 
@@ -136,7 +136,7 @@ function failOverCaseE-2() {
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockorWaitBeforeWrite=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-	
+
 	# make node1 to be the coordinator and maintainer
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
 
@@ -203,7 +203,7 @@ function failOverCaseE-3() {
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockorWaitBeforeWrite=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
-	
+
 	# make node1 to be the coordinator and maintainer
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
 
@@ -273,7 +273,7 @@ function failOverCaseE-4() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 
-    # make node1 to be the coordinator and maintainer
+	# make node1 to be the coordinator and maintainer
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true)'

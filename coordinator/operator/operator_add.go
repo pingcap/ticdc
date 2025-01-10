@@ -94,6 +94,7 @@ func (m *AddMaintainerOperator) Start() {
 func (m *AddMaintainerOperator) PostFinish() {
 	if !m.canceled.Load() {
 		m.db.MarkMaintainerReplicating(m.cf)
+		m.cf.SetIsNew(false)
 	} else {
 		m.db.MarkMaintainerAbsent(m.cf)
 	}

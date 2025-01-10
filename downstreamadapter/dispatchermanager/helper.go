@@ -280,7 +280,7 @@ func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *Event
 		}
 	}
 	if len(infos) > 0 {
-		err := eventDispatcherManager.newDispatchers(infos)
+		err := eventDispatcherManager.newDispatchers(infos, false)
 		if err != nil {
 			select {
 			case eventDispatcherManager.errCh <- err:

@@ -504,7 +504,7 @@ func (h *OpenAPIV2) resumeChangefeed(c *gin.Context) {
 		}
 	}()
 
-	err = coordinator.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs)
+	err = coordinator.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs, cfg.OverwriteCheckpointTs != 0)
 	if err != nil {
 		_ = c.Error(err)
 		return

@@ -160,6 +160,7 @@ func (c *coordinator) Run(ctx context.Context) error {
 }
 
 func (c *coordinator) handleStateChangedEvent(ctx context.Context, event *ChangefeedStateChangeEvent) error {
+	log.Info("hyy coordinator handleStateChangedEvent", zap.Any("event", event))
 	cf := c.controller.GetTask(event.ChangefeedID)
 	if cf == nil {
 		log.Warn("changefeed not found", zap.String("changefeed", event.ChangefeedID.String()))
@@ -185,7 +186,7 @@ func (c *coordinator) handleStateChangedEvent(ctx context.Context, event *Change
 	switch event.State {
 	case model.StateWarning:
 		c.controller.operatorController.StopChangefeed(ctx, event.ChangefeedID, false)
-		c.controller.changefeedDB.Resume(event.ChangefeedID, false)
+		c.controller.changefeedDB.Resume(event.ChangefeedID, false, false)
 	case model.StateFailed, model.StateFinished:
 		c.controller.operatorController.StopChangefeed(ctx, event.ChangefeedID, false)
 	default:
@@ -236,8 +237,8 @@ func (c *coordinator) PauseChangefeed(ctx context.Context, id common.ChangeFeedI
 	return c.controller.PauseChangefeed(ctx, id)
 }
 
-func (c *coordinator) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64) error {
-	return c.controller.ResumeChangefeed(ctx, id, newCheckpointTs)
+func (c *coordinator) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64, overwriteCheckpointTs bool) error {
+	return c.controller.ResumeChangefeed(ctx, id, newCheckpointTs, overwriteCheckpointTs)
 }
 
 func (c *coordinator) UpdateChangefeed(ctx context.Context, change *config.ChangeFeedInfo) error {

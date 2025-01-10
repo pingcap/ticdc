@@ -130,7 +130,7 @@ func (m *DispatcherOrchestrator) handleAddDispatcherManager(from node.ID, req *h
 				zap.String("changefeedID", cfId.Name()), zap.Error(err))
 			return err
 		}
-		manager, startTs, err = dispatchermanager.NewEventDispatcherManager(cfId, cfConfig, req.TableTriggerEventDispatcherId, req.StartTs, from)
+		manager, startTs, err = dispatchermanager.NewEventDispatcherManager(cfId, cfConfig, req.TableTriggerEventDispatcherId, req.StartTs, from, req.IsNewChangfeed)
 		// Fast return the error to maintainer.
 		if err != nil {
 			log.Error("failed to create new dispatcher manager",
@@ -154,7 +154,7 @@ func (m *DispatcherOrchestrator) handleAddDispatcherManager(from node.ID, req *h
 		// when maintainer is transferred to a new node, maybe there has an event dispatcher manager without table trigger event dispatcher
 		// so we need to add a table trigger event dispatcher to the event dispatcher manager
 		if manager.GetTableTriggerEventDispatcher() == nil && req.TableTriggerEventDispatcherId != nil {
-			startTs, err = manager.NewTableTriggerEventDispatcher(req.TableTriggerEventDispatcherId, req.StartTs)
+			startTs, err = manager.NewTableTriggerEventDispatcher(req.TableTriggerEventDispatcherId, req.StartTs, false)
 			if err != nil {
 				log.Error("failed to create new table trigger event dispatcher",
 					zap.Any("changefeedID", cfId.Name()), zap.Error(err))

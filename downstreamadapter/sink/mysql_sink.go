@@ -162,7 +162,17 @@ func (s *MysqlSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *MysqlSink) AddCheckpointTs(ts uint64) {}
 
-func (s *MysqlSink) GetStartTsList(tableIds []int64, startTsList []int64) ([]int64, error) {
+func (s *MysqlSink) GetStartTsList(tableIds []int64, startTsList []int64, cleanDDLTs bool) ([]int64, error) {
+	if cleanDDLTs {
+		// means we just need to remove the ddl ts item for this changefeed, and return startTsList directly.
+		err := s.ddlWorker.RemoveDDLTsItem()
+		if err != nil {
+			atomic.StoreUint32(&s.isNormal, 0)
+			return nil, err
+		}
+		return startTsList, nil
+	}
+
 	startTsList, err := s.ddlWorker.GetStartTsList(tableIds, startTsList)
 	if err != nil {
 		atomic.StoreUint32(&s.isNormal, 0)
