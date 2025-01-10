@@ -178,10 +178,10 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=autorandom
 
-      # - name: Test availability
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=availability
+      - name: Test availability
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=availability
 
       - name: Test bank
         if: ${{ success() }}
