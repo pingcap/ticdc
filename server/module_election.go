@@ -136,15 +136,11 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			coordinatorVersion, 10000, time.Minute)
 		e.svr.setCoordinator(co)
 		err = co.Run(ctx)
-
-		log.Info("fizz coordinator return error",
-			zap.String("captureID", string(e.svr.info.ID)),
-			zap.Error(err))
 		// When coordinator exits, we need to stop it.
 		e.svr.coordinator.AsyncStop()
-		log.Info("coordinator stop", zap.String("captureID", string(e.svr.info.ID)),
-			zap.Int64("coordinatorVersion", coordinatorVersion))
 		e.svr.setCoordinator(nil)
+		log.Info("coordinator stop", zap.String("captureID", string(e.svr.info.ID)),
+			zap.Int64("coordinatorVersion", coordinatorVersion), zap.Error(err))
 
 		if !cerror.ErrNotOwner.Equal(err) {
 			// if coordinator exits, resign the coordinator key,
@@ -157,7 +153,6 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 					cancel()
 					return errors.Trace(resignErr)
 				}
-
 				log.Warn("coordinator resign timeout", zap.String("captureID", string(e.svr.info.ID)),
 					zap.Error(resignErr), zap.Int64("coordinatorVersion", coordinatorVersion))
 			}

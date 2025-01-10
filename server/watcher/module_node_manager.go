@@ -37,10 +37,10 @@ type OwnerChangeHandler func(newOwnerKeys string)
 // NodeManager manager the read view of all captures, other modules can get the captures information from it
 // and register server update event handler
 type NodeManager struct {
-	session    *concurrency.Session
-	etcdClient etcd.CDCEtcdClient
-	owner      atomic.Value
-	nodes      atomic.Pointer[map[node.ID]*node.Info]
+	session       *concurrency.Session
+	etcdClient    etcd.CDCEtcdClient
+	coordinatorID atomic.Value
+	nodes         atomic.Pointer[map[node.ID]*node.Info]
 
 	nodeChangeHandlers struct {
 		sync.RWMutex
@@ -70,7 +70,7 @@ func NewNodeManager(
 		}{m: make(map[string]OwnerChangeHandler)},
 	}
 	m.nodes.Store(&map[node.ID]*node.Info{})
-	m.owner.Store("")
+	m.coordinatorID.Store("")
 	return m
 }
 
@@ -90,16 +90,16 @@ func (c *NodeManager) Tick(
 	oldMap := *c.nodes.Load()
 
 	ownerChanged := false
-	oldOwnerKeys := c.owner.Load().(string)
-	newOwnerKeys, err := c.etcdClient.GetOwnerID(context.Background())
+	oldCoordinatorID := c.coordinatorID.Load().(string)
+	newCoordinatorID, err := c.etcdClient.GetOwnerID(context.Background())
 	if err != nil {
-		log.Error("fizz get owner id failed", zap.Error(err))
+		log.Warn("get coordinator id failed, will retry in next tick", zap.Error(err))
 	}
 
-	if newOwnerKeys != oldOwnerKeys {
-		log.Info("fizz owner leaseID changed", zap.String("old", oldOwnerKeys), zap.String("new", newOwnerKeys))
+	if newCoordinatorID != oldCoordinatorID {
+		log.Info("coordinator changed", zap.String("oldID", oldCoordinatorID), zap.String("newID", newCoordinatorID))
 		ownerChanged = true
-		c.owner.Store(newOwnerKeys)
+		c.coordinatorID.Store(newCoordinatorID)
 	}
 
 	for _, info := range oldMap {
@@ -127,12 +127,11 @@ func (c *NodeManager) Tick(
 	}
 
 	if ownerChanged {
-		log.Info("owner change detected")
-		// handle owner change event
+		// handle coordinator change event
 		c.ownerChangeHandlers.RLock()
 		defer c.ownerChangeHandlers.RUnlock()
 		for _, handler := range c.ownerChangeHandlers.m {
-			handler(newOwnerKeys)
+			handler(newCoordinatorID)
 		}
 	}
 
