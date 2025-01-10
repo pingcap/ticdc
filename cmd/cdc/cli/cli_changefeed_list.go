@@ -16,7 +16,7 @@ package cli
 import (
 	"time"
 
-	"github.com/pingcap/ticdc/cmd/factory"
+	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	v2 "github.com/pingcap/ticdc/pkg/api/v2"
 	"github.com/pingcap/tiflow/cdc/api/owner"
 	"github.com/pingcap/tiflow/cdc/model"

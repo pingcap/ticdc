@@ -1,4 +1,4 @@
-// Copyright 2021 PingCAP, Inc.
+// Copyright 2024 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,21 +14,18 @@
 package cli
 
 import (
-	"github.com/pingcap/ticdc/cmd/factory"
+	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/spf13/cobra"
 )
 
-// newCmdCapture creates the `cli capture` command.
-func newCmdCapture(f factory.Factory) *cobra.Command {
-	cmds := &cobra.Command{
-		Use:   "capture",
-		Short: "Manage capture (capture is a CDC server instance)",
-		Args:  cobra.NoArgs,
+// newCmdTso creates the `cli tso` command.
+func newCmdTso(f factory.Factory) *cobra.Command {
+	command := &cobra.Command{
+		Use:   "tso",
+		Short: "Manage tso",
 	}
-	cmds.AddCommand(
-		newCmdListCapture(f),
-		// TODO: add resign owner command
-	)
 
-	return cmds
+	command.AddCommand(newCmdQueryTso(f))
+
+	return command
 }

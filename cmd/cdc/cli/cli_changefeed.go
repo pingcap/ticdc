@@ -14,7 +14,7 @@
 package cli
 
 import (
-	"github.com/pingcap/ticdc/cmd/factory"
+	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/spf13/cobra"
 )
 
