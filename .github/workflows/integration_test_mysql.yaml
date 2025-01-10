@@ -288,7 +288,7 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
 
-      - name: Test multi_tables_ddl
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
