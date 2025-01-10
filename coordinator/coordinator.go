@@ -160,7 +160,6 @@ func (c *coordinator) Run(ctx context.Context) error {
 }
 
 func (c *coordinator) handleStateChangedEvent(ctx context.Context, event *ChangefeedStateChangeEvent) error {
-	log.Info("hyy coordinator handleStateChangedEvent", zap.Any("event", event))
 	cf := c.controller.GetTask(event.ChangefeedID)
 	if cf == nil {
 		log.Warn("changefeed not found", zap.String("changefeed", event.ChangefeedID.String()))

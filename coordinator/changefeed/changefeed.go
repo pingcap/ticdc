@@ -122,7 +122,6 @@ func (c *Changefeed) ShouldRun() bool {
 }
 
 func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {
-	log.Info("hyy changefeed updatestatus", zap.Any("status", newStatus))
 	old := c.status.Load()
 	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
 		c.status.Store(newStatus)
@@ -157,7 +156,6 @@ func (c *Changefeed) GetLastSavedCheckPointTs() uint64 {
 }
 
 func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMessage {
-	log.Info("hyy changefeed NewAddMaintainerMessage", zap.Any("checkpointTs", c.GetStatus().CheckpointTs), zap.Any("isNew", c.isNew))
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.AddMaintainerRequest{
