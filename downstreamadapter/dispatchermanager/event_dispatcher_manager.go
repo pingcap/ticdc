@@ -99,9 +99,8 @@ type EventDispatcherManager struct {
 
 	closing atomic.Bool
 	closed  atomic.Bool
-
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
 
 	metricTableTriggerEventDispatcherCount prometheus.Gauge
 	metricEventDispatcherCount             prometheus.Gauge
