@@ -1,5 +1,5 @@
 #!/bin/bash
-trap capture_error ${LINENO} $? ERR
+trap 'capture_error ${LINENO} $?' ERR
 
 set -eu
 
