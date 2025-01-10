@@ -85,8 +85,6 @@ function run() {
 		"pause_changefeed"
 		"resume_changefeed"
 		"move_table"
-		"get_processor"
-		"list_processor"
 		"set_log_level"
 		"remove_changefeed"
 		"resign_owner"
