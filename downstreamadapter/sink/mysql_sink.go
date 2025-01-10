@@ -16,6 +16,7 @@ package sink
 import (
 	"context"
 	"database/sql"
+	"github.com/pingcap/errors"
 	"net/url"
 	"sync/atomic"
 
@@ -30,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	utils "github.com/pingcap/tiflow/pkg/util"
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -51,11 +51,10 @@ type MysqlSink struct {
 	db         *sql.DB
 	statistics *metrics.Statistics
 
-	errCh    chan error
 	isNormal uint32 // if sink is normal, isNormal is 1, otherwise is 0
 }
 
-func NewMysqlSink(ctx context.Context, changefeedID common.ChangeFeedID, workerCount int, config *config.ChangefeedConfig, sinkURI *url.URL, errCh chan error) (*MysqlSink, error) {
+func NewMysqlSink(ctx context.Context, changefeedID common.ChangeFeedID, workerCount int, config *config.ChangefeedConfig, sinkURI *url.URL) (*MysqlSink, error) {
 	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
@@ -67,7 +66,6 @@ func NewMysqlSink(ctx context.Context, changefeedID common.ChangeFeedID, workerC
 		dmlWorker:    make([]*worker.MysqlDMLWorker, workerCount),
 		workerCount:  workerCount,
 		statistics:   metrics.NewStatistics(changefeedID, "TxnSink"),
-		errCh:        errCh,
 		isNormal:     1,
 	}
 	for i := 0; i < workerCount; i++ {
@@ -85,19 +83,8 @@ func (s *MysqlSink) Run(ctx context.Context) error {
 		})
 	}
 	err := g.Wait()
-	// todo: why set is normal to 0 only error is not canceled ?
-	// todo: can we return the error directly to the caller ?
-	if errors.Cause(err) != context.Canceled {
-		atomic.StoreUint32(&s.isNormal, 0)
-		select {
-		case s.errCh <- err:
-		default:
-			log.Error("error channel is full, discard error",
-				zap.Any("ChangefeedID", s.changefeedID.String()),
-				zap.Error(err))
-		}
-	}
-	return nil
+	atomic.StoreUint32(&s.isNormal, 0)
+	return errors.Trace(err)
 }
 
 // for test

@@ -15,7 +15,7 @@ package dispatchermanager
 
 import (
 	"context"
-	"sync"
+	"golang.org/x/sync/errgroup"
 	"sync/atomic"
 	"time"
 
@@ -99,8 +99,9 @@ type EventDispatcherManager struct {
 
 	closing atomic.Bool
 	closed  atomic.Bool
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	
+	errGroup *errgroup.Group
+	cancel   context.CancelFunc
 
 	metricTableTriggerEventDispatcherCount prometheus.Gauge
 	metricEventDispatcherCount             prometheus.Gauge
@@ -120,7 +121,8 @@ func NewEventDispatcherManager(
 	startTs uint64,
 	maintainerID node.ID,
 ) (*EventDispatcherManager, uint64, error) {
-	ctx, cancel := context.WithCancel(context.Background())
+	g, ctx := errgroup.WithContext(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	manager := &EventDispatcherManager{
 		dispatcherMap:                          newDispatcherMap(),
 		changefeedID:                           changefeedID,
@@ -128,6 +130,7 @@ func NewEventDispatcherManager(
 		statusesChan:                           make(chan TableSpanStatusWithSeq, 8192),
 		blockStatusesChan:                      make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		errCh:                                  make(chan error, 1),
+		errGroup:                               g,
 		cancel:                                 cancel,
 		config:                                 cfConfig,
 		filterConfig:                           toFilterConfigPB(cfConfig.Filter),
@@ -152,7 +155,7 @@ func NewEventDispatcherManager(
 	}
 
 	var err error
-	manager.sink, err = sink.NewSink(ctx, manager.config, manager.changefeedID, manager.errCh)
+	manager.sink, err = sink.NewSink(ctx, manager.config, manager.changefeedID)
 	if err != nil {
 		return nil, 0, errors.Trace(err)
 	}
@@ -164,32 +167,27 @@ func NewEventDispatcherManager(
 		return nil, 0, errors.Trace(err)
 	}
 
-	manager.wg.Add(1)
-	go func() {
-		defer manager.wg.Done()
-		manager.sink.Run(ctx)
-	}()
+	g.Go(func() error {
+		return manager.sink.Run(ctx)
+	})
 
-	// collect errors from error channel
-	manager.wg.Add(1)
-	go func() {
-		defer manager.wg.Done()
+	g.Go(func() error {
+		// collect errors from error channel
 		manager.collectErrors(ctx)
-	}()
+		return nil
+	})
 
-	// collect heart beat info from all dispatchers
-	manager.wg.Add(1)
-	go func() {
-		defer manager.wg.Done()
+	g.Go(func() error {
+		// collect heart beat info from all dispatchers
 		manager.collectComponentStatusWhenChanged(ctx)
-	}()
+		return nil
+	})
 
-	// collect block status from all dispatchers
-	manager.wg.Add(1)
-	go func() {
-		defer manager.wg.Done()
+	g.Go(func() error {
+		// collect block status from all dispatchers
 		manager.collectBlockStatusRequest(ctx)
-	}()
+		return nil
+	})
 
 	var tableTriggerStartTs uint64 = 0
 	// init table trigger event dispatcher when tableTriggerEventDispatcherID is not nil
@@ -264,7 +262,7 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 
 	e.sink.Close(removeChangefeed)
 	e.cancel()
-	e.wg.Wait()
+	e.errGroup.Wait()
 
 	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
