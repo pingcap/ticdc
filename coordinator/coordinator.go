@@ -18,6 +18,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -145,6 +146,10 @@ func (c *coordinator) Run(ctx context.Context) error {
 	defer gcTick.Stop()
 	updateMetricsTicker := time.NewTicker(time.Second * 1)
 	defer updateMetricsTicker.Stop()
+
+	failpoint.Inject("coordinator-run-with-error", func() error {
+		return errors.New("coordinator run with error")
+	})
 
 	for {
 		select {

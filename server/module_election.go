@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
@@ -87,7 +88,13 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			return nil
 		}
 		// Campaign to be the coordinator, it blocks until it been elected.
-		if err := e.election.Campaign(ctx, string(e.svr.info.ID)); err != nil {
+		err = e.election.Campaign(ctx, string(e.svr.info.ID))
+
+		failpoint.Inject("campaign-compacted-error", func() {
+			err = errors.Trace(mvcc.ErrCompacted)
+		})
+
+		if err != nil {
 			rootErr := errors.Cause(err)
 			if rootErr == context.Canceled {
 				return nil
@@ -266,6 +273,9 @@ func (e *elector) resign(ctx context.Context) error {
 	if e.election == nil {
 		return nil
 	}
+	failpoint.Inject("resign-failed", func() error {
+		return errors.Trace(errors.New("resign failed"))
+	})
 	return cerror.WrapError(cerror.ErrCaptureResignOwner,
 		e.election.Resign(ctx))
 }

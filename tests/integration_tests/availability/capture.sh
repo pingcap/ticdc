@@ -113,7 +113,7 @@ function test_hang_up_capture() {
 	cleanup_process $CDC_BINARY
 }
 
-# test_expire_capture start one server and then stop it unitl
+# test_expire_capture start one server and then stop it until
 # the session expires, and then resume the server.
 # We expect the capture suicides itself and then recovers. The data
 # should be replicated after recovering.
