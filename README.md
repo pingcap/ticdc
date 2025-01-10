@@ -13,10 +13,10 @@ TiCDC pulls change logs from TiDB clusters and pushes them to downstream systems
 Go to [pingcap/ticdc/tags](https://github.com/pingcap/ticdc/tags) to find the latest tag, e.g. v9.0.0-alpha
 
 ### Download the patch binary
-For mac: https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-darwin-amd64.tar.gz
-For linux: https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-linux-amd64.tar.gz
+* For Linux: https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-linux-amd64.tar.gz
+* For MacOS: https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-darwin-amd64.tar.gz
 
-### Upgrade TiCDC nodes
+### Patch to the existing TiCDC nodes
 Examples:
 ```bash
 # Scale out some old version TiCDC nodes, if you don't already have some
