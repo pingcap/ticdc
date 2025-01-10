@@ -1,5 +1,16 @@
 #!/bin/bash
-trap 'capture_error ${LINENO} $?' ERR
+
+error_handler() {
+    local line_no=$1
+    local error_code=$2
+    local last_command="${BASH_COMMAND}"
+    echo -e "\033[31mError occurred in script $0 at line $line_no"
+    echo -e "Error code: $error_code"
+    echo -e "Failed command: $last_command\033[0m"
+}
+
+# Set error handler
+trap error_handler ${LINENO} $? ERR
 
 set -eu
 
