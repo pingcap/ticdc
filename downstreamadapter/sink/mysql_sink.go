@@ -16,9 +16,10 @@ package sink
 import (
 	"context"
 	"database/sql"
-	"github.com/pingcap/errors"
 	"net/url"
 	"sync/atomic"
+
+	"github.com/pingcap/errors"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/pingcap/log"
@@ -30,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
-	utils "github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -59,7 +59,7 @@ func NewMysqlSink(ctx context.Context, changefeedID common.ChangeFeedID, workerC
 	if err != nil {
 		return nil, err
 	}
-	cfg.SyncPointRetention = utils.GetOrZero(config.SyncPointRetention)
+	cfg.SyncPointRetention = config.SyncPointRetention
 	mysqlSink := MysqlSink{
 		changefeedID: changefeedID,
 		db:           db,

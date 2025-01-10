@@ -59,6 +59,9 @@ RELEASE_VERSION =
 ifeq ($(RELEASE_VERSION),)
 	RELEASE_VERSION := $(shell git describe --tags --dirty)
 endif
+ifeq ($(RELEASE_VERSION),)
+	RELEASE_VERSION := v9.0.0-alpha
+endif
 
 # Version LDFLAGS.
 LDFLAGS += -X "$(CDC_PKG)/version.ReleaseVersion=$(RELEASE_VERSION)"
@@ -79,6 +82,7 @@ ifeq ("${IS_ALPINE}", "1")
 	CONSUMER_BUILD_FLAG = -tags musl
 endif
 GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=$(CGO) $(GO) build $(BUILD_FLAG) -trimpath $(GOVENDORFLAG)
+CONSUMER_GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=1 $(GO) build $(CONSUMER_BUILD_FLAG) -trimpath $(GOVENDORFLAG)
 
 PACKAGE_LIST := go list ./... | grep -vE 'vendor|proto|ticdc/tests|integration|testing_utils|pb|pbmock|ticdc/bin'
 PACKAGES := $$($(PACKAGE_LIST))
@@ -106,7 +110,19 @@ generate_mock: tools/bin/mockgen
 	scripts/generate-mock.sh
 
 cdc:
-	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc
+
+kafka_consumer:
+	$(CONSUMER_GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_kafka_consumer ./cmd/kafka-consumer
+
+storage_consumer:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_storage_consumer ./cmd/storage-consumer/main.go
+
+pulsar_consumer:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_pulsar_consumer ./cmd/pulsar-consumer/main.go
+
+filter_helper:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_filter_helper ./cmd/filter-helper/main.go
 
 fmt: tools/bin/gofumports tools/bin/shfmt tools/bin/gci
 	@echo "run gci (format imports)"
@@ -123,9 +139,9 @@ integration_test_build: check_failpoint_ctl
 	$(FAILPOINT_ENABLE)
 	$(GOTEST) -ldflags '$(LDFLAGS)' -c -cover -covermode=atomic \
 		-coverpkg=github.com/pingcap/ticdc/... \
-		-o bin/cdc.test github.com/pingcap/ticdc/cmd \
+		-o bin/cdc.test github.com/pingcap/ticdc/cmd/cdc \
 	|| { $(FAILPOINT_DISABLE); echo "Failed to build cdc.test"; exit 1; }
-	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/main.go \
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc/main.go \
 	|| { $(FAILPOINT_DISABLE); exit 1; }
 	$(FAILPOINT_DISABLE)
 

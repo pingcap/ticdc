@@ -11,17 +11,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package coordinator
+package cli
 
 import (
-	"testing"
-
-	"github.com/stretchr/testify/require"
+	"github.com/pingcap/ticdc/cmd/cdc/factory"
+	"github.com/spf13/cobra"
 )
 
-func TestPanicWhenBatchEvent(t *testing.T) {
-	require.Panics(t, func() {
-		handler := NewStreamHandler()
-		handler.Handle(nil, &Event{}, &Event{})
-	})
+// newCmdTso creates the `cli tso` command.
+func newCmdTso(f factory.Factory) *cobra.Command {
+	command := &cobra.Command{
+		Use:   "tso",
+		Short: "Manage tso",
+	}
+
+	command.AddCommand(newCmdQueryTso(f))
+
+	return command
 }

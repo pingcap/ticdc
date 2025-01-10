@@ -178,10 +178,10 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=autorandom
 
-      # - name: Test availability
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=availability
+      - name: Test availability
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=availability
 
       - name: Test bank
         if: ${{ success() }}
@@ -282,11 +282,17 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=partition_table
-        
+      
+      # The 3th case in this group
       - name: Test multi_tables_ddl
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
+
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
 
       - name: Upload test logs
         if: always()

@@ -33,7 +33,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -148,8 +147,8 @@ func NewEventDispatcherManager(
 	if cfConfig.EnableSyncPoint {
 		// TODO: confirm that parameter validation is done at the setting location, so no need to check again here
 		manager.syncPointConfig = &syncpoint.SyncPointConfig{
-			SyncPointInterval:  util.GetOrZero(cfConfig.SyncPointInterval),
-			SyncPointRetention: util.GetOrZero(cfConfig.SyncPointRetention),
+			SyncPointInterval:  cfConfig.SyncPointInterval,
+			SyncPointRetention: cfConfig.SyncPointRetention,
 		}
 	}
 

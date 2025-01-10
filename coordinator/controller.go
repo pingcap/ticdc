@@ -32,7 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/model"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
@@ -52,6 +52,7 @@ type Controller struct {
 	operatorController *operator.Controller
 	changefeedDB       *changefeed.ChangefeedDB
 	backend            changefeed.Backend
+	eventCh            *chann.DrainableChann[*Event]
 
 	bootstrapped *atomic.Bool
 	bootstrapper *bootstrap.Bootstrapper[heartbeatpb.CoordinatorBootstrapResponse]
@@ -60,7 +61,6 @@ type Controller struct {
 	nodeChanged bool
 	nodeManager *watcher.NodeManager
 
-	stream        dynstream.DynamicStream[int, string, *Event, *Controller, *StreamHandler]
 	taskScheduler threadpool.ThreadPool
 	taskHandlers  []*threadpool.TaskHandle
 	messageCenter messaging.MessageCenter
@@ -85,7 +85,7 @@ func NewController(
 	updatedChangefeedCh chan map[common.ChangeFeedID]*changefeed.Changefeed,
 	stateChangedCh chan *ChangefeedStateChangeEvent,
 	backend changefeed.Backend,
-	stream dynstream.DynamicStream[int, string, *Event, *Controller, *StreamHandler],
+	eventCh *chann.DrainableChann[*Event],
 	taskScheduler threadpool.ThreadPool,
 	batchSize int, balanceInterval time.Duration,
 ) *Controller {
@@ -101,11 +101,11 @@ func NewController(
 			scheduler.BasicScheduler:   scheduler.NewBasicScheduler(selfNode.ID.String(), batchSize, oc, changefeedDB, nodeManager, oc.NewAddMaintainerOperator),
 			scheduler.BalanceScheduler: scheduler.NewBalanceScheduler(selfNode.ID.String(), batchSize, oc, changefeedDB, nodeManager, balanceInterval, oc.NewMoveMaintainerOperator),
 		}),
+		eventCh:             eventCh,
 		operatorController:  oc,
 		messageCenter:       mc,
 		changefeedDB:        changefeedDB,
 		nodeManager:         nodeManager,
-		stream:              stream,
 		taskScheduler:       taskScheduler,
 		backend:             backend,
 		nodeChanged:         false,
@@ -137,6 +137,10 @@ func NewController(
 
 // HandleEvent implements the event-driven process mode
 func (c *Controller) HandleEvent(event *Event) bool {
+	if event == nil {
+		return false
+	}
+
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start)
@@ -514,7 +518,7 @@ func (c *Controller) RemoveNode(id node.ID) {
 
 func (c *Controller) submitPeriodTask() {
 	task := func() time.Time {
-		c.stream.Push("coordinator", &Event{eventType: EventPeriod})
+		c.eventCh.In() <- &Event{eventType: EventPeriod}
 		return time.Now().Add(time.Millisecond * 500)
 	}
 	periodTaskhandler := c.taskScheduler.SubmitFunc(task, time.Now().Add(time.Millisecond*500))

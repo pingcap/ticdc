@@ -18,7 +18,7 @@ import (
 
 	"github.com/pingcap/errors"
 	v2 "github.com/pingcap/ticdc/api/v2"
-	"github.com/pingcap/ticdc/cmd/factory"
+	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/cmd/util"

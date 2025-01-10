@@ -19,9 +19,9 @@ import (
 	"strings"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/cmd/cli"
-	"github.com/pingcap/ticdc/cmd/server"
-	"github.com/pingcap/ticdc/cmd/version"
+	"github.com/pingcap/ticdc/cmd/cdc/cli"
+	"github.com/pingcap/ticdc/cmd/cdc/server"
+	"github.com/pingcap/ticdc/cmd/cdc/version"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/tidb/pkg/util/collate"
 	tiflowCmd "github.com/pingcap/tiflow/pkg/cmd"

@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	v2 "github.com/pingcap/ticdc/api/v2"
-	"github.com/pingcap/ticdc/cmd/factory"
+	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"

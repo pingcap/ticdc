@@ -28,6 +28,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
@@ -47,7 +48,8 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	selfNode := node.NewInfo("127.0.0.1:18300", "")
-	nodeManager := watcher.NewNodeManager(nil, nil)
+	etcdClient := newMockEtcdClient(string(selfNode.ID))
+	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[selfNode.ID] = selfNode
 	store := &mockSchemaStore{
@@ -245,7 +247,8 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	selfNode := node.NewInfo("127.0.0.1:18301", "")
-	nodeManager := watcher.NewNodeManager(nil, nil)
+	etcdClient := newMockEtcdClient(string(selfNode.ID))
+	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[selfNode.ID] = selfNode
 	store := &mockSchemaStore{
@@ -359,7 +362,8 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	selfNode := node.NewInfo("127.0.0.1:8800", "")
-	nodeManager := watcher.NewNodeManager(nil, nil)
+	etcdClient := newMockEtcdClient(string(selfNode.ID))
+	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[selfNode.ID] = selfNode
 	store := &mockSchemaStore{
@@ -457,4 +461,19 @@ func startDispatcherNode(t *testing.T, ctx context.Context,
 		mc:                mc,
 		dispatcherManager: dispManager,
 	}
+}
+
+type mockEtcdClient struct {
+	etcd.CDCEtcdClient
+	ownerID string
+}
+
+func newMockEtcdClient(ownerID string) *mockEtcdClient {
+	return &mockEtcdClient{
+		ownerID: ownerID,
+	}
+}
+
+func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (model.CaptureID, error) {
+	return model.CaptureID(m.ownerID), nil
 }
