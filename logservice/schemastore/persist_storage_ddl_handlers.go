@@ -380,7 +380,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 
 	model.ActionAlterTTLInfo: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForAlterTableTTL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -388,7 +388,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	},
 	model.ActionAlterTTLRemove: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
-		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForAlterTableTTL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -859,6 +859,18 @@ func updateDDLHistoryForRemovePartitioning(args updateDDLHistoryFuncArgs) []uint
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.PrevPartitions...)
 	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.CurrentTableID)
+	return args.tableTriggerDDLHistory
+}
+
+func updateDDLHistoryForAlterTableTTL(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
+	if isPartitionTable(args.ddlEvent.TableInfo) {
+		for _, partitionID := range getAllPartitionIDs(args.ddlEvent.TableInfo) {
+			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, partitionID)
+		}
+	} else {
+		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.CurrentTableID)
+	}
 	return args.tableTriggerDDLHistory
 }
 
