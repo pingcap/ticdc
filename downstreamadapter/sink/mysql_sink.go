@@ -88,13 +88,12 @@ func (s *MysqlSink) Run(ctx context.Context) error {
 }
 
 // for test
-func NewMysqlSinkWithDBAndConfig(ctx context.Context, changefeedID common.ChangeFeedID, workerCount int, cfg *mysql.MysqlConfig, db *sql.DB, errCh chan error) (*MysqlSink, error) {
+func NewMysqlSinkWithDBAndConfig(ctx context.Context, changefeedID common.ChangeFeedID, workerCount int, cfg *mysql.MysqlConfig, db *sql.DB) (*MysqlSink, error) {
 	mysqlSink := MysqlSink{
 		changefeedID: changefeedID,
 		dmlWorker:    make([]*worker.MysqlDMLWorker, workerCount),
 		workerCount:  workerCount,
 		statistics:   metrics.NewStatistics(changefeedID, "TxnSink"),
-		errCh:        errCh,
 		isNormal:     1,
 	}
 
@@ -183,7 +182,6 @@ func MysqlSinkForTest() (*MysqlSink, sqlmock.Sqlmock) {
 	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	errCh := make(chan error, 16)
-	sink, _ := NewMysqlSinkWithDBAndConfig(ctx, changefeedID, 8, cfg, db, errCh)
+	sink, _ := NewMysqlSinkWithDBAndConfig(ctx, changefeedID, 8, cfg, db)
 	return sink, mock
 }

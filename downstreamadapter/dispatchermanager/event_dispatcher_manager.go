@@ -15,7 +15,7 @@ package dispatchermanager
 
 import (
 	"context"
-	"golang.org/x/sync/errgroup"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -99,9 +99,9 @@ type EventDispatcherManager struct {
 
 	closing atomic.Bool
 	closed  atomic.Bool
-	
-	errGroup *errgroup.Group
-	cancel   context.CancelFunc
+
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
 	metricTableTriggerEventDispatcherCount prometheus.Gauge
 	metricEventDispatcherCount             prometheus.Gauge
@@ -121,8 +121,8 @@ func NewEventDispatcherManager(
 	startTs uint64,
 	maintainerID node.ID,
 ) (*EventDispatcherManager, uint64, error) {
-	g, ctx := errgroup.WithContext(context.Background())
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
 	manager := &EventDispatcherManager{
 		dispatcherMap:                          newDispatcherMap(),
 		changefeedID:                           changefeedID,
@@ -130,7 +130,7 @@ func NewEventDispatcherManager(
 		statusesChan:                           make(chan TableSpanStatusWithSeq, 8192),
 		blockStatusesChan:                      make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		errCh:                                  make(chan error, 1),
-		errGroup:                               g,
+		wg:                                     wg,
 		cancel:                                 cancel,
 		config:                                 cfConfig,
 		filterConfig:                           toFilterConfigPB(cfConfig.Filter),
@@ -167,27 +167,39 @@ func NewEventDispatcherManager(
 		return nil, 0, errors.Trace(err)
 	}
 
-	g.Go(func() error {
-		return manager.sink.Run(ctx)
-	})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err = manager.sink.Run(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case manager.errCh <- err:
+		default:
+			log.Error("error channel is full, discard error", zap.Any("changefeedID", changefeedID.String()), zap.Error(err))
+		}
+	}()
 
-	g.Go(func() error {
-		// collect errors from error channel
+	// collect errors from error channel
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
 		manager.collectErrors(ctx)
-		return nil
-	})
+	}()
 
-	g.Go(func() error {
-		// collect heart beat info from all dispatchers
+	// collect heart beat info from all dispatchers
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
 		manager.collectComponentStatusWhenChanged(ctx)
-		return nil
-	})
+	}()
 
-	g.Go(func() error {
-		// collect block status from all dispatchers
+	// collect block status from all dispatchers
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
 		manager.collectBlockStatusRequest(ctx)
-		return nil
-	})
+	}()
 
 	var tableTriggerStartTs uint64 = 0
 	// init table trigger event dispatcher when tableTriggerEventDispatcherID is not nil
@@ -262,7 +274,7 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 
 	e.sink.Close(removeChangefeed)
 	e.cancel()
-	e.errGroup.Wait()
+	e.wg.Wait()
 
 	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
