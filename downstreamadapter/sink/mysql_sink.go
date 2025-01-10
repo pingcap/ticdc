@@ -59,20 +59,24 @@ func NewMysqlSink(ctx context.Context, changefeedID common.ChangeFeedID, workerC
 	if err != nil {
 		return nil, err
 	}
-	cfg.SyncPointRetention = config.SyncPointRetention
-	mysqlSink := MysqlSink{
+	return newMysqlSinkWithDBAndConfig(ctx, changefeedID, workerCount, cfg, db), nil
+}
+
+func newMysqlSinkWithDBAndConfig(ctx context.Context, changefeedID common.ChangeFeedID, workerCount int, cfg *mysql.MysqlConfig, db *sql.DB) *MysqlSink {
+	stat := metrics.NewStatistics(changefeedID, "TxnSink")
+	mysqlSink := &MysqlSink{
 		changefeedID: changefeedID,
 		db:           db,
 		dmlWorker:    make([]*worker.MysqlDMLWorker, workerCount),
 		workerCount:  workerCount,
-		statistics:   metrics.NewStatistics(changefeedID, "TxnSink"),
+		statistics:   stat,
 		isNormal:     1,
 	}
 	for i := 0; i < workerCount; i++ {
-		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, mysqlSink.changefeedID, mysqlSink.statistics)
+		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, changefeedID, stat)
 	}
-	mysqlSink.ddlWorker = worker.NewMysqlDDLWorker(ctx, db, cfg, mysqlSink.changefeedID, mysqlSink.statistics)
-	return &mysqlSink, nil
+	mysqlSink.ddlWorker = worker.NewMysqlDDLWorker(ctx, db, cfg, mysqlSink.changefeedID, stat)
+	return mysqlSink
 }
 
 func (s *MysqlSink) Run(ctx context.Context) error {
@@ -85,27 +89,6 @@ func (s *MysqlSink) Run(ctx context.Context) error {
 	err := g.Wait()
 	atomic.StoreUint32(&s.isNormal, 0)
 	return errors.Trace(err)
-}
-
-// for test
-func NewMysqlSinkWithDBAndConfig(ctx context.Context, changefeedID common.ChangeFeedID, workerCount int, cfg *mysql.MysqlConfig, db *sql.DB) (*MysqlSink, error) {
-	mysqlSink := MysqlSink{
-		changefeedID: changefeedID,
-		dmlWorker:    make([]*worker.MysqlDMLWorker, workerCount),
-		workerCount:  workerCount,
-		statistics:   metrics.NewStatistics(changefeedID, "TxnSink"),
-		isNormal:     1,
-	}
-
-	for i := 0; i < workerCount; i++ {
-		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, mysqlSink.changefeedID, mysqlSink.statistics)
-	}
-	mysqlSink.ddlWorker = worker.NewMysqlDDLWorker(ctx, db, cfg, mysqlSink.changefeedID, mysqlSink.statistics)
-	mysqlSink.db = db
-
-	go mysqlSink.Run(ctx)
-
-	return &mysqlSink, nil
 }
 
 func (s *MysqlSink) IsNormal() bool {
@@ -182,6 +165,8 @@ func MysqlSinkForTest() (*MysqlSink, sqlmock.Sqlmock) {
 	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink, _ := NewMysqlSinkWithDBAndConfig(ctx, changefeedID, 8, cfg, db)
+	sink := newMysqlSinkWithDBAndConfig(ctx, changefeedID, 1, cfg, db)
+	go sink.Run(ctx)
+
 	return sink, mock
 }

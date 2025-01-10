@@ -283,7 +283,7 @@ func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, 
 	}
 
 	cfg.CachePrepStmts = cachePrepStmts
-
+	cfg.SyncPointRetention = config.SyncPointRetention
 	cfg.MaxAllowedPacket, err = pmysql.QueryMaxAllowedPacket(ctx, db)
 	if err != nil {
 		log.Warn("failed to query max_allowed_packet, use default value",
