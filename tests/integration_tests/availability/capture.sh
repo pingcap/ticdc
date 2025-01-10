@@ -10,7 +10,7 @@ error_handler() {
 }
 
 # Set error handler
-trap error_handler ${LINENO} $? ERR
+trap 'error_handler ${LINENO} $?' ERR
 
 set -eu
 
