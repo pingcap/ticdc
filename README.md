@@ -10,11 +10,11 @@ TiCDC pulls change logs from TiDB clusters and pushes them to downstream systems
 ## Quick Start
 
 ### Find the latest tag
-Go to [pingcap/ticdc/tags](https://github.com/pingcap/ticdc/tags) to find the latest tag, e.g. v9.0.0-alpha
+Go to [pingcap/ticdc/tags](https://github.com/pingcap/ticdc/tags) to find the latest tag, e.g. `v9.0.0-alpha`
 
 ### Download the patch binary
-* For Linux: https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-linux-amd64.tar.gz
-* For MacOS: https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-darwin-amd64.tar.gz
+* For Linux: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-linux-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-linux-amd64.tar.gz)
+* For MacOS: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-darwin-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-darwin-amd64.tar.gz)
 
 ### Patch to the existing TiCDC nodes
 Examples:
@@ -53,7 +53,7 @@ TiCDC can be built on the following operating systems:
 * Linux
 * MacOS
 
-1. Install GoLang 1.23.2
+Install GoLang 1.23.2
 
 ```bash
 # Linux
