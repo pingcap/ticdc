@@ -306,3 +306,7 @@ func (c *server) GetEtcdClient() etcd.CDCEtcdClient {
 func (c *server) GetMaintainerManager() *maintainer.Manager {
 	return appctx.GetService[*maintainer.Manager](appctx.MaintainerManager)
 }
+
+func (c *server) GetKVStorage() kv.Storage {
+	return c.KVStorage
+}

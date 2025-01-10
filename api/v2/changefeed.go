@@ -586,6 +586,17 @@ func (h *OpenAPIV2) updateChangefeed(c *gin.Context) {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("start_ts can not be updated"))
 		return
 	}
+	// verify replicaConfig
+	sinkURIParsed, err := url.Parse(oldCfInfo.SinkURI)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
+		return
+	}
+	err = oldCfInfo.Config.ValidateAndAdjust(sinkURIParsed)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
+		return
+	}
 
 	// verify changefeed filter
 	_, err = filter.NewFilter(oldCfInfo.Config.Filter, "", oldCfInfo.Config.CaseSensitive)

@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tiflow/cdc/model"
 	pd "github.com/tikv/pd/client"
 )
@@ -40,6 +41,7 @@ type Server interface {
 
 	GetPdClient() pd.Client
 	GetEtcdClient() etcd.CDCEtcdClient
+	GetKVStorage() kv.Storage
 
 	GetMaintainerManager() *maintainer.Manager
 }

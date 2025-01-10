@@ -45,18 +45,19 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	router.GET("/debug/info", gin.WrapF(api.handleDebugInfo))
 
 	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
+	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
 	v2.GET("health", coordinatorMiddleware, api.serverHealth)
 
 	// changefeed apis
 	changefeedGroup := v2.Group("/changefeeds")
 	changefeedGroup.GET("/:changefeed_id", coordinatorMiddleware, api.getChangeFeed)
-	changefeedGroup.POST("", coordinatorMiddleware, api.createChangefeed)
+	changefeedGroup.POST("", coordinatorMiddleware, authenticateMiddleware, api.createChangefeed)
 	changefeedGroup.GET("", coordinatorMiddleware, api.listChangeFeeds)
-	changefeedGroup.PUT("/:changefeed_id", coordinatorMiddleware, api.updateChangefeed)
-	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, api.resumeChangefeed)
-	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, api.pauseChangefeed)
-	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, api.deleteChangefeed)
-	changefeedGroup.POST("/:changefeed_id/move_table", coordinatorMiddleware, api.moveTable)
+	changefeedGroup.PUT("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, api.updateChangefeed)
+	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, authenticateMiddleware, api.resumeChangefeed)
+	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, authenticateMiddleware, api.pauseChangefeed)
+	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, api.deleteChangefeed)
+	changefeedGroup.POST("/:changefeed_id/move_table", coordinatorMiddleware, authenticateMiddleware, api.moveTable)
 	changefeedGroup.GET("/:changefeed_id/get_dispatcher_count", coordinatorMiddleware, api.getDispatcherCount)
 	changefeedGroup.GET("/:changefeed_id/tables", coordinatorMiddleware, api.listTables)
 
@@ -75,4 +76,11 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	// common APIs
 	v2.POST("/tso", api.QueryTso)
+
+	// unsafe apis
+	unsafeGroup := v2.Group("/unsafe")
+	unsafeGroup.Use(coordinatorMiddleware, authenticateMiddleware)
+	unsafeGroup.GET("/metadata", api.CDCMetaData)
+	unsafeGroup.POST("/resolve_lock", api.ResolveLock)
+	unsafeGroup.DELETE("/service_gc_safepoint", api.DeleteServiceGcSafePoint)
 }
