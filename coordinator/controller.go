@@ -137,6 +137,10 @@ func NewController(
 
 // HandleEvent implements the event-driven process mode
 func (c *Controller) HandleEvent(event *Event) bool {
+	if event == nil {
+		return false
+	}
+
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start)
