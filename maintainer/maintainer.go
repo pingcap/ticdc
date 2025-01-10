@@ -224,7 +224,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 		Config:       config.GetDefaultReplicaConfig(),
 	}
 	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI,
-		tsoClient, regionCache, 1, false) // todo
+		tsoClient, regionCache, 1, false)
 	m.cascadeRemoving = true
 	// setup period event
 	m.submitScheduledEvent(m.taskScheduler, &Event{

@@ -334,12 +334,12 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 	return nil
 }
 
-// cleanDDLTs means we don't need to check startTs from ddl_ts_table when sink is mysql-class,
+// removeDDLTs means we don't need to check startTs from ddl_ts_table when sink is mysql-class,
 // but we need to remove the ddl_ts item of this changefeed, to obtain a clean environment.
-// cleanDDLTs is true only when meet the following conditions:
+// removeDDLTs is true only when meet the following conditions:
 // 1. newDispatchers is called by NewTableTriggerEventDispatcher(just means when creating table trigger event dispatcher)
 // 2. changefeed is total new created, or resumed with overwriteCheckpointTs
-func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, cleanDDLTs bool) error {
+func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, removeDDLTs bool) error {
 	start := time.Now()
 
 	dispatcherIds := make([]common.DispatcherID, 0, len(infos))
@@ -374,12 +374,12 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, cl
 	var newStartTsList []int64
 	var err error
 	if e.sink.SinkType() == common.MysqlSinkType {
-		newStartTsList, err = e.sink.(*sink.MysqlSink).GetStartTsList(tableIds, startTsList, cleanDDLTs)
+		newStartTsList, err = e.sink.(*sink.MysqlSink).GetStartTsList(tableIds, startTsList, removeDDLTs)
 		if err != nil {
 			return errors.Trace(err)
 		}
 		log.Info("calculate real startTs for dispatchers",
-			zap.Any("receiveStartTs", startTsList), zap.Any("realStartTs", newStartTsList), zap.Any("cleanDDLTs", cleanDDLTs))
+			zap.Any("receiveStartTs", startTsList), zap.Any("realStartTs", newStartTsList), zap.Any("removeDDLTs", removeDDLTs))
 	} else {
 		newStartTsList = startTsList
 	}

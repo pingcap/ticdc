@@ -232,7 +232,7 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 		return
 	}
 
-	cf.pushEvent(&Event{changefeedID: cfID, eventType: EventInit}) // 改了这个顺便
+	cf.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 	m.maintainers.Store(cfID, cf)
 }
 
