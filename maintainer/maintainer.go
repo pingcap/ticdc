@@ -742,7 +742,7 @@ func (m *Maintainer) getNewBootstrapFn() bootstrap.NewBootstrapMessageFn {
 			zap.String("changefeed", m.id.String()),
 			zap.String("server", id.String()),
 			zap.Uint64("startTs", m.startCheckpointTs),
-			zap.Bool("is new changefed", msg.IsNewChangfeed))
+			zap.Bool("isNewChangefed", msg.IsNewChangfeed))
 		return messaging.NewSingleTargetMessage(id, messaging.DispatcherManagerManagerTopic, msg)
 	}
 }
