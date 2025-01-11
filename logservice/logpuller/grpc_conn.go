@@ -20,8 +20,10 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/tiflow/pkg/security"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	grpccodes "google.golang.org/grpc/codes"
@@ -92,9 +94,9 @@ func createGRPCConn(ctx context.Context, credential *security.Credential, target
 		dialOptions = append(dialOptions, grpc.WithStreamInterceptor(grpcMetrics.StreamClientInterceptor()))
 	}
 
-	return grpc.DialContext(ctx, target, dialOptions...)
+	// return grpc.DialContext(ctx, target, dialOptions...)
 
-	// return grpc.NewClient(target, dialOptions...)
+	return grpc.NewClient(target, dialOptions...)
 }
 
 func getContextFromFeatures(ctx context.Context, features []string) context.Context {

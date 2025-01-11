@@ -55,7 +55,7 @@ type tidbInstance struct {
 func AuthenticateMiddleware(server server.Server) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		security := config.GetGlobalServerConfig().Security
-		if security.ClientUserRequired {
+		if security != nil && security.ClientUserRequired {
 			if err := verify(ctx, server.GetEtcdClient().GetEtcdClient()); err != nil {
 				ctx.IndentedJSON(http.StatusUnauthorized, model.NewHTTPError(err))
 				ctx.Abort()
@@ -145,7 +145,6 @@ func fetchTiDBTopology(ctx context.Context, etcdClient etcd.Client) ([]tidbInsta
 
 		switch keyParts[1] {
 		case "info":
-			log.Error("info", zap.Any("", keyParts))
 			address := keyParts[0]
 			hostname, port, err := util.ParseHostAndPortFromAddress(address)
 			if err != nil {

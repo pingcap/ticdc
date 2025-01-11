@@ -43,7 +43,6 @@ import (
 	"github.com/pingcap/tiflow/cdc/model"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/pdutil"
-	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pingcap/tiflow/pkg/tcpserver"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
@@ -127,13 +126,14 @@ func (c *server) initialize(ctx context.Context) error {
 	nodeManager.RegisterNodeChangeHandler(
 		appcontext.MessageCenter,
 		appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter).OnNodeChanges)
+
+	conf := config.GetGlobalServerConfig()
 	subscriptionClient := logpuller.NewSubscriptionClient(
 		&logpuller.SubscriptionClientConfig{
 			RegionRequestWorkerPerStore: 16,
 		}, c.pdClient, c.RegionCache, c.PDClock,
-		txnutil.NewLockerResolver(c.KVStorage.(tikv.Storage)), &security.Credential{},
+		txnutil.NewLockerResolver(c.KVStorage.(tikv.Storage)), conf.Security,
 	)
-	conf := config.GetGlobalServerConfig()
 	schemaStore := schemastore.New(ctx, conf.DataDir, subscriptionClient, c.pdClient, c.PDClock, c.KVStorage)
 	eventStore := eventstore.New(ctx, conf.DataDir, subscriptionClient, c.PDClock)
 	eventService := eventservice.New(eventStore, schemaStore)
