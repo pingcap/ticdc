@@ -20,10 +20,8 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/tiflow/pkg/security"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	grpccodes "google.golang.org/grpc/codes"
