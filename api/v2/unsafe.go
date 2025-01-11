@@ -47,9 +47,6 @@ func (h *OpenAPIV2) ResolveLock(c *gin.Context) {
 		_ = c.Error(cerror.ErrAPIInvalidParam.Wrap(err))
 		return
 	}
-	var (
-		err error
-	)
 	kvStorage := h.server.GetKVStorage()
 
 	if kvStorage == nil {
@@ -58,8 +55,7 @@ func (h *OpenAPIV2) ResolveLock(c *gin.Context) {
 	}
 
 	txnResolver := txnutil.NewLockerResolver(kvStorage.(tikv.Storage))
-	err = txnResolver.Resolve(c, resolveLockReq.RegionID, resolveLockReq.Ts)
-	if err != nil {
+	if err := txnResolver.Resolve(c, resolveLockReq.RegionID, resolveLockReq.Ts); err != nil {
 		_ = c.Error(err)
 		return
 	}
