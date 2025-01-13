@@ -62,7 +62,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		},
 	}
 	appcontext.SetService(appcontext.SchemaStore, store)
-	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
@@ -124,13 +124,13 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 
 	// Case 2: Add new nodes
 	node2 := node.NewInfo("127.0.0.1:8400", "")
-	mc2 := messaging.NewMessageCenter(ctx, node2.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc2 := messaging.NewMessageCenter(ctx, node2.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 
 	node3 := node.NewInfo("127.0.0.1:8500", "")
-	mc3 := messaging.NewMessageCenter(ctx, node3.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc3 := messaging.NewMessageCenter(ctx, node3.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 
 	node4 := node.NewInfo("127.0.0.1:8600", "")
-	mc4 := messaging.NewMessageCenter(ctx, node4.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc4 := messaging.NewMessageCenter(ctx, node4.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 
 	startDispatcherNode(t, ctx, node2, mc2, nodeManager)
 	dn3 := startDispatcherNode(t, ctx, node3, mc3, nodeManager)
@@ -261,7 +261,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 		},
 	}
 	appcontext.SetService(appcontext.SchemaStore, store)
-	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
@@ -376,7 +376,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 		},
 	}
 	appcontext.SetService(appcontext.SchemaStore, store)
-	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)

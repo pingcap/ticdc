@@ -237,7 +237,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[info.ID] = info
 	mc := messaging.NewMessageCenter(ctx,
-		info.ID, 100, config.NewDefaultMessageCenterConfig())
+		info.ID, 100, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	m := NewMaintainerManager(mc)
 	go m.Run(ctx)
@@ -299,7 +299,7 @@ func TestScaleNode(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[info.ID] = info
-	mc1 := messaging.NewMessageCenter(ctx, info.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc1 := messaging.NewMessageCenter(ctx, info.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc1)
 	startMaintainerNode(ctx, info, mc1, nodeManager)
 
@@ -336,10 +336,10 @@ func TestScaleNode(t *testing.T) {
 
 	// add two nodes
 	info2 := node.NewInfo("127.0.0.1:8400", "")
-	mc2 := messaging.NewMessageCenter(ctx, info2.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc2 := messaging.NewMessageCenter(ctx, info2.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	startMaintainerNode(ctx, info2, mc2, nodeManager)
 	info3 := node.NewInfo("127.0.0.1:8500", "")
-	mc3 := messaging.NewMessageCenter(ctx, info3.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc3 := messaging.NewMessageCenter(ctx, info3.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	startMaintainerNode(ctx, info3, mc3, nodeManager)
 	// notify node changes
 	_, _ = nodeManager.Tick(ctx, &orchestrator.GlobalReactorState{
@@ -375,7 +375,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[info.ID] = info
-	mc1 := messaging.NewMessageCenter(ctx, info.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc1 := messaging.NewMessageCenter(ctx, info.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc1)
 	mNode := startMaintainerNode(ctx, info, mc1, nodeManager)
 

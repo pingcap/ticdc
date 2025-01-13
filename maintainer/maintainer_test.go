@@ -295,7 +295,7 @@ func TestMaintainerSchedule(t *testing.T) {
 
 	n := node.NewInfo("", "")
 	appcontext.SetService(appcontext.MessageCenter, messaging.NewMessageCenter(ctx,
-		n.ID, 100, config.NewDefaultMessageCenterConfig()))
+		n.ID, 100, config.NewDefaultMessageCenterConfig(), nil))
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[n.ID] = n
