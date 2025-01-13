@@ -31,14 +31,12 @@ import (
 )
 
 func encodeRowChangedEvent(e *commonEvent.RowEvent, config *common.Config, largeMessageOnlyHandleKeyColumns bool, claimCheckLocationName string) ([]byte, []byte, int, error) {
-	keyBuf := &bytes.Buffer{}
-	valueBuf := &bytes.Buffer{}
-	keyWriter := util.BorrowJSONWriter(keyBuf)
-	valueWriter := util.BorrowJSONWriter(valueBuf)
-	defer func() {
-		util.ReturnJSONWriter(keyWriter)
-		util.ReturnJSONWriter(valueWriter)
-	}()
+	var (
+		keyBuf   bytes.Buffer
+		valueBuf bytes.Buffer
+	)
+	keyWriter := util.BorrowJSONWriter(&keyBuf)
+	valueWriter := util.BorrowJSONWriter(&valueBuf)
 
 	keyWriter.WriteObject(func() {
 		keyWriter.WriteUint64Field("ts", e.CommitTs)
@@ -84,6 +82,9 @@ func encodeRowChangedEvent(e *commonEvent.RowEvent, config *common.Config, large
 			}
 		})
 	}
+	util.ReturnJSONWriter(keyWriter)
+	util.ReturnJSONWriter(valueWriter)
+
 	if err != nil {
 		return nil, nil, 0, err
 	}
