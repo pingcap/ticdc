@@ -305,11 +305,16 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls_with_user_auth
       
-      # the 7th case in this group
       - name: Test default_value
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=default_value
+
+      # the 8th case in this group
+      - name: Test http_proxies
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=http_proxies
 
       - name: Upload test logs
         if: always()
