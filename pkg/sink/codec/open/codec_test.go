@@ -120,7 +120,7 @@ func TestDMLEvent(t *testing.T) {
 		deleteRow.Row = chunk.Row{}
 		require.True(t, ok)
 
-		updateRowEvent := &pevent.RowEvent{
+		deleteEvent := &pevent.RowEvent{
 			TableInfo:      tableInfo,
 			CommitTs:       3,
 			Event:          deleteRow,
@@ -128,7 +128,7 @@ func TestDMLEvent(t *testing.T) {
 			Callback:       func() {},
 		}
 
-		key, value, _, err := encodeRowChangedEvent(updateRowEvent, protocolConfig, false, "")
+		key, value, _, err = encodeRowChangedEvent(deleteEvent, protocolConfig, false, "")
 		require.NoError(t, err)
 
 		require.Equal(t, `{"ts":3,"scm":"test","tbl":"t","t":1}`, string(key))

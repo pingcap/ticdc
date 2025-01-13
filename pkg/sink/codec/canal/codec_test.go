@@ -22,9 +22,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	ticonfig "github.com/pingcap/tiflow/pkg/config"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -57,7 +56,7 @@ func TestBasicTypes(t *testing.T) {
 		Callback:       func() {},
 	}
 
-	protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
+	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
 	value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
 	require.NoError(t, err)
 
@@ -131,7 +130,7 @@ func TestAllTypes(t *testing.T) {
 		Callback:       func() {},
 	}
 
-	protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
+	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
 	value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
 	require.NoError(t, err)
 
@@ -198,7 +197,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 			Callback:       func() {},
 		}
 
-		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
+		protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
 		value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
 		require.NoError(t, err)
 
@@ -253,7 +252,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 			Callback:       func() {},
 		}
 
-		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
+		protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
 		protocolConfig.EnableTiDBExtension = true
 		value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
 		require.NoError(t, err)
@@ -313,7 +312,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 			Callback:       func() {},
 		}
 
-		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
+		protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
 		value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
 		require.NoError(t, err)
 
@@ -400,7 +399,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 			Callback:       func() {},
 		}
 
-		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
+		protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
 		protocolConfig = protocolConfig.WithMaxMessageBytes(300)
 		protocolConfig.EnableTiDBExtension = true
 		encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
@@ -468,9 +467,9 @@ func TestGeneralDMLEvent(t *testing.T) {
 			Callback:       func() {},
 		}
 
-		protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
+		protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
 		protocolConfig = protocolConfig.WithMaxMessageBytes(300)
-		protocolConfig.LargeMessageHandle.LargeMessageHandleOption = ticonfig.LargeMessageHandleOptionHandleKeyOnly
+		protocolConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
 		protocolConfig.EnableTiDBExtension = true
 		encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
 		require.NoError(t, err)
@@ -515,7 +514,7 @@ func TestDMLTypeEvent(t *testing.T) {
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b tinyint)`)
 
-	protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
+	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
 	encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
 	require.NoError(t, err)
 	tableInfo := helper.GetTableInfo(job)
@@ -714,7 +713,7 @@ func TestDDLTypeEvent(t *testing.T) {
 
 	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
 
-	protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
+	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
 	encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
 	require.NoError(t, err)
 
@@ -761,7 +760,8 @@ func TestCheckpointTs(t *testing.T) {
 	helper := pevent.NewEventTestHelper(t)
 	defer helper.Close()
 
-	protocolConfig := newcommon.NewConfig(config.ProtocolCanalJSON)
+	protocolConfig :=
+		common.NewConfig(config.ProtocolCanalJSON)
 	encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
 	require.NoError(t, err)
 
