@@ -47,7 +47,7 @@ func NewMessageCenterForTest(t *testing.T) (*messageCenter, string, func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	mcConfig := config.NewDefaultMessageCenterConfig()
 	id := node.NewID()
-	mc := NewMessageCenter(ctx, id, mockEpoch, mcConfig)
+	mc := NewMessageCenter(ctx, id, mockEpoch, mcConfig, nil)
 	mockEpoch++
 	mcs := NewMessageCenterServer(mc)
 	proto.RegisterMessageCenterServer(grpcServer, mcs)

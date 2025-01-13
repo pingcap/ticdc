@@ -28,7 +28,7 @@ func newRemoteMessageTargetForTest() *remoteMessageTarget {
 	remoteId := node.NewID()
 	cfg := config.NewDefaultMessageCenterConfig()
 	receivedMsgCh := make(chan *TargetMessage, 1)
-	rt := newRemoteMessageTarget(localId, remoteId, 1, 1, "", receivedMsgCh, receivedMsgCh, cfg)
+	rt := newRemoteMessageTarget(localId, remoteId, 1, 1, "", receivedMsgCh, receivedMsgCh, cfg, nil)
 	return rt
 }
 

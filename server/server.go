@@ -57,8 +57,7 @@ const (
 )
 
 type server struct {
-	captureMu sync.Mutex
-	info      *node.Info
+	info *node.Info
 
 	liveness model.Liveness
 
@@ -70,6 +69,8 @@ type server struct {
 
 	// session keeps alive between the server and etcd
 	session *concurrency.Session
+
+	security *security.Credential
 
 	EtcdClient etcd.CDCEtcdClient
 
@@ -104,6 +105,7 @@ func New(conf *config.ServerConfig, pdEndpoints []string) (tiserver.Server, erro
 	s := &server{
 		pdEndpoints: pdEndpoints,
 		tcpServer:   tcpServer,
+		security:    conf.Security,
 	}
 	return s, nil
 }
@@ -116,7 +118,7 @@ func (c *server) initialize(ctx context.Context) error {
 	}
 
 	appcontext.SetID(c.info.ID.String())
-	messageCenter := messaging.NewMessageCenter(ctx, c.info.ID, c.info.Epoch, config.NewDefaultMessageCenterConfig())
+	messageCenter := messaging.NewMessageCenter(ctx, c.info.ID, c.info.Epoch, config.NewDefaultMessageCenterConfig(), c.security)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
 
 	appcontext.SetService(appcontext.EventCollector, eventcollector.New(ctx, c.info.ID))
