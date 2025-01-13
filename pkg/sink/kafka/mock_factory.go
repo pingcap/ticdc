@@ -73,6 +73,12 @@ type MockTopicDetail struct {
 	fetchesRemainingUntilVisible int
 }
 
+type MockMetricsCollector struct {
+	MetricsCollector
+	changefeedID commonType.ChangeFeedID
+	config       *kafka.ConfigMap
+}
+
 // NewMockFactory constructs a Factory with mock implementation.
 func NewMockFactory(
 	o *Options, changefeedID commonType.ChangeFeedID,
@@ -95,6 +101,11 @@ func (f *MockFactory) AdminClient(_ context.Context) (ClusterAdminClient, error)
 		mockCluster: f.mockCluster,
 		topics:      make(map[string]*MockTopicDetail),
 	}, nil
+}
+
+// MetricsCollector returns a mocked metrics collector
+func (f *MockFactory) MetricsCollector() MetricsCollector {
+	return &MockMetricsCollector{changefeedID: f.changefeedID, config: f.config}
 }
 
 func (c *MockClusterAdmin) GetAllBrokers(ctx context.Context) ([]Broker, error) {
@@ -143,6 +154,10 @@ func (c *MockClusterAdmin) CreateTopic(ctx context.Context, detail *TopicDetail,
 	return nil
 }
 
+func (c *MockClusterAdmin) GetBrokerConfig(ctx context.Context, configName string) (string, error) {
+	return "0", nil
+}
+
 // SetRemainingFetchesUntilTopicVisible is used to control the visibility of a specific topic.
 // It is used to mock the topic creation delay.
 func (c *MockClusterAdmin) SetRemainingFetchesUntilTopicVisible(
@@ -159,4 +174,7 @@ func (c *MockClusterAdmin) SetRemainingFetchesUntilTopicVisible(
 
 func (c *MockClusterAdmin) Close() {
 	c.mockCluster.Close()
+}
+
+func (c *MockMetricsCollector) Run(_ context.Context) {
 }

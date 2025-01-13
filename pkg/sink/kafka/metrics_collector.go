@@ -76,7 +76,7 @@ type metricsCollector struct {
 	config       *kafka.ConfigMap
 }
 
-// NewMetricsCollector return a kafka metrics collector based on  library.
+// NewMetricsCollector return a kafka metrics collector based on library.
 func NewMetricsCollector(
 	changefeedID common.ChangeFeedID,
 	config *kafka.ConfigMap,
