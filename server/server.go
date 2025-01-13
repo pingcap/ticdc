@@ -175,6 +175,10 @@ func (c *server) Run(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
+	defer func() {
+		c.Close(ctx)
+	}()
+
 	g, ctx := errgroup.WithContext(ctx)
 	// start all submodules
 	for _, sub := range c.subModules {

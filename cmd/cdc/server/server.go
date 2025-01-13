@@ -94,10 +94,6 @@ func (o *options) run(cmd *cobra.Command) error {
 	}
 	log.Info("init log", zap.String("file", loggerConfig.File), zap.String("level", loggerConfig.Level))
 
-	ctx, cancel := context.WithCancel(context.Background())
-	setDefaultContext(ctx)
-	defer cancel()
-
 	cdcversion.ReleaseVersion = version.ReleaseVersion
 	version.LogVersionInfo("Change Data Capture (CDC)")
 	log.Info("The TiCDC release version is", zap.String("ReleaseVersion", cdcversion.ReleaseVersion))
@@ -111,15 +107,34 @@ func (o *options) run(cmd *cobra.Command) error {
 	}
 	log.Info("TiCDC(new arch) server created",
 		zap.Strings("pd", o.pdEndpoints), zap.Stringer("config", o.serverConfig))
-
-	// Run TiCDC server.
-	err = svr.Run(ctx)
-	if err != nil && errors.Cause(err) != context.Canceled {
-		log.Warn("cdc server exits with error", zap.Error(err))
-	} else {
-		log.Info("cdc server exits normally")
+	for {
+		// Run TiCDC server.
+		ctx, cancel := context.WithCancel(context.Background())
+		setDefaultContext(ctx)
+		err = svr.Run(ctx)
+		// if server suicided, reset the server and run again.
+		// if the canceled error throw, there are two possible scenarios:
+		//   1. the internal context canceled, it means some error happened in
+		//      the internal, and the routine is exited, we should restart
+		//      the server.
+		//   2. the parent context canceled, it means that the caller of
+		//      the server hope the server to exit, and this loop will return
+		//      in the above `select` block.
+		// if there are some **internal** context deadline exceeded (IO/network
+		// timeout), reset the server and run again.
+		//
+		// TODO: make sure the internal cancel should return the real error
+		//       instead of context.Canceled.
+		if !cerror.ErrCaptureSuicide.Equal(err) {
+			cancel()
+			if err != nil && errors.Cause(err) != context.Canceled {
+				log.Warn("cdc server exits with error", zap.Error(err))
+			} else {
+				log.Info("cdc server exits normally")
+			}
+			break
+		}
 	}
-	svr.Close(ctx)
 	return nil
 }
 
