@@ -186,7 +186,7 @@ func encodeResolvedTs(ts uint64) ([]byte, []byte, error) {
 	return keyOutput.Bytes(), valueOutput.Bytes(), nil
 }
 
-func writeColumnFieldValue(writer *util.JSONWriter, col *model.ColumnInfo, row *chunk.Row, idx int, tableInfo *commonType.TableInfo) error {
+func writeColumnFieldValue(writer *util.JSONWriter, col *model.ColumnInfo, row *chunk.Row, idx int, tableInfo *commonType.TableInfo) {
 	colType := col.GetType()
 	flag := *tableInfo.GetColumnFlags()[col.ID]
 	whereHandle := flag.IsHandleKey()
@@ -199,7 +199,7 @@ func writeColumnFieldValue(writer *util.JSONWriter, col *model.ColumnInfo, row *
 
 	if row.IsNull(idx) {
 		writer.WriteNullField("v")
-		return nil
+		return
 	}
 
 	switch col.GetType() {
@@ -210,10 +210,7 @@ func writeColumnFieldValue(writer *util.JSONWriter, col *model.ColumnInfo, row *
 		} else {
 			dp := &d
 			// Encode bits as integers to avoid pingcap/tidb#10988 (which also affects MySQL itself)
-			value, err := dp.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
-			if err != nil {
-				return nil
-			}
+			value, _ := dp.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
 			writer.WriteUint64Field("v", value)
 		}
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
@@ -280,7 +277,7 @@ func writeColumnFieldValue(writer *util.JSONWriter, col *model.ColumnInfo, row *
 		value := d.GetValue()
 		writer.WriteAnyField("v", value)
 	}
-	return nil
+	return
 }
 
 func writeColumnFieldValues(
@@ -340,7 +337,7 @@ func writeColumnFieldValueIfUpdated(
 	row *chunk.Row,
 	idx int,
 	tableInfo *commonType.TableInfo,
-) error {
+) {
 	colType := col.GetType()
 	flag := *tableInfo.GetColumnFlags()[col.ID]
 	whereHandle := flag.IsHandleKey()
@@ -357,12 +354,15 @@ func writeColumnFieldValueIfUpdated(
 	}
 
 	if row.IsNull(idx) && preRow.IsNull(idx) {
-		return nil
-	} else if preRow.IsNull(idx) && !row.IsNull(idx) {
+		return
+	}
+	if preRow.IsNull(idx) && !row.IsNull(idx) {
 		writeFunc(func() { writer.WriteNullField("v") })
-		return nil
-	} else if !preRow.IsNull(idx) && row.IsNull(idx) {
-		return writeColumnFieldValue(writer, col, preRow, idx, tableInfo)
+		return
+	}
+	if !preRow.IsNull(idx) && row.IsNull(idx) {
+		writeColumnFieldValue(writer, col, preRow, idx, tableInfo)
+		return
 	}
 
 	switch col.GetType() {
@@ -481,5 +481,5 @@ func writeColumnFieldValueIfUpdated(
 			writeFunc(func() { writer.WriteAnyField("v", preRowValue) })
 		}
 	}
-	return nil
+	return
 }
