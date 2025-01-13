@@ -27,6 +27,7 @@ function complete_ddls() {
 	# ddls+=("drop table ddl_reentrant.t2" false 'DROP TABLE `ddl_reentrant`.`t2`')
 	# ddls+=("recover table ddl_reentrant.t2" false 'RECOVER TABLE `ddl_reentrant`.`t2`')
 	# ddls+=("drop database ddl_reentrant" false 'DROP DATABASE `ddl_reentrant`')
+	echo $ddls
 }
 
 changefeedid=""

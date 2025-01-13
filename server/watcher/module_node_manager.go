@@ -94,6 +94,7 @@ func (c *NodeManager) Tick(
 	newCoordinatorID, err := c.etcdClient.GetOwnerID(context.Background())
 	if err != nil {
 		log.Warn("get coordinator id failed, will retry in next tick", zap.Error(err))
+		return state, nil
 	}
 
 	if newCoordinatorID != oldCoordinatorID {

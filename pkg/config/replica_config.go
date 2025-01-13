@@ -289,10 +289,9 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 		}
 	}
 	// TODO: Remove the hack once span replication is compatible with all sinks.
-	// disable this check for test purpose
-	// if !isSinkCompatibleWithSpanReplication(sinkURI) {
-	// 	c.Scheduler.EnableTableAcrossNodes = false
-	// }
+	if !isSinkCompatibleWithSpanReplication(sinkURI) {
+		c.Scheduler.EnableTableAcrossNodes = false
+	}
 
 	if c.Integrity != nil {
 		switch strings.ToLower(sinkURI.Scheme) {

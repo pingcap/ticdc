@@ -342,7 +342,7 @@ func (c *Controller) FinishBootstrap(workingMap map[common.ChangeFeedID]remoteMa
 	for cfID, cfMeta := range cfs {
 		rm, ok := workingMap[cfID]
 		if !ok {
-			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, cfMeta.Status.CheckpointTs)
+			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, cfMeta.Status.CheckpointTs, false)
 			if shouldRunChangefeed(cf.GetInfo().State) {
 				c.changefeedDB.AddAbsentChangefeed(cf)
 			} else {
@@ -351,7 +351,7 @@ func (c *Controller) FinishBootstrap(workingMap map[common.ChangeFeedID]remoteMa
 		} else {
 			log.Info("maintainer already working in other server",
 				zap.String("changefeed", cfID.String()))
-			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, rm.status.CheckpointTs)
+			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, rm.status.CheckpointTs, false)
 			c.changefeedDB.AddReplicatingMaintainer(cf, rm.nodeID)
 			// delete it
 			delete(workingMap, cfID)
@@ -404,7 +404,7 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	if err != nil {
 		return errors.Trace(err)
 	}
-	c.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs))
+	c.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs, true))
 	return nil
 }
 
@@ -445,7 +445,7 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	return nil
 }
 
-func (c *Controller) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64) error {
+func (c *Controller) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64, overwriteCheckpointTs bool) error {
 	c.apiLock.Lock()
 	defer c.apiLock.Unlock()
 
@@ -462,7 +462,15 @@ func (c *Controller) ResumeChangefeed(ctx context.Context, id common.ChangeFeedI
 		clone.State = model.StateNormal
 		cf.SetInfo(clone)
 	}
-	c.changefeedDB.Resume(id, true)
+
+	status := cf.GetStatus()
+	status.CheckpointTs = newCheckpointTs
+	_, _, err := cf.UpdateStatus(status)
+	if err != nil {
+		return errors.NewNoStackError(err.Message)
+	}
+
+	c.changefeedDB.Resume(id, true, overwriteCheckpointTs)
 	return nil
 }
 

@@ -15,15 +15,14 @@ MAX_RETRIES=5
 retries=0
 
 while [ $retries -lt $MAX_RETRIES ]; do
-    id=$(curl http://127.0.0.1:10080/schema/"${dbName}"/"${tableName}" | jq .id)
-    if [ -n "$id" ]; then
-        echo $id
-        exit 0
-    fi
-    retries=$((retries+1))
-    sleep 1
+	id=$(curl http://127.0.0.1:10080/schema/"${dbName}"/"${tableName}" | jq .id)
+	if [ -n "$id" ]; then
+		echo $id
+		exit 0
+	fi
+	retries=$((retries + 1))
+	sleep 1
 done
-
 
 echo "Failed to get table id"
 exit 1

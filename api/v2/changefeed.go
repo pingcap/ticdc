@@ -504,7 +504,7 @@ func (h *OpenAPIV2) resumeChangefeed(c *gin.Context) {
 		}
 	}()
 
-	err = coordinator.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs)
+	err = coordinator.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs, cfg.OverwriteCheckpointTs != 0)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -584,6 +584,17 @@ func (h *OpenAPIV2) updateChangefeed(c *gin.Context) {
 	}
 	if updateCfConfig.StartTs != 0 {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("start_ts can not be updated"))
+		return
+	}
+	// verify replicaConfig
+	sinkURIParsed, err := url.Parse(oldCfInfo.SinkURI)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
+		return
+	}
+	err = oldCfInfo.Config.ValidateAndAdjust(sinkURIParsed)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
 		return
 	}
 

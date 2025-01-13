@@ -265,7 +265,7 @@ function failOverCaseD-4() {
 
 	# make node1 to be the coordinator and maintainer
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
-	
+
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
 	## make ddl must reach the place and report to maintainer, and get the write status, and block in the place that report to maintainer

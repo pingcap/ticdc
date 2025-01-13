@@ -43,7 +43,6 @@ import (
 	"github.com/pingcap/tiflow/cdc/model"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/pdutil"
-	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pingcap/tiflow/pkg/tcpserver"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
@@ -129,13 +128,14 @@ func (c *server) initialize(ctx context.Context) error {
 	nodeManager.RegisterNodeChangeHandler(
 		appcontext.MessageCenter,
 		appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter).OnNodeChanges)
+
+	conf := config.GetGlobalServerConfig()
 	subscriptionClient := logpuller.NewSubscriptionClient(
 		&logpuller.SubscriptionClientConfig{
 			RegionRequestWorkerPerStore: 16,
 		}, c.pdClient, c.RegionCache, c.PDClock,
 		txnutil.NewLockerResolver(c.KVStorage.(tikv.Storage)), c.security,
 	)
-	conf := config.GetGlobalServerConfig()
 	schemaStore := schemastore.New(ctx, conf.DataDir, subscriptionClient, c.pdClient, c.PDClock, c.KVStorage)
 	eventStore := eventstore.New(ctx, conf.DataDir, subscriptionClient, c.PDClock)
 	eventService := eventservice.New(eventStore, schemaStore)
@@ -307,4 +307,8 @@ func (c *server) GetEtcdClient() etcd.CDCEtcdClient {
 
 func (c *server) GetMaintainerManager() *maintainer.Manager {
 	return appctx.GetService[*maintainer.Manager](appctx.MaintainerManager)
+}
+
+func (c *server) GetKVStorage() kv.Storage {
+	return c.KVStorage
 }
