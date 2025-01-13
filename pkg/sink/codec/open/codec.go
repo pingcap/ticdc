@@ -18,22 +18,19 @@ import (
 	"encoding/binary"
 	"strconv"
 
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/cdc/model"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink/codec"
 )
 
-func encodeRowChangedEvent(e *commonEvent.RowEvent, config *newcommon.Config, largeMessageOnlyHandleKeyColumns bool, claimCheckLocationName string) ([]byte, []byte, int, error) {
+func encodeRowChangedEvent(e *commonEvent.RowEvent, config *common.Config, largeMessageOnlyHandleKeyColumns bool, claimCheckLocationName string) ([]byte, []byte, int, error) {
 	keyBuf := &bytes.Buffer{}
 	valueBuf := &bytes.Buffer{}
 	keyWriter := util.BorrowJSONWriter(keyBuf)
@@ -43,7 +40,7 @@ func encodeRowChangedEvent(e *commonEvent.RowEvent, config *newcommon.Config, la
 		keyWriter.WriteUint64Field("ts", e.CommitTs)
 		keyWriter.WriteStringField("scm", e.TableInfo.GetSchemaName())
 		keyWriter.WriteStringField("tbl", e.TableInfo.GetTableName())
-		keyWriter.WriteIntField("t", int(model.MessageTypeRow))
+		keyWriter.WriteIntField("t", int(common.MessageTypeRow))
 
 		if claimCheckLocationName != "" {
 			keyWriter.WriteBoolField("ohk", false)
@@ -94,7 +91,7 @@ func encodeRowChangedEvent(e *commonEvent.RowEvent, config *newcommon.Config, la
 	key := keyBuf.Bytes()
 	value := valueBuf.Bytes()
 
-	valueCompressed, err := newcommon.Compress(
+	valueCompressed, err := common.Compress(
 		config.ChangefeedID, config.LargeMessageHandle.LargeMessageHandleCompression, value,
 	)
 	if err != nil {
@@ -103,12 +100,11 @@ func encodeRowChangedEvent(e *commonEvent.RowEvent, config *newcommon.Config, la
 
 	// for single message that is longer than max-message-bytes
 	// 16 is the length of `keyLenByte` and `valueLenByte`, 8 is the length of `versionHead`
-	length := len(key) + len(valueCompressed) + ticommon.MaxRecordOverhead + 16 + 8
-
+	length := len(key) + len(valueCompressed) + common.MaxRecordOverhead + 16 + 8
 	return key, valueCompressed, length, nil
 }
 
-func encodeDDLEvent(e *commonEvent.DDLEvent, config *newcommon.Config) ([]byte, []byte, error) {
+func encodeDDLEvent(e *commonEvent.DDLEvent, config *common.Config) ([]byte, []byte, error) {
 	keyBuf := &bytes.Buffer{}
 	valueBuf := &bytes.Buffer{}
 	keyWriter := util.BorrowJSONWriter(keyBuf)
@@ -118,7 +114,7 @@ func encodeDDLEvent(e *commonEvent.DDLEvent, config *newcommon.Config) ([]byte, 
 		keyWriter.WriteUint64Field("ts", e.FinishedTs)
 		keyWriter.WriteStringField("scm", e.SchemaName)
 		keyWriter.WriteStringField("tbl", e.TableName)
-		keyWriter.WriteIntField("t", int(model.MessageTypeDDL))
+		keyWriter.WriteIntField("t", int(common.MessageTypeDDL))
 	})
 
 	valueWriter.WriteObject(func() {
@@ -129,7 +125,7 @@ func encodeDDLEvent(e *commonEvent.DDLEvent, config *newcommon.Config) ([]byte, 
 	util.ReturnJSONWriter(keyWriter)
 	util.ReturnJSONWriter(valueWriter)
 
-	value, err := newcommon.Compress(
+	value, err := common.Compress(
 		config.ChangefeedID, config.LargeMessageHandle.LargeMessageHandleCompression, valueBuf.Bytes(),
 	)
 	if err != nil {
@@ -144,7 +140,7 @@ func encodeDDLEvent(e *commonEvent.DDLEvent, config *newcommon.Config) ([]byte, 
 
 	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
 	binary.BigEndian.PutUint64(valueLenByte[:], uint64(len(value)))
-	binary.BigEndian.PutUint64(versionByte[:], codec.BatchVersion1)
+	binary.BigEndian.PutUint64(versionByte[:], batchVersion1)
 
 	keyOutput := new(bytes.Buffer)
 	keyOutput.Write(versionByte[:])
@@ -164,7 +160,7 @@ func encodeResolvedTs(ts uint64) ([]byte, []byte, error) {
 
 	keyWriter.WriteObject(func() {
 		keyWriter.WriteUint64Field("ts", ts)
-		keyWriter.WriteIntField("t", int(model.MessageTypeResolved))
+		keyWriter.WriteIntField("t", int(common.MessageTypeResolved))
 	})
 
 	util.ReturnJSONWriter(keyWriter)
@@ -190,7 +186,7 @@ func encodeResolvedTs(ts uint64) ([]byte, []byte, error) {
 	return keyOutput.Bytes(), valueOutput.Bytes(), nil
 }
 
-func writeColumnFieldValue(writer *util.JSONWriter, col *timodel.ColumnInfo, row *chunk.Row, idx int, tableInfo *common.TableInfo) error {
+func writeColumnFieldValue(writer *util.JSONWriter, col *model.ColumnInfo, row *chunk.Row, idx int, tableInfo *commonType.TableInfo) error {
 	colType := col.GetType()
 	flag := *tableInfo.GetColumnFlags()[col.ID]
 	whereHandle := flag.IsHandleKey()
@@ -290,7 +286,7 @@ func writeColumnFieldValue(writer *util.JSONWriter, col *timodel.ColumnInfo, row
 func writeColumnFieldValues(
 	jWriter *util.JSONWriter,
 	row *chunk.Row,
-	tableInfo *common.TableInfo,
+	tableInfo *commonType.TableInfo,
 	selector columnselector.Selector,
 	onlyHandleKeyColumns bool,
 ) error {
@@ -319,7 +315,7 @@ func writeUpdatedColumnFieldValues(
 	jWriter *util.JSONWriter,
 	preRow *chunk.Row,
 	row *chunk.Row,
-	tableInfo *common.TableInfo,
+	tableInfo *commonType.TableInfo,
 	selector columnselector.Selector,
 	onlyHandleKeyColumns bool,
 ) {
@@ -339,11 +335,11 @@ func writeUpdatedColumnFieldValues(
 
 func writeColumnFieldValueIfUpdated(
 	writer *util.JSONWriter,
-	col *timodel.ColumnInfo,
+	col *model.ColumnInfo,
 	preRow *chunk.Row,
 	row *chunk.Row,
 	idx int,
-	tableInfo *common.TableInfo,
+	tableInfo *commonType.TableInfo,
 ) error {
 	colType := col.GetType()
 	flag := *tableInfo.GetColumnFlags()[col.ID]
