@@ -165,6 +165,15 @@ func NewEventDispatcherManager(
 		return nil, 0, errors.Trace(err)
 	}
 
+	var tableTriggerStartTs uint64 = 0
+	// init table trigger event dispatcher when tableTriggerEventDispatcherID is not nil
+	if tableTriggerEventDispatcherID != nil {
+		tableTriggerStartTs, err = manager.NewTableTriggerEventDispatcher(tableTriggerEventDispatcherID, startTs)
+		if err != nil {
+			return nil, 0, errors.Trace(err)
+		}
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -201,14 +210,6 @@ func NewEventDispatcherManager(
 		manager.collectBlockStatusRequest(ctx)
 	}()
 
-	var tableTriggerStartTs uint64 = 0
-	// init table trigger event dispatcher when tableTriggerEventDispatcherID is not nil
-	if tableTriggerEventDispatcherID != nil {
-		tableTriggerStartTs, err = manager.NewTableTriggerEventDispatcher(tableTriggerEventDispatcherID, startTs)
-		if err != nil {
-			return nil, 0, errors.Trace(err)
-		}
-	}
 	log.Info("event dispatcher manager created",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("maintainerID", maintainerID),
@@ -432,7 +433,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo) er
 			zap.Any("startTs", newStartTsList[idx]))
 
 	}
-	e.metricCreateDispatcherDuration.Observe(float64(time.Since(start).Seconds()) / float64(len(dispatcherIds)))
+	e.metricCreateDispatcherDuration.Observe(time.Since(start).Seconds() / float64(len(dispatcherIds)))
 	log.Info("batch create new dispatchers",
 		zap.Any("changefeedID", e.changefeedID.Name()),
 		zap.Any("namespace", e.changefeedID.Namespace()),
