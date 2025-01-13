@@ -46,19 +46,18 @@ func TestResumeChangefeed(t *testing.T) {
 		Config:       config.GetDefaultReplicaConfig(),
 		State:        model.StateFailed,
 		SinkURI:      "mysql://127.0.0.1:3306",
-	},
-		1)
+	}, 1, true)
 	changefeedDB.AddStoppedChangefeed(cf)
 
 	// no changefeed
-	require.NotNil(t, controller.ResumeChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2"), 12))
+	require.NotNil(t, controller.ResumeChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2"), 12, true))
 
 	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
-	require.NotNil(t, controller.ResumeChangefeed(context.Background(), cfID, 12))
+	require.NotNil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, true))
 	require.Equal(t, model.StateFailed, changefeedDB.GetByID(cfID).GetInfo().State)
 
 	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
-	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, 12))
+	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, false))
 	require.Equal(t, model.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
 }
 
@@ -82,8 +81,7 @@ func TestPauseChangefeed(t *testing.T) {
 		Config:       config.GetDefaultReplicaConfig(),
 		State:        model.StateNormal,
 		SinkURI:      "mysql://127.0.0.1:3306",
-	},
-		1)
+	}, 1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "node1")
 
 	// no changefeed
@@ -113,8 +111,7 @@ func TestUpdateChangefeed(t *testing.T) {
 		Config:       config.GetDefaultReplicaConfig(),
 		State:        model.StateStopped,
 		SinkURI:      "mysql://127.0.0.1:3306",
-	},
-		1)
+	}, 1, true)
 	changefeedDB.AddStoppedChangefeed(cf)
 
 	newConfig := &config.ChangeFeedInfo{
@@ -152,7 +149,7 @@ func TestGetChangefeed(t *testing.T) {
 		State:        model.StateStopped,
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
-		1)
+		1, true)
 	changefeedDB.AddStoppedChangefeed(cf)
 
 	ret, status, err := controller.GetChangefeed(context.Background(), cfID.DisplayName)
@@ -184,7 +181,7 @@ func TestRemoveChangefeed(t *testing.T) {
 		State:        model.StateNormal,
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
-		1)
+		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "node1")
 	// no changefeed
 	_, err := controller.RemoveChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2"))
@@ -220,7 +217,7 @@ func TestListChangefeed(t *testing.T) {
 		State:        model.StateNormal,
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
-		1)
+		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "node1")
 	cf2ID := common.NewChangeFeedIDWithName("test")
 	cf2 := changefeed.NewChangefeed(cf2ID, &config.ChangeFeedInfo{
@@ -229,7 +226,7 @@ func TestListChangefeed(t *testing.T) {
 		State:        model.StateNormal,
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
-		2)
+		2, true)
 	changefeedDB.AddAbsentChangefeed(cf2)
 
 	cf3ID := common.NewChangeFeedIDWithName("test")
@@ -239,7 +236,7 @@ func TestListChangefeed(t *testing.T) {
 		State:        model.StateNormal,
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
-		2)
+		2, true)
 	changefeedDB.AddStoppedChangefeed(cf3)
 	cfs, status, err := controller.ListChangefeeds(context.Background())
 	require.Nil(t, err)

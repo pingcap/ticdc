@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
@@ -87,7 +88,13 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			return nil
 		}
 		// Campaign to be the coordinator, it blocks until it been elected.
-		if err := e.election.Campaign(ctx, string(e.svr.info.ID)); err != nil {
+		err = e.election.Campaign(ctx, string(e.svr.info.ID))
+
+		failpoint.Inject("campaign-compacted-error", func() {
+			err = errors.Trace(mvcc.ErrCompacted)
+		})
+
+		if err != nil {
 			rootErr := errors.Cause(err)
 			if rootErr == context.Canceled {
 				return nil
@@ -129,10 +136,11 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			coordinatorVersion, 10000, time.Minute)
 		e.svr.setCoordinator(co)
 		err = co.Run(ctx)
-
 		// When coordinator exits, we need to stop it.
 		e.svr.coordinator.AsyncStop()
 		e.svr.setCoordinator(nil)
+		log.Info("coordinator stop", zap.String("captureID", string(e.svr.info.ID)),
+			zap.Int64("coordinatorVersion", coordinatorVersion), zap.Error(err))
 
 		if !cerror.ErrNotOwner.Equal(err) {
 			// if coordinator exits, resign the coordinator key,
@@ -145,7 +153,6 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 					cancel()
 					return errors.Trace(resignErr)
 				}
-
 				log.Warn("coordinator resign timeout", zap.String("captureID", string(e.svr.info.ID)),
 					zap.Error(resignErr), zap.Int64("coordinatorVersion", coordinatorVersion))
 			}
@@ -261,6 +268,9 @@ func (e *elector) resign(ctx context.Context) error {
 	if e.election == nil {
 		return nil
 	}
+	failpoint.Inject("resign-failed", func() error {
+		return errors.Trace(errors.New("resign failed"))
+	})
 	return cerror.WrapError(cerror.ErrCaptureResignOwner,
 		e.election.Resign(ctx))
 }

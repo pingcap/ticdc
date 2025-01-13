@@ -12,7 +12,7 @@
 # --> we expect the cluster will get the correct table count and continue to sync the following events successfully.
 #     1 ddl is drop databases
 #     2 ddl is drop table
-#     3 ddl is rename table 
+#     3 ddl is rename table
 #     4 ddl is truncate table
 
 set -eu
@@ -257,7 +257,7 @@ function failOverCaseG-4() {
 
 	# make node1 to be the coordinator and maintainer
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
-	
+
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
 
 	run_sql "use fail_over_ddl_test;show tables;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&

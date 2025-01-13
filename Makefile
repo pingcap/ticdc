@@ -49,18 +49,10 @@ endif
 
 RELEASE_VERSION =
 ifeq ($(RELEASE_VERSION),)
-	RELEASE_VERSION := v8.2.0-master
-	release_version_regex := ^v[0-9]\..*$$
-	release_branch_regex := "^release-[0-9]\.[0-9].*$$|^HEAD$$|^.*/*tags/v[0-9]\.[0-9]\..*$$"
-	ifneq ($(shell git rev-parse --abbrev-ref HEAD | grep -E $(release_branch_regex)),)
-		# If we are in release branch, try to use tag version.
-		ifneq ($(shell git describe --tags --dirty | grep -E $(release_version_regex)),)
-			RELEASE_VERSION := $(shell git describe --tags --dirty)
-		endif
-	else ifneq ($(shell git status --porcelain),)
-		# Add -dirty if the working tree is dirty for non release branch.
-		RELEASE_VERSION := $(RELEASE_VERSION)-dirty
-	endif
+	RELEASE_VERSION := $(shell git describe --tags --dirty)
+endif
+ifeq ($(RELEASE_VERSION),)
+	RELEASE_VERSION := v9.0.0-alpha
 endif
 
 # Version LDFLAGS.
@@ -81,6 +73,7 @@ CONSUMER_BUILD_FLAG=
 ifeq ("${IS_ALPINE}", "1")
 	CONSUMER_BUILD_FLAG = -tags musl
 endif
+
 GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=1 $(GO) build $(BUILD_FLAG) -trimpath $(GOVENDORFLAG)
 
 PACKAGE_LIST := go list ./... | grep -vE 'vendor|proto|ticdc/tests|integration|testing_utils|pb|pbmock|ticdc/bin'
@@ -109,7 +102,19 @@ generate_mock: tools/bin/mockgen
 	scripts/generate-mock.sh
 
 cdc:
-	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc
+
+kafka_consumer:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_kafka_consumer ./cmd/kafka-consumer
+
+storage_consumer:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_storage_consumer ./cmd/storage-consumer/main.go
+
+pulsar_consumer:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_pulsar_consumer ./cmd/pulsar-consumer/main.go
+
+filter_helper:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_filter_helper ./cmd/filter-helper/main.go
 
 fmt: tools/bin/gofumports tools/bin/shfmt tools/bin/gci
 	@echo "run gci (format imports)"
@@ -126,9 +131,9 @@ integration_test_build: check_failpoint_ctl
 	$(FAILPOINT_ENABLE)
 	$(GOTEST) -ldflags '$(LDFLAGS)' -c -cover -covermode=atomic \
 		-coverpkg=github.com/pingcap/ticdc/... \
-		-o bin/cdc.test github.com/pingcap/ticdc/cmd \
+		-o bin/cdc.test github.com/pingcap/ticdc/cmd/cdc \
 	|| { $(FAILPOINT_DISABLE); echo "Failed to build cdc.test"; exit 1; }
-	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/main.go \
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc/main.go \
 	|| { $(FAILPOINT_DISABLE); exit 1; }
 	$(FAILPOINT_DISABLE)
 

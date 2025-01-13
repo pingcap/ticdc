@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
-	utils "github.com/pingcap/tiflow/pkg/util"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -72,7 +71,7 @@ func NewMysqlSink(ctx context.Context, changefeedID common.ChangeFeedID, workerC
 	if err != nil {
 		return nil, err
 	}
-	cfg.SyncPointRetention = utils.GetOrZero(config.SyncPointRetention)
+	cfg.SyncPointRetention = config.SyncPointRetention
 
 	for i := 0; i < workerCount; i++ {
 		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, mysqlSink.changefeedID, errgroup, mysqlSink.statistics)
@@ -162,7 +161,17 @@ func (s *MysqlSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *MysqlSink) AddCheckpointTs(ts uint64) {}
 
-func (s *MysqlSink) GetStartTsList(tableIds []int64, startTsList []int64) ([]int64, error) {
+func (s *MysqlSink) GetStartTsList(tableIds []int64, startTsList []int64, removeDDLTs bool) ([]int64, error) {
+	if removeDDLTs {
+		// means we just need to remove the ddl ts item for this changefeed, and return startTsList directly.
+		err := s.ddlWorker.RemoveDDLTsItem()
+		if err != nil {
+			atomic.StoreUint32(&s.isNormal, 0)
+			return nil, err
+		}
+		return startTsList, nil
+	}
+
 	startTsList, err := s.ddlWorker.GetStartTsList(tableIds, startTsList)
 	if err != nil {
 		atomic.StoreUint32(&s.isNormal, 0)

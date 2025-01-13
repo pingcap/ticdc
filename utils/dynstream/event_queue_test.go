@@ -261,7 +261,7 @@ func TestRemovePath(t *testing.T) {
 	eq.appendEvent(e)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	path.removed = true
+	path.removed.Store(true)
 	buf := make([]*mockEvent, 0)
 	events, _ := eq.popEvents(buf)
 	require.Equal(t, 0, len(events))

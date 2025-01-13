@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2021 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,18 +14,25 @@
 package cli
 
 import (
-	"github.com/pingcap/ticdc/cmd/factory"
-	"github.com/spf13/cobra"
+	"os"
+	"testing"
+
+	"github.com/golang/mock/gomock"
+	v2 "github.com/pingcap/tiflow/cdc/api/v2"
+	"github.com/stretchr/testify/require"
 )
 
-// newCmdTso creates the `cli tso` command.
-func newCmdTso(f factory.Factory) *cobra.Command {
-	command := &cobra.Command{
-		Use:   "tso",
-		Short: "Manage tso",
+func TestUnsafeShowMetadataCli(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	f := newMockFactory(ctrl)
+
+	cmd := newCmdShowMetadata(f)
+	os.Args = []string{
+		"show",
 	}
-
-	command.AddCommand(newCmdQueryTso(f))
-
-	return command
+	f.unsafes.EXPECT().Metadata(gomock.Any()).Return(&[]v2.EtcdData{
+		{Key: "a", Value: "b"},
+	}, nil)
+	require.Nil(t, cmd.Execute())
 }

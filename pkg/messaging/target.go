@@ -55,6 +55,7 @@ type remoteMessageTarget struct {
 	targetEpoch atomic.Value
 	targetId    node.ID
 	targetAddr  string
+	security    *security.Credential
 
 	// For sending events and commands
 	eventSender   *sendStreamWrapper
@@ -152,6 +153,7 @@ func newRemoteMessageTarget(
 	addr string,
 	recvEventCh, recvCmdCh chan *TargetMessage,
 	cfg *config.MessageCenterConfig,
+	security *security.Credential,
 ) *remoteMessageTarget {
 	log.Info("Create remote target", zap.Stringer("local", localID), zap.Stringer("remote", targetId), zap.Any("addr", addr), zap.Any("localEpoch", localEpoch), zap.Any("targetEpoch", targetEpoch))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -160,6 +162,7 @@ func newRemoteMessageTarget(
 		messageCenterEpoch: localEpoch,
 		targetAddr:         addr,
 		targetId:           targetId,
+		security:           security,
 		eventSender:        &sendStreamWrapper{ready: atomic.Bool{}},
 		commandSender:      &sendStreamWrapper{ready: atomic.Bool{}},
 		ctx:                ctx,
@@ -241,7 +244,7 @@ func (s *remoteMessageTarget) connect() {
 		return
 	}
 
-	conn, err := conn.Connect(string(s.targetAddr), &security.Credential{})
+	conn, err := conn.Connect(string(s.targetAddr), s.security)
 	if err != nil {
 		log.Info("Cannot create grpc client",
 			zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))

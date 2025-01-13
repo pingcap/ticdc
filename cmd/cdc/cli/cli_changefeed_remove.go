@@ -16,7 +16,7 @@ package cli
 import (
 	"strings"
 
-	"github.com/pingcap/ticdc/cmd/factory"
+	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
 	"github.com/pingcap/tiflow/pkg/cmd/context"
 	"github.com/pingcap/tiflow/pkg/cmd/util"

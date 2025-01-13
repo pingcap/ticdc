@@ -33,7 +33,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -119,6 +118,7 @@ func NewEventDispatcherManager(
 	tableTriggerEventDispatcherID *heartbeatpb.DispatcherID,
 	startTs uint64,
 	maintainerID node.ID,
+	newChangefeed bool,
 ) (*EventDispatcherManager, uint64, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &EventDispatcherManager{
@@ -146,8 +146,8 @@ func NewEventDispatcherManager(
 	if cfConfig.EnableSyncPoint {
 		// TODO: confirm that parameter validation is done at the setting location, so no need to check again here
 		manager.syncPointConfig = &syncpoint.SyncPointConfig{
-			SyncPointInterval:  util.GetOrZero(cfConfig.SyncPointInterval),
-			SyncPointRetention: util.GetOrZero(cfConfig.SyncPointRetention),
+			SyncPointInterval:  cfConfig.SyncPointInterval,
+			SyncPointRetention: cfConfig.SyncPointRetention,
 		}
 	}
 
@@ -187,7 +187,7 @@ func NewEventDispatcherManager(
 	var tableTriggerStartTs uint64 = 0
 	// init table trigger event dispatcher when tableTriggerEventDispatcherID is not nil
 	if tableTriggerEventDispatcherID != nil {
-		tableTriggerStartTs, err = manager.NewTableTriggerEventDispatcher(tableTriggerEventDispatcherID, startTs)
+		tableTriggerStartTs, err = manager.NewTableTriggerEventDispatcher(tableTriggerEventDispatcherID, startTs, newChangefeed)
 		if err != nil {
 			return nil, 0, errors.Trace(err)
 		}
@@ -293,7 +293,7 @@ type dispatcherCreateInfo struct {
 	CurrentPDTs uint64
 }
 
-func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64) (uint64, error) {
+func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) (uint64, error) {
 	err := e.newDispatchers([]dispatcherCreateInfo{
 		{
 			Id:          common.NewDispatcherIDFromPB(id),
@@ -302,7 +302,7 @@ func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.
 			SchemaID:    0,
 			CurrentPDTs: 0,
 		},
-	})
+	}, newChangefeed)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
@@ -333,7 +333,12 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 	return nil
 }
 
-func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo) error {
+// removeDDLTs means we don't need to check startTs from ddl_ts_table when sink is mysql-class,
+// but we need to remove the ddl_ts item of this changefeed, to obtain a clean environment.
+// removeDDLTs is true only when meet the following conditions:
+// 1. newDispatchers is called by NewTableTriggerEventDispatcher(just means when creating table trigger event dispatcher)
+// 2. changefeed is total new created, or resumed with overwriteCheckpointTs
+func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, removeDDLTs bool) error {
 	start := time.Now()
 
 	dispatcherIds := make([]common.DispatcherID, 0, len(infos))
@@ -368,12 +373,12 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo) er
 	var newStartTsList []int64
 	var err error
 	if e.sink.SinkType() == common.MysqlSinkType {
-		newStartTsList, err = e.sink.(*sink.MysqlSink).GetStartTsList(tableIds, startTsList)
+		newStartTsList, err = e.sink.(*sink.MysqlSink).GetStartTsList(tableIds, startTsList, removeDDLTs)
 		if err != nil {
 			return errors.Trace(err)
 		}
 		log.Info("calculate real startTs for dispatchers",
-			zap.Any("receiveStartTs", startTsList), zap.Any("realStartTs", newStartTsList))
+			zap.Any("receiveStartTs", startTsList), zap.Any("realStartTs", newStartTsList), zap.Any("removeDDLTs", removeDDLTs))
 	} else {
 		newStartTsList = startTsList
 	}

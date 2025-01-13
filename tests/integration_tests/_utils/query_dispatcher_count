@@ -15,23 +15,23 @@ echo "query dispatcher count"
 count=0
 
 while [[ $count -lt $retryCount ]]; do
-    ans=$(curl -X GET http://"${ipAddr}"/api/v2/changefeeds/"${changefeedID}"/get_dispatcher_count)
-    echo $ans
-    value=$(echo $ans | jq -r '.count')
+	ans=$(curl -X GET http://"${ipAddr}"/api/v2/changefeeds/"${changefeedID}"/get_dispatcher_count)
+	echo $ans
+	value=$(echo $ans | jq -r '.count')
 
-    if [ "$target" == "-1" ]; then
-        if [ "$value" != "null" ]; then
-            exit 0
-        fi
-    else
-        if [ "$value" == "$target" ]; then
-            exit 0
-        fi
-    fi
+	if [ "$target" == "-1" ]; then
+		if [ "$value" != "null" ]; then
+			exit 0
+		fi
+	else
+		if [ "$value" == "$target" ]; then
+			exit 0
+		fi
+	fi
 
-    sleep 2
+	sleep 2
 
-    count=$((count + 1))
+	count=$((count + 1))
 done
 
 echo "query dispatcher count $retryCount retries, final value: $value, target: $target"

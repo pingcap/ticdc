@@ -28,6 +28,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
@@ -47,7 +48,8 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	selfNode := node.NewInfo("127.0.0.1:18300", "")
-	nodeManager := watcher.NewNodeManager(nil, nil)
+	etcdClient := newMockEtcdClient(string(selfNode.ID))
+	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[selfNode.ID] = selfNode
 	store := &mockSchemaStore{
@@ -60,7 +62,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		},
 	}
 	appcontext.SetService(appcontext.SchemaStore, store)
-	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
@@ -122,13 +124,13 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 
 	// Case 2: Add new nodes
 	node2 := node.NewInfo("127.0.0.1:8400", "")
-	mc2 := messaging.NewMessageCenter(ctx, node2.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc2 := messaging.NewMessageCenter(ctx, node2.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 
 	node3 := node.NewInfo("127.0.0.1:8500", "")
-	mc3 := messaging.NewMessageCenter(ctx, node3.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc3 := messaging.NewMessageCenter(ctx, node3.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 
 	node4 := node.NewInfo("127.0.0.1:8600", "")
-	mc4 := messaging.NewMessageCenter(ctx, node4.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc4 := messaging.NewMessageCenter(ctx, node4.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 
 	startDispatcherNode(t, ctx, node2, mc2, nodeManager)
 	dn3 := startDispatcherNode(t, ctx, node3, mc3, nodeManager)
@@ -245,7 +247,8 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	selfNode := node.NewInfo("127.0.0.1:18301", "")
-	nodeManager := watcher.NewNodeManager(nil, nil)
+	etcdClient := newMockEtcdClient(string(selfNode.ID))
+	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[selfNode.ID] = selfNode
 	store := &mockSchemaStore{
@@ -258,7 +261,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 		},
 	}
 	appcontext.SetService(appcontext.SchemaStore, store)
-	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
@@ -359,7 +362,8 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	selfNode := node.NewInfo("127.0.0.1:8800", "")
-	nodeManager := watcher.NewNodeManager(nil, nil)
+	etcdClient := newMockEtcdClient(string(selfNode.ID))
+	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[selfNode.ID] = selfNode
 	store := &mockSchemaStore{
@@ -372,7 +376,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 		},
 	}
 	appcontext.SetService(appcontext.SchemaStore, store)
-	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
@@ -457,4 +461,19 @@ func startDispatcherNode(t *testing.T, ctx context.Context,
 		mc:                mc,
 		dispatcherManager: dispManager,
 	}
+}
+
+type mockEtcdClient struct {
+	etcd.CDCEtcdClient
+	ownerID string
+}
+
+func newMockEtcdClient(ownerID string) *mockEtcdClient {
+	return &mockEtcdClient{
+		ownerID: ownerID,
+	}
+}
+
+func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (model.CaptureID, error) {
+	return model.CaptureID(m.ownerID), nil
 }

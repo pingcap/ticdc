@@ -80,7 +80,7 @@ func TestResume(t *testing.T) {
 	db.AddStoppedChangefeed(cf)
 	cf.backoff = NewBackoff(cf.ID, 0, 0)
 
-	db.Resume(cf.ID, true)
+	db.Resume(cf.ID, true, false)
 
 	require.Contains(t, db.GetAbsent(), cf)
 	require.NotContains(t, db.stopped, cf.ID)
@@ -249,7 +249,7 @@ func TestScheduleChangefeed(t *testing.T) {
 		Config:       config.GetDefaultReplicaConfig(),
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
-		10)
+		10, true)
 	db.AddAbsentChangefeed(cf)
 	db.MarkMaintainerScheduling(cf)
 	db.BindChangefeedToNode("", "node-1", cf)
@@ -279,7 +279,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 			ChangefeedID: cfID,
 			Config:       config.GetDefaultReplicaConfig(),
 			State:        model.StateStopped,
-		}, 11)
+		}, 11, true)
 	db.AddStoppedChangefeed(cf1)
 	require.Equal(t, uint64(11), db.CalculateGCSafepoint())
 
@@ -289,7 +289,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 			ChangefeedID: cf2ID,
 			Config:       config.GetDefaultReplicaConfig(),
 			State:        model.StateFinished,
-		}, 9)
+		}, 9, true)
 	db.AddStoppedChangefeed(cf2)
 	require.Equal(t, uint64(11), db.CalculateGCSafepoint())
 
@@ -299,7 +299,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 			ChangefeedID: cf3ID,
 			Config:       config.GetDefaultReplicaConfig(),
 			State:        model.StateNormal,
-		}, 10)
+		}, 10, true)
 	db.AddStoppedChangefeed(cf3)
 	require.Equal(t, uint64(10), db.CalculateGCSafepoint())
 
@@ -312,7 +312,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 			Error: &model.RunningError{
 				Code: string(errors.ErrGCTTLExceeded.ID()),
 			},
-		}, 7)
+		}, 7, true)
 	db.AddStoppedChangefeed(cf4)
 	require.Equal(t, uint64(10), db.CalculateGCSafepoint())
 
@@ -323,7 +323,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 			Config:       config.GetDefaultReplicaConfig(),
 			State:        model.StateFailed,
 			Error:        &model.RunningError{},
-		}, 7)
+		}, 7, true)
 	db.AddStoppedChangefeed(cf5)
 	require.Equal(t, uint64(7), db.CalculateGCSafepoint())
 }

@@ -4,16 +4,31 @@ WORK_DIR=$1
 
 set +e
 
-## check data race
-if [ ! -f $WORK_DIR/stdout.log ]; then
+logs=$(ls $WORK_DIR/stdout*.log)
+
+if [ $? -eq 1 ]; then
+	echo "no stdout log found"
 	exit 0
 fi
+
+echo "log files: $logs"
 
 grep -q -i 'DATA RACE' $WORK_DIR/stdout*.log
 
 if [ $? -eq 0 ]; then
-	echo "found DATA RACE, please check the logs"
-	exit 1
+	for log in $logs; do
+		echo "check $log"
+		# Contains reportStoreReplicaFlows means it is a kv client issue, not a TiCDC issue, so we can ignore it
+		grep -q -i 'reportStoreReplicaFlows' $log
+		if [ $? -eq 1 ]; then
+			echo "found DATA RACE, please check the logs"
+			exit 1
+		fi
+	done
+	echo "found DATA RACE, But it is not a TiCDC issue, please check the logs"
+	exit 0
 else
+	echo "no DATA RACE found"
 	exit 0
 fi
+
