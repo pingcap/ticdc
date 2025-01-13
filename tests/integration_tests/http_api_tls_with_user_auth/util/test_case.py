@@ -195,7 +195,7 @@ def update_changefeed():
     # update fail
     # can't update start_ts
     url = BASE_URL0+"/changefeeds/changefeed-test2"
-    data = json.dumps({"start_ts": 0})
+    data = json.dumps({"start_ts": 1})
     headers = {"Content-Type": "application/json"}
     resp = rq.put(url, data=data, auth=Auth, headers=headers, cert=CERT, verify=VERIFY)
     assert resp.status_code == rq.codes.bad_request
