@@ -60,10 +60,10 @@ function run() {
 
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
 
-	python3 $CUR/util/test_case.py check_health
-	python3 $CUR/util/test_case.py get_status
+	python3 $CUR/util/test_case.py check_health $TLS_DIR
+	python3 $CUR/util/test_case.py get_status $TLS_DIR
 
-	python3 $CUR/util/test_case.py create_changefeed "$SINK_URI"
+	python3 $CUR/util/test_case.py create_changefeed $TLS_DIR "$SINK_URI"
 	# wait for all changefeed created
 	ensure $MAX_RETRIES check_changefeed_state "https://${TLS_PD_HOST}:${TLS_PD_PORT}" "changefeed-test1" "normal" "null" ${TLS_DIR}
 	ensure $MAX_RETRIES check_changefeed_state "https://${TLS_PD_HOST}:${TLS_PD_PORT}" "changefeed-test2" "normal" "null" ${TLS_DIR}
@@ -121,7 +121,7 @@ function run() {
 	)
 
 	for case in ${sequential_cases[@]}; do
-		python3 $CUR/util/test_case.py "$case"
+		python3 $CUR/util/test_case.py "$case" $TLS_DIR
 		sleep 1
 	done
 
