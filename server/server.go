@@ -174,9 +174,6 @@ func (c *server) Run(ctx context.Context) error {
 		log.Error("init server failed", zap.Error(err))
 		return errors.Trace(err)
 	}
-	defer func() {
-		c.Close(ctx)
-	}()
 
 	g, ctx := errgroup.WithContext(ctx)
 	// start all submodules
@@ -231,10 +228,8 @@ func (c *server) GetCoordinator() (tiserver.Coordinator, error) {
 // it also closes the coordinator and processorManager
 // Note: this function should be reentrant
 func (c *server) Close(ctx context.Context) {
-	// Set liveness stopping first, no matter is the owner or not.
+	// Set liveness stopping first.
 	// this is triggered by user manually stop the TiCDC instance by sent signals.
-	// It may cost a few seconds before cdc server fully stop, set it to `stopping` to prevent
-	// the capture become the leader or tables dispatched to it.
 	c.liveness.Store(model.LivenessCaptureStopping)
 
 	// Safety: Here we mainly want to stop the coordinator
