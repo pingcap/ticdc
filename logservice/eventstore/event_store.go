@@ -369,6 +369,9 @@ func (e *eventStore) Run(ctx context.Context) error {
 }
 
 func (e *eventStore) Close(ctx context.Context) error {
+	for _, ch := range e.chs {
+		go ch.Close()
+	}
 	e.wg.Wait()
 
 	for _, db := range e.dbs {

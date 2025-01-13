@@ -82,7 +82,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 		// Before campaign check liveness
-		if e.svr.liveness.Load() == model.LivenessCaptureStopping {
+		if e.svr.Liveness() == model.LivenessCaptureStopping {
 			log.Info("do not campaign coordinator, liveness is stopping",
 				zap.Any("captureID", e.svr.info.ID))
 			return nil
@@ -109,7 +109,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		}
 		// After campaign check liveness again.
 		// It is possible it becomes the coordinator right after receiving SIGTERM.
-		if e.svr.liveness.Load() == model.LivenessCaptureStopping {
+		if e.svr.Liveness() == model.LivenessCaptureStopping {
 			// If the server is stopping, resign actively.
 			log.Info("resign coordinator actively, liveness is stopping")
 			if resignErr := e.resign(ctx); resignErr != nil {
@@ -202,7 +202,7 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 		// Before campaign check liveness
-		if e.svr.liveness.Load() == model.LivenessCaptureStopping {
+		if e.svr.Liveness() == model.LivenessCaptureStopping {
 			log.Info("do not campaign log coordinator, liveness is stopping",
 				zap.Any("captureID", e.svr.info.ID))
 			return nil
@@ -225,7 +225,7 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 		}
 		// After campaign check liveness again.
 		// It is possible it becomes the coordinator right after receiving SIGTERM.
-		if e.svr.liveness.Load() == model.LivenessCaptureStopping {
+		if e.svr.Liveness() == model.LivenessCaptureStopping {
 			// If the server is stopping, resign actively.
 			log.Info("resign log coordinator actively, liveness is stopping")
 			if resignErr := e.resign(ctx); resignErr != nil {

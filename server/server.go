@@ -181,12 +181,18 @@ func (c *server) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	// start all submodules
 	for _, sub := range c.subModules {
-		func(m common.SubModule) {
-			g.Go(func() error {
-				log.Info("starting sub module", zap.String("module", m.Name()))
-				return m.Run(ctx)
-			})
-		}(sub)
+		log.Info("starting sub module", zap.String("module", sub.Name()))
+		if sub.Name() == "grpc" || sub.Name() == "http-server" {
+			go func(m common.SubModule) error {
+				return m.Run(context.TODO())
+			}(sub)
+		} else {
+			func(m common.SubModule) {
+				g.Go(func() error {
+					return m.Run(ctx)
+				})
+			}(sub)
+		}
 	}
 	// register server to etcd after we started all modules
 	err = c.registerNodeToEtcd(ctx)
@@ -225,6 +231,12 @@ func (c *server) GetCoordinator() (tiserver.Coordinator, error) {
 // it also closes the coordinator and processorManager
 // Note: this function should be reentrant
 func (c *server) Close(ctx context.Context) {
+	// Set liveness stopping first, no matter is the owner or not.
+	// this is triggered by user manually stop the TiCDC instance by sent signals.
+	// It may cost a few seconds before cdc server fully stop, set it to `stopping` to prevent
+	// the capture become the leader or tables dispatched to it.
+	c.liveness.Store(model.LivenessCaptureStopping)
+
 	// Safety: Here we mainly want to stop the coordinator
 	// and ignore it if the coordinator does not exist or is not set.
 	o, _ := c.GetCoordinator()
