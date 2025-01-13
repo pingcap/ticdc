@@ -1,5 +1,4 @@
 import sys
-import os
 import requests as rq
 from requests.exceptions import RequestException
 import time
@@ -56,7 +55,7 @@ def requests_get_with_retry(url, max_retries=RETRY_TIME, delay_seconds=1):
     """
     for retry in range(max_retries):
         try:
-            response = rq.get(url)
+            response =  rq.get(url, cert=CERT, verify=VERIFY)
             if response.status_code == 200 or response.status_code == 202:
                 return response
         except RequestException as e:
@@ -116,7 +115,7 @@ def list_changefeed():
     # test state: normal
     # test state: normal
     url = BASE_URL0+"/changefeeds?state=normal"
-    resp = rq.get(url)
+    resp = rq.get(url, cert=CERT, verify=VERIFY)
     assert_status_code(resp, rq.codes.ok, url)
     data = resp.json()
     changefeeds = data["items"]
@@ -125,7 +124,7 @@ def list_changefeed():
 
     # test state: stopped
     url = BASE_URL0+"/changefeeds?state=stopped"
-    resp = rq.get(url)
+    resp = rq.get(url, cert=CERT, verify=VERIFY)
     assert_status_code(resp, rq.codes.ok, url)
     data = resp.json()
     changefeeds = data["items"]
@@ -443,8 +442,22 @@ if __name__ == "__main__":
         "unsafe_apis": unsafe_apis
     }
 
-    func = FUNC_MAP[sys.argv[1]]
-    if len(sys.argv) >= 3:
-        func(*sys.argv[3:])
-    else:
-        func()
+    # check the test case name
+    if len(sys.argv) < 2:
+        logging.error("Please provide a test case name")
+        sys.exit(1)
+    
+    # get the test case name
+    test_case_name = sys.argv[1]
+    arg = sys.argv[2:]
+    # check if the test case name is in the FUNC_MAP
+    if test_case_name not in FUNC_MAP:
+        logging.error(f"Test case {test_case_name} not found")
+        sys.exit(1)
+    
+    # get the test case function
+    test_case_func = FUNC_MAP[test_case_name]
+    # run the test case
+    logging.info(f"Start to run test case: {test_case_name}")
+    test_case_func(*arg)
+    logging.info(f"Test case {test_case_name} finished")
