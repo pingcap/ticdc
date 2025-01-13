@@ -19,7 +19,6 @@ import (
 	"strconv"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/internal" // nolint:staticcheck
 	mm "github.com/pingcap/tidb/pkg/meta/model"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -305,9 +304,9 @@ func convertToCanalTs(commitTs uint64) int64 {
 }
 
 // get the canal EventType according to the DDLEvent
-func convertDdlEventType(e *commonEvent.DDLEvent) canal.EventType {
+func convertDdlEventType(t byte) canal.EventType {
 	// see https://github.com/alibaba/canal/blob/d53bfd7ee76f8fe6eb581049d64b07d4fcdd692d/parse/src/main/java/com/alibaba/otter/canal/parse/inbound/mysql/ddl/DruidDdlParser.java#L59-L178
-	switch mm.ActionType(e.Type) {
+	switch mm.ActionType(t) {
 	case mm.ActionCreateSchema, mm.ActionDropSchema, mm.ActionShardRowID, mm.ActionCreateView,
 		mm.ActionDropView, mm.ActionRecoverTable, mm.ActionModifySchemaCharsetAndCollate,
 		mm.ActionLockTable, mm.ActionUnlockTable, mm.ActionRepairTable, mm.ActionSetTiFlashReplica,
