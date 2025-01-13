@@ -43,6 +43,7 @@ import (
 	"github.com/pingcap/tiflow/cdc/model"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/pdutil"
+	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pingcap/tiflow/pkg/tcpserver"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
