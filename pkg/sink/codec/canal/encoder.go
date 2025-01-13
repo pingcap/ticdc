@@ -221,10 +221,7 @@ func newJSONMessageForDML(
 			continue
 		}
 		flag := e.TableInfo.GetColumnFlags()[col.ID]
-		value, javaType, err := formatColumnValue(row, idx, col, flag)
-		if err != nil {
-			return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
-		}
+		value, javaType := formatColumnValue(row, idx, col, flag)
 		valueMap[col.ID] = value
 		javaTypeMap[col.ID] = javaType
 	}
@@ -305,10 +302,7 @@ func newJSONMessageForDML(
 				continue
 			}
 			flag := e.TableInfo.GetColumnFlags()[col.ID]
-			value, _, err := formatColumnValue(preRow, idx, col, flag)
-			if err != nil {
-				return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
-			}
+			value, _ := formatColumnValue(preRow, idx, col, flag)
 			oldValueMap[col.ID] = value
 		}
 

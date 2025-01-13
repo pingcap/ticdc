@@ -15,6 +15,8 @@ package canal
 
 import (
 	"fmt"
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 	"math"
 	"strconv"
 
@@ -28,7 +30,7 @@ import (
 	canal "github.com/pingcap/tiflow/proto/canal"
 )
 
-func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, flag *common.ColumnFlagType) (string, internal.JavaSQLType, error) {
+func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, flag *common.ColumnFlagType) (string, internal.JavaSQLType) {
 	colType := columnInfo.GetType()
 
 	var value string
@@ -43,7 +45,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, 
 		} else {
 			uintValue, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 			if err != nil {
-				return "", 0, err
+				log.Panic("failed to convert bit to int", zap.Any("data", d), zap.Error(err))
 			}
 			value = strconv.FormatUint(uintValue, 10)
 		}
@@ -62,7 +64,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, 
 		if flag.IsBinary() {
 			decoded, err := bytesDecoder.Bytes(bytesValue)
 			if err != nil {
-				return "", 0, err
+				log.Panic("failed to decode bytes", zap.Any("bytes", bytesValue), zap.Error(err))
 			}
 			value = string(decoded)
 		} else {
@@ -83,7 +85,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, 
 		if flag.IsBinary() {
 			decoded, err := bytesDecoder.Bytes(bytesValue)
 			if err != nil {
-				return "", 0, err
+				log.Panic("failed to decode bytes", zap.Any("bytes", bytesValue), zap.Error(err))
 			}
 			value = string(decoded)
 		} else {
@@ -103,7 +105,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, 
 		if flag.IsBinary() {
 			decoded, err := bytesDecoder.Bytes(bytesValue)
 			if err != nil {
-				return "", 0, err
+				log.Panic("failed to decode bytes", zap.Any("bytes", bytesValue), zap.Error(err))
 			}
 			value = string(decoded)
 		} else {
@@ -295,7 +297,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, 
 			value = fmt.Sprintf("%v", d.GetValue())
 		}
 	}
-	return value, javaType, nil
+	return value, javaType
 }
 
 // convert ts in tidb to timestamp(in ms) in canal
