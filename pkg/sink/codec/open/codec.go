@@ -154,7 +154,7 @@ func encodeDDLEvent(e *commonEvent.DDLEvent, config *common.Config) ([]byte, []b
 	return keyOutput.Bytes(), valueOutput.Bytes(), nil
 }
 
-func encodeResolvedTs(ts uint64) ([]byte, []byte, error) {
+func encodeResolvedTs(ts uint64) ([]byte, []byte) {
 	keyBuf := &bytes.Buffer{}
 	keyWriter := util.BorrowJSONWriter(keyBuf)
 
@@ -180,10 +180,11 @@ func encodeResolvedTs(ts uint64) ([]byte, []byte, error) {
 	keyOutput.Write(keyLenByte[:])
 	keyOutput.Write(key)
 
+	// todo: shall we really set value here?
 	valueOutput := new(bytes.Buffer)
 	valueOutput.Write(valueLenByte[:])
 
-	return keyOutput.Bytes(), valueOutput.Bytes(), nil
+	return keyOutput.Bytes(), valueOutput.Bytes()
 }
 
 func writeColumnFieldValue(writer *util.JSONWriter, col *model.ColumnInfo, row *chunk.Row, idx int, tableInfo *commonType.TableInfo) {

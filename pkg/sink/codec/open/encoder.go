@@ -221,10 +221,6 @@ func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
 func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
-	key, value, err := encodeResolvedTs(ts)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
+	key, value := encodeResolvedTs(ts)
 	return common.NewMsg(key, value), nil
 }

@@ -230,9 +230,7 @@ func TestDDLEvent(t *testing.T) {
 }
 
 func TestResolvedTsEvent(t *testing.T) {
-	key, value, err := encodeResolvedTs(12345678)
-	require.NoError(t, err)
-
+	key, value := encodeResolvedTs(12345678)
 	require.Equal(t, `{"ts":12345678,"t":3}`, string(key)[16:])
 	require.Equal(t, 8, len(string(value)))
 }
