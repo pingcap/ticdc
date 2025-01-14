@@ -162,14 +162,15 @@ EOF
 
 	# Check if the owner is online
 	for i in {1..100}; do
-		run_cdc_cli capture list | grep -q "\"is-owner\": true"
+		curl -s -X GET "http://127.0.0.1:8300/api/v2/captures" | grep -q "\"is_coordinator\":true"
 		if [[ $? -eq 0 ]]; then
 			break
 		fi
+		echo "owner is not online, retry again, this is the $i time"
 		sleep 1
 	done
 	if [[ $? -ne 0 ]]; then
-		echo "[$(date)] <<<<< owner is not online >>>>>"
+		echo "[$(date)] <<<<< coordinator is not online >>>>>"
 		run_cdc_cli capture list
 		exit 1
 	fi
