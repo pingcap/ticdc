@@ -760,8 +760,7 @@ func TestCheckpointTs(t *testing.T) {
 	helper := pevent.NewEventTestHelper(t)
 	defer helper.Close()
 
-	protocolConfig :=
-		common.NewConfig(config.ProtocolCanalJSON)
+	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
 	encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
 	require.NoError(t, err)
 

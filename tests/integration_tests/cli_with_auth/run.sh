@@ -147,8 +147,14 @@ EOF
 	fi
 
 	# Test unsafe commands
+	echo "Start delete service gc safepoint"
 	echo "y" | run_cdc_cli unsafe delete-service-gc-safepoint
+	echo "Pass delete service gc safepoint"
+
+	echo "Start reset"
 	run_cdc_cli unsafe reset --no-confirm --pd=$pd_addr
+	echo "Pass reset"
+
 	REGION_ID=$(pd-ctl -u=$pd_addr region | jq '.regions[0].id')
 	TS=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	# wait for owner online
@@ -168,9 +174,8 @@ EOF
 		exit 1
 	fi
 
-	# Fixme: uncomment this after we fix: https://github.com/pingcap/ticdc/issues/866
-	# run_cdc_cli unsafe resolve-lock --region=$REGION_ID
-	# run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
+	run_cdc_cli unsafe resolve-lock --region=$REGION_ID
+	run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
 
 	# Test change log level
 	curl -X POST -d '"warn"' http://127.0.0.1:8300/api/v2/log
