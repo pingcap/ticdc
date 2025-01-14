@@ -130,16 +130,29 @@ func (s *schemaStore) Name() string {
 
 func (s *schemaStore) Run(ctx context.Context) error {
 	log.Info("schema store begin to run")
+	defer func() {
+		log.Info("schema store exited")
+	}()
+
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		return s.updateResolvedTsPeriodically(ctx)
+	})
+
+	eg.Go(func() error {
+		return s.dataStorage.gc(ctx)
+	})
+
+	eg.Go(func() error {
+		return s.dataStorage.persistUpperBoundPeriodically(ctx)
 	})
 
 	return eg.Wait()
 }
 
 func (s *schemaStore) Close(ctx context.Context) error {
-	log.Info("schema store closed")
+	log.Info("schema store start to close")
+	defer log.Info("schema store closed")
 	return s.dataStorage.close()
 }
 

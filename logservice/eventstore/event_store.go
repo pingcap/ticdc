@@ -304,22 +304,27 @@ func newWriteTaskPool(store *eventStore, db *pebble.DB, ch *chann.UnlimitedChann
 	}
 }
 
-func (p *writeTaskPool) run(_ context.Context) {
+func (p *writeTaskPool) run(ctx context.Context) {
 	p.store.wg.Add(p.workerNum)
 	for i := 0; i < p.workerNum; i++ {
 		go func() {
 			defer p.store.wg.Done()
 			buffer := make([]eventWithCallback, 0, 128)
 			for {
-				events, ok := p.dataCh.GetMultipleNoGroup(buffer)
-				if !ok {
+				select {
+				case <-ctx.Done():
 					return
+				default:
+					events, ok := p.dataCh.GetMultipleNoGroup(buffer)
+					if !ok {
+						return
+					}
+					p.store.writeEvents(p.db, events)
+					for i := range events {
+						events[i].callback()
+					}
+					buffer = buffer[:0]
 				}
-				p.store.writeEvents(p.db, events)
-				for i := range events {
-					events[i].callback()
-				}
-				buffer = buffer[:0]
 			}
 		}()
 	}
@@ -342,6 +347,10 @@ func (e *eventStore) Name() string {
 }
 
 func (e *eventStore) Run(ctx context.Context) error {
+	log.Info("event store start to run")
+	defer func() {
+		log.Info("event store exited")
+	}()
 	eg, ctx := errgroup.WithContext(ctx)
 
 	for _, p := range e.writeTaskPools {
@@ -369,13 +378,17 @@ func (e *eventStore) Run(ctx context.Context) error {
 }
 
 func (e *eventStore) Close(ctx context.Context) error {
-	e.wg.Wait()
+	log.Info("event store start to close")
+	defer log.Info("event store closed")
 
+	log.Info("closing pebble db")
 	for _, db := range e.dbs {
 		if err := db.Close(); err != nil {
 			log.Error("failed to close pebble db", zap.Error(err))
 		}
 	}
+	log.Info("pebble db closed")
+
 	return nil
 }
 

@@ -134,7 +134,12 @@ func addLock(ctx context.Context, cfg *util.Config) error {
 		pdcli:     pdcli,
 		kv:        store.(tikv.Storage),
 	}
-	return errors.Trace(locker.generateLocks(ctx, 10*time.Second))
+	err = locker.generateLocks(ctx, 10*time.Second)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	log.Info("generateLocks done")
+	return nil
 }
 
 // getTableID of the table with specified table name.

@@ -148,6 +148,7 @@ func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
 }
 
 func newRemoteMessageTarget(
+	ctx context.Context,
 	localID, targetId node.ID,
 	localEpoch, targetEpoch uint64,
 	addr string,
@@ -156,7 +157,7 @@ func newRemoteMessageTarget(
 	security *security.Credential,
 ) *remoteMessageTarget {
 	log.Info("Create remote target", zap.Stringer("local", localID), zap.Stringer("remote", targetId), zap.Any("addr", addr), zap.Any("localEpoch", localEpoch), zap.Any("targetEpoch", targetEpoch))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	rt := &remoteMessageTarget{
 		messageCenterID:    localID,
 		messageCenterEpoch: localEpoch,
@@ -209,6 +210,10 @@ func (s *remoteMessageTarget) runHandleErr(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
+				log.Info("remoteMessageTarget exit",
+					zap.Any("messageCenterID", s.messageCenterID),
+					zap.Any("remote", s.targetId),
+					zap.Any("error", ctx.Err()))
 				return
 			case err := <-s.errCh:
 				switch err.Type {

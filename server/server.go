@@ -156,14 +156,6 @@ func (c *server) initialize(ctx context.Context) error {
 	for _, subModule := range c.subModules {
 		appctx.SetService(subModule.Name(), subModule)
 	}
-	// start tcp server
-	go func() {
-		err := c.tcpServer.Run(ctx)
-		if err != nil {
-			log.Error("tcp server exist", zap.Error(cerror.Trace(err)))
-		}
-	}()
-	log.Info("server initialized", zap.Any("server", c.info))
 	return nil
 }
 
@@ -174,16 +166,25 @@ func (c *server) Run(ctx context.Context) error {
 		log.Error("init server failed", zap.Error(err))
 		return errors.Trace(err)
 	}
-	defer func() {
-		c.Close(ctx)
-	}()
 
 	g, ctx := errgroup.WithContext(ctx)
+	// start tcp server
+	g.Go(func() error {
+		log.Info("tcp server start to run")
+		err := c.tcpServer.Run(ctx)
+		if err != nil {
+			log.Error("tcp server exited", zap.Error(cerror.Trace(err)))
+		}
+		return nil
+	})
+
+	log.Info("server initialized", zap.Any("server", c.info))
 	// start all submodules
 	for _, sub := range c.subModules {
 		func(m common.SubModule) {
 			g.Go(func() error {
 				log.Info("starting sub module", zap.String("module", m.Name()))
+				defer log.Info("sub module exited", zap.String("module", m.Name()))
 				return m.Run(ctx)
 			})
 		}(sub)
@@ -193,7 +194,12 @@ func (c *server) Run(ctx context.Context) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	return errors.Trace(g.Wait())
+
+	err = g.Wait()
+	if err != nil {
+		log.Error("server exited", zap.Error(cerror.Trace(err)))
+	}
+	return errors.Trace(err)
 }
 
 // SelfInfo gets the server info
@@ -239,6 +245,7 @@ func (c *server) Close(ctx context.Context) {
 				zap.String("watcher", subModule.Name()),
 				zap.Error(err))
 		}
+		log.Info("sub module closed", zap.String("module", subModule.Name()))
 	}
 
 	// delete server info from etcd

@@ -31,8 +31,10 @@ import (
 
 const NodeManagerName = "node-manager"
 
-type NodeChangeHandler func(map[node.ID]*node.Info)
-type OwnerChangeHandler func(newOwnerKeys string)
+type (
+	NodeChangeHandler  func(map[node.ID]*node.Info)
+	OwnerChangeHandler func(newOwnerKeys string)
+)
 
 // NodeManager manager the read view of all captures, other modules can get the captures information from it
 // and register server update event handler

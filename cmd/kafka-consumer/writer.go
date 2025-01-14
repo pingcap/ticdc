@@ -397,7 +397,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 
 	if counter > w.option.maxBatchSize {
 		log.Panic("Open Protocol max-batch-size exceeded",
-			zap.Int("max-batch-size", w.option.maxBatchSize), zap.Int("actual-batch-size", counter),
+			zap.Int("maxBatchSize", w.option.maxBatchSize), zap.Int("actualBatchSize", counter),
 			zap.Int32("partition", partition), zap.Any("offset", offset))
 	}
 

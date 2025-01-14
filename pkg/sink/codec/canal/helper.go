@@ -15,11 +15,10 @@ package canal
 
 import (
 	"fmt"
-	"github.com/pingcap/log"
-	"go.uber.org/zap"
 	"math"
 	"strconv"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/internal" // nolint:staticcheck
 	mm "github.com/pingcap/tidb/pkg/meta/model"
@@ -28,6 +27,7 @@ import (
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	canal "github.com/pingcap/tiflow/proto/canal"
+	"go.uber.org/zap"
 )
 
 func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, flag *common.ColumnFlagType) (string, internal.JavaSQLType) {
