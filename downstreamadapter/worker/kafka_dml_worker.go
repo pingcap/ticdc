@@ -241,6 +241,7 @@ func (w *KafkaDMLWorker) batchEncodeRun() error {
 				zap.String("namespace", w.changeFeedID.Namespace()),
 				zap.String("changefeed", w.changeFeedID.Name()),
 				zap.Error(err))
+			return errors.Trace(err)
 		}
 		if msgCount == 0 {
 			continue
