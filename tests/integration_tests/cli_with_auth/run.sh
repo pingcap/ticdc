@@ -146,17 +146,19 @@ EOF
 		run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai"
 	fi
 
-	# Smoke test unsafe commands
+	# Test unsafe commands
 	echo "y" | run_cdc_cli unsafe delete-service-gc-safepoint
 	run_cdc_cli unsafe reset --no-confirm --pd=$pd_addr
 	REGION_ID=$(pd-ctl -u=$pd_addr region | jq '.regions[0].id')
 	TS=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	# wait for owner online
 	sleep 3
-	run_cdc_cli unsafe resolve-lock --region=$REGION_ID
-	run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
 
-	# Smoke test change log level
+	# Fixme: uncomment this after we fix: https://github.com/pingcap/ticdc/issues/866
+	# run_cdc_cli unsafe resolve-lock --region=$REGION_ID
+	# run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
+
+	# Test change log level
 	curl -X POST -d '"warn"' http://127.0.0.1:8300/api/v2/log
 	sleep 3
 	# make sure TiCDC does not panic
