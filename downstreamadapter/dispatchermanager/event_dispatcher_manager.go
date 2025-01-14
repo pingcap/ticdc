@@ -444,36 +444,38 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo) er
 
 // collectErrors collect the errors from the error channel and report to the maintainer.
 func (e *EventDispatcherManager) collectErrors(ctx context.Context) {
-	select {
-	case <-ctx.Done():
-		return
-	case err := <-e.errCh:
-		if errors.Cause(err) != context.Canceled {
-			log.Error("Event Dispatcher Manager Meets Error",
-				zap.String("changefeedID", e.changefeedID.String()),
-				zap.Error(err))
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case err := <-e.errCh:
+			if errors.Cause(err) != context.Canceled {
+				log.Error("Event Dispatcher Manager Meets Error",
+					zap.String("changefeedID", e.changefeedID.String()),
+					zap.Error(err))
 
-			// report error to maintainer
-			var message heartbeatpb.HeartBeatRequest
-			message.ChangefeedID = e.changefeedID.ToPB()
-			message.Err = &heartbeatpb.RunningError{
-				Time:    time.Now().String(),
-				Node:    appcontext.GetID(),
-				Code:    string(apperror.ErrorCode(err)),
-				Message: err.Error(),
-			}
-			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+				// report error to maintainer
+				var message heartbeatpb.HeartBeatRequest
+				message.ChangefeedID = e.changefeedID.ToPB()
+				message.Err = &heartbeatpb.RunningError{
+					Time:    time.Now().String(),
+					Node:    appcontext.GetID(),
+					Code:    string(apperror.ErrorCode(err)),
+					Message: err.Error(),
+				}
+				e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 
-			// resend message until the event dispatcher manager is closed
-			// the first error is matter most, so we just need to resend it continuely and ignore the other errors.
-			ticker := time.NewTicker(time.Second * 5)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+				// resend message until the event dispatcher manager is closed
+				// the first error is matter most, so we just need to resend it continuely and ignore the other errors.
+				ticker := time.NewTicker(time.Second * 5)
+				for {
+					select {
+					case <-ctx.Done():
+						ticker.Stop()
+						return
+					case <-ticker.C:
+						e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+					}
 				}
 			}
 		}
