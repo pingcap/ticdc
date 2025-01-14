@@ -176,12 +176,11 @@ EOF
 	# Test unsafe commands
 	echo "y" | run_cdc_cli unsafe delete-service-gc-safepoint
 	run_cdc_cli unsafe reset --no-confirm --pd=$pd_addr
-	REGION_ID=$(pd-ctl --cacert="${TLS_DIR}/ca.pem" --cert="${TLS_DIR}/client.pem" --key="${TLS_DIR}/client-key.pem" -u=$pd_addr region | jq '.regions[0].id')
-	TS=$(run_cdc_cli_tso_query $TLS_PD_HOST $TLS_PD_PORT true)
+
 	
 	# Check if the coordinator is online
 	for i in {1..100}; do
-		curl -s -X GET "http://127.0.0.1:8300/api/v2/captures" | grep -q "\"is_coordinator\":true"
+		curl -s -X GET "https://127.0.0.1:8300/api/v2/captures" --cacert "${TLS_DIR}/ca.pem" --cert "${TLS_DIR}/client.pem" --key "${TLS_DIR}/client-key.pem" | grep -q "\"is_coordinator\":true"
 		if [[ $? -eq 0 ]]; then
 			break
 		fi
@@ -194,6 +193,8 @@ EOF
 		exit 1
 	fi
 
+	REGION_ID=$(pd-ctl --cacert="${TLS_DIR}/ca.pem" --cert="${TLS_DIR}/client.pem" --key="${TLS_DIR}/client-key.pem" -u=$pd_addr region | jq '.regions[0].id')
+	TS=$(run_cdc_cli_tso_query $TLS_PD_HOST $TLS_PD_PORT true)
 	run_cdc_cli unsafe resolve-lock --region=$REGION_ID
 	run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
 

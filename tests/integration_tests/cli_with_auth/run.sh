@@ -155,9 +155,6 @@ EOF
 	run_cdc_cli unsafe reset --no-confirm --pd=$pd_addr
 	echo "Pass reset"
 
-	REGION_ID=$(pd-ctl -u=$pd_addr region | jq '.regions[0].id')
-	TS=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
-
 	# Check if the coordinator is online
 	for i in {1..100}; do
 		curl -s -X GET "http://127.0.0.1:8300/api/v2/captures" | grep -q "\"is_coordinator\":true"
@@ -173,6 +170,8 @@ EOF
 		exit 1
 	fi
 
+	REGION_ID=$(pd-ctl -u=$pd_addr region | jq '.regions[0].id')
+	TS=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_cdc_cli unsafe resolve-lock --region=$REGION_ID
 	run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
 
