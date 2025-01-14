@@ -296,7 +296,13 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e pevent.DD
 	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
-	log.Info("send ddl event to dispatcher", zap.Stringer("dispatcher", d.id), zap.String("query", e.Query), zap.Int64("table", e.TableID), zap.Uint64("commitTs", e.FinishedTs), zap.Uint64("seq", e.Seq))
+	log.Info("send ddl event to dispatcher",
+		zap.Stringer("dispatcher", d.id),
+		zap.Int64("dispatcherTableID", d.info.GetTableSpan().TableID),
+		zap.String("query", e.Query),
+		zap.Int64("eventTableID", e.TableID),
+		zap.Uint64("commitTs", e.FinishedTs),
+		zap.Uint64("seq", e.Seq))
 	ddlEvent := newWrapDDLEvent(remoteID, &e, d.getEventSenderState())
 	select {
 	case <-ctx.Done():
@@ -553,6 +559,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 				} else if errors.Is(err, &schemastore.TableDeletedError{}) {
 					// After a table is truncated, it is possible to receive more dml events, just ignore is ok.
 					// TODO: tables may be deleted in many ways, we need to check if it is safe to ignore later dmls in all cases.
+					// We must send the remaining ddl events to the dispatcher in this case.
+					sendRemainingDDLEvents()
 					log.Warn("get table info failed, since the table is deleted", zap.Error(err))
 					return
 				}
