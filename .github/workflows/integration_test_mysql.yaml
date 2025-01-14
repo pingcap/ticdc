@@ -283,10 +283,15 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=partition_table
       
-      - name: Test multi_tables_ddl
+      # - name: Test multi_tables_ddl
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
+
+      - name: Test multi_source
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
 
      
       - name: Test ddl_attributes
