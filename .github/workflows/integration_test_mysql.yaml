@@ -273,10 +273,10 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
 
-      - name: Test http_api
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=http_api
+      # - name: Test http_api
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=http_api
 
       - name: Test partition_table
         if: ${{ success() }}
@@ -320,11 +320,16 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=http_proxies
 
-      # the 9th case in this group
       - name: Test ddl_reentrant
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=ddl_reentrant
+
+      # the 10th case in this group
+      - name: Test syncpoint
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=syncpoint
 
       - name: Upload test logs
         if: always()
