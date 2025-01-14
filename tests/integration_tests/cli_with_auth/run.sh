@@ -152,7 +152,21 @@ EOF
 	REGION_ID=$(pd-ctl -u=$pd_addr region | jq '.regions[0].id')
 	TS=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	# wait for owner online
-	sleep 3
+	sleep 5
+
+	# Check if the owner is online
+	for i in {1..100}; do
+		run_cdc_cli capture list | grep -q "\"is-owner\": true"
+		if [[ $? -eq 0 ]]; then
+			break
+		fi
+		sleep 1
+	done
+	if [[ $? -ne 0 ]]; then
+		echo "[$(date)] <<<<< owner is not online >>>>>"
+		run_cdc_cli capture list
+		exit 1
+	fi
 
 	# Fixme: uncomment this after we fix: https://github.com/pingcap/ticdc/issues/866
 	# run_cdc_cli unsafe resolve-lock --region=$REGION_ID
