@@ -26,7 +26,7 @@ import (
 // Including DDL and DML.
 type BlackHoleSink struct{}
 
-func NewBlackHoleSink() (*BlackHoleSink, error) {
+func newBlackHoleSink() (*BlackHoleSink, error) {
 	blackholeSink := BlackHoleSink{}
 	return &blackholeSink, nil
 }

@@ -56,7 +56,14 @@ func (s *KafkaSink) SinkType() common.SinkType {
 	return common.KafkaSinkType
 }
 
-func NewKafkaSink(
+func verifyKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
+	components, _, err := worker.GetKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
+	components.AdminClient.Close()
+	components.TopicManager.Close()
+	return err
+}
+
+func newKafkaSink(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
 ) (*KafkaSink, error) {
 	errGroup, ctx := errgroup.WithContext(ctx)

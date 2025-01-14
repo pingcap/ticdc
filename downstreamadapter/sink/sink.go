@@ -47,11 +47,28 @@ func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID 
 	scheme := sink.GetScheme(sinkURI)
 	switch scheme {
 	case sink.MySQLScheme, sink.MySQLSSLScheme, sink.TiDBScheme, sink.TiDBSSLScheme:
-		return NewMysqlSink(ctx, changefeedID, 16, config, sinkURI)
+		return newMySQLSink(ctx, changefeedID, 16, config, sinkURI)
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
-		return NewKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+		return newKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.BlackHoleScheme:
-		return NewBlackHoleSink()
+		return newBlackHoleSink()
 	}
 	return nil, cerror.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
+}
+
+func VerifySink(ctx context.Context, config *config.ChangefeedConfig, changefeedID common.ChangeFeedID) error {
+	sinkURI, err := url.Parse(config.SinkURI)
+	if err != nil {
+		return cerror.WrapError(cerror.ErrSinkURIInvalid, err)
+	}
+	scheme := sink.GetScheme(sinkURI)
+	switch scheme {
+	case sink.MySQLScheme, sink.MySQLSSLScheme, sink.TiDBScheme, sink.TiDBSSLScheme:
+		return verifyMySQLSink(changefeedID, sinkURI, config)
+	case sink.KafkaScheme, sink.KafkaSSLScheme:
+		return verifyKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+	case sink.BlackHoleScheme:
+		return nil
+	}
+	return cerror.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
 }

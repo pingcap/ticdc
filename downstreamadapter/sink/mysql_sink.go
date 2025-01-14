@@ -54,7 +54,12 @@ type MysqlSink struct {
 	isNormal uint32 // if sink is normal, isNormal is 1, otherwise is 0
 }
 
-func NewMysqlSink(ctx context.Context, changefeedID common.ChangeFeedID, workerCount int, config *config.ChangefeedConfig, sinkURI *url.URL) (*MysqlSink, error) {
+func verifyMySQLSink(changefeedID common.ChangeFeedID, uri *url.URL, config *config.ChangefeedConfig) error {
+	_, err := mysql.NewMySQLConfig(changefeedID, uri, config)
+	return err
+}
+
+func newMySQLSink(ctx context.Context, changefeedID common.ChangeFeedID, workerCount int, config *config.ChangefeedConfig, sinkURI *url.URL) (*MysqlSink, error) {
 	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
