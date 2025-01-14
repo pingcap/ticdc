@@ -37,6 +37,7 @@ import (
 // SpanReplication is responsible for a table span replication status
 // It is used to manage the replication status of a table span,
 // the status is updated by the heartbeat collector
+// It implements the replica.Replication interface
 type SpanReplication struct {
 	ID           common.DispatcherID
 	Span         *heartbeatpb.TableSpan
@@ -56,7 +57,8 @@ func NewReplicaSet(cfID common.ChangeFeedID,
 	tsoClient TSOClient,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
-	checkpointTs uint64) *SpanReplication {
+	checkpointTs uint64,
+) *SpanReplication {
 	r := &SpanReplication{
 		ID:           id,
 		tsoClient:    tsoClient,
@@ -72,11 +74,11 @@ func NewReplicaSet(cfID common.ChangeFeedID,
 		CheckpointTs: checkpointTs,
 	})
 	log.Info("new replica set created",
-		zap.String("changefeed id", cfID.Name()),
+		zap.String("changefeedID", cfID.Name()),
 		zap.String("id", id.String()),
-		zap.Int64("schema id", SchemaID),
-		zap.Int64("table id", span.TableID),
-		zap.String("group id", replica.GetGroupName(r.groupID)),
+		zap.Int64("schemaID", SchemaID),
+		zap.Int64("tableID", span.TableID),
+		zap.String("groupID", replica.GetGroupName(r.groupID)),
 		zap.String("start", hex.EncodeToString(span.StartKey)),
 		zap.String("end", hex.EncodeToString(span.EndKey)))
 	return r
@@ -104,14 +106,14 @@ func NewWorkingReplicaSet(
 	r.initGroupID()
 	r.initStatus(status)
 	log.Info("new working replica set created",
-		zap.String("changefeed id", cfID.Name()),
+		zap.String("changefeedID", cfID.Name()),
 		zap.String("id", id.String()),
-		zap.String("node id", nodeID.String()),
-		zap.Uint64("checkpoint ts", status.CheckpointTs),
-		zap.String("component status", status.ComponentStatus.String()),
-		zap.Int64("schema id", SchemaID),
-		zap.Int64("table id", span.TableID),
-		zap.String("group id", replica.GetGroupName(r.groupID)),
+		zap.String("nodeID", nodeID.String()),
+		zap.Uint64("checkpointTs", status.CheckpointTs),
+		zap.String("componentStatus", status.ComponentStatus.String()),
+		zap.Int64("schemaID", SchemaID),
+		zap.Int64("tableID", span.TableID),
+		zap.String("groupID", replica.GetGroupName(r.groupID)),
 		zap.String("start", hex.EncodeToString(span.StartKey)),
 		zap.String("end", hex.EncodeToString(span.EndKey)))
 	return r
@@ -120,9 +122,9 @@ func NewWorkingReplicaSet(
 func (r *SpanReplication) initStatus(status *heartbeatpb.TableSpanStatus) {
 	if status == nil || status.CheckpointTs == 0 {
 		log.Panic("add replica with invalid checkpoint ts",
-			zap.String("changefeed id", r.ChangefeedID.Name()),
+			zap.String("changefeedID", r.ChangefeedID.Name()),
 			zap.String("id", r.ID.String()),
-			zap.Uint64("checkpoint ts", status.CheckpointTs),
+			zap.Uint64("checkpointTs", status.CheckpointTs),
 		)
 	}
 	r.status.Store(status)
@@ -134,8 +136,8 @@ func (r *SpanReplication) initGroupID() {
 	// check if the table is split
 	totalSpan := spanz.TableIDToComparableSpan(span.TableID)
 	if !spanz.IsSubSpan(span, totalSpan) {
-		log.Warn("invalid span range", zap.String("changefeed id", r.ChangefeedID.Name()),
-			zap.String("id", r.ID.String()), zap.Int64("table id", span.TableID),
+		log.Warn("invalid span range", zap.String("changefeedID", r.ChangefeedID.Name()),
+			zap.String("id", r.ID.String()), zap.Int64("tableID", span.TableID),
 			zap.String("totalSpan", totalSpan.String()),
 			zap.String("start", hex.EncodeToString(span.StartKey)),
 			zap.String("end", hex.EncodeToString(span.EndKey)))
@@ -151,6 +153,18 @@ func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
 
 func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) {
 	if newStatus != nil {
+		// we don't update the status when there exist block status and block status's checkpointTs is less than newStatus's checkpointTs
+		// It's ensure the checkpointTs can be forward until the block event is finished;
+		// It can avoid the corner case that:
+		// When node 1 with table trigger and node 2 with table1 meet the drop table 1 ddl
+		// and table trigger finish write the ddl, node2 just pass the ddl but not report the block status yet
+		// while the node 2 report the latest table span
+		// (because the ddl is passed, the table1's checkpointTs is updated, so the replication's checkpoint is updaetd)
+		// Then the node2 is crashed. So the maintainer will add new dispatcher based on the latest checkpointTs, which is unexcpeted.
+		blockState := r.blockState.Load()
+		if blockState != nil && blockState.Stage == heartbeatpb.BlockStage_WAITING && blockState.BlockTs <= newStatus.CheckpointTs {
+			return
+		}
 		oldStatus := r.status.Load()
 		if newStatus.CheckpointTs >= oldStatus.CheckpointTs {
 			r.status.Store(newStatus)
@@ -160,19 +174,6 @@ func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) {
 
 func (r *SpanReplication) ShouldRun() bool {
 	return true
-	// state := r.blockState.Load()
-	// if state != nil && state.NeedDroppedTables != nil {
-	// 	status := r.status.Load()
-	// 	if status == nil || state.BlockTs != status.CheckpointTs+1 {
-	// 		return false
-	// 	}
-	// 	for _, tableID := range state.NeedDroppedTables.TableIDs {
-	// 		if tableID == r.Span.TableID {
-	// 			return true
-	// 		}
-	// 	}
-	// }
-	// return false
 }
 
 func (r *SpanReplication) IsWorking() bool {
@@ -217,6 +218,7 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.Ta
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{

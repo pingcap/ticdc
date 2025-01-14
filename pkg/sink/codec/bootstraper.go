@@ -23,9 +23,9 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/tiflow/cdc/model"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
 

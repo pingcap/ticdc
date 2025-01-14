@@ -51,7 +51,7 @@ func TestScheduleEvent(t *testing.T) {
 		NeedAddedTables:   []*heartbeatpb.Table{{2, 1}, {3, 1}},
 	}, true)
 	event.scheduleBlockEvent()
-	//drop table will be executed first
+	// drop table will be executed first
 	require.Equal(t, 2, controller.replicationDB.GetAbsentSize())
 
 	event = NewBlockEvent(cfID, controller, &heartbeatpb.State{
@@ -64,7 +64,7 @@ func TestScheduleEvent(t *testing.T) {
 		NeedAddedTables: []*heartbeatpb.Table{{4, 1}},
 	}, false)
 	event.scheduleBlockEvent()
-	//drop table will be executed first, then add the new table
+	// drop table will be executed first, then add the new table
 	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
 
 	event = NewBlockEvent(cfID, controller, &heartbeatpb.State{
@@ -77,7 +77,7 @@ func TestScheduleEvent(t *testing.T) {
 		NeedAddedTables: []*heartbeatpb.Table{{5, 1}},
 	}, false)
 	event.scheduleBlockEvent()
-	//drop table will be executed first, then add the new table
+	// drop table will be executed first, then add the new table
 	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
 }
 
@@ -215,7 +215,8 @@ func TestUpdateSchemaID(t *testing.T) {
 				OldSchemaID: 1,
 				NewSchemaID: 2,
 			},
-		}}, true,
+		},
+	}, true,
 	)
 	event.scheduleBlockEvent()
 	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
@@ -228,7 +229,7 @@ func TestUpdateSchemaID(t *testing.T) {
 func setNodeManagerAndMessageCenter() *watcher.NodeManager {
 	n := node.NewInfo("", "")
 	appcontext.SetService(appcontext.MessageCenter, messaging.NewMessageCenter(context.Background(),
-		n.ID, 100, config.NewDefaultMessageCenterConfig()))
+		n.ID, 100, config.NewDefaultMessageCenterConfig(), nil))
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	return nodeManager

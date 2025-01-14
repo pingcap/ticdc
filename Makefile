@@ -57,18 +57,10 @@ endif
 
 RELEASE_VERSION =
 ifeq ($(RELEASE_VERSION),)
-	RELEASE_VERSION := v8.2.0-master
-	release_version_regex := ^v[0-9]\..*$$
-	release_branch_regex := "^release-[0-9]\.[0-9].*$$|^HEAD$$|^.*/*tags/v[0-9]\.[0-9]\..*$$"
-	ifneq ($(shell git rev-parse --abbrev-ref HEAD | grep -E $(release_branch_regex)),)
-		# If we are in release branch, try to use tag version.
-		ifneq ($(shell git describe --tags --dirty | grep -E $(release_version_regex)),)
-			RELEASE_VERSION := $(shell git describe --tags --dirty)
-		endif
-	else ifneq ($(shell git status --porcelain),)
-		# Add -dirty if the working tree is dirty for non release branch.
-		RELEASE_VERSION := $(RELEASE_VERSION)-dirty
-	endif
+	RELEASE_VERSION := $(shell git describe --tags --dirty)
+endif
+ifeq ($(RELEASE_VERSION),)
+	RELEASE_VERSION := v9.0.0-alpha
 endif
 
 # Version LDFLAGS.
@@ -80,9 +72,9 @@ LDFLAGS += -X "$(CDC_PKG)/version.GoVersion=$(GOVERSION)"
 LDFLAGS += -X "github.com/pingcap/tidb/pkg/parser/mysql.TiDBReleaseVersion=$(RELEASE_VERSION)"
 
 # For Tiflow CDC
-LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.ReleaseVersion=v8.4.0-alpha-44-gdd2d54ad4"
-LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitHash=dd2d54ad4c196606d038da6686462cbfe1109894"
-LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitBranch=master"
+LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.ReleaseVersion=$(RELEASE_VERSION)"
+LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitHash=$(GITHASH)"
+LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitBranch=$(GITBRANCH)"
 LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.BuildTS=$(BUILDTS)"
 
 CONSUMER_BUILD_FLAG=
@@ -90,6 +82,7 @@ ifeq ("${IS_ALPINE}", "1")
 	CONSUMER_BUILD_FLAG = -tags musl
 endif
 GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=$(CGO) $(GO) build $(BUILD_FLAG) -trimpath $(GOVENDORFLAG)
+CONSUMER_GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=1 $(GO) build $(CONSUMER_BUILD_FLAG) -trimpath $(GOVENDORFLAG)
 
 PACKAGE_LIST := go list ./... | grep -vE 'vendor|proto|ticdc/tests|integration|testing_utils|pb|pbmock|ticdc/bin'
 PACKAGES := $$($(PACKAGE_LIST))
@@ -117,7 +110,19 @@ generate_mock: tools/bin/mockgen
 	scripts/generate-mock.sh
 
 cdc:
-	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc
+
+kafka_consumer:
+	$(CONSUMER_GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_kafka_consumer ./cmd/kafka-consumer
+
+storage_consumer:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_storage_consumer ./cmd/storage-consumer/main.go
+
+pulsar_consumer:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_pulsar_consumer ./cmd/pulsar-consumer/main.go
+
+filter_helper:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_filter_helper ./cmd/filter-helper/main.go
 
 fmt: tools/bin/gofumports tools/bin/shfmt tools/bin/gci
 	@echo "run gci (format imports)"
@@ -134,9 +139,9 @@ integration_test_build: check_failpoint_ctl
 	$(FAILPOINT_ENABLE)
 	$(GOTEST) -ldflags '$(LDFLAGS)' -c -cover -covermode=atomic \
 		-coverpkg=github.com/pingcap/ticdc/... \
-		-o bin/cdc.test github.com/pingcap/ticdc/cmd \
+		-o bin/cdc.test github.com/pingcap/ticdc/cmd/cdc \
 	|| { $(FAILPOINT_DISABLE); echo "Failed to build cdc.test"; exit 1; }
-	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/main.go \
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc/main.go \
 	|| { $(FAILPOINT_DISABLE); exit 1; }
 	$(FAILPOINT_DISABLE)
 
@@ -165,10 +170,6 @@ tidy:
 	@echo "go mod tidy"
 	./tools/check/check-tidy.sh
 
-errdoc: tools/bin/errdoc-gen
-	@echo "generator errors.toml"
-	./tools/check/check-errdoc.sh
-
 check-copyright:
 	@echo "check-copyright"
 	@./scripts/check-copyright.sh
@@ -192,7 +193,14 @@ check-makefiles: format-makefiles
 format-makefiles: $(MAKE_FILES)
 	$(SED_IN_PLACE) -e 's/^\(\t*\)  /\1\t/g' -e 's/^\(\t*\) /\1/' -- $?
 
-check: check-copyright fmt tidy errdoc check-diff-line-width check-ticdc-dashboard check-makefiles
+check: check-copyright fmt tidy check-diff-line-width check-ticdc-dashboard check-makefiles
 	@git --no-pager diff --exit-code || (echo "Please add changed files!" && false)
+
+clean:
+	go clean -i ./...
+	rm -rf *.out
+	rm -rf bin
+	rm -rf tools/bin
+	rm -rf tools/include
 
 workload: tools/bin/workload

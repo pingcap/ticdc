@@ -14,7 +14,7 @@ function check_processor_table_count() {
 	changefeed=$2
 	capture=$3
 	expected=$4
-	count=$(cdc cli processor query --pd=$pd -c $changefeed -p $capture 2>&1 | jq '.status."tables"|length')
+	count=$(cdc cli processor query --pd=$pd -c $changefeed -p $capture 2>&1 | grep -v "Command to ticdc" | jq '.status."tables"|length')
 	if [[ ! "$count" -eq "$expected" ]]; then
 		echo "table count $count does equal to expected count $expected"
 		exit 1
@@ -23,7 +23,7 @@ function check_processor_table_count() {
 
 function check_no_capture() {
 	pd=$1
-	count=$(cdc cli capture list --pd=$pd 2>&1 | jq '.|length')
+	count=$(cdc cli capture list --pd=$pd 2>&1 | grep -v "Command to ticdc" | jq '.|length')
 	if [[ ! "$count" -eq "0" ]]; then
 		exit 1
 	fi

@@ -213,7 +213,7 @@ func newResendTask(message *heartbeatpb.TableSpanBlockStatus, dispatcher *Dispat
 }
 
 func (t *ResendTask) Execute() time.Time {
-	log.Debug("resend task", zap.Any("message", t.message), zap.Any("dispatcher id", t.dispatcher.id))
+	log.Debug("resend task", zap.Any("message", t.message), zap.Any("dispatcherID", t.dispatcher.id))
 	t.dispatcher.blockStatusesChan <- t.message
 	return time.Now().Add(200 * time.Millisecond)
 }
@@ -225,15 +225,15 @@ func (t *ResendTask) Cancel() {
 	t.taskHandle.Cancel()
 }
 
-var DispatcherTaskScheduler threadpool.ThreadPool
-var dispatcherTaskSchedulerOnce sync.Once
+var (
+	DispatcherTaskScheduler     threadpool.ThreadPool
+	dispatcherTaskSchedulerOnce sync.Once
+)
 
 func GetDispatcherTaskScheduler() threadpool.ThreadPool {
-	if DispatcherTaskScheduler == nil {
-		dispatcherTaskSchedulerOnce.Do(func() {
-			DispatcherTaskScheduler = threadpool.NewThreadPoolDefault()
-		})
-	}
+	dispatcherTaskSchedulerOnce.Do(func() {
+		DispatcherTaskScheduler = threadpool.NewThreadPoolDefault()
+	})
 	return DispatcherTaskScheduler
 }
 
@@ -286,8 +286,7 @@ func (d *DispatcherStatusWithID) GetDispatcherID() common.DispatcherID {
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream(async).
 // 2. If the action is a pass, we just need to pass the event in tableProgress(for correct calculation) and
 // wake the dispatcherEventsHandler to handle the event.
-type DispatcherStatusHandler struct {
-}
+type DispatcherStatusHandler struct{}
 
 func (h *DispatcherStatusHandler) Path(event DispatcherStatusWithID) common.DispatcherID {
 	return event.GetDispatcherID()
@@ -305,6 +304,7 @@ func (h *DispatcherStatusHandler) IsPaused(event DispatcherStatusWithID) bool { 
 func (h *DispatcherStatusHandler) GetArea(path common.DispatcherID, dest *Dispatcher) common.GID {
 	return dest.changefeedID.ID()
 }
+
 func (h *DispatcherStatusHandler) GetTimestamp(event DispatcherStatusWithID) dynstream.Timestamp {
 	if event.GetDispatcherStatus().Action != nil {
 		return dynstream.Timestamp(event.GetDispatcherStatus().Action.CommitTs)
@@ -313,21 +313,22 @@ func (h *DispatcherStatusHandler) GetTimestamp(event DispatcherStatusWithID) dyn
 	}
 	return 0
 }
+
 func (h *DispatcherStatusHandler) GetType(event DispatcherStatusWithID) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
 func (h *DispatcherStatusHandler) OnDrop(event DispatcherStatusWithID) {}
 
-var dispatcherStatusDynamicStream dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler]
-var dispatcherStatusDynamicStreamOnce sync.Once
+var (
+	dispatcherStatusDynamicStream     dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler]
+	dispatcherStatusDynamicStreamOnce sync.Once
+)
 
 func GetDispatcherStatusDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler] {
-	if dispatcherStatusDynamicStream == nil {
-		dispatcherStatusDynamicStreamOnce.Do(func() {
-			dispatcherStatusDynamicStream = dynstream.NewParallelDynamicStream(func(id common.DispatcherID) uint64 { return common.GID(id).FastHash() }, &DispatcherStatusHandler{})
-			dispatcherStatusDynamicStream.Start()
-		})
-	}
+	dispatcherStatusDynamicStreamOnce.Do(func() {
+		dispatcherStatusDynamicStream = dynstream.NewParallelDynamicStream(func(id common.DispatcherID) uint64 { return common.GID(id).FastHash() }, &DispatcherStatusHandler{})
+		dispatcherStatusDynamicStream.Start()
+	})
 	return dispatcherStatusDynamicStream
 }
 

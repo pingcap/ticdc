@@ -57,8 +57,7 @@ const (
 )
 
 type server struct {
-	captureMu sync.Mutex
-	info      *node.Info
+	info *node.Info
 
 	liveness model.Liveness
 
@@ -68,10 +67,10 @@ type server struct {
 	coordinatorMu sync.Mutex
 	coordinator   tiserver.Coordinator
 
-	dispatcherOrchestrator *dispatcherorchestrator.DispatcherOrchestrator
-
 	// session keeps alive between the server and etcd
 	session *concurrency.Session
+
+	security *security.Credential
 
 	EtcdClient etcd.CDCEtcdClient
 
@@ -106,6 +105,7 @@ func New(conf *config.ServerConfig, pdEndpoints []string) (tiserver.Server, erro
 	s := &server{
 		pdEndpoints: pdEndpoints,
 		tcpServer:   tcpServer,
+		security:    conf.Security,
 	}
 	return s, nil
 }
@@ -117,25 +117,26 @@ func (c *server) initialize(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	messageCenter := messaging.NewMessageCenter(ctx, c.info.ID, c.info.Epoch, config.NewDefaultMessageCenterConfig())
 	appcontext.SetID(c.info.ID.String())
+	messageCenter := messaging.NewMessageCenter(ctx, c.info.ID, c.info.Epoch, config.NewDefaultMessageCenterConfig(), c.security)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
 
 	appcontext.SetService(appcontext.EventCollector, eventcollector.New(ctx, c.info.ID))
 	appcontext.SetService(appcontext.HeartbeatCollector, dispatchermanager.NewHeartBeatCollector(c.info.ID))
-	c.dispatcherOrchestrator = dispatcherorchestrator.New()
+	appcontext.SetService(appcontext.DispatcherOrchestrator, dispatcherorchestrator.New())
 
 	nodeManager := watcher.NewNodeManager(c.session, c.EtcdClient)
 	nodeManager.RegisterNodeChangeHandler(
 		appcontext.MessageCenter,
 		appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter).OnNodeChanges)
+
+	conf := config.GetGlobalServerConfig()
 	subscriptionClient := logpuller.NewSubscriptionClient(
 		&logpuller.SubscriptionClientConfig{
 			RegionRequestWorkerPerStore: 16,
 		}, c.pdClient, c.RegionCache, c.PDClock,
-		txnutil.NewLockerResolver(c.KVStorage.(tikv.Storage)), &security.Credential{},
+		txnutil.NewLockerResolver(c.KVStorage.(tikv.Storage)), c.security,
 	)
-	conf := config.GetGlobalServerConfig()
 	schemaStore := schemastore.New(ctx, conf.DataDir, subscriptionClient, c.pdClient, c.PDClock, c.KVStorage)
 	eventStore := eventstore.New(ctx, conf.DataDir, subscriptionClient, c.PDClock)
 	eventService := eventservice.New(eventStore, schemaStore)
@@ -307,4 +308,8 @@ func (c *server) GetEtcdClient() etcd.CDCEtcdClient {
 
 func (c *server) GetMaintainerManager() *maintainer.Manager {
 	return appctx.GetService[*maintainer.Manager](appctx.MaintainerManager)
+}
+
+func (c *server) GetKVStorage() kv.Storage {
+	return c.KVStorage
 }

@@ -66,7 +66,6 @@ type onceTask struct {
 func (t *onceTask) TaskId() TaskId { return t.id }
 
 func (t *onceTask) Execute() time.Time {
-
 	t.msgChan <- t.id
 
 	t.wg.Done()

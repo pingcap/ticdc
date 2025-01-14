@@ -15,23 +15,23 @@ echo "move table with retry"
 count=0
 
 while [[ $count -lt $retryCount ]]; do
-    ans=$(run_cdc_cli capture list)
-    node2ID=$(echo $ans | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r ".[] | select(.address == \"$ipAddr\") | .id")
-    if [ -z "$node2ID" ]; then
-        echo "Failed to extract node2 ID"
-        continue
-    fi
+	ans=$(run_cdc_cli capture list)
+	node2ID=$(echo $ans | sed 's/ PASS.*//' | grep -v "Command to ticdc" | jq -r ".[] | select(.address == \"$ipAddr\") | .id")
+	if [ -z "$node2ID" ]; then
+		echo "Failed to extract node2 ID"
+		continue
+	fi
 
-    # move table 1 to node2
-    result=$(run_cdc_cli changefeed move-table -c "$changefeedID" -t $tableID -d "$node2ID")
-    echo $result
-    success=$(echo $result | sed 's/ PASS.*//' |  sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
+	# move table 1 to node2
+	result=$(run_cdc_cli changefeed move-table -c "$changefeedID" -t $tableID -d "$node2ID")
+	echo $result
+	success=$(echo $result | sed 's/ PASS.*//' | grep -v "Command to ticdc" | jq -r '.success')
 
-    if [ "$success" == "true" ]; then
-        exit 0
-    fi
+	if [ "$success" == "true" ]; then
+		exit 0
+	fi
 
-    count=$((count + 1))
+	count=$((count + 1))
 done
 
 echo "move table 1 to node2 failed after $retryCount retries"

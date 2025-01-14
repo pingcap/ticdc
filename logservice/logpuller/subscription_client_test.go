@@ -31,7 +31,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
-
 	"github.com/tikv/client-go/v2/tikv"
 )
 

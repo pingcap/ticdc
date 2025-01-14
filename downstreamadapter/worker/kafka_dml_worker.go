@@ -17,10 +17,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/config"
-	"go.uber.org/atomic"
-	"golang.org/x/sync/errgroup"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
@@ -29,10 +25,13 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/tiflow/cdc/model"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -342,7 +341,6 @@ func (w *KafkaDMLWorker) sendMessages() error {
 			for _, message := range future.Messages {
 				start := time.Now()
 				if err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
-					message.SetPartitionKey(future.Key.PartitionKey)
 					if err = w.producer.AsyncSendMessage(
 						w.ctx,
 						future.Key.Topic,

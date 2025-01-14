@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package event
 
 import (
@@ -41,9 +54,11 @@ type DDLEvent struct {
 	MultipleTableInfos []*common.TableInfo `json:"-"`
 
 	BlockedTables     *InfluencedTables `json:"blocked_tables"`
-	UpdatedSchemas    []SchemaIDChange  `json:"updated_schemas"`
 	NeedDroppedTables *InfluencedTables `json:"need_dropped_tables"`
 	NeedAddedTables   []Table           `json:"need_added_tables"`
+
+	// Only set when tables moves between databases
+	UpdatedSchemas []SchemaIDChange `json:"updated_schemas"`
 
 	// DDLs which may change table name:
 	//   Create Table

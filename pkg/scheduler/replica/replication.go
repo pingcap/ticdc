@@ -128,7 +128,7 @@ func (db *replicationDB[T, R]) GetGroupChecker(groupID GroupID) (ret GroupChecke
 }
 
 func (db *replicationDB[T, R]) GetAbsent() []R {
-	var absent = make([]R, 0)
+	absent := make([]R, 0)
 	db.withRLock(func() {
 		for _, g := range db.taskGroups {
 			absent = append(absent, g.GetAbsent()...)
@@ -152,11 +152,6 @@ func (db *replicationDB[T, R]) GetAbsentByGroup(id GroupID, batch int) []R {
 	db.withRLock(func() {
 		g := db.mustGetGroup(id)
 		for _, stm := range g.GetAbsent() {
-			// IsDropped is not implemented yet, it filter the dropped table and
-			// prevent unexpected scheduling behavior
-			// if !stm.IsDropped() {
-			// 	buffer = append(buffer, stm)
-			// }
 			buffer = append(buffer, stm)
 			if len(buffer) >= batch {
 				break
@@ -231,6 +226,7 @@ func (db *replicationDB[T, R]) GetSchedulingSize() int {
 func (db *replicationDB[T, R]) GetImbalanceGroupNodeTask(nodes map[node.ID]*node.Info) (groups map[GroupID]map[node.ID]R, valid bool) {
 	groups = make(map[GroupID]map[node.ID]R, len(db.taskGroups))
 	nodesNum := len(nodes)
+	valid = true
 	db.withRLock(func() {
 		var zeroR R
 		for gid, g := range db.taskGroups {
@@ -265,12 +261,17 @@ func (db *replicationDB[T, R]) GetImbalanceGroupNodeTask(nodes map[node.ID]*node
 				case upperLimitPerNode - 1:
 					groupMap[nodeID] = zeroR
 				default:
-					// invalid state: len(tasks) > upperLimitPerNode || len(tasks) < upperLimitPerNode-1
-					log.Panic("scheduler: invalid group state",
+					// invalid state: len(tasks) > upperLimitPerNode || len(tasks) < upperLimitPerNode-1,
+					// that means some basic scheduler happens bewteen schedule group and schedule global
+					log.Warn("scheduler: invalid group state",
 						zap.String("schedulerID", db.id),
 						zap.String("group", GetGroupName(gid)), zap.Int("totalSpan", totalSpan),
 						zap.Int("nodesNum", nodesNum), zap.Int("upperLimitPerNode", upperLimitPerNode),
 						zap.String("node", nodeID.String()), zap.Int("nodeTaskSize", len(tasks)))
+
+					groups = nil
+					valid = false
+					return
 				}
 			}
 			if limitCnt < nodesNum {
@@ -284,7 +285,7 @@ func (db *replicationDB[T, R]) GetImbalanceGroupNodeTask(nodes map[node.ID]*node
 			}
 		}
 	})
-	return groups, true
+	return
 }
 
 // GetTaskSizePerNode returns the size of the task per node

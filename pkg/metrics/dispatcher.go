@@ -143,5 +143,4 @@ func InitDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventCollectorReceivedEventLagDuration)
 	registry.MustRegister(EventCollectorResolvedTsLagGauge)
 	registry.MustRegister(EventCollectorHandleEventDuration)
-
 }

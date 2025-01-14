@@ -23,24 +23,22 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/ticdc/logservice/logservicepb"
-	"github.com/tikv/client-go/v2/oracle"
-
-	"github.com/pingcap/ticdc/utils/chann"
-
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/util"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -50,9 +48,11 @@ var (
 	CounterResolved = metrics.EventStoreReceivedEventCount.WithLabelValues("resolved")
 )
 
-var metricEventStoreFirstReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("first")
-var metricEventStoreNextReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("next")
-var metricEventStoreCloseReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("close")
+var (
+	metricEventStoreFirstReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("first")
+	metricEventStoreNextReadDurationHistogram  = metrics.EventStoreReadDurationHistogram.WithLabelValues("next")
+	metricEventStoreCloseReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("close")
+)
 
 type ResolvedTsNotifier func(watermark uint64, latestCommitTs uint64)
 
@@ -113,7 +113,7 @@ type subscriptionStat struct {
 
 	// dispatchers depend on this subscription
 	dispatchers struct {
-		sync.RWMutex
+		sync.Mutex
 		notifiers map[common.DispatcherID]ResolvedTsNotifier
 	}
 
@@ -502,8 +502,8 @@ func (e *eventStore) RegisterDispatcher(
 		}
 		// just do CompareAndSwap once, if failed, it means another goroutine has updated resolvedTs
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
-			subStat.dispatchers.RLock()
-			defer subStat.dispatchers.RUnlock()
+			subStat.dispatchers.Lock()
+			defer subStat.dispatchers.Unlock()
 			for _, notifier := range subStat.dispatchers.notifiers {
 				notifier(ts, subStat.maxEventCommitTs.Load())
 			}
@@ -536,6 +536,7 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 	if !ok {
 		log.Panic("should not happen")
 	}
+	subscriptionStat.dispatchers.Lock()
 	delete(subscriptionStat.dispatchers.notifiers, dispatcherID)
 	if len(subscriptionStat.dispatchers.notifiers) == 0 {
 		delete(e.dispatcherMeta.subscriptionStats, subID)
@@ -543,6 +544,7 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 		e.subClient.Unsubscribe(subID)
 		metrics.EventStoreSubscriptionGauge.Dec()
 	}
+	subscriptionStat.dispatchers.Unlock()
 
 	// delete the dispatcher from table subscriptions
 	dispatchersForSameTable, ok := e.dispatcherMeta.tableToDispatchers[tableID]

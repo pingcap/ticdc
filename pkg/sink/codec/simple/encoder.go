@@ -19,11 +19,11 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/config"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/sink/kafka/claimcheck"
 	"go.uber.org/zap"
 )
@@ -66,11 +66,6 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 
 	result := &ticommon.Message{
 		Value:    value,
-		Ts:       event.CommitTs,
-		Schema:   event.TableInfo.GetSchemaNamePtr(),
-		Table:    event.TableInfo.GetTableNamePtr(),
-		Type:     model.MessageTypeRow,
-		Protocol: config.ProtocolSimple,
 		Callback: callback,
 	}
 

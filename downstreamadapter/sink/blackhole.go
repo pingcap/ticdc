@@ -23,8 +23,7 @@ import (
 
 // BlackHoleSink is responsible for writing data to blackhole.
 // Including DDL and DML.
-type BlackHoleSink struct {
-}
+type BlackHoleSink struct{}
 
 func NewBlackHoleSink() (*BlackHoleSink, error) {
 	blackholeSink := BlackHoleSink{}

@@ -209,7 +209,7 @@ func (db *ChangefeedDB) GetByChangefeedDisplayName(displayName common.ChangeFeed
 }
 
 // Resume moves a changefeed to the absent map, and waiting for scheduling
-func (db *ChangefeedDB) Resume(id common.ChangeFeedID, resetBackoff bool) {
+func (db *ChangefeedDB) Resume(id common.ChangeFeedID, resetBackoff bool, overwriteCheckpointTs bool) {
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
@@ -221,8 +221,9 @@ func (db *ChangefeedDB) Resume(id common.ChangeFeedID, resetBackoff bool) {
 			cf.backoff.resetErrRetry()
 		}
 		delete(db.stopped, id)
+		cf.isNew = overwriteCheckpointTs
 		db.AddAbsentWithoutLock(cf)
-		log.Info("resume changefeed", zap.String("changefeed", id.String()))
+		log.Info("resume changefeed", zap.String("changefeed", id.String()), zap.Any("overwriteCheckpointTs", overwriteCheckpointTs))
 	}
 }
 
@@ -282,7 +283,7 @@ func (db *ChangefeedDB) ReplaceStoppedChangefeed(cf *config.ChangeFeedInfo) {
 		return
 	}
 	// todo: not create a new changefeed here?
-	newCf := NewChangefeed(cf.ChangefeedID, cf, oldCf.GetStatus().CheckpointTs)
+	newCf := NewChangefeed(cf.ChangefeedID, cf, oldCf.GetStatus().CheckpointTs, false)
 	db.stopped[cf.ChangefeedID] = newCf
 	db.changefeeds[cf.ChangefeedID] = newCf
 }

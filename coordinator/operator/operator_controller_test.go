@@ -37,10 +37,12 @@ func TestController_StopChangefeed(t *testing.T) {
 	oc := NewOperatorController(nil, node.NewInfo("localhost:8300", ""), changefeedDB,
 		backend, nodeManager, 10)
 	cfID := common.NewChangeFeedIDWithName("test")
-	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{ChangefeedID: cfID,
-		Config:  config.GetDefaultReplicaConfig(),
-		SinkURI: "mysql://127.0.0.1:3306"},
-		1)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
+		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 
 	oc.StopChangefeed(context.Background(), cfID, false)
@@ -63,19 +65,23 @@ func TestController_AddOperator(t *testing.T) {
 	oc := NewOperatorController(nil, node.NewInfo("localhost:8300", ""), changefeedDB,
 		backend, nodeManager, 10)
 	cfID := common.NewChangeFeedIDWithName("test")
-	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{ChangefeedID: cfID,
-		Config:  config.GetDefaultReplicaConfig(),
-		SinkURI: "mysql://127.0.0.1:3306"},
-		1)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
+		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 
 	require.True(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, "n2")))
 	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, "n2")))
 	cf2ID := common.NewChangeFeedIDWithName("test2")
-	cf2 := changefeed.NewChangefeed(cf2ID, &config.ChangeFeedInfo{ChangefeedID: cf2ID,
-		Config:  config.GetDefaultReplicaConfig(),
-		SinkURI: "mysql://127.0.0.1:3306"},
-		1)
+	cf2 := changefeed.NewChangefeed(cf2ID, &config.ChangeFeedInfo{
+		ChangefeedID: cf2ID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
+		1, true)
 	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf2, "n2")))
 
 	require.NotNil(t, oc.GetOperator(cfID))

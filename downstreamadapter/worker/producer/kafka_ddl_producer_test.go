@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package producer
 
 import (
@@ -7,9 +20,9 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/pingcap/ticdc/pkg/common"
+	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 )
@@ -33,12 +46,12 @@ func TestDDLSyncBroadcastMessage(t *testing.T) {
 		syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndSucceed()
 	}
 	err = p.SyncBroadcastMessage(ctx, tikafka.DefaultMockTopicName,
-		tikafka.DefaultMockPartitionNum, &ticommon.Message{Ts: 417318403368288260})
+		tikafka.DefaultMockPartitionNum, &ticommon.Message{})
 	require.NoError(t, err)
 
 	p.Close()
 	err = p.SyncBroadcastMessage(ctx, tikafka.DefaultMockTopicName,
-		tikafka.DefaultMockPartitionNum, &ticommon.Message{Ts: 417318403368288260})
+		tikafka.DefaultMockPartitionNum, &ticommon.Message{})
 	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
 	cancel()
 }
@@ -58,11 +71,11 @@ func TestDDLSyncSendMessage(t *testing.T) {
 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
 
 	syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndSucceed()
-	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{Ts: 417318403368288260})
+	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{})
 	require.NoError(t, err)
 
 	p.Close()
-	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{Ts: 417318403368288260})
+	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{})
 	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
 	cancel()
 }
@@ -88,7 +101,7 @@ func TestDDLProducerSendMsgFailed(t *testing.T) {
 	defer p.Close()
 
 	syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndFail(sarama.ErrMessageTooLarge)
-	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{Ts: 417318403368288260})
+	err = p.SyncSendMessage(ctx, tikafka.DefaultMockTopicName, 0, &ticommon.Message{})
 	require.ErrorIs(t, err, sarama.ErrMessageTooLarge)
 }
 

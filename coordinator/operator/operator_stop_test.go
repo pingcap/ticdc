@@ -28,10 +28,12 @@ import (
 func TestStopChangefeedOperator_OnNodeRemove(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test")
-	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{ChangefeedID: cfID,
-		Config:  config.GetDefaultReplicaConfig(),
-		SinkURI: "mysql://127.0.0.1:3306"},
-		1)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
+		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 
 	ctrl := gomock.NewController(t)
@@ -45,10 +47,12 @@ func TestStopChangefeedOperator_OnNodeRemove(t *testing.T) {
 func TestStopChangefeedOperator_OnTaskRemoved(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test")
-	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{ChangefeedID: cfID,
-		Config:  config.GetDefaultReplicaConfig(),
-		SinkURI: "mysql://127.0.0.1:3306"},
-		1)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
+		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 	op := NewStopChangefeedOperator(cfID, "n1", "n2", nil, true)
 	op.OnTaskRemoved()
@@ -58,10 +62,12 @@ func TestStopChangefeedOperator_OnTaskRemoved(t *testing.T) {
 func TestStopChangefeedOperator_PostFinish(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test")
-	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{ChangefeedID: cfID,
-		Config:  config.GetDefaultReplicaConfig(),
-		SinkURI: "mysql://127.0.0.1:3306"},
-		1)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
+		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 
 	ctrl := gomock.NewController(t)

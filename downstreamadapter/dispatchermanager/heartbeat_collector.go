@@ -18,14 +18,13 @@ import (
 	"sync"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/ticdc/pkg/node"
-
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"go.uber.org/zap"
 )

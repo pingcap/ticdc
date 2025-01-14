@@ -21,10 +21,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/common"
-
 	"github.com/benbjohnson/clock"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	tidbkv "github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/store/driver"
 	"github.com/pingcap/tiflow/pkg/errors"

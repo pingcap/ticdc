@@ -1,12 +1,24 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package eventservice
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"time"
-
-	"golang.org/x/sync/errgroup"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -14,15 +26,15 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
+	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
-
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -284,7 +296,13 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e pevent.DD
 	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
-	log.Info("send ddl event to dispatcher", zap.Stringer("dispatcher", d.id), zap.String("query", e.Query), zap.Int64("table", e.TableID), zap.Uint64("commitTs", e.FinishedTs), zap.Uint64("seq", e.Seq))
+	log.Info("send ddl event to dispatcher",
+		zap.Stringer("dispatcher", d.id),
+		zap.Int64("dispatcherTableID", d.info.GetTableSpan().TableID),
+		zap.String("query", e.Query),
+		zap.Int64("eventTableID", e.TableID),
+		zap.Uint64("commitTs", e.FinishedTs),
+		zap.Uint64("seq", e.Seq))
 	ddlEvent := newWrapDDLEvent(remoteID, &e, d.getEventSenderState())
 	select {
 	case <-ctx.Done():
@@ -393,7 +411,8 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 			remoteID,
 			&pevent.SyncPointEvent{
 				DispatcherID: d.id,
-				CommitTs:     ts},
+				CommitTs:     ts,
+			},
 			d.getEventSenderState())
 		c.getMessageCh(d.workerIndex) <- syncPointEvent
 		d.nextSyncPoint = oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint).Add(d.syncPointInterval))
@@ -446,7 +465,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		task.updateSentResolvedTs(dataRange.EndTs)
 	}
 
-	//2. Get event iterator from eventStore.
+	// 2. Get event iterator from eventStore.
 	iter, err := c.eventStore.GetIterator(dispatcherID, dataRange)
 	if err != nil {
 		log.Panic("read events failed", zap.Error(err))
@@ -507,7 +526,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// 3. Send the events to the dispatcher.
 	var dml *pevent.DMLEvent
 	for {
-		//Node: The first event of the txn must return isNewTxn as true.
+		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
 		if err != nil {
 			log.Panic("read events failed", zap.Error(err))
@@ -536,6 +555,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			if err != nil {
 				if task.isRemoved.Load() {
 					log.Warn("get table info failed, since the dispatcher is removed", zap.Error(err))
+					return
+				} else if errors.Is(err, &schemastore.TableDeletedError{}) {
+					// After a table is truncated, it is possible to receive more dml events, just ignore is ok.
+					// TODO: tables may be deleted in many ways, we need to check if it is safe to ignore later dmls in all cases.
+					// We must send the remaining ddl events to the dispatcher in this case.
+					sendRemainingDDLEvents()
+					log.Warn("get table info failed, since the table is deleted", zap.Error(err))
 					return
 				}
 				log.Panic("get table info failed, unknown reason", zap.Error(err))

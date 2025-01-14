@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package messaging
 
 import (
@@ -7,19 +20,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/utils/conn"
-
-	"github.com/prometheus/client_golang/prometheus"
-
-	"github.com/pingcap/ticdc/pkg/metrics"
-
 	"github.com/pingcap/log"
 	. "github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils/conn"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -45,6 +55,7 @@ type remoteMessageTarget struct {
 	targetEpoch atomic.Value
 	targetId    node.ID
 	targetAddr  string
+	security    *security.Credential
 
 	// For sending events and commands
 	eventSender   *sendStreamWrapper
@@ -142,6 +153,7 @@ func newRemoteMessageTarget(
 	addr string,
 	recvEventCh, recvCmdCh chan *TargetMessage,
 	cfg *config.MessageCenterConfig,
+	security *security.Credential,
 ) *remoteMessageTarget {
 	log.Info("Create remote target", zap.Stringer("local", localID), zap.Stringer("remote", targetId), zap.Any("addr", addr), zap.Any("localEpoch", localEpoch), zap.Any("targetEpoch", targetEpoch))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -150,6 +162,7 @@ func newRemoteMessageTarget(
 		messageCenterEpoch: localEpoch,
 		targetAddr:         addr,
 		targetId:           targetId,
+		security:           security,
 		eventSender:        &sendStreamWrapper{ready: atomic.Bool{}},
 		commandSender:      &sendStreamWrapper{ready: atomic.Bool{}},
 		ctx:                ctx,
@@ -231,13 +244,14 @@ func (s *remoteMessageTarget) connect() {
 		return
 	}
 
-	conn, err := conn.Connect(string(s.targetAddr), &security.Credential{})
+	conn, err := conn.Connect(string(s.targetAddr), s.security)
 	if err != nil {
 		log.Info("Cannot create grpc client",
 			zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))
 		s.collectErr(AppError{
 			Type:   ErrorTypeConnectionFailed,
-			Reason: fmt.Sprintf("Cannot create grpc client on address %s, error: %s", s.targetAddr, err.Error())})
+			Reason: fmt.Sprintf("Cannot create grpc client on address %s, error: %s", s.targetAddr, err.Error()),
+		})
 		return
 	}
 
@@ -255,7 +269,8 @@ func (s *remoteMessageTarget) connect() {
 			zap.Any("messageCenterID", s.messageCenterID), zap.Stringer("remote", s.targetId), zap.Error(err))
 		s.collectErr(AppError{
 			Type:   ErrorTypeConnectionFailed,
-			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error())})
+			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error()),
+		})
 		return
 	}
 
@@ -265,7 +280,8 @@ func (s *remoteMessageTarget) connect() {
 			zap.Any("messageCenterID", s.messageCenterID), zap.Stringer("remote", s.targetId), zap.Error(err))
 		s.collectErr(AppError{
 			Type:   ErrorTypeConnectionFailed,
-			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error())})
+			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error()),
+		})
 		return
 	}
 
@@ -471,7 +487,8 @@ func (s *localMessageTarget) sendCommand(msg *TargetMessage) error {
 
 func newLocalMessageTarget(id node.ID,
 	gatherRecvEventChan chan *TargetMessage,
-	gatherRecvCmdChan chan *TargetMessage) *localMessageTarget {
+	gatherRecvCmdChan chan *TargetMessage,
+) *localMessageTarget {
 	return &localMessageTarget{
 		localId:            id,
 		recvEventCh:        gatherRecvEventChan,

@@ -19,19 +19,18 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
-	"github.com/pingcap/ticdc/logservice/logservicepb"
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/node"
-
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/tiflow/pkg/chann"
 	"github.com/prometheus/client_golang/prometheus"
@@ -329,7 +328,6 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 		Type:    typeRegisterDispatcherReq,
 		Message: []messaging.IOTypeT{message},
 	})
-
 	if err != nil {
 		log.Info("failed to send dispatcher request message to event service, try again later",
 			zap.String("changefeedID", req.Dispatcher.GetChangefeedID().ID().String()),

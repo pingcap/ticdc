@@ -140,9 +140,9 @@ func (m *Manager) Run(ctx context.Context) error {
 		case msg := <-m.msgCh:
 			m.handleMessage(msg)
 		case <-ticker.C:
-			//1.  try to send heartbeat to coordinator
+			// 1.  try to send heartbeat to coordinator
 			m.sendHeartbeat()
-			//2. cleanup removed maintainers
+			// 2. cleanup removed maintainers
 			m.maintainers.Range(func(key, value interface{}) bool {
 				cf := value.(*Maintainer)
 				if cf.removed.Load() {
@@ -226,11 +226,12 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 			zap.Any("config", cfConfig))
 	}
 	cf := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.taskScheduler,
-		m.pdAPI, m.tsoClient, m.regionCache, req.CheckpointTs)
+		m.pdAPI, m.tsoClient, m.regionCache, req.CheckpointTs, req.IsNewChangfeed)
 	if err != nil {
 		log.Warn("add path to dynstream failed, coordinator will retry later", zap.Error(err))
 		return
 	}
+
 	cf.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 	m.maintainers.Store(cfID, cf)
 }
@@ -355,12 +356,12 @@ func (m *Manager) dispatcherMaintainerMessage(
 	return nil
 }
 
-func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) *Maintainer {
+func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) (*Maintainer, bool) {
 	c, ok := m.maintainers.Load(changefeedID)
 	if !ok {
-		return nil
+		return nil, false
 	}
-	return c.(*Maintainer)
+	return c.(*Maintainer), true
 }
 
 func (m *Manager) isBootstrap() bool {

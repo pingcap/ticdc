@@ -15,11 +15,12 @@ package canal
 
 import (
 	"fmt"
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 	"math"
 	"strconv"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/internal" // nolint:staticcheck
 	mm "github.com/pingcap/tidb/pkg/meta/model"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -29,7 +30,7 @@ import (
 	canal "github.com/pingcap/tiflow/proto/canal"
 )
 
-func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, flag *common.ColumnFlagType) (string, internal.JavaSQLType, error) {
+func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, flag *common.ColumnFlagType) (string, internal.JavaSQLType) {
 	colType := columnInfo.GetType()
 
 	var value string
@@ -44,7 +45,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, 
 		} else {
 			uintValue, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 			if err != nil {
-				return "", 0, err
+				log.Panic("failed to convert bit to int", zap.Any("data", d), zap.Error(err))
 			}
 			value = strconv.FormatUint(uintValue, 10)
 		}
@@ -63,7 +64,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, 
 		if flag.IsBinary() {
 			decoded, err := bytesDecoder.Bytes(bytesValue)
 			if err != nil {
-				return "", 0, err
+				log.Panic("failed to decode bytes", zap.Any("bytes", bytesValue), zap.Error(err))
 			}
 			value = string(decoded)
 		} else {
@@ -84,7 +85,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, 
 		if flag.IsBinary() {
 			decoded, err := bytesDecoder.Bytes(bytesValue)
 			if err != nil {
-				return "", 0, err
+				log.Panic("failed to decode bytes", zap.Any("bytes", bytesValue), zap.Error(err))
 			}
 			value = string(decoded)
 		} else {
@@ -104,7 +105,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, 
 		if flag.IsBinary() {
 			decoded, err := bytesDecoder.Bytes(bytesValue)
 			if err != nil {
-				return "", 0, err
+				log.Panic("failed to decode bytes", zap.Any("bytes", bytesValue), zap.Error(err))
 			}
 			value = string(decoded)
 		} else {
@@ -296,7 +297,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *timodel.ColumnInfo, 
 			value = fmt.Sprintf("%v", d.GetValue())
 		}
 	}
-	return value, javaType, nil
+	return value, javaType
 }
 
 // convert ts in tidb to timestamp(in ms) in canal
@@ -305,9 +306,9 @@ func convertToCanalTs(commitTs uint64) int64 {
 }
 
 // get the canal EventType according to the DDLEvent
-func convertDdlEventType(e *commonEvent.DDLEvent) canal.EventType {
+func convertDdlEventType(t byte) canal.EventType {
 	// see https://github.com/alibaba/canal/blob/d53bfd7ee76f8fe6eb581049d64b07d4fcdd692d/parse/src/main/java/com/alibaba/otter/canal/parse/inbound/mysql/ddl/DruidDdlParser.java#L59-L178
-	switch mm.ActionType(e.Type) {
+	switch mm.ActionType(t) {
 	case mm.ActionCreateSchema, mm.ActionDropSchema, mm.ActionShardRowID, mm.ActionCreateView,
 		mm.ActionDropView, mm.ActionRecoverTable, mm.ActionModifySchemaCharsetAndCollate,
 		mm.ActionLockTable, mm.ActionUnlockTable, mm.ActionRepairTable, mm.ActionSetTiFlashReplica,

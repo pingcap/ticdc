@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package worker
 
 import (
@@ -8,14 +21,14 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
+	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tiflow/cdc/sink/ddlsink/mq/ddlproducer"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -36,7 +49,7 @@ type KafkaDDLWorker struct {
 	topicManager topicmanager.TopicManager
 
 	// producer is used to send the messages to the Kafka broker.
-	producer ddlproducer.DDLProducer
+	producer producer.DDLProducer
 
 	tableSchemaStore *util.TableSchemaStore
 
@@ -72,7 +85,7 @@ func NewKafkaDDLWorker(
 	ctx context.Context,
 	id common.ChangeFeedID,
 	protocol config.Protocol,
-	producer ddlproducer.DDLProducer,
+	producer producer.DDLProducer,
 	encoder encoder.EventEncoder,
 	eventRouter *eventrouter.EventRouter,
 	topicManager topicmanager.TopicManager,

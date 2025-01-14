@@ -23,8 +23,6 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
-	pkgOpearator "github.com/pingcap/ticdc/pkg/scheduler/operator"
-
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -32,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler"
+	pkgOpearator "github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/processor/tablepb"
@@ -140,7 +139,7 @@ func TestBalanceGlobalEven(t *testing.T) {
 			require.True(t, ok)
 		}
 	}
-	//still on the primary node
+	// still on the primary node
 	require.Equal(t, 100, s.replicationDB.GetTaskSizeByNodeID("node1"))
 	require.Equal(t, 0, s.replicationDB.GetTaskSizeByNodeID("node2"))
 
@@ -216,7 +215,7 @@ func TestBalanceGlobalUneven(t *testing.T) {
 			require.True(t, ok)
 		}
 	}
-	//still on the primary node
+	// still on the primary node
 	require.Equal(t, 50, s.replicationDB.GetTaskSizeByNodeID("node1"))
 	require.Equal(t, 50, s.replicationDB.GetTaskSizeByNodeID("node2"))
 
@@ -286,7 +285,7 @@ func TestBalance(t *testing.T) {
 			require.True(t, ok)
 		}
 	}
-	//still on the primary node
+	// still on the primary node
 	require.Equal(t, 100, s.replicationDB.GetTaskSizeByNodeID("node1"))
 	require.Equal(t, 0, s.replicationDB.GetTaskSizeByNodeID("node2"))
 
@@ -481,7 +480,7 @@ func TestBalanceUnEvenTask(t *testing.T) {
 	s.schedulerController.GetScheduler(scheduler.BalanceScheduler).Execute()
 	require.Equal(t, 3, s.replicationDB.GetReplicatingSize())
 	require.Equal(t, 1, s.operatorController.OperatorSize())
-	//still on the primary node
+	// still on the primary node
 	require.Equal(t, 2, s.GetTaskSizeByNodeID("node1"))
 	require.Equal(t, 2, s.GetTaskSizeByNodeID("node2"))
 	require.Equal(t, 0, s.GetTaskSizeByNodeID("node3"))
@@ -585,7 +584,7 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	}, false)
 	require.Nil(t, err)
 	require.NotNil(t, barrier)
-	//total 8 regions,
+	// total 8 regions,
 	// table 1: 2 holes will be inserted to absent
 	// table 2: split to 4 spans, will be inserted to absent
 	require.Equal(t, 6, s.replicationDB.GetAbsentSize())
@@ -617,7 +616,8 @@ func TestDynamicSplitTableBasic(t *testing.T) {
 				EnableTableAcrossNodes: true,
 				RegionThreshold:        0,
 				WriteKeyThreshold:      1,
-			}}, ddlSpan, 1000, 0)
+			},
+		}, ddlSpan, 1000, 0)
 	s.taskScheduler = &mockThreadPool{}
 
 	for i := 1; i <= 2; i++ {
@@ -668,7 +668,7 @@ func TestDynamicSplitTableBasic(t *testing.T) {
 		op.PostFinish()
 	}
 
-	//total 7 regions,
+	// total 7 regions,
 	// table 1: split to 4 spans, will be inserted to absent
 	// table 2: split to 3 spans, will be inserted to absent
 	require.Equal(t, 7, s.replicationDB.GetAbsentSize())
@@ -702,7 +702,8 @@ func TestDynamicMergeAndSplitTable(t *testing.T) {
 				EnableTableAcrossNodes: true,
 				RegionThreshold:        0,
 				WriteKeyThreshold:      1,
-			}}, ddlSpan, 1000, 0)
+			},
+		}, ddlSpan, 1000, 0)
 	s.taskScheduler = &mockThreadPool{}
 
 	totalTables := 10
@@ -764,7 +765,7 @@ func TestDynamicMergeAndSplitTable(t *testing.T) {
 	}
 	require.Less(t, finishedCnt, totalTables*3-1)
 
-	//total 7 regions,
+	// total 7 regions,
 	// table 1: split to 4 spans, will be inserted to absent
 	// table 2: split to 3 spans, will be inserted to absent
 	require.Equal(t, 7, s.replicationDB.GetAbsentSize())
@@ -793,7 +794,8 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 				EnableTableAcrossNodes: true,
 				RegionThreshold:        0,
 				WriteKeyThreshold:      1,
-			}}, ddlSpan, 1000, 0)
+			},
+		}, ddlSpan, 1000, 0)
 	s.taskScheduler = &mockThreadPool{}
 
 	totalTables := 10
