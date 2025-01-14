@@ -310,11 +310,16 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=default_value
 
-      # the 8th case in this group
       - name: Test http_proxies
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=http_proxies
+
+      # the 9th case in this group
+      - name: Test ddl_reentrant
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_reentrant
 
       - name: Upload test logs
         if: always()
