@@ -130,7 +130,7 @@ EOF
 
 	# Update changefeed
 	run_cdc_cli changefeed update --pd=$pd_addr --config="$WORK_DIR/changefeed.toml" --no-confirm --changefeed-id $uuid
-	changefeed_info=$(curl -s -X GET "https://127.0.0.1:8300/api/v2/changefeeds/$uuid/meta_info" --cacert "${TLS_DIR}/ca.pem" --cert "${TLS_DIR}/client.pem" --key "${TLS_DIR}/client-key.pem" 2>&1)
+	changefeed_info=$(curl -s -X GET "https://127.0.0.1:8300/api/v2/changefeeds/$uuid" --cacert "${TLS_DIR}/ca.pem" --cert "${TLS_DIR}/client.pem" --key "${TLS_DIR}/client-key.pem" 2>&1)
 	if [[ ! $changefeed_info == *"\"case_sensitive\":true"* ]]; then
 		echo "[$(date)] <<<<< changefeed info is not updated as expected ${changefeed_info} >>>>>"
 		exit 1
@@ -173,18 +173,31 @@ EOF
 		run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai"
 	fi
 
-	# Smoke test unsafe commands
+	# Test unsafe commands
 	echo "y" | run_cdc_cli unsafe delete-service-gc-safepoint
 	run_cdc_cli unsafe reset --no-confirm --pd=$pd_addr
+
+	
+	# Check if the coordinator is online
+	for i in {1..100}; do
+		curl -s -X GET "https://127.0.0.1:8300/api/v2/captures" --cacert "${TLS_DIR}/ca.pem" --cert "${TLS_DIR}/client.pem" --key "${TLS_DIR}/client-key.pem" | grep -q "\"is_coordinator\":true"
+		if [[ $? -eq 0 ]]; then
+			break
+		fi
+		echo "owner is not online, retry again, this is the $i time"
+		sleep 1
+	done
+	if [[ $? -ne 0 ]]; then
+		echo "[$(date)] <<<<< coordinator is not online >>>>>"
+		run_cdc_cli capture list
+		exit 1
+	fi
+
 	REGION_ID=$(pd-ctl --cacert="${TLS_DIR}/ca.pem" --cert="${TLS_DIR}/client.pem" --key="${TLS_DIR}/client-key.pem" -u=$pd_addr region | jq '.regions[0].id')
 	TS=$(run_cdc_cli_tso_query $TLS_PD_HOST $TLS_PD_PORT true)
-	# wait for owner online
-	sleep 3
 	run_cdc_cli unsafe resolve-lock --region=$REGION_ID
 	run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
 
-	# Smoke test change log level
-	curl -X POST -d '"warn"' https://127.0.0.1:8300/api/v1/log --cacert "${TLS_DIR}/ca.pem" --cert "${TLS_DIR}/client.pem" --key "${TLS_DIR}/client-key.pem"
 	sleep 3
 	# make sure TiCDC does not panic
 	curl https://127.0.0.1:8300/status --cacert "${TLS_DIR}/ca.pem" --cert "${TLS_DIR}/client.pem" --key "${TLS_DIR}/client-key.pem"

@@ -111,17 +111,12 @@ function run() {
 		"pause_changefeed"
 		"update_changefeed"
 		"resume_changefeed"
-		"rebalance_table"
-		"list_processor"
-		"get_processor"
 		"move_table"
 		"set_log_level"
 		"remove_changefeed"
 		"resign_owner"
 		"get_tso"
 		"verify_table"
-		"create_changefeed_v2"
-		"delete_changefeed_v2"
 		"unsafe_apis"
 	)
 

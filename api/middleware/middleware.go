@@ -48,7 +48,7 @@ func ErrorHandleMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Next()
 		// because we will return immediately after an error occurs in http_handler
-		// there wil be only one error in c.Errors
+		// there will be only one error in c.Errors
 		lastError := c.Errors.Last()
 		if lastError != nil {
 			err := lastError.Err

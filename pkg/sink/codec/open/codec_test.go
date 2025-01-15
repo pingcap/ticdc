@@ -19,7 +19,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	ticonfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -121,7 +120,7 @@ func TestDMLEvent(t *testing.T) {
 		deleteRow.Row = chunk.Row{}
 		require.True(t, ok)
 
-		updateRowEvent := &pevent.RowEvent{
+		deleteEvent := &pevent.RowEvent{
 			TableInfo:      tableInfo,
 			CommitTs:       3,
 			Event:          deleteRow,
@@ -129,7 +128,7 @@ func TestDMLEvent(t *testing.T) {
 			Callback:       func() {},
 		}
 
-		key, value, _, err := encodeRowChangedEvent(updateRowEvent, protocolConfig, false, "")
+		key, value, _, err = encodeRowChangedEvent(deleteEvent, protocolConfig, false, "")
 		require.NoError(t, err)
 
 		require.Equal(t, `{"ts":3,"scm":"test","tbl":"t","t":1}`, string(key))
@@ -229,9 +228,7 @@ func TestDDLEvent(t *testing.T) {
 }
 
 func TestResolvedTsEvent(t *testing.T) {
-	key, value, err := encodeResolvedTs(12345678)
-	require.NoError(t, err)
-
+	key, value := encodeResolvedTs(12345678)
 	require.Equal(t, `{"ts":12345678,"t":3}`, string(key)[16:])
 	require.Equal(t, 8, len(string(value)))
 }
@@ -241,8 +238,8 @@ func TestEncodeWithColumnSelector(t *testing.T) {
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
 
-	sinkConfig := ticonfig.SinkConfig{}
-	sinkConfig.ColumnSelectors = []*ticonfig.ColumnSelector{
+	sinkConfig := config.SinkConfig{}
+	sinkConfig.ColumnSelectors = []*config.ColumnSelector{
 		{
 			Matcher: []string{"test.*"},
 			Columns: []string{"a*"},

@@ -39,11 +39,11 @@ type PersistedDDLEvent struct {
 	PrevTableName  string `msg:"prev_table_name"`
 
 	// only used for rename tables
-	PrevSchemaIDs      []int64  `msg:prev_schema_ids`
-	PrevSchemaNames    []string `msg:prev_schema_names`
-	PrevTableNames     []string `msg:prev_table_names`
-	CurrentSchemaIDs   []int64  `msg:current_schema_ids`
-	CurrentSchemaNames []string `msg:current_schema_names`
+	PrevSchemaIDs      []int64  `msg:"prev_schema_ids"`
+	PrevSchemaNames    []string `msg:"prev_schema_names"`
+	PrevTableNames     []string `msg:"prev_table_names"`
+	CurrentSchemaIDs   []int64  `msg:"current_schema_ids"`
+	CurrentSchemaNames []string `msg:"s"`
 
 	// The following fields are only set when the ddl job involves a partition table
 	PrevPartitions []int64 `msg:"prev_partitions"`
@@ -53,11 +53,13 @@ type PersistedDDLEvent struct {
 	DBInfo        *model.DBInfo `msg:"-"`
 	// for exchange partition, it is the info of the partition table
 	TableInfo *model.TableInfo `msg:"-"`
-	// for exchange partition, it is the info of the normal table
-	PreTableInfo *common.TableInfo `msg:"-"`
 	// TODO: use a custom struct to store the table info?
 	TableInfoValue []byte `msg:"table_info_value"`
-	FinishedTs     uint64 `msg:"finished_ts"`
+	// for exchange partition, it is the info of the normal table
+	PreTableInfo *common.TableInfo `msg:"-"`
+	// TODO: is there a better way to store PreTableInfo?
+	PreTableInfoValue []byte `msg:"pre_table_info_value"`
+	FinishedTs        uint64 `msg:"finished_ts"`
 
 	MultipleTableInfos      []*model.TableInfo `msg:"-"`
 	MultipleTableInfosValue [][]byte           `msg:"multi_table_info_value"`

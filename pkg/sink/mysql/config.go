@@ -209,14 +209,23 @@ func (c *MysqlConfig) Apply(
 	return nil
 }
 
-func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*MysqlConfig, *sql.DB, error) {
-	log.Info("create db connection", zap.String("sinkURI", sinkURI.String()))
-	// create db connection
+func NewMySQLConfig(changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*MysqlConfig, error) {
 	cfg := NewMysqlConfig()
 	err := cfg.Apply(sinkURI, changefeedID, config)
 	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*MysqlConfig, *sql.DB, error) {
+	log.Info("create db connection", zap.String("sinkURI", sinkURI.String()))
+	// create db connection
+	cfg, err := NewMySQLConfig(changefeedID, sinkURI, config)
+	if err != nil {
 		return nil, nil, err
 	}
+
 	dsnStr, err := GenerateDSN(cfg)
 	if err != nil {
 		return nil, nil, err
@@ -283,7 +292,7 @@ func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, 
 	}
 
 	cfg.CachePrepStmts = cachePrepStmts
-
+	cfg.SyncPointRetention = config.SyncPointRetention
 	cfg.MaxAllowedPacket, err = pmysql.QueryMaxAllowedPacket(ctx, db)
 	if err != nil {
 		log.Warn("failed to query max_allowed_packet, use default value",

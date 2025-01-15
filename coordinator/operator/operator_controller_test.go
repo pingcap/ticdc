@@ -42,7 +42,7 @@ func TestController_StopChangefeed(t *testing.T) {
 		Config:       config.GetDefaultReplicaConfig(),
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
-		1)
+		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 
 	oc.StopChangefeed(context.Background(), cfID, false)
@@ -70,7 +70,7 @@ func TestController_AddOperator(t *testing.T) {
 		Config:       config.GetDefaultReplicaConfig(),
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
-		1)
+		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 
 	require.True(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, "n2")))
@@ -81,7 +81,7 @@ func TestController_AddOperator(t *testing.T) {
 		Config:       config.GetDefaultReplicaConfig(),
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
-		1)
+		1, true)
 	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf2, "n2")))
 
 	require.NotNil(t, oc.GetOperator(cfID))

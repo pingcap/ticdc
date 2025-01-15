@@ -220,10 +220,7 @@ func newJSONMessageForDML(
 			continue
 		}
 		flag := e.TableInfo.GetColumnFlags()[col.ID]
-		value, javaType, err := formatColumnValue(row, idx, col, flag)
-		if err != nil {
-			return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
-		}
+		value, javaType := formatColumnValue(row, idx, col, flag)
 		valueMap[col.ID] = value
 		javaTypeMap[col.ID] = javaType
 	}
@@ -304,10 +301,7 @@ func newJSONMessageForDML(
 				continue
 			}
 			flag := e.TableInfo.GetColumnFlags()[col.ID]
-			value, _, err := formatColumnValue(preRow, idx, col, flag)
-			if err != nil {
-				return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
-			}
+			value, _ := formatColumnValue(preRow, idx, col, flag)
 			oldValueMap[col.ID] = value
 		}
 
@@ -392,10 +386,10 @@ func NewJSONRowEventEncoder(ctx context.Context, config *common.Config) (common.
 func (c *JSONRowEventEncoder) newJSONMessageForDDL(e *commonEvent.DDLEvent) canalJSONMessageInterface {
 	msg := &JSONMessage{
 		ID:            0, // ignored by both Canal Adapter and Flink
-		Schema:        e.SchemaName,
-		Table:         e.TableName,
+		Schema:        e.GetCurrentSchemaName(),
+		Table:         e.GetCurrentTableName(),
 		IsDDL:         true,
-		EventType:     convertDdlEventType(e).String(),
+		EventType:     convertDdlEventType(e.Type).String(),
 		ExecutionTime: convertToCanalTs(e.GetCommitTs()),
 		BuildTime:     time.Now().UnixMilli(), // timestamp
 		Query:         e.Query,

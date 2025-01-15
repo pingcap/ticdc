@@ -156,7 +156,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 		return NewAppErrorS(ErrorTypeNotExist)
 	}
 
-	pi.removed = true
+	pi.removed.Store(true)
 
 	if s.memControl != nil {
 		s.memControl.removePathFromArea(pi)

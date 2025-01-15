@@ -180,7 +180,7 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 			s.eventQueue.wakePath(e.pathInfo)
 		case e.newPath:
 			s.eventQueue.initPath(e.pathInfo)
-		case e.pathInfo.removed:
+		case e.pathInfo.removed.Load():
 			// The path is removed, so we don't need to handle its events.
 			return
 		default:
@@ -278,7 +278,7 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Note that we should not need to use a atomic.Bool here, because this field is set by the RemovePaths method,
 	// and we use sync.WaitGroup to wait for finish. So if RemovePaths is called in the handle goroutine, it should be
 	// guaranteed to see the memory change of this field.
-	removed bool
+	removed atomic.Bool
 	// The path is blocked by the handler.
 	blocking bool
 

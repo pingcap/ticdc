@@ -27,6 +27,7 @@ function complete_ddls() {
 	# ddls+=("drop table ddl_reentrant.t2" false 'DROP TABLE `ddl_reentrant`.`t2`')
 	# ddls+=("recover table ddl_reentrant.t2" false 'RECOVER TABLE `ddl_reentrant`.`t2`')
 	# ddls+=("drop database ddl_reentrant" false 'DROP DATABASE `ddl_reentrant`')
+	echo $ddls
 }
 
 changefeedid=""
@@ -89,7 +90,7 @@ function ddl_test() {
 	ensure 10 check_ddl_executed "${WORK_DIR}/cdc.log" "${WORK_DIR}/ddl_temp.sql" true
 	ddl_finished_ts=$(grep "Execute DDL succeeded" ${WORK_DIR}/cdc.log | tail -n 1 | grep -oE '"finished_ts\\":[0-9]{18}' | awk -F: '{print $(NF)}')
 	cdc cli changefeed pause --changefeed-id=${changefeedid}
-	cdc cli changefeed resume --no-confirm --changefeed-id=${changefeedid} --overwrite-checkpoint-ts=${ddl_finished_ts}
+	cdc cli changefeed resume --no-confirm --changefeed-id=${changefeedid} --overwrite-checkpoint-ts=$((ddl_finished_ts - 1))
 	echo "resume changefeed ${changefeedid} from ${ddl_finished_ts}"
 	ensure 10 check_ts_forward $changefeedid
 	ensure 1000000000000000 check_ddl_executed "${WORK_DIR}/cdc.log" "${WORK_DIR}/ddl_temp.sql" $is_reentrant

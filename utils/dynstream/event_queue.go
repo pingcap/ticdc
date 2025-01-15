@@ -103,7 +103,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 		if signal.eventCount == 0 {
 			log.Panic("signal event count is zero")
 		}
-		if path.blocking || path.removed {
+		if path.blocking || path.removed.Load() {
 			// The path is blocking or removed, we should ignore the signal completely.
 			// Since when it is waked, a signal event will be added to the queue.
 			q.totalPendingLength.Add(-int64(signal.eventCount))

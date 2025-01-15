@@ -17,7 +17,7 @@ error_pattern=${5}
 info=$(curl $endpoint/api/v2/changefeeds/$changefeed_id/status)
 echo "$info"
 
-state=$(echo $info | grep -v "Command to ticdc" | jq -r '.state')
+state=$(echo $info | jq -r '.state')
 if [[ ! "$state" == "$expected_state" ]]; then
 	echo "changefeed state $state does not equal to $expected_state"
 	exit 1

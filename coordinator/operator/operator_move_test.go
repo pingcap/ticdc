@@ -31,7 +31,7 @@ func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 		Config:       config.GetDefaultReplicaConfig(),
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
-		1)
+		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 
 	op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2")
@@ -57,7 +57,7 @@ func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 		Config:       config.GetDefaultReplicaConfig(),
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
-		1)
+		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf2, "n1")
 	op2 := NewMoveMaintainerOperator(changefeedDB, cf2, "n1", "n2")
 	op2.OnNodeRemove("n1")

@@ -340,6 +340,15 @@ func unmarshalPersistedDDLEvent(value []byte) PersistedDDLEvent {
 	}
 	ddlEvent.TableInfoValue = nil
 
+	if ddlEvent.PreTableInfoValue != nil {
+		var err error
+		ddlEvent.PreTableInfo, err = common.UnmarshalJSONToTableInfo(ddlEvent.PreTableInfoValue)
+		if err != nil {
+			log.Fatal("unmarshal pre table info failed", zap.Error(err))
+		}
+		ddlEvent.PreTableInfoValue = nil
+	}
+
 	if len(ddlEvent.MultipleTableInfosValue) > 0 {
 		ddlEvent.MultipleTableInfos = make([]*model.TableInfo, len(ddlEvent.MultipleTableInfosValue))
 		for i := range ddlEvent.MultipleTableInfosValue {
@@ -376,6 +385,12 @@ func writePersistedDDLEvent(db *pebble.DB, ddlEvent *PersistedDDLEvent) error {
 	ddlEvent.TableInfoValue, err = json.Marshal(ddlEvent.TableInfo)
 	if err != nil {
 		return err
+	}
+	if ddlEvent.PreTableInfo != nil {
+		ddlEvent.PreTableInfoValue, err = ddlEvent.PreTableInfo.Marshal()
+		if err != nil {
+			return err
+		}
 	}
 	if len(ddlEvent.MultipleTableInfos) > 0 {
 		ddlEvent.MultipleTableInfosValue = make([][]byte, len(ddlEvent.MultipleTableInfos))

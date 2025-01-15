@@ -23,31 +23,26 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/cdc/model"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink/codec"
-)
-
-const (
-	// BatchVersion1 represents the version of batch format
-	BatchVersion1 uint64 = 1
 )
 
 func encodeRowChangedEvent(e *commonEvent.RowEvent, config *common.Config, largeMessageOnlyHandleKeyColumns bool, claimCheckLocationName string) ([]byte, []byte, int, error) {
-	keyBuf := &bytes.Buffer{}
-	valueBuf := &bytes.Buffer{}
-	keyWriter := util.BorrowJSONWriter(keyBuf)
-	valueWriter := util.BorrowJSONWriter(valueBuf)
+	var (
+		keyBuf   bytes.Buffer
+		valueBuf bytes.Buffer
+	)
+	keyWriter := util.BorrowJSONWriter(&keyBuf)
+	valueWriter := util.BorrowJSONWriter(&valueBuf)
 
 	keyWriter.WriteObject(func() {
 		keyWriter.WriteUint64Field("ts", e.CommitTs)
 		keyWriter.WriteStringField("scm", e.TableInfo.GetSchemaName())
 		keyWriter.WriteStringField("tbl", e.TableInfo.GetTableName())
-		keyWriter.WriteIntField("t", int(model.MessageTypeRow))
+		keyWriter.WriteIntField("t", int(common.MessageTypeRow))
 
 		if claimCheckLocationName != "" {
 			keyWriter.WriteBoolField("ohk", false)
@@ -87,7 +82,6 @@ func encodeRowChangedEvent(e *commonEvent.RowEvent, config *common.Config, large
 			}
 		})
 	}
-
 	util.ReturnJSONWriter(keyWriter)
 	util.ReturnJSONWriter(valueWriter)
 
@@ -108,7 +102,6 @@ func encodeRowChangedEvent(e *commonEvent.RowEvent, config *common.Config, large
 	// for single message that is longer than max-message-bytes
 	// 16 is the length of `keyLenByte` and `valueLenByte`, 8 is the length of `versionHead`
 	length := len(key) + len(valueCompressed) + common.MaxRecordOverhead + 16 + 8
-
 	return key, valueCompressed, length, nil
 }
 
@@ -122,7 +115,7 @@ func encodeDDLEvent(e *commonEvent.DDLEvent, config *common.Config) ([]byte, []b
 		keyWriter.WriteUint64Field("ts", e.FinishedTs)
 		keyWriter.WriteStringField("scm", e.SchemaName)
 		keyWriter.WriteStringField("tbl", e.TableName)
-		keyWriter.WriteIntField("t", int(model.MessageTypeDDL))
+		keyWriter.WriteIntField("t", int(common.MessageTypeDDL))
 	})
 
 	valueWriter.WriteObject(func() {
@@ -148,7 +141,7 @@ func encodeDDLEvent(e *commonEvent.DDLEvent, config *common.Config) ([]byte, []b
 
 	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
 	binary.BigEndian.PutUint64(valueLenByte[:], uint64(len(value)))
-	binary.BigEndian.PutUint64(versionByte[:], codec.BatchVersion1)
+	binary.BigEndian.PutUint64(versionByte[:], batchVersion1)
 
 	keyOutput := new(bytes.Buffer)
 	keyOutput.Write(versionByte[:])
@@ -162,13 +155,13 @@ func encodeDDLEvent(e *commonEvent.DDLEvent, config *common.Config) ([]byte, []b
 	return keyOutput.Bytes(), valueOutput.Bytes(), nil
 }
 
-func encodeResolvedTs(ts uint64) ([]byte, []byte, error) {
+func encodeResolvedTs(ts uint64) ([]byte, []byte) {
 	keyBuf := &bytes.Buffer{}
 	keyWriter := util.BorrowJSONWriter(keyBuf)
 
 	keyWriter.WriteObject(func() {
 		keyWriter.WriteUint64Field("ts", ts)
-		keyWriter.WriteIntField("t", int(model.MessageTypeResolved))
+		keyWriter.WriteIntField("t", int(common.MessageTypeResolved))
 	})
 
 	util.ReturnJSONWriter(keyWriter)
@@ -188,15 +181,20 @@ func encodeResolvedTs(ts uint64) ([]byte, []byte, error) {
 	keyOutput.Write(keyLenByte[:])
 	keyOutput.Write(key)
 
+	// todo: shall we really set value here?
 	valueOutput := new(bytes.Buffer)
 	valueOutput.Write(valueLenByte[:])
 
-	return keyOutput.Bytes(), valueOutput.Bytes(), nil
+	return keyOutput.Bytes(), valueOutput.Bytes()
 }
 
 func writeColumnFieldValue(
-	writer *util.JSONWriter, col *timodel.ColumnInfo, row *chunk.Row, idx int, tableInfo *commonType.TableInfo,
-) error {
+	writer *util.JSONWriter,
+	col *model.ColumnInfo,
+	row *chunk.Row,
+	idx int,
+	tableInfo *commonType.TableInfo,
+) {
 	colType := col.GetType()
 	flag := *tableInfo.GetColumnFlags()[col.ID]
 	whereHandle := flag.IsHandleKey()
@@ -209,7 +207,7 @@ func writeColumnFieldValue(
 
 	if row.IsNull(idx) {
 		writer.WriteNullField("v")
-		return nil
+		return
 	}
 
 	switch col.GetType() {
@@ -220,10 +218,7 @@ func writeColumnFieldValue(
 		} else {
 			dp := &d
 			// Encode bits as integers to avoid pingcap/tidb#10988 (which also affects MySQL itself)
-			value, err := dp.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
-			if err != nil {
-				return nil
-			}
+			value, _ := dp.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
 			writer.WriteUint64Field("v", value)
 		}
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
@@ -290,7 +285,7 @@ func writeColumnFieldValue(
 		value := d.GetValue()
 		writer.WriteAnyField("v", value)
 	}
-	return nil
+	return
 }
 
 func writeColumnFieldValues(
@@ -345,12 +340,12 @@ func writeUpdatedColumnFieldValues(
 
 func writeColumnFieldValueIfUpdated(
 	writer *util.JSONWriter,
-	col *timodel.ColumnInfo,
+	col *model.ColumnInfo,
 	preRow *chunk.Row,
 	row *chunk.Row,
 	idx int,
 	tableInfo *commonType.TableInfo,
-) error {
+) {
 	colType := col.GetType()
 	flag := *tableInfo.GetColumnFlags()[col.ID]
 	whereHandle := flag.IsHandleKey()
@@ -367,12 +362,15 @@ func writeColumnFieldValueIfUpdated(
 	}
 
 	if row.IsNull(idx) && preRow.IsNull(idx) {
-		return nil
-	} else if preRow.IsNull(idx) && !row.IsNull(idx) {
+		return
+	}
+	if preRow.IsNull(idx) && !row.IsNull(idx) {
 		writeFunc(func() { writer.WriteNullField("v") })
-		return nil
-	} else if !preRow.IsNull(idx) && row.IsNull(idx) {
-		return writeColumnFieldValue(writer, col, preRow, idx, tableInfo)
+		return
+	}
+	if !preRow.IsNull(idx) && row.IsNull(idx) {
+		writeColumnFieldValue(writer, col, preRow, idx, tableInfo)
+		return
 	}
 
 	switch col.GetType() {
@@ -491,5 +489,5 @@ func writeColumnFieldValueIfUpdated(
 			writeFunc(func() { writer.WriteAnyField("v", preRowValue) })
 		}
 	}
-	return nil
+	return
 }

@@ -181,14 +181,6 @@ func newPersistentStorage(
 		dataStorage.initializeFromKVStorage(dbPath, storage, gcSafePoint)
 	}
 
-	go func() {
-		dataStorage.gc(ctx)
-	}()
-
-	go func() {
-		dataStorage.persistUpperBoundPeriodically(ctx)
-	}()
-
 	return dataStorage
 }
 
@@ -324,6 +316,7 @@ func (p *persistentStorage) getTableInfo(tableID int64, ts uint64) (*common.Tabl
 }
 
 func (p *persistentStorage) forceGetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error) {
+	log.Info("forceGetTableInfo", zap.Int64("tableID", tableID), zap.Uint64("ts", ts))
 	p.mu.RLock()
 	// if there is already a store, it must contain all table info on disk, so we can use it directly
 	if store, ok := p.tableInfoStoreMap[tableID]; ok {
@@ -665,6 +658,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	p.mu.Unlock()
 
+	// TODO: do we have a better way to do this?
 	if ddlEvent.Type == byte(model.ActionExchangeTablePartition) {
 		ddlEvent.PreTableInfo, _ = p.forceGetTableInfo(ddlEvent.PrevTableID, ddlEvent.FinishedTs)
 	}

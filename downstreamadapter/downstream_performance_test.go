@@ -48,7 +48,7 @@ const (
 )
 
 func initContext(serverId node.ID) {
-	appcontext.SetService(appcontext.MessageCenter, messaging.NewMessageCenter(context.Background(), serverId, 100, config.NewDefaultMessageCenterConfig()))
+	appcontext.SetService(appcontext.MessageCenter, messaging.NewMessageCenter(context.Background(), serverId, 100, config.NewDefaultMessageCenterConfig(), nil))
 	appcontext.SetService(appcontext.EventCollector, eventcollector.New(context.Background(), serverId))
 	appcontext.SetService(appcontext.HeartbeatCollector, dispatchermanager.NewHeartBeatCollector(serverId))
 }

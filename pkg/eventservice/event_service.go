@@ -85,11 +85,13 @@ func (s *eventService) Name() string {
 }
 
 func (s *eventService) Run(ctx context.Context) error {
-	log.Info("start event service")
+	log.Info("event service start to run")
+	defer func() {
+		log.Info("event service exited")
+	}()
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("event service exited")
 			return nil
 		case info := <-s.dispatcherInfo:
 			switch info.GetActionType() {

@@ -303,10 +303,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			continue
 		}
 
-		if event.GetType() != commonEvent.TypeResolvedEvent {
-			log.Debug("dispatcher receive event", zap.Stringer("dispatcher", d.id), zap.Any("event", event))
-		}
-
 		switch event.GetType() {
 		case commonEvent.TypeResolvedEvent:
 			atomic.StoreUint64(&d.resolvedTs, event.(commonEvent.ResolvedEvent).ResolvedTs)
@@ -328,7 +324,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			})
 			d.AddDMLEventToSink(dml)
 		case commonEvent.TypeDDLEvent:
-			failpoint.Inject("BlockBeforeDealWithDDL", nil)
+			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			if len(dispatcherEvents) != 1 {
 				log.Panic("ddl event should only be singly handled", zap.Any("dispatcherID", d.id))
 			}

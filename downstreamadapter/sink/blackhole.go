@@ -14,6 +14,8 @@
 package sink
 
 import (
+	"context"
+
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -25,7 +27,7 @@ import (
 // Including DDL and DML.
 type BlackHoleSink struct{}
 
-func NewBlackHoleSink() (*BlackHoleSink, error) {
+func newBlackHoleSink() (*BlackHoleSink, error) {
 	blackholeSink := BlackHoleSink{}
 	return &blackholeSink, nil
 }
@@ -79,3 +81,7 @@ func (s *BlackHoleSink) GetStartTsList(tableIds []int64, startTsList []int64) ([
 }
 
 func (s *BlackHoleSink) Close(_ bool) {}
+
+func (s *BlackHoleSink) Run(_ context.Context) error {
+	return nil
+}

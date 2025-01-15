@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -56,6 +57,10 @@ func (s *mockSink) SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaSto
 }
 
 func (s *mockSink) Close(bool) {}
+
+func (s *mockSink) Run(context.Context) error {
+	return nil
+}
 
 func (s *mockSink) SinkType() common.SinkType {
 	return s.sinkType

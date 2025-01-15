@@ -130,16 +130,29 @@ func (s *schemaStore) Name() string {
 
 func (s *schemaStore) Run(ctx context.Context) error {
 	log.Info("schema store begin to run")
+	defer func() {
+		log.Info("schema store exited")
+	}()
+
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		return s.updateResolvedTsPeriodically(ctx)
+	})
+
+	eg.Go(func() error {
+		return s.dataStorage.gc(ctx)
+	})
+
+	eg.Go(func() error {
+		return s.dataStorage.persistUpperBoundPeriodically(ctx)
 	})
 
 	return eg.Wait()
 }
 
 func (s *schemaStore) Close(ctx context.Context) error {
-	log.Info("schema store closed")
+	log.Info("schema store start to close")
+	defer log.Info("schema store closed")
 	return s.dataStorage.close()
 }
 
@@ -186,6 +199,7 @@ func (s *schemaStore) updateResolvedTsPeriodically(ctx context.Context) error {
 					zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
 					zap.Uint64("jobCommitTs", event.CommitTs),
 					zap.Any("storeSchemaVersion", s.schemaVersion),
+					zap.Any("tableInfo", event.Job.BinlogInfo.TableInfo),
 					zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
 
 				// need to update the following two members for every event to filter out later duplicate events

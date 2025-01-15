@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	ticonfig "github.com/pingcap/tiflow/pkg/config"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -470,7 +469,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 
 		protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
 		protocolConfig = protocolConfig.WithMaxMessageBytes(300)
-		protocolConfig.LargeMessageHandle.LargeMessageHandleOption = ticonfig.LargeMessageHandleOptionHandleKeyOnly
+		protocolConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
 		protocolConfig.EnableTiDBExtension = true
 		encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
 		require.NoError(t, err)
