@@ -31,15 +31,13 @@ import (
 	"go.uber.org/zap"
 )
 
-// worker will send messages to the DML producer on a batch basis.
+// KafkaDDLWorker handle DDL and checkpoint event
 type KafkaDDLWorker struct {
 	// changeFeedID indicates this sink belongs to which processor(changefeed).
 	changeFeedID commonType.ChangeFeedID
-	// protocol indicates the protocol used by this sink.
-	protocol         config.Protocol
-	checkpointTsChan chan uint64
 
-	encoder common.EventEncoder
+	checkpointTsChan chan uint64
+	encoder          common.EventEncoder
 	// eventRouter used to route events to the right topic and partition.
 	eventRouter *eventrouter.EventRouter
 	// topicManager used to manage topics.
@@ -75,7 +73,7 @@ func getDDLDispatchRule(protocol config.Protocol) DDLDispatchRule {
 	return PartitionAll
 }
 
-// newWorker creates a new flush worker.
+// NewKafkaDDLWorker return a ddl worker instance.
 func NewKafkaDDLWorker(
 	id commonType.ChangeFeedID,
 	protocol config.Protocol,
@@ -87,7 +85,6 @@ func NewKafkaDDLWorker(
 ) *KafkaDDLWorker {
 	return &KafkaDDLWorker{
 		changeFeedID:     id,
-		protocol:         protocol,
 		encoder:          encoder,
 		producer:         producer,
 		eventRouter:      eventRouter,
@@ -102,8 +99,8 @@ func (w *KafkaDDLWorker) Run(ctx context.Context) error {
 	return w.encodeAndSendCheckpointEvents(ctx)
 }
 
-func (w *KafkaDDLWorker) GetCheckpointTsChan() chan<- uint64 {
-	return w.checkpointTsChan
+func (w *KafkaDDLWorker) AddCheckpoint(ts uint64) {
+	w.checkpointTsChan <- ts
 }
 
 func (w *KafkaDDLWorker) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {

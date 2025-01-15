@@ -122,8 +122,8 @@ func TestWriteCheckpointTs(t *testing.T) {
 	tableSchemaStore := util.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.KafkaSinkType)
 	ddlWorker.SetTableSchemaStore(tableSchemaStore)
 
-	ddlWorker.GetCheckpointTsChan() <- 1
-	ddlWorker.GetCheckpointTsChan() <- 2
+	ddlWorker.AddCheckpoint(1)
+	ddlWorker.AddCheckpoint(2)
 
 	time.Sleep(1 * time.Second)
 

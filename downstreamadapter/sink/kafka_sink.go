@@ -179,7 +179,7 @@ func (s *KafkaSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *KafkaSink) AddCheckpointTs(ts uint64) {
-	s.ddlWorker.GetCheckpointTsChan() <- ts
+	s.ddlWorker.AddCheckpoint(ts)
 }
 
 func (s *KafkaSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
