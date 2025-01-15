@@ -54,12 +54,29 @@ type MysqlSink struct {
 	isNormal uint32 // if sink is normal, isNormal is 1, otherwise is 0
 }
 
-func verifyMySQLSink(changefeedID common.ChangeFeedID, uri *url.URL, config *config.ChangefeedConfig) error {
-	_, err := mysql.NewMySQLConfig(changefeedID, uri, config)
-	return err
+// verifyMySQLSink is used to verify the sink uri and config is valid
+// Currently, we verify by create a real mysql connection.
+func verifyMySQLSink(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	uri *url.URL,
+	config *config.ChangefeedConfig,
+) error {
+	_, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, uri, config)
+	if err != nil {
+		return err
+	}
+	db.Close()
+	return nil
 }
 
-func newMySQLSink(ctx context.Context, changefeedID common.ChangeFeedID, workerCount int, config *config.ChangefeedConfig, sinkURI *url.URL) (*MysqlSink, error) {
+func newMySQLSink(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	workerCount int,
+	config *config.ChangefeedConfig,
+	sinkURI *url.URL,
+) (*MysqlSink, error) {
 	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
@@ -67,7 +84,13 @@ func newMySQLSink(ctx context.Context, changefeedID common.ChangeFeedID, workerC
 	return newMysqlSinkWithDBAndConfig(ctx, changefeedID, workerCount, cfg, db), nil
 }
 
-func newMysqlSinkWithDBAndConfig(ctx context.Context, changefeedID common.ChangeFeedID, workerCount int, cfg *mysql.MysqlConfig, db *sql.DB) *MysqlSink {
+func newMysqlSinkWithDBAndConfig(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	workerCount int,
+	cfg *mysql.MysqlConfig,
+	db *sql.DB,
+) *MysqlSink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
 	mysqlSink := &MysqlSink{
 		changefeedID: changefeedID,
@@ -85,7 +108,7 @@ func newMysqlSinkWithDBAndConfig(ctx context.Context, changefeedID common.Change
 }
 
 func (s *MysqlSink) Run(ctx context.Context) error {
-	g, ctx := errgroup.WithContext(ctx)
+	g, _ := errgroup.WithContext(ctx)
 	for i := 0; i < s.workerCount; i++ {
 		g.Go(func() error {
 			return s.dmlWorker[i].Run()
@@ -132,7 +155,11 @@ func (s *MysqlSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *MysqlSink) AddCheckpointTs(ts uint64) {}
 
-func (s *MysqlSink) GetStartTsList(tableIds []int64, startTsList []int64, removeDDLTs bool) ([]int64, error) {
+func (s *MysqlSink) GetStartTsList(
+	tableIds []int64,
+	startTsList []int64,
+	removeDDLTs bool,
+) ([]int64, error) {
 	if removeDDLTs {
 		// means we just need to remove the ddl ts item for this changefeed, and return startTsList directly.
 		err := s.ddlWorker.RemoveDDLTsItem()
@@ -166,7 +193,9 @@ func (s *MysqlSink) Close(removeChangefeed bool) {
 	s.ddlWorker.Close()
 
 	if err := s.db.Close(); err != nil {
-		log.Warn("close mysql sink db meet error", zap.Any("changefeed", s.changefeedID.String()), zap.Error(err))
+		log.Warn("close mysql sink db meet error",
+			zap.Any("changefeed", s.changefeedID.String()),
+			zap.Error(err))
 	}
 	s.statistics.Close()
 }
