@@ -58,8 +58,12 @@ func (s *KafkaSink) SinkType() common.SinkType {
 
 func verifyKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
 	components, _, err := worker.GetKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
-	components.AdminClient.Close()
-	components.TopicManager.Close()
+	if components.AdminClient != nil {
+		components.AdminClient.Close()
+	}
+	if components.TopicManager != nil {
+		components.TopicManager.Close()
+	}
 	return err
 }
 
