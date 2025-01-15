@@ -237,6 +237,15 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 		if pendingEvent != nil && action.CommitTs == pendingEvent.GetCommitTs() && blockStatus == heartbeatpb.BlockStage_WAITING {
 			log.Info("pending event get the action", zap.Any("action", action), zap.Any("dispatcher", d.id), zap.Any("pendingEvent commitTs", pendingEvent.GetCommitTs()))
 			d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
+
+			pendingEvent.PushFrontFlushFunc(func() {
+				// clear blockEventStatus should be before wake ds.
+				// otherwise, there may happen:
+				// 1. wake ds
+				// 2. get new ds and set new pending event
+				// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
+				d.blockEventStatus.clear()
+			})
 			if action.Action == heartbeatpb.Action_Write {
 				failpoint.Inject("BlockOrWaitBeforeWrite", nil)
 				err := d.AddBlockEventToSink(pendingEvent)
@@ -257,10 +266,6 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 				d.PassBlockEventToSink(pendingEvent)
 				failpoint.Inject("BlockAfterPass", nil)
 			}
-
-			d.blockEventStatus.clear()
-		} else {
-			log.Info("pending event is nil or the action is not for the pending event", zap.Any("pendingEvent", pendingEvent), zap.Any("action", action), zap.Any("dispatcher", d.id))
 		}
 
 		// whether the outdate message or not, we need to return message show we have finished the event.
