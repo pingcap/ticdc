@@ -324,7 +324,11 @@ func (s *regionRequestWorker) processRegionSendTask(
 			}
 			for _, state := range s.takeRegionStates(subID) {
 				state.markStopped(&sendRequestToStoreErr{})
-				// TODO: do we need mark remove here?
+				regionEvent := regionEvent{
+					state:  state,
+					worker: s,
+				}
+				s.client.ds.Push(subID, regionEvent)
 			}
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from

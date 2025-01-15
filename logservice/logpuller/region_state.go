@@ -117,7 +117,6 @@ func (s *regionFeedState) markStopped(err error) {
 	if s.state.v == stateNormal {
 		s.state.v = stateStopped
 		s.state.err = err
-		s.matcher.clear()
 	}
 }
 
