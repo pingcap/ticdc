@@ -55,8 +55,11 @@ type remoteMessageTarget struct {
 	targetEpoch atomic.Value
 	targetId    node.ID
 	targetAddr  string
+	security    *security.Credential
 
-	// For sending events and commands
+	// senderMu is used to protect the eventSender and commandSender.
+	// It is used to ensure that there is only one eventStream and commandStream for the target.
+	senderMu      sync.Mutex
 	eventSender   *sendStreamWrapper
 	commandSender *sendStreamWrapper
 
@@ -147,19 +150,22 @@ func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
 }
 
 func newRemoteMessageTarget(
+	ctx context.Context,
 	localID, targetId node.ID,
 	localEpoch, targetEpoch uint64,
 	addr string,
 	recvEventCh, recvCmdCh chan *TargetMessage,
 	cfg *config.MessageCenterConfig,
+	security *security.Credential,
 ) *remoteMessageTarget {
 	log.Info("Create remote target", zap.Stringer("local", localID), zap.Stringer("remote", targetId), zap.Any("addr", addr), zap.Any("localEpoch", localEpoch), zap.Any("targetEpoch", targetEpoch))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	rt := &remoteMessageTarget{
 		messageCenterID:    localID,
 		messageCenterEpoch: localEpoch,
 		targetAddr:         addr,
 		targetId:           targetId,
+		security:           security,
 		eventSender:        &sendStreamWrapper{ready: atomic.Bool{}},
 		commandSender:      &sendStreamWrapper{ready: atomic.Bool{}},
 		ctx:                ctx,
@@ -206,6 +212,10 @@ func (s *remoteMessageTarget) runHandleErr(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
+				log.Info("remoteMessageTarget exit",
+					zap.Any("messageCenterID", s.messageCenterID),
+					zap.Any("remote", s.targetId),
+					zap.Any("error", ctx.Err()))
 				return
 			case err := <-s.errCh:
 				switch err.Type {
@@ -241,7 +251,7 @@ func (s *remoteMessageTarget) connect() {
 		return
 	}
 
-	conn, err := conn.Connect(string(s.targetAddr), &security.Credential{})
+	conn, err := conn.Connect(string(s.targetAddr), s.security)
 	if err != nil {
 		log.Info("Cannot create grpc client",
 			zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))
@@ -315,8 +325,15 @@ LOOP:
 }
 
 func (s *remoteMessageTarget) runEventSendStream(eventStream grpcSender) error {
+	s.senderMu.Lock()
+	if s.eventSender.stream != nil {
+		s.senderMu.Unlock()
+		return nil
+	}
 	s.eventSender.stream = eventStream
 	s.eventSender.ready.Store(true)
+	s.senderMu.Unlock()
+
 	err := s.runSendMessages(s.ctx, s.eventSender.stream, s.sendEventCh)
 	log.Info("Event send stream closed",
 		zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))
@@ -325,8 +342,15 @@ func (s *remoteMessageTarget) runEventSendStream(eventStream grpcSender) error {
 }
 
 func (s *remoteMessageTarget) runCommandSendStream(commandStream grpcSender) error {
+	s.senderMu.Lock()
+	if s.commandSender.stream != nil {
+		s.senderMu.Unlock()
+		return nil
+	}
 	s.commandSender.stream = commandStream
 	s.commandSender.ready.Store(true)
+	s.senderMu.Unlock()
+
 	err := s.runSendMessages(s.ctx, s.commandSender.stream, s.sendCmdCh)
 	log.Info("Command send stream closed",
 		zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))

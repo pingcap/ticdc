@@ -32,7 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/model"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
@@ -52,6 +52,7 @@ type Controller struct {
 	operatorController *operator.Controller
 	changefeedDB       *changefeed.ChangefeedDB
 	backend            changefeed.Backend
+	eventCh            *chann.DrainableChann[*Event]
 
 	bootstrapped *atomic.Bool
 	bootstrapper *bootstrap.Bootstrapper[heartbeatpb.CoordinatorBootstrapResponse]
@@ -60,7 +61,6 @@ type Controller struct {
 	nodeChanged bool
 	nodeManager *watcher.NodeManager
 
-	stream        dynstream.DynamicStream[int, string, *Event, *Controller, *StreamHandler]
 	taskScheduler threadpool.ThreadPool
 	taskHandlers  []*threadpool.TaskHandle
 	messageCenter messaging.MessageCenter
@@ -85,7 +85,7 @@ func NewController(
 	updatedChangefeedCh chan map[common.ChangeFeedID]*changefeed.Changefeed,
 	stateChangedCh chan *ChangefeedStateChangeEvent,
 	backend changefeed.Backend,
-	stream dynstream.DynamicStream[int, string, *Event, *Controller, *StreamHandler],
+	eventCh *chann.DrainableChann[*Event],
 	taskScheduler threadpool.ThreadPool,
 	batchSize int, balanceInterval time.Duration,
 ) *Controller {
@@ -101,11 +101,11 @@ func NewController(
 			scheduler.BasicScheduler:   scheduler.NewBasicScheduler(selfNode.ID.String(), batchSize, oc, changefeedDB, nodeManager, oc.NewAddMaintainerOperator),
 			scheduler.BalanceScheduler: scheduler.NewBalanceScheduler(selfNode.ID.String(), batchSize, oc, changefeedDB, nodeManager, balanceInterval, oc.NewMoveMaintainerOperator),
 		}),
+		eventCh:             eventCh,
 		operatorController:  oc,
 		messageCenter:       mc,
 		changefeedDB:        changefeedDB,
 		nodeManager:         nodeManager,
-		stream:              stream,
 		taskScheduler:       taskScheduler,
 		backend:             backend,
 		nodeChanged:         false,
@@ -137,6 +137,10 @@ func NewController(
 
 // HandleEvent implements the event-driven process mode
 func (c *Controller) HandleEvent(event *Event) bool {
+	if event == nil {
+		return false
+	}
+
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start)
@@ -338,7 +342,7 @@ func (c *Controller) FinishBootstrap(workingMap map[common.ChangeFeedID]remoteMa
 	for cfID, cfMeta := range cfs {
 		rm, ok := workingMap[cfID]
 		if !ok {
-			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, cfMeta.Status.CheckpointTs)
+			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, cfMeta.Status.CheckpointTs, false)
 			if shouldRunChangefeed(cf.GetInfo().State) {
 				c.changefeedDB.AddAbsentChangefeed(cf)
 			} else {
@@ -347,7 +351,7 @@ func (c *Controller) FinishBootstrap(workingMap map[common.ChangeFeedID]remoteMa
 		} else {
 			log.Info("maintainer already working in other server",
 				zap.String("changefeed", cfID.String()))
-			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, rm.status.CheckpointTs)
+			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, rm.status.CheckpointTs, false)
 			c.changefeedDB.AddReplicatingMaintainer(cf, rm.nodeID)
 			// delete it
 			delete(workingMap, cfID)
@@ -400,7 +404,7 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	if err != nil {
 		return errors.Trace(err)
 	}
-	c.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs))
+	c.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs, true))
 	return nil
 }
 
@@ -441,7 +445,7 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	return nil
 }
 
-func (c *Controller) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64) error {
+func (c *Controller) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64, overwriteCheckpointTs bool) error {
 	c.apiLock.Lock()
 	defer c.apiLock.Unlock()
 
@@ -458,7 +462,15 @@ func (c *Controller) ResumeChangefeed(ctx context.Context, id common.ChangeFeedI
 		clone.State = model.StateNormal
 		cf.SetInfo(clone)
 	}
-	c.changefeedDB.Resume(id, true)
+
+	status := cf.GetStatus()
+	status.CheckpointTs = newCheckpointTs
+	_, _, err := cf.UpdateStatus(status)
+	if err != nil {
+		return errors.NewNoStackError(err.Message)
+	}
+
+	c.changefeedDB.Resume(id, true, overwriteCheckpointTs)
 	return nil
 }
 
@@ -514,7 +526,7 @@ func (c *Controller) RemoveNode(id node.ID) {
 
 func (c *Controller) submitPeriodTask() {
 	task := func() time.Time {
-		c.stream.Push("coordinator", &Event{eventType: EventPeriod})
+		c.eventCh.In() <- &Event{eventType: EventPeriod}
 		return time.Now().Add(time.Millisecond * 500)
 	}
 	periodTaskhandler := c.taskScheduler.SubmitFunc(task, time.Now().Add(time.Millisecond*500))

@@ -231,10 +231,21 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 		pendingEvent, blockStatus := d.blockEventStatus.getEventAndStage()
 		if pendingEvent == nil && action.CommitTs > d.GetResolvedTs() {
 			// we have not receive the block event, and the action is for the future event, so just ignore
+			log.Info("pending event is nil, and the action's commit is larger than dispatchers resolvedTs", zap.Any("resolvedTs", d.GetResolvedTs()), zap.Any("action commitTs", action.CommitTs), zap.Any("dispatcher", d.id))
 			return
 		}
 		if pendingEvent != nil && action.CommitTs == pendingEvent.GetCommitTs() && blockStatus == heartbeatpb.BlockStage_WAITING {
+			log.Info("pending event get the action", zap.Any("action", action), zap.Any("dispatcher", d.id), zap.Any("pendingEvent commitTs", pendingEvent.GetCommitTs()))
 			d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
+
+			pendingEvent.PushFrontFlushFunc(func() {
+				// clear blockEventStatus should be before wake ds.
+				// otherwise, there may happen:
+				// 1. wake ds
+				// 2. get new ds and set new pending event
+				// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
+				d.blockEventStatus.clear()
+			})
 			if action.Action == heartbeatpb.Action_Write {
 				failpoint.Inject("BlockOrWaitBeforeWrite", nil)
 				err := d.AddBlockEventToSink(pendingEvent)
@@ -255,8 +266,6 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 				d.PassBlockEventToSink(pendingEvent)
 				failpoint.Inject("BlockAfterPass", nil)
 			}
-
-			d.blockEventStatus.clear()
 		}
 
 		// whether the outdate message or not, we need to return message show we have finished the event.
@@ -301,10 +310,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				zap.Any("eventType", event.GetType()),
 				zap.Any("dispatcher", d.id))
 			continue
-		}
-
-		if event.GetType() != commonEvent.TypeResolvedEvent {
-			log.Debug("dispatcher receive event", zap.Stringer("dispatcher", d.id), zap.Any("event", event))
 		}
 
 		switch event.GetType() {

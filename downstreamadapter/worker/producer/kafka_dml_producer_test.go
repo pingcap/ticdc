@@ -21,11 +21,10 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/ticdc/pkg/common"
-	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -51,10 +50,10 @@ func TestProducerAck(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, 1, config.Producer.Flush.MaxMessages)
 
-	ctx = context.WithValue(ctx, "testing.T", t)
-	changefeed := common.NewChangefeedID4Test("test", "test")
+	changefeed := commonType.NewChangefeedID4Test("test", "test")
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
+	factory.(*kafka.MockFactory).ErrorReporter = t
 
 	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
@@ -71,7 +70,7 @@ func TestProducerAck(t *testing.T) {
 
 	count := atomic.NewInt64(0)
 	for i := 0; i < 10; i++ {
-		err = producer.AsyncSendMessage(ctx, tikafka.DefaultMockTopicName, int32(0), &ticommon.Message{
+		err = producer.AsyncSendMessage(ctx, kafka.DefaultMockTopicName, int32(0), &common.Message{
 			Key:   []byte("test-key-1"),
 			Value: []byte("test-value"),
 			Callback: func() {
@@ -79,7 +78,7 @@ func TestProducerAck(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		err = producer.AsyncSendMessage(ctx, tikafka.DefaultMockTopicName, int32(1), &ticommon.Message{
+		err = producer.AsyncSendMessage(ctx, kafka.DefaultMockTopicName, int32(1), &common.Message{
 			Key:   []byte("test-key-1"),
 			Value: []byte("test-value"),
 			Callback: func() {
@@ -103,7 +102,7 @@ func TestProducerAck(t *testing.T) {
 	producer.Close()
 	cancel()
 	// check send messages when context is producer closed
-	err = producer.AsyncSendMessage(ctx, tikafka.DefaultMockTopicName, int32(0), &ticommon.Message{
+	err = producer.AsyncSendMessage(ctx, kafka.DefaultMockTopicName, int32(0), &common.Message{
 		Key:   []byte("cancel"),
 		Value: nil,
 	})
@@ -116,14 +115,14 @@ func TestProducerSendMsgFailed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 	_, err := kafka.NewSaramaConfig(ctx, options)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	options.MaxMessages = 1
 	options.MaxMessageBytes = 1
 
-	ctx = context.WithValue(ctx, "testing.T", t)
-	changefeed := common.NewChangefeedID4Test("test", "test")
+	changefeed := commonType.NewChangefeedID4Test("test", "test")
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
+	factory.(*kafka.MockFactory).ErrorReporter = t
 
 	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
@@ -149,7 +148,7 @@ func TestProducerSendMsgFailed(t *testing.T) {
 		defer wg.Done()
 
 		asyncProducer.(*kafka.MockSaramaAsyncProducer).AsyncProducer.ExpectInputAndFail(sarama.ErrMessageTooLarge)
-		err = producer.AsyncSendMessage(ctx, tikafka.DefaultMockTopicName, int32(0), &ticommon.Message{
+		err = producer.AsyncSendMessage(ctx, kafka.DefaultMockTopicName, int32(0), &common.Message{
 			Key:   []byte("test-key-1"),
 			Value: []byte("test-value"),
 		})
@@ -181,10 +180,10 @@ func TestProducerDoubleClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	ctx = context.WithValue(ctx, "testing.T", t)
-	changefeed := common.NewChangefeedID4Test("test", "test")
+	changefeed := commonType.NewChangefeedID4Test("test", "test")
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
+	factory.(*kafka.MockFactory).ErrorReporter = t
 
 	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)

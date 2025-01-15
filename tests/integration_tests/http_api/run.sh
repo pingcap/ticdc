@@ -15,8 +15,12 @@ function run() {
 		return
 	fi
 
-	sudo python3 -m pip install -U requests==2.26.0
-	#sudo python3 -m pip install -U pytest
+	if ! python3 -m pip show requests &>/dev/null; then
+		echo "requests not installed, installing..."
+		sudo python3 -m pip install -U requests
+	else
+		echo "requests installed."
+	fi
 
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
@@ -80,8 +84,6 @@ function run() {
 		"pause_changefeed"
 		"resume_changefeed"
 		"move_table"
-		"get_processor"
-		"list_processor"
 		"set_log_level"
 		"remove_changefeed"
 		"resign_owner"

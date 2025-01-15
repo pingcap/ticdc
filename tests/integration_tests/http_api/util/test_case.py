@@ -260,7 +260,9 @@ def remove_changefeed(cfID = "changefeed-test3"):
     assert_status_code(resp, rq.codes.ok, url)
 
 
+# FIXME: Enable this test case after we fully support move table API
 def move_table(cfID = "changefeed-test1"):
+    return 
     # sleep 5 seconds to make sure all tables is scheduled
     time.sleep(5)
     
@@ -309,43 +311,6 @@ def list_capture():
     url = BASE_URL0_V2 + "/captures"
     resp = requests_get_with_retry(url)
     assert_status_code(resp, rq.codes.ok, url)
-
-
-
-def list_processor():
-    # TODO: implement this test case
-    return 
-
-    url = BASE_URL0_V2 + "/processors"
-    resp = requests_get_with_retry(url)
-    assert resp.status_code == rq.codes.ok
-
-    print("pass test: list processors")
-
-
-def get_processor():
-    # TODO: implement this test case
-    return 
-    # list processor to get changefeed_id and capture_id 
-    base_url = BASE_URL0_V2 + "/processors"
-    resp = requests_get_with_retry(base_url)
-    assert resp.status_code == rq.codes.ok
-    data = resp.json()[0]
-    time.sleep(2)
-    url = base_url + "/changefeed-test1/" + data["capture_id"]
-    resp = requests_get_with_retry(url)
-    # print error message for debug 
-    if (resp.status_code != rq.codes.ok):
-        print("request url", url)
-        print("response status code:", resp.status_code)
-    assert resp.status_code == rq.codes.ok
-
-    # test capture_id error and cdc server no panic
-    url = base_url + "/" + data["changefeed_id"] + "/" + "non-exist-capture-id"
-    resp = rq.get(url)
-    assert resp.status_code == rq.codes.bad_request
-
-    print("pass test: get processors")
 
 
 def check_health():
@@ -417,9 +382,7 @@ if __name__ == "__main__":
         "pause_changefeed": pause_changefeed,
         "update_changefeed": update_changefeed,
         "resume_changefeed": resume_changefeed,
-        #"move_table": move_table,
-        "get_processor": get_processor,
-        "list_processor": list_processor,
+        "move_table": move_table,
         "set_log_level": set_log_level,
         "remove_changefeed": remove_changefeed,
         "resign_owner": resign_owner,

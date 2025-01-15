@@ -49,6 +49,7 @@ type factory struct {
 
 // NewFactory returns a factory implemented based on kafka-go
 func NewFactory(
+	_ context.Context,
 	options *pkafka.Options,
 	changefeedID commonType.ChangeFeedID,
 ) (pkafka.Factory, error) {
@@ -201,12 +202,12 @@ func (f *factory) newWriter(async bool) *kafka.Writer {
 	return w
 }
 
-func (f *factory) AdminClient(_ context.Context) (pkafka.ClusterAdminClient, error) {
+func (f *factory) AdminClient() (pkafka.ClusterAdminClient, error) {
 	return newClusterAdminClient(f.options.BrokerEndpoints, f.transport, f.changefeedID), nil
 }
 
 // SyncProducer creates a sync producer to writer message to kafka
-func (f *factory) SyncProducer(_ context.Context) (pkafka.SyncProducer, error) {
+func (f *factory) SyncProducer() (pkafka.SyncProducer, error) {
 	w := f.newWriter(false)
 	// set batch size to 1 to make sure the message is sent immediately
 	w.BatchTimeout = time.Millisecond

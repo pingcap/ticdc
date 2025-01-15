@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -29,9 +29,9 @@ import (
 // Factory is used to produce all kafka components.
 type Factory interface {
 	// AdminClient return a kafka cluster admin client
-	AdminClient(ctx context.Context) (ClusterAdminClient, error)
+	AdminClient() (ClusterAdminClient, error)
 	// SyncProducer creates a sync producer to writer message to kafka
-	SyncProducer(ctx context.Context) (SyncProducer, error)
+	SyncProducer() (SyncProducer, error)
 	// AsyncProducer creates an async producer to writer message to kafka
 	AsyncProducer(ctx context.Context) (AsyncProducer, error)
 	// MetricsCollector returns the kafka metrics collector
@@ -39,7 +39,7 @@ type Factory interface {
 }
 
 // FactoryCreator defines the type of factory creator.
-type FactoryCreator func(*Options, commonType.ChangeFeedID) (Factory, error)
+type FactoryCreator func(context.Context, *Options, commonType.ChangeFeedID) (Factory, error)
 
 // SyncProducer is the kafka sync producer
 type SyncProducer interface {
@@ -101,7 +101,9 @@ func (p *saramaSyncProducer) SendMessage(
 	return err
 }
 
-func (p *saramaSyncProducer) SendMessages(ctx context.Context, topic string, partitionNum int32, message *common.Message) error {
+func (p *saramaSyncProducer) SendMessages(
+	_ context.Context, topic string, partitionNum int32, message *common.Message,
+) error {
 	msgs := make([]*sarama.ProducerMessage, partitionNum)
 	for i := 0; i < int(partitionNum); i++ {
 		msgs[i] = &sarama.ProducerMessage{
@@ -252,7 +254,9 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 
 // AsyncSend is the input channel for the user to write messages to that they
 // wish to send.
-func (p *saramaAsyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error {
+func (p *saramaAsyncProducer) AsyncSend(
+	ctx context.Context, topic string, partition int32, message *common.Message,
+) error {
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
 		Partition: partition,

@@ -231,11 +231,9 @@ var (
 )
 
 func GetDispatcherTaskScheduler() threadpool.ThreadPool {
-	if DispatcherTaskScheduler == nil {
-		dispatcherTaskSchedulerOnce.Do(func() {
-			DispatcherTaskScheduler = threadpool.NewThreadPoolDefault()
-		})
-	}
+	dispatcherTaskSchedulerOnce.Do(func() {
+		DispatcherTaskScheduler = threadpool.NewThreadPoolDefault()
+	})
 	return DispatcherTaskScheduler
 }
 
@@ -327,12 +325,10 @@ var (
 )
 
 func GetDispatcherStatusDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler] {
-	if dispatcherStatusDynamicStream == nil {
-		dispatcherStatusDynamicStreamOnce.Do(func() {
-			dispatcherStatusDynamicStream = dynstream.NewParallelDynamicStream(func(id common.DispatcherID) uint64 { return common.GID(id).FastHash() }, &DispatcherStatusHandler{})
-			dispatcherStatusDynamicStream.Start()
-		})
-	}
+	dispatcherStatusDynamicStreamOnce.Do(func() {
+		dispatcherStatusDynamicStream = dynstream.NewParallelDynamicStream(func(id common.DispatcherID) uint64 { return common.GID(id).FastHash() }, &DispatcherStatusHandler{})
+		dispatcherStatusDynamicStream.Start()
+	})
 	return dispatcherStatusDynamicStream
 }
 

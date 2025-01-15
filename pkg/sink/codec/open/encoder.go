@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
@@ -193,7 +192,7 @@ func enhancedKeyValue(key, value []byte) ([]byte, []byte) {
 }
 
 // NewBatchEncoder creates a new BatchEncoder.
-func NewBatchEncoder(ctx context.Context, config *common.Config) (encoder.EventEncoder, error) {
+func NewBatchEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
 	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -221,10 +220,6 @@ func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
 func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
-	key, value, err := encodeResolvedTs(ts)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
+	key, value := encodeResolvedTs(ts)
 	return common.NewMsg(key, value), nil
 }

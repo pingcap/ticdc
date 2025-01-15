@@ -57,18 +57,10 @@ endif
 
 RELEASE_VERSION =
 ifeq ($(RELEASE_VERSION),)
-	RELEASE_VERSION := v8.2.0-master
-	release_version_regex := ^v[0-9]\..*$$
-	release_branch_regex := "^release-[0-9]\.[0-9].*$$|^HEAD$$|^.*/*tags/v[0-9]\.[0-9]\..*$$"
-	ifneq ($(shell git rev-parse --abbrev-ref HEAD | grep -E $(release_branch_regex)),)
-		# If we are in release branch, try to use tag version.
-		ifneq ($(shell git describe --tags --dirty | grep -E $(release_version_regex)),)
-			RELEASE_VERSION := $(shell git describe --tags --dirty)
-		endif
-	else ifneq ($(shell git status --porcelain),)
-		# Add -dirty if the working tree is dirty for non release branch.
-		RELEASE_VERSION := $(RELEASE_VERSION)-dirty
-	endif
+	RELEASE_VERSION := $(shell git describe --tags --dirty)
+endif
+ifeq ($(RELEASE_VERSION),)
+	RELEASE_VERSION := v9.0.0-alpha
 endif
 
 # Version LDFLAGS.
@@ -80,9 +72,9 @@ LDFLAGS += -X "$(CDC_PKG)/version.GoVersion=$(GOVERSION)"
 LDFLAGS += -X "github.com/pingcap/tidb/pkg/parser/mysql.TiDBReleaseVersion=$(RELEASE_VERSION)"
 
 # For Tiflow CDC
-LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.ReleaseVersion=v8.4.0-alpha-44-gdd2d54ad4"
-LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitHash=dd2d54ad4c196606d038da6686462cbfe1109894"
-LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitBranch=master"
+LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.ReleaseVersion=$(RELEASE_VERSION)"
+LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitHash=$(GITHASH)"
+LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitBranch=$(GITBRANCH)"
 LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.BuildTS=$(BUILDTS)"
 
 CONSUMER_BUILD_FLAG=
@@ -90,6 +82,7 @@ ifeq ("${IS_ALPINE}", "1")
 	CONSUMER_BUILD_FLAG = -tags musl
 endif
 GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=$(CGO) $(GO) build $(BUILD_FLAG) -trimpath $(GOVENDORFLAG)
+CONSUMER_GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=1 $(GO) build $(CONSUMER_BUILD_FLAG) -trimpath $(GOVENDORFLAG)
 
 PACKAGE_LIST := go list ./... | grep -vE 'vendor|proto|ticdc/tests|integration|testing_utils|pb|pbmock|ticdc/bin'
 PACKAGES := $$($(PACKAGE_LIST))
@@ -117,7 +110,19 @@ generate_mock: tools/bin/mockgen
 	scripts/generate-mock.sh
 
 cdc:
-	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc
+
+kafka_consumer:
+	$(CONSUMER_GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_kafka_consumer ./cmd/kafka-consumer
+
+storage_consumer:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_storage_consumer ./cmd/storage-consumer/main.go
+
+pulsar_consumer:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_pulsar_consumer ./cmd/pulsar-consumer/main.go
+
+filter_helper:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_filter_helper ./cmd/filter-helper/main.go
 
 fmt: tools/bin/gofumports tools/bin/shfmt tools/bin/gci
 	@echo "run gci (format imports)"
@@ -130,13 +135,26 @@ fmt: tools/bin/gofumports tools/bin/shfmt tools/bin/gci
 	scripts/check-log-style.sh
 	@make check-diff-line-width
 
+check_third_party_binary:
+	@which bin/tidb-server
+	@which bin/tikv-server
+	@which bin/pd-server
+	@which bin/tiflash
+	@which bin/pd-ctl
+	@which bin/sync_diff_inspector
+	@which bin/go-ycsb
+	@which bin/etcdctl
+	@which bin/jq
+	@which bin/minio
+	@which bin/bin/schema-registry-start
+
 integration_test_build: check_failpoint_ctl
 	$(FAILPOINT_ENABLE)
 	$(GOTEST) -ldflags '$(LDFLAGS)' -c -cover -covermode=atomic \
 		-coverpkg=github.com/pingcap/ticdc/... \
-		-o bin/cdc.test github.com/pingcap/ticdc/cmd \
+		-o bin/cdc.test github.com/pingcap/ticdc/cmd/cdc \
 	|| { $(FAILPOINT_DISABLE); echo "Failed to build cdc.test"; exit 1; }
-	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/main.go \
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc/main.go \
 	|| { $(FAILPOINT_DISABLE); exit 1; }
 	$(FAILPOINT_DISABLE)
 
@@ -152,6 +170,15 @@ integration_test: integration_test_mysql
 
 integration_test_mysql:
 	tests/integration_tests/run.sh mysql "$(CASE)" "$(NEWARCH)" "$(START_AT)"
+
+integration_test_kafka: check_third_party_binary
+	tests/integration_tests/run.sh kafka "$(CASE)" "$(START_AT)"
+
+integration_test_storage:
+	tests/integration_tests/run.sh storage "$(CASE)" "$(START_AT)"
+
+integration_test_pulsar:
+	tests/integration_tests/run.sh pulsar "$(CASE)" "$(START_AT)"
 
 unit_test: check_failpoint_ctl generate-protobuf
 	mkdir -p "$(TEST_DIR)"

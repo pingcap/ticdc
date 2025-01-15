@@ -161,12 +161,11 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 	// verify sinkURI
 	tempChangefeedID := common.NewChangeFeedIDWithName("sink-uri-verify-changefeed-id")
 	cfConfig := info.ToChangefeedConfig()
-	sink, err := sink.NewSink(ctx, cfConfig, tempChangefeedID, nil)
+	err = sink.VerifySink(ctx, cfConfig, tempChangefeedID)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
 		return
 	}
-	sink.Close(true)
 
 	needRemoveGCSafePoint := false
 	defer func() {
@@ -504,7 +503,7 @@ func (h *OpenAPIV2) resumeChangefeed(c *gin.Context) {
 		}
 	}()
 
-	err = coordinator.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs)
+	err = coordinator.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs, cfg.OverwriteCheckpointTs != 0)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -586,6 +585,17 @@ func (h *OpenAPIV2) updateChangefeed(c *gin.Context) {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("start_ts can not be updated"))
 		return
 	}
+	// verify replicaConfig
+	sinkURIParsed, err := url.Parse(oldCfInfo.SinkURI)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
+		return
+	}
+	err = oldCfInfo.Config.ValidateAndAdjust(sinkURIParsed)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
+		return
+	}
 
 	// verify changefeed filter
 	_, err = filter.NewFilter(oldCfInfo.Config.Filter, "", oldCfInfo.Config.CaseSensitive)
@@ -597,12 +607,11 @@ func (h *OpenAPIV2) updateChangefeed(c *gin.Context) {
 
 	// verify sink
 	tempChangefeedID := common.NewChangeFeedIDWithName("sink-uri-verify-changefeed-id")
-	sink, err := sink.NewSink(ctx, oldCfInfo.ToChangefeedConfig(), tempChangefeedID, nil)
+	err = sink.VerifySink(ctx, oldCfInfo.ToChangefeedConfig(), tempChangefeedID)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
 		return
 	}
-	sink.Close(true)
 
 	if err := coordinator.UpdateChangefeed(ctx, oldCfInfo); err != nil {
 		_ = c.Error(err)
@@ -764,6 +773,41 @@ func (h *OpenAPIV2) listTables(c *gin.Context) {
 		infos = append(infos, nodeTableInfo)
 	}
 	c.JSON(http.StatusOK, infos)
+}
+
+// getDispatcherCount returns the count of dispatcher.
+// getDispatcherCount is just for inner test use, not public use.
+func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), getNamespaceValueWithDefault(c))
+	if err := model.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
+			changefeedDisplayName.Name))
+		return
+	}
+	// get changefeefID first
+	coordinator, err := h.server.GetCoordinator()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	cfInfo, _, err := coordinator.GetChangefeed(c, changefeedDisplayName)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	changefeedID := cfInfo.ChangefeedID
+
+	maintainerManager := h.server.GetMaintainerManager()
+	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
+
+	if !ok {
+		log.Error("maintainer not found for changefeed in this node", zap.String("changefeed", changefeedID.String()))
+		_ = c.Error(apperror.ErrMaintainerNotFounded)
+		return
+	}
+
+	number := maintainer.GetDispatcherCount()
+	c.JSON(http.StatusOK, &DispatcherCount{Count: number})
 }
 
 func getNamespaceValueWithDefault(c *gin.Context) string {

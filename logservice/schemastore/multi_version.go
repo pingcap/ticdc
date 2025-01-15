@@ -15,7 +15,6 @@ package schemastore
 
 import (
 	"errors"
-	"fmt"
 	"math"
 	"sort"
 	"sync"
@@ -93,6 +92,12 @@ func (v *versionedTableInfoStore) waitTableInfoInitialized() {
 	<-v.readyToRead
 }
 
+type TableDeletedError struct{}
+
+func (e *TableDeletedError) Error() string {
+	return "table deleted"
+}
+
 // return the table info with the largest version <= ts
 func (v *versionedTableInfoStore) getTableInfo(ts uint64) (*common.TableInfo, error) {
 	v.mu.Lock()
@@ -103,12 +108,12 @@ func (v *versionedTableInfoStore) getTableInfo(ts uint64) (*common.TableInfo, er
 	}
 
 	if ts >= v.deleteVersion {
-		log.Error("table info deleted",
+		log.Warn("table info deleted",
 			zap.Any("ts", ts),
 			zap.Any("tableID", v.tableID),
 			zap.Any("infos", v.infos),
 			zap.Any("deleteVersion", v.deleteVersion))
-		return nil, fmt.Errorf("table info deleted %d", v.tableID)
+		return nil, &TableDeletedError{}
 	}
 
 	target := sort.Search(len(v.infos), func(i int) bool {

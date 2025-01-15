@@ -229,7 +229,7 @@ func TestUpdateSchemaID(t *testing.T) {
 func setNodeManagerAndMessageCenter() *watcher.NodeManager {
 	n := node.NewInfo("", "")
 	appcontext.SetService(appcontext.MessageCenter, messaging.NewMessageCenter(context.Background(),
-		n.ID, 100, config.NewDefaultMessageCenterConfig()))
+		n.ID, 100, config.NewDefaultMessageCenterConfig(), nil))
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	return nodeManager

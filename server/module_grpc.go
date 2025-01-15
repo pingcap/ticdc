@@ -17,6 +17,7 @@ import (
 	"context"
 	"net"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -42,6 +43,10 @@ func NewGrpcServer(lis net.Listener) common.SubModule {
 }
 
 func (g *GrpcModule) Run(ctx context.Context) error {
+	log.Info("grpc server start to serve")
+	defer func() {
+		log.Info("grpc server exited")
+	}()
 	return g.grpcServer.Serve(g.lis)
 }
 

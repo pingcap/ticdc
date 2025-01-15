@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	ticonfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
@@ -49,18 +48,24 @@ type KafkaSink struct {
 	statistics       *metrics.Statistics
 	metricsCollector kafka.MetricsCollector
 
-	errgroup *errgroup.Group
-	errCh    chan error
 	isNormal uint32 // if sink is normal, isNormal is 1, otherwise is 0
+	ctx      context.Context
 }
 
 func (s *KafkaSink) SinkType() common.SinkType {
 	return common.KafkaSinkType
 }
 
-func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *ticonfig.SinkConfig, errCh chan error) (*KafkaSink, error) {
-	errGroup, ctx := errgroup.WithContext(ctx)
-	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
+func verifyKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
+	components, _, err := worker.GetKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
+	components.AdminClient.Close()
+	components.TopicManager.Close()
+	return err
+}
+
+func newKafkaSink(
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+) (*KafkaSink, error) {
 	kafkaComponent, protocol, err := worker.GetKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -74,12 +79,13 @@ func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI
 		}
 	}()
 
-	dmlAsyncProducer, err := kafkaComponent.Factory.AsyncProducer(ctx)
+	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
+	asyncProducer, err := kafkaComponent.Factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
 	}
-	dmlProducer := producer.NewKafkaDMLProducer(changefeedID, dmlAsyncProducer)
-	dmlWorker := worker.NewKafkaDMLWorker(ctx,
+	dmlProducer := producer.NewKafkaDMLProducer(changefeedID, asyncProducer)
+	dmlWorker := worker.NewKafkaDMLWorker(
 		changefeedID,
 		protocol,
 		dmlProducer,
@@ -87,23 +93,21 @@ func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI
 		kafkaComponent.ColumnSelector,
 		kafkaComponent.EventRouter,
 		kafkaComponent.TopicManager,
-		statistics,
-		errGroup)
+		statistics)
 
-	ddlSyncProducer, err := kafkaComponent.Factory.SyncProducer(ctx)
+	syncProducer, err := kafkaComponent.Factory.SyncProducer()
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	ddlProducer := producer.NewKafkaDDLProducer(ctx, changefeedID, ddlSyncProducer)
-	ddlWorker := worker.NewKafkaDDLWorker(ctx,
+	ddlProducer := producer.NewKafkaDDLProducer(ctx, changefeedID, syncProducer)
+	ddlWorker := worker.NewKafkaDDLWorker(
 		changefeedID,
 		protocol,
 		ddlProducer,
 		kafkaComponent.Encoder,
 		kafkaComponent.EventRouter,
 		kafkaComponent.TopicManager,
-		statistics,
-		errGroup)
+		statistics)
 
 	sink := &KafkaSink{
 		changefeedID:     changefeedID,
@@ -112,32 +116,27 @@ func NewKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI
 		adminClient:      kafkaComponent.AdminClient,
 		topicManager:     kafkaComponent.TopicManager,
 		statistics:       statistics,
+		ctx:              ctx,
 		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
-		errgroup:         errGroup,
-		errCh:            errCh,
 	}
-	go sink.run(ctx)
 	return sink, nil
 }
 
-func (s *KafkaSink) run(ctx context.Context) {
-	s.dmlWorker.Run(ctx)
-	s.ddlWorker.Run()
-	s.errgroup.Go(func() error {
+func (s *KafkaSink) Run(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		return s.dmlWorker.Run(ctx)
+	})
+	g.Go(func() error {
+		return s.ddlWorker.Run(ctx)
+	})
+	g.Go(func() error {
 		s.metricsCollector.Run(ctx)
 		return nil
 	})
-	err := s.errgroup.Wait()
-	if errors.Cause(err) != context.Canceled {
-		atomic.StoreUint32(&s.isNormal, 0)
-		select {
-		case s.errCh <- err:
-		default:
-			log.Error("error channel is full, discard error",
-				zap.Any("changefeedID", s.changefeedID.String()),
-				zap.Error(err))
-		}
-	}
+	err := g.Wait()
+	atomic.StoreUint32(&s.isNormal, 0)
+	return errors.Trace(err)
 }
 
 func (s *KafkaSink) IsNormal() bool {
@@ -160,7 +159,7 @@ func (s *KafkaSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 			event.PostFlush()
 			return nil
 		}
-		err := s.ddlWorker.WriteBlockEvent(event)
+		err := s.ddlWorker.WriteBlockEvent(s.ctx, event)
 		if err != nil {
 			atomic.StoreUint32(&s.isNormal, 0)
 			return errors.Trace(err)
@@ -187,22 +186,12 @@ func (s *KafkaSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore)
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *KafkaSink) Close(_ bool) error {
-	err := s.ddlWorker.Close()
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	err = s.dmlWorker.Close()
-	if err != nil {
-		return errors.Trace(err)
-	}
-
+func (s *KafkaSink) Close(_ bool) {
+	s.ddlWorker.Close()
+	s.dmlWorker.Close()
 	s.adminClient.Close()
 	s.topicManager.Close()
 	s.statistics.Close()
-
-	return nil
 }
 
 func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProducer, error) {
@@ -219,8 +208,6 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 	if err != nil {
 		return nil, nil, nil, errors.Trace(err)
 	}
-
-	errGroup, ctx := errgroup.WithContext(ctx)
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
 	kafkaComponent, protocol, err := worker.GetKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
@@ -237,7 +224,7 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 
 	dmlMockProducer := producer.NewMockDMLProducer()
 
-	dmlWorker := worker.NewKafkaDMLWorker(ctx,
+	dmlWorker := worker.NewKafkaDMLWorker(
 		changefeedID,
 		protocol,
 		dmlMockProducer,
@@ -245,19 +232,17 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 		kafkaComponent.ColumnSelector,
 		kafkaComponent.EventRouter,
 		kafkaComponent.TopicManager,
-		statistics,
-		errGroup)
+		statistics)
 
 	ddlMockProducer := producer.NewMockDDLProducer()
-	ddlWorker := worker.NewKafkaDDLWorker(ctx,
+	ddlWorker := worker.NewKafkaDDLWorker(
 		changefeedID,
 		protocol,
 		ddlMockProducer,
 		kafkaComponent.Encoder,
 		kafkaComponent.EventRouter,
 		kafkaComponent.TopicManager,
-		statistics,
-		errGroup)
+		statistics)
 
 	sink := &KafkaSink{
 		changefeedID:     changefeedID,
@@ -267,9 +252,7 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 		topicManager:     kafkaComponent.TopicManager,
 		statistics:       statistics,
 		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
-		errgroup:         errGroup,
-		errCh:            make(chan error, 1),
 	}
-	go sink.run(ctx)
+	go sink.Run(ctx)
 	return sink, dmlMockProducer, ddlMockProducer, nil
 }

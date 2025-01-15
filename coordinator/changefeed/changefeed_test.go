@@ -33,7 +33,7 @@ func TestNewChangefeed(t *testing.T) {
 		Config:  config.GetDefaultReplicaConfig(),
 	}
 	checkpointTs := uint64(100)
-	cf := NewChangefeed(cfID, info, checkpointTs)
+	cf := NewChangefeed(cfID, info, checkpointTs, true)
 
 	require.Equal(t, cfID, cf.ID)
 	require.Equal(t, info, cf.GetInfo())
@@ -48,7 +48,7 @@ func TestChangefeed_GetSetInfo(t *testing.T) {
 		State:   model.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
-	cf := NewChangefeed(cfID, info, 100)
+	cf := NewChangefeed(cfID, info, 100, true)
 
 	newInfo := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9097",
@@ -66,7 +66,7 @@ func TestChangefeed_GetSetNodeID(t *testing.T) {
 		State:   model.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
-	cf := NewChangefeed(cfID, info, 100)
+	cf := NewChangefeed(cfID, info, 100, true)
 
 	nodeID := node.ID("node-1")
 	cf.setNodeID(nodeID)
@@ -80,7 +80,7 @@ func TestChangefeed_UpdateStatus(t *testing.T) {
 		State:   model.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
-	cf := NewChangefeed(cfID, info, 100)
+	cf := NewChangefeed(cfID, info, 100, true)
 
 	newStatus := &heartbeatpb.MaintainerStatus{CheckpointTs: 200}
 	updated, state, err := cf.UpdateStatus(newStatus)
@@ -97,7 +97,7 @@ func TestChangefeed_IsMQSink(t *testing.T) {
 		State:   model.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
-	cf := NewChangefeed(cfID, info, 100)
+	cf := NewChangefeed(cfID, info, 100, true)
 
 	require.True(t, cf.IsMQSink())
 }
@@ -109,7 +109,7 @@ func TestChangefeed_GetSetLastSavedCheckPointTs(t *testing.T) {
 		State:   model.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
-	cf := NewChangefeed(cfID, info, 100)
+	cf := NewChangefeed(cfID, info, 100, true)
 
 	newTs := uint64(200)
 	cf.SetLastSavedCheckPointTs(newTs)
@@ -123,7 +123,7 @@ func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 		State:   model.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
-	cf := NewChangefeed(cfID, info, 100)
+	cf := NewChangefeed(cfID, info, 100, true)
 
 	server := node.ID("server-1")
 	msg := cf.NewAddMaintainerMessage(server)
@@ -138,7 +138,7 @@ func TestChangefeed_NewRemoveMaintainerMessage(t *testing.T) {
 		State:   model.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
-	cf := NewChangefeed(cfID, info, 100)
+	cf := NewChangefeed(cfID, info, 100, true)
 
 	server := node.ID("server-1")
 	msg := cf.NewRemoveMaintainerMessage(server, true, true)
@@ -153,7 +153,7 @@ func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
 		State:   model.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
-	cf := NewChangefeed(cfID, info, 100)
+	cf := NewChangefeed(cfID, info, 100, true)
 
 	ts := uint64(200)
 	msg := cf.NewCheckpointTsMessage(ts)

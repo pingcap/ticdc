@@ -19,23 +19,20 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/config"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink/kafka/claimcheck"
 	"go.uber.org/zap"
 )
 
 type Encoder struct {
-	messages   []*ticommon.Message
-	config     *ticommon.Config
+	messages   []*common.Message
+	config     *common.Config
 	claimCheck *claimcheck.ClaimCheck
 	marshaller marshaller
 }
 
-func NewEncoder(ctx context.Context, config *ticommon.Config) (encoder.EventEncoder, error) {
+func NewEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
 	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -45,7 +42,7 @@ func NewEncoder(ctx context.Context, config *ticommon.Config) (encoder.EventEnco
 		return nil, errors.Trace(err)
 	}
 	return &Encoder{
-		messages:   make([]*ticommon.Message, 0, 1),
+		messages:   make([]*common.Message, 0, 1),
 		config:     config,
 		claimCheck: claimCheck,
 		marshaller: marshaller,
@@ -53,20 +50,20 @@ func NewEncoder(ctx context.Context, config *ticommon.Config) (encoder.EventEnco
 }
 
 // AppendRowChangedEvent implement the RowEventEncoder interface
-func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *commonEvent.RowChangedEvent, callback func()) error {
+func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *commonEvent.RowEvent) error {
 	value, err := e.marshaller.MarshalRowChangedEvent(event, false, "")
 	if err != nil {
 		return err
 	}
 
-	value, err = ticommon.Compress(e.config.ChangefeedID, e.config.LargeMessageHandle.LargeMessageHandleCompression, value)
+	value, err = common.Compress(e.config.ChangefeedID, e.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
 		return err
 	}
 
-	result := &ticommon.Message{
+	result := &common.Message{
 		Value:    value,
-		Callback: callback,
+		Callback: event.Callback,
 	}
 
 	result.IncRowsCount()
@@ -97,7 +94,7 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 	if err != nil {
 		return err
 	}
-	value, err = ticommon.Compress(e.config.ChangefeedID, e.config.LargeMessageHandle.LargeMessageHandleCompression, value)
+	value, err = common.Compress(e.config.ChangefeedID, e.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
 		return err
 	}
@@ -121,8 +118,8 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 }
 
 // Build implement the RowEventEncoder interface
-func (e *Encoder) Build() []*ticommon.Message {
-	var result []*ticommon.Message
+func (e *Encoder) Build() []*common.Message {
+	var result []*common.Message
 	if len(e.messages) != 0 {
 		result = e.messages
 		e.messages = nil
@@ -131,19 +128,19 @@ func (e *Encoder) Build() []*ticommon.Message {
 }
 
 // EncodeCheckpointEvent implement the DDLEventBatchEncoder interface
-func (e *Encoder) EncodeCheckpointEvent(ts uint64) (*ticommon.Message, error) {
+func (e *Encoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
 	value, err := e.marshaller.MarshalCheckpoint(ts)
 	if err != nil {
 		return nil, err
 	}
 
-	value, err = ticommon.Compress(e.config.ChangefeedID,
+	value, err = common.Compress(e.config.ChangefeedID,
 		e.config.LargeMessageHandle.LargeMessageHandleCompression, value)
-	return ticommon.NewResolvedMsg(config.ProtocolSimple, nil, value, ts), err
+	return common.NewMsg(nil, value), err
 }
 
 // EncodeDDLEvent implement the DDLEventBatchEncoder interface
-func (e *Encoder) EncodeDDLEvent(event *commonEvent.DDLEvent) (*ticommon.Message, error) {
+func (e *Encoder) EncodeDDLEvent(event *commonEvent.DDLEvent) (*common.Message, error) {
 	// value, err := e.marshaller.MarshalDDLEvent(event)
 	// if err != nil {
 	// 	return nil, err

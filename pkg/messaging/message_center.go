@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/tiflow/pkg/security"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -84,8 +85,9 @@ type messageCenter struct {
 	id node.ID
 	// The current epoch of the message center,
 	// when every time the message center is restarted, the epoch will be increased by 1.
-	epoch uint64
-	cfg   *config.MessageCenterConfig
+	epoch    uint64
+	cfg      *config.MessageCenterConfig
+	security *security.Credential
 	// The local target, which is the message center itself.
 	localTarget *localMessageTarget
 	// The remote targets, which are the other message centers in remote servers.
@@ -101,10 +103,17 @@ type messageCenter struct {
 	receiveEventCh chan *TargetMessage
 	receiveCmdCh   chan *TargetMessage
 	g              *errgroup.Group
+	ctx            context.Context
 	cancel         context.CancelFunc
 }
 
-func NewMessageCenter(ctx context.Context, id node.ID, epoch uint64, cfg *config.MessageCenterConfig) *messageCenter {
+func NewMessageCenter(
+	ctx context.Context,
+	id node.ID,
+	epoch uint64,
+	cfg *config.MessageCenterConfig,
+	security *security.Credential,
+) *messageCenter {
 	receiveEventCh := make(chan *TargetMessage, cfg.CacheChannelSize)
 	receiveCmdCh := make(chan *TargetMessage, cfg.CacheChannelSize)
 
@@ -114,10 +123,12 @@ func NewMessageCenter(ctx context.Context, id node.ID, epoch uint64, cfg *config
 		id:             id,
 		epoch:          epoch,
 		cfg:            cfg,
+		security:       security,
 		localTarget:    newLocalMessageTarget(id, receiveEventCh, receiveCmdCh),
 		receiveEventCh: receiveEventCh,
 		receiveCmdCh:   receiveCmdCh,
 		cancel:         cancel,
+		ctx:            ctx,
 		g:              g,
 		router:         newRouter(),
 	}
@@ -282,9 +293,10 @@ func (mc *messageCenter) touchRemoteTarget(id node.ID, epoch uint64, addr string
 	if !ok {
 		// If the target is not found, create a new one.
 		target = newRemoteMessageTarget(
+			mc.ctx,
 			mc.id, id, mc.epoch,
 			epoch, addr, mc.receiveEventCh,
-			mc.receiveCmdCh, mc.cfg)
+			mc.receiveCmdCh, mc.cfg, mc.security)
 		mc.remoteTargets.m[id] = target
 		return target
 	}
@@ -311,9 +323,10 @@ func (mc *messageCenter) touchRemoteTarget(id node.ID, epoch uint64, addr string
 		zap.Any("newAddr", addr))
 	target.close()
 	newTarget := newRemoteMessageTarget(
+		mc.ctx,
 		mc.id, id, mc.epoch,
 		epoch, addr, mc.receiveEventCh,
-		mc.receiveCmdCh, mc.cfg)
+		mc.receiveCmdCh, mc.cfg, mc.security)
 	mc.remoteTargets.m[id] = newTarget
 	return newTarget
 }

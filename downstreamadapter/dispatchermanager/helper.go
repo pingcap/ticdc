@@ -203,11 +203,9 @@ var (
 )
 
 func GetHeartBeatTaskScheduler() threadpool.ThreadPool {
-	if heartBeatTaskScheduler == nil {
-		heartBeatTaskSchedulerOnce.Do(func() {
-			heartBeatTaskScheduler = threadpool.NewThreadPoolDefault()
-		})
-	}
+	heartBeatTaskSchedulerOnce.Do(func() {
+		heartBeatTaskScheduler = threadpool.NewThreadPoolDefault()
+	})
 	return heartBeatTaskScheduler
 }
 
@@ -222,16 +220,14 @@ var (
 )
 
 func GetSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler] {
-	if schedulerDispatcherRequestDynamicStream == nil {
-		schedulerDispatcherRequestDynamicStreamOnce.Do(func() {
-			option := dynstream.NewOption()
-			option.BatchCount = 128
-			schedulerDispatcherRequestDynamicStream = dynstream.NewParallelDynamicStream(
-				func(id common.GID) uint64 { return id.FastHash() },
-				&SchedulerDispatcherRequestHandler{}, option)
-			schedulerDispatcherRequestDynamicStream.Start()
-		})
-	}
+	schedulerDispatcherRequestDynamicStreamOnce.Do(func() {
+		option := dynstream.NewOption()
+		option.BatchCount = 128
+		schedulerDispatcherRequestDynamicStream = dynstream.NewParallelDynamicStream(
+			func(id common.GID) uint64 { return id.FastHash() },
+			&SchedulerDispatcherRequestHandler{}, option)
+		schedulerDispatcherRequestDynamicStream.Start()
+	})
 	return schedulerDispatcherRequestDynamicStream
 }
 
@@ -280,7 +276,7 @@ func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *Event
 		}
 	}
 	if len(infos) > 0 {
-		err := eventDispatcherManager.newDispatchers(infos)
+		err := eventDispatcherManager.newDispatchers(infos, false)
 		if err != nil {
 			select {
 			case eventDispatcherManager.errCh <- err:
@@ -329,14 +325,12 @@ var (
 )
 
 func GetHeartBeatResponseDynamicStream() dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler] {
-	if heartBeatResponseDynamicStream == nil {
-		heartBeatResponseDynamicStreamOnce.Do(func() {
-			heartBeatResponseDynamicStream = dynstream.NewParallelDynamicStream(
-				func(id common.GID) uint64 { return id.FastHash() },
-				&HeartBeatResponseHandler{dispatcher.GetDispatcherStatusDynamicStream()})
-			heartBeatResponseDynamicStream.Start()
-		})
-	}
+	heartBeatResponseDynamicStreamOnce.Do(func() {
+		heartBeatResponseDynamicStream = dynstream.NewParallelDynamicStream(
+			func(id common.GID) uint64 { return id.FastHash() },
+			&HeartBeatResponseHandler{dispatcher.GetDispatcherStatusDynamicStream()})
+		heartBeatResponseDynamicStream.Start()
+	})
 	return heartBeatResponseDynamicStream
 }
 
@@ -424,14 +418,12 @@ var (
 )
 
 func GetCheckpointTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler] {
-	if checkpointTsMessageDynamicStream == nil {
-		checkpointTsMessageDynamicStreamOnce.Do(func() {
-			checkpointTsMessageDynamicStream = dynstream.NewParallelDynamicStream(
-				func(id common.GID) uint64 { return id.FastHash() },
-				&CheckpointTsMessageHandler{})
-			checkpointTsMessageDynamicStream.Start()
-		})
-	}
+	checkpointTsMessageDynamicStreamOnce.Do(func() {
+		checkpointTsMessageDynamicStream = dynstream.NewParallelDynamicStream(
+			func(id common.GID) uint64 { return id.FastHash() },
+			&CheckpointTsMessageHandler{})
+		checkpointTsMessageDynamicStream.Start()
+	})
 	return checkpointTsMessageDynamicStream
 }
 

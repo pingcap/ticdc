@@ -117,6 +117,10 @@ type Maintainer struct {
 	lastPrintStatusTime time.Time
 	// lastCheckpointTsTime time.Time
 
+	// true when the changefeed is new created, or resume by overwriteCheckpointTs
+	// false when otherwise, such as maintainer move to different nodes.
+	newChangefeed bool
+
 	errLock             sync.Mutex
 	runningErrors       map[node.ID]*heartbeatpb.RunningError
 	cancelUpdateMetrics context.CancelFunc
@@ -142,6 +146,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	tsoClient replica.TSOClient,
 	regionCache split.RegionCache,
 	checkpointTs uint64,
+	newChangfeed bool,
 ) *Maintainer {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -173,6 +178,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		ddlSpan:               ddlSpan,
 		checkpointTsByCapture: make(map[node.ID]heartbeatpb.Watermark),
 		runningErrors:         map[node.ID]*heartbeatpb.RunningError{},
+		newChangefeed:         newChangfeed,
 
 		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		changefeedCheckpointTsLagGauge: metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
@@ -218,7 +224,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 		Config:       config.GetDefaultReplicaConfig(),
 	}
 	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI,
-		tsoClient, regionCache, 1)
+		tsoClient, regionCache, 1, false)
 	m.cascadeRemoving = true
 	// setup period event
 	m.submitScheduledEvent(m.taskScheduler, &Event{
@@ -568,6 +574,12 @@ func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 	}
 	cachedResp := m.bootstrapper.HandleBootstrapResponse(msg.From, msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse))
 	m.onBootstrapDone(cachedResp)
+
+	// when get the bootstrap response from the event dispatcher manager with table trigger event,
+	// set new changefeed to false, which means the changefeed is no longer new created.
+	if msg.From == m.selfNode.ID {
+		m.newChangefeed = false
+	}
 }
 
 func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMessage) {
@@ -715,6 +727,7 @@ func (m *Maintainer) getNewBootstrapFn() bootstrap.NewBootstrapMessageFn {
 			Config:                        cfgBytes,
 			StartTs:                       m.startCheckpointTs,
 			TableTriggerEventDispatcherId: nil,
+			IsNewChangfeed:                false,
 		}
 
 		// only send dispatcher id to dispatcher manager on the same node
@@ -723,11 +736,13 @@ func (m *Maintainer) getNewBootstrapFn() bootstrap.NewBootstrapMessageFn {
 				zap.String("server", id.String()),
 				zap.String("dispatcherID", m.ddlSpan.ID.String()))
 			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
+			msg.IsNewChangfeed = m.newChangefeed
 		}
 		log.Info("send maintainer bootstrap message",
 			zap.String("changefeed", m.id.String()),
 			zap.String("server", id.String()),
-			zap.Uint64("startTs", m.startCheckpointTs))
+			zap.Uint64("startTs", m.startCheckpointTs),
+			zap.Bool("isNewChangefed", msg.IsNewChangfeed))
 		return messaging.NewSingleTargetMessage(id, messaging.DispatcherManagerManagerTopic, msg)
 	}
 }
@@ -834,4 +849,8 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 	if newWatermark.ResolvedTs != math.MaxUint64 {
 		m.watermark.ResolvedTs = newWatermark.ResolvedTs
 	}
+}
+
+func (m *Maintainer) GetDispatcherCount() int {
+	return len(m.controller.GetAllTasks())
 }

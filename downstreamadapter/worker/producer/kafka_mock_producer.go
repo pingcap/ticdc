@@ -86,7 +86,7 @@ func (m *MockProducer) GetEvents(topic string, partition int32) []*common.Messag
 }
 
 // SyncBroadcastMessage stores a message to all partitions of the topic.
-func (m *MockProducer) SyncBroadcastMessage(ctx context.Context, topic string,
+func (m *MockProducer) SyncBroadcastMessage(_ context.Context, topic string,
 	totalPartitionsNum int32, message *common.Message,
 ) error {
 	m.mu.Lock()

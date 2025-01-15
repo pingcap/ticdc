@@ -21,11 +21,11 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	ticonfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	v2 "github.com/pingcap/ticdc/pkg/sink/kafka/v2"
 	"github.com/pingcap/ticdc/pkg/sink/util"
@@ -36,7 +36,7 @@ import (
 
 type KafkaComponent struct {
 	EncoderGroup   codec.EncoderGroup
-	Encoder        encoder.EventEncoder
+	Encoder        common.EventEncoder
 	ColumnSelector *columnselector.ColumnSelectors
 	EventRouter    *eventrouter.EventRouter
 	TopicManager   topicmanager.TopicManager
@@ -45,7 +45,7 @@ type KafkaComponent struct {
 }
 
 func getKafkaSinkComponentWithFactory(ctx context.Context,
-	changefeedID common.ChangeFeedID,
+	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *ticonfig.SinkConfig,
 	factoryCreator kafka.FactoryCreator,
@@ -55,23 +55,18 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 	if err != nil {
 		return kafkaComponent, ticonfig.ProtocolUnknown, errors.Trace(err)
 	}
-	topic, err := helper.GetTopic(sinkURI)
-	if err != nil {
-		return kafkaComponent, protocol, errors.Trace(err)
-	}
-	scheme := sink.GetScheme(sinkURI)
 
 	options := kafka.NewOptions()
-	if err := options.Apply(changefeedID, sinkURI, sinkConfig); err != nil {
+	if err = options.Apply(changefeedID, sinkURI, sinkConfig); err != nil {
 		return kafkaComponent, protocol, cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
 	}
 
-	kafkaComponent.Factory, err = factoryCreator(options, changefeedID)
+	kafkaComponent.Factory, err = factoryCreator(ctx, options, changefeedID)
 	if err != nil {
 		return kafkaComponent, protocol, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
 	}
 
-	kafkaComponent.AdminClient, err = kafkaComponent.Factory.AdminClient(ctx)
+	kafkaComponent.AdminClient, err = kafkaComponent.Factory.AdminClient()
 	if err != nil {
 		return kafkaComponent, protocol, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
 	}
@@ -84,6 +79,10 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 		}
 	}()
 
+	topic, err := helper.GetTopic(sinkURI)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
 	// adjust the option configuration before creating the kafka client
 	if err = kafka.AdjustOptions(ctx, kafkaComponent.AdminClient, options, topic); err != nil {
 		return kafkaComponent, protocol, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
@@ -97,6 +96,7 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 		kafkaComponent.AdminClient,
 	)
 
+	scheme := sink.GetScheme(sinkURI)
 	kafkaComponent.EventRouter, err = eventrouter.NewEventRouter(sinkConfig, protocol, topic, scheme)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
@@ -112,7 +112,10 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	kafkaComponent.EncoderGroup = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
+	kafkaComponent.EncoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
 
 	kafkaComponent.Encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
 	if err != nil {
@@ -123,7 +126,7 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 
 func GetKafkaSinkComponent(
 	ctx context.Context,
-	changefeedID common.ChangeFeedID,
+	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *ticonfig.SinkConfig,
 ) (KafkaComponent, ticonfig.Protocol, error) {
@@ -136,7 +139,7 @@ func GetKafkaSinkComponent(
 
 func GetKafkaSinkComponentForTest(
 	ctx context.Context,
-	changefeedID common.ChangeFeedID,
+	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *ticonfig.SinkConfig,
 ) (KafkaComponent, ticonfig.Protocol, error) {
