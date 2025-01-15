@@ -124,8 +124,8 @@ func (s *EventRouter) GetActiveTopics(activeTables []*commonEvent.SchemaTableNam
 	return topics
 }
 
-// GetPartitionForRowChange returns the target partition for row changes.
-func (s *EventRouter) GetPartitionGeneratorForRowChange(tableInfo *common.TableInfo) partition.PartitionGenerator {
+// GetPartitionGenerator returns the target partition by the table information.
+func (s *EventRouter) GetPartitionGenerator(tableInfo *common.TableInfo) partition.PartitionGenerator {
 	return s.GetPartitionDispatcher(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 }
 

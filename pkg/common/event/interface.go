@@ -40,7 +40,7 @@ type FlushableEvent interface {
 	ClearPostFlushFunc()
 }
 
-// BlockEvent is an event that may be blocked the dispatcher.
+// BlockEvent is an event that may block the dispatcher.
 // It could be a ddl event or a sync point event.
 type BlockEvent interface {
 	FlushableEvent
