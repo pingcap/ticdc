@@ -38,8 +38,9 @@ type Changefeed struct {
 	isMQSink bool
 	isNew    bool // only true when the changfeed is newly created or resumed by overwriteCheckpointTs
 
-	mutex  sync.Mutex // protect nodeID
-	nodeID node.ID
+	// nodeIDMu protects nodeID
+	nodeIDMu sync.Mutex
+	nodeID   node.ID
 
 	configBytes []byte
 	// it's saved to the backend db
@@ -99,20 +100,15 @@ func (c *Changefeed) StartFinished() {
 	c.backoff.StartFinished()
 }
 
-// setNodeID set the node id of the changefeed
-func (c *Changefeed) setNodeID(n node.ID) {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
-	c.nodeID = n
-}
-
 func (c *Changefeed) GetNodeID() node.ID {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	c.nodeIDMu.Lock()
+	defer c.nodeIDMu.Unlock()
 	return c.nodeID
 }
 
 func (c *Changefeed) SetNodeID(n node.ID) {
+	c.nodeIDMu.Lock()
+	defer c.nodeIDMu.Unlock()
 	c.nodeID = n
 }
 
