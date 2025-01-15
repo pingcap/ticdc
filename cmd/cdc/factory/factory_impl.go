@@ -14,13 +14,12 @@
 package factory
 
 import (
-	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"strings"
 	"time"
 
 	"github.com/pingcap/log"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	cmdconetxt "github.com/pingcap/tiflow/pkg/cmd/context"
 	"github.com/pingcap/tiflow/pkg/cmd/util"
@@ -126,13 +125,13 @@ func (f *factoryImpl) PdClient() (pd.Client, error) {
 
 	pdAddr := f.GetPdAddr()
 	if len(pdAddr) == 0 {
-		return nil, cerror.ErrInvalidServerOption.
+		return nil, errors.ErrInvalidServerOption.
 			GenWithStack("Empty PD address. Please use --pd to specify PD cluster addresses")
 	}
 	pdEndpoints := strings.Split(pdAddr, ",")
 	for _, ep := range pdEndpoints {
-		if err := util.VerifyPdEndpoint(ep, credential.IsTLSEnabled()); err != nil {
-			return nil, cerror.ErrInvalidServerOption.Wrap(err).GenWithStackByArgs()
+		if err = util.VerifyPdEndpoint(ep, credential.IsTLSEnabled()); err != nil {
+			return nil, errors.ErrInvalidServerOption.Wrap(err).GenWithStackByArgs()
 		}
 	}
 
@@ -228,7 +227,7 @@ func (f *factoryImpl) findServerAddr() (string, error) {
 	ctx := cmdconetxt.GetDefaultContext()
 	err = etcdClient.CheckMultipleCDCClusterExist(ctx)
 	if err != nil {
-		if cerror.ErrMultipleCDCClustersExist.Equal(err) {
+		if errors.ErrMultipleCDCClustersExist.Equal(err) {
 			log.Error("You are using multiple TiCDC clusters to " +
 				"replicate this TiDB cluster. Please set the parameter --server " +
 				"to specify which cluster you want to operate on.")

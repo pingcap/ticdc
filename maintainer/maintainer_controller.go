@@ -15,9 +15,9 @@ package maintainer
 
 import (
 	"context"
-	"github.com/pingcap/errors"
 	"time"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"

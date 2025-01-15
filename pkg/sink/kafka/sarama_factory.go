@@ -15,10 +15,10 @@ package kafka
 
 import (
 	"context"
-	"github.com/pingcap/errors"
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/rcrowley/go-metrics"

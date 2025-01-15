@@ -26,6 +26,10 @@ var (
 		"changefeed not exists, %s",
 		errors.RFCCodeText("CDC:ErrChangeFeedNotExists"),
 	)
+	ErrEtcdAPIError = errors.Normalize(
+		"etcd api returns error",
+		errors.RFCCodeText("CDC:ErrEtcdAPIError"),
+	)
 	ErrChangeFeedAlreadyExists = errors.Normalize(
 		"changefeed already exists, %s",
 		errors.RFCCodeText("CDC:ErrChangeFeedAlreadyExists"),

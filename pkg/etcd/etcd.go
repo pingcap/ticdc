@@ -17,11 +17,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/pingcap/errors"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"

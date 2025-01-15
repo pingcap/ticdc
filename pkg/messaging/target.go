@@ -16,11 +16,11 @@ package messaging
 import (
 	"context"
 	"fmt"
-	"github.com/pingcap/errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	. "github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/config"

@@ -16,11 +16,11 @@ package claimcheck
 import (
 	"context"
 	"encoding/json"
-	"github.com/pingcap/errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"

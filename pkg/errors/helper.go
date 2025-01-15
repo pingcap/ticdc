@@ -15,8 +15,9 @@ package errors
 
 import (
 	"context"
-	"github.com/pingcap/errors"
 	"strings"
+
+	"github.com/pingcap/errors"
 )
 
 // WrapError generates a new error based on given `*errors.Error`, wraps the err

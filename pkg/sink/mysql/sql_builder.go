@@ -15,10 +15,10 @@ package mysql
 
 import (
 	"fmt"
-	"github.com/pingcap/errors"
 	"strings"
 	"sync"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"

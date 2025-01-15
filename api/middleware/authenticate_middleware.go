@@ -15,8 +15,6 @@ package middleware
 import (
 	"context"
 	"fmt"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -26,6 +24,7 @@ import (
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
@@ -71,7 +70,7 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 	username, password, ok := ctx.Request.BasicAuth()
 	if !ok {
 		errMsg := "please specify the user and password via authorization header"
-		return cerror.ErrCredentialNotFound.GenWithStackByArgs(errMsg)
+		return errors.ErrCredentialNotFound.GenWithStackByArgs(errMsg)
 	}
 
 	allowed := false
@@ -87,7 +86,7 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 		if username == "" {
 			errMsg = "Empty username is not allowed."
 		}
-		return cerror.ErrUnauthorized.GenWithStackByArgs(username, errMsg)
+		return errors.ErrUnauthorized.GenWithStackByArgs(username, errMsg)
 	}
 
 	// verifyTiDBUser verify whether the username and password are valid in TiDB. It does the validation via
@@ -111,10 +110,10 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 		if errorutil.IsAccessDeniedError(err) {
 			// For access denied error, we can return immediately.
 			// For other errors, we need to continue to verify the next tidb instance.
-			return cerror.ErrUnauthorized.GenWithStackByArgs(username, err.Error())
+			return errors.ErrUnauthorized.GenWithStackByArgs(username, err.Error())
 		}
 	}
-	return cerror.ErrUnauthorized.GenWithStackByArgs(username, err.Error())
+	return errors.ErrUnauthorized.GenWithStackByArgs(username, err.Error())
 }
 
 // fetchTiDBTopology parses the TiDB topology from etcd.

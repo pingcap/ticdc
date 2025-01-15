@@ -15,12 +15,12 @@ package v2
 
 import (
 	"context"
-	"github.com/pingcap/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"strconv"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	pkafka "github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"

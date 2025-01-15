@@ -15,10 +15,10 @@ package coordinator
 
 import (
 	"context"
-	"github.com/pingcap/errors"
 	"math"
 	"time"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
