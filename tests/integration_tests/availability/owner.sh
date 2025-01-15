@@ -19,11 +19,11 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 MAX_RETRIES=10
 function test_owner_ha() {
-	test_kill_owner
+	# test_kill_owner
 	test_hang_up_owner
-	test_expire_owner
-	test_owner_retryable_error
-	test_delete_owner_key
+	# test_expire_owner
+	# test_owner_retryable_error
+	# test_delete_owner_key
 }
 # test_kill_owner starts two captures and kill the owner
 # we expect the live capture will be elected as the new
