@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/errgroup"
 )
 
 var count int
@@ -48,13 +47,12 @@ func kafkaDMLWorkerForTest(t *testing.T) *KafkaDMLWorker {
 	require.NoError(t, err)
 
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	errGroup, ctx := errgroup.WithContext(ctx)
 	dmlMockProducer := producer.NewMockDMLProducer()
 
 	dmlWorker := NewKafkaDMLWorker(changefeedID, protocol, dmlMockProducer,
 		kafkaComponent.EncoderGroup, kafkaComponent.ColumnSelector,
 		kafkaComponent.EventRouter, kafkaComponent.TopicManager,
-		statistics, errGroup)
+		statistics)
 	return dmlWorker
 }
 

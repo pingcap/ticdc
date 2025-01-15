@@ -25,16 +25,21 @@ import (
 func TestCreateTopic(t *testing.T) {
 	t.Parallel()
 
-	adminClient := kafka.NewClusterAdminClientMockImpl()
+	options := kafka.NewOptions()
+	changefeed := common.NewChangefeedID4Test("test", "test")
+	factory, err := kafka.NewMockFactory(options, changefeed)
+	require.NoError(t, err)
+
+	adminClient, err := factory.AdminClient()
+	require.NoError(t, err)
 	defer adminClient.Close()
 	cfg := &kafka.AutoCreateTopicConfig{
 		AutoCreate:        true,
 		PartitionNum:      2,
 		ReplicationFactor: 1,
 	}
-
-	changefeedID := common.NewChangefeedID4Test("test", "test")
 	ctx := context.Background()
+	changefeedID := common.NewChangefeedID4Test("test", "test")
 	manager := newKafkaTopicManager(ctx, kafka.DefaultMockTopicName, changefeedID, adminClient, cfg)
 	defer manager.Close()
 	partitionNum, err := manager.CreateTopicAndWaitUntilVisible(ctx, kafka.DefaultMockTopicName)
@@ -80,7 +85,13 @@ func TestCreateTopic(t *testing.T) {
 func TestCreateTopicWithDelay(t *testing.T) {
 	t.Parallel()
 
-	adminClient := kafka.NewClusterAdminClientMockImpl()
+	options := kafka.NewOptions()
+	changefeed := common.NewChangefeedID4Test("test", "test")
+	factory, err := kafka.NewMockFactory(options, changefeed)
+	require.NoError(t, err)
+
+	adminClient, err := factory.AdminClient()
+	require.NoError(t, err)
 	defer adminClient.Close()
 	cfg := &kafka.AutoCreateTopicConfig{
 		AutoCreate:        true,
@@ -88,9 +99,9 @@ func TestCreateTopicWithDelay(t *testing.T) {
 		ReplicationFactor: 1,
 	}
 
+	ctx := context.Background()
 	topic := "new_topic"
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	ctx := context.Background()
 	manager := newKafkaTopicManager(ctx, topic, changefeedID, adminClient, cfg)
 	defer manager.Close()
 	partitionNum, err := manager.createTopic(ctx, topic)

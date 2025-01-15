@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	v2 "github.com/pingcap/ticdc/pkg/sink/kafka/v2"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/br/pkg/utils"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
@@ -61,7 +60,7 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, protocol, cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
 	}
 
-	kafkaComponent.Factory, err = factoryCreator(ctx, options, changefeedID)
+	kafkaComponent.Factory, err = factoryCreator(options, changefeedID)
 	if err != nil {
 		return kafkaComponent, protocol, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
 	}
@@ -130,10 +129,7 @@ func GetKafkaSinkComponent(
 	sinkURI *url.URL,
 	sinkConfig *ticonfig.SinkConfig,
 ) (KafkaComponent, ticonfig.Protocol, error) {
-	factoryCreator := kafka.NewSaramaFactory
-	if utils.GetOrZero(sinkConfig.EnableKafkaSinkV2) {
-		factoryCreator = v2.NewFactory
-	}
+	factoryCreator := kafka.NewFactory
 	return getKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, factoryCreator)
 }
 
