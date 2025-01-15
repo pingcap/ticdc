@@ -58,11 +58,11 @@ type MysqlSink struct {
 // Currently, we verify by create a real mysql connection.
 func verifyMySQLSink(
 	ctx context.Context,
-	changefeedID common.ChangeFeedID,
 	uri *url.URL,
 	config *config.ChangefeedConfig,
 ) error {
-	_, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, uri, config)
+	testID := common.NewChangefeedID4Test("test", "mysql_create_sink_test")
+	_, db, err := mysql.NewMysqlConfigAndDB(ctx, testID, uri, config)
 	if err != nil {
 		return err
 	}
