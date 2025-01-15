@@ -48,8 +48,8 @@ type KafkaSink struct {
 	statistics       *metrics.Statistics
 	metricsCollector kafka.MetricsCollector
 
-	errgroup *errgroup.Group
 	isNormal uint32 // if sink is normal, isNormal is 1, otherwise is 0
+	ctx      context.Context
 }
 
 func (s *KafkaSink) SinkType() common.SinkType {
@@ -66,8 +66,6 @@ func verifyKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, uri 
 func newKafkaSink(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
 ) (*KafkaSink, error) {
-	errGroup, ctx := errgroup.WithContext(ctx)
-	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
 	kafkaComponent, protocol, err := worker.GetKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -120,19 +118,23 @@ func newKafkaSink(
 		statistics:       statistics,
 		ctx:              ctx,
 		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
-		errgroup:         errGroup,
 	}
 	return sink, nil
 }
 
 func (s *KafkaSink) Run(ctx context.Context) error {
-	s.dmlWorker.Run(ctx)
-	s.ddlWorker.Run()
-	s.errgroup.Go(func() error {
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		return s.dmlWorker.Run(ctx)
+	})
+	g.Go(func() error {
+		return s.ddlWorker.Run(ctx)
+	})
+	g.Go(func() error {
 		s.metricsCollector.Run(ctx)
 		return nil
 	})
-	err := s.errgroup.Wait()
+	err := g.Wait()
 	atomic.StoreUint32(&s.isNormal, 0)
 	return errors.Trace(err)
 }
@@ -250,7 +252,6 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 		topicManager:     kafkaComponent.TopicManager,
 		statistics:       statistics,
 		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
-		errgroup:         errGroup,
 	}
 	go sink.Run(ctx)
 	return sink, dmlMockProducer, ddlMockProducer, nil
