@@ -81,7 +81,7 @@ func TestWriteEvents(t *testing.T) {
 		err := dmlWorker.Run(ctx)
 		require.True(t, errors.Is(err, context.Canceled))
 	}()
-	dmlWorker.GetEventChan() <- dmlEvent
+	dmlWorker.AddDMLEvent(dmlEvent)
 
 	// Wait for the events to be received by the worker.
 	time.Sleep(time.Second)

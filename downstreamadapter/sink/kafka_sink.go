@@ -144,7 +144,7 @@ func (s *KafkaSink) IsNormal() bool {
 }
 
 func (s *KafkaSink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.dmlWorker.GetEventChan() <- event
+	s.dmlWorker.AddDMLEvent(event)
 }
 
 func (s *KafkaSink) PassBlockEvent(event commonEvent.BlockEvent) {
