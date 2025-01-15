@@ -57,7 +57,9 @@ type remoteMessageTarget struct {
 	targetAddr  string
 	security    *security.Credential
 
-	// For sending events and commands
+	// senderMu is used to protect the eventSender and commandSender.
+	// It is used to ensure that there is only one eventStream and commandStream for the target.
+	senderMu      sync.Mutex
 	eventSender   *sendStreamWrapper
 	commandSender *sendStreamWrapper
 
@@ -323,8 +325,15 @@ LOOP:
 }
 
 func (s *remoteMessageTarget) runEventSendStream(eventStream grpcSender) error {
+	s.senderMu.Lock()
+	if s.eventSender.stream != nil {
+		s.senderMu.Unlock()
+		return nil
+	}
 	s.eventSender.stream = eventStream
 	s.eventSender.ready.Store(true)
+	s.senderMu.Unlock()
+
 	err := s.runSendMessages(s.ctx, s.eventSender.stream, s.sendEventCh)
 	log.Info("Event send stream closed",
 		zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))
@@ -333,8 +342,15 @@ func (s *remoteMessageTarget) runEventSendStream(eventStream grpcSender) error {
 }
 
 func (s *remoteMessageTarget) runCommandSendStream(commandStream grpcSender) error {
+	s.senderMu.Lock()
+	if s.commandSender.stream != nil {
+		s.senderMu.Unlock()
+		return nil
+	}
 	s.commandSender.stream = commandStream
 	s.commandSender.ready.Store(true)
+	s.senderMu.Unlock()
+
 	err := s.runSendMessages(s.ctx, s.commandSender.stream, s.sendCmdCh)
 	log.Info("Command send stream closed",
 		zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))
