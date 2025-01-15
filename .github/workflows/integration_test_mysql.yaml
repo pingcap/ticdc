@@ -51,94 +51,123 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
 
-      - name: Test charset_gbk
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
+      # - name: Test charset_gbk
+      #   run: |
+      #     pwd && ls -l bin/ && ls -l tools/bin/
+      #     export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
 
-      - name: Test changefeed_finish
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_finish
+      # - name: Test changefeed_finish
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=changefeed_finish
       
-      - name: Test sql_mode
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=sql_mode
+      # - name: Test sql_mode
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=sql_mode
         
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
+      # - name: Test changefeed_pause_resume
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
 
-      - name: Test changefeed_reconstruct
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_reconstruct
+      # - name: Test changefeed_reconstruct
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=changefeed_reconstruct
 
-      - name: Test common_1
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=common_1
+      # - name: Test common_1
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=common_1
 
-      - name: Test foreign_key
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=foreign_key
+      # - name: Test foreign_key
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=foreign_key
 
-      # The 7th case in this group
-      - name: Test generate_column
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=generate_column
+      # # The 7th case in this group
+      # - name: Test generate_column
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=generate_column
       
-      # The 8th case in this group
-      - name: Test many_pk_or_uk
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=many_pk_or_uk
+      # # The 8th case in this group
+      # - name: Test many_pk_or_uk
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=many_pk_or_uk
       
-      # The 9th case in this group
-      - name: Test drop_many_tables
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=drop_many_tables
+      # # The 9th case in this group
+      # - name: Test drop_many_tables
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=drop_many_tables
 
-      # The 10th case in this group     
-      - name: Test new_ci_collation
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=new_ci_collation
+      # # The 10th case in this group     
+      # - name: Test new_ci_collation
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=new_ci_collation
 
-      # The 11th case in this group     
-      - name: Test region_merge
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=region_merge
+      # # The 11th case in this group     
+      # - name: Test region_merge
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=region_merge
 
-      # The 12th case in this group     
-      - name: Test safe mode
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=safe_mode
+      # # The 12th case in this group     
+      # - name: Test safe mode
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=safe_mode
 
-      # The 13th case in this group     
-      - name: Test savepoint
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=savepoint
+      # # The 13th case in this group     
+      # - name: Test savepoint
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=savepoint
 
-      # The 14th case in this group     
-      - name: Test server config compatibility
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=server_config_compatibility
+      # # The 14th case in this group     
+      # - name: Test server config compatibility
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=server_config_compatibility
 
-      # The 15th case in this group     
-      - name: Test split region
+      # # The 15th case in this group     
+      # - name: Test split region
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=split_region
+      - name: Test multi_source
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=split_region
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
 
       - name: Upload test logs
         if: always()
@@ -168,82 +197,112 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
 
-      - name: Test api_v2
+      - name: Test multi_source
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=api_v2
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
 
-      - name: Test autorandom
+      - name: Test multi_source
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=autorandom
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
 
-      - name: Test availability
+      - name: Test multi_source
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=availability
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
 
-      - name: Test bank
+      - name: Test multi_source
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=bank
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
 
-      - name: Test batch_add_table
+      - name: Test multi_source
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=batch_add_table
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
 
-      - name: Test batch_update_to_no_batch
+      - name: Test multi_source
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=batch_update_to_no_batch
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
 
-      - name: Test ci_collation_compatibility
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ci_collation_compatibility
+      # - name: Test api_v2
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=api_v2
 
-      - name: Test multi_capture
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=multi_capture
+      # - name: Test autorandom
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=autorandom
 
-      - name: Test multi_cdc_cluster
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=multi_cdc_cluster
+      # - name: Test availability
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=availability
 
-      - name: Test multi_rocks
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=multi_rocks
+      # - name: Test bank
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=bank
 
-      - name: Test resourcecontrol
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=resourcecontrol
+      # - name: Test batch_add_table
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=batch_add_table
 
-      - name: Test row_format
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=row_format
+      # - name: Test batch_update_to_no_batch
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=batch_update_to_no_batch
 
-      - name: Test tiflash
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=tiflash
+      # - name: Test ci_collation_compatibility
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=ci_collation_compatibility
 
-      # The 14th case in this group     
-      - name: Test vector
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=vector
+      # - name: Test multi_capture
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=multi_capture
 
-      # The 15th case in this group     
-      - name: Test simple
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=simple
+      # - name: Test multi_cdc_cluster
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=multi_cdc_cluster
+
+      # - name: Test multi_rocks
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=multi_rocks
+
+      # - name: Test resourcecontrol
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=resourcecontrol
+
+      # - name: Test row_format
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=row_format
+
+      # - name: Test tiflash
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=tiflash
+
+      # # The 14th case in this group     
+      # - name: Test vector
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=vector
+
+      # # The 15th case in this group     
+      # - name: Test simple
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=simple
 
       - name: Upload test logs
         if: always()
@@ -278,10 +337,10 @@ jobs:
       #   run: |
       #     export TICDC_NEWARCH=true && make integration_test CASE=http_api
 
-      - name: Test partition_table
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=partition_table
+      # - name: Test partition_table
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=partition_table
       
       # - name: Test multi_tables_ddl
       #   if: ${{ success() }}
@@ -293,43 +352,67 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=multi_source
 
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
      
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+      # - name: Test ddl_attributes
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
       
-      - name: Test http_api_tls
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls
+      # - name: Test http_api_tls
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls
 
       
-      - name: Test http_api_tls_with_user_auth
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls_with_user_auth
+      # - name: Test http_api_tls_with_user_auth
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls_with_user_auth
       
-      - name: Test default_value
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=default_value
+      # - name: Test default_value
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=default_value
 
-      - name: Test http_proxies
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=http_proxies
+      # - name: Test http_proxies
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=http_proxies
 
-      - name: Test ddl_reentrant
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_reentrant
+      # - name: Test ddl_reentrant
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=ddl_reentrant
 
-      # the 10th case in this group
-      - name: Test syncpoint
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=syncpoint
+      # # the 10th case in this group
+      # - name: Test syncpoint
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=syncpoint
 
       - name: Upload test logs
         if: always()

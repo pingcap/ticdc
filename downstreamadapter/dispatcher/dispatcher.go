@@ -231,9 +231,11 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 		pendingEvent, blockStatus := d.blockEventStatus.getEventAndStage()
 		if pendingEvent == nil && action.CommitTs > d.GetResolvedTs() {
 			// we have not receive the block event, and the action is for the future event, so just ignore
+			log.Info("pending event is nil, and the action's commit is larger than dispatchers resolvedTs", zap.Any("resolvedTs", d.GetResolvedTs()), zap.Any("action commitTs", action.CommitTs), zap.Any("dispatcher", d.id))
 			return
 		}
 		if pendingEvent != nil && action.CommitTs == pendingEvent.GetCommitTs() && blockStatus == heartbeatpb.BlockStage_WAITING {
+			log.Info("pending event get the action", zap.Any("action", action), zap.Any("dispatcher", d.id), zap.Any("pendingEvent commitTs", pendingEvent.GetCommitTs()))
 			d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
 			if action.Action == heartbeatpb.Action_Write {
 				failpoint.Inject("BlockOrWaitBeforeWrite", nil)
@@ -257,6 +259,8 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 			}
 
 			d.blockEventStatus.clear()
+		} else {
+			log.Info("pending event is nil or the action is not for the pending event", zap.Any("pendingEvent", pendingEvent), zap.Any("action", action), zap.Any("dispatcher", d.id))
 		}
 
 		// whether the outdate message or not, we need to return message show we have finished the event.
