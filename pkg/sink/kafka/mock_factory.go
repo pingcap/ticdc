@@ -96,7 +96,7 @@ func NewMockFactory(
 }
 
 // AdminClient return a mocked admin client
-func (f *MockFactory) AdminClient(_ context.Context) (ClusterAdminClient, error) {
+func (f *MockFactory) AdminClient() (ClusterAdminClient, error) {
 	return &MockClusterAdmin{
 		mockCluster: f.mockCluster,
 		topics:      make(map[string]*MockTopicDetail),

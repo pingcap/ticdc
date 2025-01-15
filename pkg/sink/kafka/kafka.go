@@ -35,11 +35,11 @@ type Broker struct {
 // Factory is used to produce all kafka components.
 type Factory interface {
 	// AdminClient return a kafka cluster admin client
-	AdminClient(ctx context.Context) (ClusterAdminClient, error)
+	AdminClient() (ClusterAdminClient, error)
 	// SyncProducer creates a sync producer to writer message to kafka
-	SyncProducer(ctx context.Context) (SyncProducer, error)
+	SyncProducer() (SyncProducer, error)
 	// AsyncProducer creates an async producer to writer message to kafka
-	AsyncProducer(ctx context.Context) (AsyncProducer, error)
+	AsyncProducer() (AsyncProducer, error)
 	// MetricsCollector returns the kafka metrics collector
 	MetricsCollector() MetricsCollector
 }

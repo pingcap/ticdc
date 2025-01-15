@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/errgroup"
 )
 
 // ddl | checkpoint ts
@@ -50,12 +49,11 @@ func kafkaDDLWorkerForTest(t *testing.T) *KafkaDDLWorker {
 	require.NoError(t, err)
 
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	errGroup, ctx := errgroup.WithContext(ctx)
 	ddlMockProducer := producer.NewMockDDLProducer()
 
 	ddlWorker := NewKafkaDDLWorker(changefeedID, protocol, ddlMockProducer,
 		kafkaComponent.Encoder, kafkaComponent.EventRouter, kafkaComponent.TopicManager,
-		statistics, errGroup)
+		statistics)
 	return ddlWorker
 }
 

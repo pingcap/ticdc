@@ -30,8 +30,7 @@ func TestCreateTopic(t *testing.T) {
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
 
-	ctx := context.Background()
-	adminClient, err := factory.AdminClient(ctx)
+	adminClient, err := factory.AdminClient()
 	require.NoError(t, err)
 	defer adminClient.Close()
 	cfg := &kafka.AutoCreateTopicConfig{
@@ -39,7 +38,7 @@ func TestCreateTopic(t *testing.T) {
 		PartitionNum:      2,
 		ReplicationFactor: 1,
 	}
-
+	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	manager := newKafkaTopicManager(ctx, kafka.DefaultMockTopicName, changefeedID, adminClient, cfg)
 	defer manager.Close()
@@ -91,8 +90,7 @@ func TestCreateTopicWithDelay(t *testing.T) {
 	factory, err := kafka.NewMockFactory(options, changefeed)
 	require.NoError(t, err)
 
-	ctx := context.Background()
-	adminClient, err := factory.AdminClient(ctx)
+	adminClient, err := factory.AdminClient()
 	require.NoError(t, err)
 	defer adminClient.Close()
 	cfg := &kafka.AutoCreateTopicConfig{
@@ -101,6 +99,7 @@ func TestCreateTopicWithDelay(t *testing.T) {
 		ReplicationFactor: 1,
 	}
 
+	ctx := context.Background()
 	topic := "new_topic"
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	manager := newKafkaTopicManager(ctx, topic, changefeedID, adminClient, cfg)

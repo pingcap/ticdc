@@ -49,7 +49,7 @@ func NewFactory(
 	}, nil
 }
 
-func (f *factory) AdminClient(_ context.Context) (ClusterAdminClient, error) {
+func (f *factory) AdminClient() (ClusterAdminClient, error) {
 	client, err := kafka.NewAdminClient(f.config)
 	if err != nil {
 		return nil, err
@@ -58,7 +58,7 @@ func (f *factory) AdminClient(_ context.Context) (ClusterAdminClient, error) {
 }
 
 // SyncProducer creates a sync producer to Producer message to kafka
-func (f *factory) SyncProducer(_ context.Context) (SyncProducer, error) {
+func (f *factory) SyncProducer() (SyncProducer, error) {
 	p, err := kafka.NewProducer(f.config)
 	if err != nil {
 		return nil, err
@@ -67,9 +67,7 @@ func (f *factory) SyncProducer(_ context.Context) (SyncProducer, error) {
 }
 
 // AsyncProducer creates an async producer to Producer message to kafka
-func (f *factory) AsyncProducer(
-	ctx context.Context,
-) (AsyncProducer, error) {
+func (f *factory) AsyncProducer() (AsyncProducer, error) {
 	p, err := kafka.NewProducer(f.config)
 	if err != nil {
 		return nil, err

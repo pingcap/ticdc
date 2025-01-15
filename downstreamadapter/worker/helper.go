@@ -60,7 +60,7 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, protocol, cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
 	}
 
-	kafkaComponent.Factory, err = factoryCreator(ctx, options, changefeedID)
+	kafkaComponent.Factory, err = factoryCreator(options, changefeedID)
 	if err != nil {
 		return kafkaComponent, protocol, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
 	}

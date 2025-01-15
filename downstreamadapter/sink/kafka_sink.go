@@ -80,7 +80,7 @@ func newKafkaSink(
 	}()
 
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	asyncProducer, err := kafkaComponent.Factory.AsyncProducer(ctx)
+	asyncProducer, err := kafkaComponent.Factory.AsyncProducer()
 	if err != nil {
 		return nil, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
 	}
@@ -250,9 +250,7 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 		adminClient:      kafkaComponent.AdminClient,
 		topicManager:     kafkaComponent.TopicManager,
 		statistics:       statistics,
-		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
-		errgroup:         errGroup,
-		errCh:            make(chan error, 1),
+		metricsCollector: kafkaComponent.Factory.MetricsCollector(),
 	}
 	go sink.Run(ctx)
 	return sink, dmlMockProducer, ddlMockProducer, nil

@@ -43,7 +43,7 @@ func newClusterAdminClient(
 	}
 }
 
-func (a *admin) clusterMetadata(ctx context.Context) (*kafka.Metadata, error) {
+func (a *admin) clusterMetadata(_ context.Context) (*kafka.Metadata, error) {
 	// request is not set, so it will return all metadata
 	return a.client.GetMetadata(nil, true, a.timeoutMs)
 }
