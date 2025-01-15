@@ -17,7 +17,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
@@ -26,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/tiflow/cdc/model"

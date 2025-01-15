@@ -16,7 +16,6 @@ package worker
 import (
 	"context"
 	"fmt"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"net/url"
 	"testing"
 	"time"
@@ -27,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
