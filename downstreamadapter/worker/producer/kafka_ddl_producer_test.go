@@ -19,8 +19,8 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/ticdc/pkg/common"
-	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	common "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
@@ -31,8 +31,8 @@ func TestDDLSyncBroadcastMessage(t *testing.T) {
 	options := getOptions()
 	options.MaxMessages = 1
 
-	changefeed := common.NewChangefeedID4Test("test", "test")
-	factory, err := kafka.NewMockFactory(options, changefeed)
+	changefeed := commonType.NewChangefeedID4Test("test", "test")
+	factory, err := kafka.NewMockFactory(ctx, options, changefeed)
 	require.NoError(t, err)
 	factory.(*kafka.MockFactory).ErrorReporter = t
 
@@ -45,12 +45,12 @@ func TestDDLSyncBroadcastMessage(t *testing.T) {
 		syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndSucceed()
 	}
 	err = p.SyncBroadcastMessage(ctx, kafka.DefaultMockTopicName,
-		kafka.DefaultMockPartitionNum, &ticommon.Message{})
+		kafka.DefaultMockPartitionNum, &common.Message{})
 	require.NoError(t, err)
 
 	p.Close()
 	err = p.SyncBroadcastMessage(ctx, kafka.DefaultMockTopicName,
-		kafka.DefaultMockPartitionNum, &ticommon.Message{})
+		kafka.DefaultMockPartitionNum, &common.Message{})
 	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
 	cancel()
 }
@@ -59,8 +59,8 @@ func TestDDLSyncSendMessage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	options := getOptions()
 
-	changefeed := common.NewChangefeedID4Test("test", "test")
-	factory, err := kafka.NewMockFactory(options, changefeed)
+	changefeed := commonType.NewChangefeedID4Test("test", "test")
+	factory, err := kafka.NewMockFactory(ctx, options, changefeed)
 	require.NoError(t, err)
 	factory.(*kafka.MockFactory).ErrorReporter = t
 
@@ -70,11 +70,11 @@ func TestDDLSyncSendMessage(t *testing.T) {
 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
 
 	syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndSucceed()
-	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &ticommon.Message{})
+	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &common.Message{})
 	require.NoError(t, err)
 
 	p.Close()
-	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &ticommon.Message{})
+	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &common.Message{})
 	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
 	cancel()
 }
@@ -89,8 +89,8 @@ func TestDDLProducerSendMsgFailed(t *testing.T) {
 	ctx = context.WithValue(ctx, "testing.T", t)
 
 	// This will make the first send failed.
-	changefeed := common.NewChangefeedID4Test("test", "test")
-	factory, err := kafka.NewMockFactory(options, changefeed)
+	changefeed := commonType.NewChangefeedID4Test("test", "test")
+	factory, err := kafka.NewMockFactory(ctx, options, changefeed)
 	require.NoError(t, err)
 	factory.(*kafka.MockFactory).ErrorReporter = t
 
@@ -101,7 +101,7 @@ func TestDDLProducerSendMsgFailed(t *testing.T) {
 	defer p.Close()
 
 	syncProducer.(*kafka.MockSaramaSyncProducer).Producer.ExpectSendMessageAndFail(sarama.ErrMessageTooLarge)
-	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &ticommon.Message{})
+	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &common.Message{})
 	require.ErrorIs(t, err, sarama.ErrMessageTooLarge)
 }
 
@@ -110,8 +110,8 @@ func TestDDLProducerDoubleClose(t *testing.T) {
 	defer cancel()
 	options := getOptions()
 
-	changefeed := common.NewChangefeedID4Test("test", "test")
-	factory, err := kafka.NewMockFactory(options, changefeed)
+	changefeed := commonType.NewChangefeedID4Test("test", "test")
+	factory, err := kafka.NewMockFactory(ctx, options, changefeed)
 	require.NoError(t, err)
 	factory.(*kafka.MockFactory).ErrorReporter = t
 
