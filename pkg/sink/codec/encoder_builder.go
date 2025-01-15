@@ -17,7 +17,7 @@ import (
 	"context"
 
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
@@ -36,6 +36,6 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncod
 	// case config.ProtocolSimple:
 	// 	return simple.NewEncoder(ctx, cfg)
 	default:
-		return nil, cerror.ErrSinkUnknownProtocol.GenWithStackByArgs(cfg.Protocol)
+		return nil, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(cfg.Protocol)
 	}
 }

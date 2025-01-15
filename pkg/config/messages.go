@@ -16,7 +16,7 @@ package config
 import (
 	"time"
 
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/p2p"
 )
 
@@ -99,7 +99,7 @@ func (c *MessagesConfig) ValidateAndAdjust() error {
 		c.ClientMaxBatchInterval = defaultMessageConfig.ClientMaxBatchInterval
 	}
 	if time.Duration(c.ClientMaxBatchInterval) > 10*time.Second {
-		return cerrors.ErrInvalidServerOption.GenWithStackByArgs("client-max-batch-interval is larger than 10s")
+		return errors.ErrInvalidServerOption.GenWithStackByArgs("client-max-batch-interval is larger than 10s")
 	}
 
 	// We do not impose an upper limit on ClientMaxBatchSize and ClientMaxBatchCount
@@ -130,7 +130,7 @@ func (c *MessagesConfig) ValidateAndAdjust() error {
 		c.KeepAliveTimeout = defaultMessageConfig.KeepAliveTimeout
 	}
 	if time.Duration(c.ServerAckInterval) > 10*time.Second {
-		return cerrors.ErrInvalidServerOption.GenWithStackByArgs("server-ack-interval is larger than 10s")
+		return errors.ErrInvalidServerOption.GenWithStackByArgs("server-ack-interval is larger than 10s")
 	}
 
 	if c.ServerWorkerPoolSize <= 0 {
@@ -138,14 +138,14 @@ func (c *MessagesConfig) ValidateAndAdjust() error {
 	}
 	// We put an upper limit on ServerWorkerPoolSize to avoid having to create many goroutines.
 	if c.ServerWorkerPoolSize > 32 {
-		return cerrors.ErrInvalidServerOption.GenWithStackByArgs("server-worker-pool-size is larger than 32")
+		return errors.ErrInvalidServerOption.GenWithStackByArgs("server-worker-pool-size is larger than 32")
 	}
 
 	if c.MaxRecvMsgSize == 0 {
 		c.MaxRecvMsgSize = defaultMaxRecvMsgSize
 	}
 	if c.MaxRecvMsgSize < 0 {
-		return cerrors.ErrInvalidServerOption.GenWithStackByArgs(
+		return errors.ErrInvalidServerOption.GenWithStackByArgs(
 			"max-recv-msg-size must be larger than 0")
 	}
 

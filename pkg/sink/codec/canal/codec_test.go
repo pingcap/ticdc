@@ -22,7 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -405,7 +405,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 		encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
 		require.NoError(t, err)
 		err = encoder.AppendRowChangedEvent(context.Background(), "", rowEvent)
-		require.ErrorIs(t, err, cerror.ErrMessageTooLarge)
+		require.ErrorIs(t, err, errors.ErrMessageTooLarge)
 	}
 	// message large + handle only
 	{

@@ -28,9 +28,8 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/linkedin/goavro/v2"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/httputil"
 	"github.com/pingcap/tiflow/pkg/security"
@@ -85,19 +84,19 @@ func NewConfluentSchemaManager(
 	resp, err := httpCli.Get(ctx, registryURL)
 	if err != nil {
 		log.Error("Test connection to Schema Registry failed", zap.Error(err))
-		return nil, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	defer resp.Body.Close()
 
 	text, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Error("Reading response from Schema Registry failed", zap.Error(err))
-		return nil, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
 	if string(text[:]) != "{}" {
 		log.Error("Unexpected response from Schema Registry", zap.ByteString("response", text))
-		return nil, cerror.ErrAvroSchemaAPIError.GenWithStack(
+		return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
 			"Unexpected response from Schema Registry",
 		)
 	}
@@ -128,7 +127,7 @@ func (m *confluentSchemaManager) Register(
 	err := json.Compact(buffer, []byte(schemaDefinition))
 	if err != nil {
 		log.Error("Could not compact schema", zap.Error(err))
-		return id, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	reqBody := registerRequest{
 		Schema: buffer.String(),
@@ -136,7 +135,7 @@ func (m *confluentSchemaManager) Register(
 	payload, err := json.Marshal(&reqBody)
 	if err != nil {
 		log.Error("Could not marshal request to the Registry", zap.Error(err))
-		return id, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	uri := m.registryURL + "/subjects/" + url.QueryEscape(schemaName) + "/versions"
 	log.Info("Registering schema", zap.String("uri", uri), zap.ByteString("payload", payload))
@@ -144,7 +143,7 @@ func (m *confluentSchemaManager) Register(
 	req, err := http.NewRequestWithContext(ctx, "POST", uri, bytes.NewReader(payload))
 	if err != nil {
 		log.Error("Failed to NewRequestWithContext", zap.Error(err))
-		return id, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	req.Header.Add(
 		"Accept",
@@ -161,7 +160,7 @@ func (m *confluentSchemaManager) Register(
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Error("Failed to read response from Registry", zap.Error(err))
-		return id, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
 	if resp.StatusCode != 200 {
@@ -175,18 +174,18 @@ func (m *confluentSchemaManager) Register(
 			zap.ByteString("requestBody", payload),
 			zap.ByteString("responseBody", body),
 		)
-		return id, cerror.ErrAvroSchemaAPIError.GenWithStackByArgs()
+		return id, errors.ErrAvroSchemaAPIError.GenWithStackByArgs()
 	}
 
 	var jsonResp registerResponse
 	err = json.Unmarshal(body, &jsonResp)
 	if err != nil {
 		log.Error("Failed to parse result from Registry", zap.Error(err))
-		return id, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
 	if jsonResp.SchemaID == 0 {
-		return id, cerror.ErrAvroSchemaAPIError.GenWithStack(
+		return id, errors.ErrAvroSchemaAPIError.GenWithStack(
 			"Illegal schema ID returned from Registry %d",
 			jsonResp.SchemaID,
 		)
@@ -220,7 +219,7 @@ func (m *confluentSchemaManager) Lookup(
 	req, err := http.NewRequestWithContext(ctx, "GET", uri, nil)
 	if err != nil {
 		log.Error("Error constructing request for Registry lookup", zap.Error(err))
-		return nil, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	req.Header.Add(
 		"Accept",
@@ -237,7 +236,7 @@ func (m *confluentSchemaManager) Lookup(
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Error("Failed to parse result from Registry", zap.Error(err))
-		return nil, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
 	if resp.StatusCode != 200 && resp.StatusCode != 404 {
@@ -245,7 +244,7 @@ func (m *confluentSchemaManager) Lookup(
 			zap.Int("status", resp.StatusCode),
 			zap.String("uri", uri),
 			zap.ByteString("responseBody", body))
-		return nil, cerror.ErrAvroSchemaAPIError.GenWithStack(
+		return nil, errors.ErrAvroSchemaAPIError.GenWithStack(
 			"Failed to query schema from the Registry, HTTP error",
 		)
 	}
@@ -254,7 +253,7 @@ func (m *confluentSchemaManager) Lookup(
 		log.Warn("Specified schema not found in Registry",
 			zap.String("key", schemaName),
 			zap.Int("schemaID", schemaID.confluentSchemaID))
-		return nil, cerror.ErrAvroSchemaAPIError.GenWithStackByArgs(
+		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
 			"Schema not found in Registry",
 		)
 	}
@@ -263,14 +262,14 @@ func (m *confluentSchemaManager) Lookup(
 	err = json.Unmarshal(body, &jsonResp)
 	if err != nil {
 		log.Error("Failed to parse result from Registry", zap.Error(err))
-		return nil, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
 	cacheEntry := new(schemaCacheEntry)
 	cacheEntry.codec, err = goavro.NewCodec(jsonResp.Schema)
 	if err != nil {
 		log.Error("Creating Avro codec failed", zap.Error(err))
-		return nil, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	cacheEntry.schemaID.confluentSchemaID = schemaID.confluentSchemaID
 	cacheEntry.header, err = m.getMsgHeader(schemaID.confluentSchemaID)
@@ -317,7 +316,7 @@ func (m *confluentSchemaManager) GetCachedOrRegister(
 	codec, err := goavro.NewCodec(schema)
 	if err != nil {
 		log.Error("GetCachedOrRegister: Could not make goavro codec", zap.Error(err))
-		return nil, nil, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return nil, nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
 	id, err := m.Register(ctx, schemaSubject, schema)
@@ -356,7 +355,7 @@ func (m *confluentSchemaManager) ClearRegistry(ctx context.Context, schemaSubjec
 	req, err := http.NewRequestWithContext(ctx, "DELETE", uri, nil)
 	if err != nil {
 		log.Error("Could not construct request for clearRegistry", zap.Error(err))
-		return cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	req.Header.Add(
 		"Accept",
@@ -383,7 +382,7 @@ func (m *confluentSchemaManager) ClearRegistry(ctx context.Context, schemaSubjec
 	}
 
 	log.Error("Error when clearing Registry", zap.Int("status", resp.StatusCode))
-	return cerror.ErrAvroSchemaAPIError.GenWithStack(
+	return errors.ErrAvroSchemaAPIError.GenWithStack(
 		"Error when clearing Registry, status = %d",
 		resp.StatusCode,
 	)
@@ -400,11 +399,11 @@ func (m *confluentSchemaManager) getMsgHeader(schemaID int) ([]byte, error) {
 	head := new(bytes.Buffer)
 	err := head.WriteByte(magicByte)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrEncodeFailed, err)
+		return nil, errors.WrapError(errors.ErrEncodeFailed, err)
 	}
 	err = binary.Write(head, binary.BigEndian, int32(schemaID))
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrEncodeFailed, err)
+		return nil, errors.WrapError(errors.ErrEncodeFailed, err)
 	}
 	return head.Bytes(), nil
 }
@@ -431,7 +430,7 @@ func httpRetry(
 
 	if err != nil {
 		log.Error("Failed to parse response", zap.Error(err))
-		return nil, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	for {
 		if data != nil {
@@ -467,7 +466,7 @@ func httpRetry(
 
 func getConfluentSchemaIDFromHeader(header []byte) (uint32, error) {
 	if len(header) < 5 {
-		return 0, cerror.ErrDecodeFailed.GenWithStackByArgs("header too short")
+		return 0, errors.ErrDecodeFailed.GenWithStackByArgs("header too short")
 	}
 	return binary.BigEndian.Uint32(header[1:5]), nil
 }

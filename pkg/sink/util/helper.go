@@ -23,7 +23,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	ticonfig "github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/sink"
 	"github.com/pingcap/tiflow/pkg/util"
@@ -40,7 +40,7 @@ func GetEncoderConfig(
 ) (*common.Config, error) {
 	encoderConfig := common.NewConfig(protocol)
 	if err := encoderConfig.Apply(sinkURI, sinkConfig); err != nil {
-		return nil, cerror.WrapError(cerror.ErrSinkInvalidConfig, err)
+		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
 	}
 	// Always set encoder's `MaxMessageBytes` equal to producer's `MaxMessageBytes`
 	// to prevent that the encoder generate batched message too large
@@ -51,12 +51,12 @@ func GetEncoderConfig(
 
 	tz, err := util.GetTimezone(config.GetGlobalServerConfig().TZ)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrSinkInvalidConfig, err)
+		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
 	}
 	encoderConfig.TimeZone = tz
 
-	if err := encoderConfig.Validate(); err != nil {
-		return nil, cerror.WrapError(cerror.ErrSinkInvalidConfig, err)
+	if err = encoderConfig.Validate(); err != nil {
+		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
 	}
 
 	return encoderConfig, nil
@@ -360,7 +360,7 @@ func (s *TableIDStore) GetAllTableIds() []int64 {
 func IsMysqlCompatibleBackend(sinkURIStr string) (bool, error) {
 	sinkURI, err := url.Parse(sinkURIStr)
 	if err != nil {
-		return false, cerror.WrapError(cerror.ErrSinkURIInvalid, err)
+		return false, errors.WrapError(errors.ErrSinkURIInvalid, err)
 	}
 	scheme := sink.GetScheme(sinkURI)
 	return sink.IsMySQLCompatibleScheme(scheme), nil

@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,7 +26,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/api/middleware"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/httputil"
@@ -374,8 +373,8 @@ func (r *Request) Do(ctx context.Context) (res *Result) {
 		}
 		// rewind the request body when r.body is not nil
 		if seeker, ok := r.body.(io.Seeker); ok && r.body != nil {
-			if _, err := seeker.Seek(0, 0); err != nil {
-				return cerrors.ErrRewindRequestBodyError
+			if _, err = seeker.Seek(0, 0); err != nil {
+				return errors.ErrRewindRequestBodyError
 			}
 		}
 
@@ -408,7 +407,7 @@ func (r *Request) Do(ctx context.Context) (res *Result) {
 			retry.WithBackoffBaseDelay(baseDelay),
 			retry.WithBackoffMaxDelay(maxDelay),
 			retry.WithMaxTries(maxRetries),
-			retry.WithIsRetryableErr(cerrors.IsRetryableError),
+			retry.WithIsRetryableErr(errors.IsRetryableError),
 		)
 	} else {
 		err = fn()
@@ -486,7 +485,7 @@ func (r Result) Into(obj interface{}) error {
 	}
 
 	if len(r.body) == 0 {
-		return cerrors.ErrZeroLengthResponseBody.GenWithStackByArgs(r.statusCode)
+		return errors.ErrZeroLengthResponseBody.GenWithStackByArgs(r.statusCode)
 	}
 
 	return json.Unmarshal(r.body, obj)

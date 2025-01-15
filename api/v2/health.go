@@ -17,7 +17,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/model"
 )
 
@@ -31,7 +31,7 @@ import (
 func (h *OpenAPIV2) serverHealth(c *gin.Context) {
 	liveness := h.server.Liveness()
 	if liveness != model.LivenessCaptureAlive {
-		err := cerror.ErrClusterIsUnhealthy.FastGenByArgs()
+		err := errors.ErrClusterIsUnhealthy.FastGenByArgs()
 		_ = c.Error(err)
 		return
 	}

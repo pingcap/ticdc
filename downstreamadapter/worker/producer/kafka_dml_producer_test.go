@@ -15,14 +15,13 @@ package producer
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/IBM/sarama"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
@@ -51,7 +50,7 @@ func TestProducerAck(t *testing.T) {
 	require.Equal(t, 1, config.Producer.Flush.MaxMessages)
 
 	changefeed := commonType.NewChangefeedID4Test("test", "test")
-	factory, err := kafka.NewMockFactory(options, changefeed)
+	factory, err := kafka.NewMockFactory(ctx, options, changefeed)
 	require.NoError(t, err)
 	factory.(*kafka.MockFactory).ErrorReporter = t
 
@@ -106,7 +105,7 @@ func TestProducerAck(t *testing.T) {
 		Key:   []byte("cancel"),
 		Value: nil,
 	})
-	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
+	require.ErrorIs(t, err, errors.ErrKafkaProducerClosed)
 }
 
 func TestProducerSendMsgFailed(t *testing.T) {
@@ -120,7 +119,7 @@ func TestProducerSendMsgFailed(t *testing.T) {
 	options.MaxMessageBytes = 1
 
 	changefeed := commonType.NewChangefeedID4Test("test", "test")
-	factory, err := kafka.NewMockFactory(options, changefeed)
+	factory, err := kafka.NewMockFactory(ctx, options, changefeed)
 	require.NoError(t, err)
 	factory.(*kafka.MockFactory).ErrorReporter = t
 
@@ -154,7 +153,7 @@ func TestProducerSendMsgFailed(t *testing.T) {
 		})
 		if err != nil {
 			require.Condition(t, func() bool {
-				return errors.Is(err, cerror.ErrKafkaProducerClosed) ||
+				return errors.Is(err, errors.ErrKafkaProducerClosed) ||
 					errors.Is(err, context.DeadlineExceeded)
 			}, "should return error")
 		}
@@ -181,7 +180,7 @@ func TestProducerDoubleClose(t *testing.T) {
 	defer cancel()
 
 	changefeed := commonType.NewChangefeedID4Test("test", "test")
-	factory, err := kafka.NewMockFactory(options, changefeed)
+	factory, err := kafka.NewMockFactory(ctx, options, changefeed)
 	require.NoError(t, err)
 	factory.(*kafka.MockFactory).ErrorReporter = t
 

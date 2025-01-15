@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -198,7 +198,7 @@ func TestLargeMessage(t *testing.T) {
 	}
 
 	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
-	require.ErrorIs(t, err, cerror.ErrMessageTooLarge)
+	require.ErrorIs(t, err, errors.ErrMessageTooLarge)
 }
 
 func TestLargeMessageWithHandle(t *testing.T) {
@@ -275,5 +275,5 @@ func TestLargeMessageWithoutHandle(t *testing.T) {
 	}
 
 	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
-	require.ErrorIs(t, err, cerror.ErrOpenProtocolCodecInvalidData)
+	require.ErrorIs(t, err, errors.ErrOpenProtocolCodecInvalidData)
 }

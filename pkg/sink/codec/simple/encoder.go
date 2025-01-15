@@ -16,10 +16,9 @@ package simple
 import (
 	"context"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"go.uber.org/zap"
@@ -78,7 +77,7 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 			zap.Int("maxMessageBytes", e.config.MaxMessageBytes),
 			zap.Int("length", length),
 			zap.Any("table", event.TableInfo.TableName))
-		return cerror.ErrMessageTooLarge.GenWithStackByArgs()
+		return errors.ErrMessageTooLarge.GenWithStackByArgs()
 	}
 
 	var claimCheckLocation string
@@ -114,7 +113,7 @@ func (e *Encoder) AppendRowChangedEvent(ctx context.Context, _ string, event *co
 		zap.Int("maxMessageBytes", e.config.MaxMessageBytes),
 		zap.Int("length", result.Length()),
 		zap.Any("table", event.TableInfo.TableName))
-	return cerror.ErrMessageTooLarge.GenWithStackByArgs()
+	return errors.ErrMessageTooLarge.GenWithStackByArgs()
 }
 
 // Build implement the RowEventEncoder interface

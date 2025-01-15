@@ -20,9 +20,8 @@ import (
 	"strings"
 	"time"
 
-	cerror "github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	cmdUtil "github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/filter"
@@ -139,21 +138,21 @@ func (o *option) Adjust(upstreamURI *url.URL, configFile string) error {
 	if configFile != "" {
 		err = cmdUtil.StrictDecodeFile(configFile, "kafka consumer", replicaConfig)
 		if err != nil {
-			return cerror.Trace(err)
+			return errors.Trace(err)
 		}
 		if _, err = filter.VerifyTableRules(replicaConfig.Filter); err != nil {
-			return cerror.Trace(err)
+			return errors.Trace(err)
 		}
 	}
 	o.replicaConfig = replicaConfig
 
 	o.codecConfig = common.NewConfig(protocol)
 	if err = o.codecConfig.Apply(upstreamURI, o.replicaConfig); err != nil {
-		return cerror.Trace(err)
+		return errors.Trace(err)
 	}
 	tz, err := util.GetTimezone(o.timezone)
 	if err != nil {
-		return cerrors.Trace(err)
+		return errors.Trace(err)
 	}
 	o.codecConfig.TimeZone = tz
 

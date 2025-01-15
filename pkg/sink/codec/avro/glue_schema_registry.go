@@ -27,10 +27,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/glue/types"
 	"github.com/google/uuid"
 	"github.com/linkedin/goavro/v2"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
@@ -149,20 +148,20 @@ func (m *glueSchemaManager) Lookup(
 		return nil, errors.Trace(err)
 	}
 	if !ok {
-		return nil, cerror.ErrAvroSchemaAPIError.
+		return nil, errors.ErrAvroSchemaAPIError.
 			GenWithStackByArgs("schema not found in registry, name: %s, id: %s", schemaName, schemaID.glueSchemaID)
 	}
 
 	codec, err := goavro.NewCodec(schema)
 	if err != nil {
 		log.Error("could not make goavro codec", zap.Error(err))
-		return nil, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
 	header, err := m.getMsgHeader(schemaID.glueSchemaID)
 	if err != nil {
 		log.Error("could not get message header", zap.Error(err))
-		return nil, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
 	m.cacheRWLock.Lock()
@@ -209,7 +208,7 @@ func (m *glueSchemaManager) GetCachedOrRegister(
 	codec, err := goavro.NewCodec(schema)
 	if err != nil {
 		log.Error("GetCachedOrRegister: Could not make goavro codec", zap.Error(err))
-		return nil, nil, cerror.WrapError(cerror.ErrAvroSchemaAPIError, err)
+		return nil, nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 
 	log.Info(fmt.Sprintf("The code to be registered: %#v", schema))
@@ -338,7 +337,7 @@ func (m *glueSchemaManager) getMsgHeader(schemaID string) ([]byte, error) {
 	header = append(header, compressionDefaultByte)
 	uuid, err := uuid.ParseBytes([]byte(schemaID))
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrEncodeFailed, err)
+		return nil, errors.WrapError(errors.ErrEncodeFailed, err)
 	}
 	header = append(header, uuid[:]...)
 	return header, nil
@@ -346,7 +345,7 @@ func (m *glueSchemaManager) getMsgHeader(schemaID string) ([]byte, error) {
 
 func getGlueSchemaIDFromHeader(header []byte) (string, error) {
 	if len(header) < 18 {
-		return "", cerror.ErrDecodeFailed.GenWithStackByArgs("header is too short")
+		return "", errors.ErrDecodeFailed.GenWithStackByArgs("header is too short")
 	}
 	uuid := uuid.UUID(header[2:18])
 	return uuid.String(), nil
