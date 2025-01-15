@@ -204,6 +204,12 @@ func (c *eventBroker) sendReadyEvent(
 	wrapEvent := newWrapReadyEvent(server, event)
 	c.getMessageCh(d.workerIndex) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
+	log.Debug("send ready event to dispatcher",
+		zap.Uint64("clusterID", d.info.GetClusterID()),
+		zap.String("changefeed", d.info.GetChangefeedID().String()),
+		zap.Stringer("dispatcher", d.id),
+		zap.Uint64("startTs", d.info.GetStartTs()),
+		zap.Int64("tableID", d.info.GetTableSpan().TableID))
 }
 
 func (c *eventBroker) sendNotReusableEvent(
@@ -391,6 +397,12 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 	}
 	c.getMessageCh(task.workerIndex) <- wrapE
 	metricEventServiceSendCommandCount.Inc()
+	log.Debug("send handshake event to dispatcher",
+		zap.Uint64("clusterID", task.info.GetClusterID()),
+		zap.String("changefeed", task.info.GetChangefeedID().String()),
+		zap.Stringer("dispatcher", task.id),
+		zap.Uint64("startTs", task.info.GetStartTs()),
+		zap.Int64("tableID", task.info.GetTableSpan().TableID))
 	return false
 }
 
