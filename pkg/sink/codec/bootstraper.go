@@ -15,11 +15,11 @@ package codec
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"

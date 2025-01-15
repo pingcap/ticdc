@@ -18,13 +18,12 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
-	mock_changefeed "github.com/pingcap/ticdc/coordinator/changefeed/mock"
+	"github.com/pingcap/ticdc/coordinator/changefeed/mock"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/tiflow/cdc/model"
@@ -158,7 +157,7 @@ func TestGetChangefeed(t *testing.T) {
 	require.Equal(t, uint64(1), status.CheckpointTs)
 
 	_, _, err = controller.GetChangefeed(context.Background(), common.NewChangeFeedDisplayName("test1", "default"))
-	require.True(t, cerror.ErrChangeFeedNotExists.Equal(err))
+	require.True(t, errors.ErrChangeFeedNotExists.Equal(err))
 }
 
 func TestRemoveChangefeed(t *testing.T) {
