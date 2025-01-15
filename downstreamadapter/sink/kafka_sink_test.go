@@ -14,7 +14,6 @@
 package sink
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -74,7 +73,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	}
 	dmlEvent.CommitTs = 2
 
-	err = sink.WriteBlockEvent(context.Background(), ddlEvent)
+	err = sink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
 	sink.AddDMLEvent(dmlEvent)

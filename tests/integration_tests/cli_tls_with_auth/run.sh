@@ -177,7 +177,6 @@ EOF
 	echo "y" | run_cdc_cli unsafe delete-service-gc-safepoint
 	run_cdc_cli unsafe reset --no-confirm --pd=$pd_addr
 
-	
 	# Check if the coordinator is online
 	for i in {1..100}; do
 		curl -s -X GET "https://127.0.0.1:8300/api/v2/captures" --cacert "${TLS_DIR}/ca.pem" --cert "${TLS_DIR}/client.pem" --key "${TLS_DIR}/client-key.pem" | grep -q "\"is_coordinator\":true"
