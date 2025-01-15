@@ -16,6 +16,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"github.com/pingcap/tiflow/pkg/errors"
 	"net/url"
 	"testing"
 	"time"
@@ -74,11 +75,17 @@ func TestWriteEvents(t *testing.T) {
 	dmlEvent.CommitTs = 2
 
 	dmlWorker := kafkaDMLWorkerForTest(t)
-	dmlWorker.Run(context.Background())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		err := dmlWorker.Run(ctx)
+		require.True(t, errors.Is(err, context.Canceled))
+	}()
 	dmlWorker.GetEventChan() <- dmlEvent
 
 	// Wait for the events to be received by the worker.
 	time.Sleep(time.Second)
 	require.Len(t, dmlWorker.producer.(*producer.MockProducer).GetAllEvents(), 2)
 	require.Equal(t, count, 1)
+	cancel()
 }
