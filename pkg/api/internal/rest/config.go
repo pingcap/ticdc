@@ -17,8 +17,7 @@ import (
 	"net/url"
 	"path"
 
-	"github.com/pingcap/errors"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/httputil"
 	"github.com/pingcap/tiflow/pkg/security"
 )
@@ -68,7 +67,7 @@ func defaultServerURLFromConfig(config *Config) (*url.URL, string, error) {
 			return nil, "", errors.Trace(err)
 		}
 		if hostURL.Path != "" && hostURL.Path != "/" {
-			return nil, "", cerrors.ErrInvalidHost.GenWithStackByArgs(base)
+			return nil, "", errors.ErrInvalidHost.GenWithStackByArgs(base)
 		}
 	}
 	versionedPath := path.Join("/", config.APIPath, config.Version)

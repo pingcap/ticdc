@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	clogutil "github.com/pingcap/tiflow/pkg/logutil"
 	"go.uber.org/zap"
 	"golang.org/x/net/netutil"
@@ -76,9 +76,9 @@ func (s *HttpServer) Run(ctx context.Context) error {
 	log.Info("http server is running", zap.String("addr", s.listener.Addr().String()))
 	err := s.server.Serve(s.listener)
 	if err != nil {
-		log.Error("http server error", zap.Error(cerror.WrapError(cerror.ErrServeHTTP, err)))
+		log.Error("http server error", zap.Error(err))
 	}
-	return err
+	return errors.WrapError(errors.ErrServeHTTP, err)
 }
 
 func (s *HttpServer) Close(ctx context.Context) error {

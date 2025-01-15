@@ -22,10 +22,9 @@ import (
 	"time"
 
 	"github.com/dustin/go-humanize"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/tidb/pkg/util/gctuner"
@@ -214,7 +213,7 @@ func (c *server) registerNodeToEtcd(ctx context.Context) error {
 	}
 	err := c.EtcdClient.PutCaptureInfo(ctx, cInfo, c.session.Lease())
 	if err != nil {
-		return cerror.WrapError(cerror.ErrCaptureRegister, err)
+		return errors.WrapError(errors.ErrCaptureRegister, err)
 	}
 	return nil
 }
