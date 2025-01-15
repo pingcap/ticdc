@@ -88,11 +88,19 @@ type syncProducer struct {
 
 func (s *syncProducer) SendMessage(
 	ctx context.Context,
-	topic string, partitionNum int32,
+	topic string, partition int32,
 	message *common.Message,
 ) error {
-	msg := &kafka.Message{}
-	s.p.Produce(msg, s.deliveryChan)
+	msg := &kafka.Message{
+		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: partition},
+		Key:            message.Key,
+		Value:          message.Value,
+		Opaque:         message.Callback,
+	}
+	err := s.p.Produce(msg, s.deliveryChan)
+	if err != nil {
+		return err
+	}
 	event := <-s.deliveryChan
 	switch e := event.(type) {
 	case *kafka.Error:
@@ -162,7 +170,10 @@ func (a *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 		case event := <-a.p.Events():
 			switch e := event.(type) {
 			case *kafka.Message:
-
+				callback := e.Opaque.(func())
+				if callback != nil {
+					callback()
+				}
 			case *kafka.Error:
 				return errors.WrapError(errors.ErrKafkaAsyncSendMessage, e)
 			}

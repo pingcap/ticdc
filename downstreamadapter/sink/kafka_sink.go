@@ -117,6 +117,7 @@ func newKafkaSink(
 		topicManager:     kafkaComponent.TopicManager,
 		statistics:       statistics,
 		metricsCollector: kafkaComponent.Factory.MetricsCollector(),
+		ctx:              ctx,
 	}
 	return sink, nil
 }

@@ -67,7 +67,7 @@ func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string,
 	if err != nil {
 		return "", errors.Trace(err)
 	}
-	controllerID := response.OriginatingBroker.ID
+	controllerID := response.Brokers[0].ID
 
 	resources := []kafka.ConfigResource{
 		{

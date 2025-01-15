@@ -53,12 +53,12 @@ type kafkaMetrics struct {
 	// Number of topics in the metadata cache.
 	MetadataCacheCnt int `json:"metadata_cache_cnt"`
 
-	Brokers []broker `json:"brokers"`
+	Brokers map[string]broker `json:"brokers"`
 }
 
 type broker struct {
 	Name     string `json:"name"`
-	Nodeid   int    `json:"nodeid"`
+	Nodeid   int    `json:"nodeid"` // -1 for bootstraps
 	Nodename string `json:"nodename"`
 	State    string `json:"state"`
 	Rtt      window `json:"rtt"`
@@ -85,67 +85,70 @@ func NewMetricsCollector(
 }
 
 func (m *metricsCollector) Run(ctx context.Context) {
-	_ = m.config.SetKey("statistics.interval.ms", RefreshMetricsInterval.Milliseconds())
-	_ = m.config.SetKey("stats_cb", m.collect)
-	client, err := kafka.NewAdminClient(m.config)
+	_ = m.config.SetKey("statistics.interval.ms", int(RefreshMetricsInterval.Milliseconds()))
+	p, err := kafka.NewProducer(m.config)
 	if err != nil {
-		log.Error("create client failed", zap.Error(err))
+		log.Error("create producer failed", zap.Error(err))
 		return
 	}
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("Kafka metrics collector stopped",
+			log.Warn("Kafka metrics collector stopped",
 				zap.String("namespace", m.changefeedID.String()))
-			client.Close()
+			p.Close()
 			m.cleanupMetrics()
 			return
+		case event := <-p.Events():
+			switch e := event.(type) {
+			case *kafka.Stats:
+				m.collect(e.String())
+			}
 		}
 	}
 }
+
 func (m *metricsCollector) collect(data string) {
 	var statistics kafkaMetrics
 	if err := json.Unmarshal([]byte(data), &statistics); err != nil {
 		log.Error("kafka metrics collect failed", zap.Error(err))
+		return
 	}
 	// metrics is collected each 5 seconds, divide by 5 to get per seconds average.
-	// compressionRatioGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
+	// compressionRatioGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
 	// 	Set(float64(statistics.Writes / 5))
-	recordsPerRequestGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
+	recordsPerRequestGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
 		Set(float64(statistics.Tx) / 5)
-	requestsInFlightGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
+	requestsInFlightGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
 		Set(float64(statistics.MsgCount) / 5)
-	responseRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
+	responseRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
 		Set(float64(statistics.Rx) / 5)
-	// RequestRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
+	// RequestRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
 	// 	Set(float64(statistics.Writes / 5))
 
-	latency := 0
 	for _, broker := range statistics.Brokers {
-		latency += broker.Rtt.Avg
+		// latency is in milliseconds
+		RequestLatencyGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), broker.Name, "avg").
+			Set(float64(broker.Rtt.Avg) * 1000 / 5)
+		// OutgoingByteRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
+		// 	Set(float64(statistics.Bytes / 5))
 	}
-	latency = latency / len(statistics.Brokers)
-	// latency is in milliseconds
-	RequestLatencyGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
-		Set(float64(latency) * 1000 / 5)
-	// OutgoingByteRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
-	// 	Set(float64(statistics.Bytes / 5))
 }
 
 func (m *metricsCollector) cleanupMetrics() {
 	// compressionRatioGauge.
-	// 	DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String())
+	// 	DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
 	recordsPerRequestGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String())
+		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
 	requestsInFlightGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String())
+		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
 	responseRateGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String())
+		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
 	// RequestRateGauge.
-	// 	DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String())
+	// 	DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
 
 	RequestLatencyGauge.
 		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
-	OutgoingByteRateGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String())
+	// OutgoingByteRateGauge.
+	// 	DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
 }
