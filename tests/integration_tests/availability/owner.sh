@@ -19,11 +19,11 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 MAX_RETRIES=10
 function test_owner_ha() {
-	# test_kill_owner
+	test_kill_owner
 	test_hang_up_owner
-	# test_expire_owner
-	# test_owner_retryable_error
-	# test_delete_owner_key
+	test_expire_owner
+	test_owner_retryable_error
+	test_delete_owner_key
 }
 # test_kill_owner starts two captures and kill the owner
 # we expect the live capture will be elected as the new
@@ -133,9 +133,9 @@ function test_owner_retryable_error() {
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/coordinator/coordinator-run-with-error=1*return(true);github.com/pingcap/ticdc/server/resign-failed=1*return(true)'
 	# run another server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix test_owner_retryable_error.server2 --addr "127.0.0.1:8301"
-	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep -v \"$owner_id\" | grep id"
+	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep -v \"$owner_id\" | grep -v cluster_id | grep id"
 	capture_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}' | grep -v "$owner_pid")
-	capture_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}' | grep -v "$owner_id")
+	capture_id=$($CDC_BINARY cli capture list --server 'http://127.0.0.1:8301' 2>&1 | awk -F '"' '/\"id/{print $4}' | grep -v "$owner_id")
 	echo "capture_id:" $capture_id
 	# resign the first capture, the second capture campaigns to be owner.
 	# However we have injected two failpoints, the second capture owner runs
@@ -169,9 +169,9 @@ function test_delete_owner_key() {
 
 	# run another server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8301" --logsuffix test_gap_between_watch_capture.server2
-	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep -v \"$owner_id\" | grep id"
+	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep -v \"$owner_id\" | grep -v cluster_id | grep id"
 	capture_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}' | grep -v "$owner_pid")
-	capture_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/id/{print $4}' | grep -v "$owner_id")
+	capture_id=$($CDC_BINARY cli capture list --server 'http://127.0.0.1:8301' 2>&1 | awk -F '"' '/\"id/{print $4}' | grep -v "$owner_id")
 	echo "capture_id:" $capture_id
 
 	etcdctl del $owner_key
