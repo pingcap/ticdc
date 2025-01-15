@@ -64,7 +64,7 @@ func VerifySink(ctx context.Context, config *config.ChangefeedConfig, changefeed
 	scheme := sink.GetScheme(sinkURI)
 	switch scheme {
 	case sink.MySQLScheme, sink.MySQLSSLScheme, sink.TiDBScheme, sink.TiDBSSLScheme:
-		return verifyMySQLSink(changefeedID, sinkURI, config)
+		return verifyMySQLSink(ctx, changefeedID, sinkURI, config)
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
 		return verifyKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.BlackHoleScheme:
