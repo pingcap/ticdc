@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -112,7 +113,11 @@ func TestWriteDDLEvents(t *testing.T) {
 
 func TestWriteCheckpointTs(t *testing.T) {
 	ddlWorker := kafkaDDLWorkerForTest(t)
-	ddlWorker.Run(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		err := ddlWorker.Run(ctx)
+		require.True(t, errors.Is(err, context.Canceled))
+	}()
 
 	tableSchemaStore := util.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.KafkaSinkType)
 	ddlWorker.SetTableSchemaStore(tableSchemaStore)
@@ -123,4 +128,5 @@ func TestWriteCheckpointTs(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	require.Len(t, ddlWorker.producer.(*producer.MockProducer).GetAllEvents(), 2)
+	cancel()
 }
