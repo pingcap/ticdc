@@ -19,9 +19,8 @@ import (
 	"net/url"
 	"sync/atomic"
 
-	"github.com/pingcap/errors"
-
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/worker"
 	"github.com/pingcap/ticdc/pkg/common"
