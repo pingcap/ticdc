@@ -20,7 +20,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerrors "github.com/pingcap/tiflow/pkg/errors"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/retry"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"

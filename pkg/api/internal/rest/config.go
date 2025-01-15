@@ -18,7 +18,7 @@ import (
 	"path"
 
 	"github.com/pingcap/errors"
-	cerrors "github.com/pingcap/tiflow/pkg/errors"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/httputil"
 	"github.com/pingcap/tiflow/pkg/security"
 )

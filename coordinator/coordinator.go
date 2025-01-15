@@ -15,6 +15,7 @@ package coordinator
 
 import (
 	"context"
+	"github.com/pingcap/errors"
 	"math"
 	"time"
 
@@ -32,7 +33,6 @@ import (
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/txnutil/gc"
 	"github.com/tikv/client-go/v2/oracle"

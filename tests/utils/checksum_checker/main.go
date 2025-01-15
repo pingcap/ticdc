@@ -22,10 +22,10 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/sink/dmlsink/mq/transformer/columnselector"
 	cmdUtil "github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
 

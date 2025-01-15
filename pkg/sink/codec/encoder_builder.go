@@ -17,10 +17,10 @@ import (
 	"context"
 
 	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 )
 
 func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncoder, error) {

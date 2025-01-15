@@ -14,16 +14,16 @@
 package factory
 
 import (
+	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/tiflow/pkg/errors"
 	"strings"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	cmdconetxt "github.com/pingcap/tiflow/pkg/cmd/context"
 	"github.com/pingcap/tiflow/pkg/cmd/util"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/version"
 	pd "github.com/tikv/pd/client"
 	etcdlogutil "go.etcd.io/etcd/client/pkg/v3/logutil"
@@ -106,7 +106,7 @@ func (f *factoryImpl) EtcdClient() (*etcd.CDCEtcdClientImpl, error) {
 
 	client, err := etcd.NewCDCEtcdClient(ctx, etcdClient, etcd.DefaultCDCClusterID)
 	if err != nil {
-		return nil, cerror.ErrEtcdAPIError.GenWithStack(
+		return nil, errors.ErrEtcdAPIError.GenWithStack(
 			"Etcd operation error. Please check the cluster's status " +
 				" and the pd address(es) \"%s\"")
 	}

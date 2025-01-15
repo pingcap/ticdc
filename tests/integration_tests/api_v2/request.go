@@ -27,9 +27,9 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/api/middleware"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerrors "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/httputil"
 	"github.com/pingcap/tiflow/pkg/retry"
 	"github.com/pingcap/tiflow/pkg/version"

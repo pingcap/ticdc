@@ -20,8 +20,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	tableFilter "github.com/pingcap/tidb/pkg/util/table-filter"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 )
 
 type Rule struct {

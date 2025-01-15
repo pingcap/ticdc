@@ -15,6 +15,7 @@ package maintainer
 
 import (
 	"context"
+	"github.com/pingcap/errors"
 	"time"
 
 	"github.com/pingcap/log"
@@ -35,7 +36,6 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"github.com/pingcap/ticdc/utils/threadpool"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/spanz"
 	"go.uber.org/zap"

@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	clogutil "github.com/pingcap/tiflow/pkg/logutil"
 	"go.uber.org/zap"
 	"golang.org/x/net/netutil"

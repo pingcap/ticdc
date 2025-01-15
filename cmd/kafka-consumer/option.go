@@ -22,9 +22,9 @@ import (
 
 	cerror "github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	cmdUtil "github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/pingcap/tiflow/pkg/config"
-	cerrors "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/filter"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/util"

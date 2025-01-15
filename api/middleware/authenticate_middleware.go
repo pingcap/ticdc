@@ -15,6 +15,8 @@ package middleware
 import (
 	"context"
 	"fmt"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/tiflow/pkg/errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -31,8 +33,6 @@ import (
 	"github.com/pingcap/tidb-dashboard/util/distro"
 	"github.com/pingcap/tidb/pkg/domain/infosync"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/errors"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/errorutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"

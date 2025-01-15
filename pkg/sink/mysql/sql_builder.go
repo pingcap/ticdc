@@ -15,6 +15,7 @@ package mysql
 
 import (
 	"fmt"
+	"github.com/pingcap/errors"
 	"strings"
 	"sync"
 
@@ -22,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/quotes"
 )
 

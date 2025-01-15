@@ -15,9 +15,9 @@ package columnselector
 
 import (
 	ticonfig "github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	filter "github.com/pingcap/tidb/pkg/util/table-filter"
-	"github.com/pingcap/tiflow/pkg/errors"
 )
 
 type Selector interface {

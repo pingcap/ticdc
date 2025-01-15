@@ -23,6 +23,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	commonNew "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -30,7 +31,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/types"
 	tiTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/integrity"
 	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"go.uber.org/zap"

@@ -18,8 +18,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/ticdc/logservice/txnutil"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/tikv/client-go/v2/tikv"
 )
 

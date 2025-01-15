@@ -14,8 +14,8 @@
 package config
 
 import (
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/compression"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 )
 
 const (

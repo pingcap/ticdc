@@ -15,12 +15,13 @@ package v2
 
 import (
 	"context"
+	"github.com/pingcap/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"strconv"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	pkafka "github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 )
@@ -91,7 +92,7 @@ func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string,
 	if len(resp.Resources) == 0 || len(resp.Resources[0].ConfigEntries) == 0 {
 		log.Warn("Kafka config item not found",
 			zap.String("configName", configName))
-		return "", errors.ErrKafkaConfigNotFound.GenWithStack(
+		return "", cerror.ErrKafkaConfigNotFound.GenWithStack(
 			"cannot find the `%s` from the broker's configuration", configName)
 	}
 
@@ -106,7 +107,7 @@ func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string,
 
 	log.Warn("Kafka config item not found",
 		zap.String("configName", configName))
-	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
+	return "", cerror.ErrKafkaConfigNotFound.GenWithStack(
 		"cannot find the `%s` from the broker's configuration", configName)
 }
 
@@ -129,7 +130,7 @@ func (a *admin) GetTopicConfig(ctx context.Context, topicName string, configName
 	if len(resp.Resources) == 0 || len(resp.Resources[0].ConfigEntries) == 0 {
 		log.Warn("Kafka config item not found",
 			zap.String("configName", configName))
-		return "", errors.ErrKafkaConfigNotFound.GenWithStack(
+		return "", cerror.ErrKafkaConfigNotFound.GenWithStack(
 			"cannot find the `%s` from the topic's configuration", configName)
 	}
 
@@ -149,7 +150,7 @@ func (a *admin) GetTopicConfig(ctx context.Context, topicName string, configName
 
 	log.Warn("Kafka config item not found",
 		zap.String("configName", configName))
-	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
+	return "", cerror.ErrKafkaConfigNotFound.GenWithStack(
 		"cannot find the `%s` from the topic's configuration", configName)
 }
 
@@ -221,8 +222,8 @@ func (a *admin) CreateTopic(
 		return errors.Trace(err)
 	}
 
-	for _, err := range response.Errors {
-		if err != nil && !errors.Is(err, kafka.TopicAlreadyExists) {
+	for _, err = range response.Errors {
+		if err != nil && errors.Cause(err) != kafka.TopicAlreadyExists {
 			return errors.Trace(err)
 		}
 	}

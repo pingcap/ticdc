@@ -17,12 +17,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/pingcap/errors"
 	"math"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
 

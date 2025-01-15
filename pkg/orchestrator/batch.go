@@ -15,7 +15,7 @@ package orchestrator
 
 import (
 	"github.com/pingcap/errors"
-	cerrors "github.com/pingcap/tiflow/pkg/errors"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	tiorchestrator "github.com/pingcap/tiflow/pkg/orchestrator"
 	"github.com/pingcap/tiflow/pkg/orchestrator/util"
 )

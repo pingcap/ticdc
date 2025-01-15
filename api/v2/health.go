@@ -17,8 +17,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 )
 
 // @Summary Check the health status of a TiCDC cluster

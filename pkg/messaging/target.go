@@ -16,6 +16,7 @@ package messaging
 import (
 	"context"
 	"fmt"
+	"github.com/pingcap/errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/conn"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"

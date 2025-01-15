@@ -23,6 +23,7 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/cdc/sink/ddlsink"
 	ddlsinkfactory "github.com/pingcap/tiflow/cdc/sink/ddlsink/factory"
@@ -30,7 +31,6 @@ import (
 	"github.com/pingcap/tiflow/cdc/sink/dmlsink/mq/dispatcher"
 	"github.com/pingcap/tiflow/cdc/sink/tablesink"
 	"github.com/pingcap/tiflow/pkg/config"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec"
 	"github.com/pingcap/tiflow/pkg/sink/codec/avro"
 	"github.com/pingcap/tiflow/pkg/sink/codec/canal"
