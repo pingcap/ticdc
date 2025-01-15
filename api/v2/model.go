@@ -17,11 +17,10 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/model"
 	bf "github.com/pingcap/tiflow/pkg/binlog-filter"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/integrity"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pingcap/tiflow/pkg/util"
@@ -1123,7 +1122,7 @@ func (cfg *PDConfig) toCredential() *security.Credential {
 // Marshal returns the json marshal format of a ChangeFeedInfo
 func (info *ChangeFeedInfo) Marshal() (string, error) {
 	data, err := json.Marshal(info)
-	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
+	return string(data), errors.WrapError(errors.ErrMarshalFailed, err)
 }
 
 // Clone returns a cloned ChangeFeedInfo
@@ -1142,7 +1141,7 @@ func (info *ChangeFeedInfo) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, &info)
 	if err != nil {
 		return errors.Annotatef(
-			cerror.WrapError(cerror.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
+			errors.WrapError(errors.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
 	}
 	return nil
 }

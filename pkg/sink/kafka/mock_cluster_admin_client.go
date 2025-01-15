@@ -19,7 +19,7 @@ import (
 	"strconv"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/tiflow/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 const (

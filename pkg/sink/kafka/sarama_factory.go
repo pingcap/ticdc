@@ -18,9 +18,9 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/rcrowley/go-metrics"
 	"go.uber.org/zap"
 )

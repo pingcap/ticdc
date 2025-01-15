@@ -17,10 +17,9 @@ import (
 	"context"
 	"math"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerrors "github.com/pingcap/tiflow/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/retry"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -54,7 +53,7 @@ func EnsureChangefeedStartTsSafety(
 	// would return a ErrSnapshotLostByGC even though the changefeed would appear to be successfully
 	// created/resumed. See issue #6350 for more detail.
 	if startTs > 0 && startTs < minServiceGCTs+1 {
-		return cerrors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
+		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
 	}
 	return nil
 }
@@ -100,7 +99,7 @@ func SetServiceGCSafepoint(
 		},
 		retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
 		retry.WithMaxTries(gcServiceMaxRetries),
-		retry.WithIsRetryableErr(cerrors.IsRetryableError))
+		retry.WithIsRetryableErr(errors.IsRetryableError))
 	return
 }
 
@@ -118,5 +117,5 @@ func RemoveServiceGCSafepoint(ctx context.Context, pdCli pd.Client, serviceID st
 		},
 		retry.WithBackoffBaseDelay(gcServiceBackoffDelay), // 1s
 		retry.WithMaxTries(gcServiceMaxRetries),
-		retry.WithIsRetryableErr(cerrors.IsRetryableError))
+		retry.WithIsRetryableErr(errors.IsRetryableError))
 }

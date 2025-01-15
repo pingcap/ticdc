@@ -17,11 +17,11 @@ import (
 	"fmt"
 
 	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	tifilter "github.com/pingcap/tidb/pkg/util/filter"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	bf "github.com/pingcap/tiflow/pkg/binlog-filter"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 )
 
 // IsSysSchema returns true if the given schema is a system schema

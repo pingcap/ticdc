@@ -19,15 +19,14 @@ import (
 
 	"github.com/goccy/go-json"
 	"github.com/mailru/easyjson/jwriter"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/internal"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"go.uber.org/zap"
 	"golang.org/x/text/encoding"
@@ -143,7 +142,7 @@ func newJSONMessageForDML(
 		}
 	}
 	if columnLen == 0 {
-		return nil, cerror.ErrOpenProtocolCodecInvalidData.GenWithStack("not found invlaid columns for the event")
+		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found invlaid columns for the event")
 	}
 
 	mysqlTypeMap := make(map[string]string, columnLen)
@@ -344,7 +343,7 @@ func newJSONMessageForDML(
 
 	value, err := out.BuildBytes()
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
+		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 	return value, nil
 }
@@ -429,7 +428,7 @@ func (c *JSONRowEventEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message,
 	msg := c.newJSONMessage4CheckpointEvent(ts)
 	value, err := json.Marshal(msg)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
+		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 
 	value, err = common.Compress(
@@ -472,13 +471,13 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 				zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
 				zap.Int("length", originLength),
 				zap.Any("table", e.TableInfo.TableName))
-			return cerror.ErrMessageTooLarge.GenWithStackByArgs()
+			return errors.ErrMessageTooLarge.GenWithStackByArgs()
 		}
 
 		if c.config.LargeMessageHandle.HandleKeyOnly() {
 			value, err = newJSONMessageForDML(e, c.config, true, "")
 			if err != nil {
-				return cerror.ErrMessageTooLarge.GenWithStackByArgs()
+				return errors.ErrMessageTooLarge.GenWithStackByArgs()
 			}
 			value, err = common.Compress(
 				c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
@@ -495,7 +494,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 					zap.Int("originLength", originLength),
 					zap.Int("length", length),
 					zap.Any("table", e.TableInfo.TableName))
-				return cerror.ErrMessageTooLarge.GenWithStackByArgs()
+				return errors.ErrMessageTooLarge.GenWithStackByArgs()
 			}
 			log.Warn("Single message is too large for canal-json, only encode handle-key columns",
 				zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
@@ -527,7 +526,7 @@ func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 	claimCheckLocation := c.claimCheck.FileNameWithPrefix(fileName)
 	value, err := newJSONMessageForDML(event, c.config, true, claimCheckLocation)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
+		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 
 	value, err = common.Compress(
@@ -547,7 +546,7 @@ func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 			zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
 			zap.Int("length", length),
 			zap.Any("table", event.TableInfo.TableName))
-		return nil, cerror.ErrMessageTooLarge.GenWithStackByArgs(length)
+		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(length)
 	}
 	return result, nil
 }
@@ -568,7 +567,7 @@ func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.M
 	message := c.newJSONMessageForDDL(e)
 	value, err := json.Marshal(message)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
+		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 	value, err = common.Compress(
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,

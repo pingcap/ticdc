@@ -15,16 +15,15 @@ package producer
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/IBM/sarama"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -106,7 +105,7 @@ func TestProducerAck(t *testing.T) {
 		Key:   []byte("cancel"),
 		Value: nil,
 	})
-	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
+	require.ErrorIs(t, err, errors.ErrKafkaProducerClosed)
 }
 
 func TestProducerSendMsgFailed(t *testing.T) {
@@ -154,7 +153,7 @@ func TestProducerSendMsgFailed(t *testing.T) {
 		})
 		if err != nil {
 			require.Condition(t, func() bool {
-				return errors.Is(err, cerror.ErrKafkaProducerClosed) ||
+				return errors.Is(err, errors.ErrKafkaProducerClosed) ||
 					errors.Is(err, context.DeadlineExceeded)
 			}, "should return error")
 		}

@@ -19,8 +19,8 @@ import (
 	"strings"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 )
 
 const (
@@ -117,7 +117,7 @@ func NamespacedPrefix(clusterID, namespace string) string {
 // Parse parses the given etcd key
 func (k *CDCKey) Parse(clusterID, key string) error {
 	if !strings.HasPrefix(key, BaseKey(clusterID)) {
-		return cerror.ErrInvalidEtcdKey.GenWithStackByArgs(key)
+		return errors.ErrInvalidEtcdKey.GenWithStackByArgs(key)
 	}
 	key = key[len("/tidb/cdc"):]
 	parts := strings.Split(key, "/")
@@ -141,7 +141,7 @@ func (k *CDCKey) Parse(clusterID, key string) error {
 		case strings.HasPrefix(key, metaVersionKey):
 			k.Tp = CDCKeyTypeMetaVersion
 		default:
-			return cerror.ErrInvalidEtcdKey.GenWithStackByArgs(key)
+			return errors.ErrInvalidEtcdKey.GenWithStackByArgs(key)
 		}
 	} else {
 		namespace := parts[2]
@@ -175,7 +175,7 @@ func (k *CDCKey) Parse(clusterID, key string) error {
 		case strings.HasPrefix(key, taskPositionKey):
 			splitKey := strings.SplitN(key[len(taskPositionKey)+1:], "/", 2)
 			if len(splitKey) != 2 {
-				return cerror.ErrInvalidEtcdKey.GenWithStackByArgs(key)
+				return errors.ErrInvalidEtcdKey.GenWithStackByArgs(key)
 			}
 			k.Tp = CDCKeyTypeTaskPosition
 			k.CaptureID = splitKey[0]
@@ -185,7 +185,7 @@ func (k *CDCKey) Parse(clusterID, key string) error {
 			}
 			k.OwnerLeaseID = ""
 		default:
-			return cerror.ErrInvalidEtcdKey.GenWithStackByArgs(key)
+			return errors.ErrInvalidEtcdKey.GenWithStackByArgs(key)
 		}
 	}
 	return nil

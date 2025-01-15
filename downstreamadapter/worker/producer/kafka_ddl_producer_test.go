@@ -20,9 +20,10 @@ import (
 
 	"github.com/IBM/sarama"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	common "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,7 +52,7 @@ func TestDDLSyncBroadcastMessage(t *testing.T) {
 	p.Close()
 	err = p.SyncBroadcastMessage(ctx, kafka.DefaultMockTopicName,
 		kafka.DefaultMockPartitionNum, &common.Message{})
-	require.ErrorIs(t, err, cerror.ErrKafkaProducerClosed)
+	require.ErrorIs(t, err, errors.ErrKafkaProducerClosed)
 	cancel()
 }
 

@@ -18,7 +18,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
 // GetTopic returns the topic name from the sink URI.
