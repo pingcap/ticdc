@@ -168,6 +168,11 @@ func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) erro
 		metrics.CheckpointTsMessageCount.DeleteLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
 	}()
 
+	var (
+		msg          *common.Message
+		partitionNum int32
+		err          error
+	)
 	for {
 		select {
 		case <-ctx.Done():
@@ -181,7 +186,7 @@ func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) erro
 			}
 			start := time.Now()
 
-			msg, err := w.encoder.EncodeCheckpointEvent(ts)
+			msg, err = w.encoder.EncodeCheckpointEvent(ts)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -195,7 +200,7 @@ func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) erro
 			// This will be compatible with the old behavior.
 			if len(tableNames) == 0 {
 				topic := w.eventRouter.GetDefaultTopic()
-				partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
+				partitionNum, err = w.topicManager.GetPartitionNum(ctx, topic)
 				if err != nil {
 					return errors.Trace(err)
 				}
@@ -208,7 +213,7 @@ func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) erro
 			} else {
 				topics := w.eventRouter.GetActiveTopics(tableNames)
 				for _, topic := range topics {
-					partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
+					partitionNum, err = w.topicManager.GetPartitionNum(ctx, topic)
 					if err != nil {
 						return errors.Trace(err)
 					}
