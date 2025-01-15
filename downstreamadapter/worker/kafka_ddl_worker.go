@@ -114,12 +114,12 @@ func (w *KafkaDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEv
 			return errors.Trace(err)
 		}
 		topic := w.eventRouter.GetTopicForDDL(e)
-		partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
-		if err != nil {
-			return errors.Trace(err)
-		}
 
 		if w.partitionRule == PartitionAll {
+			partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
+			if err != nil {
+				return errors.Trace(err)
+			}
 			err = w.statistics.RecordDDLExecution(func() error {
 				return w.producer.SyncBroadcastMessage(ctx, topic, partitionNum, message)
 			})
