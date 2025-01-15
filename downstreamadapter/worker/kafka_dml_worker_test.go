@@ -25,7 +25,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/tiflow/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -51,7 +51,7 @@ func kafkaDMLWorkerForTest(t *testing.T) *KafkaDMLWorker {
 	errGroup, ctx := errgroup.WithContext(ctx)
 	dmlMockProducer := producer.NewMockDMLProducer()
 
-	dmlWorker := NewKafkaDMLWorker(ctx, changefeedID, protocol, dmlMockProducer,
+	dmlWorker := NewKafkaDMLWorker(changefeedID, protocol, dmlMockProducer,
 		kafkaComponent.EncoderGroup, kafkaComponent.ColumnSelector,
 		kafkaComponent.EventRouter, kafkaComponent.TopicManager,
 		statistics, errGroup)

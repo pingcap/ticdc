@@ -233,7 +233,7 @@ func (o *Options) Apply(changefeedID common.ChangeFeedID,
 	var err error
 	req := &http.Request{URL: sinkURI}
 	urlParameter := &urlConfig{}
-	if err := binding.Query.Bind(req, urlParameter); err != nil {
+	if err = binding.Query.Bind(req, urlParameter); err != nil {
 		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
 	}
 	if urlParameter, err = mergeConfig(sinkConfig, urlParameter); err != nil {

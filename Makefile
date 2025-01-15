@@ -127,6 +127,19 @@ fmt: tools/bin/gofumports tools/bin/shfmt tools/bin/gci
 	scripts/check-log-style.sh
 	@make check-diff-line-width
 
+check_third_party_binary:
+	@which bin/tidb-server
+	@which bin/tikv-server
+	@which bin/pd-server
+	@which bin/tiflash
+	@which bin/pd-ctl
+	@which bin/sync_diff_inspector
+	@which bin/go-ycsb
+	@which bin/etcdctl
+	@which bin/jq
+	@which bin/minio
+	@which bin/bin/schema-registry-start
+
 integration_test_build: check_failpoint_ctl
 	$(FAILPOINT_ENABLE)
 	$(GOTEST) -ldflags '$(LDFLAGS)' -c -cover -covermode=atomic \
@@ -149,6 +162,15 @@ integration_test: integration_test_mysql
 
 integration_test_mysql:
 	tests/integration_tests/run.sh mysql "$(CASE)" "$(NEWARCH)" "$(START_AT)"
+
+integration_test_kafka: check_third_party_binary
+	tests/integration_tests/run.sh kafka "$(CASE)" "$(START_AT)"
+
+integration_test_storage:
+	tests/integration_tests/run.sh storage "$(CASE)" "$(START_AT)"
+
+integration_test_pulsar:
+	tests/integration_tests/run.sh pulsar "$(CASE)" "$(START_AT)"
 
 unit_test: check_failpoint_ctl generate-protobuf
 	mkdir -p "$(TEST_DIR)"

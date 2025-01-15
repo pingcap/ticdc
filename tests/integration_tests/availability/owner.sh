@@ -1,12 +1,12 @@
 #!/bin/bash
 
 error_handler() {
-    local line_no=$1
-    local error_code=$2
-    local last_command="${BASH_COMMAND}"
-    echo -e "\033[31mError occurred in script $0 at line $line_no"
-    echo -e "Error code: $error_code"
-    echo -e "Failed command: $last_command\033[0m"
+	local line_no=$1
+	local error_code=$2
+	local last_command="${BASH_COMMAND}"
+	echo -e "\033[31mError occurred in script $0 at line $line_no"
+	echo -e "Error code: $error_code"
+	echo -e "Failed command: $last_command\033[0m"
 }
 
 # Set error handler
@@ -145,7 +145,6 @@ function test_owner_retryable_error() {
 	export GO_FAILPOINTS=''
 	cleanup_process $CDC_BINARY
 }
-
 
 # make sure when owner key in etcd is deleted, the owner will resign,
 # and only one owner exists in the cluster at the same time.

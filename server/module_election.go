@@ -242,7 +242,9 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			zap.String("captureID", string(e.svr.info.ID)))
 
 		co := logcoordinator.New()
-		if err := co.Run(ctx); err != nil {
+		err = co.Run(ctx)
+
+		if err != nil && err != context.Canceled {
 			if !cerror.ErrNotOwner.Equal(err) {
 				if resignErr := e.resignLogCoordinaotr(); resignErr != nil {
 					return errors.Trace(resignErr)
@@ -254,8 +256,10 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 
-		log.Info("log coordinator resigned successfully",
-			zap.String("captureID", string(e.svr.info.ID)))
+		// If coordinator exits normally, continue the campaign loop and try to election coordinator again
+		log.Info("log coordinator exited normally",
+			zap.String("captureID", string(e.svr.info.ID)),
+			zap.String("error", err.Error()))
 	}
 }
 

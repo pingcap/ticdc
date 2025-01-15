@@ -16,6 +16,7 @@ package changefeed
 import (
 	"encoding/json"
 	"net/url"
+	"sync"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -32,11 +33,14 @@ import (
 
 // Changefeed is a memory present for changefeed info and status
 type Changefeed struct {
-	ID          common.ChangeFeedID
-	info        *atomic.Pointer[config.ChangeFeedInfo]
-	isMQSink    bool
-	isNew       bool // only true when the changfeed is newly created or resumed by overwriteCheckpointTs
-	nodeID      node.ID
+	ID       common.ChangeFeedID
+	info     *atomic.Pointer[config.ChangeFeedInfo]
+	isMQSink bool
+	isNew    bool // only true when the changfeed is newly created or resumed by overwriteCheckpointTs
+
+	mutex  sync.Mutex // protect nodeID
+	nodeID node.ID
+
 	configBytes []byte
 	// it's saved to the backend db
 	lastSavedCheckpointTs *atomic.Uint64
@@ -97,10 +101,14 @@ func (c *Changefeed) StartFinished() {
 
 // setNodeID set the node id of the changefeed
 func (c *Changefeed) setNodeID(n node.ID) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 	c.nodeID = n
 }
 
 func (c *Changefeed) GetNodeID() node.ID {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 	return c.nodeID
 }
 

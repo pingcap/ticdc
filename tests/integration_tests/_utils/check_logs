@@ -31,4 +31,3 @@ else
 	echo "no DATA RACE found"
 	exit 0
 fi
-

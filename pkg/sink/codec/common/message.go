@@ -68,6 +68,7 @@ func (m *Message) IncRowsCount() {
 }
 
 // NewMsg should be used when creating a Message struct.
+// todo: shall we really copy the input byte slices? does it takes observable extra resources?
 // It copies the input byte slices to avoid any surprises in asynchronous MQ writes.
 func NewMsg(
 	key []byte,

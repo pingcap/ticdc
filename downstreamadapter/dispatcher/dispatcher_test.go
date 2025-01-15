@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -55,7 +56,9 @@ func (s *mockSink) AddCheckpointTs(ts uint64) {
 func (s *mockSink) SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore) {
 }
 
-func (s *mockSink) Close(bool) error {
+func (s *mockSink) Close(bool) {}
+
+func (s *mockSink) Run(context.Context) error {
 	return nil
 }
 

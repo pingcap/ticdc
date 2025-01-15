@@ -17,6 +17,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/pingcap/errors"
@@ -104,22 +105,33 @@ func (o *options) run(cmd *cobra.Command) error {
 
 	util.LogHTTPProxies()
 
-	svr, err := server.New(o.serverConfig, o.pdEndpoints)
-	if err != nil {
-		log.Error("create cdc server failed", zap.Error(err))
-		return errors.Trace(err)
-	}
-	log.Info("TiCDC(new arch) server created",
-		zap.Strings("pd", o.pdEndpoints), zap.Stringer("config", o.serverConfig))
+	for {
+		svr, err := server.New(o.serverConfig, o.pdEndpoints)
+		if err != nil {
+			log.Error("create cdc server failed", zap.Error(err))
+			return errors.Trace(err)
+		}
+		log.Info("TiCDC(new arch) server created",
+			zap.Strings("pd", o.pdEndpoints), zap.Stringer("config", o.serverConfig))
 
-	// Run TiCDC server.
-	err = svr.Run(ctx)
-	if err != nil && errors.Cause(err) != context.Canceled {
-		log.Warn("cdc server exits with error", zap.Error(err))
-	} else {
-		log.Info("cdc server exits normally")
+		err = svr.Run(ctx)
+		if err != nil && errors.Cause(err) != context.Canceled {
+			log.Warn("cdc server exits with error", zap.Error(err))
+		} else {
+			log.Info("cdc server exits normally")
+		}
+		// Close the server
+		svr.Close(ctx)
+
+		if strings.Contains(err.Error(), "ErrCaptureSuicide") {
+			log.Info("server exit with capture suicide error, restart it again", zap.Error(err))
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		break
 	}
-	svr.Close(ctx)
+
 	return nil
 }
 

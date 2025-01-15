@@ -23,7 +23,7 @@ import (
 
 // Test callback and tableProgress works as expected after AddDMLEvent
 func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
-	sink, err := NewBlackHoleSink()
+	sink, err := newBlackHoleSink()
 	require.NoError(t, err)
 
 	count := 0

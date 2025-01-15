@@ -26,8 +26,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tiflow/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -53,7 +53,7 @@ func kafkaDDLWorkerForTest(t *testing.T) *KafkaDDLWorker {
 	errGroup, ctx := errgroup.WithContext(ctx)
 	ddlMockProducer := producer.NewMockDDLProducer()
 
-	ddlWorker := NewKafkaDDLWorker(ctx, changefeedID, protocol, ddlMockProducer,
+	ddlWorker := NewKafkaDDLWorker(changefeedID, protocol, ddlMockProducer,
 		kafkaComponent.Encoder, kafkaComponent.EventRouter, kafkaComponent.TopicManager,
 		statistics, errGroup)
 	return ddlWorker
@@ -100,11 +100,12 @@ func TestWriteDDLEvents(t *testing.T) {
 		},
 	}
 
+	ctx := context.Background()
 	ddlWorker := kafkaDDLWorkerForTest(t)
-	err := ddlWorker.WriteBlockEvent(ddlEvent)
+	err := ddlWorker.WriteBlockEvent(ctx, ddlEvent)
 	require.NoError(t, err)
 
-	err = ddlWorker.WriteBlockEvent(ddlEvent2)
+	err = ddlWorker.WriteBlockEvent(ctx, ddlEvent2)
 	require.NoError(t, err)
 
 	// Wait for the events to be received by the worker.
@@ -114,7 +115,7 @@ func TestWriteDDLEvents(t *testing.T) {
 
 func TestWriteCheckpointTs(t *testing.T) {
 	ddlWorker := kafkaDDLWorkerForTest(t)
-	ddlWorker.Run()
+	ddlWorker.Run(context.Background())
 
 	tableSchemaStore := util.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.KafkaSinkType)
 	ddlWorker.SetTableSchemaStore(tableSchemaStore)
