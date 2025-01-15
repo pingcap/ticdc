@@ -47,6 +47,7 @@ function test_kill_owner() {
 	echo "owner pid:" $owner_pid
 	echo "owner id" $owner_id
 	# run another server
+	echo "Start to run another server"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8301" --logsuffix test_kill_owner.server2
 	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep -v \"$owner_id\" | grep -v cluster_id | grep id"
 	capture_id=$($CDC_BINARY cli capture list --server 'http://127.0.0.1:8301' 2>&1 | awk -F '"' '/\"id/{print $4}' | grep -v "$owner_id")
@@ -71,9 +72,13 @@ function test_hang_up_owner() {
 	echo "owner pid:" $owner_pid
 	echo "owner id" $owner_id
 	# run another server
+	echo "Start to run another server"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8301" --logsuffix test_hang_up_owner.server2
-	ensure $MAX_RETRIES "$CDC_BINARY cli capture list --server 'http://127.0.0.1:8301'  2>&1 | grep -v \"$owner_id\" | grep id"
-	capture_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}' | grep -v "$owner_id")
+	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep -v \"$owner_id\" | grep -v cluster_id | grep id"
+	# ensure $MAX_RETRIES "$CDC_BINARY cli capture list --server 'http://127.0.0.1:8301'  2>&1 | grep -v \"$owner_id\" | grep id"
+	# capture_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}' | grep -v "$owner_id")
+	capture_id=$($CDC_BINARY cli capture list --server 'http://127.0.0.1:8301' 2>&1 | awk -F '"' '/\"id/{print $4}' | grep -v "$owner_id")
+
 	echo "capture_id:" $capture_id
 	# stop the owner
 	kill -SIGSTOP $owner_pid
