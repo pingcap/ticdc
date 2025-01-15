@@ -240,7 +240,7 @@ func TestLargeMessageWithHandle(t *testing.T) {
 	message := messages[0]
 	require.Equal(t, batchVersion1, readByteToUint(message.Key[:8]))
 	require.Equal(t, uint64(len(message.Key[16:])), readByteToUint(message.Key[8:16]))
-	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message.Key[16:]))
+	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1,"ohk":true}`, string(message.Key[16:]))
 
 	require.Equal(t, uint64(len(message.Value[8:])), readByteToUint(message.Value[:8]))
 	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1}}}`, string(message.Value[8:]))

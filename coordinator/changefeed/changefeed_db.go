@@ -87,7 +87,7 @@ func (db *ChangefeedDB) AddReplicatingMaintainer(task *Changefeed, nodeID node.I
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
-	task.setNodeID(nodeID)
+	task.SetNodeID(nodeID)
 	log.Info("add an replicating maintainer",
 		zap.String("nodeID", nodeID.String()),
 		zap.String("changefeed", task.ID.String()))
@@ -126,7 +126,7 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 			log.Info("changefeed is not scheduled, delete directly")
 			return ""
 		}
-		cf.setNodeID("")
+		cf.SetNodeID("")
 		return nodeID
 	}
 	return ""

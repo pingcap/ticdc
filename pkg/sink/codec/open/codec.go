@@ -44,6 +44,9 @@ func encodeRowChangedEvent(e *commonEvent.RowEvent, config *common.Config, large
 		keyWriter.WriteStringField("tbl", e.TableInfo.GetTableName())
 		keyWriter.WriteIntField("t", int(common.MessageTypeRow))
 
+		if largeMessageOnlyHandleKeyColumns {
+			keyWriter.WriteBoolField("ohk", true)
+		}
 		if claimCheckLocationName != "" {
 			keyWriter.WriteBoolField("ohk", false)
 			keyWriter.WriteStringField("ccl", claimCheckLocationName)
