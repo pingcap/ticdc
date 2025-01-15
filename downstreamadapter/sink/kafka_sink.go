@@ -152,14 +152,14 @@ func (s *KafkaSink) PassBlockEvent(event commonEvent.BlockEvent) {
 }
 
 func (s *KafkaSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
-	switch event := event.(type) {
+	switch v := event.(type) {
 	case *commonEvent.DDLEvent:
-		if event.TiDBOnly {
+		if v.TiDBOnly {
 			// run callback directly and return
-			event.PostFlush()
+			v.PostFlush()
 			return nil
 		}
-		err := s.ddlWorker.WriteBlockEvent(s.ctx, event)
+		err := s.ddlWorker.WriteBlockEvent(s.ctx, v)
 		if err != nil {
 			atomic.StoreUint32(&s.isNormal, 0)
 			return errors.Trace(err)
