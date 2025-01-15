@@ -229,6 +229,15 @@ func (c *EventCollector) resetDispatcher(d *dispatcherStat) {
 }
 
 func (c *EventCollector) addDispatcherRequestToSendingQueue(serverId node.ID, topic string, req DispatcherRequest) {
+	log.Debug("add dispatcher request to sending queue",
+		zap.Stringer("dispatcher", req.Dispatcher.GetId()),
+		zap.String("changefeed", req.Dispatcher.GetChangefeedID().String()),
+		zap.String("topic", topic),
+		zap.String("server", serverId.String()),
+		zap.String("action", req.ActionType.String()),
+		zap.Uint64("startTs", req.StartTs),
+	)
+
 	c.dispatcherRequestChan.In() <- DispatcherRequestWithTarget{
 		Target: serverId,
 		Topic:  topic,
