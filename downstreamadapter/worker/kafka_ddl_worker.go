@@ -108,34 +108,12 @@ func (w *KafkaDDLWorker) SetTableSchemaStore(tableSchemaStore *util.TableSchemaS
 }
 
 func (w *KafkaDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent) error {
-	messages := make([]*common.Message, 0)
-	topics := make([]string, 0)
-
-	// Some ddl event may be multi-events, we need to split it into multiple messages.
-	// Such as rename table test.table1 to test.table10, test.table2 to test.table20
-	if event.IsMultiEvents() {
-		subEvents := event.GetSubEvents()
-		for _, subEvent := range subEvents {
-			message, err := w.encoder.EncodeDDLEvent(&subEvent)
-			if err != nil {
-				return errors.Trace(err)
-			}
-			topic := w.eventRouter.GetTopicForDDL(&subEvent)
-			messages = append(messages, message)
-			topics = append(topics, topic)
-		}
-	} else {
-		message, err := w.encoder.EncodeDDLEvent(event)
+	for _, e := range event.GetEvents() {
+		message, err := w.encoder.EncodeDDLEvent(e)
 		if err != nil {
 			return errors.Trace(err)
 		}
-		topic := w.eventRouter.GetTopicForDDL(event)
-		messages = append(messages, message)
-		topics = append(topics, topic)
-	}
-
-	for i, message := range messages {
-		topic := topics[i]
+		topic := w.eventRouter.GetTopicForDDL(e)
 		partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
 		if err != nil {
 			return errors.Trace(err)
