@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/pingcap/log"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pkg/errors"
 )
@@ -47,6 +48,12 @@ func NewConfig(options *Options) *kafka.ConfigMap {
 	}
 
 	completeSASLConfig(config, options)
+
+	compression := strings.ToLower(strings.TrimSpace(options.Compression))
+	config.SetKey("compression.codec", compression)
+	if compression != "none" {
+		log.Info("Kafka producer uses " + compression + " compression algorithm")
+	}
 	return config
 }
 
