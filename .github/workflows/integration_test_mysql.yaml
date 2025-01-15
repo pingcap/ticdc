@@ -146,6 +146,124 @@ jobs:
         with:
           log-name: e2e_test_group_1
 
+  # To boost the test speed, we split every 15 test cases into a group.
+  e2e_test_group_1_on_7.5:
+    ## Only run ci when PR is not draft
+    if: github.event.pull_request.draft == false
+
+    runs-on: ubuntu-latest 
+    name: E2E Test Group 1 on 7.5
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2
+
+      - name: Setup Go environment
+        uses: actions/setup-go@v3
+        with:
+          go-version: '1.23'
+
+      - name: Integration Build
+        run: |
+          tests/scripts/download-integration-test-binaries.sh master true v7.5.5
+          go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
+          make integration_test_build
+          ls -l bin/ && ls -l tools/bin/
+
+      - name: Test charset_gbk
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
+
+      - name: Test changefeed_finish
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_finish
+      
+      - name: Test sql_mode
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=sql_mode
+        
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
+
+      - name: Test changefeed_reconstruct
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_reconstruct
+
+      - name: Test common_1
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=common_1
+
+      - name: Test foreign_key
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=foreign_key
+
+      # The 7th case in this group
+      - name: Test generate_column
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=generate_column
+      
+      # The 8th case in this group
+      - name: Test many_pk_or_uk
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=many_pk_or_uk
+      
+      # The 9th case in this group
+      - name: Test drop_many_tables
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=drop_many_tables
+
+      # The 10th case in this group     
+      - name: Test new_ci_collation
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=new_ci_collation
+
+      # The 11th case in this group     
+      - name: Test region_merge
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=region_merge
+
+      # The 12th case in this group     
+      - name: Test safe mode
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=safe_mode
+
+      # The 13th case in this group     
+      - name: Test savepoint
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=savepoint
+
+      # The 14th case in this group     
+      - name: Test server config compatibility
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=server_config_compatibility
+
+      # The 15th case in this group     
+      - name: Test split region
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=split_region
+
+      - name: Upload test logs
+        if: always()
+        uses: ./.github/actions/upload-test-logs
+        with:
+          log-name: e2e_test_group_1_on_7.5
+
   e2e_test_group_2:
     ## Only run ci when PR is not draft
     if: github.event.pull_request.draft == false
