@@ -211,10 +211,8 @@ func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.Schema
 // 2. If the action is a pass, we just need to pass the event
 func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) {
 	log.Debug("dispatcher handle dispatcher status",
-		zap.Any("dispatcherStatus", dispatcherStatus),
 		zap.Stringer("dispatcher", d.id),
-		zap.Any("action", dispatcherStatus.GetAction()),
-		zap.Any("ack", dispatcherStatus.GetAck()))
+		zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)))
 	// deal with the ack info
 	ack := dispatcherStatus.GetAck()
 	if ack != nil {

@@ -414,10 +414,6 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 	for {
 		allTargetTs := make([]uint64, 0, limit)
 		p.mu.RLock()
-		// log.Debug("fetchTableTriggerDDLEvents in persistentStorage",
-		// 	zap.Any("start", start),
-		// 	zap.Int("limit", limit),
-		// 	zap.Any("tableTriggerDDLHistory", p.tableTriggerDDLHistory))
 		index := sort.Search(len(p.tableTriggerDDLHistory), func(i int) bool {
 			return p.tableTriggerDDLHistory[i] > nextStartTs
 		})

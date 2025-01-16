@@ -82,7 +82,7 @@ func TestOneBlockEvent(t *testing.T) {
 		isSyncPoint: true,
 	}
 	resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
-	event := barrier.blockedTs[key]
+	event := barrier.events[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == controller.ddlDispatcherID)
 	require.True(t, event.selected)
@@ -125,7 +125,7 @@ func TestOneBlockEvent(t *testing.T) {
 	require.NotNil(t, msg)
 	resp = msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
-	require.Len(t, barrier.blockedTs, 0)
+	require.Len(t, barrier.events, 0)
 
 	// send event done again
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -151,7 +151,7 @@ func TestOneBlockEvent(t *testing.T) {
 			},
 		},
 	})
-	require.Len(t, barrier.blockedTs, 0)
+	require.Len(t, barrier.events, 0)
 	// no event if found, no message will be sent
 	require.NotNil(t, msg)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
@@ -259,7 +259,7 @@ func TestNormalBlock(t *testing.T) {
 		blockTs:     10,
 		isSyncPoint: false,
 	}
-	event := barrier.blockedTs[key]
+	event := barrier.events[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == selectDispatcherID)
 	// all dispatcher reported, the reported status is reset
@@ -320,7 +320,7 @@ func TestNormalBlock(t *testing.T) {
 			},
 		},
 	})
-	require.Len(t, barrier.blockedTs, 1)
+	require.Len(t, barrier.events, 1)
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -342,7 +342,7 @@ func TestNormalBlock(t *testing.T) {
 			},
 		},
 	})
-	require.Len(t, barrier.blockedTs, 0)
+	require.Len(t, barrier.events, 0)
 }
 
 func TestNormalBlockWithTableTrigger(t *testing.T) {
@@ -397,7 +397,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	require.Len(t, resp.DispatcherStatuses, 1)
 	require.True(t, resp.DispatcherStatuses[0].Ack.CommitTs == 10)
 	require.Len(t, resp.DispatcherStatuses[0].InfluencedDispatchers.DispatcherIDs, 1)
-	require.False(t, barrier.blockedTs[eventKey{blockTs: 10, isSyncPoint: false}].tableTriggerDispatcherRelated)
+	require.False(t, barrier.events[eventKey{blockTs: 10, isSyncPoint: false}].tableTriggerDispatcherRelated)
 
 	// table trigger  block request
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -442,7 +442,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 		blockTs:     10,
 		isSyncPoint: false,
 	}
-	event := barrier.blockedTs[key]
+	event := barrier.events[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == tableTriggerEventDispatcherID)
 	// all dispatcher reported, the reported status is reset
@@ -463,7 +463,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 			},
 		},
 	})
-	require.Len(t, barrier.blockedTs, 1)
+	require.Len(t, barrier.events, 1)
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -485,7 +485,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 			},
 		},
 	})
-	require.Len(t, barrier.blockedTs, 0)
+	require.Len(t, barrier.events, 0)
 }
 
 func TestSchemaBlock(t *testing.T) {
@@ -597,7 +597,7 @@ func TestSchemaBlock(t *testing.T) {
 	require.True(t, resp.DispatcherStatuses[1].Action.CommitTs == 10)
 	require.True(t, resp.DispatcherStatuses[1].Action.Action == heartbeatpb.Action_Write)
 	key := eventKey{blockTs: 10}
-	event := barrier.blockedTs[key]
+	event := barrier.events[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	// the ddl dispatcher will be the writer
 	require.Equal(t, event.writerDispatcher, controller.ddlDispatcherID)
@@ -628,7 +628,7 @@ func TestSchemaBlock(t *testing.T) {
 	resp = msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 1)
 	require.True(t, resp.DispatcherStatuses[0].Ack.CommitTs == 10)
-	event = barrier.blockedTs[key]
+	event = barrier.events[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	// the ddl dispatcher will be the writer
 	require.Equal(t, event.writerDispatcher, controller.ddlDispatcherID)
@@ -654,7 +654,7 @@ func TestSchemaBlock(t *testing.T) {
 	require.Equal(t, messaging.TypeHeartBeatResponse, msg.Type)
 	require.Equal(t, msg.Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].Action.Action,
 		heartbeatpb.Action_Pass)
-	require.Len(t, barrier.blockedTs, 1)
+	require.Len(t, barrier.events, 1)
 	// other dispatcher advanced checkpoint ts
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
@@ -677,7 +677,7 @@ func TestSchemaBlock(t *testing.T) {
 			},
 		},
 	})
-	require.Len(t, barrier.blockedTs, 0)
+	require.Len(t, barrier.events, 0)
 
 	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
 	require.Equal(t, 2, controller.operatorController.OperatorSize())
@@ -821,7 +821,7 @@ func TestSyncPointBlock(t *testing.T) {
 	require.True(t, resp.DispatcherStatuses[1].Action.CommitTs == 10)
 	require.True(t, resp.DispatcherStatuses[1].Action.Action == heartbeatpb.Action_Write)
 	key := eventKey{blockTs: 10, isSyncPoint: true}
-	event := barrier.blockedTs[key]
+	event := barrier.events[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	// the last one will be the writer
 	require.Equal(t, event.writerDispatcher, controller.ddlDispatcherID)
@@ -844,7 +844,7 @@ func TestSyncPointBlock(t *testing.T) {
 	msgs := barrier.Resend()
 	// 2 pass action messages to one node
 	require.Len(t, msgs, 2)
-	require.Len(t, barrier.blockedTs, 1)
+	require.Len(t, barrier.events, 1)
 	// other dispatcher advanced checkpoint ts
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
@@ -878,7 +878,7 @@ func TestSyncPointBlock(t *testing.T) {
 			},
 		},
 	})
-	require.Len(t, barrier.blockedTs, 0)
+	require.Len(t, barrier.events, 0)
 }
 
 func TestNonBlocked(t *testing.T) {
@@ -926,7 +926,7 @@ func TestNonBlocked(t *testing.T) {
 	require.Equal(t, uint64(10), resp.DispatcherStatuses[0].Ack.CommitTs)
 	require.True(t, heartbeatpb.InfluenceType_Normal == resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType)
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.DispatcherIDs[0], blockedDispatcherIDS[0])
-	require.Len(t, barrier.blockedTs, 0)
+	require.Len(t, barrier.events, 0)
 	require.Equal(t, 2, barrier.controller.replicationDB.GetAbsentSize(), 2)
 }
 
@@ -970,7 +970,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 		isSyncPoint: false,
 	}
 	resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
-	event := barrier.blockedTs[key]
+	event := barrier.events[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == controller.ddlDispatcherID)
 	require.True(t, event.selected)
@@ -1043,7 +1043,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 			},
 		},
 	})
-	event := barrier.blockedTs[getEventKey(6, false)]
+	event := barrier.events[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.False(t, event.selected)
 	require.False(t, event.writerDispatcherAdvanced)
@@ -1082,7 +1082,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 			},
 		},
 	})
-	event = barrier.blockedTs[getEventKey(6, false)]
+	event = barrier.events[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.True(t, event.selected)
 	require.False(t, event.writerDispatcherAdvanced)
@@ -1120,7 +1120,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 			},
 		},
 	})
-	event = barrier.blockedTs[getEventKey(6, false)]
+	event = barrier.events[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.True(t, event.selected)
 	require.True(t, event.writerDispatcherAdvanced)
@@ -1149,7 +1149,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 			},
 		},
 	})
-	event = barrier.blockedTs[getEventKey(6, false)]
+	event = barrier.events[getEventKey(6, false)]
 	require.Nil(t, event)
 }
 
