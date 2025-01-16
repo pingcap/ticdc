@@ -255,6 +255,11 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 }
 
 func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs uint64) {
+	log.Info("handleResolvedTs",
+		zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
+		zap.Uint64("regionID", state.getRegionID()),
+		zap.Bool("initializd", state.isInitialized()),
+		zap.Uint64("resolvedTs", resolvedTs))
 	if state.isStale() || !state.isInitialized() {
 		return
 	}
