@@ -23,6 +23,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -32,7 +33,7 @@ type BarrierEvent struct {
 	cfID        common.ChangeFeedID
 	commitTs    uint64
 	controller  *Controller
-	selected    bool
+	selected    atomic.Bool
 	hasNewTable bool
 	// table trigger event dispatcher reported the block event, we should use it as the writer
 	tableTriggerDispatcherRelated bool
@@ -59,7 +60,7 @@ func NewBlockEvent(cfID common.ChangeFeedID, controller *Controller,
 ) *BarrierEvent {
 	event := &BarrierEvent{
 		controller:          controller,
-		selected:            false,
+		selected:            atomic.Bool{},
 		hasNewTable:         len(status.NeedAddedTables) > 0,
 		cfID:                cfID,
 		commitTs:            status.BlockTs,
@@ -117,10 +118,17 @@ func NewBlockEvent(cfID common.ChangeFeedID, controller *Controller,
 	return event
 }
 
+func (be *BarrierEvent) checkEventAction(dispatcherID common.DispatcherID) *heartbeatpb.DispatcherStatus {
+	if !be.allDispatcherReported() {
+		return nil
+	}
+	return be.onAllDispatcherReportedBlockEvent(dispatcherID)
+}
+
 // onAllDispatcherReportedBlockEvent is called when all dispatcher reported the block event
 // it will select a dispatcher as the writer, reset the range checker ,and move the event to the selected state
 // returns the dispatcher status to the dispatcher manager
-func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatchers []*heartbeatpb.DispatcherID) *heartbeatpb.DispatcherStatus {
+func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.DispatcherID) *heartbeatpb.DispatcherStatus {
 	var dispatcher common.DispatcherID
 	switch be.blockedDispatchers.InfluenceType {
 	case heartbeatpb.InfluenceType_DB, heartbeatpb.InfluenceType_All:
@@ -131,7 +139,7 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatchers []*heartbe
 			zap.Uint64("commitTs", be.commitTs))
 		dispatcher = be.controller.ddlDispatcherID
 	default:
-		selected := dispatchers[len(dispatchers)-1]
+		selected := dispatcherID.ToPB()
 		if be.tableTriggerDispatcherRelated {
 			// select the last one as the writer
 			// or the table trigger event dispatcher if it's one of the blocked dispatcher
@@ -146,13 +154,14 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatchers []*heartbe
 
 	// reset ranger checkers
 	be.rangeChecker.Reset()
-	be.selected = true
+	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
-	log.Info("all dispatcher reported heartbeat, select one to write",
+	log.Info("all dispatcher reported heartbeat, schedule it, and select one to write",
 		zap.String("changefeed", be.cfID.Name()),
 		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.Uint64("commitTs", be.commitTs),
 		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()))
+	be.scheduleBlockEvent()
 	return &heartbeatpb.DispatcherStatus{
 		InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
 			InfluenceType: heartbeatpb.InfluenceType_Normal,
@@ -163,6 +172,7 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatchers []*heartbe
 }
 
 func (be *BarrierEvent) scheduleBlockEvent() {
+	log.Info("schedule block event", zap.Uint64("commitTs", be.commitTs))
 	// dispatcher notify us to drop some tables, by dispatcher ID or schema ID
 	if be.dropDispatchers != nil {
 		switch be.dropDispatchers.InfluenceType {
@@ -208,6 +218,10 @@ func (be *BarrierEvent) scheduleBlockEvent() {
 	}
 }
 
+func (be *BarrierEvent) markTableDone(tableID int64) {
+	be.rangeChecker.AddSubRange(tableID, nil, nil)
+}
+
 func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID) {
 	replicaSpan := be.controller.GetTask(dispatcherID)
 	if replicaSpan == nil {
@@ -223,6 +237,8 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 	return be.rangeChecker.IsFullyCovered()
 }
 
+// send pass action to the related dispatchers, if find the related dispatchers are all removed, mark rangeCheck done
+// else return pass action messages
 func (be *BarrierEvent) sendPassAction() []*messaging.TargetMessage {
 	if be.blockedDispatchers == nil {
 		return []*messaging.TargetMessage{}
@@ -230,43 +246,49 @@ func (be *BarrierEvent) sendPassAction() []*messaging.TargetMessage {
 	msgMap := make(map[node.ID]*messaging.TargetMessage)
 	switch be.blockedDispatchers.InfluenceType {
 	case heartbeatpb.InfluenceType_DB:
-		for _, stm := range be.controller.GetTasksBySchemaID(be.blockedDispatchers.SchemaID) {
-			nodeID := stm.GetNodeID()
-			if nodeID == "" {
-				continue
-			}
-			_, ok := msgMap[nodeID]
-			if !ok {
-				msgMap[nodeID] = be.newPassActionMessage(nodeID)
+		spans := be.controller.GetTasksBySchemaID(be.blockedDispatchers.SchemaID)
+		if len(spans) == 0 {
+			// means tables are removed, mark the event done
+			be.rangeChecker.MarkCovered()
+			return nil
+		} else {
+			for _, stm := range spans {
+				nodeID := stm.GetNodeID()
+				if nodeID == "" {
+					continue
+				}
+				_, ok := msgMap[nodeID]
+				if !ok {
+					msgMap[nodeID] = be.newPassActionMessage(nodeID)
+				}
 			}
 		}
 	case heartbeatpb.InfluenceType_All:
+		// all type will not have drop-type ddl.
 		for _, n := range be.controller.GetAllNodes() {
 			msgMap[n] = be.newPassActionMessage(n)
 		}
 	case heartbeatpb.InfluenceType_Normal:
-		// send pass action
-		for _, stm := range be.controller.GetTasksByTableIDs(be.blockedDispatchers.TableIDs...) {
-			if stm == nil {
-				log.Warn("nil span replication, ignore",
-					zap.String("changefeed", be.cfID.Name()),
-					zap.Uint64("commitTs", be.commitTs),
-					zap.Bool("isSyncPoint", be.isSyncPoint),
-				)
-				continue
+		for _, tableID := range be.blockedDispatchers.TableIDs {
+			spans := be.controller.GetTasksByTableID(tableID)
+			if len(spans) == 0 {
+				be.markTableDone(tableID)
+			} else {
+				for _, stm := range spans {
+					nodeID := stm.GetNodeID()
+					dispatcherID := stm.ID
+					if dispatcherID == be.writerDispatcher {
+						continue
+					}
+					msg, ok := msgMap[nodeID]
+					if !ok {
+						msg = be.newPassActionMessage(nodeID)
+						msgMap[nodeID] = msg
+					}
+					influencedDispatchers := msg.Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].InfluencedDispatchers
+					influencedDispatchers.DispatcherIDs = append(influencedDispatchers.DispatcherIDs, dispatcherID.ToPB())
+				}
 			}
-			nodeID := stm.GetNodeID()
-			dispatcherID := stm.ID
-			if dispatcherID == be.writerDispatcher {
-				continue
-			}
-			msg, ok := msgMap[nodeID]
-			if !ok {
-				msg = be.newPassActionMessage(nodeID)
-				msgMap[nodeID] = msg
-			}
-			influencedDispatchers := msg.Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].InfluencedDispatchers
-			influencedDispatchers.DispatcherIDs = append(influencedDispatchers.DispatcherIDs, dispatcherID.ToPB())
 		}
 	}
 	msgs := make([]*messaging.TargetMessage, 0, len(msgMap))
@@ -287,7 +309,7 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 				zap.String("changefeed", be.cfID.Name()),
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Bool("isSyncPoint", be.isSyncPoint),
-				zap.Bool("selected", be.selected),
+				zap.Bool("selected", be.selected.Load()),
 				zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
 				zap.String("coverage", be.rangeChecker.Detail()),
 				zap.Any("blocker", be.blockedDispatchers),
@@ -298,7 +320,7 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 	}()
 
 	// still waiting for all dispatcher to reach the block commit ts
-	if !be.selected {
+	if !be.selected.Load() {
 		return nil
 	}
 	be.lastResendTime = time.Now()
@@ -317,7 +339,7 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID())}
 	} else {
 		// the writer dispatcher is advanced, resend pass action
-		msgs = be.sendPassAction()
+		return be.sendPassAction()
 	}
 	return msgs
 }
