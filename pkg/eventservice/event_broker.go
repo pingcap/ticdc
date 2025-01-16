@@ -323,6 +323,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e pevent.DD
 // If the dispatcher does not need to scan the event store, it send the watermark to the dispatcher
 func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common.DataRange) {
 	if !mustCheck && task.taskScanning.Load() {
+		log.Info("hyy task is already scanning", zap.Any("task", task))
 		return false, common.DataRange{}
 	}
 
@@ -377,6 +378,7 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	if task.resetTs.Load() == 0 {
+		log.Info("hyy task going to send ready event", zap.Any("dispatcherID", task.id))
 		remoteID := node.ID(task.info.GetServerID())
 		c.sendReadyEvent(remoteID, task)
 		return false

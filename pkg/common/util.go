@@ -14,6 +14,7 @@
 package common
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -66,6 +67,16 @@ func FormatInfluencedDispatchers(d *heartbeatpb.InfluencedDispatchers) string {
 		sb.WriteString(fmt.Sprintf(", excludeDispatcherID: %s",
 			NewDispatcherIDFromPB(d.ExcludeDispatcherId).String()))
 	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+func FormatTableSpan(s *heartbeatpb.TableSpan) string {
+	sb := strings.Builder{}
+	sb.WriteString(fmt.Sprintf("tableID: %d, startKey: %s, endKey: %s",
+		s.TableID,
+		hex.EncodeToString(s.StartKey),
+		hex.EncodeToString(s.EndKey)))
 	sb.WriteString("\n")
 	return sb.String()
 }

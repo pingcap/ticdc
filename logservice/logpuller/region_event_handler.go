@@ -191,7 +191,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("requestID", state.requestID),
-				zap.Stringer("span", &state.region.span))
+				zap.String("span", common.FormatTableSpan(&state.region.span)))
 
 			for _, cachedEvent := range state.matcher.matchCachedRow(true) {
 				span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, cachedEvent))
