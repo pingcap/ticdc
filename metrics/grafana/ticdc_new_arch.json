@@ -1570,7 +1570,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Puller output events/s",
+          "title": "Puller output events / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1777,7 +1777,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "EventService output events/s",
+          "title": "EventService output events / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1986,7 +1986,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event Collector received event/s",
+          "title": "Event Collector received event / s",
           "tooltip": {
             "shared": true,
             "sort": 2,
@@ -2193,7 +2193,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Sink flush rows/s",
+          "title": "Sink flush rows / s",
           "tooltip": {
             "shared": true,
             "sort": 2,
@@ -5061,7 +5061,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Sink write rows/s",
+          "title": "Sink write rows / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -5603,7 +5603,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TiKV admin apply/s",
+          "title": "TiKV admin apply / s",
           "tooltip": {
             "msResolution": false,
             "shared": true,
@@ -5710,7 +5710,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TiKV advance resovled ts/s",
+          "title": "TiKV advance resolved ts / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -7042,7 +7042,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "KV client dispatch events/s",
+          "title": "KV client dispatch events / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -7213,7 +7213,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_kvclient_worker_process_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\", type=\"EventStore\"}[1m])) by (namespace,changefeed,instance, type, id) /sum(rate(ticdc_kvclient_worker_total_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\", type=\"EventStore\"}[1m])) by (namespace,changefeed,instance, type, id) *100",
+              "expr": "sum(rate(ticdc_kvclient_worker_process_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\", type=\"EventStore\"}[1m])) by (namespace,changefeed,instance, type, id) / sum(rate(ticdc_kvclient_worker_total_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\", type=\"EventStore\"}[1m])) by (namespace,changefeed,instance, type, id) *100",
               "interval": "",
               "legendFormat": "{{instance}}-worker-{{type}}-{{id}}",
               "queryType": "randomWalk",
@@ -7507,7 +7507,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event Store Input Event Count/s",
+          "title": "Event Store Input Event Count / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -7811,7 +7811,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Scan Requests/s",
+          "title": "Scan Requests / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -7909,7 +7909,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Write Bytes/s",
+          "title": "Write Bytes / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -8007,7 +8007,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Scan Bytes/s",
+          "title": "Scan Bytes / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -8414,7 +8414,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Write Requests/s",
+          "title": "Write Requests / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -8974,7 +8974,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Get Table Info Count/s",
+          "title": "Get Table Info Count / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -12047,7 +12047,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_worker_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed,instance,id) /sum(rate(ticdc_sink_txn_worker_total_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed,instance,id) *100",
+              "expr": "sum(rate(ticdc_sink_txn_worker_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed,instance,id) / sum(rate(ticdc_sink_txn_worker_total_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed,instance,id) *100",
               "interval": "",
               "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-worker-{{id}}",
               "queryType": "randomWalk",
@@ -12424,7 +12424,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Bytes/second written off all brokers.\nvalue = one-minute moving average rate of Bytes per second",
+          "description": "Bytes / second written off all brokers.\nvalue = one-minute moving average rate of Bytes per second",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -12733,7 +12733,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Requests/second sent to all brokers.\nvalue = one-minute moving average rate of events per second",
+          "description": "Requests / second sent to all brokers.\nvalue = one-minute moving average rate of events per second",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -16019,7 +16019,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "KV client receive events/s",
+          "title": "KV client receive events / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -16262,7 +16262,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "KV client dispatch events/s",
+          "title": "KV client dispatch events / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -16685,7 +16685,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "RegionCache operation/s",
+          "title": "RegionCache operation / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -17189,7 +17189,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Puller output events/s",
+          "title": "Puller output events / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -20627,7 +20627,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Redo Write rows/s ",
+          "title": "Redo Write rows / s ",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -20723,7 +20723,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Redo Write bytes/s ",
+          "title": "Redo Write bytes / s ",
           "tooltip": {
             "shared": true,
             "sort": 0,
