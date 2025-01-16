@@ -97,8 +97,8 @@ func NewDMLEvent(
 
 func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	decode func(
-		rawKv *common.RawKVEntry,
-		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error),
+	rawKv *common.RawKVEntry,
+	tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error),
 ) error {
 	RowType := RowTypeInsert
 	if raw.OpType == common.OpTypeDelete {
@@ -151,8 +151,8 @@ func (t *DMLEvent) PushFrontFlushFunc(f func()) {
 	t.PostTxnFlushed = append([]func(){f}, t.PostTxnFlushed...)
 }
 
-func (d *DMLEvent) ClearPostFlushFunc() {
-	d.PostTxnFlushed = d.PostTxnFlushed[:0]
+func (t *DMLEvent) ClearPostFlushFunc() {
+	t.PostTxnFlushed = t.PostTxnFlushed[:0]
 }
 
 func (t *DMLEvent) AddPostFlushFunc(f func()) {
@@ -199,7 +199,7 @@ func (t *DMLEvent) Len() int32 {
 	return t.Length
 }
 
-func (t DMLEvent) Marshal() ([]byte, error) {
+func (t *DMLEvent) Marshal() ([]byte, error) {
 	return t.encode()
 }
 
@@ -339,30 +339,29 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 
 // AssembleRows assembles the Rows from the RawRows.
 // It also sets the TableInfo and clears the RawRows.
-func (t *DMLEvent) AssembleRows(tableInfo *common.TableInfo) error {
+func (t *DMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	defer t.TableInfo.InitPrivateFields()
 	// t.Rows is already set, no need to assemble again
 	// When the event is passed from the same node, the Rows is already set.
 	if t.Rows != nil {
-		return nil
+		return
 	}
 	if tableInfo == nil {
 		log.Panic("DMLEvent: TableInfo is nil")
-		return nil
+		return
 	}
 	if len(t.RawRows) == 0 {
 		log.Panic("DMLEvent: RawRows is empty")
-		return nil
+		return
 	}
 	if t.TableInfoVersion != tableInfo.UpdateTS() {
 		log.Panic("DMLEvent: TableInfoVersion mismatch", zap.Uint64("dmlEventTableInfoVersion", t.TableInfoVersion), zap.Uint64("tableInfoVersion", tableInfo.UpdateTS()))
-		return nil
+		return
 	}
 	decoder := chunk.NewCodec(tableInfo.GetFieldSlice())
 	t.Rows, _ = decoder.Decode(t.RawRows)
 	t.TableInfo = tableInfo
 	t.RawRows = nil
-	return nil
 }
 
 type RowChange struct {

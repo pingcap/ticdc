@@ -183,7 +183,7 @@ func (s *EventTestHelper) DML2Event(schema, table string, dml ...string) *DMLEve
 	return dmlEvent
 }
 
-func (s EventTestHelper) DML2RawKv(schema, table string, dml ...string) []*common.RawKVEntry {
+func (s *EventTestHelper) DML2RawKv(schema, table string, dml ...string) []*common.RawKVEntry {
 	tableInfo, ok := s.tableInfos[toTableInfosKey(schema, table)]
 	require.True(s.t, ok)
 	ts := tableInfo.UpdateTS()

@@ -152,7 +152,7 @@ func (s *MysqlSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *MysqlSink) AddCheckpointTs(ts uint64) {}
+func (s *MysqlSink) AddCheckpointTs(_ uint64) {}
 
 func (s *MysqlSink) GetStartTsList(
 	tableIds []int64,
