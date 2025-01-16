@@ -107,10 +107,10 @@ func newMysqlSinkWithDBAndConfig(
 }
 
 func (s *MysqlSink) Run(ctx context.Context) error {
-	g, _ := errgroup.WithContext(ctx)
+	g, ctx := errgroup.WithContext(ctx)
 	for i := 0; i < s.workerCount; i++ {
 		g.Go(func() error {
-			return s.dmlWorker[i].Run()
+			return s.dmlWorker[i].Run(ctx)
 		})
 	}
 	err := g.Wait()
@@ -136,7 +136,7 @@ func (s *MysqlSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	// directly dividing by the number of buckets may cause unevenness between buckets.
 	// Therefore, we first take the modulus of the prime number and then take the modulus of the bucket.
 	index := int64(event.PhysicalTableID) % prime % int64(s.workerCount)
-	s.dmlWorker[index].GetEventChan() <- event
+	s.dmlWorker[index].AddDMLEvent(event)
 }
 
 func (s *MysqlSink) PassBlockEvent(event commonEvent.BlockEvent) {

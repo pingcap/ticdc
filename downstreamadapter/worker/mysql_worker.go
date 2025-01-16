@@ -31,7 +31,6 @@ import (
 
 // MysqlDMLWorker is used to flush the dml event downstream
 type MysqlDMLWorker struct {
-	ctx          context.Context
 	changefeedID common.ChangeFeedID
 
 	eventChan   chan *commonEvent.DMLEvent
@@ -50,7 +49,6 @@ func NewMysqlDMLWorker(
 	statistics *metrics.Statistics,
 ) *MysqlDMLWorker {
 	return &MysqlDMLWorker{
-		ctx:          ctx,
 		mysqlWriter:  mysql.NewMysqlWriter(ctx, db, config, changefeedID, statistics),
 		id:           id,
 		maxRows:      config.MaxTxnRow,
@@ -63,7 +61,7 @@ func (w *MysqlDMLWorker) GetEventChan() chan *commonEvent.DMLEvent {
 	return w.eventChan
 }
 
-func (w *MysqlDMLWorker) Run() error {
+func (w *MysqlDMLWorker) Run(ctx context.Context) error {
 	namespace := w.changefeedID.Namespace()
 	changefeed := w.changefeedID.Name()
 
@@ -83,8 +81,8 @@ func (w *MysqlDMLWorker) Run() error {
 	for {
 		needFlush := false
 		select {
-		case <-w.ctx.Done():
-			return errors.Trace(w.ctx.Err())
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
 		case txnEvent := <-w.eventChan:
 			events = append(events, txnEvent)
 			rows += int(txnEvent.Len())
@@ -133,6 +131,10 @@ func (w *MysqlDMLWorker) Run() error {
 
 func (w *MysqlDMLWorker) Close() {
 	w.mysqlWriter.Close()
+}
+
+func (w *MysqlDMLWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
+	w.eventChan <- event
 }
 
 // MysqlDDLWorker is use to flush the ddl event and sync point eventdownstream
