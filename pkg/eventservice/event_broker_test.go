@@ -22,9 +22,11 @@ import (
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,6 +39,8 @@ func newTableSpan(tableID int64, start, end string) *heartbeatpb.TableSpan {
 }
 
 func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore) {
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	es := newMockEventStore(100)
 	ss := newMockSchemaStore()
 	mc := newMockMessageCenter()

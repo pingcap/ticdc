@@ -34,7 +34,6 @@ import (
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/tiflow/pkg/chann"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -428,27 +427,7 @@ func (c *EventCollector) updateMetrics(ctx context.Context) {
 			metricsDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 			metricsDSUsedMemoryUsage.Set(float64(dsMetrics.MemoryControl.UsedMemory))
 			metricsDSMaxMemoryUsage.Set(float64(dsMetrics.MemoryControl.MaxMemory))
-			c.updateResolvedTsMetric()
 		}
-	}
-}
-
-func (c *EventCollector) updateResolvedTsMetric() {
-	var minResolvedTs uint64
-	c.dispatcherMap.Range(func(key, value interface{}) bool {
-		if stat, ok := value.(*dispatcherStat); ok {
-			d := stat.target
-			if minResolvedTs == 0 || d.GetResolvedTs() < minResolvedTs {
-				minResolvedTs = d.GetResolvedTs()
-			}
-		}
-		return true
-	})
-
-	if minResolvedTs > 0 {
-		phyResolvedTs := oracle.ExtractPhysical(minResolvedTs)
-		lagMs := float64(oracle.GetPhysical(time.Now())-phyResolvedTs) / 1e3
-		metrics.EventCollectorResolvedTsLagGauge.Set(lagMs)
 	}
 }
 

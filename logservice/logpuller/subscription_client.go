@@ -29,8 +29,8 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/dynstream"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pingcap/tiflow/pkg/spanz"
 	"github.com/pingcap/tiflow/pkg/util"
@@ -867,8 +867,9 @@ func (s *SubscriptionClient) GetResolvedTsLag() float64 {
 	if pullerMinResolvedTs == 0 {
 		return 0
 	}
+	pdTime := s.pdClock.CurrentTime()
 	phyResolvedTs := oracle.ExtractPhysical(pullerMinResolvedTs)
-	lag := float64(oracle.GetPhysical(time.Now())-phyResolvedTs) / 1e3
+	lag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 	return lag
 }
 

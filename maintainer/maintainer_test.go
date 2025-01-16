@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -290,6 +291,10 @@ func TestMaintainerSchedule(t *testing.T) {
 			SchemaTableName: &commonEvent.SchemaTableName{},
 		})
 	}
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
 	schemaStore := &mockSchemaStore{tables: tables}
 	appcontext.SetService(appcontext.SchemaStore, schemaStore)
 
