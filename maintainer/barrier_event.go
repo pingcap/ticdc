@@ -48,6 +48,14 @@ type BarrierEvent struct {
 	// if the split table is enable for this changefeeed, if not we can use table id to check coverage
 	dynamicSplitEnabled bool
 
+	// used to store report waiting status dispatchers before rangeChecker is created
+	// when BlockTables.InfluenceType is not Normal, we should store reported dispatchers first
+	// and wait get the reported from table trigger event dispatcher(all/db type must have table trigger event dispatcher)
+	// then create the rangeChecker and update the reported dispatchers.
+	// Why we need to wait table trigger event dispatcher?
+	// because we need to consider the add/drop tables in the other ddls.
+	// so only we use table trigger to create rangeChecker can ensure the coverage is correct.
+	reportedDispatchers map[common.DispatcherID]struct{}
 	// rangeChecker is used to check if all the dispatchers reported the block events
 	rangeChecker   range_checker.RangeChecker
 	lastResendTime time.Time
@@ -55,8 +63,11 @@ type BarrierEvent struct {
 	lastWarningLogTime time.Time
 }
 
-func NewBlockEvent(cfID common.ChangeFeedID, controller *Controller,
-	status *heartbeatpb.State, dynamicSplitEnabled bool,
+func NewBlockEvent(cfID common.ChangeFeedID,
+	dispatcherID common.DispatcherID,
+	controller *Controller,
+	status *heartbeatpb.State,
+	dynamicSplitEnabled bool,
 ) *BarrierEvent {
 	event := &BarrierEvent{
 		controller:          controller,
@@ -69,6 +80,7 @@ func NewBlockEvent(cfID common.ChangeFeedID, controller *Controller,
 		dropDispatchers:     status.NeedDroppedTables,
 		schemaIDChange:      status.UpdatedSchemas,
 		lastResendTime:      time.Time{},
+		reportedDispatchers: make(map[common.DispatcherID]struct{}),
 		isSyncPoint:         status.IsSyncPoint,
 		dynamicSplitEnabled: dynamicSplitEnabled,
 		lastWarningLogTime:  time.Now(),
@@ -82,31 +94,46 @@ func NewBlockEvent(cfID common.ChangeFeedID, controller *Controller,
 				event.rangeChecker = range_checker.NewTableCountChecker(len(status.BlockTables.TableIDs))
 			}
 		case heartbeatpb.InfluenceType_DB:
-			// add table trigger event dispatcher for InfluenceType_DB:
-			if dynamicSplitEnabled {
-				reps := controller.GetTasksBySchemaID(status.BlockTables.SchemaID)
-				tbls := make([]int64, 0, len(reps))
-				for _, rep := range reps {
-					tbls = append(tbls, rep.Span.TableID)
-				}
+			//TODO:clean code
+			// create range checker if dispatcher is ddl dispatcher
+			// otherwise store dispatcherID in reportedDispatchers, and not create rangeChecker
+			if dispatcherID == controller.ddlDispatcherID {
+				// add table trigger event dispatcher for InfluenceType_DB:
+				if dynamicSplitEnabled {
+					reps := controller.GetTasksBySchemaID(status.BlockTables.SchemaID)
+					tbls := make([]int64, 0, len(reps))
+					for _, rep := range reps {
+						tbls = append(tbls, rep.Span.TableID)
+					}
 
-				tbls = append(tbls, heartbeatpb.DDLSpan.TableID)
-				event.rangeChecker = range_checker.NewTableSpanRangeChecker(tbls)
+					tbls = append(tbls, heartbeatpb.DDLSpan.TableID)
+					event.rangeChecker = range_checker.NewTableSpanRangeChecker(tbls)
+				} else {
+					event.rangeChecker = range_checker.NewTableCountChecker(
+						controller.GetTaskSizeBySchemaID(status.BlockTables.SchemaID) + 1 /*table trigger event dispatcher*/)
+				}
+				log.Info("create range checker for block event", zap.Any("influcenceType", status.BlockTables.InfluenceType), zap.Any("commitTs", status.BlockTs))
 			} else {
-				event.rangeChecker = range_checker.NewTableCountChecker(
-					controller.GetTaskSizeBySchemaID(status.BlockTables.SchemaID) + 1 /*table trigger event dispatcher*/)
+				event.reportedDispatchers[dispatcherID] = struct{}{}
 			}
 		case heartbeatpb.InfluenceType_All:
-			if dynamicSplitEnabled {
-				reps := controller.GetAllTasks()
-				tbls := make([]int64, 0, len(reps))
-				for _, rep := range reps {
-					tbls = append(tbls, rep.Span.TableID)
+			// create range checker if dispatcher is ddl dispatcher
+			// otherwise store dispatcherID in reportedDispatchers, and not create rangeChecker
+			if dispatcherID == controller.ddlDispatcherID {
+				if dynamicSplitEnabled {
+					reps := controller.GetAllTasks()
+					tbls := make([]int64, 0, len(reps))
+					for _, rep := range reps {
+						tbls = append(tbls, rep.Span.TableID)
+					}
+					tbls = append(tbls, heartbeatpb.DDLSpan.TableID)
+					event.rangeChecker = range_checker.NewTableSpanRangeChecker(tbls)
+				} else {
+					event.rangeChecker = range_checker.NewTableCountChecker(controller.TaskSize())
 				}
-				tbls = append(tbls, heartbeatpb.DDLSpan.TableID)
-				event.rangeChecker = range_checker.NewTableSpanRangeChecker(tbls)
+				log.Info("create range checker for block event", zap.Any("influcenceType", status.BlockTables.InfluenceType), zap.Any("commitTs", status.BlockTs))
 			} else {
-				event.rangeChecker = range_checker.NewTableCountChecker(controller.TaskSize())
+				event.reportedDispatchers[dispatcherID] = struct{}{}
 			}
 		}
 	}
@@ -230,10 +257,80 @@ func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID
 			zap.String("dispatcher", dispatcherID.String()))
 		return
 	}
-	be.rangeChecker.AddSubRange(replicaSpan.Span.TableID, replicaSpan.Span.StartKey, replicaSpan.Span.EndKey)
+	if be.rangeChecker == nil {
+		// rangeChecker is not created
+		if dispatcherID == be.controller.ddlDispatcherID {
+			// create rangeChecker
+			switch be.blockedDispatchers.InfluenceType {
+			case heartbeatpb.InfluenceType_Normal:
+				log.Panic("influence type should not be normal when range checker is nil")
+			case heartbeatpb.InfluenceType_DB:
+				// create range checker first
+				if be.dynamicSplitEnabled {
+					reps := be.controller.GetTasksBySchemaID(be.blockedDispatchers.SchemaID)
+					tbls := make([]int64, 0, len(reps))
+					for _, rep := range reps {
+						tbls = append(tbls, rep.Span.TableID)
+					}
+
+					tbls = append(tbls, heartbeatpb.DDLSpan.TableID)
+					be.rangeChecker = range_checker.NewTableSpanRangeChecker(tbls)
+				} else {
+					be.rangeChecker = range_checker.NewTableCountChecker(
+						be.controller.GetTaskSizeBySchemaID(be.blockedDispatchers.SchemaID) + 1 /*table trigger event dispatcher*/)
+				}
+				log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs))
+				// add reported dispatchers sub range to range checker
+				be.rangeChecker.AddSubRange(replicaSpan.Span.TableID, replicaSpan.Span.StartKey, replicaSpan.Span.EndKey)
+				for dispatcher := range be.reportedDispatchers {
+					replicaSpan := be.controller.GetTask(dispatcher)
+					if replicaSpan == nil {
+						log.Warn("dispatcher not found, ignore",
+							zap.String("changefeed", be.cfID.Name()),
+							zap.String("dispatcher", dispatcherID.String()))
+						return
+					}
+					be.rangeChecker.AddSubRange(replicaSpan.Span.TableID, replicaSpan.Span.StartKey, replicaSpan.Span.EndKey)
+				}
+			case heartbeatpb.InfluenceType_All:
+				// create range checker first
+				if be.dynamicSplitEnabled {
+					reps := be.controller.GetAllTasks()
+					tbls := make([]int64, 0, len(reps))
+					for _, rep := range reps {
+						tbls = append(tbls, rep.Span.TableID)
+					}
+					tbls = append(tbls, heartbeatpb.DDLSpan.TableID)
+					be.rangeChecker = range_checker.NewTableSpanRangeChecker(tbls)
+				} else {
+					be.rangeChecker = range_checker.NewTableCountChecker(be.controller.TaskSize())
+				}
+				log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs))
+				// add reported dispatchers sub range to range checker
+				be.rangeChecker.AddSubRange(replicaSpan.Span.TableID, replicaSpan.Span.StartKey, replicaSpan.Span.EndKey)
+				for dispatcher := range be.reportedDispatchers {
+					replicaSpan := be.controller.GetTask(dispatcher)
+					if replicaSpan == nil {
+						log.Warn("dispatcher not found, ignore",
+							zap.String("changefeed", be.cfID.Name()),
+							zap.String("dispatcher", dispatcherID.String()))
+						return
+					}
+					be.rangeChecker.AddSubRange(replicaSpan.Span.TableID, replicaSpan.Span.StartKey, replicaSpan.Span.EndKey)
+				}
+			}
+		} else {
+			be.reportedDispatchers[dispatcherID] = struct{}{}
+		}
+	} else {
+		be.rangeChecker.AddSubRange(replicaSpan.Span.TableID, replicaSpan.Span.StartKey, replicaSpan.Span.EndKey)
+	}
 }
 
 func (be *BarrierEvent) allDispatcherReported() bool {
+	if be.rangeChecker == nil {
+		return false
+	}
 	return be.rangeChecker.IsFullyCovered()
 }
 

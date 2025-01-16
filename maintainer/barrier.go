@@ -166,7 +166,7 @@ func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 			event, ok := b.blockedEvents.Get(key)
 			if !ok {
-				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), b.controller, blockState, b.splitTableEnabled)
+				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.controller, blockState, b.splitTableEnabled)
 				b.blockedEvents.Set(key, event)
 			}
 			switch blockState.Stage {
@@ -306,7 +306,7 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
 		// no block event found
-		be := NewBlockEvent(changefeedID, b.controller, status.State, b.splitTableEnabled)
+		be := NewBlockEvent(changefeedID, dispatcherID, b.controller, status.State, b.splitTableEnabled)
 		// the event is a fake event, the dispatcher will not send the block event
 		be.rangeChecker = range_checker.NewBoolRangeChecker(false)
 		return be
@@ -335,7 +335,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	if blockState.IsBlocked {
 		key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 		// insert an event, or get the old one event check if the event is already tracked
-		event := b.getOrInsertNewEvent(changefeedID, key, blockState)
+		event := b.getOrInsertNewEvent(changefeedID, dispatcherID, key, blockState)
 		if dispatcherID == b.controller.ddlDispatcherID {
 			log.Info("the block event is sent by ddl dispatcher",
 				zap.String("changefeed", changefeedID.Name()),
@@ -361,18 +361,18 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	// it's not a blocked event, it must be sent by table event trigger dispatcher, just for doing scheduler
 	// and the ddl already synced to downstream , e.g.: create table
 	// if ack failed, dispatcher will send a heartbeat again, so we do not need to care about resend message here
-	event := NewBlockEvent(changefeedID, b.controller, blockState, b.splitTableEnabled)
+	event := NewBlockEvent(changefeedID, dispatcherID, b.controller, blockState, b.splitTableEnabled)
 	event.scheduleBlockEvent()
 	return event, nil
 }
 
 // getOrInsertNewEvent get the block event from the map, if not found, create a new one
-func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, key eventKey,
-	blockState *heartbeatpb.State,
+func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID,
+	key eventKey, blockState *heartbeatpb.State,
 ) *BarrierEvent {
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
-		event = NewBlockEvent(changefeedID, b.controller, blockState, b.splitTableEnabled)
+		event = NewBlockEvent(changefeedID, dispatcherID, b.controller, blockState, b.splitTableEnabled)
 		b.blockedEvents.Set(key, event)
 	}
 	return event
