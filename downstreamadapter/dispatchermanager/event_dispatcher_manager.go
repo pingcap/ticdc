@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
@@ -31,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/prometheus/client_golang/prometheus"
@@ -179,7 +179,7 @@ func NewEventDispatcherManager(
 	go func() {
 		defer wg.Done()
 		err = manager.sink.Run(ctx)
-		if err != nil && errors.Cause(err) != context.Canceled {
+		if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 			select {
 			case <-ctx.Done():
 				return
@@ -455,7 +455,7 @@ func (e *EventDispatcherManager) collectErrors(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case err := <-e.errCh:
-			if errors.Cause(err) != context.Canceled {
+			if !errors.Is(errors.Cause(err), context.Canceled) {
 				log.Error("Event Dispatcher Manager Meets Error",
 					zap.String("changefeedID", e.changefeedID.String()),
 					zap.Error(err))
@@ -472,7 +472,7 @@ func (e *EventDispatcherManager) collectErrors(ctx context.Context) {
 				e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 
 				// resend message until the event dispatcher manager is closed
-				// the first error is matter most, so we just need to resend it continuely and ignore the other errors.
+				// the first error is matter most, so we just need to resend it continue and ignore the other errors.
 				ticker := time.NewTicker(time.Second * 5)
 				for {
 					select {

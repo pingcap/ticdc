@@ -65,7 +65,7 @@ func verifyMySQLSink(
 	if err != nil {
 		return err
 	}
-	db.Close()
+	_ = db.Close()
 	return nil
 }
 
