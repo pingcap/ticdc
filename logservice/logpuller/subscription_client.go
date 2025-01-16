@@ -548,6 +548,10 @@ func (s *SubscriptionClient) divideSpanAndScheduleRegionRequests(
 
 		backoff := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		regions, err := s.regionCache.BatchLoadRegionsWithKeyRange(backoff, nextSpan.StartKey, nextSpan.EndKey, limit)
+		log.Debug("hyy load regions",
+			zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
+			zap.Any("regions", regions))
+
 		if err != nil {
 			log.Warn("subscription client load regions failed",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
