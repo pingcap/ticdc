@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package dynstream
 
 import (
@@ -283,4 +296,102 @@ func TestGetMetrics(t *testing.T) {
 	usedMemory, maxMemory = mc.getMetrics()
 	require.Equal(t, int64(100), usedMemory)
 	require.Equal(t, int64(100), maxMemory)
+}
+
+func TestUpdateAreaPauseState(t *testing.T) {
+	mc, path := setupTestComponents()
+	settings := AreaSettings{
+		MaxPendingSize:   100,
+		FeedbackInterval: time.Millisecond * 100,
+	}
+	feedbackChan := make(chan Feedback[int, string, any], 10)
+	mc.addPathToArea(path, settings, feedbackChan)
+	areaMemStat := path.areaMemStat
+
+	areaMemStat.totalPendingSize.Store(int64(10))
+	areaMemStat.updateAreaPauseState(path)
+	require.False(t, areaMemStat.paused.Load())
+
+	areaMemStat.totalPendingSize.Store(int64(60))
+	areaMemStat.updateAreaPauseState(path)
+	require.False(t, areaMemStat.paused.Load())
+
+	areaMemStat.totalPendingSize.Store(int64(80))
+	areaMemStat.updateAreaPauseState(path)
+	require.True(t, areaMemStat.paused.Load())
+	fb := <-feedbackChan
+	require.True(t, fb.IsPauseArea())
+	require.True(t, fb.PauseArea)
+	require.Equal(t, path.area, fb.Area)
+
+	areaMemStat.totalPendingSize.Store(int64(30))
+	areaMemStat.updateAreaPauseState(path)
+	require.True(t, areaMemStat.paused.Load())
+
+	// Wait feedback interval, the area should be resumed
+	time.Sleep(settings.FeedbackInterval)
+	areaMemStat.updateAreaPauseState(path)
+	require.False(t, areaMemStat.paused.Load())
+	fb = <-feedbackChan
+	require.False(t, fb.PauseArea)
+	require.True(t, fb.IsAreaFeedback())
+	require.Equal(t, path.area, fb.Area)
+
+	// Wait feedback interval, no more feedback should be sent
+	time.Sleep(settings.FeedbackInterval)
+	areaMemStat.updateAreaPauseState(path)
+	timer := time.After(settings.FeedbackInterval)
+	select {
+	case fb = <-feedbackChan:
+		require.Fail(t, "feedback should not be received")
+	case <-timer:
+		// Pass
+	}
+}
+
+func TestUpdatePathPauseState(t *testing.T) {
+	mc, path := setupTestComponents()
+	settings := AreaSettings{
+		MaxPendingSize:   100,
+		FeedbackInterval: time.Millisecond * 100,
+	}
+	feedbackChan := make(chan Feedback[int, string, any], 10)
+	mc.addPathToArea(path, settings, feedbackChan)
+	areaMemStat := path.areaMemStat
+
+	path.pendingSize.Store(uint32(10))
+	areaMemStat.updatePathPauseState(path)
+	require.False(t, path.paused.Load())
+
+	path.pendingSize.Store(uint32(60))
+	areaMemStat.updatePathPauseState(path)
+	require.True(t, path.paused.Load())
+	fb := <-feedbackChan
+	require.True(t, fb.IsPausePath())
+	require.True(t, fb.PausePath)
+	require.Equal(t, path.area, fb.Area)
+
+	path.pendingSize.Store(uint32(9))
+	areaMemStat.updatePathPauseState(path)
+	require.True(t, path.paused.Load())
+
+	// Wait feedback interval, the path should be resumed
+	time.Sleep(settings.FeedbackInterval)
+	areaMemStat.updatePathPauseState(path)
+	require.False(t, path.paused.Load())
+	fb = <-feedbackChan
+	require.False(t, fb.PausePath)
+	require.False(t, fb.IsAreaFeedback())
+	require.Equal(t, path.area, fb.Area)
+
+	// Wait feedback interval, no more feedback should be sent
+	time.Sleep(settings.FeedbackInterval)
+	areaMemStat.updatePathPauseState(path)
+	timer := time.After(settings.FeedbackInterval)
+	select {
+	case fb = <-feedbackChan:
+		require.Fail(t, "feedback should not be received")
+	case <-timer:
+		// Pass
+	}
 }

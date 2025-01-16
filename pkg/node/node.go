@@ -19,9 +19,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pingcap/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/version"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 )
 
 type ID string
@@ -97,5 +97,4 @@ func CaptureInfosToNodeInfos(captureInfos map[model.CaptureID]*model.CaptureInfo
 		nodeInfos[ID(ci.ID)] = CaptureInfoToNodeInfo(ci)
 	}
 	return nodeInfos
-
 }

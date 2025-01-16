@@ -22,8 +22,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -34,11 +33,11 @@ type saramaAdminClient struct {
 	admin  sarama.ClusterAdmin
 }
 
-func (a *saramaAdminClient) GetAllBrokers(_ context.Context) ([]tikafka.Broker, error) {
+func (a *saramaAdminClient) GetAllBrokers(_ context.Context) ([]Broker, error) {
 	brokers := a.client.Brokers()
-	result := make([]tikafka.Broker, 0, len(brokers))
+	result := make([]Broker, 0, len(brokers))
 	for _, broker := range brokers {
-		result = append(result, tikafka.Broker{
+		result = append(result, Broker{
 			ID: broker.ID(),
 		})
 	}
@@ -117,8 +116,8 @@ func (a *saramaAdminClient) GetTopicConfig(
 
 func (a *saramaAdminClient) GetTopicsMeta(
 	_ context.Context, topics []string, ignoreTopicError bool,
-) (map[string]tikafka.TopicDetail, error) {
-	result := make(map[string]tikafka.TopicDetail, len(topics))
+) (map[string]TopicDetail, error) {
+	result := make(map[string]TopicDetail, len(topics))
 
 	metaList, err := a.admin.DescribeTopics(topics)
 	if err != nil {
@@ -137,7 +136,7 @@ func (a *saramaAdminClient) GetTopicsMeta(
 				zap.Error(meta.Err))
 			continue
 		}
-		result[meta.Name] = tikafka.TopicDetail{
+		result[meta.Name] = TopicDetail{
 			Name:          meta.Name,
 			NumPartitions: int32(len(meta.Partitions)),
 		}
@@ -161,7 +160,7 @@ func (a *saramaAdminClient) GetTopicsPartitionsNum(
 }
 
 func (a *saramaAdminClient) CreateTopic(
-	_ context.Context, detail *tikafka.TopicDetail, validateOnly bool,
+	_ context.Context, detail *TopicDetail, validateOnly bool,
 ) error {
 	request := &sarama.TopicDetail{
 		NumPartitions:     detail.NumPartitions,

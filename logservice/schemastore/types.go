@@ -1,6 +1,20 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package schemastore
 
 import (
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 )
 
@@ -24,16 +38,28 @@ type PersistedDDLEvent struct {
 	PrevSchemaName string `msg:"prev_schema_name"`
 	PrevTableName  string `msg:"prev_table_name"`
 
+	// only used for rename tables
+	PrevSchemaIDs      []int64  `msg:"prev_schema_ids"`
+	PrevSchemaNames    []string `msg:"prev_schema_names"`
+	PrevTableNames     []string `msg:"prev_table_names"`
+	CurrentSchemaIDs   []int64  `msg:"current_schema_ids"`
+	CurrentSchemaNames []string `msg:"s"`
+
 	// The following fields are only set when the ddl job involves a partition table
 	PrevPartitions []int64 `msg:"prev_partitions"`
 
-	Query         string           `msg:"query"`
-	SchemaVersion int64            `msg:"schema_version"`
-	DBInfo        *model.DBInfo    `msg:"-"`
-	TableInfo     *model.TableInfo `msg:"-"`
+	Query         string        `msg:"query"`
+	SchemaVersion int64         `msg:"schema_version"`
+	DBInfo        *model.DBInfo `msg:"-"`
+	// for exchange partition, it is the info of the partition table
+	TableInfo *model.TableInfo `msg:"-"`
 	// TODO: use a custom struct to store the table info?
 	TableInfoValue []byte `msg:"table_info_value"`
-	FinishedTs     uint64 `msg:"finished_ts"`
+	// for exchange partition, it is the info of the normal table
+	PreTableInfo *common.TableInfo `msg:"-"`
+	// TODO: is there a better way to store PreTableInfo?
+	PreTableInfoValue []byte `msg:"pre_table_info_value"`
+	FinishedTs        uint64 `msg:"finished_ts"`
 
 	MultipleTableInfos      []*model.TableInfo `msg:"-"`
 	MultipleTableInfosValue [][]byte           `msg:"multi_table_info_value"`

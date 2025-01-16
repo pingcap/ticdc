@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -95,6 +96,7 @@ func (m *mockDispatcherManager) handleMessage(msg *messaging.TargetMessage) {
 		log.Panic("unknown msg type", zap.Any("msg", msg))
 	}
 }
+
 func (m *mockDispatcherManager) sendMessages(msg *heartbeatpb.HeartBeatRequest) {
 	target := messaging.NewSingleTargetMessage(
 		m.maintainerID,
@@ -106,6 +108,7 @@ func (m *mockDispatcherManager) sendMessages(msg *heartbeatpb.HeartBeatRequest) 
 		log.Warn("send command failed", zap.Error(err))
 	}
 }
+
 func (m *mockDispatcherManager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
 	switch msg.Type {
 	// receive message from maintainer
@@ -124,6 +127,7 @@ func (m *mockDispatcherManager) recvMessages(ctx context.Context, msg *messaging
 	}
 	return nil
 }
+
 func (m *mockDispatcherManager) onBootstrapRequest(msg *messaging.TargetMessage) {
 	req := msg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
 	m.maintainerID = msg.From
@@ -279,7 +283,7 @@ func TestMaintainerSchedule(t *testing.T) {
 		sleepTime, _ = strconv.Atoi(argList[1])
 	}
 
-	var tables = make([]commonEvent.Table, 0, tableSize)
+	tables := make([]commonEvent.Table, 0, tableSize)
 	for id := 1; id <= tableSize; id++ {
 		tables = append(tables, commonEvent.Table{
 			SchemaID:        1,
@@ -287,12 +291,16 @@ func TestMaintainerSchedule(t *testing.T) {
 			SchemaTableName: &commonEvent.SchemaTableName{},
 		})
 	}
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
 	schemaStore := &mockSchemaStore{tables: tables}
 	appcontext.SetService(appcontext.SchemaStore, schemaStore)
 
 	n := node.NewInfo("", "")
 	appcontext.SetService(appcontext.MessageCenter, messaging.NewMessageCenter(ctx,
-		n.ID, 100, config.NewDefaultMessageCenterConfig()))
+		n.ID, 100, config.NewDefaultMessageCenterConfig(), nil))
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[n.ID] = n
@@ -316,7 +324,7 @@ func TestMaintainerSchedule(t *testing.T) {
 		},
 		&config.ChangeFeedInfo{
 			Config: config.GetDefaultReplicaConfig(),
-		}, n, taskScheduler, nil, tsoClient, nil, 10)
+		}, n, taskScheduler, nil, tsoClient, nil, 10, true)
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic,
 		func(ctx context.Context, msg *messaging.TargetMessage) error {

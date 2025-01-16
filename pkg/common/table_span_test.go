@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package common
 
 import (
@@ -39,6 +52,7 @@ func TestMergeDataRange(t *testing.T) {
 	mergedDataRange = dataRange1.Merge(dataRange4)
 	require.Nil(t, mergedDataRange)
 }
+
 func TestDataRangeEqual(t *testing.T) {
 	span1 := &heartbeatpb.TableSpan{
 		TableID:  1,
@@ -65,6 +79,7 @@ func TestDataRangeEqual(t *testing.T) {
 	require.False(t, dataRange1.Equal(dataRange3))
 	require.False(t, dataRange1.Equal(dataRange4))
 }
+
 func TestTableSpanLess(t *testing.T) {
 	span1 := &heartbeatpb.TableSpan{
 		TableID:  1,
@@ -86,6 +101,7 @@ func TestTableSpanLess(t *testing.T) {
 	require.False(t, span2.Less(span1))
 	require.True(t, span2.Less(span3))
 }
+
 func TestTableSpanEqual(t *testing.T) {
 	span1 := &heartbeatpb.TableSpan{
 		TableID:  1,

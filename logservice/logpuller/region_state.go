@@ -117,7 +117,6 @@ func (s *regionFeedState) markStopped(err error) {
 	if s.state.v == stateNormal {
 		s.state.v = stateStopped
 		s.state.err = err
-		s.matcher.clear()
 	}
 }
 
@@ -153,7 +152,6 @@ func (s *regionFeedState) isInitialized() bool {
 
 func (s *regionFeedState) setInitialized() {
 	s.region.lockedRangeState.Initialized.Store(true)
-
 }
 
 func (s *regionFeedState) getRegionID() uint64 {

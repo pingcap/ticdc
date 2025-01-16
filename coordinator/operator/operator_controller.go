@@ -51,7 +51,8 @@ func NewOperatorController(mc messaging.MessageCenter,
 	db *changefeed.ChangefeedDB,
 	backend changefeed.Backend,
 	nodeManger *watcher.NodeManager,
-	batchSize int) *Controller {
+	batchSize int,
+) *Controller {
 	oc := &Controller{
 		operators:     make(map[common.ChangeFeedID]*operator.OperatorWithTime[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]),
 		runningQueue:  make(operator.OperatorQueue[common.ChangeFeedID, *heartbeatpb.MaintainerStatus], 0),
@@ -121,7 +122,7 @@ func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID
 	oc.lock.Lock()
 	defer oc.lock.Unlock()
 
-	var scheduledNode = oc.changefeedDB.StopByChangefeedID(cfID, removed)
+	scheduledNode := oc.changefeedDB.StopByChangefeedID(cfID, removed)
 	if scheduledNode == "" {
 		log.Info("changefeed is not scheduled, try stop maintainer using coordinator node",
 			zap.Bool("removed", removed),
@@ -157,7 +158,8 @@ func (oc *Controller) pushStopChangefeedOperator(cfID common.ChangeFeedID, nodeI
 }
 
 func (oc *Controller) UpdateOperatorStatus(id common.ChangeFeedID, from node.ID,
-	status *heartbeatpb.MaintainerStatus) {
+	status *heartbeatpb.MaintainerStatus,
+) {
 	oc.lock.RLock()
 	defer oc.lock.RUnlock()
 
@@ -202,7 +204,7 @@ func (oc *Controller) HasOperator(dispName common.ChangeFeedDisplayName) bool {
 	oc.lock.RLock()
 	defer oc.lock.RUnlock()
 
-	for id, _ := range oc.operators {
+	for id := range oc.operators {
 		if id.DisplayName == dispName {
 			return true
 		}

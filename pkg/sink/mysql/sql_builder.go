@@ -14,14 +14,15 @@
 package mysql
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/quotes"
 )
 
@@ -31,6 +32,19 @@ type preparedDMLs struct {
 	rowCount        int
 	approximateSize int64
 	startTs         []uint64
+}
+
+func (d *preparedDMLs) String() string {
+	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v", d.fmtSqls(), d.values, d.rowCount, d.approximateSize, d.startTs)
+}
+
+func (d *preparedDMLs) fmtSqls() string {
+	builder := strings.Builder{}
+	for _, sql := range d.sqls {
+		builder.WriteString(sql)
+		builder.WriteString(";")
+	}
+	return builder.String()
 }
 
 var dmlsPool = sync.Pool{

@@ -38,7 +38,8 @@ type AddMaintainerOperator struct {
 func NewAddMaintainerOperator(
 	db *changefeed.ChangefeedDB,
 	cf *changefeed.Changefeed,
-	dest node.ID) *AddMaintainerOperator {
+	dest node.ID,
+) *AddMaintainerOperator {
 	return &AddMaintainerOperator{
 		cf:   cf,
 		dest: dest,
@@ -93,6 +94,7 @@ func (m *AddMaintainerOperator) Start() {
 func (m *AddMaintainerOperator) PostFinish() {
 	if !m.canceled.Load() {
 		m.db.MarkMaintainerReplicating(m.cf)
+		m.cf.SetIsNew(false)
 	} else {
 		m.db.MarkMaintainerAbsent(m.cf)
 	}

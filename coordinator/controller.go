@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/operator"
@@ -27,15 +26,15 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -52,14 +51,15 @@ type Controller struct {
 	operatorController *operator.Controller
 	changefeedDB       *changefeed.ChangefeedDB
 	backend            changefeed.Backend
+	eventCh            *chann.DrainableChann[*Event]
 
 	bootstrapped *atomic.Bool
 	bootstrapper *bootstrap.Bootstrapper[heartbeatpb.CoordinatorBootstrapResponse]
 
-	nodeChanged *atomic.Bool
+	mutex       sync.Mutex // protect nodeChanged and do onNodeChanged()
+	nodeChanged bool
 	nodeManager *watcher.NodeManager
 
-	stream        dynstream.DynamicStream[int, string, *Event, *Controller, *StreamHandler]
 	taskScheduler threadpool.ThreadPool
 	taskHandlers  []*threadpool.TaskHandle
 	messageCenter messaging.MessageCenter
@@ -84,9 +84,10 @@ func NewController(
 	updatedChangefeedCh chan map[common.ChangeFeedID]*changefeed.Changefeed,
 	stateChangedCh chan *ChangefeedStateChangeEvent,
 	backend changefeed.Backend,
-	stream dynstream.DynamicStream[int, string, *Event, *Controller, *StreamHandler],
+	eventCh *chann.DrainableChann[*Event],
 	taskScheduler threadpool.ThreadPool,
-	batchSize int, balanceInterval time.Duration) *Controller {
+	batchSize int, balanceInterval time.Duration,
+) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	changefeedDB := changefeed.NewChangefeedDB(version)
 
@@ -99,14 +100,14 @@ func NewController(
 			scheduler.BasicScheduler:   scheduler.NewBasicScheduler(selfNode.ID.String(), batchSize, oc, changefeedDB, nodeManager, oc.NewAddMaintainerOperator),
 			scheduler.BalanceScheduler: scheduler.NewBalanceScheduler(selfNode.ID.String(), batchSize, oc, changefeedDB, nodeManager, balanceInterval, oc.NewMoveMaintainerOperator),
 		}),
+		eventCh:             eventCh,
 		operatorController:  oc,
 		messageCenter:       mc,
 		changefeedDB:        changefeedDB,
 		nodeManager:         nodeManager,
-		stream:              stream,
 		taskScheduler:       taskScheduler,
 		backend:             backend,
-		nodeChanged:         atomic.NewBool(false),
+		nodeChanged:         false,
 		updatedChangefeedCh: updatedChangefeedCh,
 		stateChangedCh:      stateChangedCh,
 		lastPrintStatusTime: time.Now(),
@@ -116,11 +117,13 @@ func NewController(
 	nodes := c.nodeManager.GetAliveNodes()
 	// detect the capture changes
 	c.nodeManager.RegisterNodeChangeHandler("coordinator-controller", func(allNodes map[node.ID]*node.Info) {
-		c.nodeChanged.Store(true)
+		c.mutex.Lock()
+		c.nodeChanged = true
+		c.mutex.Unlock()
 	})
 	log.Info("changefeed bootstrap initial nodes",
 		zap.Int("nodes", len(nodes)))
-	var newNodes = make([]*node.Info, 0, len(nodes))
+	newNodes := make([]*node.Info, 0, len(nodes))
 	for _, n := range nodes {
 		newNodes = append(newNodes, n)
 	}
@@ -133,6 +136,10 @@ func NewController(
 
 // HandleEvent implements the event-driven process mode
 func (c *Controller) HandleEvent(event *Event) bool {
+	if event == nil {
+		return false
+	}
+
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start)
@@ -143,10 +150,8 @@ func (c *Controller) HandleEvent(event *Event) bool {
 		}
 	}()
 	// first check the online/offline nodes
-	if c.nodeChanged.Load() {
-		c.onNodeChanged()
-		c.nodeChanged.Store(false)
-	}
+	c.checkOnNodeChanged()
+
 	switch event.eventType {
 	case EventMessage:
 		c.onMessage(event.message)
@@ -154,6 +159,15 @@ func (c *Controller) HandleEvent(event *Event) bool {
 		c.onPeriodTask()
 	}
 	return false
+}
+
+func (c *Controller) checkOnNodeChanged() {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if c.nodeChanged {
+		c.onNodeChanged()
+		c.nodeChanged = false
+	}
 }
 
 func (c *Controller) onPeriodTask() {
@@ -181,14 +195,14 @@ func (c *Controller) onNodeChanged() {
 	currentNodes := c.bootstrapper.GetAllNodes()
 
 	activeNodes := c.nodeManager.GetAliveNodes()
-	var newNodes = make([]*node.Info, 0, len(activeNodes))
+	newNodes := make([]*node.Info, 0, len(activeNodes))
 	for id, n := range activeNodes {
 		if _, ok := currentNodes[id]; !ok {
 			newNodes = append(newNodes, n)
 		}
 	}
 	var removedNodes []node.ID
-	for id, _ := range currentNodes {
+	for id := range currentNodes {
 		if _, ok := activeNodes[id]; !ok {
 			removedNodes = append(removedNodes, id)
 			c.RemoveNode(id)
@@ -327,7 +341,7 @@ func (c *Controller) FinishBootstrap(workingMap map[common.ChangeFeedID]remoteMa
 	for cfID, cfMeta := range cfs {
 		rm, ok := workingMap[cfID]
 		if !ok {
-			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, cfMeta.Status.CheckpointTs)
+			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, cfMeta.Status.CheckpointTs, false)
 			if shouldRunChangefeed(cf.GetInfo().State) {
 				c.changefeedDB.AddAbsentChangefeed(cf)
 			} else {
@@ -336,7 +350,7 @@ func (c *Controller) FinishBootstrap(workingMap map[common.ChangeFeedID]remoteMa
 		} else {
 			log.Info("maintainer already working in other server",
 				zap.String("changefeed", cfID.String()))
-			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, rm.status.CheckpointTs)
+			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, rm.status.CheckpointTs, false)
 			c.changefeedDB.AddReplicatingMaintainer(cf, rm.nodeID)
 			// delete it
 			delete(workingMap, cfID)
@@ -389,7 +403,7 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	if err != nil {
 		return errors.Trace(err)
 	}
-	c.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs))
+	c.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs, true))
 	return nil
 }
 
@@ -430,7 +444,7 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	return nil
 }
 
-func (c *Controller) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64) error {
+func (c *Controller) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64, overwriteCheckpointTs bool) error {
 	c.apiLock.Lock()
 	defer c.apiLock.Unlock()
 
@@ -447,7 +461,15 @@ func (c *Controller) ResumeChangefeed(ctx context.Context, id common.ChangeFeedI
 		clone.State = model.StateNormal
 		cf.SetInfo(clone)
 	}
-	c.changefeedDB.Resume(id, true)
+
+	status := cf.GetStatus()
+	status.CheckpointTs = newCheckpointTs
+	_, _, err := cf.UpdateStatus(status)
+	if err != nil {
+		return errors.New(err.Message)
+	}
+
+	c.changefeedDB.Resume(id, true, overwriteCheckpointTs)
 	return nil
 }
 
@@ -486,7 +508,7 @@ func (c *Controller) GetChangefeed(_ context.Context, changefeedDisplayName comm
 
 	cf := c.changefeedDB.GetByChangefeedDisplayName(changefeedDisplayName)
 	if cf == nil {
-		return nil, nil, cerror.ErrChangeFeedNotExists.GenWithStackByArgs(changefeedDisplayName.Name)
+		return nil, nil, errors.ErrChangeFeedNotExists.GenWithStackByArgs(changefeedDisplayName.Name)
 	}
 	return cf.GetInfo(), &config.ChangeFeedStatus{CheckpointTs: cf.GetStatus().CheckpointTs}, nil
 }
@@ -503,7 +525,7 @@ func (c *Controller) RemoveNode(id node.ID) {
 
 func (c *Controller) submitPeriodTask() {
 	task := func() time.Time {
-		c.stream.Push("coordinator", &Event{eventType: EventPeriod})
+		c.eventCh.In() <- &Event{eventType: EventPeriod}
 		return time.Now().Add(time.Millisecond * 500)
 	}
 	periodTaskhandler := c.taskScheduler.SubmitFunc(task, time.Now().Add(time.Millisecond*500))

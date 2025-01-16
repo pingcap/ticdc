@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package eventservice
 
 import (
@@ -9,9 +22,11 @@ import (
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,6 +39,8 @@ func newTableSpan(tableID int64, start, end string) *heartbeatpb.TableSpan {
 }
 
 func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore) {
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	es := newMockEventStore(100)
 	ss := newMockSchemaStore()
 	mc := newMockMessageCenter()
@@ -134,7 +151,7 @@ func TestOnNotify(t *testing.T) {
 	}
 	log.Info("Pass case 4")
 
-	//Case 5: do scan and then onNotify again.
+	// Case 5: do scan and then onNotify again.
 	broker.doScan(context.TODO(), task)
 	require.False(t, disp.taskScanning.Load())
 	require.Equal(t, notifyMsgs4.resolvedTs, disp.sentResolvedTs.Load())

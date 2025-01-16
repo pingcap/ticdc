@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package apperror
 
 import (
@@ -5,7 +18,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/errors"
-	tierrors "github.com/pingcap/tiflow/pkg/errors"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 )
 
 var (
@@ -65,7 +78,7 @@ const (
 	ErrorTypeTargetNotFound       ErrorType = 207
 	ErrorTypeInvalidMessage       ErrorType = 208
 
-	//ErrorTypeCreateEventDispatcherManagerFailed ErrorType = 300
+	// ErrorTypeCreateEventDispatcherManagerFailed ErrorType = 300
 
 	ErrorInvalidDDLEvent ErrorType = 301
 )
@@ -141,24 +154,24 @@ func (e AppError) Equal(err AppError) bool {
 }
 
 var changefeedUnRetryableErrors = []*errors.Error{
-	tierrors.ErrExpressionColumnNotFound,
-	tierrors.ErrExpressionParseFailed,
-	tierrors.ErrSchemaSnapshotNotFound,
-	tierrors.ErrSyncRenameTableFailed,
-	tierrors.ErrChangefeedUnretryable,
-	tierrors.ErrCorruptedDataMutation,
-	tierrors.ErrDispatcherFailed,
-	tierrors.ErrColumnSelectorFailed,
+	cerrors.ErrExpressionColumnNotFound,
+	cerrors.ErrExpressionParseFailed,
+	cerrors.ErrSchemaSnapshotNotFound,
+	cerrors.ErrSyncRenameTableFailed,
+	cerrors.ErrChangefeedUnretryable,
+	cerrors.ErrCorruptedDataMutation,
+	cerrors.ErrDispatcherFailed,
+	cerrors.ErrColumnSelectorFailed,
 
-	tierrors.ErrSinkURIInvalid,
-	tierrors.ErrKafkaInvalidConfig,
-	tierrors.ErrMySQLInvalidConfig,
-	tierrors.ErrStorageSinkInvalidConfig,
+	cerrors.ErrSinkURIInvalid,
+	cerrors.ErrKafkaInvalidConfig,
+	cerrors.ErrMySQLInvalidConfig,
+	cerrors.ErrStorageSinkInvalidConfig,
 
 	// gc related errors
-	tierrors.ErrGCTTLExceeded,
-	tierrors.ErrSnapshotLostByGC,
-	tierrors.ErrStartTsBeforeGC,
+	cerrors.ErrGCTTLExceeded,
+	cerrors.ErrSnapshotLostByGC,
+	cerrors.ErrStartTsBeforeGC,
 }
 
 // ErrorCode returns the RFC error code for the given error.
@@ -167,15 +180,15 @@ var changefeedUnRetryableErrors = []*errors.Error{
 func ErrorCode(err error) errors.RFCErrorCode {
 	for _, e := range changefeedUnRetryableErrors {
 		if e.Equal(err) {
-			return tierrors.ErrChangefeedUnretryable.RFCCode()
+			return cerrors.ErrChangefeedUnretryable.RFCCode()
 		}
-		if code, ok := tierrors.RFCCode(err); ok {
+		if code, ok := cerrors.RFCCode(err); ok {
 			if code == e.RFCCode() {
-				return tierrors.ErrChangefeedUnretryable.RFCCode()
+				return cerrors.ErrChangefeedUnretryable.RFCCode()
 			}
 		}
 		if strings.Contains(err.Error(), string(e.RFCCode())) {
-			return tierrors.ErrChangefeedUnretryable.RFCCode()
+			return cerrors.ErrChangefeedUnretryable.RFCCode()
 		}
 	}
 

@@ -18,23 +18,26 @@ import (
 	"math"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/server"
-	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/txnutil/gc"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -52,18 +55,19 @@ type coordinator struct {
 	controller *Controller
 
 	mc            messaging.MessageCenter
-	stream        dynstream.DynamicStream[int, string, *Event, *Controller, *StreamHandler]
 	taskScheduler threadpool.ThreadPool
 
 	gcManager gc.Manager
 	pdClient  pd.Client
 	pdClock   pdutil.Clock
 
+	eventCh             *chann.DrainableChann[*Event]
 	updatedChangefeedCh chan map[common.ChangeFeedID]*changefeed.Changefeed
 	stateChangedCh      chan *ChangefeedStateChangeEvent
 	backend             changefeed.Backend
 
 	cancel func()
+	closed atomic.Bool
 }
 
 func New(node *node.Info,
@@ -73,13 +77,15 @@ func New(node *node.Info,
 	clusterID string,
 	version int64,
 	batchSize int,
-	balanceCheckInterval time.Duration) server.Coordinator {
+	balanceCheckInterval time.Duration,
+) server.Coordinator {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	c := &coordinator{
 		version:             version,
 		nodeInfo:            node,
 		lastTickTime:        time.Now(),
 		gcManager:           gc.NewManager(clusterID, pdClient, pdClock),
+		eventCh:             chann.NewAutoDrainChann[*Event](),
 		pdClient:            pdClient,
 		pdClock:             pdClock,
 		mc:                  mc,
@@ -87,9 +93,8 @@ func New(node *node.Info,
 		stateChangedCh:      make(chan *ChangefeedStateChangeEvent, 8),
 		backend:             backend,
 	}
-	c.stream = dynstream.NewDynamicStream(NewStreamHandler())
-	c.stream.Start()
 	c.taskScheduler = threadpool.NewThreadPoolDefault()
+	c.closed.Store(false)
 
 	controller := NewController(
 		c.version,
@@ -97,24 +102,36 @@ func New(node *node.Info,
 		c.updatedChangefeedCh,
 		c.stateChangedCh,
 		backend,
-		c.stream,
+		c.eventCh,
 		c.taskScheduler,
 		batchSize,
 		balanceCheckInterval,
 	)
 
 	c.controller = controller
-	if err := c.stream.AddPath("coordinator", controller); err != nil {
-		log.Panic("failed to add path",
-			zap.Error(err))
-	}
+
 	// receive messages
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+
+	nodeManager.RegisterOwnerChangeHandler(string(c.nodeInfo.ID), func(newCoordinatorID string) {
+		if newCoordinatorID != string(c.nodeInfo.ID) {
+			log.Info("Coordinator changed, and I am not the coordinator, stop myself",
+				zap.String("selfID", string(c.nodeInfo.ID)),
+				zap.String("newCoordinatorID", newCoordinatorID))
+			c.AsyncStop()
+		}
+	})
+
 	return c
 }
 
 func (c *coordinator) recvMessages(_ context.Context, msg *messaging.TargetMessage) error {
-	c.stream.Push("coordinator", &Event{message: msg})
+	if c.closed.Load() {
+		return nil
+	}
+	c.eventCh.In() <- &Event{message: msg}
 	return nil
 }
 
@@ -131,6 +148,12 @@ func (c *coordinator) Run(ctx context.Context) error {
 	defer gcTick.Stop()
 	updateMetricsTicker := time.NewTicker(time.Second * 1)
 	defer updateMetricsTicker.Stop()
+
+	go c.runHandleEvent(ctx)
+
+	failpoint.Inject("coordinator-run-with-error", func() error {
+		return errors.New("coordinator run with error")
+	})
 
 	for {
 		select {
@@ -152,8 +175,17 @@ func (c *coordinator) Run(ctx context.Context) error {
 			if err := c.handleStateChangedEvent(ctx, event); err != nil {
 				return errors.Trace(err)
 			}
-		case <-updateMetricsTicker.C:
-			c.updateMetricsOnce()
+		}
+	}
+}
+
+func (c *coordinator) runHandleEvent(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case event := <-c.eventCh.Out():
+			c.controller.HandleEvent(event)
 		}
 	}
 }
@@ -184,7 +216,7 @@ func (c *coordinator) handleStateChangedEvent(ctx context.Context, event *Change
 	switch event.State {
 	case model.StateWarning:
 		c.controller.operatorController.StopChangefeed(ctx, event.ChangefeedID, false)
-		c.controller.changefeedDB.Resume(event.ChangefeedID, false)
+		c.controller.changefeedDB.Resume(event.ChangefeedID, false, false)
 	case model.StateFailed, model.StateFinished:
 		c.controller.operatorController.StopChangefeed(ctx, event.ChangefeedID, false)
 	default:
@@ -235,8 +267,8 @@ func (c *coordinator) PauseChangefeed(ctx context.Context, id common.ChangeFeedI
 	return c.controller.PauseChangefeed(ctx, id)
 }
 
-func (c *coordinator) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64) error {
-	return c.controller.ResumeChangefeed(ctx, id, newCheckpointTs)
+func (c *coordinator) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64, overwriteCheckpointTs bool) error {
+	return c.controller.ResumeChangefeed(ctx, id, newCheckpointTs, overwriteCheckpointTs)
 }
 
 func (c *coordinator) UpdateChangefeed(ctx context.Context, change *config.ChangeFeedInfo) error {
@@ -260,11 +292,13 @@ func shouldRunChangefeed(state model.FeedState) bool {
 }
 
 func (c *coordinator) AsyncStop() {
-	c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
-	c.controller.Stop()
-	c.taskScheduler.Stop()
-	c.stream.Close()
-	c.cancel()
+	if c.closed.CompareAndSwap(false, true) {
+		c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
+		c.controller.Stop()
+		c.taskScheduler.Stop()
+		c.eventCh.CloseAndDrain()
+		c.cancel()
+	}
 }
 
 func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
@@ -292,10 +326,4 @@ func (c *coordinator) updateGCSafepoint(
 	gcSafepointUpperBound := minCheckpointTs - 1
 	err := c.gcManager.TryUpdateGCSafePoint(ctx, gcSafepointUpperBound, false)
 	return errors.Trace(err)
-}
-
-func (c *coordinator) updateMetricsOnce() {
-	dsMetrics := c.stream.GetMetrics()
-	metricsDSInputChanLen.Set(float64(dsMetrics.EventChanSize))
-	metricsDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 }

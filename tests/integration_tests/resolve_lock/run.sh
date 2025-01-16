@@ -29,7 +29,7 @@ function prepare() {
 		run_pulsar_cluster $WORK_DIR normal
 		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
 		;;
-	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/tidb-txn-mode=pessimistic" ;;
+	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/?tidb-txn-mode=pessimistic" ;;
 	esac
 	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 	case $SINK_TYPE in

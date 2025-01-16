@@ -28,16 +28,16 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
@@ -66,6 +66,8 @@ type Maintainer struct {
 	selfNode   *node.Info
 	controller *Controller
 	barrier    *Barrier
+
+	pdClock pdutil.Clock
 
 	eventCh *chann.DrainableChann[*Event]
 
@@ -102,8 +104,11 @@ type Maintainer struct {
 	// closedNodes is used to record the nodes that dispatcherManager is closed
 	closedNodes map[node.ID]struct{}
 
-	statusChanged  *atomic.Bool
-	nodeChanged    *atomic.Bool
+	statusChanged *atomic.Bool
+
+	mutex       sync.Mutex // protect nodeChanged and do onNodeChanged()
+	nodeChanged bool
+
 	lastReportTime time.Time
 
 	removing        bool
@@ -112,7 +117,11 @@ type Maintainer struct {
 	changefeedRemoved bool
 
 	lastPrintStatusTime time.Time
-	//lastCheckpointTsTime time.Time
+	// lastCheckpointTsTime time.Time
+
+	// true when the changefeed is new created, or resume by overwriteCheckpointTs
+	// false when otherwise, such as maintainer move to different nodes.
+	newChangefeed bool
 
 	errLock             sync.Mutex
 	runningErrors       map[node.ID]*heartbeatpb.RunningError
@@ -139,6 +148,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	tsoClient replica.TSOClient,
 	regionCache split.RegionCache,
 	checkpointTs uint64,
+	newChangfeed bool,
 ) *Maintainer {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -150,8 +160,13 @@ func NewMaintainer(cfID common.ChangeFeedID,
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
 		}, selfNode.ID)
+
+	// TODO: Retrieve the correct pdClock from the context once multiple upstreams are supported.
+	// For now, since there is only one upstream, using the default pdClock is sufficient.
+	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	m := &Maintainer{
 		id:                cfID,
+		pdClock:           pdClock,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		taskScheduler:     taskScheduler,
@@ -163,13 +178,14 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		nodeManager:     nodeManager,
 		closedNodes:     make(map[node.ID]struct{}),
 		statusChanged:   atomic.NewBool(true),
-		nodeChanged:     atomic.NewBool(false),
+		nodeChanged:     false,
 		cascadeRemoving: false,
 		config:          cfg,
 
 		ddlSpan:               ddlSpan,
 		checkpointTsByCapture: make(map[node.ID]heartbeatpb.Watermark),
 		runningErrors:         map[node.ID]*heartbeatpb.RunningError{},
+		newChangefeed:         newChangfeed,
 
 		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		changefeedCheckpointTsLagGauge: metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
@@ -190,7 +206,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	m.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](m.id.Name(), m.getNewBootstrapFn())
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("ddl dispatcher", tableTriggerEventDispatcherID.String()))
+		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()))
 	metrics.MaintainerGauge.WithLabelValues(cfID.Namespace(), cfID.Name()).Inc()
 	// Should update metrics immediately when maintainer is created
 	// FIXME: Use a correct context
@@ -215,7 +231,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 		Config:       config.GetDefaultReplicaConfig(),
 	}
 	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI,
-		tsoClient, regionCache, 1)
+		tsoClient, regionCache, 1, false)
 	m.cascadeRemoving = true
 	// setup period event
 	m.submitScheduledEvent(m.taskScheduler, &Event{
@@ -246,11 +262,10 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 			zap.String("changefeed", m.id.String()))
 		return false
 	}
+
 	// first check the online/offline nodes
-	if m.nodeChanged.Load() {
-		m.onNodeChanged()
-		m.nodeChanged.Store(false)
-	}
+	m.checkOnNodeChanged()
+
 	switch event.eventType {
 	case EventInit:
 		return m.onInit()
@@ -260,6 +275,15 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 		m.onPeriodTask()
 	}
 	return false
+}
+
+func (m *Maintainer) checkOnNodeChanged() {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if m.nodeChanged {
+		m.onNodeChanged()
+		m.nodeChanged = false
+	}
 }
 
 // Close cleanup resources
@@ -302,13 +326,15 @@ func (m *Maintainer) initialize() error {
 
 	// detect the capture changes
 	m.nodeManager.RegisterNodeChangeHandler(node.ID("maintainer-"+m.id.Name()), func(allNodes map[node.ID]*node.Info) {
-		m.nodeChanged.Store(true)
+		m.mutex.Lock()
+		m.nodeChanged = true
+		m.mutex.Unlock()
 	})
 	// init bootstrapper nodes
 	nodes := m.nodeManager.GetAliveNodes()
 	log.Info("changefeed bootstrap initial nodes",
 		zap.Int("nodes", len(nodes)))
-	var newNodes = make([]*node.Info, 0, len(nodes))
+	newNodes := make([]*node.Info, 0, len(nodes))
 	for _, n := range nodes {
 		newNodes = append(newNodes, n)
 	}
@@ -393,7 +419,7 @@ func (m *Maintainer) onNodeChanged() {
 	currentNodes := m.bootstrapper.GetAllNodes()
 
 	activeNodes := m.nodeManager.GetAliveNodes()
-	var newNodes = make([]*node.Info, 0, len(activeNodes))
+	newNodes := make([]*node.Info, 0, len(activeNodes))
 	for id, n := range activeNodes {
 		if _, ok := currentNodes[id]; !ok {
 			newNodes = append(newNodes, n)
@@ -472,14 +498,16 @@ func (m *Maintainer) calCheckpointTs() {
 
 func (m *Maintainer) updateMetrics() {
 	watermark := m.getWatermark()
+
+	pdTime := m.pdClock.CurrentTime()
 	phyCkpTs := oracle.ExtractPhysical(watermark.CheckpointTs)
 	m.changefeedCheckpointTsGauge.Set(float64(phyCkpTs))
-	lag := float64(oracle.GetPhysical(time.Now())-phyCkpTs) / 1e3
+	lag := float64(oracle.GetPhysical(pdTime)-phyCkpTs) / 1e3
 	m.changefeedCheckpointTsLagGauge.Set(lag)
 
 	phyResolvedTs := oracle.ExtractPhysical(watermark.ResolvedTs)
 	m.changefeedResolvedTsGauge.Set(float64(phyResolvedTs))
-	lag = float64(oracle.GetPhysical(time.Now())-phyResolvedTs) / 1e3
+	lag = float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 	m.changefeedResolvedTsLagGauge.Set(lag)
 
 	m.changefeedStatusGauge.Set(float64(m.state.Load()))
@@ -555,6 +583,12 @@ func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 	}
 	cachedResp := m.bootstrapper.HandleBootstrapResponse(msg.From, msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse))
 	m.onBootstrapDone(cachedResp)
+
+	// when get the bootstrap response from the event dispatcher manager with table trigger event,
+	// set new changefeed to false, which means the changefeed is no longer new created.
+	if msg.From == m.selfNode.ID {
+		m.newChangefeed = false
+	}
 }
 
 func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMessage) {
@@ -689,23 +723,8 @@ func (m *Maintainer) handleError(err error) {
 // getNewBootstrapFn returns a function that creates a new bootstrap message to initialize
 // a changefeed dispatcher manager.
 func (m *Maintainer) getNewBootstrapFn() bootstrap.NewBootstrapMessageFn {
-	cfg := m.config
-	changefeedConfig := config.ChangefeedConfig{
-		ChangefeedID:       cfg.ChangefeedID,
-		StartTS:            cfg.StartTs,
-		TargetTS:           cfg.TargetTs,
-		SinkURI:            cfg.SinkURI,
-		ForceReplicate:     cfg.Config.ForceReplicate,
-		SinkConfig:         cfg.Config.Sink,
-		Filter:             cfg.Config.Filter,
-		EnableSyncPoint:    *cfg.Config.EnableSyncPoint,
-		SyncPointInterval:  cfg.Config.SyncPointInterval,
-		SyncPointRetention: cfg.Config.SyncPointRetention,
-		MemoryQuota:        cfg.Config.MemoryQuota,
-		// other fields are not necessary for maintainer
-	}
 	// cfgBytes only holds necessary fields to initialize a changefeed dispatcher.
-	cfgBytes, err := json.Marshal(changefeedConfig)
+	cfgBytes, err := json.Marshal(m.config.ToChangefeedConfig())
 	if err != nil {
 		log.Panic("marshal changefeed config failed",
 			zap.String("changefeed", m.id.Name()),
@@ -717,19 +736,22 @@ func (m *Maintainer) getNewBootstrapFn() bootstrap.NewBootstrapMessageFn {
 			Config:                        cfgBytes,
 			StartTs:                       m.startCheckpointTs,
 			TableTriggerEventDispatcherId: nil,
+			IsNewChangfeed:                false,
 		}
 
 		// only send dispatcher id to dispatcher manager on the same node
 		if id == m.selfNode.ID {
 			log.Info("create table event trigger dispatcher", zap.String("changefeed", m.id.String()),
 				zap.String("server", id.String()),
-				zap.String("dispatcher id", m.ddlSpan.ID.String()))
+				zap.String("dispatcherID", m.ddlSpan.ID.String()))
 			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
+			msg.IsNewChangfeed = m.newChangefeed
 		}
 		log.Info("send maintainer bootstrap message",
 			zap.String("changefeed", m.id.String()),
 			zap.String("server", id.String()),
-			zap.Uint64("startTs", m.startCheckpointTs))
+			zap.Uint64("startTs", m.startCheckpointTs),
+			zap.Bool("isNewChangefed", msg.IsNewChangfeed))
 		return messaging.NewSingleTargetMessage(id, messaging.DispatcherManagerManagerTopic, msg)
 	}
 }
@@ -794,11 +816,16 @@ func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
 	return m.controller.moveTable(tableId, targetNode)
 }
 
+func (m *Maintainer) GetTables() []*replica.SpanReplication {
+	return m.controller.replicationDB.GetAllTasks()
+}
+
 // SubmitScheduledEvent submits a task to controller pool to send a future event
 func (m *Maintainer) submitScheduledEvent(
 	scheduler threadpool.ThreadPool,
 	event *Event,
-	scheduleTime time.Time) {
+	scheduleTime time.Time,
+) {
 	task := func() time.Time {
 		m.pushEvent(event)
 		return time.Time{}
@@ -831,4 +858,8 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 	if newWatermark.ResolvedTs != math.MaxUint64 {
 		m.watermark.ResolvedTs = newWatermark.ResolvedTs
 	}
+}
+
+func (m *Maintainer) GetDispatcherCount() int {
+	return len(m.controller.GetAllTasks())
 }

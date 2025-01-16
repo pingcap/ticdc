@@ -34,6 +34,11 @@ const (
 
 // Connect returns a new grpc client connection to the target.
 func Connect(target string, credential *security.Credential) (*grpc.ClientConn, error) {
+	// If credential is nil, use an empty credential.
+	if credential == nil {
+		credential = &security.Credential{}
+	}
+
 	grpcTLSOption, err := credential.ToGRPCDialOption()
 	if err != nil {
 		return nil, err

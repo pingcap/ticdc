@@ -19,9 +19,9 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/migrate"
 	tiorchestrator "github.com/pingcap/tiflow/pkg/orchestrator"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -36,7 +36,8 @@ type EtcdWatcher struct {
 }
 
 func NewEtcdWatcher(etcdClient etcd.CDCEtcdClient, session *concurrency.Session,
-	baseKey string, role string) *EtcdWatcher {
+	baseKey string, role string,
+) *EtcdWatcher {
 	return &EtcdWatcher{
 		etcdClient: etcdClient,
 		baseKey:    baseKey,

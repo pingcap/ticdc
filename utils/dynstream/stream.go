@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package dynstream
 
 import (
@@ -6,9 +19,8 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/ticdc/utils/deque"
+	"go.uber.org/zap"
 )
 
 const BlockLenInPendingQueue = 32
@@ -84,7 +96,6 @@ func (s *stream[A, P, T, D, H]) in() chan eventWrap[A, P, T, D, H] {
 	} else {
 		return s.eventChan
 	}
-
 }
 
 // Start the stream.
@@ -169,7 +180,7 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 			s.eventQueue.wakePath(e.pathInfo)
 		case e.newPath:
 			s.eventQueue.initPath(e.pathInfo)
-		case e.pathInfo.removed:
+		case e.pathInfo.removed.Load():
 			// The path is removed, so we don't need to handle its events.
 			return
 		default:
@@ -267,7 +278,7 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Note that we should not need to use a atomic.Bool here, because this field is set by the RemovePaths method,
 	// and we use sync.WaitGroup to wait for finish. So if RemovePaths is called in the handle goroutine, it should be
 	// guaranteed to see the memory change of this field.
-	removed bool
+	removed atomic.Bool
 	// The path is blocked by the handler.
 	blocking bool
 
@@ -331,7 +342,7 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 	pi.pendingSize.Add(uint32(-e.eventSize))
 
 	if pi.areaMemStat != nil {
-		pi.areaMemStat.totalPendingSize.Add(-int64(e.eventSize))
+		pi.areaMemStat.decPendingSize(int64(e.eventSize))
 	}
 	return e, true
 }

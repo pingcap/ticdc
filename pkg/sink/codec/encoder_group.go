@@ -19,15 +19,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	newCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/cdc/model"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -50,7 +48,7 @@ type EncoderGroup interface {
 }
 
 type encoderGroup struct {
-	changefeedID common.ChangeFeedID
+	changefeedID commonType.ChangeFeedID
 
 	// concurrency is the number of encoder pipelines to run
 	concurrency int
@@ -58,7 +56,7 @@ type encoderGroup struct {
 	inputCh []chan *future
 	index   uint64
 
-	rowEventEncoders []encoder.EventEncoder
+	rowEventEncoders []common.EventEncoder
 
 	outputCh chan *future
 
@@ -69,37 +67,37 @@ type encoderGroup struct {
 func NewEncoderGroup(
 	ctx context.Context,
 	cfg *config.SinkConfig,
-	encoderConfig *newCommon.Config,
-	changefeedID common.ChangeFeedID,
-) *encoderGroup {
+	encoderConfig *common.Config,
+	changefeedID commonType.ChangeFeedID,
+) (*encoderGroup, error) {
 	concurrency := util.GetOrZero(cfg.EncoderConcurrency)
 	if concurrency <= 0 {
 		concurrency = config.DefaultEncoderGroupConcurrency
 	}
 	inputCh := make([]chan *future, concurrency)
-	rowEventEncoders := make([]encoder.EventEncoder, concurrency)
+	rowEventEncoders := make([]common.EventEncoder, concurrency)
 	var err error
 	for i := 0; i < concurrency; i++ {
 		inputCh[i] = make(chan *future, defaultInputChanSize)
 		rowEventEncoders[i], err = NewEventEncoder(ctx, encoderConfig)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
-			return nil
+			return nil, errors.Trace(err)
 		}
 	}
 	outCh := make(chan *future, defaultInputChanSize*concurrency)
 
-	var bootstrapWorker *bootstrapWorker
+	var bw *bootstrapWorker
 	if cfg.ShouldSendBootstrapMsg() {
-		rowEventEncoder, err := NewEventEncoder(ctx, encoderConfig)
+		encoder, err := NewEventEncoder(ctx, encoderConfig)
 		if err != nil {
 			log.Error("failed to create row event encoder", zap.Error(err))
-			return nil
+			return nil, errors.Trace(err)
 		}
-		bootstrapWorker = newBootstrapWorker(
+		bw = newBootstrapWorker(
 			changefeedID,
 			outCh,
-			rowEventEncoder,
+			encoder,
 			util.GetOrZero(cfg.SendBootstrapIntervalInSec),
 			util.GetOrZero(cfg.SendBootstrapInMsgCount),
 			util.GetOrZero(cfg.SendBootstrapToAllPartition),
@@ -114,8 +112,8 @@ func NewEncoderGroup(
 		inputCh:          inputCh,
 		index:            0,
 		outputCh:         outCh,
-		bootstrapWorker:  bootstrapWorker,
-	}
+		bootstrapWorker:  bw,
+	}, nil
 }
 
 func (g *encoderGroup) Run(ctx context.Context) error {
@@ -162,7 +160,7 @@ func (g *encoderGroup) runEncoder(ctx context.Context, idx int) error {
 				}
 			}
 			future.Messages = g.rowEventEncoders[idx].Build()
-			// TODO:是不是要用后清零
+			// TODO: Is it necessary to clear after use?
 			close(future.done)
 		}
 	}
@@ -207,16 +205,15 @@ func (g *encoderGroup) cleanMetrics() {
 	for _, encoder := range g.rowEventEncoders {
 		encoder.Clean()
 	}
-	newCommon.CleanMetrics(g.changefeedID)
+	common.CleanMetrics(g.changefeedID)
 }
 
 // future is a wrapper of the result of encoding events
 // It's used to notify the caller that the result is ready.
-// TODO:换个名字
 type future struct {
 	Key      model.TopicPartitionKey
 	events   []*commonEvent.RowEvent
-	Messages []*ticommon.Message
+	Messages []*common.Message
 	done     chan struct{}
 }
 

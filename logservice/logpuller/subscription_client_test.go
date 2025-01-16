@@ -25,13 +25,12 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/logservice/txnutil"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/tidb/pkg/store/mockstore/mockcopr"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
-
 	"github.com/tikv/client-go/v2/tikv"
 )
 

@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package config
 
 import (
@@ -9,8 +22,8 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink"
 	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/pingcap/tiflow/pkg/version"
@@ -29,12 +42,12 @@ type ChangefeedConfig struct {
 	ForceReplicate bool          `json:"force_replicate" default:"false"`
 	Filter         *FilterConfig `toml:"filter" json:"filter"`
 	MemoryQuota    uint64        `toml:"memory-quota" json:"memory-quota"`
-	//sync point related
-	// TODO:syncPointRetention|default 可以不要吗
-	EnableSyncPoint    bool           `json:"enable_sync_point" default:"false"`
-	SyncPointInterval  *time.Duration `json:"sync_point_interval" default:"1m"`
-	SyncPointRetention *time.Duration `json:"sync_point_retention" default:"24h"`
-	SinkConfig         *SinkConfig    `json:"sink_config"`
+	// sync point related
+	// TODO: Is syncPointRetention|default can be removed?
+	EnableSyncPoint    bool          `json:"enable_sync_point" default:"false"`
+	SyncPointInterval  time.Duration `json:"sync_point_interval" default:"1m"`
+	SyncPointRetention time.Duration `json:"sync_point_retention" default:"24h"`
+	SinkConfig         *SinkConfig   `json:"sink_config"`
 }
 
 // ChangeFeedInfo describes the detail of a ChangeFeed
@@ -55,14 +68,32 @@ type ChangeFeedInfo struct {
 	// but can be fetched for backward compatibility
 	SortDir string `json:"sort-dir"`
 
-	Config  *ReplicaConfig      `json:"config"`
-	State   model.FeedState     `json:"state"`
-	Error   *model.RunningError `json:"error"`
-	Warning *model.RunningError `json:"warning"`
+	UpstreamInfo *UpstreamInfo       `json:"upstream-info"`
+	Config       *ReplicaConfig      `json:"config"`
+	State        model.FeedState     `json:"state"`
+	Error        *model.RunningError `json:"error"`
+	Warning      *model.RunningError `json:"warning"`
 
 	CreatorVersion string `json:"creator-version"`
 	// Epoch is the epoch of a changefeed, changes on every restart.
 	Epoch uint64 `json:"epoch"`
+}
+
+func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
+	return &ChangefeedConfig{
+		ChangefeedID:       info.ChangefeedID,
+		StartTS:            info.StartTs,
+		TargetTS:           info.TargetTs,
+		SinkURI:            info.SinkURI,
+		ForceReplicate:     info.Config.ForceReplicate,
+		SinkConfig:         info.Config.Sink,
+		Filter:             info.Config.Filter,
+		EnableSyncPoint:    util.GetOrZero(info.Config.EnableSyncPoint),
+		SyncPointInterval:  util.GetOrZero(info.Config.SyncPointInterval),
+		SyncPointRetention: util.GetOrZero(info.Config.SyncPointRetention),
+		MemoryQuota:        info.Config.MemoryQuota,
+		// other fields are not necessary for maintainer
+	}
 }
 
 // NeedBlockGC returns true if the changefeed need to block the GC safepoint.

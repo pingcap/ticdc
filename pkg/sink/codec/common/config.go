@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )

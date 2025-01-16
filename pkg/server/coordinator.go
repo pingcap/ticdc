@@ -41,7 +41,7 @@ type Coordinator interface {
 	// PauseChangefeed pauses a changefeed
 	PauseChangefeed(ctx context.Context, id common.ChangeFeedID) error
 	// ResumeChangefeed resumes a changefeed
-	ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64) error
+	ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64, overwriteCheckpointTs bool) error
 	// UpdateChangefeed updates a changefeed
 	UpdateChangefeed(ctx context.Context, change *config.ChangeFeedInfo) error
 }

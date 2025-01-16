@@ -9,13 +9,51 @@ TiCDC pulls change logs from TiDB clusters and pushes them to downstream systems
 
 ## Quick Start
 
+### Find the latest tag
+Go to [pingcap/ticdc/tags](https://github.com/pingcap/ticdc/tags) to find the latest tag, e.g. `v9.0.0-alpha`
+
+### Download the patch binary
+* For Linux: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-linux-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-linux-amd64.tar.gz)
+* For MacOS: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-darwin-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-darwin-amd64.tar.gz)
+
+### Patch to the existing TiCDC nodes
+Examples:
+```bash
+# Scale out some old version TiCDC nodes, if you don't already have some
+tiup cluster scale-out test_cluster scale-out.yml
+
+#scale-out.yml
+#cdc_servers:
+#  - host: 172.31.10.1
+
+# Patch the new arch TiCDC to the cluster
+tiup cluster patch --overwrite test_cluster cdc-v9.0.0-alpha-nightly-linux-amd64.tar.gz -R cdc
+
+# Enable the new architectural TiCDC by setting the "newarch" parameter
+tiup cluster edit-config test_cluster
+#cdc_servers:
+# ...
+# config:
+#    newarch: true
+
+tiup cluster reload test_cluster -R cdc
+```
+
+### Import the new dashboard to grafana to monitor your workloads
+Download [ticdc_new_arch.json](https://github.com/pingcap/ticdc/blob/master/metrics/grafana/ticdc_new_arch.json), and use the import button.
+
+![](./docs/media/grafana_import.png)
+
+
+## How to compile TiCDC from source code
+
 ### Prerequests
 TiCDC can be built on the following operating systems:
 
 * Linux
 * MacOS
 
-1. Install GoLang 1.23.2
+Install GoLang 1.23.2
 
 ```bash
 # Linux
@@ -32,19 +70,15 @@ export GOPATH=$HOME/go
 export PATH=$PATH:$GOPATH/bin
 ```
 
-### Download the latest release's source code and compile
+### Download the source code and compile
 
-1. Go to [ticdc/tags](https://github.com/pingcap/ticdc/tags) to find the latest tag, for example `latest-version`
-
-2. Download the repo and checkout the latest tag
+1. Download the code
 ```bash
 git clone git@github.com:pingcap/ticdc.git
 cd ticdc
-git fetch origin
-git checkout latest-version
 ```
 
-3. Build TiCDC
+2. Build TiCDC
 
 ```bash
 make cdc
@@ -53,33 +87,3 @@ make cdc
 cd bin
 tar -czf newarch_cdc.tar.gz cdc
 ```
-
-### Patch the new arch TiCDC to your cluster.
-
-Examples:
-```bash
-# Scale out the old version TiCDC nodes
-tiup cluster scale-out cdc-test scale-out.yml
-
-#scale-out.yml
-#cdc_servers:
-#  - host: 172.31.10.1
-
-# Patch the new arch TiCDC to the cluster
-tiup cluster patch --overwrite cdc-test newarch_cdc.tar.gz -R cdc
-
-# Enable the newarch
-tiup cluster edit-config cdc-test
-#vim
-#cdc_servers:
-# ...
-# config:
-#    newarch: true
-
-tiup cluster reload cdc-test -R cdc
-```
-
-### Import the new dashboard to grafana to monitor your workloads
-Download [ticdc_new_arch.json](https://github.com/pingcap/ticdc/blob/master/metrics/grafana/ticdc_new_arch.json), and use the import button.
-
-![](./docs/media/grafana_import.png)

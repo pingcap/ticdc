@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package eventservice
 
 import (
@@ -8,11 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/eventpb"
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/node"
-
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
@@ -20,8 +30,11 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	tconfig "github.com/pingcap/tiflow/pkg/config"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -32,6 +45,8 @@ func initEventService(
 	mc messaging.MessageCenter, mockStore eventstore.EventStore,
 ) *eventService {
 	mockSchemaStore := newMockSchemaStore()
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	appcontext.SetService(appcontext.EventStore, mockStore)
 	appcontext.SetService(appcontext.SchemaStore, mockSchemaStore)
@@ -129,7 +144,6 @@ func TestEventServiceBasic(t *testing.T) {
 			break
 		}
 	}
-
 }
 
 var _ messaging.MessageCenter = &mockMessageCenter{}
@@ -146,7 +160,6 @@ func newMockMessageCenter() *mockMessageCenter {
 }
 
 func (m *mockMessageCenter) OnNodeChanges(nodeInfos map[node.ID]*node.Info) {
-
 }
 
 func (m *mockMessageCenter) SendEvent(event *messaging.TargetMessage) error {
@@ -374,7 +387,6 @@ func (m *mockSchemaStore) RegisterTable(
 	tableID int64,
 	startTS common.Ts,
 ) error {
-
 	return nil
 }
 
@@ -384,7 +396,6 @@ func (m *mockSchemaStore) UnregisterTable(tableID int64) error {
 
 // GetNextDDLEvents returns the next ddl event which finishedTs is within the range (start, end]
 func (m *mockSchemaStore) FetchTableDDLEvents(tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
-
 	events := m.DDLEvents[tableID]
 	if len(events) == 0 {
 		return nil, nil

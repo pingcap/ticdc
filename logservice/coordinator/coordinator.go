@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logservicepb"
+	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -29,8 +30,6 @@ import (
 	"github.com/pingcap/tiflow/pkg/chann"
 	"github.com/pingcap/tiflow/pkg/spanz"
 	"go.uber.org/zap"
-
-	"github.com/pingcap/ticdc/pkg/common"
 )
 
 type LogCoordinator interface {
@@ -147,13 +146,13 @@ func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {
 	for id := range c.nodes.m {
 		if _, ok := allNodes[id]; !ok {
 			delete(c.nodes.m, id)
-			log.Info("log coordinaotr detect node removed", zap.String("nodeId", id.String()))
+			log.Info("log coordinator detect node removed", zap.String("nodeId", id.String()))
 		}
 	}
 	for id, node := range allNodes {
 		if _, ok := c.nodes.m[id]; !ok {
 			c.nodes.m[id] = node
-			log.Info("log coordinaotr detect node added", zap.String("nodeId", id.String()))
+			log.Info("log coordinator detect node added", zap.String("nodeId", id.String()))
 		}
 	}
 }

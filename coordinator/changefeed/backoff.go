@@ -21,8 +21,8 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerrors "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -167,7 +167,7 @@ func (m *Backoff) HandleError(errs []*heartbeatpb.RunningError) (bool, *heartbea
 		}
 	}
 
-	var lastError = errs[len(errs)-1]
+	lastError := errs[len(errs)-1]
 
 	if !m.retrying.Load() {
 		// errBackoff may be stopped, reset it before the first retry.

@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package common
 
 import (
@@ -103,8 +116,10 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 	return ToDigest(hash)
 }
 
-var once sync.Once
-var storage *SharedColumnSchemaStorage
+var (
+	once    sync.Once
+	storage *SharedColumnSchemaStorage
+)
 
 func GetSharedColumnSchemaStorage() *SharedColumnSchemaStorage {
 	once.Do(func() {
@@ -454,7 +469,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 			ID:            col.ID,
 			IsPKHandle:    pkIsHandle,
 			Ft:            col.FieldType.Clone(),
-			VirtualGenCol: col.IsGenerated(),
+			VirtualGenCol: !IsColCDCVisible(col),
 		}
 		colSchema.RowColFieldTps[col.ID] = colSchema.RowColInfos[i].Ft
 		colSchema.RowColFieldTpsSlice = append(colSchema.RowColFieldTpsSlice, colSchema.RowColInfos[i].Ft)
@@ -751,12 +766,13 @@ func (s *columnSchema) genPreSQLInsert(isReplace bool, needPlaceHolder bool) str
 		builder.WriteString("INSERT INTO %s")
 	}
 	builder.WriteString(" (")
-	builder.WriteString(s.getColumnList(false))
+	nonGeneratedColumnCount, columnList := s.getColumnList(false)
+	builder.WriteString(columnList)
 	builder.WriteString(") VALUES ")
 
 	if needPlaceHolder {
 		builder.WriteString("(")
-		builder.WriteString(placeHolder(len(s.Columns) - s.VirtualColumnCount))
+		builder.WriteString(placeHolder(nonGeneratedColumnCount))
 		builder.WriteString(")")
 	}
 	return builder.String()
@@ -766,7 +782,8 @@ func (s *columnSchema) genPreSQLUpdate() string {
 	var builder strings.Builder
 	builder.WriteString("UPDATE %s")
 	builder.WriteString(" SET ")
-	builder.WriteString(s.getColumnList(true))
+	_, columnList := s.getColumnList(true)
+	builder.WriteString(columnList)
 	return builder.String()
 }
 
@@ -784,12 +801,15 @@ func placeHolder(n int) string {
 	return builder.String()
 }
 
-func (s *columnSchema) getColumnList(isUpdate bool) string {
+// getColumnList returns non-generated columns number and column names
+func (s *columnSchema) getColumnList(isUpdate bool) (int, string) {
 	var b strings.Builder
+	nonGeneratedColumnCount := 0
 	for i, col := range s.Columns {
 		if col == nil || s.ColumnsFlag[col.ID].IsGeneratedColumn() {
 			continue
 		}
+		nonGeneratedColumnCount++
 		if i > 0 {
 			b.WriteString(",")
 		}
@@ -798,5 +818,5 @@ func (s *columnSchema) getColumnList(isUpdate bool) string {
 			b.WriteString(" = ?")
 		}
 	}
-	return b.String()
+	return nonGeneratedColumnCount, b.String()
 }

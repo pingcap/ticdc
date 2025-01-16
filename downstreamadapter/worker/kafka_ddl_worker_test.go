@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package worker
 
 import (
@@ -13,10 +26,10 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tiflow/pkg/sink/kafka"
+	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/errgroup"
 )
 
 // ddl | checkpoint ts
@@ -37,12 +50,10 @@ func kafkaDDLWorkerForTest(t *testing.T) *KafkaDDLWorker {
 	require.NoError(t, err)
 
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	errGroup, ctx := errgroup.WithContext(ctx)
 	ddlMockProducer := producer.NewMockDDLProducer()
-
-	ddlWorker := NewKafkaDDLWorker(ctx, changefeedID, protocol, ddlMockProducer,
+	ddlWorker := NewKafkaDDLWorker(changefeedID, protocol, ddlMockProducer,
 		kafkaComponent.Encoder, kafkaComponent.EventRouter, kafkaComponent.TopicManager,
-		statistics, errGroup)
+		statistics)
 	return ddlWorker
 }
 
@@ -87,11 +98,12 @@ func TestWriteDDLEvents(t *testing.T) {
 		},
 	}
 
+	ctx := context.Background()
 	ddlWorker := kafkaDDLWorkerForTest(t)
-	err := ddlWorker.WriteBlockEvent(ddlEvent)
+	err := ddlWorker.WriteBlockEvent(ctx, ddlEvent)
 	require.NoError(t, err)
 
-	err = ddlWorker.WriteBlockEvent(ddlEvent2)
+	err = ddlWorker.WriteBlockEvent(ctx, ddlEvent2)
 	require.NoError(t, err)
 
 	// Wait for the events to be received by the worker.
@@ -101,16 +113,20 @@ func TestWriteDDLEvents(t *testing.T) {
 
 func TestWriteCheckpointTs(t *testing.T) {
 	ddlWorker := kafkaDDLWorkerForTest(t)
-	ddlWorker.Run()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		err := ddlWorker.Run(ctx)
+		require.True(t, errors.Is(err, context.Canceled))
+	}()
 
 	tableSchemaStore := util.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.KafkaSinkType)
 	ddlWorker.SetTableSchemaStore(tableSchemaStore)
 
-	ddlWorker.GetCheckpointTsChan() <- 1
-	ddlWorker.GetCheckpointTsChan() <- 2
+	ddlWorker.AddCheckpoint(1)
+	ddlWorker.AddCheckpoint(2)
 
 	time.Sleep(1 * time.Second)
 
 	require.Len(t, ddlWorker.producer.(*producer.MockProducer).GetAllEvents(), 2)
-
+	cancel()
 }

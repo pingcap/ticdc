@@ -103,9 +103,10 @@ func formatDDLEventsForTest(events []commonEvent.DDLEvent) string {
 		if event.NeedDroppedTables != nil {
 			needDroppedTableIDs = fmt.Sprintf("type: %v, schemaID: %d, tableIDs: %v", event.NeedDroppedTables.InfluenceType, event.NeedDroppedTables.SchemaID, event.NeedDroppedTables.TableIDs)
 		}
-		res = append(res, fmt.Sprintf("type: %s, finishedTs: %d, blocked tables: %s, updated schemas %v, need dropped tables: %s, need added tables: %v, table name change %v",
+		res = append(res, fmt.Sprintf("type: %s, finishedTs: %d, query %s, blocked tables: %s, updated schemas %v, need dropped tables: %s, need added tables: %v, table name change %v",
 			model.ActionType(event.Type),
 			event.FinishedTs,
+			event.Query,
 			blockedTableIDs,
 			event.UpdatedSchemas,
 			needDroppedTableIDs,
@@ -141,7 +142,6 @@ func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos []mockDBInfo) {
 
 func buildTableFilterByNameForTest(schemaName, tableName string) filter.Filter {
 	filterRule := fmt.Sprintf("%s.%s", schemaName, tableName)
-	log.Info("filterRule", zap.String("filterRule", filterRule))
 	filterConfig := &config.FilterConfig{
 		Rules: []string{filterRule},
 	}
@@ -202,12 +202,31 @@ func buildCreateTablesJobForTest(schemaID int64, tableIDs []int64, tableNames []
 			ID:   id,
 			Name: pmodel.NewCIStr(tableNames[i]),
 		})
-		querys = append(querys, fmt.Sprintf("create table %s(a int primary key)", tableNames[i]))
+		querys = append(querys, fmt.Sprintf("create table %s(a int primary key);", tableNames[i]))
 	}
 	return &model.Job{
 		Type:     model.ActionCreateTables,
 		SchemaID: schemaID,
-		Query:    strings.Join(querys, ";"),
+		Query:    strings.Join(querys, ""),
+		BinlogInfo: &model.HistoryInfo{
+			MultipleTableInfos: multiTableInfos,
+			FinishedTS:         finishedTs,
+		},
+	}
+}
+
+func buildCreateTablesJobWithQueryForTest(schemaID int64, tableIDs []int64, tableNames []string, query string, finishedTs uint64) *model.Job {
+	multiTableInfos := make([]*model.TableInfo, 0, len(tableIDs))
+	for i, id := range tableIDs {
+		multiTableInfos = append(multiTableInfos, &model.TableInfo{
+			ID:   id,
+			Name: pmodel.NewCIStr(tableNames[i]),
+		})
+	}
+	return &model.Job{
+		Type:     model.ActionCreateTables,
+		SchemaID: schemaID,
+		Query:    query,
 		BinlogInfo: &model.HistoryInfo{
 			MultipleTableInfos: multiTableInfos,
 			FinishedTS:         finishedTs,
@@ -230,6 +249,7 @@ func buildCreatePartitionTablesJobForTest(schemaID int64, tableIDs []int64, tabl
 			Name: pmodel.NewCIStr(tableNames[i]),
 			Partition: &model.PartitionInfo{
 				Definitions: partitionDefinitions,
+				Enable:      true,
 			},
 		})
 		querys = append(querys, fmt.Sprintf("create table %s(a int primary key)", tableNames[i]))
@@ -245,8 +265,8 @@ func buildCreatePartitionTablesJobForTest(schemaID int64, tableIDs []int64, tabl
 	}
 }
 
-func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64) *model.Job {
-	return &model.Job{
+func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finishedTs uint64, prevInfo *model.InvolvingSchemaInfo) *model.Job {
+	job := &model.Job{
 		Type:     model.ActionRenameTable,
 		SchemaID: schemaID,
 		TableID:  tableID,
@@ -258,6 +278,50 @@ func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finis
 			FinishedTS: finishedTs,
 		},
 	}
+	if prevInfo != nil {
+		job.InvolvingSchemaInfo = []model.InvolvingSchemaInfo{
+			{
+				Database: prevInfo.Database,
+				Table:    prevInfo.Table,
+			},
+		}
+	}
+	return job
+}
+
+func buildRenameTablesJobForTest(
+	oldSchemaIDs, newSchemaIDs, tableIDs []int64,
+	oldSchemaNames, oldTableNames, newTableNames []string,
+	finishedTs uint64,
+) *model.Job {
+	args := &model.RenameTablesArgs{
+		RenameTableInfos: make([]*model.RenameTableArgs, 0, len(tableIDs)),
+	}
+	multiTableInfos := make([]*model.TableInfo, 0, len(tableIDs))
+	for i := 0; i < len(tableIDs); i++ {
+		args.RenameTableInfos = append(args.RenameTableInfos, &model.RenameTableArgs{
+			OldSchemaID:   oldSchemaIDs[i],
+			NewSchemaID:   newSchemaIDs[i],
+			TableID:       tableIDs[i],
+			NewTableName:  pmodel.NewCIStr(newTableNames[i]),
+			OldSchemaName: pmodel.NewCIStr(oldSchemaNames[i]),
+			OldTableName:  pmodel.NewCIStr(oldTableNames[i]),
+		})
+		multiTableInfos = append(multiTableInfos, &model.TableInfo{
+			ID:   tableIDs[i],
+			Name: pmodel.NewCIStr(newTableNames[i]),
+		})
+	}
+	job := &model.Job{
+		Type: model.ActionRenameTables,
+		BinlogInfo: &model.HistoryInfo{
+			MultipleTableInfos: multiTableInfos,
+			FinishedTS:         finishedTs,
+		},
+		Version: model.JobVersion2,
+	}
+	job.FillArgs(args)
+	return job
 }
 
 func buildRenamePartitionTableJobForTest(schemaID, tableID int64, tableName string, partitionIDs []int64, finishedTs uint64) *model.Job {
@@ -282,6 +346,7 @@ func buildPartitionTableRelatedJobForTest(jobType model.ActionType, schemaID, ta
 				Name: pmodel.NewCIStr(tableName),
 				Partition: &model.PartitionInfo{
 					Definitions: partitionDefinitions,
+					Enable:      true,
 				},
 			},
 			FinishedTS: finishedTs,
@@ -341,6 +406,7 @@ func buildTruncatePartitionTableJobForTest(schemaID, oldTableID, newTableID int6
 				Name: pmodel.NewCIStr(tableName),
 				Partition: &model.PartitionInfo{
 					Definitions: partitionDefinitions,
+					Enable:      true,
 				},
 			},
 			FinishedTS: finishedTs,
@@ -388,6 +454,7 @@ func buildExchangePartitionJobForTest(
 				Name: pmodel.NewCIStr(partitionTableName),
 				Partition: &model.PartitionInfo{
 					Definitions: partitionDefinitions,
+					Enable:      true,
 				},
 			},
 			FinishedTS: finishedTs,
@@ -478,6 +545,108 @@ func buildSetTiFlashReplicaJobForTest(schemaID, tableID int64, finishedTs uint64
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildMultiSchemaChangeJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionMultiSchemaChange,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildAddColumnJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionMultiSchemaChange,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildDropColumnJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionMultiSchemaChange,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildCreateViewJobForTest(schemaID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionCreateView,
+		SchemaID: schemaID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+func buildDropViewJobForTest(schemaID int64, finishedTs uint64) *model.Job {
+	return &model.Job{
+		Type:     model.ActionDropView,
+		SchemaID: schemaID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+// old table can be a normal table or a partition table
+// `tableName` args is just to pass some safety check for the ddl handler
+func buildAlterTablePartitioningJobForTest(
+	schemaID, oldTableID, newTableID int64, newPartitions []int64,
+	tableName string, finishedTs uint64,
+) *model.Job {
+	partitionDefinitions := make([]model.PartitionDefinition, 0, len(newPartitions))
+	for _, partitionID := range newPartitions {
+		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
+			ID: partitionID,
+		})
+	}
+	return &model.Job{
+		Type:     model.ActionAlterTablePartitioning,
+		SchemaID: schemaID,
+		TableID:  oldTableID,
+		BinlogInfo: &model.HistoryInfo{
+			TableInfo: &model.TableInfo{
+				ID:   newTableID,
+				Name: pmodel.NewCIStr(tableName),
+				Partition: &model.PartitionInfo{
+					Definitions: partitionDefinitions,
+					Enable:      true,
+				},
+			},
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
+// `tableName` args is just to pass some safety check for the ddl handler
+func buildRemovePartitioningJobForTest(
+	schemaID, oldTableID, newTableID int64,
+	tableName string, finishedTs uint64,
+) *model.Job {
+	return &model.Job{
+		Type:     model.ActionRemovePartitioning,
+		SchemaID: schemaID,
+		TableID:  oldTableID,
+		BinlogInfo: &model.HistoryInfo{
+			TableInfo: &model.TableInfo{
+				ID:   newTableID,
+				Name: pmodel.NewCIStr(tableName),
+			},
 			FinishedTS: finishedTs,
 		},
 	}

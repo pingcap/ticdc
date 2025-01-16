@@ -46,8 +46,7 @@ type regionEvent struct {
 	err        *cdcpb.Event_Error
 }
 
-type pathHasher struct {
-}
+type pathHasher struct{}
 
 func (h pathHasher) HashPath(subID SubscriptionID) uint64 {
 	return uint64(subID)
@@ -103,6 +102,7 @@ func (h *regionEventHandler) GetSize(event regionEvent) int { return 0 }
 func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) int {
 	return 0
 }
+
 func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp {
 	if event.entries != nil {
 		entries := event.entries.Entries.GetEntries()
@@ -132,7 +132,10 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	} else if event.err != nil || event.state.isStale() {
 		return dynstream.EventType{DataGroup: DataGroupError, Property: dynstream.BatchableData}
 	} else {
-		log.Panic("should not reach", zap.Any("event", event))
+		log.Panic("unknown event type",
+			zap.Uint64("regionID", event.state.getRegionID()),
+			zap.Uint64("requestID", event.state.requestID),
+			zap.Uint64("workerID", event.worker.workerID))
 	}
 	return dynstream.DefaultEventType
 }

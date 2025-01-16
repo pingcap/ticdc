@@ -12,7 +12,7 @@ function test_compression() {
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
-	TOPIC_NAME="ticdc-kafka-compression-$1-test"
+	TOPIC_NAME="ticdc-kafka-compression-$1-test-$RANDOM"
 	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true&kafka-version=${KAFKA_VERSION}&compression=$1"
 	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c $1
 	run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=canal-json&version=${KAFKA_VERSION}&enable-tidb-extension=true"

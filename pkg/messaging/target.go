@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package messaging
 
 import (
@@ -7,19 +20,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/node"
-
-	"github.com/prometheus/client_golang/prometheus"
-
-	"github.com/pingcap/ticdc/pkg/metrics"
-
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	. "github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/conn"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -45,13 +55,19 @@ type remoteMessageTarget struct {
 	targetEpoch atomic.Value
 	targetId    node.ID
 	targetAddr  string
+	security    *security.Credential
 
-	// For sending events and commands
+	// senderMu is used to protect the eventSender and commandSender.
+	// It is used to ensure that there is only one eventStream and commandStream for the target.
+	senderMu      sync.Mutex
 	eventSender   *sendStreamWrapper
 	commandSender *sendStreamWrapper
 
 	// For receiving events and commands
-	conn              *grpc.ClientConn
+	conn struct {
+		sync.RWMutex
+		c *grpc.ClientConn
+	}
 	eventRecvStream   grpcReceiver
 	commandRecvStream grpcReceiver
 
@@ -134,19 +150,22 @@ func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
 }
 
 func newRemoteMessageTarget(
+	ctx context.Context,
 	localID, targetId node.ID,
 	localEpoch, targetEpoch uint64,
 	addr string,
 	recvEventCh, recvCmdCh chan *TargetMessage,
 	cfg *config.MessageCenterConfig,
+	security *security.Credential,
 ) *remoteMessageTarget {
 	log.Info("Create remote target", zap.Stringer("local", localID), zap.Stringer("remote", targetId), zap.Any("addr", addr), zap.Any("localEpoch", localEpoch), zap.Any("targetEpoch", targetEpoch))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	rt := &remoteMessageTarget{
 		messageCenterID:    localID,
 		messageCenterEpoch: localEpoch,
 		targetAddr:         addr,
 		targetId:           targetId,
+		security:           security,
 		eventSender:        &sendStreamWrapper{ready: atomic.Bool{}},
 		commandSender:      &sendStreamWrapper{ready: atomic.Bool{}},
 		ctx:                ctx,
@@ -180,10 +199,7 @@ func newRemoteMessageTarget(
 // close stops the grpc stream and the goroutine spawned by remoteMessageTarget.
 func (s *remoteMessageTarget) close() {
 	log.Info("Closing remote target", zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Any("addr", s.targetAddr))
-	if s.conn != nil {
-		s.conn.Close()
-		s.conn = nil
-	}
+	s.closeConn()
 	s.cancel()
 	s.wg.Wait()
 	log.Info("Close remote target done", zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId))
@@ -196,6 +212,10 @@ func (s *remoteMessageTarget) runHandleErr(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
+				log.Info("remoteMessageTarget exit",
+					zap.Any("messageCenterID", s.messageCenterID),
+					zap.Any("remote", s.targetId),
+					zap.Any("error", ctx.Err()))
 				return
 			case err := <-s.errCh:
 				switch err.Type {
@@ -227,16 +247,18 @@ func (s *remoteMessageTarget) collectErr(err AppError) {
 }
 
 func (s *remoteMessageTarget) connect() {
-	if s.conn != nil {
+	if _, ok := s.getConn(); ok {
 		return
 	}
-	conn, err := conn.Connect(string(s.targetAddr), &security.Credential{})
+
+	conn, err := conn.Connect(string(s.targetAddr), s.security)
 	if err != nil {
 		log.Info("Cannot create grpc client",
 			zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))
 		s.collectErr(AppError{
 			Type:   ErrorTypeConnectionFailed,
-			Reason: fmt.Sprintf("Cannot create grpc client on address %s, error: %s", s.targetAddr, err.Error())})
+			Reason: fmt.Sprintf("Cannot create grpc client on address %s, error: %s", s.targetAddr, err.Error()),
+		})
 		return
 	}
 
@@ -254,7 +276,8 @@ func (s *remoteMessageTarget) connect() {
 			zap.Any("messageCenterID", s.messageCenterID), zap.Stringer("remote", s.targetId), zap.Error(err))
 		s.collectErr(AppError{
 			Type:   ErrorTypeConnectionFailed,
-			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error())})
+			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error()),
+		})
 		return
 	}
 
@@ -264,11 +287,12 @@ func (s *remoteMessageTarget) connect() {
 			zap.Any("messageCenterID", s.messageCenterID), zap.Stringer("remote", s.targetId), zap.Error(err))
 		s.collectErr(AppError{
 			Type:   ErrorTypeConnectionFailed,
-			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error())})
+			Reason: fmt.Sprintf("Cannot open event grpc stream, error: %s", err.Error()),
+		})
 		return
 	}
 
-	s.conn = conn
+	s.setConn(conn)
 	s.eventRecvStream = eventStream
 	s.commandRecvStream = commandStream
 	s.runReceiveMessages(eventStream, s.recvEventCh)
@@ -284,11 +308,7 @@ func (s *remoteMessageTarget) resetConnect() {
 		zap.Any("messageCenterID", s.messageCenterID),
 		zap.Any("remote", s.targetId))
 	// Close the old streams
-	if s.conn != nil {
-		s.conn.Close()
-		s.conn = nil
-	}
-
+	s.closeConn()
 	s.eventRecvStream = nil
 	s.commandRecvStream = nil
 	// Clear the error channel
@@ -305,8 +325,15 @@ LOOP:
 }
 
 func (s *remoteMessageTarget) runEventSendStream(eventStream grpcSender) error {
+	s.senderMu.Lock()
+	if s.eventSender.stream != nil {
+		s.senderMu.Unlock()
+		return nil
+	}
 	s.eventSender.stream = eventStream
 	s.eventSender.ready.Store(true)
+	s.senderMu.Unlock()
+
 	err := s.runSendMessages(s.ctx, s.eventSender.stream, s.sendEventCh)
 	log.Info("Event send stream closed",
 		zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))
@@ -315,8 +342,15 @@ func (s *remoteMessageTarget) runEventSendStream(eventStream grpcSender) error {
 }
 
 func (s *remoteMessageTarget) runCommandSendStream(commandStream grpcSender) error {
+	s.senderMu.Lock()
+	if s.commandSender.stream != nil {
+		s.senderMu.Unlock()
+		return nil
+	}
 	s.commandSender.stream = commandStream
 	s.commandSender.ready.Store(true)
+	s.senderMu.Unlock()
+
 	err := s.runSendMessages(s.ctx, s.commandSender.stream, s.sendCmdCh)
 	log.Info("Command send stream closed",
 		zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))
@@ -411,6 +445,25 @@ func (s *remoteMessageTarget) newMessage(msg ...*TargetMessage) *proto.Message {
 	return protoMsg
 }
 
+func (s *remoteMessageTarget) getConn() (*grpc.ClientConn, bool) {
+	s.conn.RLock()
+	defer s.conn.RUnlock()
+	return s.conn.c, s.conn.c != nil
+}
+
+func (s *remoteMessageTarget) setConn(conn *grpc.ClientConn) {
+	s.conn.Lock()
+	defer s.conn.Unlock()
+	s.conn.c = conn
+}
+
+func (s *remoteMessageTarget) closeConn() {
+	if conn, ok := s.getConn(); ok {
+		conn.Close()
+		s.setConn(nil)
+	}
+}
+
 // localMessageTarget implements the SendMessageChannel interface.
 // It is used to send messages to the local server.
 // It simply pushes the messages to the messageCenter's channel directly.
@@ -455,7 +508,8 @@ func (s *localMessageTarget) sendCommand(msg *TargetMessage) error {
 
 func newLocalMessageTarget(id node.ID,
 	gatherRecvEventChan chan *TargetMessage,
-	gatherRecvCmdChan chan *TargetMessage) *localMessageTarget {
+	gatherRecvCmdChan chan *TargetMessage,
+) *localMessageTarget {
 	return &localMessageTarget{
 		localId:            id,
 		recvEventCh:        gatherRecvEventChan,

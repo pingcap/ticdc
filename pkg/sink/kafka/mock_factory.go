@@ -15,74 +15,61 @@ package kafka
 
 import (
 	"context"
-	"testing"
 
 	"github.com/IBM/sarama"
 	"github.com/IBM/sarama/mocks"
 	"github.com/pingcap/errors"
 	ticommon "github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink/codec/common"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
-	"github.com/pingcap/tiflow/pkg/util"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
 // MockFactory is a mock implementation of Factory interface.
 type MockFactory struct {
-	o            *Options
-	changefeedID ticommon.ChangeFeedID
+	changefeedID  ticommon.ChangeFeedID
+	config        *sarama.Config
+	ErrorReporter mocks.ErrorReporter
 }
 
 // NewMockFactory constructs a Factory with mock implementation.
 func NewMockFactory(
+	_ context.Context,
 	o *Options, changefeedID ticommon.ChangeFeedID,
 ) (Factory, error) {
+	config, err := NewSaramaConfig(context.Background(), o)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
 	return &MockFactory{
-		o:            o,
 		changefeedID: changefeedID,
+		config:       config,
 	}, nil
 }
 
 // AdminClient return a mocked admin client
-func (f *MockFactory) AdminClient(_ context.Context) (tikafka.ClusterAdminClient, error) {
-	return tikafka.NewClusterAdminClientMockImpl(), nil
+func (f *MockFactory) AdminClient() (ClusterAdminClient, error) {
+	return NewClusterAdminClientMockImpl(), nil
 }
 
 // SyncProducer creates a sync producer
-func (f *MockFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	config, err := NewSaramaConfig(ctx, f.o)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	t := ctx.Value("testing.T").(*testing.T)
-	syncProducer := mocks.NewSyncProducer(t, config)
+func (f *MockFactory) SyncProducer() (SyncProducer, error) {
+	syncProducer := mocks.NewSyncProducer(f.ErrorReporter, f.config)
 	return &MockSaramaSyncProducer{
 		Producer: syncProducer,
 	}, nil
 }
 
 // AsyncProducer creates an async producer
-func (f *MockFactory) AsyncProducer(
-	ctx context.Context,
-	failpointCh chan error,
-) (tikafka.AsyncProducer, error) {
-	config, err := NewSaramaConfig(ctx, f.o)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	t := ctx.Value("testing.T").(*testing.T)
-	asyncProducer := mocks.NewAsyncProducer(t, config)
+func (f *MockFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
+	asyncProducer := mocks.NewAsyncProducer(f.ErrorReporter, f.config)
 	return &MockSaramaAsyncProducer{
 		AsyncProducer: asyncProducer,
-		failpointCh:   failpointCh,
+		failpointCh:   make(chan error, 1),
 	}, nil
 }
 
 // MetricsCollector returns the metric collector
-func (f *MockFactory) MetricsCollector(
-	_ util.Role, _ tikafka.ClusterAdminClient,
-) tikafka.MetricsCollector {
+func (f *MockFactory) MetricsCollector(_ ClusterAdminClient) MetricsCollector {
 	return &mockMetricsCollector{}
 }
 
@@ -107,7 +94,7 @@ func (m *MockSaramaSyncProducer) SendMessage(
 }
 
 // SendMessages implement the SyncProducer interface.
-func (m *MockSaramaSyncProducer) SendMessages(ctx context.Context, topic string, partitionNum int32, message *common.Message) error {
+func (m *MockSaramaSyncProducer) SendMessages(_ context.Context, topic string, partitionNum int32, message *common.Message) error {
 	msgs := make([]*sarama.ProducerMessage, partitionNum)
 	for i := 0; i < int(partitionNum); i++ {
 		msgs[i] = &sarama.ProducerMessage{

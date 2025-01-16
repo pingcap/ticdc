@@ -17,11 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/node"
-
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 )
 

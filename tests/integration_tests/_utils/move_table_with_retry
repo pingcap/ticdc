@@ -1,0 +1,38 @@
+#!/bin/bash
+# parameter 1: ip addr with port
+# parameter 2: table id
+# parameter 3: changefeed id
+# parameter 4: retry count
+
+set -ex
+
+ipAddr=${1}
+tableID=${2}
+changefeedID=${3}
+retryCount=${4}
+
+echo "move table with retry"
+count=0
+
+while [[ $count -lt $retryCount ]]; do
+	ans=$(run_cdc_cli capture list)
+	node2ID=$(echo $ans | sed 's/ PASS.*//' | sed 's/^=== Command to ticdc(new arch). //' | jq -r ".[] | select(.address == \"$ipAddr\") | .id")
+	if [ -z "$node2ID" ]; then
+		echo "Failed to extract node2 ID"
+		continue
+	fi
+
+	# move table 1 to node2
+	result=$(run_cdc_cli changefeed move-table -c "$changefeedID" -t $tableID -d "$node2ID")
+	echo $result
+	success=$(echo $result | sed 's/ PASS.*//' | sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
+
+	if [ "$success" == "true" ]; then
+		exit 0
+	fi
+
+	count=$((count + 1))
+done
+
+echo "move table 1 to node2 failed after $retryCount retries"
+exit 1

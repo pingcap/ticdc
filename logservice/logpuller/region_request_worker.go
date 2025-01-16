@@ -217,6 +217,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 				regionEvent.entries = eventData
 			case *cdcpb.Event_Admin_:
 				// ignore
+				continue
 			case *cdcpb.Event_Error:
 				log.Debug("region request worker receives a region error",
 					zap.Uint64("workerID", s.workerID),
@@ -229,6 +230,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 				regionEvent.resolvedTs = eventData.ResolvedTs
 			case *cdcpb.Event_LongTxn_:
 				// ignore
+				continue
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
@@ -322,7 +324,11 @@ func (s *regionRequestWorker) processRegionSendTask(
 			}
 			for _, state := range s.takeRegionStates(subID) {
 				state.markStopped(&sendRequestToStoreErr{})
-				// TODO: do we need mark remove here?
+				regionEvent := regionEvent{
+					state:  state,
+					worker: s,
+				}
+				s.client.ds.Push(subID, regionEvent)
 			}
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from

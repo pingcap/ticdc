@@ -19,33 +19,26 @@ import (
 
 	"github.com/goccy/go-json"
 	"github.com/mailru/easyjson/jwriter"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/internal"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/config"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
-	ticommon "github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"go.uber.org/zap"
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
 )
 
-var (
-	bytesDecoder = charmap.ISO8859_1.NewDecoder()
-)
+var bytesDecoder = charmap.ISO8859_1.NewDecoder()
 
 // TODO: we need to reorg this code later, including use util.jsonWriter and other unreasonable code
 func fillColumns(
 	valueMap map[int64]string,
-	tableInfo *common.TableInfo,
+	tableInfo *commonType.TableInfo,
 	onlyHandleKeyColumn bool,
 	out *jwriter.Writer,
 	columnSelector columnselector.Selector,
@@ -88,7 +81,7 @@ func fillColumns(
 func fillUpdateColumns(
 	newValueMap map[int64]string,
 	oldValueMap map[int64]string,
-	tableInfo *common.TableInfo,
+	tableInfo *commonType.TableInfo,
 	onlyHandleKeyColumn bool,
 	onlyOutputUpdatedColumn bool,
 	out *jwriter.Writer,
@@ -131,7 +124,7 @@ func fillUpdateColumns(
 
 func newJSONMessageForDML(
 	e *commonEvent.RowEvent,
-	config *newcommon.Config,
+	config *common.Config,
 	messageTooLarge bool,
 	claimCheckFileName string,
 ) ([]byte, error) {
@@ -149,7 +142,7 @@ func newJSONMessageForDML(
 		}
 	}
 	if columnLen == 0 {
-		return nil, cerror.ErrOpenProtocolCodecInvalidData.GenWithStack("not found invlaid columns for the event")
+		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found invlaid columns for the event")
 	}
 
 	mysqlTypeMap := make(map[string]string, columnLen)
@@ -226,10 +219,7 @@ func newJSONMessageForDML(
 			continue
 		}
 		flag := e.TableInfo.GetColumnFlags()[col.ID]
-		value, javaType, err := formatColumnValue(row, idx, col, flag)
-		if err != nil {
-			return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
-		}
+		value, javaType := formatColumnValue(row, idx, col, flag)
 		valueMap[col.ID] = value
 		javaTypeMap[col.ID] = javaType
 	}
@@ -310,10 +300,7 @@ func newJSONMessageForDML(
 				continue
 			}
 			flag := e.TableInfo.GetColumnFlags()[col.ID]
-			value, _, err := formatColumnValue(preRow, idx, col, flag)
-			if err != nil {
-				return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
-			}
+			value, _ := formatColumnValue(preRow, idx, col, flag)
 			oldValueMap[col.ID] = value
 		}
 
@@ -356,7 +343,7 @@ func newJSONMessageForDML(
 
 	value, err := out.BuildBytes()
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
+		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 	return value, nil
 }
@@ -373,22 +360,22 @@ func eventTypeString(e *commonEvent.RowEvent) string {
 
 // JSONRowEventEncoder encodes row event in JSON format
 type JSONRowEventEncoder struct {
-	messages     []*ticommon.Message
+	messages     []*common.Message
 	bytesDecoder *encoding.Decoder
 
 	claimCheck *claimcheck.ClaimCheck
 
-	config *newcommon.Config
+	config *common.Config
 }
 
-// newJSONRowEventEncoder creates a new JSONRowEventEncoder
-func NewJSONRowEventEncoder(ctx context.Context, config *newcommon.Config) (encoder.EventEncoder, error) {
+// NewJSONRowEventEncoder creates a new JSONRowEventEncoder
+func NewJSONRowEventEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
 	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	return &JSONRowEventEncoder{
-		messages:     make([]*ticommon.Message, 0, 1),
+		messages:     make([]*common.Message, 0, 1),
 		bytesDecoder: charmap.ISO8859_1.NewDecoder(),
 		config:       config,
 		claimCheck:   claimCheck,
@@ -398,10 +385,10 @@ func NewJSONRowEventEncoder(ctx context.Context, config *newcommon.Config) (enco
 func (c *JSONRowEventEncoder) newJSONMessageForDDL(e *commonEvent.DDLEvent) canalJSONMessageInterface {
 	msg := &JSONMessage{
 		ID:            0, // ignored by both Canal Adapter and Flink
-		Schema:        e.SchemaName,
-		Table:         e.TableName,
+		Schema:        e.GetCurrentSchemaName(),
+		Table:         e.GetCurrentTableName(),
 		IsDDL:         true,
-		EventType:     convertDdlEventType(e).String(),
+		EventType:     convertDdlEventType(e.Type).String(),
 		ExecutionTime: convertToCanalTs(e.GetCommitTs()),
 		BuildTime:     time.Now().UnixMilli(), // timestamp
 		Query:         e.Query,
@@ -433,7 +420,7 @@ func (c *JSONRowEventEncoder) newJSONMessage4CheckpointEvent(
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
-func (c *JSONRowEventEncoder) EncodeCheckpointEvent(ts uint64) (*ticommon.Message, error) {
+func (c *JSONRowEventEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
 	if !c.config.EnableTiDBExtension {
 		return nil, nil
 	}
@@ -441,17 +428,17 @@ func (c *JSONRowEventEncoder) EncodeCheckpointEvent(ts uint64) (*ticommon.Messag
 	msg := c.newJSONMessage4CheckpointEvent(ts)
 	value, err := json.Marshal(msg)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
+		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 
-	value, err = newcommon.Compress(
+	value, err = common.Compress(
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 	)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	return ticommon.NewResolvedMsg(config.ProtocolCanalJSON, nil, value, ts), nil
+	return common.NewMsg(nil, value), nil
 }
 
 // AppendRowChangedEvent implements the interface EventJSONBatchEncoder
@@ -465,22 +452,15 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 		return errors.Trace(err)
 	}
 
-	value, err = newcommon.Compress(
+	value, err = common.Compress(
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 	)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	m := &ticommon.Message{
-		Key:      nil,
-		Value:    value,
-		Ts:       e.CommitTs,
-		Schema:   e.TableInfo.GetSchemaNamePtr(),
-		Table:    e.TableInfo.GetTableNamePtr(),
-		Type:     model.MessageTypeRow,
-		Protocol: config.ProtocolCanalJSON,
-		Callback: e.Callback,
-	}
+
+	m := common.NewMsg(nil, value)
+	m.Callback = e.Callback
 	m.IncRowsCount()
 
 	originLength := m.Length()
@@ -491,15 +471,15 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 				zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
 				zap.Int("length", originLength),
 				zap.Any("table", e.TableInfo.TableName))
-			return cerror.ErrMessageTooLarge.GenWithStackByArgs()
+			return errors.ErrMessageTooLarge.GenWithStackByArgs()
 		}
 
 		if c.config.LargeMessageHandle.HandleKeyOnly() {
 			value, err = newJSONMessageForDML(e, c.config, true, "")
 			if err != nil {
-				return cerror.ErrMessageTooLarge.GenWithStackByArgs()
+				return errors.ErrMessageTooLarge.GenWithStackByArgs()
 			}
-			value, err = newcommon.Compress(
+			value, err = common.Compress(
 				c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 			)
 			if err != nil {
@@ -514,7 +494,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 					zap.Int("originLength", originLength),
 					zap.Int("length", length),
 					zap.Any("table", e.TableInfo.TableName))
-				return cerror.ErrMessageTooLarge.GenWithStackByArgs()
+				return errors.ErrMessageTooLarge.GenWithStackByArgs()
 			}
 			log.Warn("Single message is too large for canal-json, only encode handle-key columns",
 				zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
@@ -542,21 +522,21 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 
 func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 	event *commonEvent.RowEvent, fileName string,
-) (*ticommon.Message, error) {
+) (*common.Message, error) {
 	claimCheckLocation := c.claimCheck.FileNameWithPrefix(fileName)
 	value, err := newJSONMessageForDML(event, c.config, true, claimCheckLocation)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
+		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 
-	value, err = newcommon.Compress(
+	value, err = common.Compress(
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 	)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	result := ticommon.NewMsg(config.ProtocolCanalJSON, nil, value, 0, model.MessageTypeRow, nil, nil)
+	result := common.NewMsg(nil, value)
 	result.Callback = event.Callback
 	result.IncRowsCount()
 
@@ -566,13 +546,13 @@ func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 			zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
 			zap.Int("length", length),
 			zap.Any("table", event.TableInfo.TableName))
-		return nil, cerror.ErrMessageTooLarge.GenWithStackByArgs(length)
+		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(length)
 	}
 	return result, nil
 }
 
 // Build implements the RowEventEncoder interface
-func (c *JSONRowEventEncoder) Build() []*ticommon.Message {
+func (c *JSONRowEventEncoder) Build() []*common.Message {
 	if len(c.messages) == 0 {
 		return nil
 	}
@@ -583,28 +563,20 @@ func (c *JSONRowEventEncoder) Build() []*ticommon.Message {
 }
 
 // EncodeDDLEvent encodes DDL events
-func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*ticommon.Message, error) {
+func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error) {
 	message := c.newJSONMessageForDDL(e)
 	value, err := json.Marshal(message)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrCanalEncodeFailed, err)
+		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
-	value, err = newcommon.Compress(
+	value, err = common.Compress(
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 	)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	return &ticommon.Message{
-		Key:      nil,
-		Value:    value,
-		Type:     model.MessageTypeDDL,
-		Protocol: config.ProtocolCanalJSON,
-		Table:    &e.TableName,
-		Schema:   &e.SchemaName,
-		Ts:       e.GetCommitTs(),
-	}, nil
+	return common.NewMsg(nil, value), nil
 }
 
 func (b *JSONRowEventEncoder) Clean() {

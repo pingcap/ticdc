@@ -23,9 +23,9 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/config/outdated"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/integrity"
 	"github.com/pingcap/tiflow/pkg/redo"
 	"github.com/pingcap/tiflow/pkg/sink"
@@ -289,10 +289,9 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 		}
 	}
 	// TODO: Remove the hack once span replication is compatible with all sinks.
-	// disable this check for test purpose
-	// if !isSinkCompatibleWithSpanReplication(sinkURI) {
-	// 	c.Scheduler.EnableTableAcrossNodes = false
-	// }
+	if !isSinkCompatibleWithSpanReplication(sinkURI) {
+		c.Scheduler.EnableTableAcrossNodes = false
+	}
 
 	if c.Integrity != nil {
 		switch strings.ToLower(sinkURI.Scheme) {

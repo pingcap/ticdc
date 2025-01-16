@@ -16,6 +16,7 @@ package changefeed
 import (
 	"encoding/json"
 	"net/url"
+	"sync"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -32,10 +33,15 @@ import (
 
 // Changefeed is a memory present for changefeed info and status
 type Changefeed struct {
-	ID          common.ChangeFeedID
-	info        *atomic.Pointer[config.ChangeFeedInfo]
-	isMQSink    bool
-	nodeID      node.ID
+	ID       common.ChangeFeedID
+	info     *atomic.Pointer[config.ChangeFeedInfo]
+	isMQSink bool
+	isNew    bool // only true when the changfeed is newly created or resumed by overwriteCheckpointTs
+
+	// nodeIDMu protects nodeID
+	nodeIDMu sync.Mutex
+	nodeID   node.ID
+
 	configBytes []byte
 	// it's saved to the backend db
 	lastSavedCheckpointTs *atomic.Uint64
@@ -48,7 +54,9 @@ type Changefeed struct {
 // NewChangefeed creates a new changefeed instance
 func NewChangefeed(cfID common.ChangeFeedID,
 	info *config.ChangeFeedInfo,
-	checkpointTs uint64) *Changefeed {
+	checkpointTs uint64,
+	isNew bool,
+) *Changefeed {
 	uri, err := url.Parse(info.SinkURI)
 	if err != nil {
 		log.Panic("unable to marshal changefeed config",
@@ -69,6 +77,7 @@ func NewChangefeed(cfID common.ChangeFeedID,
 		configBytes:           bytes,
 		lastSavedCheckpointTs: atomic.NewUint64(checkpointTs),
 		isMQSink:              sink.IsMQScheme(uri.Scheme),
+		isNew:                 isNew,
 		// init the first Status
 		status: atomic.NewPointer[heartbeatpb.MaintainerStatus](
 			&heartbeatpb.MaintainerStatus{
@@ -91,16 +100,15 @@ func (c *Changefeed) StartFinished() {
 	c.backoff.StartFinished()
 }
 
-// setNodeID set the node id of the changefeed
-func (c *Changefeed) setNodeID(n node.ID) {
-	c.nodeID = n
-}
-
 func (c *Changefeed) GetNodeID() node.ID {
+	c.nodeIDMu.Lock()
+	defer c.nodeIDMu.Unlock()
 	return c.nodeID
 }
 
 func (c *Changefeed) SetNodeID(n node.ID) {
+	c.nodeIDMu.Lock()
+	defer c.nodeIDMu.Unlock()
 	c.nodeID = n
 }
 
@@ -135,6 +143,10 @@ func (c *Changefeed) IsMQSink() bool {
 	return c.isMQSink
 }
 
+func (c *Changefeed) SetIsNew(isNew bool) {
+	c.isNew = isNew
+}
+
 func (c *Changefeed) GetStatus() *heartbeatpb.MaintainerStatus {
 	return c.status.Load()
 }
@@ -151,9 +163,10 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.AddMaintainerRequest{
-			Id:           c.ID.ToPB(),
-			CheckpointTs: c.GetStatus().CheckpointTs,
-			Config:       c.configBytes,
+			Id:             c.ID.ToPB(),
+			CheckpointTs:   c.GetStatus().CheckpointTs,
+			Config:         c.configBytes,
+			IsNewChangfeed: c.isNew,
 		})
 }
 

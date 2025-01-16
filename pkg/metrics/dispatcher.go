@@ -112,13 +112,6 @@ var (
 			Buckets:   LagBucket(),
 		}, []string{"type"})
 
-	EventCollectorResolvedTsLagGauge = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "event_collector",
-			Name:      "resolved_ts_lag",
-			Help:      "Resolved ts lag of event collector in seconds",
-		})
 	EventCollectorHandleEventDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -141,7 +134,5 @@ func InitDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DispatcherReceivedEventCount)
 	registry.MustRegister(EventCollectorRegisteredDispatcherCount)
 	registry.MustRegister(EventCollectorReceivedEventLagDuration)
-	registry.MustRegister(EventCollectorResolvedTsLagGauge)
 	registry.MustRegister(EventCollectorHandleEventDuration)
-
 }

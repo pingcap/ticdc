@@ -19,23 +19,21 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
-	"github.com/pingcap/ticdc/logservice/logservicepb"
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/node"
-
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/tiflow/pkg/chann"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -238,6 +236,8 @@ func (c *EventCollector) addDispatcherRequestToSendingQueue(serverId node.ID, to
 }
 
 func (c *EventCollector) processFeedback(ctx context.Context) {
+	log.Info("Start process feedback from dynamic stream")
+	defer log.Info("Stop process feedback from dynamic stream")
 	for {
 		select {
 		case <-ctx.Done():
@@ -249,7 +249,6 @@ func (c *EventCollector) processFeedback(ctx context.Context) {
 				} else {
 					feedback.Dest.resumeChangefeed(c)
 				}
-				return
 			}
 
 			if feedback.IsPausePath() {
@@ -328,7 +327,6 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 		Type:    typeRegisterDispatcherReq,
 		Message: []messaging.IOTypeT{message},
 	})
-
 	if err != nil {
 		log.Info("failed to send dispatcher request message to event service, try again later",
 			zap.String("changefeedID", req.Dispatcher.GetChangefeedID().ID().String()),
@@ -429,27 +427,7 @@ func (c *EventCollector) updateMetrics(ctx context.Context) {
 			metricsDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 			metricsDSUsedMemoryUsage.Set(float64(dsMetrics.MemoryControl.UsedMemory))
 			metricsDSMaxMemoryUsage.Set(float64(dsMetrics.MemoryControl.MaxMemory))
-			c.updateResolvedTsMetric()
 		}
-	}
-}
-
-func (c *EventCollector) updateResolvedTsMetric() {
-	var minResolvedTs uint64
-	c.dispatcherMap.Range(func(key, value interface{}) bool {
-		if stat, ok := value.(*dispatcherStat); ok {
-			d := stat.target
-			if minResolvedTs == 0 || d.GetResolvedTs() < minResolvedTs {
-				minResolvedTs = d.GetResolvedTs()
-			}
-		}
-		return true
-	})
-
-	if minResolvedTs > 0 {
-		phyResolvedTs := oracle.ExtractPhysical(minResolvedTs)
-		lagMs := float64(oracle.GetPhysical(time.Now())-phyResolvedTs) / 1e3
-		metrics.EventCollectorResolvedTsLagGauge.Set(lagMs)
 	}
 }
 
@@ -531,6 +509,7 @@ func (d *dispatcherStat) shouldIgnoreDataEvent(event dispatcher.DispatcherEvent,
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID),
 			zap.Stringer("dispatcher", d.target.GetId()),
+			zap.Any("event", event.Event),
 			zap.Uint64("eventCommitTs", event.GetCommitTs()),
 			zap.Uint64("sentCommitTs", d.sentCommitTs.Load()))
 		return true
@@ -674,6 +653,11 @@ func (d *dispatcherStat) pauseChangefeed(eventCollector *EventCollector) {
 		return
 	}
 
+	log.Info("Send pause changefeed event to event service",
+		zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+		zap.String("dispatcher", d.target.GetId().String()),
+		zap.Uint64("resolvedTs", d.target.GetResolvedTs()))
+
 	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
 		Dispatcher: d.target,
 		ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE_CHANGEFEED,
@@ -688,6 +672,10 @@ func (d *dispatcherStat) resumeChangefeed(eventCollector *EventCollector) {
 		// Just ignore the request if the dispatcher is not ready.
 		return
 	}
+	log.Info("Send resume changefeed event to event service",
+		zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+		zap.Stringer("dispatcher", d.target.GetId()),
+		zap.Uint64("resolvedTs", d.target.GetResolvedTs()))
 
 	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
 		Dispatcher: d.target,

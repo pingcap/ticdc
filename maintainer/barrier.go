@@ -57,7 +57,8 @@ func NewBarrier(controller *Controller, splitTableEnabled bool) *Barrier {
 
 // HandleStatus handle the block status from dispatcher manager
 func (b *Barrier) HandleStatus(from node.ID,
-	request *heartbeatpb.BlockStatusRequest) *messaging.TargetMessage {
+	request *heartbeatpb.BlockStatusRequest,
+) *messaging.TargetMessage {
 	log.Debug("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
 		zap.Any("detail", request))
@@ -188,14 +189,13 @@ func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			barrierEvent.writerDispatcherAdvanced = true
 		}
 	}
-
 }
 
 // Resend resends the message to the dispatcher manger, the pass action is handle here
 func (b *Barrier) Resend() []*messaging.TargetMessage {
 	var msgs []*messaging.TargetMessage
 	for _, event := range b.blockedTs {
-		//todo: we can limit the number of messages to send in one round here
+		// todo: we can limit the number of messages to send in one round here
 		msgs = append(msgs, event.resend()...)
 	}
 	return msgs
@@ -263,7 +263,8 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 
 func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
-	status *heartbeatpb.TableSpanBlockStatus) *BarrierEvent {
+	status *heartbeatpb.TableSpanBlockStatus,
+) *BarrierEvent {
 	blockState := status.State
 	if blockState.IsBlocked {
 		key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
@@ -302,7 +303,8 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 
 // getOrInsertNewEvent get the block event from the map, if not found, create a new one
 func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, key eventKey,
-	blockState *heartbeatpb.State) *BarrierEvent {
+	blockState *heartbeatpb.State,
+) *BarrierEvent {
 	event, ok := b.blockedTs[key]
 	if !ok {
 		event = NewBlockEvent(changefeedID, b.controller, blockState, b.splitTableEnabled)
@@ -312,11 +314,12 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, key even
 }
 
 func (b *Barrier) checkEvent(be *BarrierEvent,
-	dispatchers []*heartbeatpb.DispatcherID) *heartbeatpb.DispatcherStatus {
+	dispatchers []*heartbeatpb.DispatcherID,
+) *heartbeatpb.DispatcherStatus {
 	if !be.allDispatcherReported() {
 		return nil
 	}
-	if be.selected {
+	if be.selected && be.allDispatcherReported() {
 		log.Info("the all dispatchers reported event done, remove event and schedule it",
 			zap.String("changefeed", be.cfID.Name()),
 			zap.Uint64("committs", be.commitTs))

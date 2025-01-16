@@ -1,6 +1,20 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package dispatcher
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -8,11 +22,10 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
 	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tiflow/pkg/spanz"
-
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,7 +56,9 @@ func (s *mockSink) AddCheckpointTs(ts uint64) {
 func (s *mockSink) SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore) {
 }
 
-func (s *mockSink) Close(bool) error {
+func (s *mockSink) Close(bool) {}
+
+func (s *mockSink) Run(context.Context) error {
 	return nil
 }
 
@@ -104,8 +119,8 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dis
 			SyncPointInterval:  time.Duration(5 * time.Second),
 			SyncPointRetention: time.Duration(10 * time.Minute),
 		}, // syncPointConfig
-		nil,          //filterConfig
-		common.Ts(0), //pdTs
+		nil,          // filterConfig
+		common.Ts(0), // pdTs
 		make(chan error, 1),
 	)
 }
@@ -472,7 +487,6 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	checkpointTs = dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(1), checkpointTs)
 	require.Equal(t, 1, count)
-
 }
 
 func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
@@ -483,7 +497,7 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	tableTriggerEventDispatcher := newDispatcherForTest(sink, ddlTableSpan)
 	require.Nil(t, tableTriggerEventDispatcher.tableSchemaStore)
 
-	err := tableTriggerEventDispatcher.InitalizeTableSchemaStore([]*heartbeatpb.SchemaInfo{})
+	err := tableTriggerEventDispatcher.InitializeTableSchemaStore([]*heartbeatpb.SchemaInfo{})
 	require.NoError(t, err)
 
 	helper := commonEvent.NewEventTestHelper(t)
@@ -562,7 +576,7 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	tableTriggerEventDispatcher := newDispatcherForTest(sink, ddlTableSpan)
 	require.Nil(t, tableTriggerEventDispatcher.tableSchemaStore)
 
-	err := tableTriggerEventDispatcher.InitalizeTableSchemaStore([]*heartbeatpb.SchemaInfo{})
+	err := tableTriggerEventDispatcher.InitializeTableSchemaStore([]*heartbeatpb.SchemaInfo{})
 	require.NoError(t, err)
 
 	helper := commonEvent.NewEventTestHelper(t)

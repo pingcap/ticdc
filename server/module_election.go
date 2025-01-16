@@ -17,21 +17,20 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	logcoordinator "github.com/pingcap/ticdc/logservice/coordinator"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	"go.etcd.io/etcd/client/v3/concurrency"
+	"go.etcd.io/etcd/server/v3/mvcc"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
-
-	"github.com/pingcap/errors"
-	"go.etcd.io/etcd/client/v3/concurrency"
-	"go.etcd.io/etcd/server/v3/mvcc"
 )
 
 type elector struct {
@@ -76,7 +75,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		}
 		err := rl.Wait(ctx)
 		if err != nil {
-			if errors.Cause(err) == context.Canceled {
+			if errors.Is(err, context.Canceled) {
 				return nil
 			}
 			return errors.Trace(err)
@@ -88,18 +87,25 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			return nil
 		}
 		// Campaign to be the coordinator, it blocks until it been elected.
-		if err := e.election.Campaign(ctx, string(e.svr.info.ID)); err != nil {
-			rootErr := errors.Cause(err)
-			if rootErr == context.Canceled {
+		err = e.election.Campaign(ctx, string(e.svr.info.ID))
+
+		failpoint.Inject("campaign-compacted-error", func() {
+			err = errors.Trace(mvcc.ErrCompacted)
+		})
+
+		if err != nil {
+			cause := errors.Cause(err)
+			if errors.Is(cause, context.Canceled) {
 				return nil
-			} else if rootErr == mvcc.ErrCompacted || isErrCompacted(rootErr) {
+			}
+			if errors.Is(cause, mvcc.ErrCompacted) || isErrCompacted(cause) {
 				log.Warn("campaign coordinator failed due to etcd revision "+
 					"has been compacted, retry later", zap.Error(err))
 				continue
 			}
 			log.Warn("campaign coordinator failed",
 				zap.String("captureID", string(e.svr.info.ID)), zap.Error(err))
-			return cerror.ErrCaptureSuicide.GenWithStackByArgs()
+			return errors.ErrCaptureSuicide.GenWithStackByArgs()
 		}
 		// After campaign check liveness again.
 		// It is possible it becomes the coordinator right after receiving SIGTERM.
@@ -130,12 +136,13 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			coordinatorVersion, 10000, time.Minute)
 		e.svr.setCoordinator(co)
 		err = co.Run(ctx)
-
 		// When coordinator exits, we need to stop it.
 		e.svr.coordinator.AsyncStop()
 		e.svr.setCoordinator(nil)
+		log.Info("coordinator stop", zap.String("captureID", string(e.svr.info.ID)),
+			zap.Int64("coordinatorVersion", coordinatorVersion), zap.Error(err))
 
-		if !cerror.ErrNotOwner.Equal(err) {
+		if !errors.ErrNotOwner.Equal(err) {
 			// if coordinator exits, resign the coordinator key,
 			// use a new context to prevent the context from being cancelled.
 			resignCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -146,7 +153,6 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 					cancel()
 					return errors.Trace(resignErr)
 				}
-
 				log.Warn("coordinator resign timeout", zap.String("captureID", string(e.svr.info.ID)),
 					zap.Error(resignErr), zap.Int64("coordinatorVersion", coordinatorVersion))
 			}
@@ -202,20 +208,20 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			return nil
 		}
 		// Campaign to be the log coordinator, it blocks until it been elected.
-		if err := e.logElection.Campaign(ctx, string(e.svr.info.ID)); err != nil {
-			rootErr := errors.Cause(err)
-			if rootErr == context.Canceled {
+		if err = e.logElection.Campaign(ctx, string(e.svr.info.ID)); err != nil {
+			cause := errors.Cause(err)
+			if errors.Is(cause, context.Canceled) {
 				return nil
-			} else if rootErr == mvcc.ErrCompacted || isErrCompacted(rootErr) {
+			}
+			if errors.Is(cause, mvcc.ErrCompacted) || isErrCompacted(cause) {
 				log.Warn("campaign log coordinator failed due to etcd revision "+
-					"has been compacted, retry later",
-					zap.Error(err))
+					"has been compacted, retry later", zap.Error(err))
 				continue
 			}
 			log.Warn("campaign log coordinator failed",
 				zap.String("captureID", string(e.svr.info.ID)),
 				zap.Error(err))
-			return cerror.ErrCaptureSuicide.GenWithStackByArgs()
+			return errors.ErrCaptureSuicide.GenWithStackByArgs()
 		}
 		// After campaign check liveness again.
 		// It is possible it becomes the coordinator right after receiving SIGTERM.
@@ -236,9 +242,11 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			zap.String("captureID", string(e.svr.info.ID)))
 
 		co := logcoordinator.New()
-		if err := co.Run(ctx); err != nil {
-			if !cerror.ErrNotOwner.Equal(err) {
-				if resignErr := e.resignLogCoordinaotr(); resignErr != nil {
+		err = co.Run(ctx)
+
+		if err != nil && !errors.Is(err, context.Canceled) {
+			if !errors.ErrNotOwner.Equal(err) {
+				if resignErr := e.resignLogCoordinator(); resignErr != nil {
 					return errors.Trace(resignErr)
 				}
 			}
@@ -248,8 +256,10 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 
-		log.Info("log coordinator resigned successfully",
-			zap.String("captureID", string(e.svr.info.ID)))
+		// If coordinator exits normally, continue the campaign loop and try to election coordinator again
+		log.Info("log coordinator exited normally",
+			zap.String("captureID", string(e.svr.info.ID)),
+			zap.String("error", err.Error()))
 	}
 }
 
@@ -262,19 +272,22 @@ func (e *elector) resign(ctx context.Context) error {
 	if e.election == nil {
 		return nil
 	}
-	return cerror.WrapError(cerror.ErrCaptureResignOwner,
+	failpoint.Inject("resign-failed", func() error {
+		return errors.Trace(errors.New("resign failed"))
+	})
+	return errors.WrapError(errors.ErrCaptureResignOwner,
 		e.election.Resign(ctx))
 }
 
 // resign lets the log coordinator start a new election.
-func (e *elector) resignLogCoordinaotr() error {
+func (e *elector) resignLogCoordinator() error {
 	if e.logElection == nil {
 		return nil
 	}
 	// use a new context to prevent the context from being cancelled.
 	resignCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if resignErr := e.logElection.Resign(resignCtx); resignErr != nil {
-		if errors.Cause(resignErr) != context.DeadlineExceeded {
+		if errors.Is(errors.Cause(resignErr), context.DeadlineExceeded) {
 			log.Info("log coordinator resign failed",
 				zap.String("captureID", string(e.svr.info.ID)),
 				zap.Error(resignErr))

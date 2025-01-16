@@ -22,15 +22,14 @@ import (
 	"github.com/jcmturner/gokrb5/v8/client"
 	"github.com/jcmturner/gokrb5/v8/config"
 	"github.com/jcmturner/gokrb5/v8/keytab"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	pkafka "github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
-	"github.com/pingcap/tiflow/pkg/sink/codec/common"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	tiv2 "github.com/pingcap/tiflow/pkg/sink/kafka/v2"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/segmentio/kafka-go"
 	"github.com/segmentio/kafka-go/sasl"
 	"github.com/segmentio/kafka-go/sasl/plain"
@@ -51,6 +50,7 @@ type factory struct {
 
 // NewFactory returns a factory implemented based on kafka-go
 func NewFactory(
+	_ context.Context,
 	options *pkafka.Options,
 	changefeedID commonType.ChangeFeedID,
 ) (pkafka.Factory, error) {
@@ -157,7 +157,7 @@ func completeSASLConfig(o *pkafka.Options) (sasl.Mechanism, error) {
 				o.SASL.GSSAPI.ServiceName), nil
 
 		case pkafka.SASLTypeOAuth:
-			return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
+			return nil, cerror.ErrKafkaInvalidConfig.GenWithStack(
 				"OAuth is not yet supported in Kafka sink v2")
 		}
 	}
@@ -203,12 +203,12 @@ func (f *factory) newWriter(async bool) *kafka.Writer {
 	return w
 }
 
-func (f *factory) AdminClient(_ context.Context) (tikafka.ClusterAdminClient, error) {
+func (f *factory) AdminClient() (pkafka.ClusterAdminClient, error) {
 	return newClusterAdminClient(f.options.BrokerEndpoints, f.transport, f.changefeedID), nil
 }
 
 // SyncProducer creates a sync producer to writer message to kafka
-func (f *factory) SyncProducer(_ context.Context) (pkafka.SyncProducer, error) {
+func (f *factory) SyncProducer() (pkafka.SyncProducer, error) {
 	w := f.newWriter(false)
 	// set batch size to 1 to make sure the message is sent immediately
 	w.BatchTimeout = time.Millisecond
@@ -222,8 +222,7 @@ func (f *factory) SyncProducer(_ context.Context) (pkafka.SyncProducer, error) {
 // AsyncProducer creates an async producer to writer message to kafka
 func (f *factory) AsyncProducer(
 	ctx context.Context,
-	failpointCh chan error,
-) (tikafka.AsyncProducer, error) {
+) (pkafka.AsyncProducer, error) {
 	w := f.newWriter(true)
 	// assume each message is 1KB,
 	// and set batch timeout to 5ms to avoid waste too much time on waiting for messages.
@@ -232,7 +231,7 @@ func (f *factory) AsyncProducer(
 	aw := &asyncWriter{
 		w:            w,
 		changefeedID: f.changefeedID,
-		failpointCh:  failpointCh,
+		failpointCh:  make(chan error, 1),
 		errorsChan:   make(chan error, 1),
 	}
 
@@ -264,10 +263,9 @@ func (f *factory) AsyncProducer(
 
 // MetricsCollector returns the kafka metrics collector
 func (f *factory) MetricsCollector(
-	role util.Role,
-	adminClient tikafka.ClusterAdminClient,
-) tikafka.MetricsCollector {
-	return NewMetricsCollector(f.changefeedID, role, f.writer)
+	_ pkafka.ClusterAdminClient,
+) pkafka.MetricsCollector {
+	return NewMetricsCollector(f.changefeedID, f.writer)
 }
 
 type syncWriter struct {
@@ -399,6 +397,6 @@ func (a *asyncWriter) AsyncRunCallback(ctx context.Context) error {
 		if err == nil {
 			return nil
 		}
-		return errors.WrapError(errors.ErrKafkaAsyncSendMessage, err)
+		return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, err)
 	}
 }

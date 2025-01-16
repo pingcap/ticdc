@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package schemastore
 
 import (
@@ -12,8 +25,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/tidb/pkg/kv"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -61,10 +74,10 @@ type schemaStore struct {
 
 	notifyCh chan interface{}
 
-	// resolved ts pending for apply
+	// pendingResolvedTs is the largest resolvedTs the pending ddl events
 	pendingResolvedTs atomic.Uint64
-
-	// max resolvedTs of all applied ddl events
+	// resolvedTs is the largest resolvedTs of all applied ddl events
+	// Invariant: resolvedTs >= pendingResolvedTs
 	resolvedTs atomic.Uint64
 
 	// the following two fields are used to filter out duplicate ddl events
@@ -107,7 +120,7 @@ func New(
 		kvStorage,
 		upperBound.ResolvedTs,
 		s.writeDDLEvent,
-		s.advanceResolvedTs)
+		s.advancePendingResolvedTs)
 	return s
 }
 
@@ -117,16 +130,29 @@ func (s *schemaStore) Name() string {
 
 func (s *schemaStore) Run(ctx context.Context) error {
 	log.Info("schema store begin to run")
+	defer func() {
+		log.Info("schema store exited")
+	}()
+
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		return s.updateResolvedTsPeriodically(ctx)
+	})
+
+	eg.Go(func() error {
+		return s.dataStorage.gc(ctx)
+	})
+
+	eg.Go(func() error {
+		return s.dataStorage.persistUpperBoundPeriodically(ctx)
 	})
 
 	return eg.Wait()
 }
 
 func (s *schemaStore) Close(ctx context.Context) error {
-	log.Info("schema store closed")
+	log.Info("schema store start to close")
+	defer log.Info("schema store closed")
 	return s.dataStorage.close()
 }
 
@@ -134,13 +160,10 @@ func (s *schemaStore) updateResolvedTsPeriodically(ctx context.Context) error {
 	tryUpdateResolvedTs := func() {
 		pendingTs := s.pendingResolvedTs.Load()
 		defer func() {
-			currentPhyTs := oracle.GetPhysical(s.pdClock.CurrentTime())
+			pdPhyTs := oracle.GetPhysical(s.pdClock.CurrentTime())
 			resolvedPhyTs := oracle.ExtractPhysical(pendingTs)
-			resolvedLag := float64(currentPhyTs-resolvedPhyTs) / 1e3
+			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
 			metrics.SchemaStoreResolvedTsLagGauge.Set(float64(resolvedLag))
-			// log.Info("advance resolved ts",
-			// 	zap.Uint64("resolveTs", pendingTs),
-			// 	zap.Float64("lag(s)", resolvedLag))
 		}()
 
 		if pendingTs <= s.resolvedTs.Load() {
@@ -176,6 +199,7 @@ func (s *schemaStore) updateResolvedTsPeriodically(ctx context.Context) error {
 					zap.Uint64("jobFinishTs", event.Job.BinlogInfo.FinishedTS),
 					zap.Uint64("jobCommitTs", event.CommitTs),
 					zap.Any("storeSchemaVersion", s.schemaVersion),
+					zap.Any("tableInfo", event.Job.BinlogInfo.TableInfo),
 					zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
 
 				// need to update the following two members for every event to filter out later duplicate events
@@ -308,7 +332,9 @@ func (s *schemaStore) writeDDLEvent(ddlEvent DDLJobWithCommitTs) {
 	}
 }
 
-func (s *schemaStore) advanceResolvedTs(resolvedTs uint64) {
+// advancePendingResolvedTs will be call by ddlJobFetcher when it fetched a new ddl event
+// it will update the pendingResolvedTs and notify the updateResolvedTs goroutine to apply the ddl event
+func (s *schemaStore) advancePendingResolvedTs(resolvedTs uint64) {
 	for {
 		currentTs := s.pendingResolvedTs.Load()
 		if resolvedTs <= currentTs {
@@ -325,6 +351,7 @@ func (s *schemaStore) advanceResolvedTs(resolvedTs uint64) {
 }
 
 // TODO: use notify instead of sleep
+// waitResolvedTs will wait until the schemaStore resolved ts is greater than or equal to ts.
 func (s *schemaStore) waitResolvedTs(tableID int64, ts uint64, logInterval time.Duration) {
 	start := time.Now()
 	lastLogTime := time.Now()

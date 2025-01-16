@@ -127,7 +127,7 @@ func TestOneBlockEvent(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
 	require.Len(t, barrier.blockedTs, 0)
 
-	//send event done again
+	// send event done again
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -180,7 +180,7 @@ func TestNormalBlock(t *testing.T) {
 	}
 
 	// the last one is the writer
-	var selectDispatcherID = common.NewDispatcherIDFromPB(blockedDispatcherIDS[2])
+	selectDispatcherID := common.NewDispatcherIDFromPB(blockedDispatcherIDS[2])
 	selectedRep := controller.GetTask(selectDispatcherID)
 	controller.replicationDB.BindSpanToNode("node1", "node2", selectedRep)
 	dropID := selectedRep.Span.TableID
@@ -491,7 +491,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 func TestSchemaBlock(t *testing.T) {
 	nm := setNodeManagerAndMessageCenter()
 	nmap := nm.GetAliveNodes()
-	for key, _ := range nmap {
+	for key := range nmap {
 		delete(nmap, key)
 	}
 	nmap["node1"] = &node.Info{ID: "node1"}
@@ -512,7 +512,7 @@ func TestSchemaBlock(t *testing.T) {
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 2, TableID: 3}, 1)
 	var dispatcherIDs []*heartbeatpb.DispatcherID
-	var dropTables = []int64{1, 2}
+	dropTables := []int64{1, 2}
 	absents := controller.replicationDB.GetAbsentForTest(make([]*replica.SpanReplication, 0), 100)
 	for _, stm := range absents {
 		if stm.GetSchemaID() == 1 {
@@ -599,7 +599,7 @@ func TestSchemaBlock(t *testing.T) {
 	key := eventKey{blockTs: 10}
 	event := barrier.blockedTs[key]
 	require.Equal(t, uint64(10), event.commitTs)
-	//the ddl dispatcher will be the writer
+	// the ddl dispatcher will be the writer
 	require.Equal(t, event.writerDispatcher, controller.ddlDispatcherID)
 
 	// repeated status
@@ -630,7 +630,7 @@ func TestSchemaBlock(t *testing.T) {
 	require.True(t, resp.DispatcherStatuses[0].Ack.CommitTs == 10)
 	event = barrier.blockedTs[key]
 	require.Equal(t, uint64(10), event.commitTs)
-	//the ddl dispatcher will be the writer
+	// the ddl dispatcher will be the writer
 	require.Equal(t, event.writerDispatcher, controller.ddlDispatcherID)
 
 	// selected node write done
@@ -695,7 +695,7 @@ func TestSchemaBlock(t *testing.T) {
 func TestSyncPointBlock(t *testing.T) {
 	nm := setNodeManagerAndMessageCenter()
 	nmap := nm.GetAliveNodes()
-	for key, _ := range nmap {
+	for key := range nmap {
 		delete(nmap, key)
 	}
 	nmap["node1"] = &node.Info{ID: "node1"}
@@ -715,14 +715,14 @@ func TestSyncPointBlock(t *testing.T) {
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 2, TableID: 3}, 1)
 	var dispatcherIDs []*heartbeatpb.DispatcherID
-	var dropTables = []int64{1, 2, 3}
+	dropTables := []int64{1, 2, 3}
 	absents := controller.replicationDB.GetAbsentForTest(make([]*replica.SpanReplication, 0), 10000)
 	for _, stm := range absents {
 		dispatcherIDs = append(dispatcherIDs, stm.ID.ToPB())
 		controller.replicationDB.BindSpanToNode("", "node1", stm)
 		controller.replicationDB.MarkSpanReplicating(stm)
 	}
-	var selectDispatcherID = common.NewDispatcherIDFromPB(dispatcherIDs[2])
+	selectDispatcherID := common.NewDispatcherIDFromPB(dispatcherIDs[2])
 	selectedRep := controller.GetTask(selectDispatcherID)
 	controller.replicationDB.BindSpanToNode("node1", "node2", selectedRep)
 
@@ -823,7 +823,7 @@ func TestSyncPointBlock(t *testing.T) {
 	key := eventKey{blockTs: 10, isSyncPoint: true}
 	event := barrier.blockedTs[key]
 	require.Equal(t, uint64(10), event.commitTs)
-	//the last one will be the writer
+	// the last one will be the writer
 	require.Equal(t, event.writerDispatcher, controller.ddlDispatcherID)
 
 	// selected node write done
@@ -1193,10 +1193,10 @@ func TestSyncPointBlockPerf(t *testing.T) {
 		})
 	}
 
-	//f, _ := os.OpenFile("cpu.profile", os.O_CREATE|os.O_RDWR, 0644)
-	//defer f.Close()
-	//pprof.StartCPUProfile(f)
-	//defer pprof.StopCPUProfile()
+	// f, _ := os.OpenFile("cpu.profile", os.O_CREATE|os.O_RDWR, 0644)
+	// defer f.Close()
+	// pprof.StartCPUProfile(f)
+	// defer pprof.StopCPUProfile()
 	now := time.Now()
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID:  cfID.ToPB(),

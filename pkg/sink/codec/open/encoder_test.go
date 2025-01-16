@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package open
 
 import (
@@ -10,10 +23,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	newcommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
-	ticonfig "github.com/pingcap/tiflow/pkg/config"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -36,7 +47,7 @@ func readByteToUint(b []byte) uint64 {
 
 func TestEncoderOneMessage(t *testing.T) {
 	ctx := context.Background()
-	config := newcommon.NewConfig(config.ProtocolOpen)
+	config := common.NewConfig(config.ProtocolOpen)
 	batchEncoder, err := NewBatchEncoder(ctx, config)
 	require.NoError(t, err)
 
@@ -59,7 +70,8 @@ func TestEncoderOneMessage(t *testing.T) {
 		CommitTs:       1,
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() { count += 1 }}
+		Callback:       func() { count += 1 },
+	}
 
 	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.NoError(t, err)
@@ -70,7 +82,7 @@ func TestEncoderOneMessage(t *testing.T) {
 	require.Equal(t, 1, messages[0].GetRowsCount())
 
 	message := messages[0]
-	require.Equal(t, uint64(encoder.BatchVersion1), readByteToUint(message.Key[:8]))
+	require.Equal(t, batchVersion1, readByteToUint(message.Key[:8]))
 	require.Equal(t, uint64(len(message.Key[16:])), readByteToUint(message.Key[8:16]))
 	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message.Key[16:]))
 
@@ -84,7 +96,7 @@ func TestEncoderOneMessage(t *testing.T) {
 
 func TestEncoderMultipleMessage(t *testing.T) {
 	ctx := context.Background()
-	config := newcommon.NewConfig(config.ProtocolOpen)
+	config := common.NewConfig(config.ProtocolOpen)
 	config = config.WithMaxMessageBytes(400)
 
 	batchEncoder, err := NewBatchEncoder(ctx, config)
@@ -112,7 +124,8 @@ func TestEncoderMultipleMessage(t *testing.T) {
 			CommitTs:       1,
 			Event:          insertRow,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() { count += 1 }}
+			Callback:       func() { count += 1 },
+		}
 
 		err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 		require.NoError(t, err)
@@ -126,7 +139,7 @@ func TestEncoderMultipleMessage(t *testing.T) {
 
 	// message1
 	message1 := messages[0]
-	require.Equal(t, uint64(encoder.BatchVersion1), readByteToUint(message1.Key[:8]))
+	require.Equal(t, batchVersion1, readByteToUint(message1.Key[:8]))
 	length1 := readByteToUint(message1.Key[8:16])
 	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message1.Key[16:16+length1]))
 	length2 := readByteToUint(message1.Key[16+length1 : 24+length1])
@@ -141,7 +154,7 @@ func TestEncoderMultipleMessage(t *testing.T) {
 
 	// message2
 	message2 := messages[1]
-	require.Equal(t, uint64(encoder.BatchVersion1), readByteToUint(message2.Key[:8]))
+	require.Equal(t, batchVersion1, readByteToUint(message2.Key[:8]))
 	require.Equal(t, uint64(len(message2.Key[16:])), readByteToUint(message2.Key[8:16]))
 	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message2.Key[16:]))
 
@@ -157,9 +170,9 @@ func TestEncoderMultipleMessage(t *testing.T) {
 
 func TestLargeMessage(t *testing.T) {
 	ctx := context.Background()
-	config := newcommon.NewConfig(config.ProtocolOpen)
-	config = config.WithMaxMessageBytes(100)
-	batchEncoder, err := NewBatchEncoder(ctx, config)
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+	codecConfig = codecConfig.WithMaxMessageBytes(100)
+	batchEncoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
 	helper := pevent.NewEventTestHelper(t)
@@ -181,18 +194,19 @@ func TestLargeMessage(t *testing.T) {
 		CommitTs:       1,
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() { count += 1 }}
+		Callback:       func() { count += 1 },
+	}
 
 	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
-	require.ErrorIs(t, err, cerror.ErrMessageTooLarge)
+	require.ErrorIs(t, err, errors.ErrMessageTooLarge)
 }
 
 func TestLargeMessageWithHandle(t *testing.T) {
 	ctx := context.Background()
-	config := newcommon.NewConfig(config.ProtocolOpen)
-	config = config.WithMaxMessageBytes(150)
-	config.LargeMessageHandle.LargeMessageHandleOption = ticonfig.LargeMessageHandleOptionHandleKeyOnly
-	batchEncoder, err := NewBatchEncoder(ctx, config)
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+	codecConfig = codecConfig.WithMaxMessageBytes(150)
+	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
+	batchEncoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
 	helper := pevent.NewEventTestHelper(t)
@@ -212,7 +226,8 @@ func TestLargeMessageWithHandle(t *testing.T) {
 		CommitTs:       1,
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.NoError(t, err)
@@ -223,9 +238,9 @@ func TestLargeMessageWithHandle(t *testing.T) {
 	require.Equal(t, 1, messages[0].GetRowsCount())
 
 	message := messages[0]
-	require.Equal(t, uint64(encoder.BatchVersion1), readByteToUint(message.Key[:8]))
+	require.Equal(t, batchVersion1, readByteToUint(message.Key[:8]))
 	require.Equal(t, uint64(len(message.Key[16:])), readByteToUint(message.Key[8:16]))
-	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message.Key[16:]))
+	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1,"ohk":true}`, string(message.Key[16:]))
 
 	require.Equal(t, uint64(len(message.Value[8:])), readByteToUint(message.Value[:8]))
 	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1}}}`, string(message.Value[8:]))
@@ -233,10 +248,10 @@ func TestLargeMessageWithHandle(t *testing.T) {
 
 func TestLargeMessageWithoutHandle(t *testing.T) {
 	ctx := context.Background()
-	config := newcommon.NewConfig(config.ProtocolOpen)
-	config = config.WithMaxMessageBytes(150)
-	config.LargeMessageHandle.LargeMessageHandleOption = ticonfig.LargeMessageHandleOptionHandleKeyOnly
-	batchEncoder, err := NewBatchEncoder(ctx, config)
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+	codecConfig = codecConfig.WithMaxMessageBytes(150)
+	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
+	batchEncoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
 	helper := pevent.NewEventTestHelper(t)
@@ -256,8 +271,9 @@ func TestLargeMessageWithoutHandle(t *testing.T) {
 		CommitTs:       1,
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {}}
+		Callback:       func() {},
+	}
 
 	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
-	require.ErrorIs(t, err, cerror.ErrOpenProtocolCodecInvalidData)
+	require.ErrorIs(t, err, errors.ErrOpenProtocolCodecInvalidData)
 }

@@ -28,15 +28,15 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"github.com/pingcap/ticdc/utils/threadpool"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/spanz"
 	"go.uber.org/zap"
 )
@@ -73,7 +73,8 @@ func NewController(changefeedID common.ChangeFeedID,
 	taskScheduler threadpool.ThreadPool,
 	cfConfig *config.ReplicaConfig,
 	ddlSpan *replica.SpanReplication,
-	batchSize int, balanceInterval time.Duration) *Controller {
+	batchSize int, balanceInterval time.Duration,
+) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	enableTableAcrossNodes := false
 	var splitter *split.Splitter
@@ -149,7 +150,7 @@ func (c *Controller) GetTaskSizeBySchemaID(schemaID int64) int {
 
 func (c *Controller) GetAllNodes() []node.ID {
 	aliveNodes := c.nodeManager.GetAliveNodes()
-	var nodes = make([]node.ID, 0, len(aliveNodes))
+	nodes := make([]node.ID, 0, len(aliveNodes))
 	for id := range aliveNodes {
 		nodes = append(nodes, id)
 	}
@@ -172,7 +173,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
 	if c.enableTableAcrossNodes {
-		//split the whole table span base on the configuration, todo: background split table
+		// split the whole table span base on the configuration, todo: background split table
 		tableSpans = c.splitter.SplitSpans(context.Background(), tableSpan, len(c.nodeManager.GetAliveNodes()), 0)
 	}
 	c.addNewSpans(table.SchemaID, tableSpans, startTs)
@@ -246,7 +247,7 @@ func (c *Controller) FinishBootstrap(
 			}
 			span := info.Span
 
-			//working on remote, the state must be absent or working since it's reported by remote
+			// working on remote, the state must be absent or working since it's reported by remote
 			stm := replica.NewWorkingReplicaSet(c.changefeedID, dispatcherID, c.tsoClient, info.SchemaID, span, status, server)
 			tableMap, ok := workingMap[span.TableID]
 			if !ok {
@@ -288,15 +289,18 @@ func (c *Controller) FinishBootstrap(
 			delete(workingMap, table.TableID)
 		}
 	}
-	// tables that not included in init table map we get from tikv at checkpoint ts
-	// that can happen if a table is created after checkpoint ts
-	// the initial table map only contains real physical tables,
-	// ddl table is special table id (0), can be included in the bootstrap response message
-	for tableID, tableMap := range workingMap {
-		log.Info("found a tables not in initial table map",
+	// tables that not included in init table map, but we get from different nodes.
+	// that can happen such as:
+	// node1 with table trigger event dispatcher, node2 with table1, and both receive drop table1 ddl
+	// table trigger event dispatcher write the ddl, while node2 not pass it yet
+	// then node1 restarts.
+	// node1 will get the startTs = ddl1.ts, and then the table1 will not be included in the initial table map
+	// so we just ignore the table1 dispatcher.
+	// here tableID is physical table id
+	for tableID := range workingMap {
+		log.Warn("found a tables not in initial table map",
 			zap.String("changefeed", c.changefeedID.Name()),
 			zap.Int64("id", tableID))
-		c.addWorkingSpans(tableMap)
 	}
 
 	// rebuild barrier status

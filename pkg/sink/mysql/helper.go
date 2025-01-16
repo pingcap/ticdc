@@ -21,15 +21,18 @@ import (
 	"net"
 	"strconv"
 
+	"github.com/coreos/go-semver/semver"
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/tidb/br/pkg/version"
+	"github.com/pingcap/tidb/dumpling/export"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	dmutils "github.com/pingcap/tiflow/dm/pkg/conn"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -349,4 +352,25 @@ func SetWriteSource(cfg *MysqlConfig, txn *sql.Tx) error {
 		return err
 	}
 	return nil
+}
+
+// checkVersionForVector checks vector type support
+func checkVersionForVector(db *sql.DB, cfg *MysqlConfig) bool {
+	if !cfg.HasVectorType {
+		log.Warn("please set `has-vector-type` to be true if a column is vector type when the downstream is not TiDB or TiDB version less than specify version",
+			zap.Any("hasVectorType", cfg.HasVectorType), zap.Any("supportVectorVersion", defaultSupportVectorVersion))
+		return false
+	}
+	versionInfo, err := export.SelectVersion(db)
+	if err != nil {
+		log.Warn("fail to get version", zap.Error(err), zap.Bool("isTiDB", cfg.IsTiDB))
+		return false
+	}
+	serverInfo := version.ParseServerInfo(versionInfo)
+	version := semver.New(defaultSupportVectorVersion)
+	if !cfg.IsTiDB || serverInfo.ServerVersion.LessThan(*version) {
+		log.Error("downstream unsupport vector type. it will be converted to longtext", zap.String("version", serverInfo.ServerVersion.String()), zap.String("supportVectorVersion", defaultSupportVectorVersion), zap.Bool("isTiDB", cfg.IsTiDB))
+		return true
+	}
+	return false
 }

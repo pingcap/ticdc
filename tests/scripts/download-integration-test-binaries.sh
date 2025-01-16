@@ -26,7 +26,7 @@ PD_BRANCH=${PD_BRANCH:-$DEFAULT_BRANCH}
 TIFLASH_BRANCH=${TIFLASH_BRANCH:-$DEFAULT_BRANCH}
 
 COMMUNITY=${2:-false}
-VERSION=${3:-v8.1.0}
+VERSION=${3:-v8.5.0}
 OS=${4:-linux}
 ARCH=${5:-amd64}
 
@@ -42,7 +42,7 @@ NC='\033[0m' # No Color
 
 # Functions
 log_green() {
-	echo -e "${GREEN}$1${NC}"
+	echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')] $1${NC}"
 }
 
 download_file() {
@@ -211,6 +211,7 @@ setup() {
 }
 
 main() {
+	log_green "Start downloading"
 	setup
 
 	if [ "$COMMUNITY" = true ]; then

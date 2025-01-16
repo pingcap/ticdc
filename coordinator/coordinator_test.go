@@ -33,13 +33,14 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/orchestrator"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -84,7 +85,7 @@ func (m *mockMaintainerManager) Run(ctx context.Context) error {
 		case msg := <-m.msgCh:
 			m.handleMessage(msg)
 		case <-tick.C:
-			//1.  try to send heartbeat to coordinator
+			// 1.  try to send heartbeat to coordinator
 			m.sendHeartbeat()
 		}
 	}
@@ -110,6 +111,7 @@ func (m *mockMaintainerManager) handleMessage(msg *messaging.TargetMessage) {
 		}
 	}
 }
+
 func (m *mockMaintainerManager) sendMessages(msg *heartbeatpb.MaintainerHeartbeat) {
 	target := messaging.NewSingleTargetMessage(
 		m.coordinatorID,
@@ -121,6 +123,7 @@ func (m *mockMaintainerManager) sendMessages(msg *heartbeatpb.MaintainerHeartbea
 		log.Warn("send command failed", zap.Error(err))
 	}
 }
+
 func (m *mockMaintainerManager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
 	switch msg.Type {
 	// receive message from coordinator
@@ -138,6 +141,7 @@ func (m *mockMaintainerManager) recvMessages(ctx context.Context, msg *messaging
 	}
 	return nil
 }
+
 func (m *mockMaintainerManager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	req := msg.Message[0].(*heartbeatpb.CoordinatorBootstrapRequest)
 	if m.coordinatorVersion > req.Version {
@@ -163,6 +167,7 @@ func (m *mockMaintainerManager) onCoordinatorBootstrapRequest(msg *messaging.Tar
 	log.Info("New coordinator online",
 		zap.Int64("version", m.coordinatorVersion))
 }
+
 func (m *mockMaintainerManager) onDispatchMaintainerRequest(
 	msg *messaging.TargetMessage,
 ) *heartbeatpb.ChangefeedID {
@@ -203,6 +208,7 @@ func (m *mockMaintainerManager) onDispatchMaintainerRequest(
 	}
 	return nil
 }
+
 func (m *mockMaintainerManager) sendHeartbeat() {
 	if m.coordinatorVersion > 0 {
 		response := &heartbeatpb.MaintainerHeartbeat{}
@@ -225,12 +231,13 @@ func TestCoordinatorScheduling(t *testing.T) {
 	}()
 
 	ctx := context.Background()
-	nodeManager := watcher.NewNodeManager(nil, nil)
+	info := node.NewInfo("127.0.0.1:8700", "")
+	etcdClient := newMockEtcdClient(string(info.ID))
+	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
-	info := node.NewInfo("127.0.0.1:38300", "")
 	nodeManager.GetAliveNodes()[info.ID] = info
 	mc := messaging.NewMessageCenter(ctx,
-		info.ID, 100, config.NewDefaultMessageCenterConfig())
+		info.ID, 100, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	m := NewMaintainerManager(mc)
 	go m.Run(ctx)
@@ -287,11 +294,12 @@ func TestCoordinatorScheduling(t *testing.T) {
 
 func TestScaleNode(t *testing.T) {
 	ctx := context.Background()
-	nodeManager := watcher.NewNodeManager(nil, nil)
-	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	info := node.NewInfo("127.0.0.1:28300", "")
+	etcdClient := newMockEtcdClient(string(info.ID))
+	nodeManager := watcher.NewNodeManager(nil, etcdClient)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[info.ID] = info
-	mc1 := messaging.NewMessageCenter(ctx, info.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc1 := messaging.NewMessageCenter(ctx, info.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc1)
 	startMaintainerNode(ctx, info, mc1, nodeManager)
 
@@ -328,10 +336,10 @@ func TestScaleNode(t *testing.T) {
 
 	// add two nodes
 	info2 := node.NewInfo("127.0.0.1:8400", "")
-	mc2 := messaging.NewMessageCenter(ctx, info2.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc2 := messaging.NewMessageCenter(ctx, info2.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	startMaintainerNode(ctx, info2, mc2, nodeManager)
 	info3 := node.NewInfo("127.0.0.1:8500", "")
-	mc3 := messaging.NewMessageCenter(ctx, info3.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc3 := messaging.NewMessageCenter(ctx, info3.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	startMaintainerNode(ctx, info3, mc3, nodeManager)
 	// notify node changes
 	_, _ = nodeManager.Tick(ctx, &orchestrator.GlobalReactorState{
@@ -339,7 +347,8 @@ func TestScaleNode(t *testing.T) {
 			model.CaptureID(info.ID):  {ID: model.CaptureID(info.ID), AdvertiseAddr: info.AdvertiseAddr},
 			model.CaptureID(info2.ID): {ID: model.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
 			model.CaptureID(info3.ID): {ID: model.CaptureID(info3.ID), AdvertiseAddr: info3.AdvertiseAddr},
-		}})
+		},
+	})
 	time.Sleep(time.Second * 5)
 	require.Equal(t, cfSize, co.controller.changefeedDB.GetReplicatingSize())
 	require.Equal(t, 2, len(co.controller.changefeedDB.GetByNodeID(info.ID)))
@@ -351,7 +360,8 @@ func TestScaleNode(t *testing.T) {
 		Captures: map[model.CaptureID]*model.CaptureInfo{
 			model.CaptureID(info.ID):  {ID: model.CaptureID(info.ID), AdvertiseAddr: info.AdvertiseAddr},
 			model.CaptureID(info2.ID): {ID: model.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
-		}})
+		},
+	})
 	time.Sleep(time.Second * 5)
 	require.Equal(t, cfSize, co.controller.changefeedDB.GetReplicatingSize())
 	require.Equal(t, 3, len(co.controller.changefeedDB.GetByNodeID(info.ID)))
@@ -360,11 +370,12 @@ func TestScaleNode(t *testing.T) {
 
 func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	ctx := context.Background()
-	nodeManager := watcher.NewNodeManager(nil, nil)
+	info := node.NewInfo("127.0.0.1:28301", "")
+	etcdClient := newMockEtcdClient(string(info.ID))
+	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
-	info := node.NewInfo("127.0.0.1:8700", "")
 	nodeManager.GetAliveNodes()[info.ID] = info
-	mc1 := messaging.NewMessageCenter(ctx, info.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc1 := messaging.NewMessageCenter(ctx, info.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc1)
 	mNode := startMaintainerNode(ctx, info, mc1, nodeManager)
 
@@ -452,7 +463,8 @@ func (d *maintainNode) stop() {
 
 func startMaintainerNode(ctx context.Context,
 	node *node.Info, mc messaging.MessageCenter,
-	nodeManager *watcher.NodeManager) *maintainNode {
+	nodeManager *watcher.NodeManager,
+) *maintainNode {
 	nodeManager.RegisterNodeChangeHandler(node.ID, mc.OnNodeChanges)
 	ctx, cancel := context.WithCancel(ctx)
 	maintainerM := NewMaintainerManager(mc)
@@ -476,4 +488,19 @@ func startMaintainerNode(ctx context.Context,
 		mc:      mc,
 		manager: maintainerM,
 	}
+}
+
+type mockEtcdClient struct {
+	ownerID string
+	etcd.CDCEtcdClient
+}
+
+func newMockEtcdClient(ownerID string) *mockEtcdClient {
+	return &mockEtcdClient{
+		ownerID: ownerID,
+	}
+}
+
+func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (model.CaptureID, error) {
+	return model.CaptureID(m.ownerID), nil
 }

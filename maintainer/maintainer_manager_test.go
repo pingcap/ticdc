@@ -28,10 +28,12 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/tiflow/cdc/model"
 	config2 "github.com/pingcap/tiflow/pkg/config"
@@ -47,7 +49,8 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	selfNode := node.NewInfo("127.0.0.1:18300", "")
-	nodeManager := watcher.NewNodeManager(nil, nil)
+	etcdClient := newMockEtcdClient(string(selfNode.ID))
+	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[selfNode.ID] = selfNode
 	store := &mockSchemaStore{
@@ -59,8 +62,11 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 			{SchemaID: 1, TableID: 4, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t4"}},
 		},
 	}
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
 	appcontext.SetService(appcontext.SchemaStore, store)
-	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
@@ -122,13 +128,13 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 
 	// Case 2: Add new nodes
 	node2 := node.NewInfo("127.0.0.1:8400", "")
-	mc2 := messaging.NewMessageCenter(ctx, node2.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc2 := messaging.NewMessageCenter(ctx, node2.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 
 	node3 := node.NewInfo("127.0.0.1:8500", "")
-	mc3 := messaging.NewMessageCenter(ctx, node3.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc3 := messaging.NewMessageCenter(ctx, node3.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 
 	node4 := node.NewInfo("127.0.0.1:8600", "")
-	mc4 := messaging.NewMessageCenter(ctx, node4.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc4 := messaging.NewMessageCenter(ctx, node4.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 
 	startDispatcherNode(t, ctx, node2, mc2, nodeManager)
 	dn3 := startDispatcherNode(t, ctx, node3, mc3, nodeManager)
@@ -141,7 +147,8 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 			model.CaptureID(node2.ID):    {ID: model.CaptureID(node2.ID), AdvertiseAddr: node2.AdvertiseAddr},
 			model.CaptureID(node3.ID):    {ID: model.CaptureID(node3.ID), AdvertiseAddr: node3.AdvertiseAddr},
 			model.CaptureID(node4.ID):    {ID: model.CaptureID(node4.ID), AdvertiseAddr: node4.AdvertiseAddr},
-		}})
+		},
+	})
 
 	time.Sleep(5 * time.Second)
 	require.Eventually(t, func() bool {
@@ -169,7 +176,8 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		Captures: map[model.CaptureID]*model.CaptureInfo{
 			model.CaptureID(selfNode.ID): {ID: model.CaptureID(selfNode.ID), AdvertiseAddr: selfNode.AdvertiseAddr},
 			model.CaptureID(node2.ID):    {ID: model.CaptureID(node2.ID), AdvertiseAddr: node2.AdvertiseAddr},
-		}})
+		},
+	})
 
 	require.Eventually(t, func() bool {
 		return maintainer.controller.replicationDB.GetReplicatingSize() == 4
@@ -243,7 +251,8 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	selfNode := node.NewInfo("127.0.0.1:18301", "")
-	nodeManager := watcher.NewNodeManager(nil, nil)
+	etcdClient := newMockEtcdClient(string(selfNode.ID))
+	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[selfNode.ID] = selfNode
 	store := &mockSchemaStore{
@@ -255,12 +264,14 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 			{SchemaID: 1, TableID: 4, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t4"}},
 		},
 	}
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	appcontext.SetService(appcontext.SchemaStore, store)
-	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
-	//discard maintainer manager messages
+	// discard maintainer manager messages
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		return nil
 	})
@@ -289,9 +300,11 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 		dispManager.bootstrapTables = append(dispManager.bootstrapTables, &heartbeatpb.BootstrapTableSpan{
 			ID:       dispatcherID.ToPB(),
 			SchemaID: 1,
-			Span: &heartbeatpb.TableSpan{TableID: tableSpan.TableID,
+			Span: &heartbeatpb.TableSpan{
+				TableID:  tableSpan.TableID,
 				StartKey: tableSpan.StartKey,
-				EndKey:   tableSpan.EndKey},
+				EndKey:   tableSpan.EndKey,
+			},
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    10,
 		})
@@ -355,7 +368,8 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	selfNode := node.NewInfo("127.0.0.1:8800", "")
-	nodeManager := watcher.NewNodeManager(nil, nil)
+	etcdClient := newMockEtcdClient(string(selfNode.ID))
+	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[selfNode.ID] = selfNode
 	store := &mockSchemaStore{
@@ -367,12 +381,14 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 			{SchemaID: 1, TableID: 4, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t4"}},
 		},
 	}
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	appcontext.SetService(appcontext.SchemaStore, store)
-	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig())
+	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
-	//discard maintainer manager messages
+	// discard maintainer manager messages
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		return nil
 	})
@@ -430,7 +446,8 @@ func (d *dispatcherNode) stop() {
 }
 
 func startDispatcherNode(t *testing.T, ctx context.Context,
-	node *node.Info, mc messaging.MessageCenter, nodeManager *watcher.NodeManager) *dispatcherNode {
+	node *node.Info, mc messaging.MessageCenter, nodeManager *watcher.NodeManager,
+) *dispatcherNode {
 	nodeManager.RegisterNodeChangeHandler(node.ID, mc.OnNodeChanges)
 	ctx, cancel := context.WithCancel(ctx)
 	dispManager := MockDispatcherManager(mc, node.ID)
@@ -452,4 +469,19 @@ func startDispatcherNode(t *testing.T, ctx context.Context,
 		mc:                mc,
 		dispatcherManager: dispManager,
 	}
+}
+
+type mockEtcdClient struct {
+	etcd.CDCEtcdClient
+	ownerID string
+}
+
+func newMockEtcdClient(ownerID string) *mockEtcdClient {
+	return &mockEtcdClient{
+		ownerID: ownerID,
+	}
+}
+
+func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (model.CaptureID, error) {
+	return model.CaptureID(m.ownerID), nil
 }

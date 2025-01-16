@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package kafka
 
 import (
@@ -17,9 +30,8 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
-	tikafka "github.com/pingcap/tiflow/pkg/sink/kafka"
 	"go.uber.org/zap"
 )
 
@@ -217,7 +229,7 @@ func (o *Options) Apply(changefeedID common.ChangeFeedID,
 	var err error
 	req := &http.Request{URL: sinkURI}
 	urlParameter := &urlConfig{}
-	if err := binding.Query.Bind(req, urlParameter); err != nil {
+	if err = binding.Query.Bind(req, urlParameter); err != nil {
 		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
 	}
 	if urlParameter, err = mergeConfig(sinkConfig, urlParameter); err != nil {
@@ -556,7 +568,7 @@ func NewKafkaClientID(captureAddr string,
 // AdjustOptions adjust the `Options` and `sarama.Config` by condition.
 func AdjustOptions(
 	ctx context.Context,
-	admin tikafka.ClusterAdminClient,
+	admin ClusterAdminClient,
 	options *Options,
 	topic string,
 ) error {
@@ -663,8 +675,8 @@ func AdjustOptions(
 
 func validateMinInsyncReplicas(
 	ctx context.Context,
-	admin tikafka.ClusterAdminClient,
-	topics map[string]tikafka.TopicDetail,
+	admin ClusterAdminClient,
+	topics map[string]TopicDetail,
 	topic string,
 	replicationFactor int,
 ) error {
@@ -735,7 +747,7 @@ func validateMinInsyncReplicas(
 // NOTICE: The configuration names of topic and broker may be different for the same configuration.
 func getTopicConfig(
 	ctx context.Context,
-	admin tikafka.ClusterAdminClient,
+	admin ClusterAdminClient,
 	topicName string,
 	topicConfigName string,
 	brokerConfigName string,

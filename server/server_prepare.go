@@ -22,17 +22,16 @@ import (
 	"time"
 
 	"github.com/dustin/go-humanize"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/tidb/pkg/util/gctuner"
 	"github.com/pingcap/tiflow/cdc/kv"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/fsutil"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -111,6 +110,15 @@ func (c *server) prepare(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 	c.pdEndpoints = append(c.pdEndpoints, allPDEndpoints...)
+
+	// Update meta-region label to ensure that meta region isolated from data regions.
+	err = pdAPIClient.UpdateMetaLabel(ctx)
+	if err != nil {
+		log.Warn("Fail to verify region label rule",
+			zap.Error(err),
+			zap.Stringer("upstreamID", c.info.ID),
+			zap.Strings("upstreamEndpoints", c.pdEndpoints))
+	}
 
 	c.KVStorage, err = kv.CreateTiStore(strings.Join(allPDEndpoints, ","), conf.Security)
 	if err != nil {
@@ -205,7 +213,7 @@ func (c *server) registerNodeToEtcd(ctx context.Context) error {
 	}
 	err := c.EtcdClient.PutCaptureInfo(ctx, cInfo, c.session.Lease())
 	if err != nil {
-		return cerror.WrapError(cerror.ErrCaptureRegister, err)
+		return errors.WrapError(errors.ErrCaptureRegister, err)
 	}
 	return nil
 }

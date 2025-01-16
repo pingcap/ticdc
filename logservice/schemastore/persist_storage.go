@@ -181,14 +181,6 @@ func newPersistentStorage(
 		dataStorage.initializeFromKVStorage(dbPath, storage, gcSafePoint)
 	}
 
-	go func() {
-		dataStorage.gc(ctx)
-	}()
-
-	go func() {
-		dataStorage.persistUpperBoundPeriodically(ctx)
-	}()
-
 	return dataStorage
 }
 
@@ -323,6 +315,21 @@ func (p *persistentStorage) getTableInfo(tableID int64, ts uint64) (*common.Tabl
 	return store.getTableInfo(ts)
 }
 
+func (p *persistentStorage) forceGetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error) {
+	log.Info("forceGetTableInfo", zap.Int64("tableID", tableID), zap.Uint64("ts", ts))
+	p.mu.RLock()
+	// if there is already a store, it must contain all table info on disk, so we can use it directly
+	if store, ok := p.tableInfoStoreMap[tableID]; ok {
+		p.mu.RUnlock()
+		return store.getTableInfo(ts)
+	}
+	p.mu.RUnlock()
+	// build a temp store to get table info
+	store := newEmptyVersionedTableInfoStore(tableID)
+	p.buildVersionedTableInfoStore(store)
+	return store.getTableInfo(ts)
+}
+
 // TODO: this may consider some shouldn't be send ddl, like create table, does it matter?
 func (p *persistentStorage) getMaxEventCommitTs(tableID int64, ts uint64) uint64 {
 	p.mu.RLock()
@@ -378,13 +385,10 @@ func (p *persistentStorage) fetchTableDDLEvents(tableID int64, tableFilter filte
 	events := make([]commonEvent.DDLEvent, 0, len(allTargetTs))
 	for _, ts := range allTargetTs {
 		rawEvent := readPersistedDDLEvent(storageSnap, ts)
-		// TODO: if ExtraSchemaName and other fields are empty, does it cause any problem?
-		if tableFilter != nil &&
-			tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.CurrentSchemaName, rawEvent.CurrentTableName) &&
-			tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.PrevSchemaName, rawEvent.PrevTableName) {
-			continue
+		ddlEvent, ok := buildDDLEvent(&rawEvent, tableFilter)
+		if ok {
+			events = append(events, ddlEvent)
 		}
-		events = append(events, buildDDLEvent(&rawEvent, tableFilter))
 	}
 	// log.Info("fetchTableDDLEvents",
 	// 	zap.Int64("tableID", tableID),
@@ -444,26 +448,10 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
-			if tableFilter != nil {
-				if rawEvent.Type == byte(model.ActionCreateTables) {
-					allFiltered := true
-					for _, tableInfo := range rawEvent.MultipleTableInfos {
-						if !tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.CurrentSchemaName, tableInfo.Name.O) {
-							allFiltered = false
-							break
-						}
-					}
-					if allFiltered {
-						continue
-					}
-				} else {
-					if tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.CurrentSchemaName, rawEvent.CurrentTableName) &&
-						tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.PrevSchemaName, rawEvent.PrevTableName) {
-						continue
-					}
-				}
+			ddlEvent, ok := buildDDLEvent(&rawEvent, tableFilter)
+			if ok {
+				events = append(events, ddlEvent)
 			}
-			events = append(events, buildDDLEvent(&rawEvent, tableFilter))
 		}
 		storageSnap.Close()
 		if len(events) >= limit {
@@ -473,9 +461,7 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 	}
 }
 
-func (p *persistentStorage) buildVersionedTableInfoStore(
-	store *versionedTableInfoStore,
-) error {
+func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableInfoStore) error {
 	tableID := store.getTableID()
 	// get snapshot from disk before get current gc ts to make sure data is not deleted by gc process
 	storageSnap := p.db.NewSnapshot()
@@ -506,7 +492,7 @@ func addTableInfoFromKVSnap(
 ) error {
 	tableInfo := readTableInfoInKVSnap(snap, store.getTableID(), kvSnapVersion)
 	if tableInfo != nil {
-		store.addInitialTableInfo(tableInfo)
+		store.addInitialTableInfo(tableInfo, kvSnapVersion)
 	}
 	return nil
 }
@@ -672,8 +658,13 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	p.mu.Unlock()
 
+	// TODO: do we have a better way to do this?
+	if ddlEvent.Type == byte(model.ActionExchangeTablePartition) {
+		ddlEvent.PreTableInfo, _ = p.forceGetTableInfo(ddlEvent.PrevTableID, ddlEvent.FinishedTs)
+	}
+
 	// Note: need write ddl event to disk before update ddl history,
-	// becuase other goroutines may read ddl events from disk according to ddl history
+	// because other goroutines may read ddl events from disk according to ddl history
 	writePersistedDDLEvent(p.db, &ddlEvent)
 
 	p.mu.Lock()
@@ -700,6 +691,13 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	handler.iterateEventTablesFunc(&ddlEvent, func(tableIDs ...int64) {
 		for _, tableID := range tableIDs {
 			if store, ok := p.tableInfoStoreMap[tableID]; ok {
+				// do some safety check
+				switch model.ActionType(job.Type) {
+				case model.ActionCreateTable, model.ActionCreateTables:
+					// newly created tables should not be registered before this ddl are handled
+					log.Panic("should not be registered", zap.Int64("tableID", tableID))
+				default:
+				}
 				store.applyDDL(&ddlEvent)
 			}
 		}
@@ -726,7 +724,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 				zap.Int64("jobID", job.ID),
 				zap.Int64("schemaID", job.SchemaID),
 				zap.Int64("tableID", job.BinlogInfo.TableInfo.ID),
-				zap.Uint64("finishTs", job.BinlogInfo.FinishedTS),
+				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
 				zap.Int64("jobSchemaVersion", job.BinlogInfo.SchemaVersion))
 			return true
 		}
@@ -738,19 +736,30 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 				zap.Int64("jobID", job.ID),
 				zap.Int64("schemaID", job.SchemaID),
 				zap.Int64("tableID", job.BinlogInfo.MultipleTableInfos[0].ID),
-				zap.Uint64("finishTs", job.BinlogInfo.FinishedTS),
+				zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
 				zap.Int64("jobSchemaVersion", job.BinlogInfo.SchemaVersion))
 			return true
 		}
 	// DDLs ignored
-	case model.ActionAlterTableAttributes,
-		model.ActionAlterTablePartitionAttributes:
+	case model.ActionCreateSequence,
+		model.ActionAlterSequence,
+		model.ActionDropSequence,
+		model.ActionAlterTableAttributes,
+		model.ActionAlterTablePartitionAttributes,
+		model.ActionCreateResourceGroup,
+		model.ActionAlterResourceGroup,
+		model.ActionDropResourceGroup:
+		log.Info("ignore ddl",
+			zap.String("DDL", job.Query),
+			zap.Int64("jobID", job.ID),
+			zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
+			zap.Any("type", job.Type))
 		return true
 	}
 	return false
 }
 
-func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) commonEvent.DDLEvent {
+func buildDDLEvent(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool) {
 	handler, ok := allDDLHandlers[model.ActionType(rawEvent.Type)]
 	if !ok {
 		log.Panic("unknown ddl type", zap.Any("ddlType", rawEvent.Type), zap.String("query", rawEvent.Query))

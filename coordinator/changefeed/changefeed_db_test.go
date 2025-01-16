@@ -20,9 +20,9 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -80,7 +80,7 @@ func TestResume(t *testing.T) {
 	db.AddStoppedChangefeed(cf)
 	cf.backoff = NewBackoff(cf.ID, 0, 0)
 
-	db.Resume(cf.ID, true)
+	db.Resume(cf.ID, true, false)
 
 	require.Contains(t, db.GetAbsent(), cf)
 	require.NotContains(t, db.stopped, cf.ID)
@@ -210,17 +210,21 @@ func TestReplaceStoppedChangefeed(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	cf := &Changefeed{
 		ID: cfID,
-		info: atomic.NewPointer(&config.ChangeFeedInfo{ChangefeedID: cfID,
-			Config:  config.GetDefaultReplicaConfig(),
-			SinkURI: "mysql://127.0.0.1:3306"}),
+		info: atomic.NewPointer(&config.ChangeFeedInfo{
+			ChangefeedID: cfID,
+			Config:       config.GetDefaultReplicaConfig(),
+			SinkURI:      "mysql://127.0.0.1:3306",
+		}),
 		status: atomic.NewPointer(&heartbeatpb.MaintainerStatus{}),
 	}
 	db.AddStoppedChangefeed(cf)
 	require.Contains(t, db.stopped, cf.ID)
 
-	cf2 := &config.ChangeFeedInfo{ChangefeedID: cfID,
-		Config:  config.GetDefaultReplicaConfig(),
-		SinkURI: "kafka://127.0.0.1:9092"}
+	cf2 := &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "kafka://127.0.0.1:9092",
+	}
 	db.ReplaceStoppedChangefeed(cf2)
 	require.Contains(t, db.stopped, cf.ID)
 
@@ -228,8 +232,10 @@ func TestReplaceStoppedChangefeed(t *testing.T) {
 	require.Equal(t, true, cf3.isMQSink)
 
 	cf4ID := common.NewChangeFeedIDWithName("test4")
-	cf4 := &config.ChangeFeedInfo{ChangefeedID: cf4ID,
-		SinkURI: "kafka://127.0.0.1:9092"}
+	cf4 := &config.ChangeFeedInfo{
+		ChangefeedID: cf4ID,
+		SinkURI:      "kafka://127.0.0.1:9092",
+	}
 	db.ReplaceStoppedChangefeed(cf4)
 
 	require.NotContains(t, db.changefeeds, cf4ID)
@@ -238,10 +244,12 @@ func TestReplaceStoppedChangefeed(t *testing.T) {
 func TestScheduleChangefeed(t *testing.T) {
 	db := NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test")
-	cf := NewChangefeed(cfID, &config.ChangeFeedInfo{ChangefeedID: cfID,
-		Config:  config.GetDefaultReplicaConfig(),
-		SinkURI: "mysql://127.0.0.1:3306"},
-		10)
+	cf := NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
+		10, true)
 	db.AddAbsentChangefeed(cf)
 	db.MarkMaintainerScheduling(cf)
 	db.BindChangefeedToNode("", "node-1", cf)
@@ -267,50 +275,55 @@ func TestCalculateGCSafepoint(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	cf1 := NewChangefeed(cfID,
-		&config.ChangeFeedInfo{ChangefeedID: cfID,
-			Config: config.GetDefaultReplicaConfig(),
-			State:  model.StateStopped,
-		}, 11)
+		&config.ChangeFeedInfo{
+			ChangefeedID: cfID,
+			Config:       config.GetDefaultReplicaConfig(),
+			State:        model.StateStopped,
+		}, 11, true)
 	db.AddStoppedChangefeed(cf1)
 	require.Equal(t, uint64(11), db.CalculateGCSafepoint())
 
 	cf2ID := common.NewChangeFeedIDWithName("test")
 	cf2 := NewChangefeed(cf2ID,
-		&config.ChangeFeedInfo{ChangefeedID: cf2ID,
-			Config: config.GetDefaultReplicaConfig(),
-			State:  model.StateFinished,
-		}, 9)
+		&config.ChangeFeedInfo{
+			ChangefeedID: cf2ID,
+			Config:       config.GetDefaultReplicaConfig(),
+			State:        model.StateFinished,
+		}, 9, true)
 	db.AddStoppedChangefeed(cf2)
 	require.Equal(t, uint64(11), db.CalculateGCSafepoint())
 
 	cf3ID := common.NewChangeFeedIDWithName("test")
 	cf3 := NewChangefeed(cf3ID,
-		&config.ChangeFeedInfo{ChangefeedID: cf3ID,
-			Config: config.GetDefaultReplicaConfig(),
-			State:  model.StateNormal,
-		}, 10)
+		&config.ChangeFeedInfo{
+			ChangefeedID: cf3ID,
+			Config:       config.GetDefaultReplicaConfig(),
+			State:        model.StateNormal,
+		}, 10, true)
 	db.AddStoppedChangefeed(cf3)
 	require.Equal(t, uint64(10), db.CalculateGCSafepoint())
 
 	cf4ID := common.NewChangeFeedIDWithName("test")
 	cf4 := NewChangefeed(cf4ID,
-		&config.ChangeFeedInfo{ChangefeedID: cf4ID,
-			Config: config.GetDefaultReplicaConfig(),
-			State:  model.StateFailed,
+		&config.ChangeFeedInfo{
+			ChangefeedID: cf4ID,
+			Config:       config.GetDefaultReplicaConfig(),
+			State:        model.StateFailed,
 			Error: &model.RunningError{
 				Code: string(errors.ErrGCTTLExceeded.ID()),
 			},
-		}, 7)
+		}, 7, true)
 	db.AddStoppedChangefeed(cf4)
 	require.Equal(t, uint64(10), db.CalculateGCSafepoint())
 
 	cf5ID := common.NewChangeFeedIDWithName("test")
 	cf5 := NewChangefeed(cf5ID,
-		&config.ChangeFeedInfo{ChangefeedID: cf5ID,
-			Config: config.GetDefaultReplicaConfig(),
-			State:  model.StateFailed,
-			Error:  &model.RunningError{},
-		}, 7)
+		&config.ChangeFeedInfo{
+			ChangefeedID: cf5ID,
+			Config:       config.GetDefaultReplicaConfig(),
+			State:        model.StateFailed,
+			Error:        &model.RunningError{},
+		}, 7, true)
 	db.AddStoppedChangefeed(cf5)
 	require.Equal(t, uint64(7), db.CalculateGCSafepoint())
 }

@@ -23,24 +23,22 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/ticdc/logservice/logservicepb"
-	"github.com/tikv/client-go/v2/oracle"
-
-	"github.com/pingcap/ticdc/utils/chann"
-
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
+	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/tiflow/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tiflow/pkg/util"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -50,9 +48,11 @@ var (
 	CounterResolved = metrics.EventStoreReceivedEventCount.WithLabelValues("resolved")
 )
 
-var metricEventStoreFirstReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("first")
-var metricEventStoreNextReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("next")
-var metricEventStoreCloseReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("close")
+var (
+	metricEventStoreFirstReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("first")
+	metricEventStoreNextReadDurationHistogram  = metrics.EventStoreReadDurationHistogram.WithLabelValues("next")
+	metricEventStoreCloseReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("close")
+)
 
 type ResolvedTsNotifier func(watermark uint64, latestCommitTs uint64)
 
@@ -113,7 +113,7 @@ type subscriptionStat struct {
 
 	// dispatchers depend on this subscription
 	dispatchers struct {
-		sync.RWMutex
+		sync.Mutex
 		notifiers map[common.DispatcherID]ResolvedTsNotifier
 	}
 
@@ -304,25 +304,42 @@ func newWriteTaskPool(store *eventStore, db *pebble.DB, ch *chann.UnlimitedChann
 	}
 }
 
-func (p *writeTaskPool) run(_ context.Context) {
+func (p *writeTaskPool) run(ctx context.Context) {
 	p.store.wg.Add(p.workerNum)
 	for i := 0; i < p.workerNum; i++ {
 		go func() {
 			defer p.store.wg.Done()
 			buffer := make([]eventWithCallback, 0, 128)
 			for {
-				events, ok := p.dataCh.GetMultipleNoGroup(buffer)
-				if !ok {
+				select {
+				case <-ctx.Done():
 					return
+				default:
+					events, ok := p.dataCh.GetMultipleNoGroup(buffer)
+					if !ok {
+						return
+					}
+					p.store.writeEvents(p.db, events)
+					for i := range events {
+						events[i].callback()
+					}
+					buffer = buffer[:0]
 				}
-				p.store.writeEvents(p.db, events)
-				for i := range events {
-					events[i].callback()
-				}
-				buffer = buffer[:0]
 			}
 		}()
 	}
+}
+
+func (e *eventStore) setCoordinatorInfo(id node.ID) {
+	e.coordinatorInfo.Lock()
+	defer e.coordinatorInfo.Unlock()
+	e.coordinatorInfo.id = id
+}
+
+func (e *eventStore) getCoordinatorInfo() node.ID {
+	e.coordinatorInfo.RLock()
+	defer e.coordinatorInfo.RUnlock()
+	return e.coordinatorInfo.id
 }
 
 func (e *eventStore) Name() string {
@@ -330,6 +347,10 @@ func (e *eventStore) Name() string {
 }
 
 func (e *eventStore) Run(ctx context.Context) error {
+	log.Info("event store start to run")
+	defer func() {
+		log.Info("event store exited")
+	}()
 	eg, ctx := errgroup.WithContext(ctx)
 
 	for _, p := range e.writeTaskPools {
@@ -357,13 +378,17 @@ func (e *eventStore) Run(ctx context.Context) error {
 }
 
 func (e *eventStore) Close(ctx context.Context) error {
-	e.wg.Wait()
+	log.Info("event store start to close")
+	defer log.Info("event store closed")
 
+	log.Info("closing pebble db")
 	for _, db := range e.dbs {
 		if err := db.Close(); err != nil {
 			log.Error("failed to close pebble db", zap.Error(err))
 		}
 	}
+	log.Info("pebble db closed")
+
 	return nil
 }
 
@@ -490,8 +515,8 @@ func (e *eventStore) RegisterDispatcher(
 		}
 		// just do CompareAndSwap once, if failed, it means another goroutine has updated resolvedTs
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
-			subStat.dispatchers.RLock()
-			defer subStat.dispatchers.RUnlock()
+			subStat.dispatchers.Lock()
+			defer subStat.dispatchers.Unlock()
 			for _, notifier := range subStat.dispatchers.notifiers {
 				notifier(ts, subStat.maxEventCommitTs.Load())
 			}
@@ -524,6 +549,7 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 	if !ok {
 		log.Panic("should not happen")
 	}
+	subscriptionStat.dispatchers.Lock()
 	delete(subscriptionStat.dispatchers.notifiers, dispatcherID)
 	if len(subscriptionStat.dispatchers.notifiers) == 0 {
 		delete(e.dispatcherMeta.subscriptionStats, subID)
@@ -531,6 +557,7 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 		e.subClient.Unsubscribe(subID)
 		metrics.EventStoreSubscriptionGauge.Dec()
 	}
+	subscriptionStat.dispatchers.Unlock()
 
 	// delete the dispatcher from table subscriptions
 	dispatchersForSameTable, ok := e.dispatcherMeta.tableToDispatchers[tableID]
@@ -669,15 +696,15 @@ func (e *eventStore) updateMetrics(ctx context.Context) error {
 }
 
 func (e *eventStore) updateMetricsOnce() {
-	currentTime := e.pdClock.CurrentTime()
-	currentPhyTs := oracle.GetPhysical(currentTime)
+	pdTime := e.pdClock.CurrentTime()
+	pdPhyTs := oracle.GetPhysical(pdTime)
 	minResolvedTs := uint64(0)
 	e.dispatcherMeta.RLock()
 	for _, subscriptionStat := range e.dispatcherMeta.subscriptionStats {
 		// resolved ts lag
 		resolvedTs := subscriptionStat.resolvedTs.Load()
 		resolvedPhyTs := oracle.ExtractPhysical(resolvedTs)
-		resolvedLag := float64(currentPhyTs-resolvedPhyTs) / 1e3
+		resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
 		metrics.EventStoreDispatcherResolvedTsLagHist.Observe(float64(resolvedLag))
 		if minResolvedTs == 0 || resolvedTs < minResolvedTs {
 			minResolvedTs = resolvedTs
@@ -685,7 +712,7 @@ func (e *eventStore) updateMetricsOnce() {
 		// checkpoint ts lag
 		checkpointTs := subscriptionStat.checkpointTs.Load()
 		watermarkPhyTs := oracle.ExtractPhysical(checkpointTs)
-		watermarkLag := float64(currentPhyTs-watermarkPhyTs) / 1e3
+		watermarkLag := float64(pdPhyTs-watermarkPhyTs) / 1e3
 		metrics.EventStoreDispatcherWatermarkLagHist.Observe(float64(watermarkLag))
 	}
 	e.dispatcherMeta.RUnlock()
@@ -694,7 +721,7 @@ func (e *eventStore) updateMetricsOnce() {
 		return
 	}
 	minResolvedPhyTs := oracle.ExtractPhysical(minResolvedTs)
-	eventStoreResolvedTsLag := float64(currentPhyTs-minResolvedPhyTs) / 1e3
+	eventStoreResolvedTsLag := float64(pdPhyTs-minResolvedPhyTs) / 1e3
 	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLag)
 }
 
@@ -797,9 +824,7 @@ func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.T
 	for _, msg := range targetMessage.Message {
 		switch msg.(type) {
 		case *common.LogCoordinatorBroadcastRequest:
-			e.coordinatorInfo.Lock()
-			e.coordinatorInfo.id = targetMessage.From
-			e.coordinatorInfo.Unlock()
+			e.setCoordinatorInfo(targetMessage.From)
 		default:
 			log.Panic("invalid message type", zap.Any("msg", msg))
 		}
@@ -844,7 +869,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 				}
 			}
 
-			message := messaging.NewSingleTargetMessage(e.coordinatorInfo.id, messaging.LogCoordinatorTopic, state)
+			message := messaging.NewSingleTargetMessage(e.getCoordinatorInfo(), messaging.LogCoordinatorTopic, state)
 			e.dispatcherMeta.RUnlock()
 			// just ignore messagees fail to send
 			if err := e.messageCenter.SendEvent(message); err != nil {

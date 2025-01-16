@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package common
 
 import (
@@ -73,6 +86,11 @@ const (
 	// UnsignedFlag means the column stores an unsigned integer
 	UnsignedFlag
 )
+
+func NewColumnFlagType(flag ColumnFlagType) *ColumnFlagType {
+	f := ColumnFlagType(flag)
+	return &f
+}
 
 // SetIsBinary sets BinaryFlag
 func (b *ColumnFlagType) SetIsBinary() {
@@ -281,8 +299,6 @@ type TableInfo struct {
 	// So be careful when using the TableInfo.
 	TableName TableName `json:"table-name"`
 
-	// Version means the version of the table info.
-	Version      uint16        `json:"version"`
 	columnSchema *columnSchema `json:"-"`
 
 	preSQLs struct {
@@ -574,7 +590,7 @@ func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 	return result
 }
 
-func NewTableInfo(schemaID int64, schemaName string, tableName string, tableID int64, isPartition bool, version uint16, columnSchema *columnSchema) *TableInfo {
+func NewTableInfo(schemaID int64, schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
 	ti := &TableInfo{
 		SchemaID: schemaID,
 		TableName: TableName{
@@ -584,7 +600,6 @@ func NewTableInfo(schemaID int64, schemaName string, tableName string, tableID i
 			IsPartition: isPartition,
 			quotedName:  QuoteSchema(schemaName, tableName),
 		},
-		Version:      version,
 		columnSchema: columnSchema,
 	}
 
@@ -603,7 +618,7 @@ func WrapTableInfo(schemaID int64, schemaName string, info *model.TableInfo) *Ta
 	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
 	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
 
-	return NewTableInfo(schemaID, schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, info.Version, columnSchema)
+	return NewTableInfo(schemaID, schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema)
 }
 
 // GetColumnDefaultValue returns the default definition of a column.
