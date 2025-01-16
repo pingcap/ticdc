@@ -71,7 +71,7 @@ type DDLEvent struct {
 	TableNameChange *TableNameChange `json:"table_name_change"`
 
 	TiDBOnly bool `json:"tidb_only"`
-	// 用于在event flush 后执行，后续兼容不同下游的时候要看是不是要拆下去
+	// Call when event flush is completed
 	PostTxnFlushed []func() `json:"-"`
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
 	eventSize int64 `json:"-"`
