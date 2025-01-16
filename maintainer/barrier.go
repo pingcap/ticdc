@@ -71,7 +71,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 			log.Error("handle block status failed, event is nil",
 				zap.String("from", from.String()),
 				zap.String("changefeed", request.ChangefeedID.GetName()),
-				zap.String("detail", common.FormatDispatcherStatus(status)))
+				zap.String("detail", common.FormatTableSpanBlockStatus(status)))
 			continue
 		}
 		eventMap[event] = append(eventMap[event], status.ID)
