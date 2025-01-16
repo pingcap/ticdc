@@ -153,8 +153,8 @@ func (c *Changefeed) GetStatus() *heartbeatpb.MaintainerStatus {
 	return c.status.Load()
 }
 
-// GetCloneStatus returns a deep copy of the changefeed status
-func (c *Changefeed) GetCloneStatus() *heartbeatpb.MaintainerStatus {
+// GetClonedStatus returns a deep copy of the changefeed status
+func (c *Changefeed) GetClonedStatus() *heartbeatpb.MaintainerStatus {
 	status := c.status.Load()
 	clone := &heartbeatpb.MaintainerStatus{
 		ChangefeedID: &heartbeatpb.ChangefeedID{
