@@ -15,7 +15,6 @@ package kafka
 
 import (
 	"crypto/x509"
-	"strconv"
 	"strings"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
