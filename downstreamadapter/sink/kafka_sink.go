@@ -47,8 +47,9 @@ type KafkaSink struct {
 	statistics       *metrics.Statistics
 	metricsCollector kafka.MetricsCollector
 
-	// todo: what is the usage of this field?
-	isNormal uint32 // if sink is normal, isNormal is 1, otherwise is 0
+	// isNormal means the sink does not meet error.
+	// if sink is normal, isNormal is 1, otherwise is 0
+	isNormal uint32
 	ctx      context.Context
 }
 
@@ -151,7 +152,6 @@ func (s *KafkaSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmlWorker.AddDMLEvent(event)
 }
 
-// What does the `PassBlockEvent` means ?
 func (s *KafkaSink) PassBlockEvent(event commonEvent.BlockEvent) {
 	event.PostFlush()
 }

@@ -627,16 +627,14 @@ func (d *Dispatcher) addToStatusDynamicStream() {
 func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully.
 	// If sink is not normal, we can close the dispatcher immediately.
-	if (d.sink.IsNormal() && d.tableProgress.Empty()) || !d.sink.IsNormal() {
+	if !d.sink.IsNormal() || d.tableProgress.Empty() {
 		w.CheckpointTs = d.GetCheckpointTs()
 		w.ResolvedTs = d.GetResolvedTs()
 
 		d.componentStatus.Set(heartbeatpb.ComponentState_Stopped)
-
 		if d.IsTableTriggerEventDispatcher() {
 			d.tableSchemaStore.Clear()
 		}
-
 		return w, true
 	}
 	return w, false
