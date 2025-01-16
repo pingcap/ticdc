@@ -147,8 +147,37 @@ func (c *Changefeed) SetIsNew(isNew bool) {
 	c.isNew = isNew
 }
 
+// GetStatus returns the changefeed status.
+// Note: the returned status is a pointer, so it's not safe to modify it!
 func (c *Changefeed) GetStatus() *heartbeatpb.MaintainerStatus {
 	return c.status.Load()
+}
+
+// GetCloneStatus returns a deep copy of the changefeed status
+func (c *Changefeed) GetCloneStatus() *heartbeatpb.MaintainerStatus {
+	status := c.status.Load()
+	clone := &heartbeatpb.MaintainerStatus{
+		ChangefeedID: &heartbeatpb.ChangefeedID{
+			High:      status.ChangefeedID.High,
+			Low:       status.ChangefeedID.Low,
+			Name:      status.ChangefeedID.Name,
+			Namespace: status.ChangefeedID.Namespace,
+		},
+		CheckpointTs: status.CheckpointTs,
+		FeedState:    status.FeedState,
+		State:        status.State,
+		Err:          make([]*heartbeatpb.RunningError, 0, len(status.Err)),
+	}
+	for _, err := range status.Err {
+		clonedErr := &heartbeatpb.RunningError{
+			Time:    err.Time,
+			Node:    err.Node,
+			Code:    err.Code,
+			Message: err.Message,
+		}
+		clone.Err = append(clone.Err, clonedErr)
+	}
+	return clone
 }
 
 func (c *Changefeed) SetLastSavedCheckPointTs(ts uint64) {
