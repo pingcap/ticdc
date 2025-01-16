@@ -131,7 +131,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1737017291195,
+  "iteration": 1737020331669,
   "links": [],
   "panels": [
     {
@@ -710,10 +710,10 @@
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "max": false,
+            "max": true,
             "min": false,
-            "rightSide": true,
-            "show": false,
+            "rightSide": false,
+            "show": true,
             "total": false,
             "values": true
           },
@@ -778,7 +778,7 @@
               "logBase": 1,
               "max": null,
               "min": null,
-              "show": true
+              "show": false
             }
           ],
           "yaxis": {
@@ -813,10 +813,10 @@
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "max": false,
+            "max": true,
             "min": false,
-            "rightSide": true,
-            "show": false,
+            "rightSide": false,
+            "show": true,
             "total": false,
             "values": true
           },
@@ -881,7 +881,7 @@
               "logBase": 1,
               "max": null,
               "min": null,
-              "show": true
+              "show": false
             }
           ],
           "yaxis": {
@@ -1000,7 +1000,7 @@
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "max": false,
+            "max": true,
             "min": false,
             "rightSide": false,
             "show": true,
@@ -1085,7 +1085,7 @@
               "logBase": 1,
               "max": null,
               "min": null,
-              "show": true
+              "show": false
             }
           ],
           "yaxis": {
@@ -1204,7 +1204,7 @@
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "max": false,
+            "max": true,
             "min": false,
             "rightSide": false,
             "show": true,
@@ -1273,7 +1273,7 @@
               "logBase": 1,
               "max": null,
               "min": null,
-              "show": true
+              "show": false
             }
           ],
           "yaxis": {
@@ -1308,7 +1308,7 @@
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "max": false,
+            "max": true,
             "min": false,
             "rightSide": false,
             "show": true,
@@ -1377,7 +1377,7 @@
               "logBase": 1,
               "max": null,
               "min": null,
-              "show": true
+              "show": false
             }
           ],
           "yaxis": {
@@ -1412,7 +1412,7 @@
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "max": false,
+            "max": true,
             "min": false,
             "rightSide": false,
             "show": true,
@@ -1481,7 +1481,7 @@
               "logBase": 1,
               "max": null,
               "min": null,
-              "show": true
+              "show": false
             }
           ],
           "yaxis": {
@@ -6546,7 +6546,7 @@
             "h": 5,
             "w": 12,
             "x": 0,
-            "y": 7
+            "y": 58
           },
           "hiddenSeries": false,
           "id": 20145,
@@ -6649,7 +6649,7 @@
             "h": 5,
             "w": 12,
             "x": 12,
-            "y": 7
+            "y": 58
           },
           "hiddenSeries": false,
           "id": 20146,
@@ -6756,7 +6756,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 12
+            "y": 63
           },
           "hiddenSeries": false,
           "id": 10069,
@@ -6873,7 +6873,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 12
+            "y": 63
           },
           "hiddenSeries": false,
           "id": 10071,
@@ -10977,7 +10977,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 14
+            "y": 66
           },
           "hiddenSeries": false,
           "id": 719,
@@ -11079,7 +11079,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 14
+            "y": 66
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -11156,7 +11156,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 22
+            "y": 74
           },
           "hiddenSeries": false,
           "id": 610,
@@ -11262,7 +11262,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 22
+            "y": 74
           },
           "hiddenSeries": false,
           "id": 721,
@@ -11358,7 +11358,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 30
+            "y": 82
           },
           "hiddenSeries": false,
           "id": 613,
@@ -11469,7 +11469,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 30
+            "y": 82
           },
           "hiddenSeries": false,
           "id": 612,
@@ -11567,7 +11567,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 38
+            "y": 90
           },
           "hiddenSeries": false,
           "id": 614,
@@ -11665,7 +11665,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 38
+            "y": 90
           },
           "hiddenSeries": false,
           "id": 611,
@@ -23075,5 +23075,5 @@
   "timezone": "browser",
   "title": "test-cluster-TiCDC-New-Arch",
   "uid": "YiGL8hBZ0aab",
-  "version": 1
+  "version": 2
 }
