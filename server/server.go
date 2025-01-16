@@ -56,6 +56,9 @@ const (
 )
 
 type server struct {
+	// mu is used to protect the server's Run method
+	mu sync.Mutex
+
 	info *node.Info
 
 	liveness model.Liveness
@@ -162,6 +165,9 @@ func (c *server) initialize(ctx context.Context) error {
 
 // Run runs the server
 func (c *server) Run(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	err := c.initialize(ctx)
 	if err != nil {
 		log.Error("init server failed", zap.Error(err))
