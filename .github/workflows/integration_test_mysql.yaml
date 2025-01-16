@@ -340,6 +340,7 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=tidb_mysql_test
+
       - name: Upload test logs
         if: always()
         uses: ./.github/actions/upload-test-logs
