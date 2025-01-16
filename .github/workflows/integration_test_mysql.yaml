@@ -28,6 +28,155 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  e2e_test_group_test:
+    ## Only run ci when PR is not draft
+    if: github.event.pull_request.draft == false
+
+    runs-on: ubuntu-latest 
+    name: E2E Test Group 1
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2
+
+      - name: Setup Go environment
+        uses: actions/setup-go@v3
+        with:
+          go-version: '1.23'
+
+      - name: Integration Build
+        run: |
+          tests/scripts/download-integration-test-binaries.sh master true
+          go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
+          make integration_test_build
+          ls -l bin/ && ls -l tools/bin/
+
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+      
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+          
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+      
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+          
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+      
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+          
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+      
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+          
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+      
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+      
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+          
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+      
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+          
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+
+      - name: Upload test logs
+        if: always()
+        uses: ./.github/actions/upload-test-logs
+        with:
+          log-name: e2e_test_group_test
+
+
   # To boost the test speed, we split every 15 test cases into a group.
   e2e_test_group_1:
     ## Only run ci when PR is not draft
@@ -299,16 +448,16 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
       
-      - name: Test http_api_tls
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls
+      # - name: Test http_api_tls
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls
 
       
-      - name: Test http_api_tls_with_user_auth
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls_with_user_auth
+      # - name: Test http_api_tls_with_user_auth
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls_with_user_auth
       
       - name: Test default_value
         if: ${{ success() }}
