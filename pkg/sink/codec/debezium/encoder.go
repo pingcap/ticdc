@@ -19,8 +19,8 @@ import (
 	"time"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/pkg/errors"
 )
 
 // BatchEncoder encodes message into Debezium format.

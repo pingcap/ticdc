@@ -19,7 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcherorchestrator"
@@ -33,6 +32,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	appctx "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -41,7 +41,6 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pingcap/tiflow/pkg/tcpserver"
@@ -171,9 +170,9 @@ func (c *server) Run(ctx context.Context) error {
 	// start tcp server
 	g.Go(func() error {
 		log.Info("tcp server start to run")
-		err := c.tcpServer.Run(ctx)
+		err = c.tcpServer.Run(ctx)
 		if err != nil {
-			log.Error("tcp server exited", zap.Error(cerror.Trace(err)))
+			log.Error("tcp server exited", zap.Error(errors.Trace(err)))
 		}
 		return nil
 	})
@@ -197,7 +196,7 @@ func (c *server) Run(ctx context.Context) error {
 
 	err = g.Wait()
 	if err != nil {
-		log.Error("server exited", zap.Error(cerror.Trace(err)))
+		log.Error("server exited", zap.Error(err))
 	}
 	return errors.Trace(err)
 }
@@ -208,7 +207,7 @@ func (c *server) SelfInfo() (*node.Info, error) {
 	if c.info != nil {
 		return c.info, nil
 	}
-	return nil, cerror.ErrCaptureNotInitialized.GenWithStackByArgs()
+	return nil, errors.ErrCaptureNotInitialized.GenWithStackByArgs()
 }
 
 func (c *server) setCoordinator(co tiserver.Coordinator) {
@@ -222,7 +221,7 @@ func (c *server) GetCoordinator() (tiserver.Coordinator, error) {
 	c.coordinatorMu.Lock()
 	defer c.coordinatorMu.Unlock()
 	if c.coordinator == nil {
-		return nil, cerror.ErrNotOwner.GenWithStackByArgs()
+		return nil, errors.ErrNotOwner.GenWithStackByArgs()
 	}
 	return c.coordinator, nil
 }
@@ -302,7 +301,7 @@ func (c *server) GetCoordinatorInfo(ctx context.Context) (*node.Info, error) {
 			return res, nil
 		}
 	}
-	return nil, cerror.ErrOwnerNotFound.FastGenByArgs()
+	return nil, errors.ErrOwnerNotFound.FastGenByArgs()
 }
 
 func isErrCompacted(err error) bool {

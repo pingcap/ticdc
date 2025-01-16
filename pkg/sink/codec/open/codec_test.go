@@ -199,7 +199,7 @@ func TestHandleOnlyEvent(t *testing.T) {
 	key, value, _, err := encodeRowChangedEvent(insertRowEvent, protocolConfig, true, "")
 	require.NoError(t, err)
 
-	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(key))
+	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1,"ohk":true}`, string(key))
 	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1}}}`, string(value))
 }
 

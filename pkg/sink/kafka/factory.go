@@ -20,9 +20,8 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/rcrowley/go-metrics"
 	"go.uber.org/zap"
 )
 
@@ -32,7 +31,6 @@ type factory struct {
 	config       *kafka.ConfigMap
 	changefeedID commonType.ChangeFeedID
 	options      *Options
-	registry     metrics.Registry
 }
 
 // NewFactory returns a factory implemented based on kafka-go
@@ -45,7 +43,6 @@ func NewFactory(
 		config:       config,
 		changefeedID: changefeedID,
 		options:      options,
-		registry:     metrics.NewRegistry(),
 	}, nil
 }
 

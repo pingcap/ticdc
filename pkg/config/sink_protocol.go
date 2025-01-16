@@ -16,7 +16,7 @@ package config
 import (
 	"strings"
 
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
 const (

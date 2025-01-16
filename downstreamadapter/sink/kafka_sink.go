@@ -27,10 +27,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -148,7 +148,7 @@ func (s *KafkaSink) IsNormal() bool {
 }
 
 func (s *KafkaSink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.dmlWorker.GetEventChan() <- event
+	s.dmlWorker.AddDMLEvent(event)
 }
 
 func (s *KafkaSink) PassBlockEvent(event commonEvent.BlockEvent) {
@@ -156,14 +156,14 @@ func (s *KafkaSink) PassBlockEvent(event commonEvent.BlockEvent) {
 }
 
 func (s *KafkaSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
-	switch event := event.(type) {
+	switch v := event.(type) {
 	case *commonEvent.DDLEvent:
-		if event.TiDBOnly {
+		if v.TiDBOnly {
 			// run callback directly and return
-			event.PostFlush()
+			v.PostFlush()
 			return nil
 		}
-		err := s.ddlWorker.WriteBlockEvent(s.ctx, event)
+		err := s.ddlWorker.WriteBlockEvent(s.ctx, v)
 		if err != nil {
 			atomic.StoreUint32(&s.isNormal, 0)
 			return errors.Trace(err)
@@ -183,7 +183,7 @@ func (s *KafkaSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *KafkaSink) AddCheckpointTs(ts uint64) {
-	s.ddlWorker.GetCheckpointTsChan() <- ts
+	s.ddlWorker.AddCheckpoint(ts)
 }
 
 func (s *KafkaSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {

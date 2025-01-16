@@ -69,7 +69,7 @@ func TestChangefeed_GetSetNodeID(t *testing.T) {
 	cf := NewChangefeed(cfID, info, 100, true)
 
 	nodeID := node.ID("node-1")
-	cf.setNodeID(nodeID)
+	cf.SetNodeID(nodeID)
 	require.Equal(t, nodeID, cf.GetNodeID())
 }
 

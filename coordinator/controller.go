@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/operator"
@@ -27,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -35,7 +35,6 @@ import (
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -467,7 +466,7 @@ func (c *Controller) ResumeChangefeed(ctx context.Context, id common.ChangeFeedI
 	status.CheckpointTs = newCheckpointTs
 	_, _, err := cf.UpdateStatus(status)
 	if err != nil {
-		return errors.NewNoStackError(err.Message)
+		return errors.New(err.Message)
 	}
 
 	c.changefeedDB.Resume(id, true, overwriteCheckpointTs)
@@ -509,7 +508,7 @@ func (c *Controller) GetChangefeed(_ context.Context, changefeedDisplayName comm
 
 	cf := c.changefeedDB.GetByChangefeedDisplayName(changefeedDisplayName)
 	if cf == nil {
-		return nil, nil, cerror.ErrChangeFeedNotExists.GenWithStackByArgs(changefeedDisplayName.Name)
+		return nil, nil, errors.ErrChangeFeedNotExists.GenWithStackByArgs(changefeedDisplayName.Name)
 	}
 	return cf.GetInfo(), &config.ChangeFeedStatus{CheckpointTs: cf.GetStatus().CheckpointTs}, nil
 }

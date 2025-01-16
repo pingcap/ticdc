@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	. "github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -27,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/conn"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"

@@ -17,7 +17,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
@@ -26,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/tiflow/cdc/model"
@@ -49,8 +49,6 @@ type KafkaDMLWorker struct {
 
 	eventChan chan *commonEvent.DMLEvent
 	rowChan   chan *commonEvent.MQRowEvent
-	// ticker used to force flush the batched messages when the interval is reached.
-	ticker *time.Ticker
 
 	columnSelector *columnselector.ColumnSelectors
 	// eventRouter used to route events to the right topic and partition.
@@ -83,7 +81,6 @@ func NewKafkaDMLWorker(
 		protocol:       protocol,
 		eventChan:      make(chan *commonEvent.DMLEvent, 32),
 		rowChan:        make(chan *commonEvent.MQRowEvent, 32),
-		ticker:         time.NewTicker(batchInterval),
 		encoderGroup:   encoderGroup,
 		columnSelector: columnSelector,
 		eventRouter:    eventRouter,
@@ -131,7 +128,7 @@ func (w *KafkaDMLWorker) calculateKeyPartitions(ctx context.Context) error {
 			if err != nil {
 				return errors.Trace(err)
 			}
-			partitonGenerator := w.eventRouter.GetPartitionGeneratorForRowChange(event.TableInfo)
+			partitionGenerator := w.eventRouter.GetPartitionGenerator(event.TableInfo)
 			selector := w.columnSelector.GetSelector(event.TableInfo.TableName.Schema, event.TableInfo.TableName.Table)
 			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
 				var calledCount atomic.Uint64
@@ -154,12 +151,12 @@ func (w *KafkaDMLWorker) calculateKeyPartitions(ctx context.Context) error {
 					break
 				}
 
-				index, key, err := partitonGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.CommitTs)
+				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.CommitTs)
 				if err != nil {
 					return errors.Trace(err)
 				}
 
-				w.rowChan <- &commonEvent.MQRowEvent{
+				mqEvent := &commonEvent.MQRowEvent{
 					Key: model.TopicPartitionKey{
 						Topic:          topic,
 						Partition:      index,
@@ -174,13 +171,18 @@ func (w *KafkaDMLWorker) calculateKeyPartitions(ctx context.Context) error {
 						ColumnSelector: selector,
 					},
 				}
+				w.addMQRowEvent(mqEvent)
 			}
 		}
 	}
 }
 
-func (w *KafkaDMLWorker) GetEventChan() chan<- *commonEvent.DMLEvent {
-	return w.eventChan
+func (w *KafkaDMLWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
+	w.eventChan <- event
+}
+
+func (w *KafkaDMLWorker) addMQRowEvent(event *commonEvent.MQRowEvent) {
+	w.rowChan <- event
 }
 
 // nonBatchEncodeRun add events to the encoder group immediately.
@@ -224,10 +226,12 @@ func (w *KafkaDMLWorker) batchEncodeRun(ctx context.Context) error {
 		metrics.WorkerBatchSize.DeleteLabelValues(namespace, changefeed)
 	}()
 
+	ticker := time.NewTicker(batchInterval)
+	defer ticker.Stop()
 	msgsBuf := make([]*commonEvent.MQRowEvent, batchSize)
 	for {
 		start := time.Now()
-		msgCount, err := w.batch(ctx, msgsBuf, batchInterval)
+		msgCount, err := w.batch(ctx, msgsBuf, ticker)
 		if err != nil {
 			log.Error("kafka dml worker batch failed",
 				zap.String("namespace", w.changeFeedID.Namespace()),
@@ -256,7 +260,7 @@ func (w *KafkaDMLWorker) batchEncodeRun(ctx context.Context) error {
 // batch collects a batch of messages from w.msgChan into buffer.
 // It returns the number of messages collected.
 // Note: It will block until at least one message is received.
-func (w *KafkaDMLWorker) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, flushInterval time.Duration) (int, error) {
+func (w *KafkaDMLWorker) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) (int, error) {
 	msgCount := 0
 	maxBatchSize := len(buffer)
 	// We need to receive at least one message or be interrupted,
@@ -276,7 +280,7 @@ func (w *KafkaDMLWorker) batch(ctx context.Context, buffer []*commonEvent.MQRowE
 
 	// Reset the ticker to start a new batching.
 	// We need to stop batching when the interval is reached.
-	w.ticker.Reset(flushInterval)
+	ticker.Reset(batchInterval)
 	for {
 		select {
 		case <-ctx.Done():
@@ -293,7 +297,7 @@ func (w *KafkaDMLWorker) batch(ctx context.Context, buffer []*commonEvent.MQRowE
 			if msgCount >= maxBatchSize {
 				return msgCount, nil
 			}
-		case <-w.ticker.C:
+		case <-ticker.C:
 			return msgCount, nil
 		}
 	}
@@ -352,6 +356,5 @@ func (w *KafkaDMLWorker) sendMessages(ctx context.Context) error {
 }
 
 func (w *KafkaDMLWorker) Close() {
-	w.ticker.Stop()
 	w.producer.Close()
 }
