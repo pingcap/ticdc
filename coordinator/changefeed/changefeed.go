@@ -156,13 +156,11 @@ func (c *Changefeed) GetStatus() *heartbeatpb.MaintainerStatus {
 // GetClonedStatus returns a deep copy of the changefeed status
 func (c *Changefeed) GetClonedStatus() *heartbeatpb.MaintainerStatus {
 	status := c.status.Load()
+	if status == nil {
+		return nil
+	}
+
 	clone := &heartbeatpb.MaintainerStatus{
-		ChangefeedID: &heartbeatpb.ChangefeedID{
-			High:      status.ChangefeedID.High,
-			Low:       status.ChangefeedID.Low,
-			Name:      status.ChangefeedID.Name,
-			Namespace: status.ChangefeedID.Namespace,
-		},
 		CheckpointTs: status.CheckpointTs,
 		FeedState:    status.FeedState,
 		State:        status.State,
@@ -177,6 +175,17 @@ func (c *Changefeed) GetClonedStatus() *heartbeatpb.MaintainerStatus {
 		}
 		clone.Err = append(clone.Err, clonedErr)
 	}
+
+	cfID := status.ChangefeedID
+	if cfID != nil {
+		clone.ChangefeedID = &heartbeatpb.ChangefeedID{
+			High:      cfID.High,
+			Low:       cfID.Low,
+			Name:      cfID.Name,
+			Namespace: cfID.Namespace,
+		}
+	}
+
 	return clone
 }
 
