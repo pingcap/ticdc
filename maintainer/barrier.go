@@ -323,6 +323,7 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 
 	// checkpoint ts is advanced, clear the map, so do not need to resend message anymore
 	event.markDispatcherEventDone(dispatcherID)
+	b.checkEventFinish(event)
 	return event
 }
 

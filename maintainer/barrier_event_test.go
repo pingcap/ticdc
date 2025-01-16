@@ -113,18 +113,18 @@ func TestResendAction(t *testing.T) {
 	}, false)
 	// time is not reached
 	event.lastResendTime = time.Now()
-	event.selected = true
+	event.selected.Store(true)
 	msgs := event.resend()
 	require.Len(t, msgs, 0)
 
 	// time is not reached
 	event.lastResendTime = time.Time{}
-	event.selected = false
+	event.selected.Store(false)
 	msgs = event.resend()
 	require.Len(t, msgs, 0)
 
 	// resend write action
-	event.selected = true
+	event.selected.Store(true)
 	event.writerDispatcherAdvanced = false
 	event.writerDispatcher = dispatcherIDs[0]
 	msgs = event.resend()
@@ -138,7 +138,7 @@ func TestResendAction(t *testing.T) {
 			SchemaID:      1,
 		},
 	}, false)
-	event.selected = true
+	event.selected.Store(true)
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend()
 	require.Len(t, msgs, 1)
@@ -156,7 +156,7 @@ func TestResendAction(t *testing.T) {
 			SchemaID:      1,
 		},
 	}, false)
-	event.selected = true
+	event.selected.Store(true)
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend()
 	require.Len(t, msgs, 1)
@@ -175,7 +175,7 @@ func TestResendAction(t *testing.T) {
 			SchemaID:      1,
 		},
 	}, false)
-	event.selected = true
+	event.selected.Store(true)
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend()
 	require.Len(t, msgs, 1)
@@ -223,7 +223,7 @@ func TestUpdateSchemaID(t *testing.T) {
 	// check the schema id and map is updated
 	require.Len(t, controller.GetTasksBySchemaID(1), 0)
 	require.Len(t, controller.GetTasksBySchemaID(2), 1)
-	require.Equal(t, controller.GetTasksByTableIDs(1)[0].GetSchemaID(), int64(2))
+	require.Equal(t, controller.GetTasksByTableID(1)[0].GetSchemaID(), int64(2))
 }
 
 func setNodeManagerAndMessageCenter() *watcher.NodeManager {
