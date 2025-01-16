@@ -131,7 +131,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1737020331669,
+  "iteration": 1737020331672,
   "links": [],
   "panels": [
     {
@@ -1590,7 +1590,7 @@
               "label": "",
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             },
             {
@@ -1690,7 +1690,7 @@
           },
           "yaxes": [
             {
-              "format": "none",
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -1702,8 +1702,8 @@
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
-              "show": true
+              "min": "0",
+              "show": false
             }
           ],
           "yaxis": {
@@ -1793,11 +1793,11 @@
           },
           "yaxes": [
             {
-              "format": "none",
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             },
             {
@@ -1806,7 +1806,7 @@
               "logBase": 1,
               "max": null,
               "min": null,
-              "show": true
+              "show": false
             }
           ],
           "yaxis": {
@@ -1898,11 +1898,11 @@
           },
           "yaxes": [
             {
-              "format": "none",
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             },
             {
@@ -2006,7 +2006,7 @@
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             },
             {
@@ -2105,11 +2105,11 @@
           },
           "yaxes": [
             {
-              "format": "none",
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             },
             {
@@ -2118,7 +2118,7 @@
               "logBase": 1,
               "max": null,
               "min": null,
-              "show": true
+              "show": false
             }
           ],
           "yaxis": {
@@ -2213,7 +2213,7 @@
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             },
             {
@@ -2313,11 +2313,11 @@
           },
           "yaxes": [
             {
-              "format": "none",
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": null,
+              "min": "0",
               "show": true
             },
             {
@@ -2326,7 +2326,7 @@
               "logBase": 1,
               "max": null,
               "min": null,
-              "show": true
+              "show": false
             }
           ],
           "yaxis": {
