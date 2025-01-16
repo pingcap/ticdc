@@ -131,7 +131,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1735813842385,
+  "iteration": 1737017291195,
   "links": [],
   "panels": [
     {
@@ -170,7 +170,7 @@
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "max": false,
+            "max": true,
             "min": false,
             "rightSide": false,
             "show": true,
@@ -200,35 +200,18 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "rate(tidb_tikvclient_txn_write_size_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",scope=~\"general\"}[30s])",
-              "hide": true,
-              "interval": "",
-              "legendFormat": "{{instance}}-rate",
-              "queryType": "randomWalk",
-              "refId": "A"
-            },
-            {
-              "exemplar": true,
-              "expr": "avg_over_time(sum(rate(tidb_tikvclient_txn_write_size_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", scope=~\"general\"}[30s]))[1m:])",
-              "hide": true,
-              "interval": "",
-              "legendFormat": "TOTAL-AVG",
-              "refId": "B"
-            },
-            {
-              "exemplar": true,
               "expr": "sum(rate(tidb_tikvclient_txn_write_size_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",scope=~\"general\"}[30s]))",
               "hide": false,
               "interval": "",
               "legendFormat": "sum",
-              "refId": "C"
+              "refId": "A"
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Upstream Write Size Bytes Rate ",
+          "title": "Upstream Write Bytes / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -271,7 +254,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The number of bytes input ticdc",
+          "description": "The number of bytes written into the event store pebble storage",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -290,7 +273,7 @@
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "max": false,
+            "max": true,
             "min": false,
             "rightSide": false,
             "show": true,
@@ -326,7 +309,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "TiCDC Input Bytes/s",
+          "title": "TiCDC Input Bytes / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -390,7 +373,7 @@
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "max": false,
+            "max": true,
             "min": false,
             "rightSide": false,
             "show": true,
@@ -422,7 +405,7 @@
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-DML-Events",
+              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}",
               "refId": "A"
             }
           ],
@@ -430,7 +413,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Sink Event Count /s",
+          "title": "Sink Event Count / s",
           "tooltip": {
             "shared": true,
             "sort": 2,
@@ -450,7 +433,7 @@
               "label": null,
               "logBase": 1,
               "max": null,
-              "min": "0",
+              "min": null,
               "show": true
             },
             {
@@ -491,7 +474,7 @@
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "max": false,
+            "max": true,
             "min": false,
             "show": true,
             "total": false,
@@ -525,7 +508,7 @@
             {
               "exemplar": true,
               "expr": "avg_over_time(sum(rate(ticdc_sink_write_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (instance, type)[1m:])",
-              "hide": false,
+              "hide": true,
               "interval": "",
               "legendFormat": "{{instance}}-AVG",
               "refId": "B"
@@ -535,7 +518,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Sink Write Bytes/s",
+          "title": "Sink Write Bytes / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -551,20 +534,20 @@
           },
           "yaxes": [
             {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
-            {
-              "format": "short",
+              "format": "Bps",
               "label": null,
               "logBase": 1,
               "max": null,
               "min": null,
               "show": true
+            },
+            {
+              "format": "Bps",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": false
             }
           ],
           "yaxis": {
@@ -603,7 +586,7 @@
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "max": false,
+            "max": true,
             "min": false,
             "rightSide": false,
             "show": true,
@@ -2612,7 +2595,7 @@
             "y": 4
           },
           "hiddenSeries": false,
-          "id": 27,
+          "id": 275,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -8090,7 +8073,7 @@
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 274,
+          "id": 22225,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -10617,7 +10600,7 @@
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 20200,
+          "id": 22223,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -10701,7 +10684,7 @@
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 20201,
+          "id": 22224,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -23092,5 +23075,5 @@
   "timezone": "browser",
   "title": "test-cluster-TiCDC-New-Arch",
   "uid": "YiGL8hBZ0aab",
-  "version": 2
+  "version": 1
 }
