@@ -15,12 +15,14 @@ package kafka
 
 import (
 	"crypto/x509"
+	"strconv"
 	"strings"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pkg/errors"
+	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -33,7 +35,7 @@ var (
 func NewConfig(options *Options) *kafka.ConfigMap {
 	config := &kafka.ConfigMap{
 		"bootstrap.servers": strings.Join(options.BrokerEndpoints, ","),
-		"log_level":         6 - int(options.LogLevel),
+		"log_level":         getLogLevel(),
 	}
 	if options.EnableTLS {
 		_ = config.SetKey("security.protocol", ProtocolSSL)
@@ -54,6 +56,17 @@ func NewConfig(options *Options) *kafka.ConfigMap {
 	if compression != "none" {
 		log.Info("Kafka producer uses " + compression + " compression algorithm")
 	}
+
+	// retrying may cause reordering unless enable.idempotence is set to true.
+	config.SetKey("retries", 0)
+	// The following configuration properties are adjusted automatically when idempotence is enabled:
+	// max.in.flight.requests.per.connection=5 (must be less than or equal to 5), retries=INT32_MAX (must be greater than 0), acks=all
+	// Producer instantation will fail if user-supplied configuration is incompatible.
+	// config.SetKey("enable.idempotence", true)
+	config.SetKey("max.in.flight", 1)
+	config.SetKey("request.required.acks", int(options.RequiredAcks))
+	config.SetKey("message.max.bytes", options.MaxMessageBytes)
+	config.SetKey("socket.timeout.ms", int(options.DialTimeout.Milliseconds()))
 	return config
 }
 
@@ -110,5 +123,24 @@ func addVerifyPeerCertificate(config *kafka.ConfigMap, verifyCN []string) {
 				"in the configuration cluster-verify-cn with value: %s", cns, verifyCN)
 		}
 		_ = config.SetKey("ssl.certificate.verify_cb", verifyPeerCertificate)
+	}
+}
+
+func getLogLevel() int {
+	switch log.GetLevel() {
+	case zapcore.DebugLevel:
+		return 7
+	case zapcore.InfoLevel:
+		return 6
+	case zapcore.WarnLevel:
+		return 4
+	case zapcore.ErrorLevel:
+		return 3
+	case zapcore.DPanicLevel:
+		return 2
+	case zapcore.FatalLevel:
+		return 0
+	default:
+		return 6
 	}
 }

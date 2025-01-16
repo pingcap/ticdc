@@ -33,7 +33,6 @@ import (
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -171,8 +170,6 @@ type Options struct {
 	DialTimeout  time.Duration
 	WriteTimeout time.Duration
 	ReadTimeout  time.Duration
-
-	LogLevel zapcore.Level
 }
 
 // NewOptions returns a default Kafka configuration
@@ -191,7 +188,6 @@ func NewOptions() *Options {
 		DialTimeout:        10 * time.Second,
 		WriteTimeout:       10 * time.Second,
 		ReadTimeout:        10 * time.Second,
-		LogLevel:           log.GetLevel(),
 	}
 }
 
@@ -288,21 +284,21 @@ func (o *Options) Apply(changefeedID common.ChangeFeedID,
 		o.DialTimeout = a
 	}
 
-	if urlParameter.WriteTimeout != nil && *urlParameter.WriteTimeout != "" {
-		a, err := time.ParseDuration(*urlParameter.WriteTimeout)
-		if err != nil {
-			return err
-		}
-		o.WriteTimeout = a
-	}
+	// if urlParameter.WriteTimeout != nil && *urlParameter.WriteTimeout != "" {
+	// 	a, err := time.ParseDuration(*urlParameter.WriteTimeout)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	o.WriteTimeout = a
+	// }
 
-	if urlParameter.ReadTimeout != nil && *urlParameter.ReadTimeout != "" {
-		a, err := time.ParseDuration(*urlParameter.ReadTimeout)
-		if err != nil {
-			return err
-		}
-		o.ReadTimeout = a
-	}
+	// if urlParameter.ReadTimeout != nil && *urlParameter.ReadTimeout != "" {
+	// 	a, err := time.ParseDuration(*urlParameter.ReadTimeout)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	o.ReadTimeout = a
+	// }
 
 	if urlParameter.RequiredAcks != nil {
 		r, err := requireAcksFromString(*urlParameter.RequiredAcks)
