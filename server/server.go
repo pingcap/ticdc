@@ -122,7 +122,7 @@ func (c *server) initialize(ctx context.Context) error {
 
 	appcontext.SetService(appcontext.EventCollector, eventcollector.New(ctx, c.info.ID))
 	appcontext.SetService(appcontext.HeartbeatCollector, dispatchermanager.NewHeartBeatCollector(c.info.ID))
-	appcontext.SetService(appcontext.DispatcherOrchestrator, dispatcherorchestrator.New())
+	appcontext.SetService(appcontext.DispatcherOrchestrator, dispatcherorchestrator.New(c.PDClock))
 
 	nodeManager := watcher.NewNodeManager(c.session, c.EtcdClient)
 	nodeManager.RegisterNodeChangeHandler(
