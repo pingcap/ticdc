@@ -32,8 +32,6 @@ const (
 	DefaultMockPartitionNum = 3
 	// defaultMockControllerID specifies the default mock controller ID.
 	defaultMockControllerID = 1
-	// topic replication factor must be 3 for Confluent Cloud Kafka.
-	// defaultReplicationFactor = 3
 )
 
 const (
@@ -63,11 +61,13 @@ type MockFactory struct {
 	changefeedID commonType.ChangeFeedID
 	mockCluster  *kafka.MockCluster
 }
+
 type MockClusterAdmin struct {
 	ClusterAdminClient
 	mockCluster *kafka.MockCluster
 	topics      map[string]*MockTopicDetail
 }
+
 type MockTopicDetail struct {
 	TopicDetail
 	fetchesRemainingUntilVisible int
@@ -119,7 +119,8 @@ func (c *MockClusterAdmin) GetAllBrokers(ctx context.Context) ([]Broker, error) 
 }
 
 func (c *MockClusterAdmin) GetTopicsMeta(ctx context.Context,
-	topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
+	topics []string, ignoreTopicError bool,
+) (map[string]TopicDetail, error) {
 	topicsMeta := make(map[string]TopicDetail)
 	for key, val := range c.topics {
 		topicsMeta[key] = val.TopicDetail
