@@ -99,10 +99,11 @@ func newMysqlSinkWithDBAndConfig(
 		statistics:   stat,
 		isNormal:     1,
 	}
+	formatVectorType := mysql.ShouldFormatVectorType(db, cfg)
 	for i := 0; i < workerCount; i++ {
-		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, changefeedID, stat)
+		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, changefeedID, stat, formatVectorType)
 	}
-	mysqlSink.ddlWorker = worker.NewMysqlDDLWorker(ctx, db, cfg, mysqlSink.changefeedID, stat)
+	mysqlSink.ddlWorker = worker.NewMysqlDDLWorker(ctx, db, cfg, changefeedID, stat, formatVectorType)
 	return mysqlSink
 }
 

@@ -354,8 +354,8 @@ func SetWriteSource(cfg *MysqlConfig, txn *sql.Tx) error {
 	return nil
 }
 
-// checkVersionForVector checks vector type support
-func checkVersionForVector(db *sql.DB, cfg *MysqlConfig) bool {
+// ShouldFormatVectorType return true if vector type should be converted to longtext.
+func ShouldFormatVectorType(db *sql.DB, cfg *MysqlConfig) bool {
 	if !cfg.HasVectorType {
 		log.Warn("please set `has-vector-type` to be true if a column is vector type when the downstream is not TiDB or TiDB version less than specify version",
 			zap.Any("hasVectorType", cfg.HasVectorType), zap.Any("supportVectorVersion", defaultSupportVectorVersion))
@@ -367,9 +367,10 @@ func checkVersionForVector(db *sql.DB, cfg *MysqlConfig) bool {
 		return false
 	}
 	serverInfo := version.ParseServerInfo(versionInfo)
-	version := semver.New(defaultSupportVectorVersion)
-	if !cfg.IsTiDB || serverInfo.ServerVersion.LessThan(*version) {
-		log.Error("downstream unsupport vector type. it will be converted to longtext", zap.String("version", serverInfo.ServerVersion.String()), zap.String("supportVectorVersion", defaultSupportVectorVersion), zap.Bool("isTiDB", cfg.IsTiDB))
+	ver := semver.New(defaultSupportVectorVersion)
+	if !cfg.IsTiDB || serverInfo.ServerVersion.LessThan(*ver) {
+		log.Error("downstream unsupport vector type. it will be converted to longtext",
+			zap.String("version", serverInfo.ServerVersion.String()), zap.String("supportVectorVersion", defaultSupportVectorVersion), zap.Bool("isTiDB", cfg.IsTiDB))
 		return true
 	}
 	return false
