@@ -484,6 +484,10 @@ type ChangeFeedStatus struct {
 	CheckpointTs uint64 `json:"checkpoint-ts"`
 	// Progress indicates changefeed progress status
 	Progress Progress `json:"progress"`
+
+	// MaintainerAddr is the address of the changefeed's maintainer
+	// It is used to identify the changefeed's maintainer, and it is not stored in etcd.
+	maintainerAddr string `json:"-"`
 }
 
 // Marshal returns json encoded string of ChangeFeedStatus, only contains necessary fields stored in storage
@@ -492,9 +496,19 @@ func (status *ChangeFeedStatus) Marshal() (string, error) {
 	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
 }
 
-// Unmarshal unmarshals into *ChangeFeedStatus from json marshal byte slice
+// Unmarshal into *ChangeFeedStatus from json marshal byte slice
 func (status *ChangeFeedStatus) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, status)
 	return errors.Annotatef(
 		cerror.WrapError(cerror.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
+}
+
+// GetMaintainerAddr returns the address of the changefeed's maintainer
+func (status *ChangeFeedStatus) GetMaintainerAddr() string {
+	return status.maintainerAddr
+}
+
+// SetMaintainerAddr sets the address of the changefeed's maintainer
+func (status *ChangeFeedStatus) SetMaintainerAddr(addr string) {
+	status.maintainerAddr = addr
 }

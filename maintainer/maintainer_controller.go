@@ -449,7 +449,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 	count := 0
 	maxTry := 30
 	for !op.IsFinished() && count < maxTry {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(1 * time.Second)
 		count += 1
 		log.Info("wait for move table operator finished", zap.Int("count", count))
 	}

@@ -502,7 +502,14 @@ func (c *Controller) ListChangefeeds(_ context.Context) ([]*config.ChangeFeedInf
 	return infos, statuses, nil
 }
 
-func (c *Controller) GetChangefeed(_ context.Context, changefeedDisplayName common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {
+func (c *Controller) GetChangefeed(
+	_ context.Context,
+	changefeedDisplayName common.ChangeFeedDisplayName,
+) (
+	*config.ChangeFeedInfo,
+	*config.ChangeFeedStatus,
+	error,
+) {
 	c.apiLock.RLock()
 	defer c.apiLock.RUnlock()
 
@@ -510,7 +517,16 @@ func (c *Controller) GetChangefeed(_ context.Context, changefeedDisplayName comm
 	if cf == nil {
 		return nil, nil, errors.ErrChangeFeedNotExists.GenWithStackByArgs(changefeedDisplayName.Name)
 	}
-	return cf.GetInfo(), &config.ChangeFeedStatus{CheckpointTs: cf.GetStatus().CheckpointTs}, nil
+
+	maintainerID := cf.GetNodeID()
+	nodeInfo := c.nodeManager.GetNodeInfo(maintainerID)
+	maintainerAddr := ""
+	if nodeInfo != nil {
+		maintainerAddr = nodeInfo.AdvertiseAddr
+	}
+	status := &config.ChangeFeedStatus{CheckpointTs: cf.GetStatus().CheckpointTs}
+	status.SetMaintainerAddr(maintainerAddr)
+	return cf.GetInfo(), status, nil
 }
 
 // GetTask queries a task by channgefeed ID, return nil if not found
