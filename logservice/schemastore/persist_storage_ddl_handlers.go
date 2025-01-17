@@ -2070,7 +2070,13 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)
 	resultQuerys := make([]string, 0, logicalTableCount)
 	for i, info := range rawEvent.MultipleTableInfos {
+		log.Info("build create tables",
+			zap.String("schemaName", rawEvent.CurrentSchemaName),
+			zap.String("tableName", info.Name.O))
 		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, info.Name.O) {
+			log.Info("build create tables filtered",
+				zap.String("schemaName", rawEvent.CurrentSchemaName),
+				zap.String("tableName", info.Name.O))
 			continue
 		}
 		if isPartitionTable(info) {
