@@ -54,6 +54,8 @@ const (
 
 	loadRegionRetryInterval time.Duration = 100 * time.Millisecond
 	resolveLockMinInterval  time.Duration = 10 * time.Second
+	resolveLockTickInterval time.Duration = 2 * time.Second
+	resolveLockFence        time.Duration = 4 * time.Second
 )
 
 var (
@@ -128,8 +130,10 @@ type subscribedSpan struct {
 	staleLocksTargetTs atomic.Uint64
 
 	lastAdvanceTime atomic.Int64
-	// This is used to calculate the resolvedTs lag for metrics.
-	resolvedTs atomic.Uint64
+
+	initialized       atomic.Bool
+	resolvedTsUpdated atomic.Int64
+	resolvedTs        atomic.Uint64
 }
 
 func (span *subscribedSpan) clearKVEventsCache() {
@@ -332,17 +336,6 @@ func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
 	s.ds.Wake(subID)
 }
 
-// ResolveLock is a function. If outsider subscribers find a span resolved timestamp is
-// advanced slowly or stopped, they can try to resolve locks in the given span.
-func (s *SubscriptionClient) ResolveLock(subID SubscriptionID, targetTs uint64) {
-	s.totalSpans.Lock()
-	rt := s.totalSpans.spanMap[subID]
-	s.totalSpans.Unlock()
-	if rt != nil {
-		rt.resolveStaleLocks(targetTs)
-	}
-}
-
 // RegionCount returns subscribed region count for the span.
 func (s *SubscriptionClient) RegionCount(subID SubscriptionID) uint64 {
 	s.totalSpans.RLock()
@@ -367,6 +360,7 @@ func (s *SubscriptionClient) Run(ctx context.Context) error {
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.handleRegions(ctx, g) })
 	g.Go(func() error { return s.handleErrors(ctx) })
+	g.Go(func() error { return s.runResolveLockChecker(ctx) })
 	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
 	g.Go(func() error { return s.logSlowRegions(ctx) })
 	g.Go(func() error { return s.errCache.dispatch(ctx) })
@@ -728,6 +722,60 @@ func (s *SubscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 	}
 }
 
+type subscriptionAndTargetTs struct {
+	subSpan  *subscribedSpan
+	targetTs uint64
+}
+
+func (s *SubscriptionClient) runResolveLockChecker(ctx context.Context) error {
+	resolveLockTicker := time.NewTicker(resolveLockTickInterval)
+	defer resolveLockTicker.Stop()
+	maxCacheSize := 1024
+	subSpanAndTsCache := make([]subscriptionAndTargetTs, 0, maxCacheSize)
+	// getResolvedTargetTs returns the targetTs to resolve stale locks. 0 means no need to resolve.
+	getResolvedTargetTs := func(subSpan *subscribedSpan, currentTime time.Time) uint64 {
+		resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
+		if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {
+			return 0
+		}
+		resolvedTs := subSpan.resolvedTs.Load()
+		resolvedTime := oracle.GetTimeFromTS(resolvedTs)
+		if currentTime.Sub(resolvedTime) < resolveLockFence {
+			return 0
+		}
+		return oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence))
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-resolveLockTicker.C:
+		}
+		currentTime := s.pdClock.CurrentTime()
+		s.totalSpans.Lock()
+		for _, subSpan := range s.totalSpans.spanMap {
+			if subSpan != nil {
+				targetTs := getResolvedTargetTs(subSpan, currentTime)
+				if targetTs > 0 {
+					subSpanAndTsCache = append(subSpanAndTsCache, subscriptionAndTargetTs{
+						subSpan:  subSpan,
+						targetTs: targetTs,
+					})
+				}
+			}
+		}
+		s.totalSpans.Unlock()
+		for _, subSpanAndTs := range subSpanAndTsCache {
+			subSpanAndTs.subSpan.resolveStaleLocks(subSpanAndTs.targetTs)
+		}
+		subSpanAndTsCache = subSpanAndTsCache[:0]
+		if cap(subSpanAndTsCache) > maxCacheSize {
+			subSpanAndTsCache = make([]subscriptionAndTargetTs, 0, maxCacheSize)
+		}
+	}
+}
+
 func (s *SubscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 	resolveLastRun := make(map[uint64]time.Time)
 
@@ -838,6 +886,8 @@ func (s *SubscriptionClient) newSubscribedSpan(
 		advanceResolvedTs: advanceResolvedTs,
 		advanceInterval:   advanceInterval,
 	}
+	rt.initialized.Store(false)
+	rt.resolvedTsUpdated.Store(time.Now().Unix())
 	rt.resolvedTs.Store(startTs)
 
 	rt.tryResolveLock = func(regionID uint64, state *regionlock.LockedRangeState) {
