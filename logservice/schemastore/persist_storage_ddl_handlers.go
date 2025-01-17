@@ -2103,6 +2103,8 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		AddName: addName,
 	}
 	ddlEvent.Query = strings.Join(resultQuerys, "")
+	log.Info("build ddl event result querys",
+		zap.String("query", ddlEvent.Query))
 	if len(ddlEvent.NeedAddedTables) == 0 {
 		log.Fatal("should not happen")
 	}
