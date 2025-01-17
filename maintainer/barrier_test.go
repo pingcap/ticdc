@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -44,7 +43,7 @@ func TestOneBlockEvent(t *testing.T) {
 		nil, nil, nil, ddlSpan, 1000, 0)
 	startTs := uint64(10)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, startTs)
-	stm := controller.GetTasksByTableIDs(1)[0]
+	stm := controller.GetTasksByTableID(1)[0]
 	controller.replicationDB.BindSpanToNode("", "node1", stm)
 	controller.replicationDB.MarkSpanReplicating(stm)
 
@@ -82,10 +81,10 @@ func TestOneBlockEvent(t *testing.T) {
 		isSyncPoint: true,
 	}
 	resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
-	event := barrier.blockedTs[key]
+	event := barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == controller.ddlDispatcherID)
-	require.True(t, event.selected)
+	require.True(t, event.selected.Load())
 	require.False(t, event.writerDispatcherAdvanced)
 	require.Len(t, resp.DispatcherStatuses, 2)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
@@ -125,7 +124,7 @@ func TestOneBlockEvent(t *testing.T) {
 	require.NotNil(t, msg)
 	resp = msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
-	require.Len(t, barrier.blockedTs, 0)
+	require.Len(t, barrier.blockedEvents.m, 0)
 
 	// send event done again
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -151,7 +150,7 @@ func TestOneBlockEvent(t *testing.T) {
 			},
 		},
 	})
-	require.Len(t, barrier.blockedTs, 0)
+	require.Len(t, barrier.blockedEvents.m, 0)
 	// no event if found, no message will be sent
 	require.NotNil(t, msg)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
@@ -173,7 +172,7 @@ func TestNormalBlock(t *testing.T) {
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
 		controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 10)
-		stm := controller.GetTasksByTableIDs(int64(id))[0]
+		stm := controller.GetTasksByTableID(int64(id))[0]
 		blockedDispatcherIDS = append(blockedDispatcherIDS, stm.ID.ToPB())
 		controller.replicationDB.BindSpanToNode("", "node1", stm)
 		controller.replicationDB.MarkSpanReplicating(stm)
@@ -183,7 +182,6 @@ func TestNormalBlock(t *testing.T) {
 	selectDispatcherID := common.NewDispatcherIDFromPB(blockedDispatcherIDS[2])
 	selectedRep := controller.GetTask(selectDispatcherID)
 	controller.replicationDB.BindSpanToNode("node1", "node2", selectedRep)
-	dropID := selectedRep.Span.TableID
 
 	newSpan := &heartbeatpb.Table{TableID: 10, SchemaID: 1}
 	barrier := NewBarrier(controller, false)
@@ -201,10 +199,6 @@ func TestNormalBlock(t *testing.T) {
 						InfluenceType: heartbeatpb.InfluenceType_Normal,
 						TableIDs:      []int64{1, 2, 3},
 					},
-					NeedDroppedTables: &heartbeatpb.InfluencedTables{
-						InfluenceType: heartbeatpb.InfluenceType_Normal,
-						TableIDs:      []int64{dropID},
-					},
 					NeedAddedTables: []*heartbeatpb.Table{newSpan},
 				},
 			},
@@ -216,10 +210,6 @@ func TestNormalBlock(t *testing.T) {
 					BlockTables: &heartbeatpb.InfluencedTables{
 						InfluenceType: heartbeatpb.InfluenceType_Normal,
 						TableIDs:      []int64{1, 2, 3},
-					},
-					NeedDroppedTables: &heartbeatpb.InfluencedTables{
-						InfluenceType: heartbeatpb.InfluenceType_Normal,
-						TableIDs:      []int64{dropID},
 					},
 					NeedAddedTables: []*heartbeatpb.Table{newSpan},
 				},
@@ -245,10 +235,6 @@ func TestNormalBlock(t *testing.T) {
 						InfluenceType: heartbeatpb.InfluenceType_Normal,
 						TableIDs:      []int64{1, 2, 3},
 					},
-					NeedDroppedTables: &heartbeatpb.InfluencedTables{
-						InfluenceType: heartbeatpb.InfluenceType_Normal,
-						TableIDs:      []int64{dropID},
-					},
 					NeedAddedTables: []*heartbeatpb.Table{newSpan},
 				},
 			},
@@ -259,7 +245,7 @@ func TestNormalBlock(t *testing.T) {
 		blockTs:     10,
 		isSyncPoint: false,
 	}
-	event := barrier.blockedTs[key]
+	event := barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == selectDispatcherID)
 	// all dispatcher reported, the reported status is reset
@@ -278,10 +264,6 @@ func TestNormalBlock(t *testing.T) {
 						InfluenceType: heartbeatpb.InfluenceType_Normal,
 						TableIDs:      []int64{1, 2, 3},
 					},
-					NeedDroppedTables: &heartbeatpb.InfluencedTables{
-						InfluenceType: heartbeatpb.InfluenceType_Normal,
-						TableIDs:      []int64{dropID},
-					},
 					NeedAddedTables: []*heartbeatpb.Table{newSpan},
 				},
 			},
@@ -293,10 +275,6 @@ func TestNormalBlock(t *testing.T) {
 					BlockTables: &heartbeatpb.InfluencedTables{
 						InfluenceType: heartbeatpb.InfluenceType_Normal,
 						TableIDs:      []int64{1, 2, 3},
-					},
-					NeedDroppedTables: &heartbeatpb.InfluencedTables{
-						InfluenceType: heartbeatpb.InfluenceType_Normal,
-						TableIDs:      []int64{dropID},
 					},
 					NeedAddedTables: []*heartbeatpb.Table{newSpan},
 				},
@@ -320,7 +298,7 @@ func TestNormalBlock(t *testing.T) {
 			},
 		},
 	})
-	require.Len(t, barrier.blockedTs, 1)
+	require.Len(t, barrier.blockedEvents.m, 1)
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -342,7 +320,7 @@ func TestNormalBlock(t *testing.T) {
 			},
 		},
 	})
-	require.Len(t, barrier.blockedTs, 0)
+	require.Len(t, barrier.blockedEvents.m, 0)
 }
 
 func TestNormalBlockWithTableTrigger(t *testing.T) {
@@ -361,7 +339,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 3; id++ {
 		controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 10)
-		stm := controller.GetTasksByTableIDs(int64(id))[0]
+		stm := controller.GetTasksByTableID(int64(id))[0]
 		blockedDispatcherIDS = append(blockedDispatcherIDS, stm.ID.ToPB())
 		controller.replicationDB.BindSpanToNode("", "node1", stm)
 		controller.replicationDB.MarkSpanReplicating(stm)
@@ -397,7 +375,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	require.Len(t, resp.DispatcherStatuses, 1)
 	require.True(t, resp.DispatcherStatuses[0].Ack.CommitTs == 10)
 	require.Len(t, resp.DispatcherStatuses[0].InfluencedDispatchers.DispatcherIDs, 1)
-	require.False(t, barrier.blockedTs[eventKey{blockTs: 10, isSyncPoint: false}].tableTriggerDispatcherRelated)
+	require.False(t, barrier.blockedEvents.m[eventKey{blockTs: 10, isSyncPoint: false}].tableTriggerDispatcherRelated)
 
 	// table trigger  block request
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -426,7 +404,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 					BlockTs:   10,
 					BlockTables: &heartbeatpb.InfluencedTables{
 						InfluenceType: heartbeatpb.InfluenceType_Normal,
-						TableIDs:      []int64{0, 2, 3},
+						TableIDs:      []int64{0, 1, 2},
 					},
 					NeedDroppedTables: &heartbeatpb.InfluencedTables{
 						InfluenceType: heartbeatpb.InfluenceType_Normal,
@@ -442,7 +420,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 		blockTs:     10,
 		isSyncPoint: false,
 	}
-	event := barrier.blockedTs[key]
+	event := barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == tableTriggerEventDispatcherID)
 	// all dispatcher reported, the reported status is reset
@@ -463,7 +441,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 			},
 		},
 	})
-	require.Len(t, barrier.blockedTs, 1)
+	require.Len(t, barrier.blockedEvents.m, 1)
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -475,17 +453,13 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 					Stage:     heartbeatpb.BlockStage_DONE,
 				},
 			},
-			{
-				ID: blockedDispatcherIDS[1],
-				State: &heartbeatpb.State{
-					IsBlocked: true,
-					BlockTs:   10,
-					Stage:     heartbeatpb.BlockStage_DONE,
-				},
-			},
 		},
 	})
-	require.Len(t, barrier.blockedTs, 0)
+	require.Len(t, barrier.blockedEvents.m, 1)
+	// resend to check removed tables
+	event.resend()
+	barrier.checkEventFinish(event)
+	require.Len(t, barrier.blockedEvents.m, 0)
 }
 
 func TestSchemaBlock(t *testing.T) {
@@ -597,7 +571,7 @@ func TestSchemaBlock(t *testing.T) {
 	require.True(t, resp.DispatcherStatuses[1].Action.CommitTs == 10)
 	require.True(t, resp.DispatcherStatuses[1].Action.Action == heartbeatpb.Action_Write)
 	key := eventKey{blockTs: 10}
-	event := barrier.blockedTs[key]
+	event := barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	// the ddl dispatcher will be the writer
 	require.Equal(t, event.writerDispatcher, controller.ddlDispatcherID)
@@ -628,7 +602,7 @@ func TestSchemaBlock(t *testing.T) {
 	resp = msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 1)
 	require.True(t, resp.DispatcherStatuses[0].Ack.CommitTs == 10)
-	event = barrier.blockedTs[key]
+	event = barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	// the ddl dispatcher will be the writer
 	require.Equal(t, event.writerDispatcher, controller.ddlDispatcherID)
@@ -647,37 +621,10 @@ func TestSchemaBlock(t *testing.T) {
 			},
 		},
 	})
-	// 1 pass action message to one node
+	// pass action message to no node, because tables are removed
 	msgs := barrier.Resend()
-	require.Len(t, msgs, 1)
-	msg = msgs[0]
-	require.Equal(t, messaging.TypeHeartBeatResponse, msg.Type)
-	require.Equal(t, msg.Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].Action.Action,
-		heartbeatpb.Action_Pass)
-	require.Len(t, barrier.blockedTs, 1)
-	// other dispatcher advanced checkpoint ts
-	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
-		ChangefeedID: cfID.ToPB(),
-		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
-			{
-				ID: dispatcherIDs[0],
-				State: &heartbeatpb.State{
-					IsBlocked: true,
-					BlockTs:   10,
-					Stage:     heartbeatpb.BlockStage_DONE,
-				},
-			},
-			{
-				ID: dispatcherIDs[1],
-				State: &heartbeatpb.State{
-					IsBlocked: true,
-					BlockTs:   10,
-					Stage:     heartbeatpb.BlockStage_DONE,
-				},
-			},
-		},
-	})
-	require.Len(t, barrier.blockedTs, 0)
+	require.Len(t, msgs, 0)
+	require.Len(t, barrier.blockedEvents.m, 0)
 
 	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
 	require.Equal(t, 2, controller.operatorController.OperatorSize())
@@ -715,7 +662,6 @@ func TestSyncPointBlock(t *testing.T) {
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 2, TableID: 3}, 1)
 	var dispatcherIDs []*heartbeatpb.DispatcherID
-	dropTables := []int64{1, 2, 3}
 	absents := controller.replicationDB.GetAbsentForTest(make([]*replica.SpanReplication, 0), 10000)
 	for _, stm := range absents {
 		dispatcherIDs = append(dispatcherIDs, stm.ID.ToPB())
@@ -726,7 +672,6 @@ func TestSyncPointBlock(t *testing.T) {
 	selectedRep := controller.GetTask(selectDispatcherID)
 	controller.replicationDB.BindSpanToNode("node1", "node2", selectedRep)
 
-	newSpan := &heartbeatpb.Table{TableID: 10, SchemaID: 2}
 	barrier := NewBarrier(controller, true)
 	// first dispatcher  block request
 	msg := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -741,12 +686,7 @@ func TestSyncPointBlock(t *testing.T) {
 						InfluenceType: heartbeatpb.InfluenceType_All,
 						SchemaID:      1,
 					},
-					NeedDroppedTables: &heartbeatpb.InfluencedTables{
-						InfluenceType: heartbeatpb.InfluenceType_Normal,
-						TableIDs:      dropTables,
-					},
-					NeedAddedTables: []*heartbeatpb.Table{newSpan},
-					IsSyncPoint:     true,
+					IsSyncPoint: true,
 				},
 			},
 			{
@@ -758,12 +698,7 @@ func TestSyncPointBlock(t *testing.T) {
 						InfluenceType: heartbeatpb.InfluenceType_All,
 						SchemaID:      1,
 					},
-					NeedDroppedTables: &heartbeatpb.InfluencedTables{
-						InfluenceType: heartbeatpb.InfluenceType_Normal,
-						TableIDs:      dropTables,
-					},
-					NeedAddedTables: []*heartbeatpb.Table{newSpan},
-					IsSyncPoint:     true,
+					IsSyncPoint: true,
 				},
 			},
 			{
@@ -775,12 +710,7 @@ func TestSyncPointBlock(t *testing.T) {
 						InfluenceType: heartbeatpb.InfluenceType_All,
 						SchemaID:      1,
 					},
-					NeedDroppedTables: &heartbeatpb.InfluencedTables{
-						InfluenceType: heartbeatpb.InfluenceType_Normal,
-						TableIDs:      dropTables,
-					},
-					NeedAddedTables: []*heartbeatpb.Table{newSpan},
-					IsSyncPoint:     true,
+					IsSyncPoint: true,
 				},
 			},
 		},
@@ -804,12 +734,7 @@ func TestSyncPointBlock(t *testing.T) {
 						InfluenceType: heartbeatpb.InfluenceType_All,
 						SchemaID:      1,
 					},
-					NeedDroppedTables: &heartbeatpb.InfluencedTables{
-						InfluenceType: heartbeatpb.InfluenceType_Normal,
-						TableIDs:      dropTables,
-					},
-					NeedAddedTables: []*heartbeatpb.Table{newSpan},
-					IsSyncPoint:     true,
+					IsSyncPoint: true,
 				},
 			},
 		},
@@ -821,7 +746,7 @@ func TestSyncPointBlock(t *testing.T) {
 	require.True(t, resp.DispatcherStatuses[1].Action.CommitTs == 10)
 	require.True(t, resp.DispatcherStatuses[1].Action.Action == heartbeatpb.Action_Write)
 	key := eventKey{blockTs: 10, isSyncPoint: true}
-	event := barrier.blockedTs[key]
+	event := barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	// the last one will be the writer
 	require.Equal(t, event.writerDispatcher, controller.ddlDispatcherID)
@@ -844,7 +769,7 @@ func TestSyncPointBlock(t *testing.T) {
 	msgs := barrier.Resend()
 	// 2 pass action messages to one node
 	require.Len(t, msgs, 2)
-	require.Len(t, barrier.blockedTs, 1)
+	require.Len(t, barrier.blockedEvents.m, 1)
 	// other dispatcher advanced checkpoint ts
 	msg = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
@@ -878,7 +803,7 @@ func TestSyncPointBlock(t *testing.T) {
 			},
 		},
 	})
-	require.Len(t, barrier.blockedTs, 0)
+	require.Len(t, barrier.blockedEvents.m, 0)
 }
 
 func TestNonBlocked(t *testing.T) {
@@ -926,7 +851,7 @@ func TestNonBlocked(t *testing.T) {
 	require.Equal(t, uint64(10), resp.DispatcherStatuses[0].Ack.CommitTs)
 	require.True(t, heartbeatpb.InfluenceType_Normal == resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType)
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.DispatcherIDs[0], blockedDispatcherIDS[0])
-	require.Len(t, barrier.blockedTs, 0)
+	require.Len(t, barrier.blockedEvents.m, 0)
 	require.Equal(t, 2, barrier.controller.replicationDB.GetAbsentSize(), 2)
 }
 
@@ -970,10 +895,10 @@ func TestUpdateCheckpointTs(t *testing.T) {
 		isSyncPoint: false,
 	}
 	resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
-	event := barrier.blockedTs[key]
+	event := barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == controller.ddlDispatcherID)
-	require.True(t, event.selected)
+	require.True(t, event.selected.Load())
 	require.False(t, event.writerDispatcherAdvanced)
 	require.Len(t, resp.DispatcherStatuses, 2)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
@@ -1004,7 +929,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	var dispatcherIDs []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
 		controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 2)
-		stm := controller.GetTasksByTableIDs(int64(id))[0]
+		stm := controller.GetTasksByTableID(int64(id))[0]
 		dispatcherIDs = append(dispatcherIDs, stm.ID.ToPB())
 		controller.replicationDB.BindSpanToNode("", "node1", stm)
 		controller.replicationDB.MarkSpanReplicating(stm)
@@ -1043,9 +968,9 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 			},
 		},
 	})
-	event := barrier.blockedTs[getEventKey(6, false)]
+	event := barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
-	require.False(t, event.selected)
+	require.False(t, event.selected.Load())
 	require.False(t, event.writerDispatcherAdvanced)
 	require.True(t, event.allDispatcherReported())
 
@@ -1082,9 +1007,9 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 			},
 		},
 	})
-	event = barrier.blockedTs[getEventKey(6, false)]
+	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
-	require.True(t, event.selected)
+	require.True(t, event.selected.Load())
 	require.False(t, event.writerDispatcherAdvanced)
 
 	// two done dispatchers
@@ -1120,9 +1045,9 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 			},
 		},
 	})
-	event = barrier.blockedTs[getEventKey(6, false)]
+	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
-	require.True(t, event.selected)
+	require.True(t, event.selected.Load())
 	require.True(t, event.writerDispatcherAdvanced)
 
 	// nil, none stage
@@ -1149,7 +1074,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 			},
 		},
 	})
-	event = barrier.blockedTs[getEventKey(6, false)]
+	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.Nil(t, event)
 }
 

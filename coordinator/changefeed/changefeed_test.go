@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
 func TestNewChangefeed(t *testing.T) {
@@ -167,4 +168,60 @@ func TestRemoveMaintainerMessage(t *testing.T) {
 	msg := RemoveMaintainerMessage(cfID, server, true, true)
 	require.Equal(t, server, msg.To)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
+}
+
+func TestChangefeedGetCloneStatus(t *testing.T) {
+	// Prepare test data
+	originalStatus := &heartbeatpb.MaintainerStatus{
+		ChangefeedID: &heartbeatpb.ChangefeedID{
+			High:      123,
+			Low:       456,
+			Name:      "test-changefeed",
+			Namespace: "test-namespace",
+		},
+		CheckpointTs: 789,
+		FeedState:    "normal",
+		State:        heartbeatpb.ComponentState_Working,
+		Err: []*heartbeatpb.RunningError{
+			{
+				Time:    "2024-01-01 00:00:00",
+				Node:    "test-node",
+				Code:    "test-error",
+				Message: "test error message",
+			},
+		},
+	}
+
+	// Create a Changefeed instance
+	cf := &Changefeed{
+		status: atomic.NewPointer(originalStatus),
+	}
+
+	// Get the cloned status
+	clonedStatus := cf.GetClonedStatus()
+
+	// Check if the cloned status is equal to the original status
+	require.Equal(t, originalStatus.ChangefeedID.High, clonedStatus.ChangefeedID.High)
+	require.Equal(t, originalStatus.ChangefeedID.Low, clonedStatus.ChangefeedID.Low)
+	require.Equal(t, originalStatus.ChangefeedID.Name, clonedStatus.ChangefeedID.Name)
+	require.Equal(t, originalStatus.ChangefeedID.Namespace, clonedStatus.ChangefeedID.Namespace)
+	require.Equal(t, originalStatus.CheckpointTs, clonedStatus.CheckpointTs)
+	require.Equal(t, originalStatus.FeedState, clonedStatus.FeedState)
+	require.Equal(t, originalStatus.State, clonedStatus.State)
+	require.Equal(t, len(originalStatus.Err), len(clonedStatus.Err))
+
+	// Check if the error array elements are the same
+	if len(originalStatus.Err) > 0 {
+		require.Equal(t, originalStatus.Err[0].Time, clonedStatus.Err[0].Time)
+		require.Equal(t, originalStatus.Err[0].Node, clonedStatus.Err[0].Node)
+		require.Equal(t, originalStatus.Err[0].Code, clonedStatus.Err[0].Code)
+		require.Equal(t, originalStatus.Err[0].Message, clonedStatus.Err[0].Message)
+	}
+
+	// Check if the cloned status is a new object
+	require.NotSame(t, originalStatus, clonedStatus)
+	require.NotSame(t, originalStatus.ChangefeedID, clonedStatus.ChangefeedID)
+	if len(originalStatus.Err) > 0 {
+		require.NotSame(t, originalStatus.Err[0], clonedStatus.Err[0])
+	}
 }

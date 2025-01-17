@@ -13,17 +13,20 @@
 
 package range_checker
 
-import "fmt"
+import (
+	"fmt"
+	"sync/atomic"
+)
 
 // BoolRangeChecker is a range checker that always returns the same value.
 type BoolRangeChecker struct {
-	covered bool
+	covered atomic.Bool
 }
 
 func NewBoolRangeChecker(covered bool) *BoolRangeChecker {
-	return &BoolRangeChecker{
-		covered: covered,
-	}
+	boolRangeChecker := &BoolRangeChecker{}
+	boolRangeChecker.covered.Store(covered)
+	return boolRangeChecker
 }
 
 // AddSubRange adds a sub table pan to the range checker.
@@ -32,7 +35,7 @@ func (f *BoolRangeChecker) AddSubRange(_ int64, _, _ []byte) {
 
 // IsFullyCovered checks if the entire range from start to end is covered.
 func (f *BoolRangeChecker) IsFullyCovered() bool {
-	return f.covered
+	return f.covered.Load()
 }
 
 // Reset resets the range checker reported sub spans
@@ -40,5 +43,9 @@ func (f *BoolRangeChecker) Reset() {
 }
 
 func (f *BoolRangeChecker) Detail() string {
-	return fmt.Sprintf("covered: %v", f.covered)
+	return fmt.Sprintf("covered: %v", f.covered.Load())
+}
+
+func (f *BoolRangeChecker) MarkCovered() {
+	f.covered.Store(true)
 }

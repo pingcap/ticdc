@@ -125,19 +125,31 @@ func (db *ReplicationDB) TryRemoveBySchemaID(schemaID int64) []*SpanReplication 
 	return tasks
 }
 
-// GetTasksByTableIDs returns the spans by the table ids
-func (db *ReplicationDB) GetTasksByTableIDs(tableIDs ...int64) []*SpanReplication {
+// GetTasksByTableID returns the spans by the table id
+func (db *ReplicationDB) GetTasksByTableID(tableID int64) []*SpanReplication {
 	db.lock.RLock()
 	defer db.lock.RUnlock()
 
 	var tasks []*SpanReplication
-	for _, tableID := range tableIDs {
-		for _, task := range db.tableTasks[tableID] {
-			tasks = append(tasks, task)
-		}
+	for _, task := range db.tableTasks[tableID] {
+		tasks = append(tasks, task)
 	}
 	return tasks
 }
+
+// // GetTasksByTableIDs returns the spans by the table ids
+// func (db *ReplicationDB) GetTasksByTableIDs(tableIDs ...int64) []*SpanReplication {
+// 	db.lock.RLock()
+// 	defer db.lock.RUnlock()
+
+// 	var tasks []*SpanReplication
+// 	for _, tableID := range tableIDs {
+// 		for _, task := range db.tableTasks[tableID] {
+// 			tasks = append(tasks, task)
+// 		}
+// 	}
+// 	return tasks
+// }
 
 // GetAllTasks returns all the spans in the db, it's used when the block event type is all, it will return the ddl span
 func (db *ReplicationDB) GetAllTasks() []*SpanReplication {

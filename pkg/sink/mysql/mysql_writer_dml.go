@@ -66,9 +66,9 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 			switch row.RowType {
 			case commonEvent.RowTypeUpdate:
 				if translateToInsert {
-					query, args, err = buildUpdate(event.TableInfo, row)
+					query, args, err = buildUpdate(event.TableInfo, row, w.cfg.ForceReplicate)
 				} else {
-					query, args, err = buildDelete(event.TableInfo, row)
+					query, args, err = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
 					if err != nil {
 						dmlsPool.Put(dmls) // Return to pool on error
 						return nil, errors.Trace(err)
@@ -80,7 +80,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 					query, args, err = buildInsert(event.TableInfo, row, translateToInsert)
 				}
 			case commonEvent.RowTypeDelete:
-				query, args, err = buildDelete(event.TableInfo, row)
+				query, args, err = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
 			case commonEvent.RowTypeInsert:
 				query, args, err = buildInsert(event.TableInfo, row, translateToInsert)
 			}

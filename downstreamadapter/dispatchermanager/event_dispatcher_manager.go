@@ -55,7 +55,9 @@ One EventDispatcherManager has one backend sink.
 */
 type EventDispatcherManager struct {
 	changefeedID common.ChangeFeedID
-	maintainerID node.ID
+
+	maintainerIDMutex sync.Mutex
+	maintainerID      node.ID
 
 	pdClock pdutil.Clock
 
@@ -710,10 +712,14 @@ func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap {
 }
 
 func (e *EventDispatcherManager) GetMaintainerID() node.ID {
+	e.maintainerIDMutex.Lock()
+	defer e.maintainerIDMutex.Unlock()
 	return e.maintainerID
 }
 
 func (e *EventDispatcherManager) SetMaintainerID(maintainerID node.ID) {
+	e.maintainerIDMutex.Lock()
+	defer e.maintainerIDMutex.Unlock()
 	e.maintainerID = maintainerID
 }
 

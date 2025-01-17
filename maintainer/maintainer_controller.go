@@ -351,9 +351,9 @@ func (c *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	c.operatorController.RemoveTasksByTableIDs(tables...)
 }
 
-// GetTasksByTableIDs get all tasks by table id
-func (c *Controller) GetTasksByTableIDs(tableIDs ...int64) []*replica.SpanReplication {
-	return c.replicationDB.GetTasksByTableIDs(tableIDs...)
+// GetTasksByTableID get all tasks by table id
+func (c *Controller) GetTasksByTableID(tableID int64) []*replica.SpanReplication {
+	return c.replicationDB.GetTasksByTableID(tableID)
 }
 
 // GetAllTasks get all tasks
@@ -435,7 +435,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 		return apperror.ErrNodeIsNotFound.GenWithStackByArgs("targetNode", targetNode)
 	}
 
-	replications := c.replicationDB.GetTasksByTableIDs(tableId)
+	replications := c.replicationDB.GetTasksByTableID(tableId)
 	if len(replications) != 1 {
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("unexpected number of replications found for table in this node; tableID is %s, replication count is %s", tableId, len(replications))
 	}
