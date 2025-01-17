@@ -334,11 +334,16 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=force_replicate_table
 
-      # the 12th case in this group
       - name: Test tidb_mysql_test
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=tidb_mysql_test
+
+      # the 13th case in this group
+      - name: Test move_table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=move_table
 
       - name: Upload test logs
         if: always()
