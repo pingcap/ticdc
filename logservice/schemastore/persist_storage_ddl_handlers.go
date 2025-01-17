@@ -2072,7 +2072,8 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	for i, info := range rawEvent.MultipleTableInfos {
 		log.Info("build create tables",
 			zap.String("schemaName", rawEvent.CurrentSchemaName),
-			zap.String("tableName", info.Name.O))
+			zap.String("tableName", info.Name.O),
+			zap.String("query", querys[i]))
 		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, info.Name.O) {
 			log.Info("build create tables filtered",
 				zap.String("schemaName", rawEvent.CurrentSchemaName),
