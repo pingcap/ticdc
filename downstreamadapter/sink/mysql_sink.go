@@ -65,7 +65,7 @@ func verifyMySQLSink(
 	if err != nil {
 		return err
 	}
-	db.Close()
+	_ = db.Close()
 	return nil
 }
 
@@ -99,18 +99,19 @@ func newMysqlSinkWithDBAndConfig(
 		statistics:   stat,
 		isNormal:     1,
 	}
+	formatVectorType := mysql.ShouldFormatVectorType(db, cfg)
 	for i := 0; i < workerCount; i++ {
-		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, changefeedID, stat)
+		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, changefeedID, stat, formatVectorType)
 	}
-	mysqlSink.ddlWorker = worker.NewMysqlDDLWorker(ctx, db, cfg, mysqlSink.changefeedID, stat)
+	mysqlSink.ddlWorker = worker.NewMysqlDDLWorker(ctx, db, cfg, changefeedID, stat, formatVectorType)
 	return mysqlSink
 }
 
 func (s *MysqlSink) Run(ctx context.Context) error {
-	g, _ := errgroup.WithContext(ctx)
+	g, ctx := errgroup.WithContext(ctx)
 	for i := 0; i < s.workerCount; i++ {
 		g.Go(func() error {
-			return s.dmlWorker[i].Run()
+			return s.dmlWorker[i].Run(ctx)
 		})
 	}
 	err := g.Wait()
@@ -136,7 +137,7 @@ func (s *MysqlSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	// directly dividing by the number of buckets may cause unevenness between buckets.
 	// Therefore, we first take the modulus of the prime number and then take the modulus of the bucket.
 	index := int64(event.PhysicalTableID) % prime % int64(s.workerCount)
-	s.dmlWorker[index].GetEventChan() <- event
+	s.dmlWorker[index].AddDMLEvent(event)
 }
 
 func (s *MysqlSink) PassBlockEvent(event commonEvent.BlockEvent) {
@@ -152,7 +153,7 @@ func (s *MysqlSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *MysqlSink) AddCheckpointTs(ts uint64) {}
+func (s *MysqlSink) AddCheckpointTs(_ uint64) {}
 
 func (s *MysqlSink) GetStartTsList(
 	tableIds []int64,

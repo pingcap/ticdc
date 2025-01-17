@@ -16,7 +16,6 @@ package worker
 import (
 	"context"
 	"fmt"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"net/url"
 	"testing"
 	"time"
@@ -27,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -81,7 +81,7 @@ func TestWriteEvents(t *testing.T) {
 		err := dmlWorker.Run(ctx)
 		require.True(t, errors.Is(err, context.Canceled))
 	}()
-	dmlWorker.GetEventChan() <- dmlEvent
+	dmlWorker.AddDMLEvent(dmlEvent)
 
 	// Wait for the events to be received by the worker.
 	time.Sleep(time.Second)

@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
@@ -31,8 +30,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -57,6 +58,8 @@ type EventDispatcherManager struct {
 
 	maintainerIDMutex sync.Mutex
 	maintainerID      node.ID
+
+	pdClock pdutil.Clock
 
 	config       *config.ChangefeedConfig
 	filterConfig *eventpb.FilterConfig
@@ -124,10 +127,12 @@ func NewEventDispatcherManager(
 ) (*EventDispatcherManager, uint64, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
+	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	manager := &EventDispatcherManager{
 		dispatcherMap:                          newDispatcherMap(),
 		changefeedID:                           changefeedID,
 		maintainerID:                           maintainerID,
+		pdClock:                                pdClock,
 		statusesChan:                           make(chan TableSpanStatusWithSeq, 8192),
 		blockStatusesChan:                      make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		errCh:                                  make(chan error, 1),
@@ -181,7 +186,7 @@ func NewEventDispatcherManager(
 	go func() {
 		defer wg.Done()
 		err = manager.sink.Run(ctx)
-		if err != nil && errors.Cause(err) != context.Canceled {
+		if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 			select {
 			case <-ctx.Done():
 				return
@@ -457,7 +462,7 @@ func (e *EventDispatcherManager) collectErrors(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case err := <-e.errCh:
-			if errors.Cause(err) != context.Canceled {
+			if !errors.Is(errors.Cause(err), context.Canceled) {
 				log.Error("Event Dispatcher Manager Meets Error",
 					zap.String("changefeedID", e.changefeedID.String()),
 					zap.Error(err))
@@ -474,7 +479,7 @@ func (e *EventDispatcherManager) collectErrors(ctx context.Context) {
 				e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 
 				// resend message until the event dispatcher manager is closed
-				// the first error is matter most, so we just need to resend it continuely and ignore the other errors.
+				// the first error is matter most, so we just need to resend it continue and ignore the other errors.
 				ticker := time.NewTicker(time.Second * 5)
 				for {
 					select {
@@ -656,8 +661,9 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	phyCheckpointTs := oracle.ExtractPhysical(message.Watermark.CheckpointTs)
 	phyResolvedTs := oracle.ExtractPhysical(message.Watermark.ResolvedTs)
 
-	e.metricCheckpointTsLag.Set(float64(oracle.GetPhysical(time.Now())-phyCheckpointTs) / 1e3)
-	e.metricResolvedTsLag.Set(float64(oracle.GetPhysical(time.Now())-phyResolvedTs) / 1e3)
+	pdTime := e.pdClock.CurrentTime()
+	e.metricCheckpointTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyCheckpointTs) / 1e3)
+	e.metricResolvedTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3)
 	return &message
 }
 

@@ -462,9 +462,9 @@ func (c *Controller) ResumeChangefeed(ctx context.Context, id common.ChangeFeedI
 		cf.SetInfo(clone)
 	}
 
-	newStatus := *cf.GetStatus()
-	newStatus.CheckpointTs = newCheckpointTs
-	_, _, err := cf.UpdateStatus(&newStatus)
+	status := cf.GetClonedStatus()
+	status.CheckpointTs = newCheckpointTs
+	_, _, err := cf.ForceUpdateStatus(status)
 	if err != nil {
 		return errors.New(err.Message)
 	}

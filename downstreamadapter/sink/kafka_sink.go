@@ -19,7 +19,6 @@ import (
 	"net/url"
 	"sync/atomic"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
 	"github.com/pingcap/ticdc/downstreamadapter/worker"
@@ -27,7 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
@@ -48,7 +47,9 @@ type KafkaSink struct {
 	statistics       *metrics.Statistics
 	metricsCollector kafka.MetricsCollector
 
-	isNormal uint32 // if sink is normal, isNormal is 1, otherwise is 0
+	// isNormal means the sink does not meet error.
+	// if sink is normal, isNormal is 1, otherwise is 0
+	isNormal uint32
 	ctx      context.Context
 }
 
@@ -58,8 +59,12 @@ func (s *KafkaSink) SinkType() common.SinkType {
 
 func verifyKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
 	components, _, err := worker.GetKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
-	components.AdminClient.Close()
-	components.TopicManager.Close()
+	if components.AdminClient != nil {
+		components.AdminClient.Close()
+	}
+	if components.TopicManager != nil {
+		components.TopicManager.Close()
+	}
 	return err
 }
 
@@ -82,7 +87,7 @@ func newKafkaSink(
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
 	asyncProducer, err := kafkaComponent.Factory.AsyncProducer(ctx)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 	dmlProducer := producer.NewKafkaDMLProducer(changefeedID, asyncProducer)
 	dmlWorker := worker.NewKafkaDMLWorker(
@@ -144,7 +149,7 @@ func (s *KafkaSink) IsNormal() bool {
 }
 
 func (s *KafkaSink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.dmlWorker.GetEventChan() <- event
+	s.dmlWorker.AddDMLEvent(event)
 }
 
 func (s *KafkaSink) PassBlockEvent(event commonEvent.BlockEvent) {
@@ -152,14 +157,14 @@ func (s *KafkaSink) PassBlockEvent(event commonEvent.BlockEvent) {
 }
 
 func (s *KafkaSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
-	switch event := event.(type) {
+	switch v := event.(type) {
 	case *commonEvent.DDLEvent:
-		if event.TiDBOnly {
+		if v.TiDBOnly {
 			// run callback directly and return
-			event.PostFlush()
+			v.PostFlush()
 			return nil
 		}
-		err := s.ddlWorker.WriteBlockEvent(s.ctx, event)
+		err := s.ddlWorker.WriteBlockEvent(s.ctx, v)
 		if err != nil {
 			atomic.StoreUint32(&s.isNormal, 0)
 			return errors.Trace(err)
@@ -179,7 +184,7 @@ func (s *KafkaSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *KafkaSink) AddCheckpointTs(ts uint64) {
-	s.ddlWorker.GetCheckpointTsChan() <- ts
+	s.ddlWorker.AddCheckpoint(ts)
 }
 
 func (s *KafkaSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {

@@ -26,11 +26,13 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -70,6 +72,7 @@ type eventBroker struct {
 	mounter     pevent.Mounter
 	// msgSender is used to send the events to the dispatchers.
 	msgSender messaging.MessageSender
+	pdClock   pdutil.Clock
 
 	// changefeedMap is used to track the changefeed status.
 	changefeedMap sync.Map
@@ -119,9 +122,15 @@ func newEventBroker(
 
 	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
+
+	// TODO: Retrieve the correct pdClock from the context once multiple upstreams are supported.
+	// For now, since there is only one upstream, using the default pdClock is sufficient.
+	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
+
 	c := &eventBroker{
 		tidbClusterID:           id,
 		eventStore:              eventStore,
+		pdClock:                 pdClock,
 		mounter:                 pevent.NewMounter(tz),
 		schemaStore:             schemaStore,
 		changefeedMap:           sync.Map{},
@@ -728,11 +737,12 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			if receivedMinResolvedTs == 0 {
 				continue
 			}
+			pdTime := c.pdClock.CurrentTime()
 			phyResolvedTs := oracle.ExtractPhysical(receivedMinResolvedTs)
-			lag := float64(oracle.GetPhysical(time.Now())-phyResolvedTs) / 1e3
+			lag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 			c.metricEventServiceReceivedResolvedTs.Set(float64(phyResolvedTs))
 			c.metricEventServiceResolvedTsLag.Set(lag)
-			lag = float64(oracle.GetPhysical(time.Now())-oracle.ExtractPhysical(sentMinWaterMark)) / 1e3
+			lag = float64(oracle.GetPhysical(pdTime)-oracle.ExtractPhysical(sentMinWaterMark)) / 1e3
 			c.metricEventServiceSentResolvedTs.Set(lag)
 			metricEventBrokerPendingScanTaskCount.Set(float64(len(c.taskChan)))
 		}

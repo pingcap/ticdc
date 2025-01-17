@@ -104,7 +104,6 @@ func (o *options) run(cmd *cobra.Command) error {
 	log.Info("The TiCDC release version is", zap.String("ReleaseVersion", cdcversion.ReleaseVersion))
 
 	util.LogHTTPProxies()
-
 	for {
 		svr, err := server.New(o.serverConfig, o.pdEndpoints)
 		if err != nil {

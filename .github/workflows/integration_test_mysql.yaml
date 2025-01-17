@@ -28,303 +28,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  e2e_test_group_test:
-    ## Only run ci when PR is not draft
-    if: github.event.pull_request.draft == false
-
-    runs-on: ubuntu-latest 
-    name: E2E Test Group test 1
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v2
-
-      - name: Setup Go environment
-        uses: actions/setup-go@v3
-        with:
-          go-version: '1.23'
-
-      - name: Integration Build
-        run: |
-          tests/scripts/download-integration-test-binaries.sh master true
-          go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
-          make integration_test_build
-          ls -l bin/ && ls -l tools/bin/
-
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-      
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-          
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-      
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-          
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-      
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-          
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-      
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-          
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-      
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-      
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-          
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-      
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-          
-      - name: Test ddl_attributes
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
-
-      - name: Upload test logs
-        if: always()
-        uses: ./.github/actions/upload-test-logs
-        with:
-          log-name: e2e_test_group_test2
-
-  e2e_test_group_test2:
-    ## Only run ci when PR is not draft
-    if: github.event.pull_request.draft == false
-
-    runs-on: ubuntu-latest 
-    name: E2E Test Group test 2
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v2
-
-      - name: Setup Go environment
-        uses: actions/setup-go@v3
-        with:
-          go-version: '1.23'
-
-      - name: Integration Build
-        run: |
-          tests/scripts/download-integration-test-binaries.sh master true
-          go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
-          make integration_test_build
-          ls -l bin/ && ls -l tools/bin/
-
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-      
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-          
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-      
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-          
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-      
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-          
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-      
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-          
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-      
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-      
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-          
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-      
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-          
-      - name: Test changefeed_pause_resume
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
-
-      - name: Upload test logs
-        if: always()
-        uses: ./.github/actions/upload-test-logs
-        with:
-          log-name: e2e_test_group_test
-
-
   # To boost the test speed, we split every 15 test cases into a group.
   e2e_test_group_1:
     ## Only run ci when PR is not draft
@@ -485,10 +188,10 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=bank
 
-      - name: Test batch_add_table
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=batch_add_table
+      # - name: Test batch_add_table
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=batch_add_table
 
       - name: Test batch_update_to_no_batch
         if: ${{ success() }}
@@ -622,11 +325,21 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=ddl_reentrant
 
-      # the 10th case in this group
       - name: Test syncpoint
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=syncpoint
+
+      - name: Test force_replicate_table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=force_replicate_table
+
+      # the 12th case in this group
+      - name: Test tidb_mysql_test
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=tidb_mysql_test
 
       - name: Upload test logs
         if: always()

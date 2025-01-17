@@ -43,7 +43,7 @@ type ChangefeedConfig struct {
 	Filter         *FilterConfig `toml:"filter" json:"filter"`
 	MemoryQuota    uint64        `toml:"memory-quota" json:"memory-quota"`
 	// sync point related
-	// TODO:syncPointRetention|default 可以不要吗
+	// TODO: Is syncPointRetention|default can be removed?
 	EnableSyncPoint    bool          `json:"enable_sync_point" default:"false"`
 	SyncPointInterval  time.Duration `json:"sync_point_interval" default:"1m"`
 	SyncPointRetention time.Duration `json:"sync_point_retention" default:"24h"`
