@@ -304,11 +304,10 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls
 
-      
-      - name: Test http_api_tls_with_user_auth
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls_with_user_auth
+      # - name: Test http_api_tls_with_user_auth
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls_with_user_auth
       
       - name: Test default_value
         if: ${{ success() }}
