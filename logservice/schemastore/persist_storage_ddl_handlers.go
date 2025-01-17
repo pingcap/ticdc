@@ -1378,10 +1378,12 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 	// Note: not all ddl types will respect the `filtered` result, example: create tables, rename tables
 	filtered := false
 	// TODO: ShouldDiscardDDL is used for old architecture, should be removed later
-	if tableFilter != nil &&
-		tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.CurrentSchemaName, rawEvent.CurrentTableName) &&
-		tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.PrevSchemaName, rawEvent.PrevTableName) {
-		filtered = true
+	if tableFilter != nil && rawEvent.CurrentSchemaName != "" && rawEvent.CurrentTableName != "" {
+		filtered = tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.CurrentSchemaName, rawEvent.CurrentTableName)
+		// if the ddl invovles another table name, only set filtered to true when all of them should be filtered
+		if rawEvent.PrevSchemaName != "" && rawEvent.PrevTableName != "" {
+			filtered = filtered && tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.PrevSchemaName, rawEvent.PrevTableName)
+		}
 	}
 	if rawEvent.TableInfo != nil {
 		wrapTableInfo = common.WrapTableInfo(
