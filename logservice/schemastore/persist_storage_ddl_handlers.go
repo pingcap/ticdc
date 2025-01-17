@@ -2060,6 +2060,12 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	if err != nil {
 		log.Panic("split queries failed", zap.Error(err))
 	}
+	if len(querys) != len(rawEvent.MultipleTableInfos) {
+		log.Panic("query count not match table count",
+			zap.Int("queryCount", len(querys)),
+			zap.Int("tableCount", len(rawEvent.MultipleTableInfos)),
+			zap.String("query", rawEvent.Query))
+	}
 	ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, physicalTableCount)
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)
 	resultQuerys := make([]string, 0, logicalTableCount)
