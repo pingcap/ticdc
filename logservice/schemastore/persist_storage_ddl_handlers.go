@@ -1377,6 +1377,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 	var wrapTableInfo *common.TableInfo
 	// Note: not all ddl types will respect the `filtered` result, example: create tables, rename tables
 	filtered := false
+	// TODO: ShouldDiscardDDL is used for old architecture, should be removed later
 	if tableFilter != nil &&
 		tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.CurrentSchemaName, rawEvent.CurrentTableName) &&
 		tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.PrevSchemaName, rawEvent.PrevTableName) {
@@ -2070,12 +2071,8 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)
 	resultQuerys := make([]string, 0, logicalTableCount)
 	for i, info := range rawEvent.MultipleTableInfos {
-		log.Info("build create tables",
-			zap.String("schemaName", rawEvent.CurrentSchemaName),
-			zap.String("tableName", info.Name.O),
-			zap.String("query", querys[i]))
 		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, info.Name.O) {
-			log.Info("build create tables filtered",
+			log.Info("build ddl event for create tables filter table",
 				zap.String("schemaName", rawEvent.CurrentSchemaName),
 				zap.String("tableName", info.Name.O))
 			continue
@@ -2103,8 +2100,6 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		AddName: addName,
 	}
 	ddlEvent.Query = strings.Join(resultQuerys, "")
-	log.Info("build ddl event result querys",
-		zap.String("query", ddlEvent.Query))
 	if len(ddlEvent.NeedAddedTables) == 0 {
 		log.Fatal("should not happen")
 	}
