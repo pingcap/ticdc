@@ -807,11 +807,16 @@ func (h *OpenAPIV2) listTables(c *gin.Context) {
 		nodeTableInfo.addTableID(table.Span.TableID)
 	}
 
-	infos := make([]*NodeTableInfo, 0, len(nodeTableInfoMap))
+	infos := make([]NodeTableInfo, 0, len(nodeTableInfoMap))
 	for _, nodeTableInfo := range nodeTableInfoMap {
-		infos = append(infos, nodeTableInfo)
+		infos = append(infos, *nodeTableInfo)
 	}
-	c.JSON(http.StatusOK, infos)
+
+	resp := &ListResponse[NodeTableInfo]{
+		Total: len(infos),
+		Items: infos,
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // getDispatcherCount returns the count of dispatcher.
