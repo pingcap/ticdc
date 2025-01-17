@@ -402,16 +402,28 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 	var msgs []*messaging.TargetMessage
 	defer func() {
 		if time.Since(be.lastWarningLogTime) > time.Second*10 {
-			log.Warn("barrier event is not resolved",
-				zap.String("changefeed", be.cfID.Name()),
-				zap.Uint64("commitTs", be.commitTs),
-				zap.Bool("isSyncPoint", be.isSyncPoint),
-				zap.Bool("selected", be.selected.Load()),
-				zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
-				zap.String("coverage", be.rangeChecker.Detail()),
-				zap.Any("blocker", be.blockedDispatchers),
-				zap.Any("resend", msgs),
-			)
+			if be.rangeChecker != nil {
+				log.Warn("barrier event is not resolved",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.Uint64("commitTs", be.commitTs),
+					zap.Bool("isSyncPoint", be.isSyncPoint),
+					zap.Bool("selected", be.selected.Load()),
+					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
+					zap.String("coverage", be.rangeChecker.Detail()),
+					zap.Any("blocker", be.blockedDispatchers),
+					zap.Any("resend", msgs),
+				)
+			} else {
+				log.Warn("barrier event is not resolved",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.Uint64("commitTs", be.commitTs),
+					zap.Bool("isSyncPoint", be.isSyncPoint),
+					zap.Bool("selected", be.selected.Load()),
+					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
+					zap.Any("blocker", be.blockedDispatchers),
+					zap.Any("resend", msgs),
+				)
+			}
 			be.lastWarningLogTime = time.Now()
 		}
 	}()

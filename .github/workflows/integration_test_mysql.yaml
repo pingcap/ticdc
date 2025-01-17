@@ -174,7 +174,7 @@ jobs:
         if: always()
         uses: ./.github/actions/upload-test-logs
         with:
-          log-name: e2e_test_group_test
+          log-name: e2e_test_group_test2
 
   e2e_test_group_test2:
     ## Only run ci when PR is not draft
