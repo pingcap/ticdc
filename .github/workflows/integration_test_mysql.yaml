@@ -339,7 +339,13 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=tidb_mysql_test
 
-      # the 13th case in this group
+
+      - name: Test resolve_lock
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=resolve_lock
+
+      # The 14th case in this group
       - name: Test move_table
         if: ${{ success() }}
         run: |

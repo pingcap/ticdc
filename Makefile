@@ -1,3 +1,11 @@
+# Phony targets are targets that are not associated with files.
+# Add new phony targets here to make them available in the `make` command.
+.PHONY: clean fmt check tidy \
+	generate-protobuf generate_mock \
+	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
+	unit_test_in_verify_ci integration_test_build integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
+
+
 FAIL_ON_STDOUT := awk '{ print } END { if (NR > 0) { exit 1  }  }'
 
 PROJECT=ticdc
@@ -36,7 +44,7 @@ GOVERSION := $(shell go version)
 # ref: https://github.com/pingcap/tidb/pull/39526#issuecomment-1407952955
 OS := "$(shell go env GOOS)"
 SED_IN_PLACE ?= $(shell which sed)
-IS_ALPINE := $(shell grep -qi Alpine /etc/os-release && echo 1)
+IS_ALPINE := $(shell if [ -f /etc/os-release ]; then grep -qi Alpine /etc/os-release && echo 1; else echo 0; fi)
 ifeq (${OS}, "linux")
 	CGO := 0
 	SED_IN_PLACE += -i
@@ -98,6 +106,17 @@ FAILPOINT_DIR := $$(for p in $(PACKAGES); do echo $${p\#"github.com/pingcap/$(PR
 FAILPOINT := tools/bin/failpoint-ctl
 FAILPOINT_ENABLE  := $$(echo $(FAILPOINT_DIR) | xargs $(FAILPOINT) enable >/dev/null)
 FAILPOINT_DISABLE := $$(echo $(FAILPOINT_DIR) | xargs $(FAILPOINT) disable >/dev/null)
+
+# go test -p parameter for unit tests
+P=3
+
+# The following packages are used in unit tests.
+# Add new packages here if you want to include them in unit tests.
+UT_PACKAGES_DISPATCHER := ./pkg/sink/mysql/... ./pkg/sink/util/... ./downstreamadapter/sink/... ./downstreamadapter/dispatcher/... ./downstreamadapter/worker/... ./pkg/sink/codec/open/... ./pkg/sink/codec/canal/...
+UT_PACKAGES_MAINTAINER := ./maintainer/...
+UT_PACKAGES_COORDINATOR := ./coordinator/...
+UT_PACKAGES_LOGSERVICE := ./logservice/...
+UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./utils/dynstream/...
 
 include tools/Makefile
 
@@ -186,6 +205,22 @@ unit_test: check_failpoint_ctl generate-protobuf
 	@export log_level=error;\
 	$(GOTEST) -cover -covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" $(PACKAGES) \
 	|| { $(FAILPOINT_DISABLE); exit 1; }
+	$(FAILPOINT_DISABLE)
+
+unit_test_in_verify_ci: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov tools/bin/gocov-xml
+	mkdir -p "$(TEST_DIR)"
+	$(FAILPOINT_ENABLE)
+	@echo "Running unit tests..."
+	@export log_level=error;\
+	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 120s -p $(P) --race --tags=intest \
+	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
+	$(UT_PACKAGES_DISPATCHER) \
+	$(UT_PACKAGES_MAINTAINER) \
+	$(UT_PACKAGES_COORDINATOR) \
+	$(UT_PACKAGES_LOGSERVICE) \
+	$(UT_PACKAGES_OTHERS) \
+	|| { $(FAILPOINT_DISABLE); exit 1; }
+	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
 	$(FAILPOINT_DISABLE)
 
 tidy:

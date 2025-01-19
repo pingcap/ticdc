@@ -251,10 +251,14 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 				log.Error("remove checkpointTs message failed", zap.Any("changefeedID", e.changefeedID), zap.Error(err))
 			}
 		}
-		dispatcher.Remove()
+
 		_, ok := dispatcher.TryClose()
 		if !ok {
 			toCloseDispatchers = append(toCloseDispatchers, dispatcher)
+		} else {
+			// remove should be called after dispatcher can be closed succesfully
+			// For example, dispatcher may wait the ack from maintainer to pass the create table ddl event in tableProgress
+			dispatcher.Remove()
 		}
 	})
 
@@ -265,6 +269,9 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 			_, ok = dispatcher.TryClose()
 			time.Sleep(10 * time.Millisecond)
 		}
+		// remove should be called after dispatcher can be closed succesfully
+		// For example, dispatcher may wait the ack from maintainer to pass the create table ddl event in tableProgress
+		dispatcher.Remove()
 	}
 
 	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(e)
