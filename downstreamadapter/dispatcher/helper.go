@@ -320,19 +320,23 @@ func (h *DispatcherStatusHandler) GetType(event DispatcherStatusWithID) dynstrea
 }
 func (h *DispatcherStatusHandler) OnDrop(event DispatcherStatusWithID) {}
 
-var (
-	dispatcherStatusDynamicStream     dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler]
-	dispatcherStatusDynamicStreamOnce sync.Once
-)
+var dispatcherStatusDSMu sync.RWMutex
+var dispatcherStatusDS dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler]
 
-func GetDispatcherStatusDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler] {
-	dispatcherStatusDynamicStreamOnce.Do(func() {
-		dispatcherStatusDynamicStream = dynstream.NewParallelDynamicStream(func(id common.DispatcherID) uint64 { return common.GID(id).FastHash() }, &DispatcherStatusHandler{})
-		dispatcherStatusDynamicStream.Start()
-	})
-	return dispatcherStatusDynamicStream
+func NewDispatcherStatusDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler] {
+	ds := dynstream.NewParallelDynamicStream(func(id common.DispatcherID) uint64 { return common.GID(id).FastHash() }, &DispatcherStatusHandler{})
+	ds.Start()
+	dispatcherStatusDSMu.Lock()
+	defer dispatcherStatusDSMu.Unlock()
+	dispatcherStatusDS = ds
+	return ds
 }
 
-func SetDispatcherStatusDynamicStream(dynamicStream dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler]) {
-	dispatcherStatusDynamicStream = dynamicStream
+func getDispatcherStatusDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler] {
+	dispatcherStatusDSMu.RLock()
+	defer dispatcherStatusDSMu.RUnlock()
+	if dispatcherStatusDS == nil {
+		log.Panic("dispatcher status dynamic stream is not initialized")
+	}
+	return dispatcherStatusDS
 }

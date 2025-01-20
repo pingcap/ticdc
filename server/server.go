@@ -113,6 +113,7 @@ func New(conf *config.ServerConfig, pdEndpoints []string) (tiserver.Server, erro
 		pdEndpoints: pdEndpoints,
 		tcpServer:   tcpServer,
 		security:    conf.Security,
+		preServices: make([]common.Closeable, 0),
 	}
 	return s, nil
 }
@@ -287,6 +288,10 @@ func (c *server) Close(ctx context.Context) {
 		log.Info("coordinator closed", zap.String("captureID", string(c.info.ID)))
 	}
 
+	for _, service := range c.preServices {
+		service.Close()
+	}
+
 	for _, subModule := range c.subModules {
 		if err := subModule.Close(ctx); err != nil {
 			log.Warn("failed to close sub watcher",
@@ -294,10 +299,6 @@ func (c *server) Close(ctx context.Context) {
 				zap.Error(err))
 		}
 		log.Info("sub module closed", zap.String("module", subModule.Name()))
-	}
-
-	for _, service := range c.preServices {
-		service.Close()
 	}
 
 	// delete server info from etcd

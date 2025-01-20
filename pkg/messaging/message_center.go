@@ -117,9 +117,6 @@ func NewMessageCenter(
 	receiveEventCh := make(chan *TargetMessage, cfg.CacheChannelSize)
 	receiveCmdCh := make(chan *TargetMessage, cfg.CacheChannelSize)
 
-	ctx, cancel := context.WithCancel(ctx)
-	g, ctx := errgroup.WithContext(ctx)
-
 	mc := &messageCenter{
 		id:             id,
 		epoch:          epoch,
@@ -128,9 +125,6 @@ func NewMessageCenter(
 		localTarget:    newLocalMessageTarget(id, receiveEventCh, receiveCmdCh),
 		receiveEventCh: receiveEventCh,
 		receiveCmdCh:   receiveCmdCh,
-		cancel:         cancel,
-		ctx:            ctx,
-		g:              g,
 		router:         newRouter(),
 	}
 	mc.remoteTargets.m = make(map[node.ID]*remoteMessageTarget)
@@ -141,6 +135,13 @@ func NewMessageCenter(
 }
 
 func (mc *messageCenter) Run(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	g, ctx := errgroup.WithContext(ctx)
+
+	mc.g = g
+	mc.ctx = ctx
+	mc.cancel = cancel
+
 	mc.g.Go(func() error {
 		mc.router.runDispatch(ctx, mc.receiveEventCh)
 		return nil
@@ -277,16 +278,23 @@ func (mc *messageCenter) ReceiveCmd() (*TargetMessage, error) {
 
 // Close stops the grpc server and stops all the connections to the remote targets.
 func (mc *messageCenter) Close() {
+	log.Info("fizz message center is closing, lock requiring", zap.Stringer("id", mc.id))
 	mc.remoteTargets.RLock()
 	defer mc.remoteTargets.RUnlock()
+	log.Info("fizz message center is closing, lock required", zap.Stringer("id", mc.id))
+
 	for _, target := range mc.remoteTargets.m {
 		target.close()
 	}
+
+	log.Info("fizz message center is closing, closed remote targets", zap.Stringer("id", mc.id))
 
 	mc.cancel()
 	if mc.grpcServer != nil {
 		mc.grpcServer.Stop()
 	}
+	log.Info("fizz message center is closing, stopped grpc server", zap.Stringer("id", mc.id))
+
 	mc.grpcServer = nil
 	_ = mc.g.Wait()
 	log.Info("message center is closed", zap.Stringer("id", mc.id))

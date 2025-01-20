@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -48,6 +49,7 @@ type HeartBeatCollector struct {
 	heartBeatReqQueue   *HeartbeatRequestQueue
 	blockStatusReqQueue *BlockStatusRequestQueue
 
+	dispatcherStatusDynamicStream           dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, *dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]
 	heartBeatResponseDynamicStream          dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler]
 	schedulerDispatcherRequestDynamicStream dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler]
 	checkpointTsMessageDynamicStream        dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler]
@@ -59,13 +61,15 @@ type HeartBeatCollector struct {
 }
 
 func NewHeartBeatCollector(serverId node.ID) *HeartBeatCollector {
+	dds := dispatcher.NewDispatcherStatusDynamicStream()
 	heartBeatCollector := HeartBeatCollector{
 		from:                                    serverId,
 		heartBeatReqQueue:                       NewHeartbeatRequestQueue(),
 		blockStatusReqQueue:                     NewBlockStatusRequestQueue(),
-		heartBeatResponseDynamicStream:          GetHeartBeatResponseDynamicStream(),
-		schedulerDispatcherRequestDynamicStream: GetSchedulerDispatcherRequestDynamicStream(),
-		checkpointTsMessageDynamicStream:        GetCheckpointTsMessageDynamicStream(),
+		dispatcherStatusDynamicStream:           dds,
+		heartBeatResponseDynamicStream:          newHeartBeatResponseDynamicStream(dds),
+		schedulerDispatcherRequestDynamicStream: newSchedulerDispatcherRequestDynamicStream(),
+		checkpointTsMessageDynamicStream:        newCheckpointTsMessageDynamicStream(),
 		mc:                                      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 	}
 	heartBeatCollector.mc.RegisterHandler(messaging.HeartbeatCollectorTopic, heartBeatCollector.RecvMessages)
@@ -137,10 +141,13 @@ func (c *HeartBeatCollector) sendHeartBeatMessages(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("heartbeat collector is shutting down")
+			log.Info("heartbeat collector is shutting down, exit sendHeartBeatMessages")
 			return ctx.Err()
 		default:
-			heartBeatRequestWithTargetID := c.heartBeatReqQueue.Dequeue()
+			heartBeatRequestWithTargetID := c.heartBeatReqQueue.Dequeue(ctx)
+			if heartBeatRequestWithTargetID == nil {
+				continue
+			}
 			err := c.mc.SendCommand(
 				messaging.NewSingleTargetMessage(
 					heartBeatRequestWithTargetID.TargetID,
@@ -158,10 +165,13 @@ func (c *HeartBeatCollector) sendBlockStatusMessages(ctx context.Context) error 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("heartbeat collector is shutting down")
+			log.Info("heartbeat collector is shutting down, exit sendBlockStatusMessages")
 			return ctx.Err()
 		default:
-			blockStatusRequestWithTargetID := c.blockStatusReqQueue.Dequeue()
+			blockStatusRequestWithTargetID := c.blockStatusReqQueue.Dequeue(ctx)
+			if blockStatusRequestWithTargetID == nil {
+				continue
+			}
 			err := c.mc.SendCommand(
 				messaging.NewSingleTargetMessage(
 					blockStatusRequestWithTargetID.TargetID,
@@ -180,8 +190,7 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 	case messaging.TypeHeartBeatResponse:
 		// TODO: Change a more appropriate name for HeartBeatResponse. It should be BlockStatusResponse or something else.
 		heartbeatResponse := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
-		heartBeatResponseDynamicStream := GetHeartBeatResponseDynamicStream()
-		heartBeatResponseDynamicStream.Push(
+		c.heartBeatResponseDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(heartbeatResponse.ChangefeedID),
 			NewHeartBeatResponse(heartbeatResponse))
 	case messaging.TypeScheduleDispatcherRequest:

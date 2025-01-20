@@ -121,7 +121,6 @@ func (o *options) run(cmd *cobra.Command) error {
 		}
 		// Close the server
 		svr.Close(ctx)
-
 		if strings.Contains(err.Error(), "ErrCaptureSuicide") {
 			log.Info("server exit with capture suicide error, restart it again", zap.Error(err))
 			time.Sleep(1 * time.Second)
