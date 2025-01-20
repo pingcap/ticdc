@@ -207,17 +207,22 @@ func (m *mockDispatcherManager) onDispatchRequest(
 		dispatchers := make([]*heartbeatpb.TableSpanStatus, 0, len(m.dispatchers))
 		delete(m.dispatchersMap, *request.Config.DispatcherID)
 		for _, status := range m.dispatchers {
-			if status.ID.High != request.Config.DispatcherID.High || status.ID.Low != request.Config.DispatcherID.Low {
-				dispatchers = append(dispatchers, status)
+			newStatus := &heartbeatpb.TableSpanStatus{
+				ID:              status.ID,
+				ComponentStatus: status.ComponentStatus,
+				CheckpointTs:    status.CheckpointTs,
+			}
+			if newStatus.ID.High != request.Config.DispatcherID.High || newStatus.ID.Low != request.Config.DispatcherID.Low {
+				dispatchers = append(dispatchers, newStatus)
 			} else {
-				status.ComponentStatus = heartbeatpb.ComponentState_Stopped
+				newStatus.ComponentStatus = heartbeatpb.ComponentState_Stopped
 				response := &heartbeatpb.HeartBeatRequest{
 					ChangefeedID: m.changefeedID,
 					Watermark: &heartbeatpb.Watermark{
 						CheckpointTs: m.checkpointTs,
 						ResolvedTs:   m.checkpointTs,
 					},
-					Statuses: []*heartbeatpb.TableSpanStatus{status},
+					Statuses: []*heartbeatpb.TableSpanStatus{newStatus},
 				}
 				m.sendMessages(response)
 			}

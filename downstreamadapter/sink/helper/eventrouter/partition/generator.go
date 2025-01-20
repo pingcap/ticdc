@@ -31,8 +31,7 @@ type PartitionGenerator interface {
 
 func GetPartitionGenerator(rule string, scheme string, indexName string, columns []string) PartitionGenerator {
 	switch strings.ToLower(rule) {
-	case "default":
-	case "table":
+	case "default", "table":
 		return newTablePartitionGenerator()
 	case "ts":
 		return newTsPartitionGenerator()
