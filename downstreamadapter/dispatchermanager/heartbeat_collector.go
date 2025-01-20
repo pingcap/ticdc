@@ -43,7 +43,6 @@ Recieve messages include:
 HeartBeatCollector is an instance-level component.
 */
 type HeartBeatCollector struct {
-	wg   sync.WaitGroup
 	from node.ID
 
 	heartBeatReqQueue   *HeartbeatRequestQueue
@@ -54,6 +53,9 @@ type HeartBeatCollector struct {
 	checkpointTsMessageDynamicStream        dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler]
 
 	mc messaging.MessageCenter
+
+	wg     sync.WaitGroup
+	cancel context.CancelFunc
 }
 
 func NewHeartBeatCollector(serverId node.ID) *HeartBeatCollector {
@@ -68,18 +70,31 @@ func NewHeartBeatCollector(serverId node.ID) *HeartBeatCollector {
 	}
 	heartBeatCollector.mc.RegisterHandler(messaging.HeartbeatCollectorTopic, heartBeatCollector.RecvMessages)
 
-	heartBeatCollector.wg.Add(2)
-	go func() {
-		defer heartBeatCollector.wg.Done()
-		heartBeatCollector.sendHeartBeatMessages()
-	}()
-
-	go func() {
-		defer heartBeatCollector.wg.Done()
-		heartBeatCollector.sendBlockStatusMessages()
-	}()
-
 	return &heartBeatCollector
+}
+
+func (c *HeartBeatCollector) Run(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	c.cancel = cancel
+
+	log.Info("heartbeat collector is running")
+
+	c.wg.Add(2)
+	go func() {
+		defer c.wg.Done()
+		err := c.sendHeartBeatMessages(ctx)
+		if err != nil {
+			log.Error("failed to send heartbeat messages", zap.Error(err))
+		}
+	}()
+
+	go func() {
+		defer c.wg.Done()
+		err := c.sendBlockStatusMessages(ctx)
+		if err != nil {
+			log.Error("failed to send block status messages", zap.Error(err))
+		}
+	}()
 }
 
 func (c *HeartBeatCollector) RegisterEventDispatcherManager(m *EventDispatcherManager) error {
@@ -118,32 +133,44 @@ func (c *HeartBeatCollector) RemoveCheckpointTsMessage(changefeedID common.Chang
 	return errors.Trace(err)
 }
 
-func (c *HeartBeatCollector) sendHeartBeatMessages() {
+func (c *HeartBeatCollector) sendHeartBeatMessages(ctx context.Context) error {
 	for {
-		heartBeatRequestWithTargetID := c.heartBeatReqQueue.Dequeue()
-		err := c.mc.SendCommand(
-			messaging.NewSingleTargetMessage(
-				heartBeatRequestWithTargetID.TargetID,
-				messaging.MaintainerManagerTopic,
-				heartBeatRequestWithTargetID.Request,
-			))
-		if err != nil {
-			log.Error("failed to send heartbeat request message", zap.Error(err))
+		select {
+		case <-ctx.Done():
+			log.Info("heartbeat collector is shutting down")
+			return ctx.Err()
+		default:
+			heartBeatRequestWithTargetID := c.heartBeatReqQueue.Dequeue()
+			err := c.mc.SendCommand(
+				messaging.NewSingleTargetMessage(
+					heartBeatRequestWithTargetID.TargetID,
+					messaging.MaintainerManagerTopic,
+					heartBeatRequestWithTargetID.Request,
+				))
+			if err != nil {
+				log.Error("failed to send heartbeat request message", zap.Error(err))
+			}
 		}
 	}
 }
 
-func (c *HeartBeatCollector) sendBlockStatusMessages() {
+func (c *HeartBeatCollector) sendBlockStatusMessages(ctx context.Context) error {
 	for {
-		blockStatusRequestWithTargetID := c.blockStatusReqQueue.Dequeue()
-		err := c.mc.SendCommand(
-			messaging.NewSingleTargetMessage(
-				blockStatusRequestWithTargetID.TargetID,
-				messaging.MaintainerManagerTopic,
-				blockStatusRequestWithTargetID.Request,
-			))
-		if err != nil {
-			log.Error("failed to send block status request message", zap.Error(err))
+		select {
+		case <-ctx.Done():
+			log.Info("heartbeat collector is shutting down")
+			return ctx.Err()
+		default:
+			blockStatusRequestWithTargetID := c.blockStatusReqQueue.Dequeue()
+			err := c.mc.SendCommand(
+				messaging.NewSingleTargetMessage(
+					blockStatusRequestWithTargetID.TargetID,
+					messaging.MaintainerManagerTopic,
+					blockStatusRequestWithTargetID.Request,
+				))
+			if err != nil {
+				log.Error("failed to send block status request message", zap.Error(err))
+			}
 		}
 	}
 }
@@ -177,5 +204,7 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 
 func (c *HeartBeatCollector) Close() {
 	c.mc.DeRegisterHandler(messaging.HeartbeatCollectorTopic)
+	c.cancel()
 	c.wg.Wait()
+	log.Info("heartbeat collector is closed")
 }

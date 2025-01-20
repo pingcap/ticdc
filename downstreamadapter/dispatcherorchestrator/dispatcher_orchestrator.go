@@ -237,3 +237,7 @@ func (m *DispatcherOrchestrator) sendResponse(to node.ID, topic string, msg mess
 	}
 	return nil
 }
+
+func (m *DispatcherOrchestrator) Close() {
+	m.mc.DeRegisterHandler(messaging.DispatcherManagerManagerTopic)
+}

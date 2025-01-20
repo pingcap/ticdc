@@ -117,8 +117,9 @@ func NewMessageCenter(
 	receiveEventCh := make(chan *TargetMessage, cfg.CacheChannelSize)
 	receiveCmdCh := make(chan *TargetMessage, cfg.CacheChannelSize)
 
-	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
+	g, ctx := errgroup.WithContext(ctx)
+
 	mc := &messageCenter{
 		id:             id,
 		epoch:          epoch,
@@ -134,21 +135,28 @@ func NewMessageCenter(
 	}
 	mc.remoteTargets.m = make(map[node.ID]*remoteMessageTarget)
 
-	g.Go(func() error {
+	log.Info("create message center success.",
+		zap.Stringer("id", id), zap.Any("epoch", epoch))
+	return mc
+}
+
+func (mc *messageCenter) Run(ctx context.Context) {
+	mc.g.Go(func() error {
 		mc.router.runDispatch(ctx, mc.receiveEventCh)
 		return nil
 	})
-	g.Go(func() error {
+
+	mc.g.Go(func() error {
 		mc.router.runDispatch(ctx, mc.receiveCmdCh)
 		return nil
 	})
-	g.Go(func() error {
+
+	mc.g.Go(func() error {
 		mc.updateMetrics(ctx)
 		return nil
 	})
-	log.Info("create message center success, message router is running.",
-		zap.Stringer("id", id), zap.Any("epoch", epoch))
-	return mc
+
+	log.Info("Start running message center", zap.Stringer("id", mc.id))
 }
 
 func (mc *messageCenter) RegisterHandler(topic string, handler MessageHandler) {
@@ -281,6 +289,7 @@ func (mc *messageCenter) Close() {
 	}
 	mc.grpcServer = nil
 	_ = mc.g.Wait()
+	log.Info("message center is closed", zap.Stringer("id", mc.id))
 }
 
 // touchRemoteTarget returns the remote target by the id,

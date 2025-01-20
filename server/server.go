@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/logservice/txnutil"
 	"github.com/pingcap/ticdc/maintainer"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	appctx "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -80,7 +79,13 @@ type server struct {
 	RegionCache *tikv.RegionCache
 	PDClock     pdutil.Clock
 
-	tcpServer  tcpserver.TCPServer
+	tcpServer tcpserver.TCPServer
+
+	// preServices is the preServices will be start before the server is running
+	// And will be closed when the server is closing
+	preServices []common.Closeable
+	// subModules is the modules will be start after PreServices are started
+	// And will be closed when the server is closing
 	subModules []common.SubModule
 }
 
@@ -119,20 +124,15 @@ func (c *server) initialize(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	appcontext.SetService(appcontext.DefaultPDClock, c.PDClock)
-
-	appcontext.SetID(c.info.ID.String())
-	messageCenter := messaging.NewMessageCenter(ctx, c.info.ID, c.info.Epoch, config.NewDefaultMessageCenterConfig(), c.security)
-	appcontext.SetService(appcontext.MessageCenter, messageCenter)
-
-	appcontext.SetService(appcontext.EventCollector, eventcollector.New(ctx, c.info.ID))
-	appcontext.SetService(appcontext.HeartbeatCollector, dispatchermanager.NewHeartBeatCollector(c.info.ID))
-	appcontext.SetService(appcontext.DispatcherOrchestrator, dispatcherorchestrator.New())
+	if err := c.setPreServices(ctx); err != nil {
+		log.Error("server set pre services failed", zap.Any("server", c.info), zap.Error(err))
+		return errors.Trace(err)
+	}
 
 	nodeManager := watcher.NewNodeManager(c.session, c.EtcdClient)
 	nodeManager.RegisterNodeChangeHandler(
-		appcontext.MessageCenter,
-		appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter).OnNodeChanges)
+		appctx.MessageCenter,
+		appctx.GetService[messaging.MessageCenter](appctx.MessageCenter).OnNodeChanges)
 
 	conf := config.GetGlobalServerConfig()
 	subscriptionClient := logpuller.NewSubscriptionClient(
@@ -160,6 +160,47 @@ func (c *server) initialize(ctx context.Context) error {
 	for _, subModule := range c.subModules {
 		appctx.SetService(subModule.Name(), subModule)
 	}
+	return nil
+}
+
+// setPreServices sets the preServices
+func (c *server) setPreServices(ctx context.Context) error {
+	// Set ID to Global Context
+	appctx.SetID(c.info.ID.String())
+
+	// Set PDClock to Global Context
+	var err error
+	c.PDClock, err = pdutil.NewClock(ctx, c.pdClient)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	c.PDClock.Run(ctx)
+	appctx.SetService(appctx.DefaultPDClock, c.PDClock)
+	c.preServices = append(c.preServices, c.PDClock)
+	// Set MessageCenter to Global Context
+	messageCenter := messaging.NewMessageCenter(ctx, c.info.ID, c.info.Epoch, config.NewDefaultMessageCenterConfig(), c.security)
+	messageCenter.Run(ctx)
+	appctx.SetService(appctx.MessageCenter, messageCenter)
+	c.preServices = append(c.preServices, messageCenter)
+
+	// Set EventCollector to Global Context
+	ec := eventcollector.New(c.info.ID)
+	ec.Run(ctx)
+	appctx.SetService(appctx.EventCollector, ec)
+	c.preServices = append(c.preServices, ec)
+
+	// Set HeartbeatCollector to Global Context
+	hc := dispatchermanager.NewHeartBeatCollector(c.info.ID)
+	hc.Run(ctx)
+	appctx.SetService(appctx.HeartbeatCollector, hc)
+	c.preServices = append(c.preServices, hc)
+
+	// Set DispatcherOrchestrator to Global Context
+	dispatcherOrchestrator := dispatcherorchestrator.New()
+	appctx.SetService(appctx.DispatcherOrchestrator, dispatcherOrchestrator)
+	c.preServices = append(c.preServices, dispatcherOrchestrator)
+
+	log.Info("pre services all set", zap.Any("preServicesNum", len(c.preServices)))
 	return nil
 }
 
@@ -255,14 +296,18 @@ func (c *server) Close(ctx context.Context) {
 		log.Info("sub module closed", zap.String("module", subModule.Name()))
 	}
 
+	for _, service := range c.preServices {
+		service.Close()
+	}
+
 	// delete server info from etcd
 	timeoutCtx, cancel := context.WithTimeout(context.Background(), cleanMetaDuration)
+	defer cancel()
 	if err := c.EtcdClient.DeleteCaptureInfo(timeoutCtx, model.CaptureID(c.info.ID)); err != nil {
 		log.Warn("failed to delete server info when server exited",
 			zap.String("captureID", string(c.info.ID)),
 			zap.Error(err))
 	}
-	cancel()
 }
 
 // Liveness returns liveness of the server.
