@@ -14,6 +14,7 @@
 package messaging
 
 import (
+	"context"
 	"testing"
 
 	"github.com/pingcap/log"
@@ -26,9 +27,10 @@ import (
 func newRemoteMessageTargetForTest() *remoteMessageTarget {
 	localId := node.NewID()
 	remoteId := node.NewID()
+	ctx := context.Background()
 	cfg := config.NewDefaultMessageCenterConfig()
 	receivedMsgCh := make(chan *TargetMessage, 1)
-	rt := newRemoteMessageTarget(localId, remoteId, 1, 1, "", receivedMsgCh, receivedMsgCh, cfg, nil)
+	rt := newRemoteMessageTarget(ctx, localId, remoteId, 1, 1, "", receivedMsgCh, receivedMsgCh, cfg, nil)
 	return rt
 }
 

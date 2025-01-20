@@ -119,7 +119,8 @@ func (f *filter) FilterDDLEvent(ddl *commonEvent.DDLEvent) error {
 	finalQuery := make([]string, 0, len(queryList))
 	for i, query := range queryList {
 		tableInfo := multiTableInfos[i]
-		// 只需要 判断 table name 需不需要过滤就行，如果 schema name 要过滤的话，整个 query 就不会给 dispatcher 了
+		// Only need to check if table name needs to be filtered,
+		// if schema name needs to be filtered, the entire query will not be given to dispatcher
 		tableName := tableInfo.TableName.Table
 		if !f.ShouldIgnoreTable(schemaName, tableName) {
 			finalQuery = append(finalQuery, query)
@@ -128,7 +129,7 @@ func (f *filter) FilterDDLEvent(ddl *commonEvent.DDLEvent) error {
 	if len(finalQuery) != len(queryList) {
 		ddl.Query = strings.Join(finalQuery, ";")
 	}
-	// TODO: 应该同时要更新一下 ddl 依赖的 table 信息
+	// TODO: Should also update the table information that ddl depends on
 	return nil
 }
 

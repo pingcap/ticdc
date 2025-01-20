@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
@@ -31,8 +30,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -54,7 +55,11 @@ One EventDispatcherManager has one backend sink.
 */
 type EventDispatcherManager struct {
 	changefeedID common.ChangeFeedID
-	maintainerID node.ID
+
+	maintainerIDMutex sync.Mutex
+	maintainerID      node.ID
+
+	pdClock pdutil.Clock
 
 	config       *config.ChangefeedConfig
 	filterConfig *eventpb.FilterConfig
@@ -121,13 +126,17 @@ func NewEventDispatcherManager(
 	newChangefeed bool,
 ) (*EventDispatcherManager, uint64, error) {
 	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	manager := &EventDispatcherManager{
 		dispatcherMap:                          newDispatcherMap(),
 		changefeedID:                           changefeedID,
 		maintainerID:                           maintainerID,
+		pdClock:                                pdClock,
 		statusesChan:                           make(chan TableSpanStatusWithSeq, 8192),
 		blockStatusesChan:                      make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		errCh:                                  make(chan error, 1),
+		wg:                                     wg,
 		cancel:                                 cancel,
 		config:                                 cfConfig,
 		filterConfig:                           toFilterConfigPB(cfConfig.Filter),
@@ -151,7 +160,8 @@ func NewEventDispatcherManager(
 		}
 	}
 
-	err := manager.startSink(ctx)
+	var err error
+	manager.sink, err = sink.NewSink(ctx, manager.config, manager.changefeedID)
 	if err != nil {
 		return nil, 0, errors.Trace(err)
 	}
@@ -163,27 +173,6 @@ func NewEventDispatcherManager(
 		return nil, 0, errors.Trace(err)
 	}
 
-	// collect errors from error channel
-	manager.wg.Add(1)
-	go func() {
-		defer manager.wg.Done()
-		manager.collectErrors(ctx)
-	}()
-
-	// collect heart beat info from all dispatchers
-	manager.wg.Add(1)
-	go func() {
-		defer manager.wg.Done()
-		manager.collectComponentStatusWhenChanged(ctx)
-	}()
-
-	// collect block status from all dispatchers
-	manager.wg.Add(1)
-	go func() {
-		defer manager.wg.Done()
-		manager.collectBlockStatusRequest(ctx)
-	}()
-
 	var tableTriggerStartTs uint64 = 0
 	// init table trigger event dispatcher when tableTriggerEventDispatcherID is not nil
 	if tableTriggerEventDispatcherID != nil {
@@ -192,21 +181,49 @@ func NewEventDispatcherManager(
 			return nil, 0, errors.Trace(err)
 		}
 	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err = manager.sink.Run(ctx)
+		if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
+			select {
+			case <-ctx.Done():
+				return
+			case manager.errCh <- err:
+			default:
+				log.Error("error channel is full, discard error", zap.Any("changefeedID", changefeedID.String()), zap.Error(err))
+			}
+		}
+	}()
+
+	// collect errors from error channel
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		manager.collectErrors(ctx)
+	}()
+
+	// collect heart beat info from all dispatchers
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		manager.collectComponentStatusWhenChanged(ctx)
+	}()
+
+	// collect block status from all dispatchers
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		manager.collectBlockStatusRequest(ctx)
+	}()
+
 	log.Info("event dispatcher manager created",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("maintainerID", maintainerID),
 		zap.Uint64("startTs", startTs),
 		zap.Uint64("tableTriggerStartTs", tableTriggerStartTs))
 	return manager, tableTriggerStartTs, nil
-}
-
-func (e *EventDispatcherManager) startSink(ctx context.Context) error {
-	sink, err := sink.NewSink(ctx, e.config, e.changefeedID, e.errCh)
-	if err != nil {
-		return err
-	}
-	e.sink = sink
-	return nil
 }
 
 func (e *EventDispatcherManager) TryClose(removeChangefeed bool) bool {
@@ -234,10 +251,14 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 				log.Error("remove checkpointTs message failed", zap.Any("changefeedID", e.changefeedID), zap.Error(err))
 			}
 		}
-		dispatcher.Remove()
+
 		_, ok := dispatcher.TryClose()
 		if !ok {
 			toCloseDispatchers = append(toCloseDispatchers, dispatcher)
+		} else {
+			// remove should be called after dispatcher can be closed succesfully
+			// For example, dispatcher may wait the ack from maintainer to pass the create table ddl event in tableProgress
+			dispatcher.Remove()
 		}
 	})
 
@@ -248,6 +269,9 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 			_, ok = dispatcher.TryClose()
 			time.Sleep(10 * time.Millisecond)
 		}
+		// remove should be called after dispatcher can be closed succesfully
+		// For example, dispatcher may wait the ack from maintainer to pass the create table ddl event in tableProgress
+		dispatcher.Remove()
 	}
 
 	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(e)
@@ -264,12 +288,7 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 		e.heartBeatTask.Cancel()
 	}
 
-	err = e.sink.Close(removeChangefeed)
-	if err != nil && errors.Cause(err) != context.Canceled {
-		log.Error("close sink failed", zap.Error(err))
-		return
-	}
-
+	e.sink.Close(removeChangefeed)
 	e.cancel()
 	e.wg.Wait()
 
@@ -434,7 +453,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			zap.Any("startTs", newStartTsList[idx]))
 
 	}
-	e.metricCreateDispatcherDuration.Observe(float64(time.Since(start).Seconds()) / float64(len(dispatcherIds)))
+	e.metricCreateDispatcherDuration.Observe(time.Since(start).Seconds() / float64(len(dispatcherIds)))
 	log.Info("batch create new dispatchers",
 		zap.Any("changefeedID", e.changefeedID.Name()),
 		zap.Any("namespace", e.changefeedID.Namespace()),
@@ -445,36 +464,38 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 
 // collectErrors collect the errors from the error channel and report to the maintainer.
 func (e *EventDispatcherManager) collectErrors(ctx context.Context) {
-	select {
-	case <-ctx.Done():
-		return
-	case err := <-e.errCh:
-		if errors.Cause(err) != context.Canceled {
-			log.Error("Event Dispatcher Manager Meets Error",
-				zap.String("changefeedID", e.changefeedID.String()),
-				zap.Error(err))
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case err := <-e.errCh:
+			if !errors.Is(errors.Cause(err), context.Canceled) {
+				log.Error("Event Dispatcher Manager Meets Error",
+					zap.String("changefeedID", e.changefeedID.String()),
+					zap.Error(err))
 
-			// report error to maintainer
-			var message heartbeatpb.HeartBeatRequest
-			message.ChangefeedID = e.changefeedID.ToPB()
-			message.Err = &heartbeatpb.RunningError{
-				Time:    time.Now().String(),
-				Node:    appcontext.GetID(),
-				Code:    string(apperror.ErrorCode(err)),
-				Message: err.Error(),
-			}
-			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+				// report error to maintainer
+				var message heartbeatpb.HeartBeatRequest
+				message.ChangefeedID = e.changefeedID.ToPB()
+				message.Err = &heartbeatpb.RunningError{
+					Time:    time.Now().String(),
+					Node:    appcontext.GetID(),
+					Code:    string(apperror.ErrorCode(err)),
+					Message: err.Error(),
+				}
+				e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 
-			// resend message until the event dispatcher manager is closed
-			// the first error is matter most, so we just need to resend it continuely and ignore the other errors.
-			ticker := time.NewTicker(time.Second * 5)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+				// resend message until the event dispatcher manager is closed
+				// the first error is matter most, so we just need to resend it continue and ignore the other errors.
+				ticker := time.NewTicker(time.Second * 5)
+				for {
+					select {
+					case <-ctx.Done():
+						ticker.Stop()
+						return
+					case <-ticker.C:
+						e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+					}
 				}
 			}
 		}
@@ -647,8 +668,9 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	phyCheckpointTs := oracle.ExtractPhysical(message.Watermark.CheckpointTs)
 	phyResolvedTs := oracle.ExtractPhysical(message.Watermark.ResolvedTs)
 
-	e.metricCheckpointTsLag.Set(float64(oracle.GetPhysical(time.Now())-phyCheckpointTs) / 1e3)
-	e.metricResolvedTsLag.Set(float64(oracle.GetPhysical(time.Now())-phyResolvedTs) / 1e3)
+	pdTime := e.pdClock.CurrentTime()
+	e.metricCheckpointTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyCheckpointTs) / 1e3)
+	e.metricResolvedTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3)
 	return &message
 }
 
@@ -697,10 +719,14 @@ func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap {
 }
 
 func (e *EventDispatcherManager) GetMaintainerID() node.ID {
+	e.maintainerIDMutex.Lock()
+	defer e.maintainerIDMutex.Unlock()
 	return e.maintainerID
 }
 
 func (e *EventDispatcherManager) SetMaintainerID(maintainerID node.ID) {
+	e.maintainerIDMutex.Lock()
+	defer e.maintainerIDMutex.Unlock()
 	e.maintainerID = maintainerID
 }
 

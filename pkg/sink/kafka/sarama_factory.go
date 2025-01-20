@@ -18,48 +18,51 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/rcrowley/go-metrics"
 	"go.uber.org/zap"
 )
 
 type saramaFactory struct {
 	changefeedID common.ChangeFeedID
-	option       *Options
-
-	registry metrics.Registry
+	config       *sarama.Config
+	endpoints    []string
 }
 
 // NewSaramaFactory constructs a Factory with sarama implementation.
 func NewSaramaFactory(
+	ctx context.Context,
 	o *Options,
 	changefeedID common.ChangeFeedID,
 ) (Factory, error) {
+	start := time.Now()
+	saramaConfig, err := NewSaramaConfig(ctx, o)
+	duration := time.Since(start).Seconds()
+	if duration > 2 {
+		log.Warn("new sarama config cost too much time",
+			zap.Any("duration", duration), zap.Stringer("changefeedID", changefeedID))
+	}
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	saramaConfig.MetricRegistry = metrics.NewRegistry()
+
 	return &saramaFactory{
 		changefeedID: changefeedID,
-		option:       o,
-		registry:     metrics.NewRegistry(),
+		endpoints:    o.BrokerEndpoints,
+		config:       saramaConfig,
 	}, nil
 }
 
-func (f *saramaFactory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
+func (f *saramaFactory) AdminClient() (ClusterAdminClient, error) {
 	start := time.Now()
-	config, err := NewSaramaConfig(ctx, f.option)
+	client, err := sarama.NewClient(f.endpoints, f.config)
 	duration := time.Since(start).Seconds()
 	if duration > 2 {
-		log.Warn("new sarama config cost too much time", zap.Any("duration", duration), zap.Stringer("changefeedID", f.changefeedID))
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	start = time.Now()
-	client, err := sarama.NewClient(f.option.BrokerEndpoints, config)
-	duration = time.Since(start).Seconds()
-	if duration > 2 {
-		log.Warn("new sarama client cost too much time", zap.Any("duration", duration), zap.Stringer("changefeedID", f.changefeedID))
+		log.Warn("new sarama client cost too much time",
+			zap.Any("duration", duration), zap.Stringer("changefeedID", f.changefeedID))
 	}
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -69,7 +72,8 @@ func (f *saramaFactory) AdminClient(ctx context.Context) (ClusterAdminClient, er
 	admin, err := sarama.NewClusterAdminFromClient(client)
 	duration = time.Since(start).Seconds()
 	if duration > 2 {
-		log.Warn("new sarama cluster admin cost too much time", zap.Any("duration", duration), zap.Stringer("changefeedID", f.changefeedID))
+		log.Warn("new sarama cluster admin cost too much time",
+			zap.Any("duration", duration), zap.Stringer("changefeedID", f.changefeedID))
 	}
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -83,14 +87,8 @@ func (f *saramaFactory) AdminClient(ctx context.Context) (ClusterAdminClient, er
 
 // SyncProducer returns a Sync Producer,
 // it should be the caller's responsibility to close the producer
-func (f *saramaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	config, err := NewSaramaConfig(ctx, f.option)
-	if err != nil {
-		return nil, err
-	}
-	config.MetricRegistry = f.registry
-
-	client, err := sarama.NewClient(f.option.BrokerEndpoints, config)
+func (f *saramaFactory) SyncProducer() (SyncProducer, error) {
+	client, err := sarama.NewClient(f.endpoints, f.config)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -108,16 +106,8 @@ func (f *saramaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) 
 
 // AsyncProducer return an Async Producer,
 // it should be the caller's responsibility to close the producer
-func (f *saramaFactory) AsyncProducer(
-	ctx context.Context,
-) (AsyncProducer, error) {
-	config, err := NewSaramaConfig(ctx, f.option)
-	if err != nil {
-		return nil, err
-	}
-	config.MetricRegistry = f.registry
-
-	client, err := sarama.NewClient(f.option.BrokerEndpoints, config)
+func (f *saramaFactory) AsyncProducer(_ context.Context) (AsyncProducer, error) {
+	client, err := sarama.NewClient(f.endpoints, f.config)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -136,5 +126,10 @@ func (f *saramaFactory) AsyncProducer(
 func (f *saramaFactory) MetricsCollector(
 	adminClient ClusterAdminClient,
 ) MetricsCollector {
-	return NewSaramaMetricsCollector(f.changefeedID, adminClient, f.registry)
+	return &saramaMetricsCollector{
+		changefeedID: f.changefeedID,
+		adminClient:  adminClient,
+		brokers:      make(map[int32]struct{}),
+		registry:     f.config.MetricRegistry,
+	}
 }

@@ -22,9 +22,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -405,7 +405,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 		encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
 		require.NoError(t, err)
 		err = encoder.AppendRowChangedEvent(context.Background(), "", rowEvent)
-		require.ErrorIs(t, err, cerror.ErrMessageTooLarge)
+		require.ErrorIs(t, err, errors.ErrMessageTooLarge)
 	}
 	// message large + handle only
 	{
@@ -760,8 +760,7 @@ func TestCheckpointTs(t *testing.T) {
 	helper := pevent.NewEventTestHelper(t)
 	defer helper.Close()
 
-	protocolConfig :=
-		common.NewConfig(config.ProtocolCanalJSON)
+	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
 	encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
 	require.NoError(t, err)
 

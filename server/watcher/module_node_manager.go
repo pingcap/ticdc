@@ -31,8 +31,10 @@ import (
 
 const NodeManagerName = "node-manager"
 
-type NodeChangeHandler func(map[node.ID]*node.Info)
-type OwnerChangeHandler func(newOwnerKeys string)
+type (
+	NodeChangeHandler  func(map[node.ID]*node.Info)
+	OwnerChangeHandler func(newOwnerKeys string)
+)
 
 // NodeManager manager the read view of all captures, other modules can get the captures information from it
 // and register server update event handler
@@ -142,6 +144,10 @@ func (c *NodeManager) Tick(
 // GetAliveNodes get all alive captures, the caller mustn't modify the returned map
 func (c *NodeManager) GetAliveNodes() map[node.ID]*node.Info {
 	return *c.nodes.Load()
+}
+
+func (c *NodeManager) GetNodeInfo(id node.ID) *node.Info {
+	return (*c.nodes.Load())[id]
 }
 
 func (c *NodeManager) Run(ctx context.Context) error {

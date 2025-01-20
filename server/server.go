@@ -19,7 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcherorchestrator"
@@ -33,16 +32,16 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	appctx "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	tiserver "github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pingcap/tiflow/pkg/tcpserver"
 	"github.com/tikv/client-go/v2/tikv"
@@ -57,6 +56,9 @@ const (
 )
 
 type server struct {
+	// mu is used to protect the server's Run method
+	mu sync.Mutex
+
 	info *node.Info
 
 	liveness model.Liveness
@@ -117,6 +119,8 @@ func (c *server) initialize(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
+	appcontext.SetService(appcontext.DefaultPDClock, c.PDClock)
+
 	appcontext.SetID(c.info.ID.String())
 	messageCenter := messaging.NewMessageCenter(ctx, c.info.ID, c.info.Epoch, config.NewDefaultMessageCenterConfig(), c.security)
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
@@ -156,34 +160,38 @@ func (c *server) initialize(ctx context.Context) error {
 	for _, subModule := range c.subModules {
 		appctx.SetService(subModule.Name(), subModule)
 	}
-	// start tcp server
-	go func() {
-		err := c.tcpServer.Run(ctx)
-		if err != nil {
-			log.Error("tcp server exist", zap.Error(cerror.Trace(err)))
-		}
-	}()
-	log.Info("server initialized", zap.Any("server", c.info))
 	return nil
 }
 
 // Run runs the server
 func (c *server) Run(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	err := c.initialize(ctx)
 	if err != nil {
 		log.Error("init server failed", zap.Error(err))
 		return errors.Trace(err)
 	}
-	defer func() {
-		c.Close(ctx)
-	}()
 
 	g, ctx := errgroup.WithContext(ctx)
+	// start tcp server
+	g.Go(func() error {
+		log.Info("tcp server start to run")
+		err = c.tcpServer.Run(ctx)
+		if err != nil {
+			log.Error("tcp server exited", zap.Error(errors.Trace(err)))
+		}
+		return nil
+	})
+
+	log.Info("server initialized", zap.Any("server", c.info))
 	// start all submodules
 	for _, sub := range c.subModules {
 		func(m common.SubModule) {
 			g.Go(func() error {
 				log.Info("starting sub module", zap.String("module", m.Name()))
+				defer log.Info("sub module exited", zap.String("module", m.Name()))
 				return m.Run(ctx)
 			})
 		}(sub)
@@ -193,7 +201,12 @@ func (c *server) Run(ctx context.Context) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	return errors.Trace(g.Wait())
+
+	err = g.Wait()
+	if err != nil {
+		log.Error("server exited", zap.Error(err))
+	}
+	return errors.Trace(err)
 }
 
 // SelfInfo gets the server info
@@ -202,7 +215,7 @@ func (c *server) SelfInfo() (*node.Info, error) {
 	if c.info != nil {
 		return c.info, nil
 	}
-	return nil, cerror.ErrCaptureNotInitialized.GenWithStackByArgs()
+	return nil, errors.ErrCaptureNotInitialized.GenWithStackByArgs()
 }
 
 func (c *server) setCoordinator(co tiserver.Coordinator) {
@@ -216,7 +229,7 @@ func (c *server) GetCoordinator() (tiserver.Coordinator, error) {
 	c.coordinatorMu.Lock()
 	defer c.coordinatorMu.Unlock()
 	if c.coordinator == nil {
-		return nil, cerror.ErrNotOwner.GenWithStackByArgs()
+		return nil, errors.ErrNotOwner.GenWithStackByArgs()
 	}
 	return c.coordinator, nil
 }
@@ -239,6 +252,7 @@ func (c *server) Close(ctx context.Context) {
 				zap.String("watcher", subModule.Name()),
 				zap.Error(err))
 		}
+		log.Info("sub module closed", zap.String("module", subModule.Name()))
 	}
 
 	// delete server info from etcd
@@ -295,7 +309,7 @@ func (c *server) GetCoordinatorInfo(ctx context.Context) (*node.Info, error) {
 			return res, nil
 		}
 	}
-	return nil, cerror.ErrOwnerNotFound.FastGenByArgs()
+	return nil, errors.ErrOwnerNotFound.FastGenByArgs()
 }
 
 func isErrCompacted(err error) bool {

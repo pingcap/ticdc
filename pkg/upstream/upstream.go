@@ -24,10 +24,11 @@ import (
 	"github.com/benbjohnson/clock"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	tidbkv "github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/store/driver"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/security"
 	tikvconfig "github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikv"
@@ -154,7 +155,7 @@ func initUpstream(ctx context.Context, up *Upstream) error {
 			return errors.Trace(err)
 		}
 
-		etcdCli, err := CreateRawEtcdClient(up.SecurityConfig, grpcTLSOption, up.PdEndpoints...)
+		etcdCli, err := etcd.CreateRawEtcdClient(up.SecurityConfig, grpcTLSOption, up.PdEndpoints...)
 		if err != nil {
 			return errors.Trace(err)
 		}

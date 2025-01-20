@@ -146,18 +146,35 @@ EOF
 		run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --tz="Asia/Shanghai"
 	fi
 
-	# Smoke test unsafe commands
+	# Test unsafe commands
+	echo "Start delete service gc safepoint"
 	echo "y" | run_cdc_cli unsafe delete-service-gc-safepoint
+	echo "Pass delete service gc safepoint"
+
+	echo "Start reset"
 	run_cdc_cli unsafe reset --no-confirm --pd=$pd_addr
+	echo "Pass reset"
+
+	# Check if the coordinator is online
+	for i in {1..100}; do
+		curl -s -X GET "http://127.0.0.1:8300/api/v2/captures" | grep -q "\"is_coordinator\":true"
+		if [[ $? -eq 0 ]]; then
+			break
+		fi
+		echo "owner is not online, retry again, this is the $i time"
+		sleep 1
+	done
+	if [[ $? -ne 0 ]]; then
+		echo "[$(date)] <<<<< coordinator is not online >>>>>"
+		run_cdc_cli capture list
+		exit 1
+	fi
+
 	REGION_ID=$(pd-ctl -u=$pd_addr region | jq '.regions[0].id')
 	TS=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
-	# wait for owner online
-	sleep 3
 	run_cdc_cli unsafe resolve-lock --region=$REGION_ID
 	run_cdc_cli unsafe resolve-lock --region=$REGION_ID --ts=$TS
 
-	# Smoke test change log level
-	curl -X POST -d '"warn"' http://127.0.0.1:8300/api/v2/log
 	sleep 3
 	# make sure TiCDC does not panic
 	curl http://127.0.0.1:8300/status

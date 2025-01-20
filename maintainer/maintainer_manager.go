@@ -27,8 +27,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/threadpool"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 )
@@ -358,6 +358,14 @@ func (m *Manager) dispatcherMaintainerMessage(
 
 func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) (*Maintainer, bool) {
 	c, ok := m.maintainers.Load(changefeedID)
+
+	m.maintainers.Range(func(key, value interface{}) bool {
+		log.Info("fizz maintainer",
+			zap.String("GID", key.(common.ChangeFeedID).Id.String()),
+			zap.String("Name", key.(common.ChangeFeedID).DisplayName.String()))
+		return true
+	})
+
 	if !ok {
 		return nil, false
 	}

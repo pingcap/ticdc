@@ -17,7 +17,7 @@ import (
 	"errors"
 	"time"
 
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
 // ChangefeedSchedulerConfig is per changefeed scheduler settings.

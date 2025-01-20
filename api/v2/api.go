@@ -41,7 +41,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	// For compatibility with the old API.
 	// TiDB Operator relies on this API to determine whether the TiCDC node is healthy.
 	router.GET("/status", api.serverStatus)
-	// Intergration test relies on this API to determine whether the TiCDC node is healthy.
+	// Integration test relies on this API to determine whether the TiCDC node is healthy.
 	router.GET("/debug/info", gin.WrapF(api.handleDebugInfo))
 
 	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
@@ -57,9 +57,11 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, authenticateMiddleware, api.resumeChangefeed)
 	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, authenticateMiddleware, api.pauseChangefeed)
 	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, api.deleteChangefeed)
-	changefeedGroup.POST("/:changefeed_id/move_table", coordinatorMiddleware, authenticateMiddleware, api.moveTable)
-	changefeedGroup.GET("/:changefeed_id/get_dispatcher_count", coordinatorMiddleware, api.getDispatcherCount)
-	changefeedGroup.GET("/:changefeed_id/tables", coordinatorMiddleware, api.listTables)
+
+	// internal APIs
+	changefeedGroup.POST("/:changefeed_id/move_table", authenticateMiddleware, api.moveTable)
+	changefeedGroup.GET("/:changefeed_id/get_dispatcher_count", api.getDispatcherCount)
+	changefeedGroup.GET("/:changefeed_id/tables", api.listTables)
 
 	// capture apis
 	captureGroup := v2.Group("/captures")

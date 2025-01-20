@@ -153,8 +153,7 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, count, 0)
-
-	require.Equal(t, sink.IsNormal(), false)
+	require.False(t, sink.IsNormal())
 }
 
 // test the situation meets error when executing DDL
@@ -192,9 +191,10 @@ func TestMysqlSinkMeetsDDLError(t *testing.T) {
 	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnError(errors.New("connect: connection refused"))
 	mock.ExpectRollback()
 
-	sink.WriteBlockEvent(ddlEvent)
+	err := sink.WriteBlockEvent(ddlEvent)
+	require.Error(t, err)
 
-	err := mock.ExpectationsWereMet()
+	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
 
 	require.Equal(t, count, 0)

@@ -71,7 +71,7 @@ type DDLEvent struct {
 	TableNameChange *TableNameChange `json:"table_name_change"`
 
 	TiDBOnly bool `json:"tidb_only"`
-	// 用于在event flush 后执行，后续兼容不同下游的时候要看是不是要拆下去
+	// Call when event flush is completed
 	PostTxnFlushed []func() `json:"-"`
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
 	eventSize int64 `json:"-"`
@@ -115,20 +115,12 @@ func (d *DDLEvent) GetPrevTableName() string {
 	return d.PrevTableName
 }
 
-func (d *DDLEvent) IsMultiEvents() bool {
-	switch model.ActionType(d.Type) {
-	case model.ActionExchangeTablePartition,
-		model.ActionCreateTables:
-		return true
-	default:
-		return false
-	}
-}
-
-func (d *DDLEvent) GetSubEvents() []DDLEvent {
+func (d *DDLEvent) GetEvents() []*DDLEvent {
+	// Some ddl event may be multi-events, we need to split it into multiple messages.
+	// Such as rename table test.table1 to test.table10, test.table2 to test.table20
 	switch model.ActionType(d.Type) {
 	case model.ActionExchangeTablePartition:
-		return []DDLEvent{
+		return []*DDLEvent{
 			// partition table before exchange
 			{
 				Version: d.Version,
@@ -153,26 +145,26 @@ func (d *DDLEvent) GetSubEvents() []DDLEvent {
 			},
 		}
 	case model.ActionCreateTables:
-		events := make([]DDLEvent, 0, len(d.TableNameChange.AddName))
+		events := make([]*DDLEvent, 0, len(d.TableNameChange.AddName))
 		// TODO: don't use ; to split query, please use parser
-		querys := strings.Split(d.Query, ";")
-		if len(querys) != len(d.TableNameChange.AddName) {
-			log.Panic("querys length should be equal to addName length", zap.String("query", d.Query), zap.Any("addName", d.TableNameChange.AddName))
+		queries := strings.Split(d.Query, ";")
+		if len(queries) != len(d.TableNameChange.AddName) {
+			log.Panic("queries length should be equal to addName length", zap.String("query", d.Query), zap.Any("addName", d.TableNameChange.AddName))
 		}
 		for i, schemaAndTable := range d.TableNameChange.AddName {
-			events = append(events, DDLEvent{
+			events = append(events, &DDLEvent{
 				Version:    d.Version,
 				Type:       d.Type,
 				SchemaName: schemaAndTable.SchemaName,
 				TableName:  schemaAndTable.TableName,
-				Query:      querys[i],
+				Query:      queries[i],
 				FinishedTs: d.FinishedTs,
 			})
 		}
 		return events
 	default:
-		return nil
 	}
+	return []*DDLEvent{d}
 }
 
 func (d *DDLEvent) GetSeq() uint64 {

@@ -284,7 +284,7 @@ func NewPulsarConsumer(option *ConsumerOption) (pulsar.Consumer, pulsar.Client) 
 			auth.ConfigParamScope:     option.oauth2Scope,
 			auth.ConfigParamType:      auth.ConfigParamTypeClientCredentials,
 		})
-		log.Info("oauth2 authentication is enabled", zap.String("issuer url", option.oauth2IssuerURL))
+		log.Info("oauth2 authentication is enabled", zap.String("issuerUrl", option.oauth2IssuerURL))
 		clientOption.Authentication = authentication
 	}
 	if len(option.mtlsAuthTLSCertificatePath) != 0 {

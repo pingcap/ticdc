@@ -14,8 +14,7 @@
 package orchestrator
 
 import (
-	"github.com/pingcap/errors"
-	cerrors "github.com/pingcap/tiflow/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	tiorchestrator "github.com/pingcap/tiflow/pkg/orchestrator"
 	"github.com/pingcap/tiflow/pkg/orchestrator/util"
 )
@@ -48,10 +47,10 @@ func getBatchChangedState(state map[util.EtcdKey][]byte, patchGroups [][]tiorche
 		// we should return an error instantly
 		if i == 0 {
 			if changedSize > etcdTxnMaxSize {
-				return nil, 0, 0, cerrors.ErrEtcdTxnSizeExceed.GenWithStackByArgs(changedSize, etcdTxnMaxSize)
+				return nil, 0, 0, errors.ErrEtcdTxnSizeExceed.GenWithStackByArgs(changedSize, etcdTxnMaxSize)
 			}
 			if len(changedState) > etcdTxnMaxOps {
-				return nil, 0, 0, cerrors.ErrEtcdTxnOpsExceed.GenWithStackByArgs(len(changedState), etcdTxnMaxOps)
+				return nil, 0, 0, errors.ErrEtcdTxnOpsExceed.GenWithStackByArgs(len(changedState), etcdTxnMaxOps)
 			}
 		}
 
@@ -77,7 +76,7 @@ func getChangedState(state map[util.EtcdKey][]byte, patches []tiorchestrator.Dat
 	for _, patch := range patches {
 		err := patch.Patch(state, changedSet)
 		if err != nil {
-			if cerrors.ErrEtcdIgnore.Equal(errors.Cause(err)) {
+			if errors.ErrEtcdIgnore.Equal(errors.Cause(err)) {
 				continue
 			}
 			return nil, 0, errors.Trace(err)

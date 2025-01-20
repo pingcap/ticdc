@@ -15,61 +15,53 @@ package kafka
 
 import (
 	"context"
-	"testing"
 
 	"github.com/IBM/sarama"
 	"github.com/IBM/sarama/mocks"
 	"github.com/pingcap/errors"
 	ticommon "github.com/pingcap/ticdc/pkg/common"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 )
 
 // MockFactory is a mock implementation of Factory interface.
 type MockFactory struct {
-	o            *Options
-	changefeedID ticommon.ChangeFeedID
+	changefeedID  ticommon.ChangeFeedID
+	config        *sarama.Config
+	ErrorReporter mocks.ErrorReporter
 }
 
 // NewMockFactory constructs a Factory with mock implementation.
 func NewMockFactory(
+	_ context.Context,
 	o *Options, changefeedID ticommon.ChangeFeedID,
 ) (Factory, error) {
+	config, err := NewSaramaConfig(context.Background(), o)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
 	return &MockFactory{
-		o:            o,
 		changefeedID: changefeedID,
+		config:       config,
 	}, nil
 }
 
 // AdminClient return a mocked admin client
-func (f *MockFactory) AdminClient(_ context.Context) (ClusterAdminClient, error) {
+func (f *MockFactory) AdminClient() (ClusterAdminClient, error) {
 	return NewClusterAdminClientMockImpl(), nil
 }
 
 // SyncProducer creates a sync producer
-func (f *MockFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	config, err := NewSaramaConfig(ctx, f.o)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	t := ctx.Value("testing.T").(*testing.T)
-	syncProducer := mocks.NewSyncProducer(t, config)
+func (f *MockFactory) SyncProducer() (SyncProducer, error) {
+	syncProducer := mocks.NewSyncProducer(f.ErrorReporter, f.config)
 	return &MockSaramaSyncProducer{
 		Producer: syncProducer,
 	}, nil
 }
 
 // AsyncProducer creates an async producer
-func (f *MockFactory) AsyncProducer(
-	ctx context.Context,
-) (AsyncProducer, error) {
-	config, err := NewSaramaConfig(ctx, f.o)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	t := ctx.Value("testing.T").(*testing.T)
-	asyncProducer := mocks.NewAsyncProducer(t, config)
+func (f *MockFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
+	asyncProducer := mocks.NewAsyncProducer(f.ErrorReporter, f.config)
 	return &MockSaramaAsyncProducer{
 		AsyncProducer: asyncProducer,
 		failpointCh:   make(chan error, 1),

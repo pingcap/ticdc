@@ -451,9 +451,8 @@ func (h *CheckpointTsMessageHandler) Handle(eventDispatcherManager *EventDispatc
 		panic("invalid message count")
 	}
 	checkpointTsMessage := messages[0]
-	if eventDispatcherManager.tableTriggerEventDispatcher != nil && eventDispatcherManager.sink.SinkType() != common.MysqlSinkType {
-		tableTriggerEventDispatcher := eventDispatcherManager.tableTriggerEventDispatcher
-		tableTriggerEventDispatcher.HandleCheckpointTs(checkpointTsMessage.CheckpointTs)
+	if eventDispatcherManager.tableTriggerEventDispatcher != nil {
+		eventDispatcherManager.tableTriggerEventDispatcher.HandleCheckpointTs(checkpointTsMessage.CheckpointTs)
 	}
 	return false
 }
