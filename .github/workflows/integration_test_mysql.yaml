@@ -369,111 +369,111 @@ jobs:
   #       with:
   #         log-name: e2e_test_group_2
 
-  # e2e_test_group_3:
-  #   ## Only run ci when PR is not draft
-  #   if: github.event.pull_request.draft == false
+  e2e_test_group_3:
+    ## Only run ci when PR is not draft
+    if: github.event.pull_request.draft == false
 
-  #   runs-on: ubuntu-latest 
-  #   name: E2E Test Group 3
-  #   steps:
-  #     - name: Check out code
-  #       uses: actions/checkout@v2
+    runs-on: ubuntu-latest 
+    name: E2E Test Group 3
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2
 
-  #     - name: Setup Go environment
-  #       uses: actions/setup-go@v3
-  #       with:
-  #         go-version: '1.23'
+      - name: Setup Go environment
+        uses: actions/setup-go@v3
+        with:
+          go-version: '1.23'
 
-  #     - name: Integration Build
-  #       run: |
-  #         tests/scripts/download-integration-test-binaries.sh master true
-  #         go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
-  #         make integration_test_build
-  #         ls -l bin/ && ls -l tools/bin/
+      - name: Integration Build
+        run: |
+          tests/scripts/download-integration-test-binaries.sh master true
+          go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
+          make integration_test_build
+          ls -l bin/ && ls -l tools/bin/
 
-  #     # - name: Test http_api
-  #     #   if: ${{ success() }}
-  #     #   run: |
-  #     #     export TICDC_NEWARCH=true && make integration_test CASE=http_api
+      # - name: Test http_api
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=http_api
 
-  #     - name: Test partition_table
-  #       if: ${{ success() }}
-  #       run: |
-  #         export TICDC_NEWARCH=true && make integration_test CASE=partition_table
+      - name: Test partition_table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=partition_table
       
-  #     # - name: Test multi_tables_ddl
-  #     #   if: ${{ success() }}
-  #     #   run: |
-  #     #     export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
+      # - name: Test multi_tables_ddl
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
 
-  #     - name: Test multi_source
-  #       if: ${{ success() }}
-  #       run: |
-  #         export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
 
      
-  #     - name: Test ddl_attributes
-  #       if: ${{ success() }}
-  #       run: |
-  #         export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
       
-  #     - name: Test http_api_tls
-  #       if: ${{ success() }}
-  #       run: |
-  #         export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls
+      - name: Test http_api_tls
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls
 
-  #     # - name: Test http_api_tls_with_user_auth
-  #     #   if: ${{ success() }}
-  #     #   run: |
-  #     #     export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls_with_user_auth
+      # - name: Test http_api_tls_with_user_auth
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls_with_user_auth
       
-  #     - name: Test default_value
-  #       if: ${{ success() }}
-  #       run: |
-  #         export TICDC_NEWARCH=true && make integration_test CASE=default_value
+      - name: Test default_value
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=default_value
 
-  #     - name: Test http_proxies
-  #       if: ${{ success() }}
-  #       run: |
-  #         export TICDC_NEWARCH=true && make integration_test CASE=http_proxies
+      - name: Test http_proxies
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=http_proxies
 
-  #     - name: Test ddl_reentrant
-  #       if: ${{ success() }}
-  #       run: |
-  #         export TICDC_NEWARCH=true && make integration_test CASE=ddl_reentrant
+      - name: Test ddl_reentrant
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_reentrant
 
-  #     - name: Test syncpoint
-  #       if: ${{ success() }}
-  #       run: |
-  #         export TICDC_NEWARCH=true && make integration_test CASE=syncpoint
+      - name: Test syncpoint
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=syncpoint
 
-  #     - name: Test force_replicate_table
-  #       if: ${{ success() }}
-  #       run: |
-  #         export TICDC_NEWARCH=true && make integration_test CASE=force_replicate_table
+      - name: Test force_replicate_table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=force_replicate_table
 
-  #     - name: Test tidb_mysql_test
-  #       if: ${{ success() }}
-  #       run: |
-  #         export TICDC_NEWARCH=true && make integration_test CASE=tidb_mysql_test
+      - name: Test tidb_mysql_test
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=tidb_mysql_test
 
 
-  #     - name: Test resolve_lock
-  #       if: ${{ success() }}
-  #       run: |
-  #         export TICDC_NEWARCH=true && make integration_test CASE=resolve_lock
+      - name: Test resolve_lock
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=resolve_lock
 
-  #     # The 14th case in this group
-  #     - name: Test move_table
-  #       if: ${{ success() }}
-  #       run: |
-  #         export TICDC_NEWARCH=true && make integration_test CASE=move_table
+      # The 14th case in this group
+      - name: Test move_table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=move_table
 
-  #     - name: Upload test logs
-  #       if: always()
-  #       uses: ./.github/actions/upload-test-logs
-  #       with:
-  #         log-name: e2e_test_group_3
+      - name: Upload test logs
+        if: always()
+        uses: ./.github/actions/upload-test-logs
+        with:
+          log-name: e2e_test_group_3
 
 
   failover_e2e_test1:
