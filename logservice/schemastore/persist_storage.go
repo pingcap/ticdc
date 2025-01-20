@@ -23,10 +23,12 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/bloom"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -249,8 +251,13 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 
 	p.mu.Lock()
 	if snapTs < p.gcTs {
-		return nil, fmt.Errorf("snapTs %d is smaller than gcTs %d", snapTs, p.gcTs)
+		p.mu.Unlock()
+		failpoint.Inject("getAllPhysicalTablesGCFastFail", func() {
+			failpoint.Return(nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs("snapTs %d is smaller than gcTs %d", snapTs, p.gcTs))
+		})
+		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs("snapTs %d is smaller than gcTs %d", snapTs, p.gcTs)
 	}
+
 	gcTs := p.gcTs
 	p.mu.Unlock()
 

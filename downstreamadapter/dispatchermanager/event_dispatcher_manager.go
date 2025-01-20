@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
@@ -125,6 +126,9 @@ func NewEventDispatcherManager(
 	maintainerID node.ID,
 	newChangefeed bool,
 ) (*EventDispatcherManager, uint64, error) {
+
+	failpoint.Inject("NewEventDispatcherManagerDelay", nil)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
