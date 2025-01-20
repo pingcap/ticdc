@@ -32,12 +32,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
@@ -66,6 +66,8 @@ type Maintainer struct {
 	selfNode   *node.Info
 	controller *Controller
 	barrier    *Barrier
+
+	pdClock pdutil.Clock
 
 	eventCh *chann.DrainableChann[*Event]
 
@@ -109,10 +111,10 @@ type Maintainer struct {
 
 	lastReportTime time.Time
 
-	removing        bool
+	removing        atomic.Bool
 	cascadeRemoving bool
 	// the changefeed is removed, notify the dispatcher manager to clear ddl_ts table
-	changefeedRemoved bool
+	changefeedRemoved atomic.Bool
 
 	lastPrintStatusTime time.Time
 	// lastCheckpointTsTime time.Time
@@ -158,8 +160,13 @@ func NewMaintainer(cfID common.ChangeFeedID,
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
 		}, selfNode.ID)
+
+	// TODO: Retrieve the correct pdClock from the context once multiple upstreams are supported.
+	// For now, since there is only one upstream, using the default pdClock is sufficient.
+	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	m := &Maintainer{
 		id:                cfID,
+		pdClock:           pdClock,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		taskScheduler:     taskScheduler,
@@ -390,9 +397,9 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 }
 
 func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
-	m.removing = true
+	m.removing.Store(true)
 	m.cascadeRemoving = cascade
-	m.changefeedRemoved = changefeedRemoved
+	m.changefeedRemoved.Store(changefeedRemoved)
 	closed := m.tryCloseChangefeed()
 	if closed {
 		m.removed.Store(true)
@@ -491,14 +498,16 @@ func (m *Maintainer) calCheckpointTs() {
 
 func (m *Maintainer) updateMetrics() {
 	watermark := m.getWatermark()
+
+	pdTime := m.pdClock.CurrentTime()
 	phyCkpTs := oracle.ExtractPhysical(watermark.CheckpointTs)
 	m.changefeedCheckpointTsGauge.Set(float64(phyCkpTs))
-	lag := float64(oracle.GetPhysical(time.Now())-phyCkpTs) / 1e3
+	lag := float64(oracle.GetPhysical(pdTime)-phyCkpTs) / 1e3
 	m.changefeedCheckpointTsLagGauge.Set(lag)
 
 	phyResolvedTs := oracle.ExtractPhysical(watermark.ResolvedTs)
 	m.changefeedResolvedTsGauge.Set(float64(phyResolvedTs))
-	lag = float64(oracle.GetPhysical(time.Now())-phyResolvedTs) / 1e3
+	lag = float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 	m.changefeedResolvedTsLagGauge.Set(lag)
 
 	m.changefeedStatusGauge.Set(float64(m.state.Load()))
@@ -632,13 +641,13 @@ func (m *Maintainer) sendPostBootstrapRequest() {
 func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeatpb.MaintainerCloseResponse) {
 	if response.Success {
 		m.closedNodes[from] = struct{}{}
-		m.onRemoveMaintainer(m.cascadeRemoving, m.changefeedRemoved)
+		m.onRemoveMaintainer(m.cascadeRemoving, m.changefeedRemoved.Load())
 	}
 }
 
 func (m *Maintainer) handleResendMessage() {
 	// resend closing message
-	if m.removing {
+	if m.removing.Load() {
 		m.trySendMaintainerCloseRequestToAllNode()
 		return
 	}
@@ -676,7 +685,7 @@ func (m *Maintainer) trySendMaintainerCloseRequestToAllNode() bool {
 				messaging.DispatcherManagerManagerTopic,
 				&heartbeatpb.MaintainerCloseRequest{
 					ChangefeedID: m.id.ToPB(),
-					Removed:      m.changefeedRemoved,
+					Removed:      m.changefeedRemoved.Load(),
 				}))
 		}
 	}

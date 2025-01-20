@@ -63,7 +63,14 @@ type MysqlWriter struct {
 	needFormat bool
 }
 
-func NewMysqlWriter(ctx context.Context, db *sql.DB, cfg *MysqlConfig, changefeedID common.ChangeFeedID, statistics *metrics.Statistics) *MysqlWriter {
+func NewMysqlWriter(
+	ctx context.Context,
+	db *sql.DB,
+	cfg *MysqlConfig,
+	changefeedID common.ChangeFeedID,
+	statistics *metrics.Statistics,
+	needFormatVectorType bool,
+) *MysqlWriter {
 	return &MysqlWriter{
 		ctx:                    ctx,
 		db:                     db,
@@ -77,7 +84,7 @@ func NewMysqlWriter(ctx context.Context, db *sql.DB, cfg *MysqlConfig, changefee
 		maxAllowedPacket:       cfg.MaxAllowedPacket,
 		stmtCache:              cfg.stmtCache,
 		statistics:             statistics,
-		needFormat:             checkVersionForVector(db, cfg),
+		needFormat:             needFormatVectorType,
 	}
 }
 

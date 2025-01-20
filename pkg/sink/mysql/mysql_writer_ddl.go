@@ -24,8 +24,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/retry"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tiflow/pkg/retry"
 	pmysql "github.com/pingcap/tiflow/pkg/sink/mysql"
 	"go.uber.org/zap"
 )
@@ -145,6 +145,7 @@ func (w *MysqlWriter) execDDL(event *commonEvent.DDLEvent) error {
 	}
 
 	shouldSwitchDB := needSwitchDB(event)
+
 	// Convert vector type to string type for unsupport database
 	if w.needFormat {
 		if newQuery := formatQuery(event.Query); newQuery != event.Query {
@@ -152,6 +153,7 @@ func (w *MysqlWriter) execDDL(event *commonEvent.DDLEvent) error {
 			event.Query = newQuery
 		}
 	}
+
 	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -236,6 +238,10 @@ func (w *MysqlWriter) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 	}
 
 	for _, tableID := range relatedTableIDs {
+		// tableID 0 means table trigger, which can't not do async ddl
+		if tableID == 0 {
+			continue
+		}
 		state, ok := w.asyncDDLState.Load(tableID)
 		if !ok {
 			// query the downstream,
@@ -274,10 +280,59 @@ WHERE TABLE_ID = "%s"
     AND (STATE = "running" OR STATE = "queueing");
 `
 
+// true means the async ddl is still running, false means the async ddl is done.
+func (w *MysqlWriter) doQueryAsyncDDL(tableID int64, query string) (bool, error) {
+	start := time.Now()
+	rows, err := w.db.QueryContext(w.ctx, query)
+	log.Debug("query duration", zap.Any("duration", time.Since(start)), zap.Any("query", query))
+	if err != nil {
+		return false, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to query ddl jobs table; Query is %s", query)))
+	}
+
+	defer rows.Close()
+	var jobID int64
+	var jobType string
+	var schemaState string
+	var state string
+
+	noRows := true
+	for rows.Next() {
+		noRows = false
+		err := rows.Scan(&jobID, &jobType, &schemaState, &state)
+		if err != nil {
+			return false, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to query ddl jobs table; Query is %s", query)))
+		}
+
+		log.Info("async ddl is still running",
+			zap.String("changefeed", w.ChangefeedID.String()),
+			zap.Duration("checkDuration", time.Since(start)),
+			zap.Any("tableID", tableID),
+			zap.Any("jobID", jobID),
+			zap.String("jobType", jobType),
+			zap.String("schemaState", schemaState),
+			zap.String("state", state))
+		break
+	}
+
+	if noRows {
+		return false, nil
+	}
+
+	return true, nil
+}
+
 // query the ddl jobs to find the state of the async ddl
 // if the ddl is still running, we should wait for it.
 func (w *MysqlWriter) checkAndWaitAsyncDDLDoneDownstream(tableID int64) error {
 	query := fmt.Sprintf(checkRunningAddIndexSQL, tableID)
+	running, err := w.doQueryAsyncDDL(tableID, query)
+	if err != nil {
+		return err
+	}
+	if !running {
+		return nil
+	}
+
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -286,38 +341,11 @@ func (w *MysqlWriter) checkAndWaitAsyncDDLDoneDownstream(tableID int64) error {
 		case <-w.ctx.Done():
 			return nil
 		case <-ticker.C:
-			start := time.Now()
-			rows, err := w.db.QueryContext(w.ctx, query)
+			running, err := w.doQueryAsyncDDL(tableID, query)
 			if err != nil {
-				return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to query ddl jobs table; Query is %s", query)))
+				return err
 			}
-
-			defer rows.Close()
-			var jobID int64
-			var jobType string
-			var schemaState string
-			var state string
-
-			noRows := true
-			for rows.Next() {
-				noRows = false
-				err := rows.Scan(&jobID, &jobType, &schemaState, &state)
-				if err != nil {
-					return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to query ddl jobs table; Query is %s", query)))
-				}
-
-				log.Info("async ddl is still running",
-					zap.String("changefeed", w.ChangefeedID.String()),
-					zap.Duration("checkDuration", time.Since(start)),
-					zap.Any("tableID", tableID),
-					zap.Any("jobID", jobID),
-					zap.String("jobType", jobType),
-					zap.String("schemaState", schemaState),
-					zap.String("state", state))
-				break
-			}
-
-			if noRows {
+			if !running {
 				return nil
 			}
 		}

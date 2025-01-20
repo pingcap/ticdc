@@ -31,7 +31,6 @@ import (
 
 // MysqlDMLWorker is used to flush the dml event downstream
 type MysqlDMLWorker struct {
-	ctx          context.Context
 	changefeedID common.ChangeFeedID
 
 	eventChan   chan *commonEvent.DMLEvent
@@ -48,10 +47,10 @@ func NewMysqlDMLWorker(
 	id int,
 	changefeedID common.ChangeFeedID,
 	statistics *metrics.Statistics,
+	formatVectorType bool,
 ) *MysqlDMLWorker {
 	return &MysqlDMLWorker{
-		ctx:          ctx,
-		mysqlWriter:  mysql.NewMysqlWriter(ctx, db, config, changefeedID, statistics),
+		mysqlWriter:  mysql.NewMysqlWriter(ctx, db, config, changefeedID, statistics, formatVectorType),
 		id:           id,
 		maxRows:      config.MaxTxnRow,
 		eventChan:    make(chan *commonEvent.DMLEvent, 16),
@@ -63,7 +62,7 @@ func (w *MysqlDMLWorker) GetEventChan() chan *commonEvent.DMLEvent {
 	return w.eventChan
 }
 
-func (w *MysqlDMLWorker) Run() error {
+func (w *MysqlDMLWorker) Run(ctx context.Context) error {
 	namespace := w.changefeedID.Namespace()
 	changefeed := w.changefeedID.Name()
 
@@ -83,8 +82,8 @@ func (w *MysqlDMLWorker) Run() error {
 	for {
 		needFlush := false
 		select {
-		case <-w.ctx.Done():
-			return errors.Trace(w.ctx.Err())
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
 		case txnEvent := <-w.eventChan:
 			events = append(events, txnEvent)
 			rows += int(txnEvent.Len())
@@ -135,6 +134,10 @@ func (w *MysqlDMLWorker) Close() {
 	w.mysqlWriter.Close()
 }
 
+func (w *MysqlDMLWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
+	w.eventChan <- event
+}
+
 // MysqlDDLWorker is use to flush the ddl event and sync point eventdownstream
 type MysqlDDLWorker struct {
 	changefeedID common.ChangeFeedID
@@ -147,10 +150,11 @@ func NewMysqlDDLWorker(
 	config *mysql.MysqlConfig,
 	changefeedID common.ChangeFeedID,
 	statistics *metrics.Statistics,
+	formatVectorType bool,
 ) *MysqlDDLWorker {
 	return &MysqlDDLWorker{
 		changefeedID: changefeedID,
-		mysqlWriter:  mysql.NewMysqlWriter(ctx, db, config, changefeedID, statistics),
+		mysqlWriter:  mysql.NewMysqlWriter(ctx, db, config, changefeedID, statistics, formatVectorType),
 	}
 }
 

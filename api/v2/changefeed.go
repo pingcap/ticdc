@@ -24,6 +24,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	apperror "github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -200,9 +201,13 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 	log.Info("Create changefeed successfully!",
 		zap.String("id", info.ChangefeedID.Name()),
 		zap.String("changefeed", info.String()))
-	c.JSON(http.StatusOK, toAPIModel(info,
-		info.StartTs, info.StartTs,
-		nil))
+	c.JSON(http.StatusOK, toAPIModel(
+		info,
+		&config.ChangeFeedStatus{
+			CheckpointTs: info.StartTs,
+		},
+		nil,
+	))
 }
 
 // listChangeFeeds lists all changefeeds in cdc cluster
@@ -291,15 +296,13 @@ func (h *OpenAPIV2) getChangeFeed(c *gin.Context) {
 	}
 
 	taskStatus := make([]model.CaptureTaskStatus, 0)
-	detail := toAPIModel(cfInfo, status.CheckpointTs,
-		status.CheckpointTs, taskStatus)
+	detail := toAPIModel(cfInfo, status, taskStatus)
 	c.JSON(http.StatusOK, detail)
 }
 
 func toAPIModel(
 	info *config.ChangeFeedInfo,
-	resolvedTs uint64,
-	checkpointTs uint64,
+	status *config.ChangeFeedStatus,
 	taskStatus []model.CaptureTaskStatus,
 ) *ChangeFeedInfo {
 	var runningError *RunningError
@@ -332,10 +335,12 @@ func toAPIModel(
 		State:          info.State,
 		Error:          runningError,
 		CreatorVersion: info.CreatorVersion,
-		CheckpointTs:   checkpointTs,
-		ResolvedTs:     resolvedTs,
-		CheckpointTime: model.JSONTime(oracle.GetTimeFromTS(checkpointTs)),
+		CheckpointTs:   status.CheckpointTs,
+		ResolvedTs:     status.CheckpointTs,
+		CheckpointTime: model.JSONTime(oracle.GetTimeFromTS(status.CheckpointTs)),
 		TaskStatus:     taskStatus,
+		MaintainerAddr: status.GetMaintainerAddr(),
+		GID:            info.ChangefeedID.ID(),
 	}
 	return apiInfoModel
 }
@@ -618,7 +623,7 @@ func (h *OpenAPIV2) updateChangefeed(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, toAPIModel(oldCfInfo, status.CheckpointTs, status.CheckpointTs, nil))
+	c.JSON(http.StatusOK, toAPIModel(oldCfInfo, status, nil))
 }
 
 // verifyResumeChangefeedConfig verifies the changefeed config before resuming a changefeed
@@ -688,24 +693,42 @@ func (h *OpenAPIV2) moveTable(c *gin.Context) {
 			changefeedDisplayName.Name))
 		return
 	}
+
 	// get changefeedID first
-	coordinator, err := h.server.GetCoordinator()
+	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	cfInfo, _, err := coordinator.GetChangefeed(c, changefeedDisplayName)
+
+	if cfInfo.MaintainerAddr == "" {
+		_ = c.Error(errors.New("Can't not find maintainer for changefeed: " + changefeedDisplayName.Name))
+		return
+	}
+
+	selfInfo, err := h.server.SelfInfo()
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	changefeedID := cfInfo.ChangefeedID
+
+	if cfInfo.MaintainerAddr != selfInfo.AdvertiseAddr {
+		// Forward the request to the maintainer
+		middleware.ForwardToServer(c, selfInfo.ID, cfInfo.MaintainerAddr)
+		c.Abort()
+		return
+	}
+
+	changefeedID := common.ChangeFeedID{
+		Id:          cfInfo.GID,
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+	}
 
 	maintainerManager := h.server.GetMaintainerManager()
 	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
 
 	if !ok {
-		log.Error("maintainer not found for changefeed in this node", zap.String("changefeed", changefeedID.String()))
+		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("Name", changefeedID.DisplayName.String()))
 		_ = c.Error(apperror.ErrMaintainerNotFounded)
 		return
 	}
@@ -732,24 +755,40 @@ func (h *OpenAPIV2) listTables(c *gin.Context) {
 		return
 	}
 
-	coordinator, err := h.server.GetCoordinator()
+	// get changefeedID first
+	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
 
-	cfInfo, _, err := coordinator.GetChangefeed(c, changefeedDisplayName)
+	if cfInfo.MaintainerAddr == "" {
+		_ = c.Error(errors.New("Can't not find maintainer for changefeed: " + changefeedDisplayName.Name))
+		return
+	}
+
+	selfInfo, err := h.server.SelfInfo()
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
 
-	changefeedID := cfInfo.ChangefeedID
+	if cfInfo.MaintainerAddr != selfInfo.AdvertiseAddr {
+		// Forward the request to the maintainer
+		middleware.ForwardToServer(c, selfInfo.ID, cfInfo.MaintainerAddr)
+		c.Abort()
+		return
+	}
+
+	changefeedID := common.ChangeFeedID{
+		Id:          cfInfo.GID,
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+	}
 
 	maintainerManager := h.server.GetMaintainerManager()
 	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
 	if !ok {
-		log.Error("maintainer not found for changefeed in this node", zap.String("changefeed", changefeedID.String()))
+		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("Name", changefeedID.DisplayName.String()))
 		_ = c.Error(apperror.ErrMaintainerNotFounded)
 		return
 	}
@@ -768,11 +807,16 @@ func (h *OpenAPIV2) listTables(c *gin.Context) {
 		nodeTableInfo.addTableID(table.Span.TableID)
 	}
 
-	infos := make([]*NodeTableInfo, 0, len(nodeTableInfoMap))
+	infos := make([]NodeTableInfo, 0, len(nodeTableInfoMap))
 	for _, nodeTableInfo := range nodeTableInfoMap {
-		infos = append(infos, nodeTableInfo)
+		infos = append(infos, *nodeTableInfo)
 	}
-	c.JSON(http.StatusOK, infos)
+
+	resp := &ListResponse[NodeTableInfo]{
+		Total: len(infos),
+		Items: infos,
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // getDispatcherCount returns the count of dispatcher.
@@ -784,24 +828,41 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 			changefeedDisplayName.Name))
 		return
 	}
-	// get changefeefID first
-	coordinator, err := h.server.GetCoordinator()
+
+	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Name)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	cfInfo, _, err := coordinator.GetChangefeed(c, changefeedDisplayName)
+
+	if cfInfo.MaintainerAddr == "" {
+		_ = c.Error(errors.New("Can't not find maintainer for changefeed: " + changefeedDisplayName.Name))
+		return
+	}
+
+	selfInfo, err := h.server.SelfInfo()
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	changefeedID := cfInfo.ChangefeedID
+
+	if cfInfo.MaintainerAddr != selfInfo.AdvertiseAddr {
+		// Forward the request to the maintainer
+		middleware.ForwardToServer(c, selfInfo.ID, cfInfo.MaintainerAddr)
+		c.Abort()
+		return
+	}
+
+	changefeedID := common.ChangeFeedID{
+		Id:          cfInfo.GID,
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+	}
 
 	maintainerManager := h.server.GetMaintainerManager()
 	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
 
 	if !ok {
-		log.Error("maintainer not found for changefeed in this node", zap.String("changefeed", changefeedID.String()))
+		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("changefeed", changefeedID.String()))
 		_ = c.Error(apperror.ErrMaintainerNotFounded)
 		return
 	}

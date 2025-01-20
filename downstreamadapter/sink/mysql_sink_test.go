@@ -15,6 +15,7 @@ package sink
 
 import (
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,13 +24,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var count = 0
+var count atomic.Int64
 
 // Test callback and tableProgress works as expected after AddDMLEvent
 func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
 
-	count = 0
+	count.Store(0)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -50,7 +51,7 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 		},
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
-			func() { count++ },
+			func() { count.Add(1) },
 		},
 	}
 
@@ -65,13 +66,13 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 		},
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
-			func() { count++ },
+			func() { count.Add(1) },
 		},
 	}
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
 	dmlEvent.PostTxnFlushed = []func(){
-		func() { count++ },
+		func() { count.Add(1) },
 	}
 	dmlEvent.CommitTs = 2
 
@@ -116,14 +117,14 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
 
-	require.Equal(t, count, 3)
+	require.Equal(t, count.Load(), int64(3))
 }
 
 // test the situation meets error when executing DML
 // whether the sink state is correct
 func TestMysqlSinkMeetsDMLError(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
-	count = 0
+	count.Store(0)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -135,7 +136,7 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
 	dmlEvent.PostTxnFlushed = []func(){
-		func() { count++ },
+		func() { count.Add(1) },
 	}
 	dmlEvent.CommitTs = 2
 
@@ -152,7 +153,7 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 	err := mock.ExpectationsWereMet()
 	require.NoError(t, err)
 
-	require.Equal(t, count, 0)
+	require.Equal(t, count.Load(), int64(0))
 	require.False(t, sink.IsNormal())
 }
 
@@ -161,7 +162,7 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 func TestMysqlSinkMeetsDDLError(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
 
-	count = 0
+	count.Store(0)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -182,7 +183,7 @@ func TestMysqlSinkMeetsDDLError(t *testing.T) {
 		},
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
-			func() { count++ },
+			func() { count.Add(1) },
 		},
 	}
 
@@ -197,7 +198,7 @@ func TestMysqlSinkMeetsDDLError(t *testing.T) {
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
 
-	require.Equal(t, count, 0)
+	require.Equal(t, count.Load(), int64(0))
 
 	require.Equal(t, sink.IsNormal(), false)
 }

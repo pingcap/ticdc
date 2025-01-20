@@ -22,6 +22,7 @@ var (
 	once     sync.Once
 )
 
+// ServiceName is the name of the service.
 const (
 	MessageCenter           = "MessageCenter"
 	EventCollector          = "EventCollector"
@@ -33,6 +34,7 @@ const (
 	DispatcherDynamicStream = "DispatcherDynamicStream"
 	MaintainerManager       = "MaintainerManager"
 	DispatcherOrchestrator  = "DispatcherOrchestrator"
+	DefaultPDClock          = "PDClock-0"
 )
 
 // Put all the global instances here.

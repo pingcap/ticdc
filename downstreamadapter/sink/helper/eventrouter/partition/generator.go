@@ -14,6 +14,7 @@
 package partition
 
 import (
+	"go.uber.org/zap"
 	"strings"
 
 	"github.com/pingcap/log"
@@ -30,8 +31,7 @@ type PartitionGenerator interface {
 
 func GetPartitionGenerator(rule string, scheme string, indexName string, columns []string) PartitionGenerator {
 	switch strings.ToLower(rule) {
-	case "default":
-	case "table":
+	case "default", "table":
 		return newTablePartitionGenerator()
 	case "ts":
 		return newTsPartitionGenerator()
@@ -49,7 +49,7 @@ func GetPartitionGenerator(rule string, scheme string, indexName string, columns
 		return newKeyPartitionGenerator(rule)
 	}
 
-	log.Warn("the partition dispatch rule is not default/ts/table/index-value/columns," +
-		" use the default rule instead.")
+	log.Warn("the partition dispatch rule is not default/ts/table/index-value/columns,"+
+		" use the default rule instead.", zap.String("rule", rule))
 	return newTablePartitionGenerator()
 }

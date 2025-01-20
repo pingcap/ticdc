@@ -160,7 +160,7 @@ func (g *encoderGroup) runEncoder(ctx context.Context, idx int) error {
 				}
 			}
 			future.Messages = g.rowEventEncoders[idx].Build()
-			// TODO:是不是要用后清零
+			// TODO: Is it necessary to clear after use?
 			close(future.done)
 		}
 	}
@@ -210,7 +210,6 @@ func (g *encoderGroup) cleanMetrics() {
 
 // future is a wrapper of the result of encoding events
 // It's used to notify the caller that the result is ready.
-// TODO:换个名字
 type future struct {
 	Key      model.TopicPartitionKey
 	events   []*commonEvent.RowEvent

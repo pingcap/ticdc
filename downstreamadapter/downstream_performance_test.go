@@ -36,10 +36,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// 使用攻略：
-// 1. 先去增加 NewDispatcher, GetDS,AggregateDispatcherHeartbeats(都是套一下壳)
-// 2. memory quota 直接硬编码写死
-// 3. 注释掉 shouldIgnoreDataEvent 的检查
+// Usage:
+// 1. Add NewDispatcher, GetDS, AggregateDispatcherHeartbeats (just wrap the original method)
+// 2. Hardcode memory quota
+// 3. Comment out the check in shouldIgnoreDataEvent
 
 const (
 	totalCount      = 40
@@ -54,7 +54,7 @@ func initContext(serverId node.ID) {
 }
 
 func pushDataIntoDispatchers(dispatcherIDSet map[common.DispatcherID]interface{}, helper *commonEvent.EventTestHelper) {
-	// 因为开了 dryrun，所以不用避免冲突，随便写'
+	// Since use dryrun, no need to avoid conflicts, just write
 	eventCollectorItem := appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector)
 	idx := 0
 	var mutex sync.Mutex
@@ -153,7 +153,7 @@ func TestDownstream(t *testing.T) {
 	wg.Wait()
 	log.Warn("test begin", zap.Any("duration", time.Since(start)))
 
-	// 插入数据, 先固定 data 格式
+	// Insert data, fix data format
 	go pushDataIntoDispatchers(dispatcherIDSet, helper)
 
 	finishCount := 0

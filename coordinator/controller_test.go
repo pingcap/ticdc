@@ -19,7 +19,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
-	"github.com/pingcap/ticdc/coordinator/changefeed/mock"
+	mock_changefeed "github.com/pingcap/ticdc/coordinator/changefeed/mock"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -137,9 +137,11 @@ func TestGetChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	changefeedDB := changefeed.NewChangefeedDB(1216)
+	nodeManager := watcher.NewNodeManager(nil, nil)
 	controller := &Controller{
 		backend:      backend,
 		changefeedDB: changefeedDB,
+		nodeManager:  nodeManager,
 	}
 	cfID := common.NewChangeFeedIDWithName("test")
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
