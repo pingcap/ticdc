@@ -165,8 +165,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	c.dispatcherMap.Store(target.GetId(), stat)
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
-	areaSetting := dynstream.NewAreaSettings()
-	areaSetting.MaxPendingSize = memoryQuota
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota)
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Error("add dispatcher to dynamic stream failed", zap.Error(err))

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -26,6 +27,12 @@ import (
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"go.uber.org/zap"
 )
+
+type FilterConfig struct {
+	CaseSensitive  bool
+	ForceReplicate bool
+	FilterConfig   *eventpb.FilterConfig
+}
 
 type ResendTaskMap struct {
 	mutex sync.Mutex

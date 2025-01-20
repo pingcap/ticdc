@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
-	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -62,7 +61,7 @@ type EventDispatcherManager struct {
 	pdClock pdutil.Clock
 
 	config       *config.ChangefeedConfig
-	filterConfig *eventpb.FilterConfig
+	filterConfig *dispatcher.FilterConfig
 	// only not nil when enable sync point
 	// TODO: changefeed update config
 	syncPointConfig *syncpoint.SyncPointConfig
@@ -126,7 +125,6 @@ func NewEventDispatcherManager(
 	newChangefeed bool,
 ) (*EventDispatcherManager, uint64, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	var wg sync.WaitGroup
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	manager := &EventDispatcherManager{
 		dispatcherMap:                          newDispatcherMap(),
@@ -136,10 +134,9 @@ func NewEventDispatcherManager(
 		statusesChan:                           make(chan TableSpanStatusWithSeq, 8192),
 		blockStatusesChan:                      make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		errCh:                                  make(chan error, 1),
-		wg:                                     wg,
 		cancel:                                 cancel,
 		config:                                 cfConfig,
-		filterConfig:                           toFilterConfigPB(cfConfig.Filter),
+		filterConfig:                           &dispatcher.FilterConfig{CaseSensitive: cfConfig.CaseSensitive, ForceReplicate: cfConfig.ForceReplicate, FilterConfig: toFilterConfigPB(cfConfig.Filter)},
 		schemaIDToDispatchers:                  dispatcher.NewSchemaIDToDispatchers(),
 		latestWatermark:                        NewWatermark(startTs),
 		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
@@ -182,9 +179,9 @@ func NewEventDispatcherManager(
 		}
 	}
 
-	wg.Add(1)
+	manager.wg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer manager.wg.Done()
 		err = manager.sink.Run(ctx)
 		if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 			select {
@@ -198,23 +195,23 @@ func NewEventDispatcherManager(
 	}()
 
 	// collect errors from error channel
-	wg.Add(1)
+	manager.wg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer manager.wg.Done()
 		manager.collectErrors(ctx)
 	}()
 
 	// collect heart beat info from all dispatchers
-	wg.Add(1)
+	manager.wg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer manager.wg.Done()
 		manager.collectComponentStatusWhenChanged(ctx)
 	}()
 
 	// collect block status from all dispatchers
-	wg.Add(1)
+	manager.wg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer manager.wg.Done()
 		manager.collectBlockStatusRequest(ctx)
 	}()
 
@@ -412,6 +409,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			e.schemaIDToDispatchers,
 			e.syncPointConfig,
 			e.filterConfig,
+			e.forceReplicate,
 			pdTsList[idx],
 			e.errCh)
 

@@ -253,6 +253,13 @@ func NewAreaSettings() AreaSettings {
 	}
 }
 
+func NewAreaSettingsWithMaxPendingSize(size int) AreaSettings {
+	return AreaSettings{
+		MaxPendingSize:   size,
+		FeedbackInterval: DefaultFeedbackInterval,
+	}
+}
+
 type Feedback[A Area, P Path, D Dest] struct {
 	Area A
 	Path P

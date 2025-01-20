@@ -75,10 +75,11 @@ type filter struct {
 	sqlEventFilter *sqlEventFilter
 	// ignoreTxnStartTs is used to filter out dml/ddl event by its starsTs.
 	ignoreTxnStartTs []uint64
+	forceReplicate   bool
 }
 
 // NewFilter creates a filter.
-func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool) (Filter, error) {
+func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool, forceReplicate bool) (Filter, error) {
 	f, err := VerifyTableRules(cfg)
 	if err != nil {
 		return nil, err
@@ -101,6 +102,7 @@ func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool) (Filter,
 		dmlExprFilter:    dmlExprFilter,
 		sqlEventFilter:   sqlEventFilter,
 		ignoreTxnStartTs: cfg.IgnoreTxnStartTs,
+		forceReplicate:   forceReplicate,
 	}, nil
 }
 
