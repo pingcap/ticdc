@@ -147,7 +147,7 @@ jobs:
           log-name: e2e_test_group_1
 
   # # To boost the test speed, we split every 15 test cases into a group.
-  e2e_test_group_1_on_7.5:
+  e2e_test_group_1_on_7-5:
     ## Only run ci when PR is not draft
     if: github.event.pull_request.draft == false
 
