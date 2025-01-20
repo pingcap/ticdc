@@ -111,10 +111,10 @@ type Maintainer struct {
 
 	lastReportTime time.Time
 
-	removing        bool
+	removing        atomic.Bool
 	cascadeRemoving bool
 	// the changefeed is removed, notify the dispatcher manager to clear ddl_ts table
-	changefeedRemoved bool
+	changefeedRemoved atomic.Bool
 
 	lastPrintStatusTime time.Time
 	// lastCheckpointTsTime time.Time
@@ -397,9 +397,9 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 }
 
 func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
-	m.removing = true
+	m.removing.Store(true)
 	m.cascadeRemoving = cascade
-	m.changefeedRemoved = changefeedRemoved
+	m.changefeedRemoved.Store(changefeedRemoved)
 	closed := m.tryCloseChangefeed()
 	if closed {
 		m.removed.Store(true)
@@ -641,13 +641,13 @@ func (m *Maintainer) sendPostBootstrapRequest() {
 func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeatpb.MaintainerCloseResponse) {
 	if response.Success {
 		m.closedNodes[from] = struct{}{}
-		m.onRemoveMaintainer(m.cascadeRemoving, m.changefeedRemoved)
+		m.onRemoveMaintainer(m.cascadeRemoving, m.changefeedRemoved.Load())
 	}
 }
 
 func (m *Maintainer) handleResendMessage() {
 	// resend closing message
-	if m.removing {
+	if m.removing.Load() {
 		m.trySendMaintainerCloseRequestToAllNode()
 		return
 	}
@@ -685,7 +685,7 @@ func (m *Maintainer) trySendMaintainerCloseRequestToAllNode() bool {
 				messaging.DispatcherManagerManagerTopic,
 				&heartbeatpb.MaintainerCloseRequest{
 					ChangefeedID: m.id.ToPB(),
-					Removed:      m.changefeedRemoved,
+					Removed:      m.changefeedRemoved.Load(),
 				}))
 		}
 	}
