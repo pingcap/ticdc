@@ -299,13 +299,15 @@ func TestMaintainerSchedule(t *testing.T) {
 	appcontext.SetService(appcontext.SchemaStore, schemaStore)
 
 	n := node.NewInfo("", "")
-	appcontext.SetService(appcontext.MessageCenter, messaging.NewMessageCenter(ctx,
-		n.ID, 100, config.NewDefaultMessageCenterConfig(), nil))
+	mc := messaging.NewMessageCenter(ctx, n.ID, 100, config.NewDefaultMessageCenterConfig(), nil)
+	mc.Run(ctx)
+	defer mc.Close()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[n.ID] = n
 	cfID := common.NewChangeFeedIDWithName("test")
-	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	dispatcherManager := MockDispatcherManager(mc, n.ID)
 
 	wg := &sync.WaitGroup{}
