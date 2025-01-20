@@ -51,94 +51,85 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
 
-      - name: Test charset_gbk
+      - name: Test ddl_attributes
+        if: ${{ success() }}
         run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
 
-      - name: Test changefeed_finish
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_finish
-      
-      - name: Test sql_mode
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=sql_mode
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
         
-      - name: Test changefeed_pause_resume
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
 
-      - name: Test changefeed_reconstruct
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_reconstruct
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
 
-      - name: Test common_1
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=common_1
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
 
-      - name: Test foreign_key
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=foreign_key
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
 
-      # The 7th case in this group
-      - name: Test generate_column
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=generate_column
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
       
-      # The 8th case in this group
-      - name: Test many_pk_or_uk
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=many_pk_or_uk
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
       
-      # The 9th case in this group
-      - name: Test drop_many_tables
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=drop_many_tables
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
 
-      # The 10th case in this group     
-      - name: Test new_ci_collation
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=new_ci_collation
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
 
-      # The 11th case in this group     
-      - name: Test region_merge
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=region_merge
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
 
-      # The 12th case in this group     
-      - name: Test safe mode
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=safe_mode
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
 
-      # The 13th case in this group     
-      - name: Test savepoint
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=savepoint
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
 
-      # The 14th case in this group     
-      - name: Test server config compatibility
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=server_config_compatibility
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
 
-      # The 15th case in this group     
-      - name: Test split region
+      - name: Test ddl_attributes
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=split_region
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
 
       - name: Upload test logs
         if: always()
