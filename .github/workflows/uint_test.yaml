@@ -58,25 +58,9 @@ jobs:
           cd ../canal
           go test  --tags=intest
 
-  maintainer_unit_test:
-    runs-on: ubuntu-latest 
-    name: Maintainer Unit Test
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v2
-
-      - name: Setup Go environment
-        uses: actions/setup-go@v3
-        with:
-          go-version: '1.23'
-
-      - name: Unit Test
-        run: |
-          go test --tags=intest -timeout 120s  github.com/pingcap/ticdc/maintainer/...
-
   coordinator_unit_test:
     runs-on: ubuntu-latest 
-    name: Coordinator Unit Test
+    name: Coordinator And Maintainer Unit Test
     steps:
       - name: Check out code
         uses: actions/checkout@v2
@@ -89,6 +73,7 @@ jobs:
       - name: Unit Test
         run: |
           go test --tags=intest -timeout 120s  github.com/pingcap/ticdc/coordinator/...
+          go test --tags=intest -timeout 120s  github.com/pingcap/ticdc/maintainer/...
 
   eventservice_unit_test:
     runs-on: ubuntu-latest 
