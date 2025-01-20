@@ -863,7 +863,6 @@ func updateDDLHistoryForRemovePartitioning(args updateDDLHistoryFuncArgs) []uint
 }
 
 func updateDDLHistoryForAlterTableTTL(args updateDDLHistoryFuncArgs) []uint64 {
-	// args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	if isPartitionTable(args.ddlEvent.TableInfo) {
 		for _, partitionID := range getAllPartitionIDs(args.ddlEvent.TableInfo) {
 			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, partitionID)
