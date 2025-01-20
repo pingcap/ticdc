@@ -121,7 +121,6 @@ type EventDispatcherManager struct {
 func NewEventDispatcherManager(
 	changefeedID common.ChangeFeedID,
 	cfConfig *config.ChangefeedConfig,
-	pdClock pdutil.Clock,
 	tableTriggerEventDispatcherID *heartbeatpb.DispatcherID,
 	startTs uint64,
 	maintainerID node.ID,
@@ -166,7 +165,7 @@ func NewEventDispatcherManager(
 	}
 
 	var err error
-	manager.sink, err = sink.NewSink(ctx, manager.config, manager.changefeedID, manager.errCh, pdClock)
+	manager.sink, err = sink.NewSink(ctx, manager.config, manager.changefeedID, manager.errCh, manager.pdClock)
 	if err != nil {
 		return nil, 0, errors.Trace(err)
 	}

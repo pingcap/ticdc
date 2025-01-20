@@ -29,21 +29,18 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"go.uber.org/zap"
 )
 
 // DispatcherOrchestrator coordinates the creation, deletion, and management of event dispatcher managers
 // for different change feeds based on maintainer bootstrap messages.
 type DispatcherOrchestrator struct {
-	pdClock            pdutil.Clock
 	mc                 messaging.MessageCenter
 	dispatcherManagers map[common.ChangeFeedID]*dispatchermanager.EventDispatcherManager
 }
 
-func New(pdClock pdutil.Clock) *DispatcherOrchestrator {
+func New() *DispatcherOrchestrator {
 	m := &DispatcherOrchestrator{
-		pdClock:            pdClock,
 		mc:                 appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.EventDispatcherManager),
 	}
@@ -133,7 +130,7 @@ func (m *DispatcherOrchestrator) handleAddDispatcherManager(from node.ID, req *h
 				zap.String("changefeedID", cfId.Name()), zap.Error(err))
 			return err
 		}
-		manager, startTs, err = dispatchermanager.NewEventDispatcherManager(cfId, cfConfig, m.pdClock, req.TableTriggerEventDispatcherId, req.StartTs, from, req.IsNewChangfeed)
+		manager, startTs, err = dispatchermanager.NewEventDispatcherManager(cfId, cfConfig, req.TableTriggerEventDispatcherId, req.StartTs, from, req.IsNewChangfeed)
 		// Fast return the error to maintainer.
 		if err != nil {
 			log.Error("failed to create new dispatcher manager",
