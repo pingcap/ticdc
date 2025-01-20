@@ -260,7 +260,6 @@ func (e *RowEvent) GetPreRows() *chunk.Row {
 
 // PrimaryKeyColumnNames return all primary key's name
 // TODO: need a test for delete / insert / update event
-// 但理论上应该没区别，没有 ddl 没有发生 schema 变化的
 func (e *RowEvent) PrimaryKeyColumnNames() []string {
 	var result []string
 

@@ -16,7 +16,7 @@ package config
 import (
 	"math"
 
-	"github.com/pingcap/tiflow/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // DBConfig represents db sorter config.

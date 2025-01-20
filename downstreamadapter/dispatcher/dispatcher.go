@@ -57,7 +57,7 @@ All dispatchers will communicate with the Maintainer about self progress and whe
 
 Because Sink does not flush events to the downstream in strict order.
 the dispatcher can't send event to Sink continuously all the time,
-1. The ddl event/sync point event can be send to Sink only when the previous event has beed flushed to downstream successfully.
+1. The ddl event/sync point event can be sent to Sink only when the previous event has been flushed to downstream successfully.
 2. Only when the ddl event/sync point event is flushed to downstream successfully, the dispatcher can send the following event to Sink.
 3. For the cross table ddl event/sync point event, dispatcher needs to negotiate with the maintainer to decide whether and when send it to Sink.
 
@@ -92,13 +92,13 @@ type Dispatcher struct {
 	// Because when the dispatcher scheduled or the node restarts, there may be some dml events to receive twice.
 	// So we need to use `Replace` to avoid duplicate key error.
 	// Table Trigger Event Dispatcher doesn't need this, because it doesn't deal with dml events.
-	creatationPDTs uint64
+	creationPDTs uint64
 	// componentStatus is the status of the dispatcher, such as working, removing, stopped.
 	componentStatus *ComponentStateWithMutex
 	// the config of filter
 	filterConfig *eventpb.FilterConfig
 
-	// tableInfo is the latest table info of the dispatcher
+	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo *common.TableInfo
 
 	// shared by the event dispatcher manager
@@ -175,7 +175,7 @@ func NewDispatcher(
 		schemaID:              schemaID,
 		schemaIDToDispatchers: schemaIDToDispatchers,
 		resendTaskMap:         newResendTaskMap(),
-		creatationPDTs:        currentPdTs,
+		creationPDTs:          currentPdTs,
 		errCh:                 errCh,
 	}
 
@@ -210,7 +210,7 @@ func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.Schema
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream.
 // 2. If the action is a pass, we just need to pass the event
 func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) {
-	log.Debug("dispatcher handle dispatcher status",
+	log.Info("dispatcher handle dispatcher status",
 		zap.Any("dispatcherStatus", dispatcherStatus),
 		zap.Stringer("dispatcher", d.id),
 		zap.Any("action", dispatcherStatus.GetAction()),
@@ -231,10 +231,21 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 		pendingEvent, blockStatus := d.blockEventStatus.getEventAndStage()
 		if pendingEvent == nil && action.CommitTs > d.GetResolvedTs() {
 			// we have not receive the block event, and the action is for the future event, so just ignore
+			log.Info("pending event is nil, and the action's commit is larger than dispatchers resolvedTs", zap.Any("resolvedTs", d.GetResolvedTs()), zap.Any("action commitTs", action.CommitTs), zap.Any("dispatcher", d.id))
+			// we have not receive the block event, and the action is for the future event, so just ignore
 			return
 		}
 		if pendingEvent != nil && action.CommitTs == pendingEvent.GetCommitTs() && blockStatus == heartbeatpb.BlockStage_WAITING {
+			log.Info("pending event get the action", zap.Any("action", action), zap.Any("dispatcher", d.id), zap.Any("pendingEvent commitTs", pendingEvent.GetCommitTs()))
 			d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
+			pendingEvent.PushFrontFlushFunc(func() {
+				// clear blockEventStatus should be before wake ds.
+				// otherwise, there may happen:
+				// 1. wake ds
+				// 2. get new ds and set new pending event
+				// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
+				d.blockEventStatus.clear()
+			})
 			if action.Action == heartbeatpb.Action_Write {
 				failpoint.Inject("BlockOrWaitBeforeWrite", nil)
 				err := d.AddBlockEventToSink(pendingEvent)
@@ -255,8 +266,6 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 				d.PassBlockEventToSink(pendingEvent)
 				failpoint.Inject("BlockAfterPass", nil)
 			}
-
-			d.blockEventStatus.clear()
 		}
 
 		// whether the outdate message or not, we need to return message show we have finished the event.
@@ -273,7 +282,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 }
 
 // HandleEvents can batch handle events about resolvedTs Event and DML Event.
-// While for DDLEvent and SyncPointEvent, they should be handled singly,
+// While for DDLEvent and SyncPointEvent, they should be handled separately,
 // because they are block events.
 // We ensure we only will receive one event when it's ddl event or sync point event
 // by setting them with different event types in DispatcherEventsHandler.GetType
@@ -303,10 +312,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			continue
 		}
 
-		if event.GetType() != commonEvent.TypeResolvedEvent {
-			log.Debug("dispatcher receive event", zap.Stringer("dispatcher", d.id), zap.Any("event", event))
-		}
-
 		switch event.GetType() {
 		case commonEvent.TypeResolvedEvent:
 			atomic.StoreUint64(&d.resolvedTs, event.(commonEvent.ResolvedEvent).ResolvedTs)
@@ -316,10 +321,10 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				return block
 			}
 			block = true
-			dml.ReplicatingTs = d.creatationPDTs
+			dml.ReplicatingTs = d.creationPDTs
 			dml.AssembleRows(d.tableInfo)
 			dml.AddPostFlushFunc(func() {
-				// Considering dml event in sink may be write to downstream not in order,
+				// Considering dml event in sink may be written to downstream not in order,
 				// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
 				// and wake dynamic stream to handle the next events.
 				if d.tableProgress.Empty() {
@@ -333,32 +338,32 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				log.Panic("ddl event should only be singly handled", zap.Any("dispatcherID", d.id))
 			}
 			block = true
-			event := event.(*commonEvent.DDLEvent)
-			// Update the table info of the dispatcher, when it receive ddl event.
-			d.tableInfo = event.TableInfo
+			ddl := event.(*commonEvent.DDLEvent)
+			// Update the table info of the dispatcher, when it receives ddl event.
+			d.tableInfo = ddl.TableInfo
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
-				zap.String("query", event.Query),
-				zap.Int64("table", event.TableID),
+				zap.String("query", ddl.Query),
+				zap.Int64("table", ddl.TableID),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
-			event.AddPostFlushFunc(func() {
+			ddl.AddPostFlushFunc(func() {
 				if d.tableSchemaStore != nil {
-					d.tableSchemaStore.AddEvent(event)
+					d.tableSchemaStore.AddEvent(ddl)
 				}
 				wakeCallback()
 			})
-			d.dealWithBlockEvent(event)
+			d.dealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
 			if len(dispatcherEvents) != 1 {
 				log.Panic("sync point event should only be singly handled", zap.Any("dispatcherID", d.id))
 			}
 			block = true
-			event := event.(*commonEvent.SyncPointEvent)
-			event.AddPostFlushFunc(func() {
+			syncPoint := event.(*commonEvent.SyncPointEvent)
+			syncPoint.AddPostFlushFunc(func() {
 				wakeCallback()
 			})
-			d.dealWithBlockEvent(event)
+			d.dealWithBlockEvent(syncPoint)
 		case commonEvent.TypeHandshakeEvent:
 			log.Warn("Receive handshake event unexpectedly",
 				zap.Stringer("dispatcher", d.id), zap.Any("event", event))
@@ -411,21 +416,22 @@ func (d *Dispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		ddlEvent := event.(*commonEvent.DDLEvent)
-		if ddlEvent.BlockedTables != nil {
-			switch ddlEvent.GetBlockedTables().InfluenceType {
-			case commonEvent.InfluenceTypeNormal:
-				if len(ddlEvent.GetBlockedTables().TableIDs) > 1 {
-					return true
-				} else if !isCompleteSpan(d.tableSpan) {
-					// if the table is split, even the blockTable only itself, it should block
-					return true
-				}
-				return false
-			case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
+		if ddlEvent.BlockedTables == nil {
+			return false
+		}
+		switch ddlEvent.GetBlockedTables().InfluenceType {
+		case commonEvent.InfluenceTypeNormal:
+			if len(ddlEvent.GetBlockedTables().TableIDs) > 1 {
 				return true
 			}
+			if !isCompleteSpan(d.tableSpan) {
+				// if the table is split, even the blockTable only itself, it should block
+				return true
+			}
+			return false
+		case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
+			return true
 		}
-		return false
 	case commonEvent.TypeSyncPointEvent:
 		return true
 	default:
@@ -602,9 +608,8 @@ func (d *Dispatcher) GetFilterConfig() *eventpb.FilterConfig {
 func (d *Dispatcher) GetSyncPointInterval() time.Duration {
 	if d.syncPointConfig != nil {
 		return d.syncPointConfig.SyncPointInterval
-	} else {
-		return time.Duration(0)
 	}
+	return time.Duration(0)
 }
 
 func (d *Dispatcher) Remove() {
@@ -631,16 +636,14 @@ func (d *Dispatcher) addToStatusDynamicStream() {
 func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully.
 	// If sink is not normal, we can close the dispatcher immediately.
-	if (d.sink.IsNormal() && d.tableProgress.Empty()) || !d.sink.IsNormal() {
+	if !d.sink.IsNormal() || d.tableProgress.Empty() {
 		w.CheckpointTs = d.GetCheckpointTs()
 		w.ResolvedTs = d.GetResolvedTs()
 
 		d.componentStatus.Set(heartbeatpb.ComponentState_Stopped)
-
 		if d.IsTableTriggerEventDispatcher() {
 			d.tableSchemaStore.Clear()
 		}
-
 		return w, true
 	}
 	return w, false

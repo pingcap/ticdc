@@ -250,8 +250,6 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	s.client.metrics.batchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
 	for _, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			// Update the resolvedTs of the region here for metrics.
-			state.region.subscribedSpan.resolvedTs.Store(resolvedTsEvent.Ts)
 			s.client.ds.Push(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
 				state:      state,
 				worker:     s,
@@ -324,7 +322,11 @@ func (s *regionRequestWorker) processRegionSendTask(
 			}
 			for _, state := range s.takeRegionStates(subID) {
 				state.markStopped(&sendRequestToStoreErr{})
-				// TODO: do we need mark remove here?
+				regionEvent := regionEvent{
+					state:  state,
+					worker: s,
+				}
+				s.client.ds.Push(subID, regionEvent)
 			}
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from

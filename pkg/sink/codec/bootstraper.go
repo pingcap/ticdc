@@ -19,12 +19,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
@@ -39,9 +38,9 @@ const (
 // bootstrapWorker is used to send bootstrap message to the MQ sink worker.
 // It will be only used in simple protocol.
 type bootstrapWorker struct {
-	changefeedID                common.ChangeFeedID
+	changefeedID                commonType.ChangeFeedID
 	activeTables                sync.Map
-	rowEventEncoder             encoder.EventEncoder
+	rowEventEncoder             common.EventEncoder
 	sendBootstrapInterval       time.Duration
 	sendBootstrapInMsgCount     int32
 	sendBootstrapToAllPartition bool
@@ -52,9 +51,9 @@ type bootstrapWorker struct {
 
 // newBootstrapWorker creates a new bootstrapWorker instance
 func newBootstrapWorker(
-	changefeedID common.ChangeFeedID,
+	changefeedID commonType.ChangeFeedID,
 	outCh chan<- *future,
-	rowEventEncoder encoder.EventEncoder,
+	rowEventEncoder common.EventEncoder,
 	sendBootstrapInterval int64,
 	sendBootstrapInMsgCount int32,
 	sendBootstrapToAllPartition bool,
@@ -138,7 +137,7 @@ func (b *bootstrapWorker) sendBootstrapMsg(ctx context.Context, table *tableStat
 		return nil
 	}
 	table.reset()
-	tableInfo := table.tableInfo.Load().(*common.TableInfo)
+	tableInfo := table.tableInfo.Load().(*commonType.TableInfo)
 	events, err := b.generateEvents(table.topic, table.totalPartition.Load(), tableInfo)
 	if err != nil {
 		return errors.Trace(err)
@@ -153,7 +152,7 @@ func (b *bootstrapWorker) sendBootstrapMsg(ctx context.Context, table *tableStat
 	return nil
 }
 
-func NewBootstrapDDLEvent(tableInfo *common.TableInfo) *commonEvent.DDLEvent {
+func NewBootstrapDDLEvent(tableInfo *commonType.TableInfo) *commonEvent.DDLEvent {
 	return &commonEvent.DDLEvent{
 		// StartTs:  0,
 		FinishedTs: 0,
@@ -165,7 +164,7 @@ func NewBootstrapDDLEvent(tableInfo *common.TableInfo) *commonEvent.DDLEvent {
 func (b *bootstrapWorker) generateEvents(
 	topic string,
 	totalPartition int32,
-	tableInfo *common.TableInfo,
+	tableInfo *commonType.TableInfo,
 ) ([]*future, error) {
 	res := make([]*future, 0, totalPartition)
 	msg, err := b.rowEventEncoder.EncodeDDLEvent(NewBootstrapDDLEvent(tableInfo))
@@ -184,7 +183,7 @@ func (b *bootstrapWorker) generateEvents(
 				Partition: i,
 			},
 			done:     make(chan struct{}),
-			Messages: []*ticommon.Message{msg},
+			Messages: []*common.Message{msg},
 		}
 		close(f.done)
 		res = append(res, f)
@@ -261,7 +260,7 @@ func (t *tableStatistic) update(row *commonEvent.RowChangedEvent, totalPartition
 	// Note(dongmen): Rename Table DDL is a special case,
 	// the TableInfo.Name is changed but the TableInfo.UpdateTs is not changed.
 	if t.version.Load() != row.TableInfo.UpdateTS() ||
-		t.tableInfo.Load().(*common.TableInfo).TableName.Table != row.TableInfo.TableName.Table {
+		t.tableInfo.Load().(*commonType.TableInfo).TableName.Table != row.TableInfo.TableName.Table {
 		t.version.Store(row.TableInfo.UpdateTS())
 		t.tableInfo.Store(row.TableInfo)
 	}

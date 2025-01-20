@@ -28,15 +28,15 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"github.com/pingcap/ticdc/utils/threadpool"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/spanz"
 	"go.uber.org/zap"
 )
@@ -351,9 +351,9 @@ func (c *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	c.operatorController.RemoveTasksByTableIDs(tables...)
 }
 
-// GetTasksByTableIDs get all tasks by table id
-func (c *Controller) GetTasksByTableIDs(tableIDs ...int64) []*replica.SpanReplication {
-	return c.replicationDB.GetTasksByTableIDs(tableIDs...)
+// GetTasksByTableID get all tasks by table id
+func (c *Controller) GetTasksByTableID(tableID int64) []*replica.SpanReplication {
+	return c.replicationDB.GetTasksByTableID(tableID)
 }
 
 // GetAllTasks get all tasks
@@ -435,7 +435,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 		return apperror.ErrNodeIsNotFound.GenWithStackByArgs("targetNode", targetNode)
 	}
 
-	replications := c.replicationDB.GetTasksByTableIDs(tableId)
+	replications := c.replicationDB.GetTasksByTableID(tableId)
 	if len(replications) != 1 {
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("unexpected number of replications found for table in this node; tableID is %s, replication count is %s", tableId, len(replications))
 	}
@@ -449,7 +449,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 	count := 0
 	maxTry := 30
 	for !op.IsFinished() && count < maxTry {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(1 * time.Second)
 		count += 1
 		log.Info("wait for move table operator finished", zap.Int("count", count))
 	}

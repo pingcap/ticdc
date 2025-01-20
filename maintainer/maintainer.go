@@ -28,16 +28,16 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
@@ -66,6 +66,8 @@ type Maintainer struct {
 	selfNode   *node.Info
 	controller *Controller
 	barrier    *Barrier
+
+	pdClock pdutil.Clock
 
 	eventCh *chann.DrainableChann[*Event]
 
@@ -158,8 +160,13 @@ func NewMaintainer(cfID common.ChangeFeedID,
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
 		}, selfNode.ID)
+
+	// TODO: Retrieve the correct pdClock from the context once multiple upstreams are supported.
+	// For now, since there is only one upstream, using the default pdClock is sufficient.
+	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	m := &Maintainer{
 		id:                cfID,
+		pdClock:           pdClock,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		taskScheduler:     taskScheduler,
@@ -491,14 +498,16 @@ func (m *Maintainer) calCheckpointTs() {
 
 func (m *Maintainer) updateMetrics() {
 	watermark := m.getWatermark()
+
+	pdTime := m.pdClock.CurrentTime()
 	phyCkpTs := oracle.ExtractPhysical(watermark.CheckpointTs)
 	m.changefeedCheckpointTsGauge.Set(float64(phyCkpTs))
-	lag := float64(oracle.GetPhysical(time.Now())-phyCkpTs) / 1e3
+	lag := float64(oracle.GetPhysical(pdTime)-phyCkpTs) / 1e3
 	m.changefeedCheckpointTsLagGauge.Set(lag)
 
 	phyResolvedTs := oracle.ExtractPhysical(watermark.ResolvedTs)
 	m.changefeedResolvedTsGauge.Set(float64(phyResolvedTs))
-	lag = float64(oracle.GetPhysical(time.Now())-phyResolvedTs) / 1e3
+	lag = float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 	m.changefeedResolvedTsLagGauge.Set(lag)
 
 	m.changefeedStatusGauge.Set(float64(m.state.Load()))

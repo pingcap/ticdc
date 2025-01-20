@@ -21,12 +21,14 @@ function run() {
 
 	cd $WORK_DIR
 
+	TOPIC_NAME="ticdc-canal-json-adapter-compatibility-$RANDOM"
+
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
-	SINK_URI="kafka://127.0.0.1:9092/test?protocol=canal-json&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760"
+	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=canal-json&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760"
 
 	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 

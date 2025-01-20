@@ -63,20 +63,6 @@ type saramaMetricsCollector struct {
 	registry    metrics.Registry
 }
 
-// NewSaramaMetricsCollector return a kafka metrics collector based on sarama library.
-func NewSaramaMetricsCollector(
-	changefeedID common.ChangeFeedID,
-	adminClient ClusterAdminClient,
-	registry metrics.Registry,
-) MetricsCollector {
-	return &saramaMetricsCollector{
-		changefeedID: changefeedID,
-		adminClient:  adminClient,
-		brokers:      make(map[int32]struct{}),
-		registry:     registry,
-	}
-}
-
 func (m *saramaMetricsCollector) Run(ctx context.Context) {
 	// Initialize brokers.
 	m.updateBrokers(ctx)

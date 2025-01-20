@@ -23,7 +23,7 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 )
 
-// tsokenProvider is a user-defined callback for generating
+// tokenProvider is a user-defined callback for generating
 // access tokens for SASL/OAUTHBEARER auth.
 type tokenProvider struct {
 	tokenSource oauth2.TokenSource
@@ -53,22 +53,16 @@ func (t *tokenProvider) Token() (*sarama.AccessToken, error) {
 
 func newTokenProvider(ctx context.Context, o *Options) (sarama.AccessTokenProvider, error) {
 	// grant_type is by default going to be set to 'client_credentials' by the
-	// clientcredentials library as defined by the spec, however non-compliant
+	// client credentials library as defined by the spec, however non-compliant
 	// auth server implementations may want a custom type
-	var endpointParams url.Values
+	endpointParams := url.Values{}
 	if o.SASL.OAuth2.GrantType != "" {
-		if endpointParams == nil {
-			endpointParams = url.Values{}
-		}
 		endpointParams.Set("grant_type", o.SASL.OAuth2.GrantType)
 	}
 
 	// audience is an optional parameter that can be used to specify the
 	// intended audience of the token.
 	if o.SASL.OAuth2.Audience != "" {
-		if endpointParams == nil {
-			endpointParams = url.Values{}
-		}
 		endpointParams.Set("audience", o.SASL.OAuth2.Audience)
 	}
 

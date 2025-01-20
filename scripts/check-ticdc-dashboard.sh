@@ -12,11 +12,11 @@
 # limitations under the License.
 
 if $(which jq &>/dev/null); then
-	dup=$(jq '[.panels[] | .panels[]]| group_by(.id) | .[] | select(length>1) | .[] | { id: .id, title: .title}' metrics/grafana/ticdc.json)
+	dup=$(jq '[.panels[] | .panels[]]| group_by(.id) | .[] | select(length>1) | .[] | { id: .id, title: .title}' metrics/grafana/ticdc_new_arch.json)
 	[[ -n $dup ]] || exit 0
-	echo "Find panels with duplicated ID in metrics/grafana/ticdc.json"
+	echo "Find panels with duplicated ID in metrics/grafana/ticdc_new_arch.json"
 	echo "$dup"
 	echo "Please choose a new ID that is larger than the max ID:"
 	jq '[.panels[] | .panels[] | .id] | max' \
-		metrics/grafana/ticdc.json
+		metrics/grafana/ticdc_new_arch.json
 fi

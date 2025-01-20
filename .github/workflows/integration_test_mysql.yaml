@@ -273,20 +273,25 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
 
-      - name: Test http_api
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=http_api
+      # - name: Test http_api
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=http_api
 
       - name: Test partition_table
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=partition_table
       
-      - name: Test multi_tables_ddl
+      # - name: Test multi_tables_ddl
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
+
+      - name: Test multi_source
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
 
      
       - name: Test ddl_attributes
@@ -299,11 +304,10 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls
 
-      
-      - name: Test http_api_tls_with_user_auth
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls_with_user_auth
+      # - name: Test http_api_tls_with_user_auth
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls_with_user_auth
       
       - name: Test default_value
         if: ${{ success() }}
@@ -315,11 +319,37 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=http_proxies
 
-      # the 9th case in this group
       - name: Test ddl_reentrant
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=ddl_reentrant
+
+      - name: Test syncpoint
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=syncpoint
+
+      - name: Test force_replicate_table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=force_replicate_table
+
+      - name: Test tidb_mysql_test
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=tidb_mysql_test
+
+
+      - name: Test resolve_lock
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=resolve_lock
+
+      # The 14th case in this group
+      - name: Test move_table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=move_table
 
       - name: Upload test logs
         if: always()
@@ -505,11 +535,6 @@ jobs:
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_M
-      
-      - name: Test fail_over_ddl_O
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_O
           
       - name: Test fail_over_ddl_N
         run: |

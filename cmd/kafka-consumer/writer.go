@@ -23,6 +23,7 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/cdc/sink/ddlsink"
 	ddlsinkfactory "github.com/pingcap/tiflow/cdc/sink/ddlsink/factory"
@@ -30,7 +31,6 @@ import (
 	"github.com/pingcap/tiflow/cdc/sink/dmlsink/mq/dispatcher"
 	"github.com/pingcap/tiflow/cdc/sink/tablesink"
 	"github.com/pingcap/tiflow/pkg/config"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec"
 	"github.com/pingcap/tiflow/pkg/sink/codec/avro"
 	"github.com/pingcap/tiflow/pkg/sink/codec/canal"
@@ -397,7 +397,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 
 	if counter > w.option.maxBatchSize {
 		log.Panic("Open Protocol max-batch-size exceeded",
-			zap.Int("max-batch-size", w.option.maxBatchSize), zap.Int("actual-batch-size", counter),
+			zap.Int("maxBatchSize", w.option.maxBatchSize), zap.Int("actualBatchSize", counter),
 			zap.Int32("partition", partition), zap.Any("offset", offset))
 	}
 

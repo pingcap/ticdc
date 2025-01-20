@@ -22,7 +22,7 @@ function run() {
 
 	cd $WORK_DIR
 
-	TOPIC_NAME="ticdc-canal-json-content-compatible"
+	TOPIC_NAME="ticdc-canal-json-content-compatible-$RANDOM"
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 

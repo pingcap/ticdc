@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/pingcap/log"
@@ -302,7 +303,8 @@ type TableInfo struct {
 	columnSchema *columnSchema `json:"-"`
 
 	preSQLs struct {
-		isInitialized atomic.Bool
+		mutex         sync.Mutex
+		isInitialized bool
 		m             [4]string
 	} `json:"-"`
 }
@@ -314,7 +316,9 @@ func (ti *TableInfo) InitPrivateFields() {
 		return
 	}
 
-	if ti.preSQLs.isInitialized.Load() {
+	ti.preSQLs.mutex.Lock()
+	defer ti.preSQLs.mutex.Unlock()
+	if ti.preSQLs.isInitialized {
 		return
 	}
 
@@ -322,7 +326,7 @@ func (ti *TableInfo) InitPrivateFields() {
 	ti.preSQLs.m[preSQLInsert] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLInsert], ti.TableName.QuoteString())
 	ti.preSQLs.m[preSQLReplace] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLReplace], ti.TableName.QuoteString())
 	ti.preSQLs.m[preSQLUpdate] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLUpdate], ti.TableName.QuoteString())
-	ti.preSQLs.isInitialized.Store(true)
+	ti.preSQLs.isInitialized = true
 }
 
 func (ti *TableInfo) Marshal() ([]byte, error) {

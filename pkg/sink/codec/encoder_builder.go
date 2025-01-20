@@ -17,14 +17,13 @@ import (
 	"context"
 
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/encoder"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 )
 
-func NewEventEncoder(ctx context.Context, cfg *common.Config) (encoder.EventEncoder, error) {
+func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncoder, error) {
 	switch cfg.Protocol {
 	case config.ProtocolDefault, config.ProtocolOpen:
 		return open.NewBatchEncoder(ctx, cfg)
@@ -37,6 +36,6 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (encoder.EventEnco
 	// case config.ProtocolSimple:
 	// 	return simple.NewEncoder(ctx, cfg)
 	default:
-		return nil, cerror.ErrSinkUnknownProtocol.GenWithStackByArgs(cfg.Protocol)
+		return nil, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(cfg.Protocol)
 	}
 }

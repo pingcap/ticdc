@@ -16,8 +16,8 @@ package v2
 import (
 	"net/url"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/api/internal/rest"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
 )
 

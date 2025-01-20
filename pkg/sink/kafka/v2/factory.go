@@ -22,11 +22,12 @@ import (
 	"github.com/jcmturner/gokrb5/v8/client"
 	"github.com/jcmturner/gokrb5/v8/config"
 	"github.com/jcmturner/gokrb5/v8/keytab"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	pkafka "github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
 	tiv2 "github.com/pingcap/tiflow/pkg/sink/kafka/v2"
 	"github.com/segmentio/kafka-go"
@@ -49,6 +50,7 @@ type factory struct {
 
 // NewFactory returns a factory implemented based on kafka-go
 func NewFactory(
+	_ context.Context,
 	options *pkafka.Options,
 	changefeedID commonType.ChangeFeedID,
 ) (pkafka.Factory, error) {
@@ -155,7 +157,7 @@ func completeSASLConfig(o *pkafka.Options) (sasl.Mechanism, error) {
 				o.SASL.GSSAPI.ServiceName), nil
 
 		case pkafka.SASLTypeOAuth:
-			return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
+			return nil, cerror.ErrKafkaInvalidConfig.GenWithStack(
 				"OAuth is not yet supported in Kafka sink v2")
 		}
 	}
@@ -201,12 +203,12 @@ func (f *factory) newWriter(async bool) *kafka.Writer {
 	return w
 }
 
-func (f *factory) AdminClient(_ context.Context) (pkafka.ClusterAdminClient, error) {
+func (f *factory) AdminClient() (pkafka.ClusterAdminClient, error) {
 	return newClusterAdminClient(f.options.BrokerEndpoints, f.transport, f.changefeedID), nil
 }
 
 // SyncProducer creates a sync producer to writer message to kafka
-func (f *factory) SyncProducer(_ context.Context) (pkafka.SyncProducer, error) {
+func (f *factory) SyncProducer() (pkafka.SyncProducer, error) {
 	w := f.newWriter(false)
 	// set batch size to 1 to make sure the message is sent immediately
 	w.BatchTimeout = time.Millisecond
@@ -395,6 +397,6 @@ func (a *asyncWriter) AsyncRunCallback(ctx context.Context) error {
 		if err == nil {
 			return nil
 		}
-		return errors.WrapError(errors.ErrKafkaAsyncSendMessage, err)
+		return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, err)
 	}
 }

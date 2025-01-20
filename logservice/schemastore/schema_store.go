@@ -25,8 +25,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/tidb/pkg/kv"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -130,16 +130,29 @@ func (s *schemaStore) Name() string {
 
 func (s *schemaStore) Run(ctx context.Context) error {
 	log.Info("schema store begin to run")
+	defer func() {
+		log.Info("schema store exited")
+	}()
+
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		return s.updateResolvedTsPeriodically(ctx)
+	})
+
+	eg.Go(func() error {
+		return s.dataStorage.gc(ctx)
+	})
+
+	eg.Go(func() error {
+		return s.dataStorage.persistUpperBoundPeriodically(ctx)
 	})
 
 	return eg.Wait()
 }
 
 func (s *schemaStore) Close(ctx context.Context) error {
-	log.Info("schema store closed")
+	log.Info("schema store start to close")
+	defer log.Info("schema store closed")
 	return s.dataStorage.close()
 }
 
@@ -147,9 +160,9 @@ func (s *schemaStore) updateResolvedTsPeriodically(ctx context.Context) error {
 	tryUpdateResolvedTs := func() {
 		pendingTs := s.pendingResolvedTs.Load()
 		defer func() {
-			currentPhyTs := oracle.GetPhysical(s.pdClock.CurrentTime())
+			pdPhyTs := oracle.GetPhysical(s.pdClock.CurrentTime())
 			resolvedPhyTs := oracle.ExtractPhysical(pendingTs)
-			resolvedLag := float64(currentPhyTs-resolvedPhyTs) / 1e3
+			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
 			metrics.SchemaStoreResolvedTsLagGauge.Set(float64(resolvedLag))
 		}()
 

@@ -1377,10 +1377,13 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 	var wrapTableInfo *common.TableInfo
 	// Note: not all ddl types will respect the `filtered` result, example: create tables, rename tables
 	filtered := false
-	if tableFilter != nil &&
-		tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.CurrentSchemaName, rawEvent.CurrentTableName) &&
-		tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.PrevSchemaName, rawEvent.PrevTableName) {
-		filtered = true
+	// TODO: ShouldDiscardDDL is used for old architecture, should be removed later
+	if tableFilter != nil && rawEvent.CurrentSchemaName != "" && rawEvent.CurrentTableName != "" {
+		filtered = tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.CurrentSchemaName, rawEvent.CurrentTableName)
+		// if the ddl invovles another table name, only set filtered to true when all of them should be filtered
+		if rawEvent.PrevSchemaName != "" && rawEvent.PrevTableName != "" {
+			filtered = filtered && tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.PrevSchemaName, rawEvent.PrevTableName)
+		}
 	}
 	if rawEvent.TableInfo != nil {
 		wrapTableInfo = common.WrapTableInfo(
@@ -2060,11 +2063,20 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	if err != nil {
 		log.Panic("split queries failed", zap.Error(err))
 	}
+	if len(querys) != len(rawEvent.MultipleTableInfos) {
+		log.Panic("query count not match table count",
+			zap.Int("queryCount", len(querys)),
+			zap.Int("tableCount", len(rawEvent.MultipleTableInfos)),
+			zap.String("query", rawEvent.Query))
+	}
 	ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, physicalTableCount)
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)
 	resultQuerys := make([]string, 0, logicalTableCount)
 	for i, info := range rawEvent.MultipleTableInfos {
 		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, info.Name.O) {
+			log.Info("build ddl event for create tables filter table",
+				zap.String("schemaName", rawEvent.CurrentSchemaName),
+				zap.String("tableName", info.Name.O))
 			continue
 		}
 		if isPartitionTable(info) {

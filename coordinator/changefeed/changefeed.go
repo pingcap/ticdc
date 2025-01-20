@@ -16,6 +16,7 @@ package changefeed
 import (
 	"encoding/json"
 	"net/url"
+	"sync"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -32,11 +33,15 @@ import (
 
 // Changefeed is a memory present for changefeed info and status
 type Changefeed struct {
-	ID          common.ChangeFeedID
-	info        *atomic.Pointer[config.ChangeFeedInfo]
-	isMQSink    bool
-	isNew       bool // only true when the changfeed is newly created or resumed by overwriteCheckpointTs
-	nodeID      node.ID
+	ID       common.ChangeFeedID
+	info     *atomic.Pointer[config.ChangeFeedInfo]
+	isMQSink bool
+	isNew    bool // only true when the changfeed is newly created or resumed by overwriteCheckpointTs
+
+	// nodeIDMu protects nodeID
+	nodeIDMu sync.Mutex
+	nodeID   node.ID
+
 	configBytes []byte
 	// it's saved to the backend db
 	lastSavedCheckpointTs *atomic.Uint64
@@ -95,16 +100,15 @@ func (c *Changefeed) StartFinished() {
 	c.backoff.StartFinished()
 }
 
-// setNodeID set the node id of the changefeed
-func (c *Changefeed) setNodeID(n node.ID) {
-	c.nodeID = n
-}
-
 func (c *Changefeed) GetNodeID() node.ID {
+	c.nodeIDMu.Lock()
+	defer c.nodeIDMu.Unlock()
 	return c.nodeID
 }
 
 func (c *Changefeed) SetNodeID(n node.ID) {
+	c.nodeIDMu.Lock()
+	defer c.nodeIDMu.Unlock()
 	c.nodeID = n
 }
 
@@ -135,6 +139,11 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 	return false, model.StateNormal, nil
 }
 
+func (c *Changefeed) ForceUpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {
+	c.status.Store(newStatus)
+	return c.backoff.CheckStatus(newStatus)
+}
+
 func (c *Changefeed) IsMQSink() bool {
 	return c.isMQSink
 }
@@ -143,8 +152,46 @@ func (c *Changefeed) SetIsNew(isNew bool) {
 	c.isNew = isNew
 }
 
+// GetStatus returns the changefeed status.
+// Note: the returned status is a pointer, so it's not safe to modify it!
 func (c *Changefeed) GetStatus() *heartbeatpb.MaintainerStatus {
 	return c.status.Load()
+}
+
+// GetClonedStatus returns a deep copy of the changefeed status
+func (c *Changefeed) GetClonedStatus() *heartbeatpb.MaintainerStatus {
+	status := c.status.Load()
+	if status == nil {
+		return nil
+	}
+
+	clone := &heartbeatpb.MaintainerStatus{
+		CheckpointTs: status.CheckpointTs,
+		FeedState:    status.FeedState,
+		State:        status.State,
+		Err:          make([]*heartbeatpb.RunningError, 0, len(status.Err)),
+	}
+	for _, err := range status.Err {
+		clonedErr := &heartbeatpb.RunningError{
+			Time:    err.Time,
+			Node:    err.Node,
+			Code:    err.Code,
+			Message: err.Message,
+		}
+		clone.Err = append(clone.Err, clonedErr)
+	}
+
+	cfID := status.ChangefeedID
+	if cfID != nil {
+		clone.ChangefeedID = &heartbeatpb.ChangefeedID{
+			High:      cfID.High,
+			Low:       cfID.Low,
+			Name:      cfID.Name,
+			Namespace: cfID.Namespace,
+		}
+	}
+
+	return clone
 }
 
 func (c *Changefeed) SetLastSavedCheckPointTs(ts uint64) {

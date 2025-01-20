@@ -103,6 +103,7 @@ type messageCenter struct {
 	receiveEventCh chan *TargetMessage
 	receiveCmdCh   chan *TargetMessage
 	g              *errgroup.Group
+	ctx            context.Context
 	cancel         context.CancelFunc
 }
 
@@ -127,6 +128,7 @@ func NewMessageCenter(
 		receiveEventCh: receiveEventCh,
 		receiveCmdCh:   receiveCmdCh,
 		cancel:         cancel,
+		ctx:            ctx,
 		g:              g,
 		router:         newRouter(),
 	}
@@ -291,6 +293,7 @@ func (mc *messageCenter) touchRemoteTarget(id node.ID, epoch uint64, addr string
 	if !ok {
 		// If the target is not found, create a new one.
 		target = newRemoteMessageTarget(
+			mc.ctx,
 			mc.id, id, mc.epoch,
 			epoch, addr, mc.receiveEventCh,
 			mc.receiveCmdCh, mc.cfg, mc.security)
@@ -320,6 +323,7 @@ func (mc *messageCenter) touchRemoteTarget(id node.ID, epoch uint64, addr string
 		zap.Any("newAddr", addr))
 	target.close()
 	newTarget := newRemoteMessageTarget(
+		mc.ctx,
 		mc.id, id, mc.epoch,
 		epoch, addr, mc.receiveEventCh,
 		mc.receiveCmdCh, mc.cfg, mc.security)
