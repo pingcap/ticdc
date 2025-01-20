@@ -250,11 +250,11 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 	defer storageSnap.Close()
 
 	p.mu.Lock()
+	failpoint.Inject("getAllPhysicalTablesGCFastFail", func() {
+		snapTs = 0
+	})
 	if snapTs < p.gcTs {
 		p.mu.Unlock()
-		failpoint.Inject("getAllPhysicalTablesGCFastFail", func() {
-			failpoint.Return(nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs("snapTs %d is smaller than gcTs %d", snapTs, p.gcTs))
-		})
 		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs("snapTs %d is smaller than gcTs %d", snapTs, p.gcTs)
 	}
 
