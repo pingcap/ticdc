@@ -150,12 +150,21 @@ func (c *MockClusterAdmin) CreateTopic(ctx context.Context, detail *TopicDetail,
 	if int(detail.ReplicationFactor) > n {
 		return kafka.NewError(kafka.ErrInvalidReplicationFactor, "kafka create topic failed: kafka server: Replication-factor is invalid", false)
 	}
-	c.mockCluster.CreateTopic(detail.Name, int(detail.NumPartitions), int(detail.ReplicationFactor))
+	err := c.mockCluster.CreateTopic(detail.Name, int(detail.NumPartitions), int(detail.ReplicationFactor))
+	if err != nil {
+		return err
+	}
 	c.topics[detail.Name] = &MockTopicDetail{TopicDetail: *detail}
 	return nil
 }
 
 func (c *MockClusterAdmin) GetBrokerConfig(ctx context.Context, configName string) (string, error) {
+	switch configName {
+	case "message.max.bytes", "max.message.bytes":
+		return defaultMaxMessageBytes, nil
+	case "min.insync.replicas":
+		return defaultMinInsyncReplicas, nil
+	}
 	return "0", nil
 }
 

@@ -64,7 +64,7 @@ func verifyKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, uri 
 	if components.TopicManager != nil {
 		components.TopicManager.Close()
 	}
-	return errors.Trace(err)
+	return err
 }
 
 func newKafkaSink(
