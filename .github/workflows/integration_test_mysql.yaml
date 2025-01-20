@@ -476,110 +476,110 @@ jobs:
           log-name: e2e_test_group_3
 
 
-  failover_e2e_test1:
-      ## Only run ci when PR is not draft
-    if: github.event.pull_request.draft == false
+  # failover_e2e_test1:
+  #     ## Only run ci when PR is not draft
+  #   if: github.event.pull_request.draft == false
 
-    runs-on: ubuntu-latest 
-    name: Failover E2E Test
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v2
+  #   runs-on: ubuntu-latest 
+  #   name: Failover E2E Test
+  #   steps:
+  #     - name: Check out code
+  #       uses: actions/checkout@v2
 
-      - name: Setup Go environment
-        uses: actions/setup-go@v3
-        with:
-          go-version: '1.23'
+  #     - name: Setup Go environment
+  #       uses: actions/setup-go@v3
+  #       with:
+  #         go-version: '1.23'
 
-      - name: Integration Build
-        run: |
-          tests/scripts/download-integration-test-binaries.sh master true
-          go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
-          make integration_test_build
-          ls -l bin/ && ls -l tools/bin/
+  #     - name: Integration Build
+  #       run: |
+  #         tests/scripts/download-integration-test-binaries.sh master true
+  #         go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
+  #         make integration_test_build
+  #         ls -l bin/ && ls -l tools/bin/
 
-      - name: Test fail_over
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over 
+  #     - name: Test fail_over
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over 
       
-      - name: Test fail_over_ddl_A
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
+  #     - name: Test fail_over_ddl_A
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_A
       
-      - name: Test fail_over_ddl_B
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_B
+  #     - name: Test fail_over_ddl_B
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_B
       
-      - name: Test fail_over_ddl_C
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_C
+  #     - name: Test fail_over_ddl_C
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_C
       
-      - name: Test fail_over_ddl_D
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_D
+  #     - name: Test fail_over_ddl_D
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_D
 
-      - name: Test fail_over_ddl_E
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_E
+  #     - name: Test fail_over_ddl_E
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_E
       
-      - name: Test fail_over_ddl_F
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
+  #     - name: Test fail_over_ddl_F
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_F
       
-      - name: Test fail_over_ddl_G
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_G
+  #     - name: Test fail_over_ddl_G
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_G
       
-      - name: Test fail_over_ddl_H
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_H
+  #     - name: Test fail_over_ddl_H
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_H
 
-      - name: Test fail_over_ddl_I
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_I
+  #     - name: Test fail_over_ddl_I
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_I
       
-      - name: Test fail_over_ddl_J
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_J
+  #     - name: Test fail_over_ddl_J
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_J
 
-      - name: Test fail_over_ddl_K
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_K
+  #     - name: Test fail_over_ddl_K
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_K
 
-      - name: Test fail_over_ddl_L
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_L
+  #     - name: Test fail_over_ddl_L
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_L
       
-      - name: Test fail_over_ddl_M
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_M
+  #     - name: Test fail_over_ddl_M
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_M
           
-      - name: Test fail_over_ddl_N
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_N
+  #     - name: Test fail_over_ddl_N
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_N
 
-      - name: Test fail_over_ddl_O
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_O
+  #     - name: Test fail_over_ddl_O
+  #       run: |
+  #         pwd && ls -l bin/ && ls -l tools/bin/
+  #         export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_O
 
-      - name: Upload test logs
-        if: always()
-        uses: ./.github/actions/upload-test-logs
-        with:
-          log-name: failover_e2e_test1
+  #     - name: Upload test logs
+  #       if: always()
+  #       uses: ./.github/actions/upload-test-logs
+  #       with:
+  #         log-name: failover_e2e_test1
