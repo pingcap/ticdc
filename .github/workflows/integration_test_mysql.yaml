@@ -538,7 +538,7 @@ jobs:
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_G
       
-       - name: Test fail_over_ddl_H
+      - name: Test fail_over_ddl_H
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_H
@@ -558,7 +558,7 @@ jobs:
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_K
 
-          - name: Test fail_over_ddl_L
+      - name: Test fail_over_ddl_L
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_L
