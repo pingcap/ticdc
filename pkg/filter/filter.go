@@ -16,14 +16,16 @@ package filter
 import (
 	"sync"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/tidb/parser/mysql"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"github.com/pingcap/tiflow/cdc/model"
 	bf "github.com/pingcap/tiflow/pkg/binlog-filter"
+	"go.uber.org/zap"
 )
 
 const (
@@ -115,8 +117,16 @@ func (f *filter) IsEligible(tableInfo *timodel.TableInfo) bool {
 		return true
 	}
 
-	// If the table has primary key or unique key on not null columns, it is eligible.
-	// the logic is
+	// If the table has primary key, it is eligible.
+	for _, col := range tableInfo.Columns {
+		if !(col.IsGenerated() && !col.GeneratedStored) { // visible and not stored generated column
+			if (tableInfo.PKIsHandle && mysql.HasPriKeyFlag(col.GetFlag())) || col.ID == timodel.ExtraHandleID {
+				return true
+			}
+		}
+	}
+
+	// If the table has unique key on not null columns, it is eligible.
 	for _, idx := range tableInfo.Indices {
 		if idx.Primary {
 			return true
@@ -225,6 +235,7 @@ func (f *filter) ShouldIgnoreTable(db, tbl string, tableInfo *timodel.TableInfo)
 	}
 
 	if tableInfo != nil && !f.IsEligible(tableInfo) {
+		log.Info("table is not eligible, should ignore this table", zap.String("db", db), zap.String("table", tbl))
 		return true
 	}
 
