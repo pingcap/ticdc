@@ -124,8 +124,10 @@ type Maintainer struct {
 	// false when otherwise, such as maintainer move to different nodes.
 	newChangefeed bool
 
-	errLock             sync.Mutex
-	runningErrors       map[node.ID]*heartbeatpb.RunningError
+	runningErrors struct {
+		sync.Mutex
+		m map[node.ID]*heartbeatpb.RunningError
+	}
 	cancelUpdateMetrics context.CancelFunc
 
 	changefeedCheckpointTsGauge    prometheus.Gauge
@@ -186,7 +188,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 		ddlSpan:               ddlSpan,
 		checkpointTsByCapture: make(map[node.ID]heartbeatpb.Watermark),
-		runningErrors:         map[node.ID]*heartbeatpb.RunningError{},
 		newChangefeed:         newChangfeed,
 
 		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
@@ -199,6 +200,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		tableCountGauge:                metrics.TableGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Namespace(), cfID.Name()),
 	}
+	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
 	m.watermark.Watermark = &heartbeatpb.Watermark{
 		CheckpointTs: checkpointTs,
@@ -300,15 +302,15 @@ func (m *Maintainer) Close() {
 }
 
 func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
-	m.errLock.Lock()
-	defer m.errLock.Unlock()
+	m.runningErrors.Lock()
+	defer m.runningErrors.Unlock()
 	var runningErrors []*heartbeatpb.RunningError
-	if len(m.runningErrors) > 0 {
-		runningErrors = make([]*heartbeatpb.RunningError, 0, len(m.runningErrors))
-		for _, e := range m.runningErrors {
+	if len(m.runningErrors.m) > 0 {
+		runningErrors = make([]*heartbeatpb.RunningError, 0, len(m.runningErrors.m))
+		for _, e := range m.runningErrors.m {
 			runningErrors = append(runningErrors, e)
 		}
-		clear(m.runningErrors)
+		m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 	}
 
 	status := &heartbeatpb.MaintainerStatus{
@@ -558,10 +560,10 @@ func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {
 	if info, ok := m.nodeManager.GetAliveNodes()[from]; ok {
 		err.Node = info.AdvertiseAddr
 	}
-	m.errLock.Lock()
+	m.runningErrors.Lock()
 	m.statusChanged.Store(true)
-	m.runningErrors[from] = err
-	m.errLock.Unlock()
+	m.runningErrors.m[from] = err
+	m.runningErrors.Unlock()
 }
 
 func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
@@ -714,13 +716,14 @@ func (m *Maintainer) handleError(err error) {
 	} else {
 		code = string(errors.ErrOwnerUnknown.RFCCode())
 	}
-	m.runningErrors = map[node.ID]*heartbeatpb.RunningError{
-		m.selfNode.ID: {
-			Time:    time.Now().String(),
-			Node:    m.selfNode.AdvertiseAddr,
-			Code:    code,
-			Message: err.Error(),
-		},
+
+	m.runningErrors.Lock()
+	defer m.runningErrors.Unlock()
+	m.runningErrors.m[m.selfNode.ID] = &heartbeatpb.RunningError{
+		Time:    time.Now().String(),
+		Node:    m.selfNode.AdvertiseAddr,
+		Code:    code,
+		Message: err.Error(),
 	}
 	m.statusChanged.Store(true)
 }
