@@ -463,11 +463,21 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=resolve_lock
 
-      # The 14th case in this group
       - name: Test move_table
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=move_table
+
+      - name: Test changefeed_fast_fail
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_fast_fail
+
+      # The 16th case in this group
+      - name: Test capture_session_done_during_task
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=capture_session_done_during_task
 
       - name: Upload test logs
         if: always()
