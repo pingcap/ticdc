@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/sink"
 )
 
@@ -40,7 +39,7 @@ type Sink interface {
 	Run(ctx context.Context) error
 }
 
-func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID common.ChangeFeedID, errCh chan error, pdClock pdutil.Clock) (Sink, error) {
+func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
 	sinkURI, err := url.Parse(config.SinkURI)
 	if err != nil {
 		return nil, cerror.WrapError(cerror.ErrSinkURIInvalid, err)
@@ -52,7 +51,7 @@ func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID 
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
 		return newKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.S3Scheme, sink.FileScheme, sink.GCSScheme, sink.GSScheme, sink.AzblobScheme, sink.AzureScheme, sink.CloudStorageNoopScheme:
-		return newCloudStorageSink(ctx, changefeedID, sinkURI, config.SinkConfig, errCh, pdClock, nil)
+		return newCloudStorageSink(ctx, changefeedID, sinkURI, config.SinkConfig, nil)
 	case sink.BlackHoleScheme:
 		return newBlackHoleSink()
 	}
@@ -70,6 +69,8 @@ func VerifySink(ctx context.Context, config *config.ChangefeedConfig, changefeed
 		return verifyMySQLSink(ctx, sinkURI, config)
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
 		return verifyKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+	case sink.S3Scheme, sink.FileScheme, sink.GCSScheme, sink.GSScheme, sink.AzblobScheme, sink.AzureScheme, sink.CloudStorageNoopScheme:
+		return verifyCloudStorageSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.BlackHoleScheme:
 		return nil
 	}

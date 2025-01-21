@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/worker/defragmenter"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -82,9 +83,6 @@ type CloudStorageSink struct {
 
 	statistics *metrics.Statistics
 
-	cancel   func()
-	wg       sync.WaitGroup
-	dead     chan struct{}
 	isNormal uint32
 
 	// DDL
@@ -96,16 +94,37 @@ type CloudStorageSink struct {
 	lastSendCheckpointTsTime time.Time
 }
 
-func (s *CloudStorageSink) SinkType() common.SinkType {
-	return common.CloudStorageSinkType
+func verifyCloudStorageSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
+	var (
+		protocol config.Protocol
+		storage  storage.ExternalStorage
+		err      error
+	)
+	cfg := cloudstorage.NewConfig()
+	if err = cfg.Apply(ctx, sinkURI, sinkConfig); err != nil {
+		return err
+	}
+	if protocol, err = helper.GetProtocol(putil.GetOrZero(sinkConfig.Protocol)); err != nil {
+		return err
+	}
+	if _, err = util.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt); err != nil {
+		return err
+	}
+	if storage, err = helper.GetExternalStorageFromURI(ctx, sinkURI.String()); err != nil {
+		return err
+	}
+	s := &CloudStorageSink{changefeedID: changefeedID, cfg: cfg, lastSendCheckpointTsTime: time.Now()}
+	if err = s.initCron(ctx, sinkURI, nil); err != nil {
+		return err
+	}
+	storage.Close()
+	return nil
 }
 
 func newCloudStorageSink(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
-	errCh chan error, pdClock pdutil.Clock,
 	cleanupJobs []func(), /* only for test */
 ) (*CloudStorageSink, error) {
-
 	// create cloud storage config and then apply the params of sinkURI to it.
 	cfg := cloudstorage.NewConfig()
 	err := cfg.Apply(ctx, sinkURI, sinkConfig)
@@ -132,7 +151,6 @@ func newCloudStorageSink(
 		return nil, err
 	}
 
-	wgCtx, wgCancel := context.WithCancel(ctx)
 	s := &CloudStorageSink{
 		changefeedID:             changefeedID,
 		scheme:                   strings.ToLower(sinkURI.Scheme),
@@ -140,8 +158,6 @@ func newCloudStorageSink(
 		encodingWorkers:          make([]*worker.CloudStorageEncodingWorker, defaultEncodingConcurrency),
 		workers:                  make([]*worker.CloudStorageWorker, cfg.WorkerCount),
 		statistics:               metrics.NewStatistics(changefeedID, "CloudStorageSink"),
-		cancel:                   wgCancel,
-		dead:                     make(chan struct{}),
 		storage:                  storage,
 		cfg:                      cfg,
 		lastSendCheckpointTsTime: time.Now(),
@@ -161,6 +177,7 @@ func newCloudStorageSink(
 	}
 
 	// create a group of dml workers.
+	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	for i := 0; i < cfg.WorkerCount; i++ {
 		inputCh := chann.NewAutoDrainChann[defragmenter.EventFragment]()
 		s.workers[i] = worker.NewCloudStorageWorker(i, s.changefeedID, storage, cfg, ext,
@@ -174,34 +191,15 @@ func newCloudStorageSink(
 	// the same dmlWorker.
 	s.defragmenter = defragmenter.NewDefragmenter(encodedOutCh, workerChannels)
 
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		err := s.Run(wgCtx)
-
-		s.alive.Lock()
-		s.alive.isDead = true
-		s.alive.msgCh.CloseAndDrain()
-		s.alive.Unlock()
-		close(s.dead)
-
-		if err != nil && errors.Cause(err) != context.Canceled {
-			select {
-			case <-wgCtx.Done():
-			case errCh <- err:
-			}
-		}
-	}()
-
 	if err := s.initCron(ctx, sinkURI, cleanupJobs); err != nil {
 		return nil, errors.Trace(err)
 	}
-	// Note: It is intended to run the cleanup goroutine in the background.
-	// we don't wait for it to finish since the gourotine would be stuck if
-	// the downstream is abnormal, especially when the downstream is a nfs.
-	go s.bgCleanup(ctx)
 
 	return s, nil
+}
+
+func (s *CloudStorageSink) SinkType() common.SinkType {
+	return common.CloudStorageSinkType
 }
 
 func (s *CloudStorageSink) Run(ctx context.Context) error {
@@ -231,10 +229,13 @@ func (s *CloudStorageSink) Run(ctx context.Context) error {
 		})
 	}
 
-	log.Info("dml worker started", zap.String("namespace", s.changefeedID.Namespace()),
-		zap.Stringer("changefeed", s.changefeedID.ID()),
-		zap.Int("workerCount", len(s.workers)),
-		zap.Any("config", s.cfg))
+	// Note: It is intended to run the cleanup goroutine in the background.
+	// we don't wait for it to finish since the gourotine would be stuck if
+	// the downstream is abnormal, especially when the downstream is a nfs.
+	eg.Go(func() error {
+		s.bgCleanup(ctx)
+		return nil
+	})
 
 	return eg.Wait()
 }
@@ -485,11 +486,6 @@ func (s *CloudStorageSink) genCleanupJob(ctx context.Context, uri *url.URL) []fu
 }
 
 func (s *CloudStorageSink) Close(_ bool) {
-	if s.cancel != nil {
-		s.cancel()
-	}
-	s.wg.Wait()
-
 	for _, encodingWorker := range s.encodingWorkers {
 		encodingWorker.Close()
 	}
@@ -500,5 +496,8 @@ func (s *CloudStorageSink) Close(_ bool) {
 
 	if s.statistics != nil {
 		s.statistics.Close()
+	}
+	if s.cron != nil {
+		s.cron.Stop()
 	}
 }

@@ -207,11 +207,13 @@ type tableDefWithoutQuery struct {
 // FromDDLEvent converts from DDLEvent to TableDefinition.
 func (t *TableDefinition) FromDDLEvent(event *commonEvent.DDLEvent, outputColumnID bool) {
 	if event.GetCommitTs() != event.TableInfo.UpdateTS() {
-		log.Panic("commit ts and table info version should be equal",
-			zap.Any("event", event), zap.Any("tableInfo", event.TableInfo),
+		log.Error("commit ts and table info version should be equal",
+			zap.Uint64("tableInfoVersion", event.TableInfo.UpdateTS()),
+			zap.Any("commitTs", event.GetCommitTs()),
+			zap.Any("tableInfo", event.TableInfo),
 		)
 	}
-	t.FromTableInfo(event.TableInfo, event.TableInfo.UpdateTS(), outputColumnID)
+	t.FromTableInfo(event.TableInfo, event.GetCommitTs(), outputColumnID)
 	t.Query = event.Query
 	t.Type = event.Type
 }
