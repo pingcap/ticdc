@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,18 +16,19 @@ import (
 	"bytes"
 	"context"
 	"path"
+	"strconv"
 	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/utils/chann"
-
 	"github.com/pingcap/ticdc/downstreamadapter/worker/defragmenter"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	mcloudstorage "github.com/pingcap/tiflow/cdc/sink/metrics/cloudstorage"
 	"github.com/pingcap/tiflow/pkg/errors"
@@ -65,9 +66,9 @@ func NewCloudStorageWorker(
 	config *cloudstorage.Config,
 	extension string,
 	inputCh *chann.DrainableChann[defragmenter.EventFragment],
-	pdClock pdutil.Clock,
 	statistics *metrics.Statistics,
 ) *CloudStorageWorker {
+	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	d := &CloudStorageWorker{
 		id:                id,
 		changeFeedID:      changefeedID,
@@ -85,14 +86,14 @@ func NewCloudStorageWorker(
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String()),
 		metricFlushDuration: mcloudstorage.CloudStorageFlushDurationHistogram.
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String()),
-		// metricsWorkerBusyRatio: mcloudstorage.CloudStorageWorkerBusyRatio.
-		// 	WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String(), strconv.Itoa(id)),
+		metricsWorkerBusyRatio: mcloudstorage.CloudStorageWorkerBusyRatioCounter.
+			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String(), strconv.Itoa(id)),
 	}
 
 	return d
 }
 
-// run creates a set of background goroutines.
+// Run creates a set of background goroutines.
 func (d *CloudStorageWorker) Run(ctx context.Context) error {
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
