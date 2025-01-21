@@ -98,10 +98,14 @@ func (s *syncProducer) SendMessage(
 	if err != nil {
 		return err
 	}
-	event := <-s.deliveryChan
-	switch e := event.(type) {
-	case *kafka.Error:
-		return e
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case event := <-s.deliveryChan:
+		switch e := event.(type) {
+		case *kafka.Error:
+			return e
+		}
 	}
 	return nil
 }
