@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -150,6 +151,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	checkpointTs uint64,
 	newChangfeed bool,
 ) *Maintainer {
+
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -324,6 +326,9 @@ func (m *Maintainer) initialize() error {
 	log.Info("start to initialize changefeed maintainer",
 		zap.String("id", m.id.String()))
 
+	failpoint.Inject("NewChangefeedRetryError", func() {
+		failpoint.Return(errors.New("failpoint injected retriable error"))
+	})
 	// detect the capture changes
 	m.nodeManager.RegisterNodeChangeHandler(node.ID("maintainer-"+m.id.Name()), func(allNodes map[node.ID]*node.Info) {
 		m.mutex.Lock()
