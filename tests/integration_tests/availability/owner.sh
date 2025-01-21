@@ -107,7 +107,10 @@ function test_expire_owner() {
 	echo "process status:" $(ps -h -p $owner_pid -o "s")
 	# ensure the session has expired
 	ensure $MAX_RETRIES "ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/owner --prefix | grep -v '$owner_id'"
-	
+
+	# resume the owner
+	kill -SIGCONT $owner_pid
+
 	run_sql "REPLACE INTO test.availability1(id, val) VALUES (2, 22);"
 	# ensure server exit
 	ensure 30 "! ps -p $owner_pid > /dev/null 2>&1"

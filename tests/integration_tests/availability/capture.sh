@@ -149,6 +149,9 @@ function test_expire_capture() {
 	# ensure the session has expired
 	ensure $MAX_RETRIES "ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/owner --prefix | grep -v '$owner_id'"
 
+	# resume the owner
+	kill -SIGCONT $owner_pid
+
 	# ensure server exit
 	ensure 30 "! ps -p $owner_pid > /dev/null 2>&1"
 
