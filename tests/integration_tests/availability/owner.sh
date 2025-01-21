@@ -91,8 +91,8 @@ function test_hang_up_owner() {
 }
 # test_expire_owner stops the owner by sending
 # the SIGSTOP signal and wait until its session expires.
-# And then we restart the server.
-# We expect the data to be replicated after restarting the server.
+# And then we resume the owner.
+# We expect the data to be replicated after resuming the owner.
 function test_expire_owner() {
 	echo "run test case test_expire_owner"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix test_expire_owner.server1
@@ -112,10 +112,6 @@ function test_expire_owner() {
 	kill -SIGCONT $owner_pid
 
 	run_sql "REPLACE INTO test.availability1(id, val) VALUES (2, 22);"
-	# ensure server exit
-	ensure 30 "! ps -p $owner_pid > /dev/null 2>&1"
-	# restart server
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "_${TEST_NAME}_restart" --addr "127.0.0.1:8300"
 
 	ensure $MAX_RETRIES nonempty 'select id, val from test.availability1 where id=2 and val=22'
 	echo "test_expire_owner pass"

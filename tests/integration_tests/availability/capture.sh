@@ -128,8 +128,8 @@ function test_hang_up_capture() {
 }
 
 # test_expire_capture start one server and then stop it until
-# the session expires, and then we restart the server.
-# We expect the data to be replicated after restarting the server.
+# the session expires, and then we resume the server.
+# We expect the data to be replicated after resuming the server.
 function test_expire_capture() {
 	echo "run test case test_expire_capture"
 	# start one server
@@ -152,11 +152,6 @@ function test_expire_capture() {
 	# resume the owner
 	kill -SIGCONT $owner_pid
 
-	# ensure server exit
-	ensure 30 "! ps -p $owner_pid > /dev/null 2>&1"
-
-	# restart server
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "_${TEST_NAME}_restart" --addr "127.0.0.1:8300"
 
 	run_sql "UPDATE test.availability1 set val = 22 where id = 2;"
 	run_sql "DELETE from test.availability1 where id = 3;"
