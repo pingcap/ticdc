@@ -104,6 +104,7 @@ func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool, forceRep
 // IsEligible returns whether the table is a eligible table.
 // A table is eligible if it has a primary key or unique key on not null columns.
 // Or when enable forReplicate or the table is a view.
+// TODO: Add some tests for this function.
 func (f *filter) IsEligible(tableInfo *timodel.TableInfo) bool {
 	// Sequence is not supported yet, TiCDC needs to filter all sequence tables.
 	// See https://github.com/pingcap/tiflow/issues/4559
