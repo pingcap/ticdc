@@ -25,12 +25,9 @@ import (
 	"go.uber.org/zap"
 )
 
-const defaultTimeoutMs = 1000
-
 type factory struct {
 	config       *kafka.ConfigMap
 	changefeedID commonType.ChangeFeedID
-	options      *Options
 }
 
 // NewFactory returns a factory implemented based on kafka-go
@@ -42,7 +39,6 @@ func NewFactory(
 	return &factory{
 		config:       config,
 		changefeedID: changefeedID,
-		options:      options,
 	}, nil
 }
 
@@ -51,7 +47,7 @@ func (f *factory) AdminClient() (ClusterAdminClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newClusterAdminClient(client, f.changefeedID, defaultTimeoutMs), nil
+	return newClusterAdminClient(client, f.changefeedID), nil
 }
 
 // SyncProducer creates a sync producer to Producer message to kafka

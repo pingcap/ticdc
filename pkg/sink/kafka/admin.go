@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,28 +24,27 @@ import (
 	"go.uber.org/zap"
 )
 
+const defaultTimeoutMs = 1000
+
 type admin struct {
 	ClusterAdminClient
 	client       *kafka.AdminClient
 	changefeedID common.ChangeFeedID
-	timeoutMs    int
 }
 
 func newClusterAdminClient(
 	client *kafka.AdminClient,
 	changefeedID common.ChangeFeedID,
-	timeoutMs int,
 ) ClusterAdminClient {
 	return &admin{
 		client:       client,
 		changefeedID: changefeedID,
-		timeoutMs:    timeoutMs,
 	}
 }
 
 func (a *admin) clusterMetadata(_ context.Context) (*kafka.Metadata, error) {
 	// request is not set, so it will return all metadata
-	return a.client.GetMetadata(nil, true, a.timeoutMs)
+	return a.client.GetMetadata(nil, true, defaultTimeoutMs)
 }
 
 func (a *admin) GetAllBrokers(ctx context.Context) ([]Broker, error) {
@@ -68,7 +67,6 @@ func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string,
 		return "", errors.Trace(err)
 	}
 	controllerID := response.Brokers[0].ID
-
 	resources := []kafka.ConfigResource{
 		{
 			Type:   kafka.ResourceBroker,
@@ -76,7 +74,6 @@ func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string,
 			Config: []kafka.ConfigEntry{{Name: configName}},
 		},
 	}
-
 	results, err := a.client.DescribeConfigs(ctx, resources)
 	if err != nil {
 		return "", errors.Trace(err)
@@ -87,7 +84,6 @@ func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string,
 		return "", errors.ErrKafkaConfigNotFound.GenWithStack(
 			"cannot find the `%s` from the broker's configuration", configName)
 	}
-
 	// For compatibility with KOP, we checked all return values.
 	// 1. Kafka only returns requested configs.
 	// 2. Kop returns all configs.
@@ -96,7 +92,6 @@ func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string,
 			return entry.Value, nil
 		}
 	}
-
 	log.Warn("Kafka config item not found",
 		zap.String("configName", configName))
 	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
@@ -111,19 +106,16 @@ func (a *admin) GetTopicConfig(ctx context.Context, topicName string, configName
 			Config: []kafka.ConfigEntry{{Name: configName}},
 		},
 	}
-
 	results, err := a.client.DescribeConfigs(ctx, resources)
 	if err != nil {
 		return "", errors.Trace(err)
 	}
-
 	if len(results) == 0 || len(results[0].Config) == 0 {
 		log.Warn("Kafka config item not found",
 			zap.String("configName", configName))
 		return "", errors.ErrKafkaConfigNotFound.GenWithStack(
 			"cannot find the `%s` from the topic's configuration", configName)
 	}
-
 	// For compatibility with KOP, we checked all return values.
 	// 1. Kafka only returns requested configs.
 	// 2. Kop returns all configs.
@@ -152,9 +144,7 @@ func (a *admin) GetTopicsMeta(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-
 	result := make(map[string]TopicDetail, len(resp.Topics))
-
 	for _, topic := range topics {
 		msg, ok := resp.Topics[topic]
 		if !ok {
@@ -185,7 +175,6 @@ func (a *admin) GetTopicsPartitionsNum(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-
 	result := make(map[string]int32, len(topics))
 	for _, topic := range topics {
 		msg, ok := resp.Topics[topic]
@@ -215,7 +204,6 @@ func (a *admin) CreateTopic(
 	if err != nil {
 		return errors.Trace(err)
 	}
-
 	for _, res := range results {
 		if res.Error.Code() == kafka.ErrTopicAlreadyExists {
 			return errors.Trace(err)
