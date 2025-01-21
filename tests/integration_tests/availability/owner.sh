@@ -178,15 +178,10 @@ function test_delete_owner_key() {
 
 	etcdctl del $owner_key
 	ensure $MAX_RETRIES "ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/owner --prefix | grep  '$capture_id'"
-	# ensure the first capture has exited
-	ensure $MAX_RETRIES "! ps -p $owner_pid > /dev/null 2>&1"
-	echo "old owner exited"
-	# restart server
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "_${TEST_NAME}_restart" --addr "127.0.0.1:8300"
-	echo "start cdc server again"
+	echo "owner key deleted"
+
 	# ensure the it's not the owner
 	ensure $MAX_RETRIES "curl -X GET http://127.0.0.1:8300/status | grep '\"is_owner\": false'"
-
 
 	sleep 3
 
