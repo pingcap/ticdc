@@ -75,6 +75,8 @@ function run() {
 		--cert-allowed-cn "client" # The common name of client.pem
 	sleep 2
 
+	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+
 	TOPIC_NAME="ticdc-cli-test-$RANDOM"
 	case $SINK_TYPE in
 	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
@@ -176,6 +178,20 @@ EOF
 	# Test unsafe commands
 	echo "y" | run_cdc_cli unsafe delete-service-gc-safepoint
 	run_cdc_cli unsafe reset --no-confirm --pd=$pd_addr
+
+	# ensure server exit
+	ensure 30 "! ps -p $cdc_pid_1 > /dev/null 2>&1"
+
+	# restart server
+	run_cdc_server \
+	--workdir $WORK_DIR \
+	--binary $CDC_BINARY \
+	--logsuffix "_${TEST_NAME}_tls1_restart" \
+	--pd "https://${TLS_PD_HOST}:${TLS_PD_PORT}" \
+	--addr "127.0.0.1:8300" \
+	--config "$WORK_DIR/server.toml" \
+	--tlsdir "$TLS_DIR" \
+	--cert-allowed-cn "client" # The common name of client.pem
 
 	# Check if the coordinator is online
 	for i in {1..100}; do

@@ -490,6 +490,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 }
 
 func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
+
 	count = 0
 
 	ddlTableSpan := heartbeatpb.DDLSpan
@@ -649,6 +650,7 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 
 // ensure the dispatcher will be closed when no dml events is in sink
 func TestDispatcherClose(t *testing.T) {
+
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 

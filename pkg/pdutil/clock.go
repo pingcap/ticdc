@@ -34,7 +34,7 @@ type Clock interface {
 	// CurrentTime returns approximate current time from pd.
 	CurrentTime() time.Time
 	Run(ctx context.Context)
-	Stop()
+	Close()
 }
 
 // clock cache time get from PD periodically and cache it
@@ -50,6 +50,7 @@ type clock struct {
 	updateInterval time.Duration
 	cancel         context.CancelFunc
 	stopCh         chan struct{}
+	wg             sync.WaitGroup
 }
 
 // NewClock return a new clock
@@ -75,33 +76,36 @@ func (c *clock) Run(ctx context.Context) {
 	c.cancel = cancel
 	c.mu.Unlock()
 	ticker := time.NewTicker(c.updateInterval)
-	defer func() { c.stopCh <- struct{}{} }()
-	for {
-		select {
-		// c.Stop() was called or parent ctx was canceled
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			err := retry.Do(ctx, func() error {
-				physical, _, err := c.pdClient.GetTS(ctx)
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		for {
+			select {
+			// c.Stop() was called or parent ctx was canceled
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				err := retry.Do(ctx, func() error {
+					physical, _, err := c.pdClient.GetTS(ctx)
+					if err != nil {
+						log.Info("get time from pd failed, retry later", zap.Error(err))
+						return err
+					}
+					c.mu.Lock()
+					c.mu.tsEventTime = oracle.GetTimeFromTS(oracle.ComposeTS(physical, 0))
+					c.mu.tsProcessingTime = time.Now()
+					c.mu.Unlock()
+					return nil
+				}, retry.WithBackoffBaseDelay(200), retry.WithMaxTries(10))
 				if err != nil {
-					log.Info("get time from pd failed, retry later", zap.Error(err))
-					return err
+					log.Warn("get time from pd failed, do not update time cache",
+						zap.Time("cachedTime", c.mu.tsEventTime),
+						zap.Time("processingTime", c.mu.tsProcessingTime),
+						zap.Error(err))
 				}
-				c.mu.Lock()
-				c.mu.tsEventTime = oracle.GetTimeFromTS(oracle.ComposeTS(physical, 0))
-				c.mu.tsProcessingTime = time.Now()
-				c.mu.Unlock()
-				return nil
-			}, retry.WithBackoffBaseDelay(200), retry.WithMaxTries(10))
-			if err != nil {
-				log.Warn("get time from pd failed, do not update time cache",
-					zap.Time("cachedTime", c.mu.tsEventTime),
-					zap.Time("processingTime", c.mu.tsProcessingTime),
-					zap.Error(err))
 			}
 		}
-	}
+	}()
 }
 
 // CurrentTime returns approximate current time from pd.
@@ -114,11 +118,12 @@ func (c *clock) CurrentTime() time.Time {
 }
 
 // Stop clock.
-func (c *clock) Stop() {
+func (c *clock) Close() {
 	c.mu.Lock()
 	c.cancel()
 	c.mu.Unlock()
-	<-c.stopCh
+	c.wg.Wait()
+	log.Info("clock is closed")
 }
 
 type clock4Test struct{}
@@ -135,7 +140,7 @@ func (c *clock4Test) CurrentTime() time.Time {
 func (c *clock4Test) Run(ctx context.Context) {
 }
 
-func (c *clock4Test) Stop() {
+func (c *clock4Test) Close() {
 }
 
 type monotonicClock struct {
@@ -156,5 +161,5 @@ func (c *monotonicClock) CurrentTime() time.Time {
 func (c *monotonicClock) Run(ctx context.Context) {
 }
 
-func (c *monotonicClock) Stop() {
+func (c *monotonicClock) Close() {
 }

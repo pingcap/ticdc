@@ -261,7 +261,7 @@ func (up *Upstream) Close() {
 		up.RegionCache.Close()
 	}
 	if up.PDClock != nil {
-		up.PDClock.Stop()
+		up.PDClock.Close()
 	}
 	if up.session != nil {
 		err := up.session.Close()

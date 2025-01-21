@@ -414,7 +414,6 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 // We need call this function every time we send a event(whether dml/ddl/resolvedTs),
 // thus to ensure the sync point event is in correct order for each dispatcher.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
-	log.Info("hyy emitSyncPointEventIfNeeded", zap.Uint64("ts", ts), zap.Uint64("nextSyncPoint", d.nextSyncPoint))
 	if d.enableSyncPoint && ts > d.nextSyncPoint {
 		// Send the sync point event.
 		syncPointEvent := newWrapSyncPointEvent(
