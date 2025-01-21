@@ -114,11 +114,11 @@ function run() {
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/txnutil/gc/InjectActualGCSafePoint=return(9223372036854775807)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
-	changefeedid_2="changefeed-error-2"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c $changefeedid_2
-	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} ${changefeedid_2} "failed" "[CDC:ErrSnapshotLostByGC]" ""
+	changefeedid_3="changefeed-error-3"
+	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c $changefeedid_3
+	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} ${changefeedid_3} "failed" "[CDC:ErrSnapshotLostByGC]" ""
 
-	run_cdc_cli changefeed remove -c $changefeedid_2
+	run_cdc_cli changefeed remove -c $changefeedid_3
 	export GO_FAILPOINTS=''
 	cleanup_process $CDC_BINARY
 	echo "Pass case 3"
