@@ -192,7 +192,11 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	response := &heartbeatpb.CoordinatorBootstrapResponse{}
 	m.maintainers.Range(func(key, value interface{}) bool {
 		maintainer := value.(*Maintainer)
-		response.Statuses = append(response.Statuses, maintainer.GetMaintainerStatus())
+		status := maintainer.GetMaintainerStatus()
+		if status.GetErr() != nil {
+			log.Info("fizz changefeed meet error", zap.Any("status", status))
+		}
+		response.Statuses = append(response.Statuses, status)
 		maintainer.statusChanged.Store(false)
 		maintainer.lastReportTime = time.Now()
 		return true
