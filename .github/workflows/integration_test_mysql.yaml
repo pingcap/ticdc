@@ -478,6 +478,12 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=capture_session_done_during_task
+      
+      # The 17th case in this group
+      - name: Test cdc
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=cdc
 
       - name: Upload test logs
         if: always()
