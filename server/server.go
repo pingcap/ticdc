@@ -220,7 +220,7 @@ func (c *server) Run(ctx context.Context) error {
 	// start tcp server
 	g.Go(func() error {
 		log.Info("tcp server start to run")
-		err = c.tcpServer.Run(ctx)
+		err := c.tcpServer.Run(ctx)
 		if err != nil {
 			log.Error("tcp server exited", zap.Error(errors.Trace(err)))
 		}
