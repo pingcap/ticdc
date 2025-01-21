@@ -100,7 +100,7 @@ type persistStorageDDLHandler struct {
 
 var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionCreateSchema: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateDropSchema,
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForSchemaDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForTableTriggerOnlyDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForCreateSchema,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
@@ -108,8 +108,8 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForCreateSchema,
 	},
 	model.ActionDropSchema: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateDropSchema,
-		updateDDLHistoryFunc:       updateDDLHistoryForDropSchema,
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForSchemaDDL,
+		updateDDLHistoryFunc:       updateDDLHistoryForSchemaDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropSchema,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
@@ -299,7 +299,14 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
 	},
-
+	model.ActionModifySchemaCharsetAndCollate: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForSchemaDDL,
+		updateDDLHistoryFunc:       updateDDLHistoryForSchemaDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesIgnore,
+		extractTableInfoFunc:       extractTableInfoFuncIgnore,
+		buildDDLEventFunc:          buildDDLEventForModifySchemaCharsetAndCollate,
+	},
 	model.ActionSetTiFlashReplica: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
@@ -483,7 +490,7 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 	return event
 }
 
-func buildPersistedDDLEventForCreateDropSchema(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForSchemaDDL(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
 	log.Info("buildPersistedDDLEvent for create/drop schema",
 		zap.Any("type", event.Type),
@@ -720,7 +727,7 @@ func updateDDLHistoryForTableTriggerOnlyDDL(args updateDDLHistoryFuncArgs) []uin
 	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForDropSchema(args updateDDLHistoryFuncArgs) []uint64 {
+func updateDDLHistoryForSchemaDDL(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	for tableID := range args.databaseMap[args.ddlEvent.CurrentSchemaID].Tables {
 		if partitionInfo, ok := args.partitionMap[tableID]; ok {
@@ -1433,6 +1440,19 @@ func buildDDLEventForDropSchema(rawEvent *PersistedDDLEvent, tableFilter filter.
 	}
 	ddlEvent.TableNameChange = &commonEvent.TableNameChange{
 		DropDatabaseName: rawEvent.CurrentSchemaName,
+	}
+	return ddlEvent, true
+}
+
+func buildDDLEventForModifySchemaCharsetAndCollate(
+	rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool) {
+	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
+	if !ok {
+		return ddlEvent, false
+	}
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeDB,
+		SchemaID:      rawEvent.CurrentSchemaID,
 	}
 	return ddlEvent, true
 }
