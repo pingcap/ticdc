@@ -53,7 +53,6 @@ function run() {
 	ensure 30 "run_sql 'show create table ddl_attributes.placement_t2;' ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} &&
 		check_contains 'CREATE TABLE \`placement_t2\`' "
 
-	# TTL_MARK='![ttl]'
 	CREATE_TTL_SQL_CONTAINS1='/*T![ttl] TTL=\`t\` + INTERVAL 1 DAY */ /*T![ttl] TTL_ENABLE='OFF' */ /*T![ttl] TTL_JOB_INTERVAL='1h' */'
 	CREATE_TTL_SQL_CONTAINS2='/*T![ttl] TTL=\`t\` + INTERVAL 1 DAY */ /*T![ttl] TTL_ENABLE='OFF' */ /*T![ttl] TTL_JOB_INTERVAL='7h' */'
 
