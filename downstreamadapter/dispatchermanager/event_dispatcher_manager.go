@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
+	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -61,7 +62,7 @@ type EventDispatcherManager struct {
 	pdClock pdutil.Clock
 
 	config       *config.ChangefeedConfig
-	filterConfig *dispatcher.FilterConfig
+	filterConfig *eventpb.FilterConfig
 	// only not nil when enable sync point
 	// TODO: changefeed update config
 	syncPointConfig *syncpoint.SyncPointConfig
@@ -136,7 +137,7 @@ func NewEventDispatcherManager(
 		errCh:                                  make(chan error, 1),
 		cancel:                                 cancel,
 		config:                                 cfConfig,
-		filterConfig:                           &dispatcher.FilterConfig{CaseSensitive: cfConfig.CaseSensitive, ForceReplicate: cfConfig.ForceReplicate, FilterConfig: toFilterConfigPB(cfConfig.Filter)},
+		filterConfig:                           &eventpb.FilterConfig{CaseSensitive: cfConfig.CaseSensitive, ForceReplicate: cfConfig.ForceReplicate, FilterConfig: toFilterConfigPB(cfConfig.Filter)},
 		schemaIDToDispatchers:                  dispatcher.NewSchemaIDToDispatchers(),
 		latestWatermark:                        NewWatermark(startTs),
 		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
@@ -409,7 +410,6 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			e.schemaIDToDispatchers,
 			e.syncPointConfig,
 			e.filterConfig,
-			e.forceReplicate,
 			pdTsList[idx],
 			e.errCh)
 

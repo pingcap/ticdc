@@ -104,8 +104,8 @@ func (d *DispatcherMap) ForEach(fn func(id common.DispatcherID, dispatcher *disp
 	return seq
 }
 
-func toFilterConfigPB(filter *config.FilterConfig) *eventpb.FilterConfig {
-	filterConfig := &eventpb.FilterConfig{
+func toFilterConfigPB(filter *config.FilterConfig) *eventpb.InnerFilterConfig {
+	filterConfig := &eventpb.InnerFilterConfig{
 		Rules:            filter.Rules,
 		IgnoreTxnStartTs: filter.IgnoreTxnStartTs,
 		EventFilters:     make([]*eventpb.EventFilterRule, len(filter.EventFilters)),

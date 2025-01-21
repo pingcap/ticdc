@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
+	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -37,7 +38,7 @@ type EventDispatcher interface {
 	GetStartTs() uint64
 	GetChangefeedID() common.ChangeFeedID
 	GetTableSpan() *heartbeatpb.TableSpan
-	IsForceReplicate() bool
+	GetFilterConfig() *eventpb.FilterConfig
 	EnableSyncPoint() bool
 	GetSyncPointInterval() time.Duration
 	GetResolvedTs() uint64
@@ -95,7 +96,7 @@ type Dispatcher struct {
 	// componentStatus is the status of the dispatcher, such as working, removing, stopped.
 	componentStatus *ComponentStateWithMutex
 	// the config of filter
-	filterConfig *FilterConfig
+	filterConfig *eventpb.FilterConfig
 
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo *common.TableInfo
@@ -153,8 +154,7 @@ func NewDispatcher(
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
 	syncPointConfig *syncpoint.SyncPointConfig,
-	filterConfig *FilterConfig,
-	forceReplicate bool,
+	filterConfig *eventpb.FilterConfig,
 	currentPdTs uint64,
 	errCh chan error,
 ) *Dispatcher {
@@ -601,7 +601,7 @@ func (d *Dispatcher) EnableSyncPoint() bool {
 	return d.syncPointConfig != nil
 }
 
-func (d *Dispatcher) GetFilterConfig() *FilterConfig {
+func (d *Dispatcher) GetFilterConfig() *eventpb.FilterConfig {
 	return d.filterConfig
 }
 
