@@ -150,7 +150,7 @@ function test_expire_capture() {
 	ensure $MAX_RETRIES "ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/owner --prefix | grep -v '$owner_id'"
 
 	# ensure server exit
-	ensure 30 "!ps -p $owner_pid > /dev/null 2>&1"
+	ensure 30 "! ps -p $owner_pid > /dev/null 2>&1"
 
 	# restart server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "_${TEST_NAME}_restart" --addr "127.0.0.1:8300"

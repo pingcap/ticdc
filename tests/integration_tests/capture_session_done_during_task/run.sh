@@ -38,6 +38,7 @@ function run() {
 	changefeed_id=$(cdc cli changefeed create --pd=$pd_addr --start-ts=$start_ts --sink-uri="$SINK_URI" 2>&1 | tail -n2 | head -n1 | awk '{print $2}')
 	# wait task is dispatched
 	cdc_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	echo "cdc pid: $cdc_pid"
 
 	sleep 1
 
@@ -54,7 +55,7 @@ function run() {
 	ETCDCTL_API=3 etcdctl lease revoke $lease_hex
 
 	# ensure server exit
-	ensure 30 "!ps -p $cdc_pid > /dev/null 2>&1"
+	ensure 30 "! ps -p $cdc_pid"
 	echo "cdc server already exit"
 
 	# start server again

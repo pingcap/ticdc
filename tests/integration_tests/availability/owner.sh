@@ -110,7 +110,7 @@ function test_expire_owner() {
 	
 	run_sql "REPLACE INTO test.availability1(id, val) VALUES (2, 22);"
 	# ensure server exit
-	ensure 30 "!ps -p $owner_pid > /dev/null 2>&1"
+	ensure 30 "! ps -p $owner_pid > /dev/null 2>&1"
 	# restart server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "_${TEST_NAME}_restart" --addr "127.0.0.1:8300"
 
@@ -179,7 +179,7 @@ function test_delete_owner_key() {
 	etcdctl del $owner_key
 	ensure $MAX_RETRIES "ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/owner --prefix | grep  '$capture_id'"
 	# ensure the first capture has exited
-	ensure $MAX_RETRIES "!ps -p $owner_pid > /dev/null 2>&1"
+	ensure $MAX_RETRIES "! ps -p $owner_pid > /dev/null 2>&1"
 	echo "old owner exited"
 	# restart server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "_${TEST_NAME}_restart" --addr "127.0.0.1:8300"

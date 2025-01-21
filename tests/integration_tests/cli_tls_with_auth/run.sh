@@ -180,7 +180,7 @@ EOF
 	run_cdc_cli unsafe reset --no-confirm --pd=$pd_addr
 
 	# ensure server exit
-	ensure 30 "!ps -p $cdc_pid_1 > /dev/null 2>&1"
+	ensure 30 "! ps -p $cdc_pid_1 > /dev/null 2>&1"
 
 	# restart server
 	run_cdc_server \

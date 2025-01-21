@@ -243,12 +243,7 @@ func (c *server) Run(ctx context.Context) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-
-	err = g.Wait()
-	if err != nil {
-		log.Error("server exited", zap.Error(err))
-	}
-	return errors.Trace(err)
+	return g.Wait()
 }
 
 // SelfInfo gets the server info
@@ -280,6 +275,7 @@ func (c *server) GetCoordinator() (tiserver.Coordinator, error) {
 // it also closes the coordinator and processorManager
 // Note: this function should be reentrant
 func (c *server) Close(ctx context.Context) {
+	log.Info("server closing", zap.Any("ServerInfo", c.info))
 	// Safety: Here we mainly want to stop the coordinator
 	// and ignore it if the coordinator does not exist or is not set.
 	o, _ := c.GetCoordinator()
@@ -309,6 +305,8 @@ func (c *server) Close(ctx context.Context) {
 			zap.String("captureID", string(c.info.ID)),
 			zap.Error(err))
 	}
+
+	log.Info("server closed", zap.Any("ServerInfo", c.info))
 }
 
 // Liveness returns liveness of the server.

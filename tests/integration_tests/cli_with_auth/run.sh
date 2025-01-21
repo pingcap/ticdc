@@ -158,7 +158,7 @@ EOF
 	echo "Pass reset"
 
 	# ensure server exit
-	ensure 30 "!ps -p $cdc_pid_1 > /dev/null 2>&1"
+	ensure 30 "! ps -p $cdc_pid_1 > /dev/null 2>&1"
 
 	# restart server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "_${TEST_NAME}_restart" --addr "127.0.0.1:8300" --config "$WORK_DIR/server.toml"
