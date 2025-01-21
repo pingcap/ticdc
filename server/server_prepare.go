@@ -126,10 +126,6 @@ func (c *server) prepare(ctx context.Context) error {
 	}
 
 	c.RegionCache = tikv.NewRegionCache(c.pdClient)
-	c.PDClock, err = pdutil.NewClock(ctx, c.pdClient)
-	if err != nil {
-		return errors.Trace(err)
-	}
 
 	if err = c.initDir(); err != nil {
 		return errors.Trace(err)

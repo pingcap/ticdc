@@ -79,7 +79,6 @@ type EventCollector struct {
 	serverId      node.ID
 	dispatcherMap sync.Map
 	mc            messaging.MessageCenter
-	wg            sync.WaitGroup
 
 	// dispatcherRequestChan cached dispatcher request when some error occurs.
 	dispatcherRequestChan *chann.DrainableChann[DispatcherRequestWithTarget]
@@ -97,12 +96,15 @@ type EventCollector struct {
 		id node.ID
 	}
 
+	wg     sync.WaitGroup
+	cancel context.CancelFunc
+
 	metricDispatcherReceivedKVEventCount         prometheus.Counter
 	metricDispatcherReceivedResolvedTsEventCount prometheus.Counter
 	metricReceiveEventLagDuration                prometheus.Observer
 }
 
-func New(ctx context.Context, serverId node.ID) *EventCollector {
+func New(serverId node.ID) *EventCollector {
 	eventCollector := EventCollector{
 		serverId:                             serverId,
 		dispatcherMap:                        sync.Map{},
@@ -117,38 +119,53 @@ func New(ctx context.Context, serverId node.ID) *EventCollector {
 	eventCollector.ds = NewEventDynamicStream(&eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.RecvEventsMessage)
 
+	return &eventCollector
+}
+
+func (c *EventCollector) Run(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	c.cancel = cancel
+
 	for i := 0; i < config.DefaultBasicEventHandlerConcurrency; i++ {
 		ch := make(chan *messaging.TargetMessage, receiveChanSize)
-		eventCollector.receiveChannels[i] = ch
-		eventCollector.wg.Add(1)
+		c.receiveChannels[i] = ch
+		c.wg.Add(1)
 		go func() {
-			defer eventCollector.wg.Done()
-			eventCollector.runProcessMessage(ctx, ch)
+			defer c.wg.Done()
+			c.runProcessMessage(ctx, ch)
 		}()
 	}
 
-	eventCollector.wg.Add(1)
+	c.wg.Add(1)
 	go func() {
-		defer eventCollector.wg.Done()
-		eventCollector.processFeedback(ctx)
+		defer c.wg.Done()
+		c.processFeedback(ctx)
 	}()
 
-	eventCollector.wg.Add(1)
+	c.wg.Add(1)
 	go func() {
-		defer eventCollector.wg.Done()
-		eventCollector.processDispatcherRequests(ctx)
+		defer c.wg.Done()
+		c.processDispatcherRequests(ctx)
 	}()
-	eventCollector.wg.Add(1)
+
+	c.wg.Add(1)
 	go func() {
-		defer eventCollector.wg.Done()
-		eventCollector.processLogCoordinatorRequest(ctx)
+		defer c.wg.Done()
+		c.processLogCoordinatorRequest(ctx)
 	}()
-	eventCollector.wg.Add(1)
+
+	c.wg.Add(1)
 	go func() {
-		defer eventCollector.wg.Done()
-		eventCollector.updateMetrics(ctx)
+		defer c.wg.Done()
+		c.updateMetrics(ctx)
 	}()
-	return &eventCollector
+}
+
+func (c *EventCollector) Close() {
+	c.cancel()
+	c.ds.Close()
+	c.wg.Wait()
+	log.Info("event collector is closed")
 }
 
 func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota int) {
@@ -168,7 +185,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota)
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
-		log.Error("add dispatcher to dynamic stream failed", zap.Error(err))
+		log.Info("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
 
 	// TODO: handle the return error(now even it return error, it will be retried later, we can just ignore it now)

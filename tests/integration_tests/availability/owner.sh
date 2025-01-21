@@ -90,10 +90,9 @@ function test_hang_up_owner() {
 	cleanup_process $CDC_BINARY
 }
 # test_expire_owner stops the owner by sending
-# the SIGSTOP signal and wait unitl its session
-# expires.
-# We expect when the owner process resumes, it suicides
-# itself and recovers from the death.
+# the SIGSTOP signal and wait until its session expires.
+# And then we resume the owner.
+# We expect the data to be replicated after resuming the owner.
 function test_expire_owner() {
 	echo "run test case test_expire_owner"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix test_expire_owner.server1
@@ -108,11 +107,13 @@ function test_expire_owner() {
 	echo "process status:" $(ps -h -p $owner_pid -o "s")
 	# ensure the session has expired
 	ensure $MAX_RETRIES "ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/owner --prefix | grep -v '$owner_id'"
+
 	# resume the owner
 	kill -SIGCONT $owner_pid
-	echo "process status:" $(ps -h -p $owner_pid -o "s")
-	# ensure the owner has recovered
-	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_coordinator\": true'"
+
+	run_sql "REPLACE INTO test.availability1(id, val) VALUES (2, 22);"
+
+	ensure $MAX_RETRIES nonempty 'select id, val from test.availability1 where id=2 and val=22'
 	echo "test_expire_owner pass"
 	cleanup_process $CDC_BINARY
 }
@@ -176,7 +177,9 @@ function test_delete_owner_key() {
 
 	etcdctl del $owner_key
 	ensure $MAX_RETRIES "ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/owner --prefix | grep  '$capture_id'"
-	# ensure the first capture has resign owner
+	echo "owner key deleted"
+
+	# ensure the it's not the owner
 	ensure $MAX_RETRIES "curl -X GET http://127.0.0.1:8300/status | grep '\"is_owner\": false'"
 
 	sleep 3

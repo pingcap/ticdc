@@ -617,8 +617,8 @@ func (d *Dispatcher) Remove() {
 		zap.String("table", d.tableSpan.String()))
 	d.isRemoving.Store(true)
 
-	dispatcherStatusDynamicStream := GetDispatcherStatusDynamicStream()
-	err := dispatcherStatusDynamicStream.RemovePath(d.id)
+	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
+	err := dispatcherStatusDS.RemovePath(d.id)
 	if err != nil {
 		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
 	}
@@ -626,8 +626,8 @@ func (d *Dispatcher) Remove() {
 
 // addToDynamicStream add self to dynamic stream
 func (d *Dispatcher) addToStatusDynamicStream() {
-	dispatcherStatusDynamicStream := GetDispatcherStatusDynamicStream()
-	err := dispatcherStatusDynamicStream.AddPath(d.id, d)
+	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
+	err := dispatcherStatusDS.AddPath(d.id, d)
 	if err != nil {
 		log.Error("add dispatcher to dynamic stream failed", zap.Error(err))
 	}

@@ -55,10 +55,12 @@ function run() {
 	capture2_id=$(cdc cli capture list | grep -v "Command to ticdc" | jq -r '.[]|select(.address=="127.0.0.1:8301")|.id')
 
 	target_capture=$capture1_id
-	one_table_id=$(cdc cli processor query -c $changefeed_id -p $capture2_id | grep -v "Command to ticdc" | jq -r '.status.tables|keys[0]')
+	# find a table that capture2 is replicating
+	one_table_id=$(curl curl -X GET http://127.0.0.1:8301/api/v2/changefeeds/${changefeed_id}/tables | grep $capture2_id | jq -r '.status.tables|keys[0]')
 	if [[ $one_table_id == "null" ]]; then
+		# if not found, find a table that capture1 is replicating
 		target_capture=$capture2_id
-		one_table_id=$(cdc cli processor query -c $changefeed_id -p $capture1_id | grep -v "Command to ticdc" | jq -r '.status.tables|keys[0]')
+		one_table_id=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/tables | grep $capture1_id | jq -r '.status.tables|keys[0]')
 	fi
 	table_query=$(mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -e "select table_name from information_schema.tables where tidb_table_id = ${one_table_id}\G")
 	table_name=$(echo $table_query | tail -n 1 | awk '{print $(NF)}')
@@ -66,7 +68,7 @@ function run() {
 
 	# sleep some time to wait global resolved ts forwarded
 	sleep 2
-	curl -X POST http://127.0.0.1:8300/capture/owner/move_table -d "cf-id=${changefeed_id}&target-cp-id=${target_capture}&table-id=${one_table_id}"
+	curl -X POST http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/move_table?tableID=${one_table_id}&targetNodeID=${target_capture}
 	# sleep some time to wait table balance job is written to etcd
 	sleep 2
 

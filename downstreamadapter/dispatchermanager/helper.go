@@ -213,26 +213,12 @@ func SetHeartBeatTaskScheduler(taskScheduler threadpool.ThreadPool) {
 	heartBeatTaskScheduler = taskScheduler
 }
 
-// schedulerDispatcherRequestDynamicStream is responsible for create or remove the dispatchers.
-var (
-	schedulerDispatcherRequestDynamicStream     dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler]
-	schedulerDispatcherRequestDynamicStreamOnce sync.Once
-)
-
-func GetSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler] {
-	schedulerDispatcherRequestDynamicStreamOnce.Do(func() {
-		option := dynstream.NewOption()
-		option.BatchCount = 128
-		schedulerDispatcherRequestDynamicStream = dynstream.NewParallelDynamicStream(
-			func(id common.GID) uint64 { return id.FastHash() },
-			&SchedulerDispatcherRequestHandler{}, option)
-		schedulerDispatcherRequestDynamicStream.Start()
-	})
-	return schedulerDispatcherRequestDynamicStream
-}
-
-func SetSchedulerDispatcherRequestDynamicStream(dynamicStream dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler]) {
-	schedulerDispatcherRequestDynamicStream = dynamicStream
+func newSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler] {
+	ds := dynstream.NewParallelDynamicStream(
+		func(id common.GID) uint64 { return id.FastHash() },
+		&SchedulerDispatcherRequestHandler{}, dynstream.NewOption())
+	ds.Start()
+	return ds
 }
 
 type SchedulerDispatcherRequest struct {
@@ -318,20 +304,12 @@ func (h *SchedulerDispatcherRequestHandler) GetType(event SchedulerDispatcherReq
 
 func (h *SchedulerDispatcherRequestHandler) OnDrop(event SchedulerDispatcherRequest) {}
 
-// heartBeatResponseDynamicStream is responsible for send heartBeatResponse to the related dispatchers.
-var (
-	heartBeatResponseDynamicStream     dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler]
-	heartBeatResponseDynamicStreamOnce sync.Once
-)
-
-func GetHeartBeatResponseDynamicStream() dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler] {
-	heartBeatResponseDynamicStreamOnce.Do(func() {
-		heartBeatResponseDynamicStream = dynstream.NewParallelDynamicStream(
-			func(id common.GID) uint64 { return id.FastHash() },
-			&HeartBeatResponseHandler{dispatcher.GetDispatcherStatusDynamicStream()})
-		heartBeatResponseDynamicStream.Start()
-	})
-	return heartBeatResponseDynamicStream
+func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, *dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]) dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler] {
+	ds := dynstream.NewParallelDynamicStream(
+		func(id common.GID) uint64 { return id.FastHash() },
+		newHeartBeatResponseHandler(dds))
+	ds.Start()
+	return ds
 }
 
 type HeartBeatResponse struct {
@@ -342,16 +320,12 @@ func NewHeartBeatResponse(resp *heartbeatpb.HeartBeatResponse) HeartBeatResponse
 	return HeartBeatResponse{resp}
 }
 
-func SetHeartBeatResponseDynamicStream(dynamicStream dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler]) {
-	heartBeatResponseDynamicStream = dynamicStream
-}
-
 type HeartBeatResponseHandler struct {
 	dispatcherStatusDynamicStream dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, *dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]
 }
 
-func NewHeartBeatResponseHandler() HeartBeatResponseHandler {
-	return HeartBeatResponseHandler{dispatcherStatusDynamicStream: dispatcher.GetDispatcherStatusDynamicStream()}
+func newHeartBeatResponseHandler(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, *dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]) *HeartBeatResponseHandler {
+	return &HeartBeatResponseHandler{dispatcherStatusDynamicStream: dds}
 }
 
 func (h *HeartBeatResponseHandler) Path(HeartbeatResponse HeartBeatResponse) common.GID {
@@ -412,19 +386,12 @@ func (h *HeartBeatResponseHandler) GetType(event HeartBeatResponse) dynstream.Ev
 func (h *HeartBeatResponseHandler) OnDrop(event HeartBeatResponse) {}
 
 // checkpointTsMessageDynamicStream is responsible for push checkpointTsMessage to the corresponding table trigger event dispatcher.
-var (
-	checkpointTsMessageDynamicStream     dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler]
-	checkpointTsMessageDynamicStreamOnce sync.Once
-)
-
-func GetCheckpointTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler] {
-	checkpointTsMessageDynamicStreamOnce.Do(func() {
-		checkpointTsMessageDynamicStream = dynstream.NewParallelDynamicStream(
-			func(id common.GID) uint64 { return id.FastHash() },
-			&CheckpointTsMessageHandler{})
-		checkpointTsMessageDynamicStream.Start()
-	})
-	return checkpointTsMessageDynamicStream
+func newCheckpointTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler] {
+	ds := dynstream.NewParallelDynamicStream(
+		func(id common.GID) uint64 { return id.FastHash() },
+		&CheckpointTsMessageHandler{})
+	ds.Start()
+	return ds
 }
 
 type CheckpointTsMessage struct {

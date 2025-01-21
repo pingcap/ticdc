@@ -402,7 +402,10 @@ var (
 		"upstream not found, cluster-id: %d",
 		errors.RFCCodeText("CDC:ErrUpstreamNotFound"),
 	)
-
+	ErrUpdateServiceSafepointFailed = errors.Normalize(
+		"updating service safepoint failed",
+		errors.RFCCodeText("CDC:ErrUpdateServiceSafepointFailed"),
+	)
 	ErrUpstreamMissMatch = errors.Normalize(
 		"upstream missmatch,old: %d, new %d",
 		errors.RFCCodeText("CDC:ErrUpstreamMissMatch"),

@@ -40,7 +40,7 @@ func TestTimeFromPD(t *testing.T) {
 	require.NoError(t, err)
 
 	go clock.Run(context.Background())
-	defer clock.Stop()
+	defer clock.Close()
 	time.Sleep(1 * time.Second)
 
 	t1 := clock.CurrentTime()
@@ -64,7 +64,7 @@ func TestEventTimeAndProcessingTime(t *testing.T) {
 	// Disable update in test by setting a very long update interval.
 	clock.updateInterval = time.Hour
 	go clock.Run(ctx)
-	defer clock.Stop()
+	defer clock.Close()
 
 	sleep := time.Second
 	time.Sleep(sleep)

@@ -33,10 +33,13 @@ function run() {
 	run_sql "CREATE table capture_session_done_during_task.t (id int primary key auto_increment, a int)" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_sql "INSERT INTO capture_session_done_during_task.t values (),(),(),(),(),(),()" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	export GO_FAILPOINTS='github.com/pingcap/tiflow/cdc/processor/processorManagerHandleNewChangefeedDelay=sleep(2000)'
+	export GO_FAILPOINTS='github.com/pingcap/tiflow/cdc/downstreamadapter/dispatchermanager/NewEventDispatcherManagerDelay=sleep(4000)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 	changefeed_id=$(cdc cli changefeed create --pd=$pd_addr --start-ts=$start_ts --sink-uri="$SINK_URI" 2>&1 | tail -n2 | head -n1 | awk '{print $2}')
 	# wait task is dispatched
+	cdc_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+	echo "cdc pid: $cdc_pid"
+
 	sleep 1
 
 	case $SINK_TYPE in
@@ -50,6 +53,14 @@ function run() {
 	lease_hex=$(printf '%x\n' $lease)
 	# revoke lease of etcd capture key to simulate etcd session done
 	ETCDCTL_API=3 etcdctl lease revoke $lease_hex
+
+	# ensure server exit
+	ensure 30 "! ps -p $cdc_pid"
+	echo "cdc server already exit"
+
+	# start server again
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8300"
+	echo "cdc server restart success"
 
 	# capture handle task delays 10s, minus 2s wait task dispatched
 	sleep 1

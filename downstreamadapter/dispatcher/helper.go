@@ -320,19 +320,17 @@ func (h *DispatcherStatusHandler) GetType(event DispatcherStatusWithID) dynstrea
 }
 func (h *DispatcherStatusHandler) OnDrop(event DispatcherStatusWithID) {}
 
+// dispatcherStatusDS is the dynamic stream for dispatcher status.
+// It's a server level singleton, so we use a sync.Once to ensure the instance is created only once.
 var (
-	dispatcherStatusDynamicStream     dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler]
-	dispatcherStatusDynamicStreamOnce sync.Once
+	dispatcherStatusDS     dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler]
+	dispatcherStatusDSOnce sync.Once
 )
 
 func GetDispatcherStatusDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler] {
-	dispatcherStatusDynamicStreamOnce.Do(func() {
-		dispatcherStatusDynamicStream = dynstream.NewParallelDynamicStream(func(id common.DispatcherID) uint64 { return common.GID(id).FastHash() }, &DispatcherStatusHandler{})
-		dispatcherStatusDynamicStream.Start()
+	dispatcherStatusDSOnce.Do(func() {
+		dispatcherStatusDS = dynstream.NewParallelDynamicStream(func(id common.DispatcherID) uint64 { return common.GID(id).FastHash() }, &DispatcherStatusHandler{})
+		dispatcherStatusDS.Start()
 	})
-	return dispatcherStatusDynamicStream
-}
-
-func SetDispatcherStatusDynamicStream(dynamicStream dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, *Dispatcher, *DispatcherStatusHandler]) {
-	dispatcherStatusDynamicStream = dynamicStream
+	return dispatcherStatusDS
 }
