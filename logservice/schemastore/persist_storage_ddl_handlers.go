@@ -1589,6 +1589,7 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 	}
 	ddlEvent.PrevSchemaName = rawEvent.PrevSchemaName
 	ddlEvent.PrevTableName = rawEvent.PrevTableName
+	ddlEvent.PrevTableInfo = rawEvent.PreTableInfo
 	ignorePrevTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.PrevSchemaName, rawEvent.PrevTableName)
 	ignoreCurrentTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, rawEvent.CurrentTableName)
 	if isPartitionTable(rawEvent.TableInfo) {

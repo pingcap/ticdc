@@ -43,6 +43,7 @@ type DDLEvent struct {
 	TableName      string            `json:"table_name"`
 	PrevSchemaName string            `json:"prev_schema_name"`
 	PrevTableName  string            `json:"prev_table_name"`
+	PrevTableInfo  *common.TableInfo `json:"prev_table_info"`
 	Query          string            `json:"query"`
 	TableInfo      *common.TableInfo `json:"-"`
 	FinishedTs     uint64            `json:"finished_ts"`

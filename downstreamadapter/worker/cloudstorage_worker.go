@@ -94,11 +94,6 @@ func NewCloudStorageWorker(
 
 // run creates a set of background goroutines.
 func (d *CloudStorageWorker) Run(ctx context.Context) error {
-	log.Debug("dml worker started", zap.Int("workerID", d.id),
-		zap.String("namespace", d.changeFeedID.Namespace()),
-		zap.Stringer("changefeed", d.changeFeedID.ID()),
-	)
-
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		return d.flushMessages(ctx)
@@ -193,6 +188,9 @@ func (d *CloudStorageWorker) flushMessages(ctx context.Context) error {
 					zap.String("table", table.TableNameWithPhysicTableID.Table),
 					zap.String("path", dataFilePath),
 				)
+				for _, msg := range task.msgs {
+					msg.Callback()
+				}
 			}
 			flushTimeSlice += time.Since(start)
 		}
@@ -362,7 +360,7 @@ func (w *CloudStorageEncodingWorker) Run(ctx context.Context) error {
 			if !ok || atomic.LoadUint64(&w.isClosed) == 1 {
 				return nil
 			}
-			err := w.encodeEvents(ctx, frag)
+			err := w.encodeEvents(frag)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -370,7 +368,7 @@ func (w *CloudStorageEncodingWorker) Run(ctx context.Context) error {
 	}
 }
 
-func (w *CloudStorageEncodingWorker) encodeEvents(ctx context.Context, frag defragmenter.EventFragment) error {
+func (w *CloudStorageEncodingWorker) encodeEvents(frag defragmenter.EventFragment) error {
 	w.encoder.AppendTxnEvent(frag.Event)
 	frag.EncodedMsgs = w.encoder.Build()
 	w.outputCh <- frag

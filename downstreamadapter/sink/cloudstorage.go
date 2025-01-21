@@ -92,6 +92,7 @@ type CloudStorageSink struct {
 
 	lastCheckpointTs         atomic.Uint64
 	lastSendCheckpointTsTime time.Time
+	tableSchemaStore         *util.TableSchemaStore
 }
 
 func verifyCloudStorageSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
@@ -284,48 +285,26 @@ func (s *CloudStorageSink) PassBlockEvent(event commonEvent.BlockEvent) {
 }
 
 func (s *CloudStorageSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
-	switch v := event.(type) {
+	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
-		if v.TiDBOnly {
+		if e.TiDBOnly {
 			// run callback directly and return
-			v.PostFlush()
+			e.PostFlush()
 			return nil
 		}
-
-		writeFile := func(def cloudstorage.TableDefinition) error {
-			encodedDef, err := def.MarshalWithQuery()
-			if err != nil {
-				return errors.Trace(err)
-			}
-
-			path, err := def.GenerateSchemaFilePath()
-			if err != nil {
-				return errors.Trace(err)
-			}
-			log.Debug("write ddl event to external storage",
-				zap.String("path", path), zap.Any("ddl", v))
-			return s.statistics.RecordDDLExecution(func() error {
-				err1 := s.storage.WriteFile(context.Background(), path, encodedDef)
-				if err1 != nil {
-					return err1
-				}
-				return nil
-			})
-		}
-
 		var def cloudstorage.TableDefinition
-		def.FromDDLEvent(v, s.cfg.OutputColumnID)
-		if err := writeFile(def); err != nil {
+		def.FromDDLEvent(e, s.cfg.OutputColumnID)
+		if err := s.writeFile(e, def); err != nil {
 			atomic.StoreUint32(&s.isNormal, 0)
 			return errors.Trace(err)
 		}
-
-		if v.GetDDLType() == model.ActionExchangeTablePartition {
+		if e.GetDDLType() == model.ActionExchangeTablePartition {
 			// For exchange partition, we need to write the schema of the source table.
 			var sourceTableDef cloudstorage.TableDefinition
-			sourceTableDef.FromTableInfo(v.MultipleTableInfos[v.Version-1], v.TableInfo.UpdateTS(), s.cfg.OutputColumnID)
-			writeFile(sourceTableDef)
+			sourceTableDef.FromTableInfo(e.PrevTableInfo, e.PrevTableInfo.UpdateTS(), s.cfg.OutputColumnID)
+			s.writeFile(e, sourceTableDef)
 		}
+		event.PostFlush()
 	case *commonEvent.SyncPointEvent:
 		log.Error("CloudStorageSink doesn't support Sync Point Event",
 			zap.String("namespace", s.changefeedID.Namespace()),
@@ -370,7 +349,28 @@ func (s *CloudStorageSink) AddCheckpointTs(ts uint64) {
 }
 
 func (s *CloudStorageSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
-	// s.SetTableSchemaStore(tableSchemaStore)
+	s.tableSchemaStore = tableSchemaStore
+}
+
+func (s *CloudStorageSink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefinition) error {
+	encodedDef, err := def.MarshalWithQuery()
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	path, err := def.GenerateSchemaFilePath()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	log.Debug("write ddl event to external storage",
+		zap.String("path", path), zap.Any("ddl", v))
+	return s.statistics.RecordDDLExecution(func() error {
+		err1 := s.storage.WriteFile(context.Background(), path, encodedDef)
+		if err1 != nil {
+			return err1
+		}
+		return nil
+	})
 }
 
 func (s *CloudStorageSink) initCron(
