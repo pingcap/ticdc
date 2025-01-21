@@ -81,7 +81,7 @@ function run() {
 
 	# CASE 2: Test retryable error
 	echo "Start case 2: Test retryable error"
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/cdc/maintainer/NewChangefeedRetryError=return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/NewChangefeedRetryError=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} ${changefeedid} "warning" "failpoint injected retriable error" ""
 
