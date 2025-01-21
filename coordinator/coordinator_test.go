@@ -341,12 +341,12 @@ func TestScaleNode(t *testing.T) {
 	require.Equal(t, cfSize, co.controller.changefeedDB.GetReplicatingSize())
 
 	// add two nodes
-	info2 := node.NewInfo("127.0.0.1:8400", "")
+	info2 := node.NewInfo("127.0.0.1:28400", "")
 	mc2 := messaging.NewMessageCenter(ctx, info2.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	mc2.Run(ctx)
 	defer mc2.Close()
 	startMaintainerNode(ctx, info2, mc2, nodeManager)
-	info3 := node.NewInfo("127.0.0.1:8500", "")
+	info3 := node.NewInfo("127.0.0.1:28500", "")
 	mc3 := messaging.NewMessageCenter(ctx, info3.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
 	mc3.Run(ctx)
 	defer mc3.Close()

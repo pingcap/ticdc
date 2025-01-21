@@ -37,6 +37,8 @@ function run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 	changefeed_id=$(cdc cli changefeed create --pd=$pd_addr --start-ts=$start_ts --sink-uri="$SINK_URI" 2>&1 | tail -n2 | head -n1 | awk '{print $2}')
 	# wait task is dispatched
+	cdc_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+
 	sleep 1
 
 	case $SINK_TYPE in
@@ -50,6 +52,14 @@ function run() {
 	lease_hex=$(printf '%x\n' $lease)
 	# revoke lease of etcd capture key to simulate etcd session done
 	ETCDCTL_API=3 etcdctl lease revoke $lease_hex
+
+	# ensure server exit
+	ensure 30 "!ps -p $cdc_pid > /dev/null 2>&1"
+	echo "cdc server already exit"
+
+	# start server again
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8300"
+	echo "cdc server restart success"
 
 	# capture handle task delays 10s, minus 2s wait task dispatched
 	sleep 1

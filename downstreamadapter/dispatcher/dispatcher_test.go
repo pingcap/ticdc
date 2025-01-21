@@ -133,8 +133,6 @@ func callback() {
 
 // test different events can be correctly handled by the dispatcher
 func TestDispatcherHandleEvents(t *testing.T) {
-	ds := NewDispatcherStatusDynamicStream()
-	defer ds.Close()
 	count = 0
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -421,8 +419,6 @@ func TestDispatcherHandleEvents(t *testing.T) {
 
 // test uncompelete table span can correctly handle the ddl events
 func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
-	ds := NewDispatcherStatusDynamicStream()
-	defer ds.Close()
 	count = 0
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -495,8 +491,6 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 
 func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 
-	ds := NewDispatcherStatusDynamicStream()
-	defer ds.Close()
 	count = 0
 
 	ddlTableSpan := heartbeatpb.DDLSpan
@@ -576,9 +570,6 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 }
 
 func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
-	ds := NewDispatcherStatusDynamicStream()
-	defer ds.Close()
-
 	count = 0
 
 	ddlTableSpan := heartbeatpb.DDLSpan
@@ -659,8 +650,6 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 
 // ensure the dispatcher will be closed when no dml events is in sink
 func TestDispatcherClose(t *testing.T) {
-	ds := NewDispatcherStatusDynamicStream()
-	defer ds.Close()
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()

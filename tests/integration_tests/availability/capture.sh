@@ -128,9 +128,8 @@ function test_hang_up_capture() {
 }
 
 # test_expire_capture start one server and then stop it until
-# the session expires, and then resume the server.
-# We expect the capture suicides itself and then recovers. The data
-# should be replicated after recovering.
+# the session expires, and then we restart the server.
+# We expect the data to be replicated after restarting the server.
 function test_expire_capture() {
 	echo "run test case test_expire_capture"
 	# start one server
@@ -150,9 +149,11 @@ function test_expire_capture() {
 	# ensure the session has expired
 	ensure $MAX_RETRIES "ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/owner --prefix | grep -v '$owner_id'"
 
-	# resume the owner
-	kill -SIGCONT $owner_pid
-	echo "process status:" $(ps -h -p $owner_pid -o "s")
+	# ensure server exit
+	ensure 30 "!ps -p $owner_pid > /dev/null 2>&1"
+
+	# restart server
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "_${TEST_NAME}_restart" --addr "127.0.0.1:8300"
 
 	run_sql "UPDATE test.availability1 set val = 22 where id = 2;"
 	run_sql "DELETE from test.availability1 where id = 3;"

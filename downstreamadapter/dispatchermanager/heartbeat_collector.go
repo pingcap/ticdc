@@ -31,17 +31,17 @@ import (
 )
 
 /*
-HeartBeatCollect is responsible for sending and receiving messages to maintainer by messageCenter
+HeartBeatCollector is responsible for sending and receiving messages to maintainer by messageCenter
 Sending messages include:
  1. HeartBeatRequest: the watermark and table status
  2. BlockStatusRequest: the info about block events
 
-Recieve messages include:
+Receiving messages include:
  1. HeartBeatResponse: the ack and actions for block events(Need a better name)
  2. SchedulerDispatcherRequest: ask for create or remove a dispatcher
  3. CheckpointTsMessage: the latest checkpoint ts of the changefeed, it only for the MQ-class Sink
 
-HeartBeatCollector is an instance-level component.
+HeartBeatCollector is an server level component.
 */
 type HeartBeatCollector struct {
 	from node.ID
@@ -61,13 +61,13 @@ type HeartBeatCollector struct {
 }
 
 func NewHeartBeatCollector(serverId node.ID) *HeartBeatCollector {
-	dds := dispatcher.NewDispatcherStatusDynamicStream()
+	dStatusDS := dispatcher.GetDispatcherStatusDynamicStream()
 	heartBeatCollector := HeartBeatCollector{
 		from:                                    serverId,
 		heartBeatReqQueue:                       NewHeartbeatRequestQueue(),
 		blockStatusReqQueue:                     NewBlockStatusRequestQueue(),
-		dispatcherStatusDynamicStream:           dds,
-		heartBeatResponseDynamicStream:          newHeartBeatResponseDynamicStream(dds),
+		dispatcherStatusDynamicStream:           dStatusDS,
+		heartBeatResponseDynamicStream:          newHeartBeatResponseDynamicStream(dStatusDS),
 		schedulerDispatcherRequestDynamicStream: newSchedulerDispatcherRequestDynamicStream(),
 		checkpointTsMessageDynamicStream:        newCheckpointTsMessageDynamicStream(),
 		mc:                                      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
