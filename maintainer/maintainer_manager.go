@@ -298,7 +298,11 @@ func (m *Manager) sendHeartbeat() {
 		m.maintainers.Range(func(key, value interface{}) bool {
 			cfMaintainer := value.(*Maintainer)
 			if cfMaintainer.statusChanged.Load() || time.Since(cfMaintainer.lastReportTime) > time.Second*2 {
-				response.Statuses = append(response.Statuses, cfMaintainer.GetMaintainerStatus())
+				mStatus := cfMaintainer.GetMaintainerStatus()
+				if mStatus.GetErr() != nil {
+					log.Info("fizz changefeed meet error", zap.Any("status", mStatus))
+				}
+				response.Statuses = append(response.Statuses, mStatus)
 				cfMaintainer.statusChanged.Store(false)
 				cfMaintainer.lastReportTime = time.Now()
 			}

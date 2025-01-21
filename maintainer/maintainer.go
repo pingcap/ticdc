@@ -100,7 +100,6 @@ type Maintainer struct {
 	// so when a maintainer is created, that means the dispatcher is gone and must be recreated.
 	ddlSpan *replica.SpanReplication
 
-	pdEndpoints []string
 	nodeManager *watcher.NodeManager
 	// closedNodes is used to record the nodes that dispatcherManager is closed
 	closedNodes map[node.ID]struct{}
