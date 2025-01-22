@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
 )
 
@@ -152,6 +153,29 @@ func buildTableFilterByNameForTest(schemaName, tableName string) filter.Filter {
 	return tableFilter
 }
 
+func newEligibleTableInfoForTest(tableID int64, tableName string) *model.TableInfo {
+	// add a mock pk column
+	columnInfo := &model.ColumnInfo{
+		ID: 100,
+	}
+	columnInfo.SetFlag(mysql.PriKeyFlag)
+	return &model.TableInfo{
+		ID:         tableID,
+		Name:       pmodel.NewCIStr(tableName),
+		Columns:    []*model.ColumnInfo{columnInfo},
+		PKIsHandle: true,
+	}
+}
+
+func newEligiblePartitionTableInfoForTest(tableID int64, tableName string, partitions []model.PartitionDefinition) *model.TableInfo {
+	tableInfo := newEligibleTableInfoForTest(tableID, tableName)
+	tableInfo.Partition = &model.PartitionInfo{
+		Definitions: partitions,
+		Enable:      true,
+	}
+	return tableInfo
+}
+
 func buildCreateSchemaJobForTest(schemaID int64, schemaName string, finishedTs uint64) *model.Job {
 	return &model.Job{
 		Type:     model.ActionCreateSchema,
@@ -185,48 +209,29 @@ func buildCreateTableJobForTest(schemaID, tableID int64, tableName string, finis
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
-			TableInfo: &model.TableInfo{
-				ID:   tableID,
-				Name: pmodel.NewCIStr(tableName),
-			},
+			TableInfo:  newEligibleTableInfoForTest(tableID, tableName),
 			FinishedTS: finishedTs,
 		},
 	}
 }
 
 func buildCreateTablesJobForTest(schemaID int64, tableIDs []int64, tableNames []string, finishedTs uint64) *model.Job {
-	multiTableInfos := make([]*model.TableInfo, 0, len(tableIDs))
 	querys := make([]string, 0, len(tableIDs))
-	for i, id := range tableIDs {
-		multiTableInfos = append(multiTableInfos, &model.TableInfo{
-			ID:   id,
-			Name: pmodel.NewCIStr(tableNames[i]),
-		})
+	for i := range tableIDs {
 		querys = append(querys, fmt.Sprintf("create table %s(a int primary key);", tableNames[i]))
+	}
+	return buildCreateTablesJobWithQueryForTest(schemaID, tableIDs, tableNames, querys, finishedTs)
+}
+
+func buildCreateTablesJobWithQueryForTest(schemaID int64, tableIDs []int64, tableNames []string, querys []string, finishedTs uint64) *model.Job {
+	multiTableInfos := make([]*model.TableInfo, 0, len(tableIDs))
+	for i, id := range tableIDs {
+		multiTableInfos = append(multiTableInfos, newEligibleTableInfoForTest(id, tableNames[i]))
 	}
 	return &model.Job{
 		Type:     model.ActionCreateTables,
 		SchemaID: schemaID,
 		Query:    strings.Join(querys, ""),
-		BinlogInfo: &model.HistoryInfo{
-			MultipleTableInfos: multiTableInfos,
-			FinishedTS:         finishedTs,
-		},
-	}
-}
-
-func buildCreateTablesJobWithQueryForTest(schemaID int64, tableIDs []int64, tableNames []string, query string, finishedTs uint64) *model.Job {
-	multiTableInfos := make([]*model.TableInfo, 0, len(tableIDs))
-	for i, id := range tableIDs {
-		multiTableInfos = append(multiTableInfos, &model.TableInfo{
-			ID:   id,
-			Name: pmodel.NewCIStr(tableNames[i]),
-		})
-	}
-	return &model.Job{
-		Type:     model.ActionCreateTables,
-		SchemaID: schemaID,
-		Query:    query,
 		BinlogInfo: &model.HistoryInfo{
 			MultipleTableInfos: multiTableInfos,
 			FinishedTS:         finishedTs,
@@ -244,20 +249,13 @@ func buildCreatePartitionTablesJobForTest(schemaID int64, tableIDs []int64, tabl
 				ID: partitionID,
 			})
 		}
-		multiTableInfos = append(multiTableInfos, &model.TableInfo{
-			ID:   id,
-			Name: pmodel.NewCIStr(tableNames[i]),
-			Partition: &model.PartitionInfo{
-				Definitions: partitionDefinitions,
-				Enable:      true,
-			},
-		})
-		querys = append(querys, fmt.Sprintf("create table %s(a int primary key)", tableNames[i]))
+		multiTableInfos = append(multiTableInfos, newEligiblePartitionTableInfoForTest(id, tableNames[i], partitionDefinitions))
+		querys = append(querys, fmt.Sprintf("create table %s(a int primary key);", tableNames[i]))
 	}
 	return &model.Job{
 		Type:     model.ActionCreateTables,
 		SchemaID: schemaID,
-		Query:    strings.Join(querys, ";"),
+		Query:    strings.Join(querys, ""),
 		BinlogInfo: &model.HistoryInfo{
 			MultipleTableInfos: multiTableInfos,
 			FinishedTS:         finishedTs,
@@ -271,10 +269,7 @@ func buildRenameTableJobForTest(schemaID, tableID int64, tableName string, finis
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
-			TableInfo: &model.TableInfo{
-				ID:   tableID,
-				Name: pmodel.NewCIStr(tableName),
-			},
+			TableInfo:  newEligibleTableInfoForTest(tableID, tableName),
 			FinishedTS: finishedTs,
 		},
 	}
@@ -307,10 +302,7 @@ func buildRenameTablesJobForTest(
 			OldSchemaName: pmodel.NewCIStr(oldSchemaNames[i]),
 			OldTableName:  pmodel.NewCIStr(oldTableNames[i]),
 		})
-		multiTableInfos = append(multiTableInfos, &model.TableInfo{
-			ID:   tableIDs[i],
-			Name: pmodel.NewCIStr(newTableNames[i]),
-		})
+		multiTableInfos = append(multiTableInfos, newEligibleTableInfoForTest(tableIDs[i], newTableNames[i]))
 	}
 	job := &model.Job{
 		Type: model.ActionRenameTables,
@@ -341,14 +333,7 @@ func buildPartitionTableRelatedJobForTest(jobType model.ActionType, schemaID, ta
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
-			TableInfo: &model.TableInfo{
-				ID:   tableID,
-				Name: pmodel.NewCIStr(tableName),
-				Partition: &model.PartitionInfo{
-					Definitions: partitionDefinitions,
-					Enable:      true,
-				},
-			},
+			TableInfo:  newEligiblePartitionTableInfoForTest(tableID, tableName, partitionDefinitions),
 			FinishedTS: finishedTs,
 		},
 	}
@@ -380,10 +365,7 @@ func buildTruncateTableJobForTest(schemaID, oldTableID, newTableID int64, tableN
 		SchemaID: schemaID,
 		TableID:  oldTableID,
 		BinlogInfo: &model.HistoryInfo{
-			TableInfo: &model.TableInfo{
-				ID:   newTableID,
-				Name: pmodel.NewCIStr(tableName),
-			},
+			TableInfo:  newEligibleTableInfoForTest(newTableID, tableName),
 			FinishedTS: finishedTs,
 		},
 	}
@@ -401,14 +383,7 @@ func buildTruncatePartitionTableJobForTest(schemaID, oldTableID, newTableID int6
 		SchemaID: schemaID,
 		TableID:  oldTableID,
 		BinlogInfo: &model.HistoryInfo{
-			TableInfo: &model.TableInfo{
-				ID:   newTableID,
-				Name: pmodel.NewCIStr(tableName),
-				Partition: &model.PartitionInfo{
-					Definitions: partitionDefinitions,
-					Enable:      true,
-				},
-			},
+			TableInfo:  newEligiblePartitionTableInfoForTest(newTableID, tableName, partitionDefinitions),
 			FinishedTS: finishedTs,
 		},
 	}
@@ -449,45 +424,36 @@ func buildExchangePartitionJobForTest(
 		SchemaID: normalSchemaID,
 		TableID:  normalTableID,
 		BinlogInfo: &model.HistoryInfo{
-			TableInfo: &model.TableInfo{
-				ID:   partitionTableID,
-				Name: pmodel.NewCIStr(partitionTableName),
-				Partition: &model.PartitionInfo{
-					Definitions: partitionDefinitions,
-					Enable:      true,
-				},
-			},
+			TableInfo:  newEligiblePartitionTableInfoForTest(partitionTableID, partitionTableName, partitionDefinitions),
 			FinishedTS: finishedTs,
 		},
 	}
 }
 
 func buildAddPrimaryKeyJobForTest(schemaID, tableID int64, finishedTs uint64, indexes ...*model.IndexInfo) *model.Job {
+	tableInfo := newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID))
+	tableInfo.Indices = indexes
 	return &model.Job{
 		Type:     model.ActionAddPrimaryKey,
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
 			FinishedTS: finishedTs,
-			TableInfo: &model.TableInfo{
-				ID:      tableID,
-				Indices: indexes,
-			},
+			TableInfo:  tableInfo,
 		},
 	}
 }
 
 func buildAlterIndexVisibilityJobForTest(schemaID, tableID int64, finishedTs uint64, indexes ...*model.IndexInfo) *model.Job {
+	tableInfo := newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID))
+	tableInfo.Indices = indexes
 	return &model.Job{
 		Type:     model.ActionAlterIndexVisibility,
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
 			FinishedTS: finishedTs,
-			TableInfo: &model.TableInfo{
-				ID:      tableID,
-				Indices: indexes,
-			},
+			TableInfo:  tableInfo,
 		},
 	}
 }
@@ -498,21 +464,22 @@ func buildDropPrimaryKeyJobForTest(schemaID, tableID int64, finishedTs uint64) *
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
+			TableInfo:  newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID)),
 			FinishedTS: finishedTs,
 		},
 	}
 }
 
 func buildModifyTableCharsetJobForTest(schemaID, tableID int64, finishedTs uint64, charset string) *model.Job {
+	tableInfo := newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID))
+	tableInfo.Charset = charset
 	return &model.Job{
 		Type:     model.ActionModifyTableCharsetAndCollate,
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
 			FinishedTS: finishedTs,
-			TableInfo: &model.TableInfo{
-				Charset: charset,
-			},
+			TableInfo:  tableInfo,
 		},
 	}
 }
@@ -523,6 +490,7 @@ func buildAlterTTLJobForTest(schemaID, tableID int64, finishedTs uint64) *model.
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
+			TableInfo:  newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID)),
 			FinishedTS: finishedTs,
 		},
 	}
@@ -534,6 +502,7 @@ func buildRemoveTTLJobForTest(schemaID, tableID int64, finishedTs uint64) *model
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
+			TableInfo:  newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID)),
 			FinishedTS: finishedTs,
 		},
 	}
@@ -545,6 +514,7 @@ func buildSetTiFlashReplicaJobForTest(schemaID, tableID int64, finishedTs uint64
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
+			TableInfo:  newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID)),
 			FinishedTS: finishedTs,
 		},
 	}
@@ -556,6 +526,7 @@ func buildMultiSchemaChangeJobForTest(schemaID, tableID int64, finishedTs uint64
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
+			TableInfo:  newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID)),
 			FinishedTS: finishedTs,
 		},
 	}
@@ -567,6 +538,7 @@ func buildAddColumnJobForTest(schemaID, tableID int64, finishedTs uint64) *model
 		SchemaID: schemaID,
 		TableID:  tableID,
 		BinlogInfo: &model.HistoryInfo{
+			TableInfo:  newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID)),
 			FinishedTS: finishedTs,
 		},
 	}
@@ -620,14 +592,7 @@ func buildAlterTablePartitioningJobForTest(
 		SchemaID: schemaID,
 		TableID:  oldTableID,
 		BinlogInfo: &model.HistoryInfo{
-			TableInfo: &model.TableInfo{
-				ID:   newTableID,
-				Name: pmodel.NewCIStr(tableName),
-				Partition: &model.PartitionInfo{
-					Definitions: partitionDefinitions,
-					Enable:      true,
-				},
-			},
+			TableInfo:  newEligiblePartitionTableInfoForTest(newTableID, tableName, partitionDefinitions),
 			FinishedTS: finishedTs,
 		},
 	}
@@ -643,10 +608,7 @@ func buildRemovePartitioningJobForTest(
 		SchemaID: schemaID,
 		TableID:  oldTableID,
 		BinlogInfo: &model.HistoryInfo{
-			TableInfo: &model.TableInfo{
-				ID:   newTableID,
-				Name: pmodel.NewCIStr(tableName),
-			},
+			TableInfo:  newEligibleTableInfoForTest(newTableID, tableName),
 			FinishedTS: finishedTs,
 		},
 	}
