@@ -468,16 +468,32 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=move_table
 
-      - name: Test changefeed_fast_fail
+      - name: Test changefeed_error
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_fast_fail
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_error
 
       # The 16th case in this group
       - name: Test capture_session_done_during_task
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=capture_session_done_during_task
+
+      - name: Test changefeed_dup_error_restart
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_dup_error_restart
+
+      - name: Test mysql_sink_retry
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=mysql_sink_retry
+      
+      # The 19th case in this group
+      - name: Test cdc
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=cdc
 
       - name: Upload test logs
         if: always()
