@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
@@ -165,6 +166,7 @@ func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		failpoint.Inject("MySQLSinkTxnRandomError", func() {
 			log.Warn("inject MySQLSinkTxnRandomError")
 			err := errors.Trace(driver.ErrBadConn)
+			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls.sqls[0], dmls.rowCount, dmls.startTs)
 			failpoint.Return(err)
 		})
 
@@ -173,11 +175,13 @@ func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			err := cerror.WrapError(cerror.ErrMySQLDuplicateEntry, &dmysql.MySQLError{
 				Number: uint16(mysql.ErrDupEntry),
 			})
+			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls.sqls[0], dmls.rowCount, dmls.startTs)
 			failpoint.Return(err)
 		})
 
 		err := w.statistics.RecordBatchExecution(tryExec)
 		if err != nil {
+			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls.sqls[0], dmls.rowCount, dmls.startTs)
 			return errors.Trace(err)
 		}
 		return nil
@@ -257,4 +261,26 @@ func (w *MysqlWriter) multiStmtExecute(
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQL, multiStmtArgs)))
 	}
 	return nil
+}
+
+func logDMLTxnErr(
+	err error, start time.Time, changefeed string,
+	query string, count int, startTs []common.Ts,
+) error {
+	if len(query) > 1024 {
+		query = query[:1024]
+	}
+	if isRetryableDMLError(err) {
+		log.Warn("execute DMLs with error, retry later",
+			zap.Error(err), zap.Duration("duration", time.Since(start)),
+			zap.String("query", query), zap.Int("count", count),
+			zap.Uint64s("startTs", startTs),
+			zap.String("changefeed", changefeed))
+	} else {
+		log.Error("execute DMLs with error, can not retry",
+			zap.Error(err), zap.Duration("duration", time.Since(start)),
+			zap.String("query", query), zap.Int("count", count),
+			zap.String("changefeed", changefeed))
+	}
+	return errors.WithMessage(err, fmt.Sprintf("Failed query info: %s; ", query))
 }

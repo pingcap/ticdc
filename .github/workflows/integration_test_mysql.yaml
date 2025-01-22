@@ -478,8 +478,18 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=capture_session_done_during_task
+
+      - name: Test changefeed_dup_error_restart
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_dup_error_restart
+
+      - name: Test mysql_sink_retry
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=mysql_sink_retry
       
-      # The 17th case in this group
+      # The 19th case in this group
       - name: Test cdc
         if: ${{ success() }}
         run: |
