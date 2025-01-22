@@ -1445,7 +1445,8 @@ func buildDDLEventForDropSchema(rawEvent *PersistedDDLEvent, tableFilter filter.
 }
 
 func buildDDLEventForModifySchemaCharsetAndCollate(
-	rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool) {
+	rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
+) (commonEvent.DDLEvent, bool) {
 	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if !ok {
 		return ddlEvent, false

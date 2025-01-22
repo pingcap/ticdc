@@ -152,7 +152,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	checkpointTs uint64,
 	newChangfeed bool,
 ) *Maintainer {
-
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -352,6 +351,7 @@ func (m *Maintainer) initialize() error {
 	}, time.Now().Add(periodEventInterval))
 	log.Info("changefeed maintainer initialized",
 		zap.String("id", m.id.String()),
+		zap.String("status", common.FormatMaintainerStatus(m.GetMaintainerStatus())),
 		zap.Duration("duration", time.Since(start)))
 	m.state.Store(int32(heartbeatpb.ComponentState_Working))
 	m.statusChanged.Store(true)

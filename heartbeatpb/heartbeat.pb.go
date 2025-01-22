@@ -2369,10 +2369,10 @@ func (m *ChangefeedID) GetLow() uint64 {
 }
 
 func (m *ChangefeedID) GetName() string {
-	if m != nil {
-		return m.Name
+	if m == nil {
+		return ""
 	}
-	return ""
+	return m.Name
 }
 
 func (m *ChangefeedID) GetNamespace() string {
