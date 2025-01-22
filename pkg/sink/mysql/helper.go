@@ -375,3 +375,30 @@ func ShouldFormatVectorType(db *sql.DB, cfg *MysqlConfig) bool {
 	}
 	return false
 }
+
+func isRetryableDMLError(err error) bool {
+	if !cerror.IsRetryableError(err) {
+		return false
+	}
+
+	errCode, ok := getSQLErrCode(err)
+	if !ok {
+		return true
+	}
+
+	switch errCode {
+	// when meet dup entry error, we don't retry and report the error directly to owner to restart the changefeed.
+	case mysql.ErrNoSuchTable, mysql.ErrBadDB, mysql.ErrDupEntry:
+		return false
+	}
+	return true
+}
+
+func getSQLErrCode(err error) (errors.ErrCode, bool) {
+	mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError)
+	if !ok {
+		return -1, false
+	}
+
+	return errors.ErrCode(mysqlErr.Number), true
+}

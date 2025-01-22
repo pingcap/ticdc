@@ -20,11 +20,14 @@ import (
 	"strings"
 	"time"
 
+	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	pmysql "github.com/pingcap/tiflow/pkg/sink/mysql"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -46,9 +49,10 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 			dmls.startTs = append(dmls.startTs, event.StartTs)
 		}
 
-		translateToInsert := !w.cfg.SafeMode && event.CommitTs > event.ReplicatingTs
-		log.Debug("translate to insert",
-			zap.Bool("translateToInsert", translateToInsert),
+		inSafeMode := !w.cfg.SafeMode && event.CommitTs > event.ReplicatingTs
+
+		log.Debug("inSafeMode",
+			zap.Bool("inSafeMode", inSafeMode),
 			zap.Uint64("firstRowCommitTs", event.CommitTs),
 			zap.Uint64("firstRowReplicatingTs", event.ReplicatingTs),
 			zap.Bool("safeMode", w.cfg.SafeMode))
@@ -65,7 +69,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 
 			switch row.RowType {
 			case commonEvent.RowTypeUpdate:
-				if translateToInsert {
+				if inSafeMode {
 					query, args, err = buildUpdate(event.TableInfo, row, w.cfg.ForceReplicate)
 				} else {
 					query, args, err = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
@@ -77,12 +81,12 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 						dmls.sqls = append(dmls.sqls, query)
 						dmls.values = append(dmls.values, args)
 					}
-					query, args, err = buildInsert(event.TableInfo, row, translateToInsert)
+					query, args, err = buildInsert(event.TableInfo, row, inSafeMode)
 				}
 			case commonEvent.RowTypeDelete:
 				query, args, err = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
 			case commonEvent.RowTypeInsert:
-				query, args, err = buildInsert(event.TableInfo, row, translateToInsert)
+				query, args, err = buildInsert(event.TableInfo, row, inSafeMode)
 			}
 
 			if err != nil {
@@ -157,6 +161,15 @@ func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		return dmls.rowCount, dmls.approximateSize, nil
 	}
 	return retry.Do(w.ctx, func() error {
+
+		failpoint.Inject("MySQLDuplicateEntryError", func() {
+			log.Warn("inject MySQLDuplicateEntryError")
+			err := cerror.WrapError(cerror.ErrMySQLDuplicateEntry, &dmysql.MySQLError{
+				Number: uint16(mysql.ErrDupEntry),
+			})
+			failpoint.Return(err)
+		})
+
 		err := w.statistics.RecordBatchExecution(tryExec)
 		if err != nil {
 			return errors.Trace(err)
@@ -164,7 +177,8 @@ func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		return nil
 	}, retry.WithBackoffBaseDelay(pmysql.BackoffBaseDelay.Milliseconds()),
 		retry.WithBackoffMaxDelay(pmysql.BackoffMaxDelay.Milliseconds()),
-		retry.WithMaxTries(w.cfg.DMLMaxRetry))
+		retry.WithMaxTries(w.cfg.DMLMaxRetry),
+		retry.WithIsRetryableErr(isRetryableDMLError))
 }
 
 func (w *MysqlWriter) sequenceExecute(
