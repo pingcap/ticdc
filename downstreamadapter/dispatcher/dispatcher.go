@@ -333,12 +333,27 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			})
 			d.AddDMLEventToSink(dml)
 		case commonEvent.TypeDDLEvent:
-			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			if len(dispatcherEvents) != 1 {
 				log.Panic("ddl event should only be singly handled", zap.Any("dispatcherID", d.id))
 			}
+			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			block = true
 			ddl := event.(*commonEvent.DDLEvent)
+			// Some DDL have some problem to sync to downstream, such as rename table with inappropriate filter
+			// such as https://docs.pingcap.com/zh/tidb/stable/ticdc-ddl#rename-table-%E7%B1%BB%E5%9E%8B%E7%9A%84-ddl-%E6%B3%A8%E6%84%8F%E4%BA%8B%E9%A1%B9
+			// so we need report the error to maintainer.
+			err := ddl.GetError()
+			if err != nil {
+				select {
+				case d.errCh <- err:
+				default:
+					log.Error("error channel is full, discard error",
+						zap.Any("changefeedID", d.changefeedID.String()),
+						zap.Any("dispatcherID", d.id.String()),
+						zap.Error(err))
+				}
+				return
+			}
 			// Update the table info of the dispatcher, when it receives ddl event.
 			d.tableInfo = ddl.TableInfo
 			log.Info("dispatcher receive ddl event",

@@ -75,6 +75,8 @@ type DDLEvent struct {
 	PostTxnFlushed []func() `json:"-"`
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
 	eventSize int64 `json:"-"`
+
+	err error `json:"-"`
 }
 
 func (d *DDLEvent) GetType() int {
@@ -87,6 +89,10 @@ func (d *DDLEvent) GetDispatcherID() common.DispatcherID {
 
 func (d *DDLEvent) GetStartTs() common.Ts {
 	return 0
+}
+
+func (d *DDLEvent) GetError() error {
+	return d.err
 }
 
 func (d *DDLEvent) GetCommitTs() common.Ts {
