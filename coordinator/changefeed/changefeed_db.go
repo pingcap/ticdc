@@ -61,6 +61,7 @@ func (db *ChangefeedDB) withRLock(action func()) {
 }
 
 // AddAbsentChangefeed adds the changefeed to the absent map
+// It will be scheduled later
 func (db *ChangefeedDB) AddAbsentChangefeed(tasks ...*Changefeed) {
 	db.lock.Lock()
 	defer db.lock.Unlock()

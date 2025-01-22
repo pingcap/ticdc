@@ -278,22 +278,17 @@ func (mc *messageCenter) ReceiveCmd() (*TargetMessage, error) {
 
 // Close stops the grpc server and stops all the connections to the remote targets.
 func (mc *messageCenter) Close() {
-	log.Info("fizz message center is closing, lock requiring", zap.Stringer("id", mc.id))
 	mc.remoteTargets.RLock()
 	defer mc.remoteTargets.RUnlock()
-	log.Info("fizz message center is closing, lock required", zap.Stringer("id", mc.id))
 
 	for _, target := range mc.remoteTargets.m {
 		target.close()
 	}
 
-	log.Info("fizz message center is closing, closed remote targets", zap.Stringer("id", mc.id))
-
 	mc.cancel()
 	if mc.grpcServer != nil {
 		mc.grpcServer.Stop()
 	}
-	log.Info("fizz message center is closing, stopped grpc server", zap.Stringer("id", mc.id))
 
 	mc.grpcServer = nil
 	_ = mc.g.Wait()
