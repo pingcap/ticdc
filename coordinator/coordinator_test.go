@@ -293,7 +293,6 @@ func TestCoordinatorScheduling(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return len(co.controller.changefeedDB.GetByNodeID(info.ID)) == cfSize
 	}, time.Second*time.Duration(waitTime), time.Millisecond*5)
-
 }
 
 func TestScaleNode(t *testing.T) {
