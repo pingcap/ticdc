@@ -17,11 +17,13 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
 
@@ -45,38 +47,25 @@ const (
 	defaultMinInsyncReplicas = "1"
 )
 
-var (
-	// BrokerMessageMaxBytes is the broker's `message.max.bytes`
-	BrokerMessageMaxBytes = defaultMaxMessageBytes
-	// TopicMaxMessageBytes is the topic's `max.message.bytes`
-	TopicMaxMessageBytes = defaultMaxMessageBytes
-	// MinInSyncReplicas is the `min.insync.replicas`
-	MinInSyncReplicas = defaultMinInsyncReplicas
-)
+// var (
+// 	// BrokerMessageMaxBytes is the broker's `message.max.bytes`
+// 	BrokerMessageMaxBytes = defaultMaxMessageBytes
+// 	// TopicMaxMessageBytes is the topic's `max.message.bytes`
+// 	TopicMaxMessageBytes = defaultMaxMessageBytes
+// 	// MinInSyncReplicas is the `min.insync.replicas`
+// 	MinInSyncReplicas = defaultMinInsyncReplicas
+// )
 
 // MockFactory is a mock implementation of Factory interface.
 type MockFactory struct {
-	Factory
-	config       *kafka.ConfigMap
+	option       *Options
 	changefeedID commonType.ChangeFeedID
 	mockCluster  *kafka.MockCluster
 }
 
-type MockClusterAdmin struct {
-	ClusterAdminClient
-	mockCluster *kafka.MockCluster
-	topics      map[string]*MockTopicDetail
-}
-
-type MockTopicDetail struct {
+type mockTopicDetail struct {
 	TopicDetail
 	fetchesRemainingUntilVisible int
-}
-
-type MockMetricsCollector struct {
-	MetricsCollector
-	changefeedID commonType.ChangeFeedID
-	config       *kafka.ConfigMap
 }
 
 // NewMockFactory constructs a Factory with mock implementation.
@@ -89,7 +78,7 @@ func NewMockFactory(
 		return nil, errors.Trace(err)
 	}
 	return &MockFactory{
-		config:       NewConfig(o),
+		option:       o,
 		changefeedID: changefeedID,
 		mockCluster:  mockCluster,
 	}, nil
@@ -99,13 +88,28 @@ func NewMockFactory(
 func (f *MockFactory) AdminClient() (ClusterAdminClient, error) {
 	return &MockClusterAdmin{
 		mockCluster: f.mockCluster,
-		topics:      make(map[string]*MockTopicDetail),
+		topics:      make(map[string]*mockTopicDetail),
 	}, nil
+}
+
+// SyncProducer creates a sync producer to Producer message to kafka
+func (f *MockFactory) SyncProducer() (SyncProducer, error) {
+	return &MockSyncProducer{Producer: &MockProducer{}, changefeedID: f.changefeedID, option: f.option}, nil
+}
+
+// AsyncProducer creates an async producer to Producer message to kafka
+func (f *MockFactory) AsyncProducer() (AsyncProducer, error) {
+	return &MockAsyncProducer{Producer: &MockProducer{}, changefeedID: f.changefeedID, option: f.option, ch: make(chan *kafka.Message)}, nil
 }
 
 // MetricsCollector returns a mocked metrics collector
 func (f *MockFactory) MetricsCollector() MetricsCollector {
-	return &MockMetricsCollector{changefeedID: f.changefeedID, config: f.config}
+	return &MockMetricsCollector{changefeedID: f.changefeedID}
+}
+
+type MockClusterAdmin struct {
+	mockCluster *kafka.MockCluster
+	topics      map[string]*mockTopicDetail
 }
 
 func (c *MockClusterAdmin) GetAllBrokers(ctx context.Context) ([]Broker, error) {
@@ -144,6 +148,20 @@ func (c *MockClusterAdmin) GetTopicsPartitionsNum(
 	return result, nil
 }
 
+func (c *MockClusterAdmin) GetTopicConfig(ctx context.Context, topicName string, configName string) (string, error) {
+	_, ok := c.topics[topicName]
+	if !ok {
+		return "", nil
+	}
+	switch configName {
+	case "message.max.bytes", "max.message.bytes":
+		return defaultMaxMessageBytes, nil
+	case "min.insync.replicas":
+		return defaultMinInsyncReplicas, nil
+	}
+	return "0", nil
+}
+
 func (c *MockClusterAdmin) CreateTopic(ctx context.Context, detail *TopicDetail, validateOnly bool) error {
 	bootstrapServers := c.mockCluster.BootstrapServers()
 	n := len(strings.Split(bootstrapServers, ","))
@@ -154,7 +172,7 @@ func (c *MockClusterAdmin) CreateTopic(ctx context.Context, detail *TopicDetail,
 	if err != nil {
 		return err
 	}
-	c.topics[detail.Name] = &MockTopicDetail{TopicDetail: *detail}
+	c.topics[detail.Name] = &mockTopicDetail{TopicDetail: *detail}
 	return nil
 }
 
@@ -186,5 +204,140 @@ func (c *MockClusterAdmin) Close() {
 	c.mockCluster.Close()
 }
 
+type MockSyncProducer struct {
+	Producer     *MockProducer
+	option       *Options
+	changefeedID commonType.ChangeFeedID
+}
+
+// SendMessage produces message
+func (s *MockSyncProducer) SendMessage(
+	ctx context.Context,
+	topic string, partition int32,
+	message *common.Message,
+) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	if message.Length() > s.option.MaxMessageBytes {
+		return kafka.NewError(kafka.ErrMsgSizeTooLarge, "", false)
+	}
+	return nil
+}
+
+// SendMessages produces a given set of messages
+func (s *MockSyncProducer) SendMessages(ctx context.Context, topic string, partitionNum int32, message *common.Message) error {
+	var err error
+	for i := 0; i < int(partitionNum); i++ {
+		e := s.SendMessage(ctx, topic, int32(i), message)
+		if e != nil {
+			err = e
+		}
+	}
+	return err
+}
+
+// Close shuts down the mock producer
+func (s *MockSyncProducer) Close() {
+}
+
+// ExpectInputAndFail for test
+func (s *MockSyncProducer) ExpectInputAndFail() {
+}
+
+type MockAsyncProducer struct {
+	Producer     *MockProducer
+	option       *Options
+	changefeedID commonType.ChangeFeedID
+	ch           chan *kafka.Message
+}
+
+// Close shuts down the producer
+func (a *MockAsyncProducer) Close() {
+	a.Producer.err = kafka.ErrUnknown
+	close(a.ch)
+}
+
+// AsyncRunCallback process the messages that has sent to kafka
+func (a *MockAsyncProducer) AsyncRunCallback(ctx context.Context) error {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case msg := <-a.ch:
+			if msg != nil {
+				callback := msg.Opaque.(func())
+				if callback != nil {
+					callback()
+				}
+			}
+		case <-ticker.C:
+			if a.Producer.err != kafka.ErrNoError {
+				return kafka.NewError(a.Producer.err, "", false)
+			}
+		}
+	}
+}
+
+// AsyncSend is the input channel for the user to write messages to that they
+// wish to send.
+func (a *MockAsyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error {
+	msg := &kafka.Message{
+		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: partition},
+		Key:            message.Key,
+		Value:          message.Value,
+		Opaque:         message.Callback,
+	}
+	select {
+	case <-ctx.Done():
+		return errors.Trace(ctx.Err())
+	case a.ch <- msg:
+	}
+	if message.Length() > a.option.MaxMessageBytes {
+		a.Producer.err = kafka.ErrMsgSizeTooLarge
+	}
+	return nil
+}
+
+type MockMetricsCollector struct {
+	changefeedID commonType.ChangeFeedID
+}
+
 func (c *MockMetricsCollector) Run(_ context.Context) {
+}
+
+type MockProducer struct {
+	err kafka.ErrorCode
+}
+
+// ExpectInputAndFail for test
+func (s *MockProducer) ExpectInputAndFail(err kafka.ErrorCode) {
+	if err != s.err {
+		panic(fmt.Sprintf("expect input and fail. actual err: %s expected err: %s", s.err, err))
+	}
+}
+
+// ExpectSendMessageAndFail for test
+func (s *MockProducer) ExpectSendMessageAndFail(err kafka.ErrorCode) {
+	if err != s.err {
+		panic(fmt.Sprintf("expect send message and succeed failed. actual err: %s expected err: %s", s.err, err))
+	}
+}
+
+// ExpectInputAndSucceed for test
+func (s *MockProducer) ExpectInputAndSucceed() {
+	if s.err != kafka.ErrNoError {
+		panic(fmt.Sprintf("expect input and succeed failed. err: %s", s.err))
+	}
+}
+
+// ExpectInputAndSucceed for test
+func (s *MockProducer) ExpectSendMessageAndSucceed() {
+	if s.err != kafka.ErrNoError {
+		panic(fmt.Sprintf("expect send message and succeed failed. err: %s", s.err))
+	}
 }

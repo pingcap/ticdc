@@ -88,7 +88,6 @@ func (s *syncProducer) SendMessage(
 		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: partition},
 		Key:            message.Key,
 		Value:          message.Value,
-		Opaque:         message.Callback,
 	}
 	err := s.p.Produce(msg, s.deliveryChan)
 	if err != nil {
@@ -167,11 +166,16 @@ func (a *asyncProducer) AsyncRunCallback(ctx context.Context) error {
 		case event := <-a.p.Events():
 			switch e := event.(type) {
 			case *kafka.Message:
-				callback := e.Opaque.(func())
-				if callback != nil {
-					callback()
+				if e != nil {
+					callback := e.Opaque.(func())
+					if callback != nil {
+						callback()
+					}
 				}
 			case *kafka.Error:
+				if e == nil {
+					return nil
+				}
 				return errors.WrapError(errors.ErrKafkaAsyncSendMessage, e)
 			}
 		}

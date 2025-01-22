@@ -93,7 +93,9 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 		options.DeriveTopicConfig(),
 		kafkaComponent.AdminClient,
 	)
-
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
 	scheme := sink.GetScheme(sinkURI)
 	kafkaComponent.EventRouter, err = eventrouter.NewEventRouter(sinkConfig, protocol, topic, scheme)
 	if err != nil {

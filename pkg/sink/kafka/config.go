@@ -16,6 +16,7 @@ package kafka
 import (
 	"crypto/x509"
 	"strings"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
@@ -34,8 +35,17 @@ var (
 
 func NewConfig(options *Options) *kafka.ConfigMap {
 	config := &kafka.ConfigMap{
-		"bootstrap.servers": strings.Join(options.BrokerEndpoints, ","),
-		"log_level":         getLogLevel(),
+		"bootstrap.servers":        strings.Join(options.BrokerEndpoints, ","),
+		"allow.auto.create.topics": options.AutoCreate,
+		// retries may cause reordering unless enable.idempotence is set to true.
+		"message.send.max.retries":     0,
+		"max.in.flight":                1,
+		"request.required.acks":        int(options.RequiredAcks),
+		"queue.buffering.max.ms":       time.Duration(0),
+		"queue.buffering.max.messages": options.MaxMessages,
+		"message.max.bytes":            options.MaxMessageBytes,
+		"socket.timeout.ms":            int(options.DialTimeout.Milliseconds()),
+		"log_level":                    getLogLevel(),
 	}
 	if options.EnableTLS {
 		_ = config.SetKey("security.protocol", ProtocolSSL)
@@ -50,16 +60,8 @@ func NewConfig(options *Options) *kafka.ConfigMap {
 	}
 
 	completeSASLConfig(config, options)
-
 	compression := strings.ToLower(strings.TrimSpace(options.Compression))
 	config.SetKey("compression.codec", compression)
-
-	// retrying may cause reordering unless enable.idempotence is set to true.
-	config.SetKey("retries", 0)
-	config.SetKey("max.in.flight", 1)
-	config.SetKey("request.required.acks", int(options.RequiredAcks))
-	config.SetKey("message.max.bytes", options.MaxMessageBytes)
-	config.SetKey("socket.timeout.ms", int(options.DialTimeout.Milliseconds()))
 	log.Info("kafka producer config", zap.Any("config", config))
 	return config
 }

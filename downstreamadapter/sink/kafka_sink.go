@@ -202,10 +202,11 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	openProtocol := "open-protocol"
-	sinkConfig := &config.SinkConfig{Protocol: &openProtocol}
+	sinkConfig := config.GetDefaultReplicaConfig().Clone().Sink
+	sinkConfig.Protocol = &openProtocol
 	uriTemplate := "kafka://%s/%s?kafka-version=0.9.0.0&max-batch-size=1" +
 		"&max-message-bytes=1048576&partition-num=1" +
-		"&kafka-client-id=unit-test&auto-create-topic=false&compression=gzip&protocol=open-protocol"
+		"&kafka-client-id=unit-test&auto-create-topic=true&compression=gzip&protocol=open-protocol"
 	uri := fmt.Sprintf(uriTemplate, "127.0.0.1:9092", kafka.DefaultMockTopicName)
 
 	sinkURI, err := url.Parse(uri)

@@ -114,24 +114,23 @@ func (m *metricsCollector) collect(data string) {
 		log.Error("kafka metrics collect failed", zap.Error(err))
 		return
 	}
-	// metrics is collected each 5 seconds, divide by 5 to get per seconds average.
 	// compressionRatioGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
-	// 	Set(float64(statistics.Writes / 5))
+	// 	Set(float64(statistics.Writes / RefreshMetricsInterval.Seconds()))
 	recordsPerRequestGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
-		Set(float64(statistics.Tx) / 5)
+		Set(float64(statistics.Tx) / RefreshMetricsInterval.Seconds())
 	requestsInFlightGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
-		Set(float64(statistics.MsgCount) / 5)
+		Set(float64(statistics.MsgCount) / RefreshMetricsInterval.Seconds())
 	responseRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
-		Set(float64(statistics.Rx) / 5)
+		Set(float64(statistics.Rx) / RefreshMetricsInterval.Seconds())
 	// RequestRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
-	// 	Set(float64(statistics.Writes / 5))
+	// 	Set(float64(statistics.Writes / RefreshMetricsInterval.Seconds()))
 
 	for _, broker := range statistics.Brokers {
 		// latency is in milliseconds
 		RequestLatencyGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), broker.Name, "avg").
-			Set(float64(broker.Rtt.Avg) * 1000 / 5)
+			Set(float64(broker.Rtt.Avg) * 1000 / RefreshMetricsInterval.Seconds())
 		// OutgoingByteRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
-		// 	Set(float64(statistics.Bytes / 5))
+		// 	Set(float64(statistics.Bytes / RefreshMetricsInterval.Seconds()))
 	}
 }
 
