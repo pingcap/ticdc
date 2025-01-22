@@ -152,7 +152,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	checkpointTs uint64,
 	newChangfeed bool,
 ) *Maintainer {
-
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()

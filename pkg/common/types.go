@@ -50,6 +50,9 @@ func NewDispatcherID() DispatcherID {
 }
 
 func NewDispatcherIDFromPB(pb *heartbeatpb.DispatcherID) DispatcherID {
+	if pb == nil {
+		return DispatcherID{}
+	}
 	d := DispatcherID{Low: pb.Low, High: pb.High}
 	return d
 }

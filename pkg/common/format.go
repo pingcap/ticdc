@@ -18,11 +18,17 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"go.uber.org/zap"
 )
 
 func FormatBlockStatusRequest(r *heartbeatpb.BlockStatusRequest) string {
 	if r == nil {
+		return ""
+	}
+	if r.ChangefeedID == nil {
+		log.Warn("changefeedID is nil, it should not happen", zap.String("request", r.String()))
 		return ""
 	}
 	sb := strings.Builder{}
@@ -38,6 +44,10 @@ func FormatBlockStatusRequest(r *heartbeatpb.BlockStatusRequest) string {
 
 func FormatTableSpanBlockStatus(s *heartbeatpb.TableSpanBlockStatus) string {
 	if s == nil {
+		return ""
+	}
+	if s.ID == nil {
+		log.Warn("dispatcherID is nil, it should not happen", zap.String("status", s.String()))
 		return ""
 	}
 	sb := strings.Builder{}
