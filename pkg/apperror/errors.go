@@ -31,6 +31,11 @@ var (
 		errors.RFCCodeText("CDC:ErrChangefeedInitTableTriggerEventDispatcherFailed"),
 	)
 
+	ErrDDLEventError = errors.Normalize(
+		"ddl event meets error",
+		errors.RFCCodeText("CDC:ErrDDLEventError"),
+	)
+
 	ErrTableIsNotFounded = errors.Normalize(
 		"table is not found",
 		errors.RFCCodeText("CDC:ErrTableIsNotFounded"),

@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 )
@@ -40,6 +41,7 @@ func TestDDLEvent(t *testing.T) {
 		Query:        ddlJob.Query,
 		TableInfo:    common.WrapTableInfo(ddlJob.SchemaID, ddlJob.SchemaName, ddlJob.BinlogInfo.TableInfo),
 		FinishedTs:   ddlJob.BinlogInfo.FinishedTS,
+		err:          apperror.ErrDDLEventError.GenWithStackByArgs("test"),
 	}
 
 	data, err := ddlEvent.Marshal()
