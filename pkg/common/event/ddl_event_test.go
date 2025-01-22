@@ -17,8 +17,11 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestDDLEvent(t *testing.T) {
@@ -40,6 +43,7 @@ func TestDDLEvent(t *testing.T) {
 		Query:        ddlJob.Query,
 		TableInfo:    common.WrapTableInfo(ddlJob.SchemaID, ddlJob.SchemaName, ddlJob.BinlogInfo.TableInfo),
 		FinishedTs:   ddlJob.BinlogInfo.FinishedTS,
+		err:          apperror.ErrDDLEventError.GenWithStackByArgs("test"),
 	}
 
 	data, err := ddlEvent.Marshal()
@@ -50,5 +54,7 @@ func TestDDLEvent(t *testing.T) {
 	reverseEvent.eventSize = 0
 	require.Nil(t, err)
 	equal := reflect.DeepEqual(ddlEvent, ddlEvent)
+	log.Info("error", zap.Any("error", ddlEvent.err))
+	log.Info("error2", zap.Any("error", reverseEvent.err))
 	require.True(t, equal)
 }
