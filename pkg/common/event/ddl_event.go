@@ -272,7 +272,7 @@ func (t *DDLEvent) Unmarshal(data []byte) error {
 	errorDataSize := binary.BigEndian.Uint64(data[len(data)-8:])
 	if errorDataSize > 0 {
 		errorData := data[len(data)-8-int(errorDataSize) : len(data)-8]
-		log.Info("errorData", zap.Any("errorData", string(errorData)))
+		log.Info("errorData", zap.String("errorData", string(errorData)))
 		t.err = apperror.ErrDDLEventError.FastGen(string(errorData))
 	}
 	end := len(data) - 8 - int(errorDataSize)
