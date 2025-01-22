@@ -1958,7 +1958,8 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 					})
 				}
 			} else if !ignoreCurrentTable {
-				// TODO: return a ddl event with error
+				// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
+				ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.CurrentTableID, rawEvent.Query)
 			} else {
 				// if the table is both filtered out before and after rename table, ignore
 			}
@@ -1995,7 +1996,8 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 					})
 				}
 			} else if !ignoreCurrentTable {
-				// TODO: return a ddl event with error
+				// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
+				ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.CurrentTableID, rawEvent.Query)
 			} else {
 				// ignore
 			}
