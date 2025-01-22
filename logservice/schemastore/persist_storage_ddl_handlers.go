@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -1664,33 +1665,8 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 				}
 			}
 		} else if !ignoreCurrentTable {
-			// TODO: this should report an error as old cdc behaviour
-			ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
-				InfluenceType: commonEvent.InfluenceTypeNormal,
-				TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
-			}
-			// the table is filtered out before rename table, we need add table here
-			ddlEvent.NeedAddedTables = []commonEvent.Table{
-				{
-					SchemaID: rawEvent.CurrentSchemaID,
-					TableID:  rawEvent.CurrentTableID,
-				},
-			}
-			ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, len(allPhysicalIDs))
-			for _, id := range allPhysicalIDs {
-				ddlEvent.NeedAddedTables = append(ddlEvent.NeedAddedTables, commonEvent.Table{
-					SchemaID: rawEvent.CurrentSchemaID,
-					TableID:  id,
-				})
-			}
-			ddlEvent.TableNameChange = &commonEvent.TableNameChange{
-				AddName: []commonEvent.SchemaTableName{
-					{
-						SchemaName: rawEvent.CurrentSchemaName,
-						TableName:  rawEvent.CurrentTableName,
-					},
-				},
-			}
+			// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
+			ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.CurrentTableID, rawEvent.Query)
 		} else {
 			// if the table is both filtered out before and after rename table, the ddl should not be fetched
 			log.Panic("should not build a ignored rename table ddl",

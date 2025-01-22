@@ -77,7 +77,7 @@ type DDLEvent struct {
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
 	eventSize int64 `json:"-"`
 
-	err error `json:"-"`
+	Err error `json:"-"`
 }
 
 func (d *DDLEvent) GetType() int {
@@ -93,7 +93,7 @@ func (d *DDLEvent) GetStartTs() common.Ts {
 }
 
 func (d *DDLEvent) GetError() error {
-	return d.err
+	return d.Err
 }
 
 func (d *DDLEvent) GetCommitTs() common.Ts {
@@ -252,8 +252,8 @@ func (t DDLEvent) Marshal() ([]byte, error) {
 		data = append(data, tableInfoDataSize...)
 	}
 
-	if t.err != nil {
-		errData := []byte(t.err.Error())
+	if t.Err != nil {
+		errData := []byte(t.Err.Error())
 		errDataSize := make([]byte, 8)
 		binary.BigEndian.PutUint64(errDataSize, uint64(len(errData)))
 		data = append(data, errData...)
@@ -273,7 +273,7 @@ func (t *DDLEvent) Unmarshal(data []byte) error {
 	if errorDataSize > 0 {
 		errorData := data[len(data)-8-int(errorDataSize) : len(data)-8]
 		log.Info("errorData", zap.String("errorData", string(errorData)))
-		t.err = apperror.ErrDDLEventError.FastGen(string(errorData))
+		t.Err = apperror.ErrDDLEventError.FastGen(string(errorData))
 	}
 	end := len(data) - 8 - int(errorDataSize)
 	tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
