@@ -145,7 +145,7 @@ func buildTableFilterByNameForTest(schemaName, tableName string) filter.Filter {
 	filterConfig := &config.FilterConfig{
 		Rules: []string{filterRule},
 	}
-	tableFilter, err := filter.NewFilter(filterConfig, "", false)
+	tableFilter, err := filter.NewFilter(filterConfig, "", false, false)
 	if err != nil {
 		log.Panic("build filter failed", zap.Error(err))
 	}

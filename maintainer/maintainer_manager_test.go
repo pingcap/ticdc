@@ -67,6 +67,9 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 
 	appcontext.SetService(appcontext.SchemaStore, store)
 	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc.Run(ctx)
+	defer mc.Close()
+
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
@@ -129,12 +132,18 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	// Case 2: Add new nodes
 	node2 := node.NewInfo("127.0.0.1:8400", "")
 	mc2 := messaging.NewMessageCenter(ctx, node2.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc2.Run(ctx)
+	defer mc2.Close()
 
 	node3 := node.NewInfo("127.0.0.1:8500", "")
 	mc3 := messaging.NewMessageCenter(ctx, node3.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc3.Run(ctx)
+	defer mc3.Close()
 
 	node4 := node.NewInfo("127.0.0.1:8600", "")
 	mc4 := messaging.NewMessageCenter(ctx, node4.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc4.Run(ctx)
+	defer mc4.Close()
 
 	startDispatcherNode(t, ctx, node2, mc2, nodeManager)
 	dn3 := startDispatcherNode(t, ctx, node3, mc3, nodeManager)
@@ -268,6 +277,9 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	appcontext.SetService(appcontext.SchemaStore, store)
 	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc.Run(ctx)
+	defer mc.Close()
+
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)
@@ -385,6 +397,8 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	appcontext.SetService(appcontext.SchemaStore, store)
 	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc.Run(ctx)
+	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	startDispatcherNode(t, ctx, selfNode, mc, nodeManager)
 	nodeManager.RegisterNodeChangeHandler(appcontext.MessageCenter, mc.OnNodeChanges)

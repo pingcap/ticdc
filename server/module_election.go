@@ -86,6 +86,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 				zap.Any("captureID", e.svr.info.ID))
 			return nil
 		}
+		log.Info("start to campaign coordinator", zap.Any("captureID", e.svr.info.ID))
 		// Campaign to be the coordinator, it blocks until it been elected.
 		err = e.election.Campaign(ctx, string(e.svr.info.ID))
 

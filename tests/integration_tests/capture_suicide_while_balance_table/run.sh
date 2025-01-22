@@ -68,7 +68,8 @@ function run() {
 
 	# sleep some time to wait global resolved ts forwarded
 	sleep 2
-	curl -X POST http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/move_table?tableID=${one_table_id}&targetNodeID=${target_capture}
+	curl -X POST http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/move_table?tableID=${one_table_id} &
+	targetNodeID=${target_capture}
 	# sleep some time to wait table balance job is written to etcd
 	sleep 2
 

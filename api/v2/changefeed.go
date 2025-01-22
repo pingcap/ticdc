@@ -603,7 +603,7 @@ func (h *OpenAPIV2) updateChangefeed(c *gin.Context) {
 	}
 
 	// verify changefeed filter
-	_, err = filter.NewFilter(oldCfInfo.Config.Filter, "", oldCfInfo.Config.CaseSensitive)
+	_, err = filter.NewFilter(oldCfInfo.Config.Filter, "", oldCfInfo.Config.CaseSensitive, oldCfInfo.Config.ForceReplicate)
 	if err != nil {
 		_ = c.Error(errors.ErrChangefeedUpdateRefused.
 			GenWithStackByArgs(errors.Cause(err).Error()))

@@ -192,7 +192,11 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	response := &heartbeatpb.CoordinatorBootstrapResponse{}
 	m.maintainers.Range(func(key, value interface{}) bool {
 		maintainer := value.(*Maintainer)
-		response.Statuses = append(response.Statuses, maintainer.GetMaintainerStatus())
+		status := maintainer.GetMaintainerStatus()
+		if status.GetErr() != nil {
+			log.Info("fizz changefeed meet error", zap.Any("status", status))
+		}
+		response.Statuses = append(response.Statuses, status)
 		maintainer.statusChanged.Store(false)
 		maintainer.lastReportTime = time.Now()
 		return true
@@ -294,7 +298,11 @@ func (m *Manager) sendHeartbeat() {
 		m.maintainers.Range(func(key, value interface{}) bool {
 			cfMaintainer := value.(*Maintainer)
 			if cfMaintainer.statusChanged.Load() || time.Since(cfMaintainer.lastReportTime) > time.Second*2 {
-				response.Statuses = append(response.Statuses, cfMaintainer.GetMaintainerStatus())
+				mStatus := cfMaintainer.GetMaintainerStatus()
+				if mStatus.GetErr() != nil {
+					log.Info("fizz changefeed meet error", zap.Any("status", mStatus))
+				}
+				response.Statuses = append(response.Statuses, mStatus)
 				cfMaintainer.statusChanged.Store(false)
 				cfMaintainer.lastReportTime = time.Now()
 			}
@@ -360,9 +368,6 @@ func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) (
 	c, ok := m.maintainers.Load(changefeedID)
 
 	m.maintainers.Range(func(key, value interface{}) bool {
-		log.Info("fizz maintainer",
-			zap.String("GID", key.(common.ChangeFeedID).Id.String()),
-			zap.String("Name", key.(common.ChangeFeedID).DisplayName.String()))
 		return true
 	})
 

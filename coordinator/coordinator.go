@@ -30,11 +30,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/server"
+	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/txnutil/gc"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
@@ -90,7 +90,7 @@ func New(node *node.Info,
 		pdClock:             pdClock,
 		mc:                  mc,
 		updatedChangefeedCh: make(chan map[common.ChangeFeedID]*changefeed.Changefeed, 1024),
-		stateChangedCh:      make(chan *ChangefeedStateChangeEvent, 8),
+		stateChangedCh:      make(chan *ChangefeedStateChangeEvent, 1024),
 		backend:             backend,
 	}
 	c.taskScheduler = threadpool.NewThreadPoolDefault()
@@ -224,12 +224,43 @@ func (c *coordinator) handleStateChangedEvent(ctx context.Context, event *Change
 	return nil
 }
 
+// checkStaleCheckpointTs checks if the checkpointTs is stale, if it is, it will send a state change event to the stateChangedCh
+func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.ChangeFeedID, reportedCheckpointTs uint64) {
+	err := c.gcManager.CheckStaleCheckpointTs(ctx, id, reportedCheckpointTs)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err != nil {
+		errCode, _ := errors.RFCCode(err)
+		state := model.StateFailed
+		if !errors.IsChangefeedGCFastFailErrorCode(errCode) {
+			state = model.StateWarning
+		}
+		select {
+		case <-ctx.Done():
+			log.Warn("Failed to send state change event to stateChangedCh since context timeout, "+
+				"there may be a lot of state need to be handled. Try next time",
+				zap.String("changefeed", id.String()),
+				zap.Error(ctx.Err()))
+			return
+		case c.stateChangedCh <- &ChangefeedStateChangeEvent{
+			ChangefeedID: id,
+			State:        state,
+			err: &model.RunningError{
+				Code:    string(errCode),
+				Message: err.Error(),
+			},
+		}:
+		}
+	}
+}
+
 func (c *coordinator) saveCheckpointTs(ctx context.Context, cfs map[common.ChangeFeedID]*changefeed.Changefeed) error {
 	statusMap := make(map[common.ChangeFeedID]uint64)
 	for _, upCf := range cfs {
 		reportedCheckpointTs := upCf.GetStatus().CheckpointTs
 		if upCf.GetLastSavedCheckPointTs() < reportedCheckpointTs {
 			statusMap[upCf.ID] = reportedCheckpointTs
+			c.checkStaleCheckpointTs(ctx, upCf.ID, reportedCheckpointTs)
 		}
 	}
 	if len(statusMap) == 0 {

@@ -37,7 +37,8 @@ type ChangefeedConfig struct {
 	TargetTS     uint64              `json:"target_ts"`
 	SinkURI      string              `json:"sink_uri"`
 	// timezone used when checking sink uri
-	TimeZone string `json:"timezone" default:"system"`
+	TimeZone      string `json:"timezone" default:"system"`
+	CaseSensitive bool   `json:"case_sensitive" default:"false"`
 	// if true, force to replicate some ineligible tables
 	ForceReplicate bool          `json:"force_replicate" default:"false"`
 	Filter         *FilterConfig `toml:"filter" json:"filter"`
@@ -85,6 +86,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		StartTS:            info.StartTs,
 		TargetTS:           info.TargetTs,
 		SinkURI:            info.SinkURI,
+		CaseSensitive:      info.Config.CaseSensitive,
 		ForceReplicate:     info.Config.ForceReplicate,
 		SinkConfig:         info.Config.Sink,
 		Filter:             info.Config.Filter,

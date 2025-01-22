@@ -14,16 +14,14 @@
 package filter
 
 import (
-	"strings"
 	"sync"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
-	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"github.com/pingcap/tiflow/cdc/model"
 	bf "github.com/pingcap/tiflow/pkg/binlog-filter"
@@ -52,17 +50,14 @@ type Filter interface {
 	// ShouldDiscardDDL returns true if this DDL should be discarded.
 	// If a ddl is discarded, it will neither be applied to cdc's schema storage
 	// nor sent to downstream.
-	ShouldDiscardDDL(ddlType timodel.ActionType, schema, table string) bool
+	ShouldDiscardDDL(ddlType timodel.ActionType, schema, table string, tableInfo *timodel.TableInfo) bool
 	// ShouldIgnoreTable returns true if the table should be ignored.
-	ShouldIgnoreTable(schema, table string) bool
+	ShouldIgnoreTable(schema, table string, tableInfo *timodel.TableInfo) bool
 	// ShouldIgnoreSchema returns true if the schema should be ignored.
 	ShouldIgnoreSchema(schema string) bool
 	// Verify should only be called by create changefeed OpenAPI.
 	// Its purpose is to verify the expression filter config.
 	Verify(tableInfos []*model.TableInfo) error
-
-	// filter ddl event to update query and influenced table spans
-	FilterDDLEvent(ddl *commonEvent.DDLEvent) error
 }
 
 // filter implements Filter.
@@ -75,10 +70,11 @@ type filter struct {
 	sqlEventFilter *sqlEventFilter
 	// ignoreTxnStartTs is used to filter out dml/ddl event by its starsTs.
 	ignoreTxnStartTs []uint64
+	forceReplicate   bool
 }
 
 // NewFilter creates a filter.
-func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool) (Filter, error) {
+func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool, forceReplicate bool) (Filter, error) {
 	f, err := VerifyTableRules(cfg)
 	if err != nil {
 		return nil, err
@@ -101,36 +97,71 @@ func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool) (Filter,
 		dmlExprFilter:    dmlExprFilter,
 		sqlEventFilter:   sqlEventFilter,
 		ignoreTxnStartTs: cfg.IgnoreTxnStartTs,
+		forceReplicate:   forceReplicate,
 	}, nil
 }
 
-func (f *filter) FilterDDLEvent(ddl *commonEvent.DDLEvent) error {
-	query := ddl.Query
-	queryList := strings.Split(query, ";")
-	if len(queryList) == 1 {
-		return nil
+// IsEligible returns whether the table is a eligible table.
+// A table is eligible if it has a primary key or unique key on not null columns.
+// Or when enable forReplicate or the table is a view.
+// TODO: Add some tests for this function.
+func (f *filter) IsEligible(tableInfo *timodel.TableInfo) bool {
+	// Sequence is not supported yet, TiCDC needs to filter all sequence tables.
+	// See https://github.com/pingcap/tiflow/issues/4559
+	if tableInfo.IsSequence() {
+		return false
 	}
-	multiTableInfos := ddl.MultipleTableInfos
-	schemaName := ddl.SchemaName
-	if len(multiTableInfos) != len(queryList) {
-		log.Error("DDL Event is not valid, query count not equal to table count", zap.Any("ddl", ddl))
-		return apperror.NewAppError(apperror.ErrorInvalidDDLEvent, "DDL Event is not valid, query count not equal to table count")
+	if f.forceReplicate {
+		return true
 	}
-	finalQuery := make([]string, 0, len(queryList))
-	for i, query := range queryList {
-		tableInfo := multiTableInfos[i]
-		// Only need to check if table name needs to be filtered,
-		// if schema name needs to be filtered, the entire query will not be given to dispatcher
-		tableName := tableInfo.TableName.Table
-		if !f.ShouldIgnoreTable(schemaName, tableName) {
-			finalQuery = append(finalQuery, query)
+	if tableInfo.IsView() {
+		return true
+	}
+
+	// If the table has primary key, it is eligible.
+	for _, col := range tableInfo.Columns {
+		if !(col.IsGenerated() && !col.GeneratedStored) { // visible and not stored generated column
+			if (tableInfo.PKIsHandle && mysql.HasPriKeyFlag(col.GetFlag())) || col.ID == timodel.ExtraHandleID {
+				return true
+			}
 		}
 	}
-	if len(finalQuery) != len(queryList) {
-		ddl.Query = strings.Join(finalQuery, ";")
+
+	// If the table has unique key on not null columns, it is eligible.
+	for _, idx := range tableInfo.Indices {
+		if idx.Primary {
+			return true
+		}
+		if len(idx.Columns) == 0 {
+			continue
+		}
+		if idx.Unique {
+			// ensure all columns in unique key have NOT NULL flag
+			allColNotNull := true
+			skip := false
+			for _, idxCol := range idx.Columns {
+				col := timodel.FindColumnInfo(tableInfo.Cols(), idxCol.Name.L)
+				// This index has a column in DeleteOnly state,
+				// or it is expression index (it defined on a hidden column),
+				// it can not be implicit PK, go to next index iterator
+				if col == nil || col.Hidden {
+					skip = true
+					break
+				}
+				if !mysql.HasNotNullFlag(col.GetFlag()) {
+					allColNotNull = false
+					break
+				}
+			}
+			if skip {
+				continue
+			}
+			if allColNotNull {
+				return true
+			}
+		}
 	}
-	// TODO: Should also update the table information that ddl depends on
-	return nil
+	return false
 }
 
 // ShouldIgnoreDMLEvent checks if a DML event should be ignore by conditions below:
@@ -147,7 +178,7 @@ func (f *filter) ShouldIgnoreDMLEvent(
 		return true, nil
 	}
 
-	if f.ShouldIgnoreTable(dml.TableInfo.GetSchemaName(), dml.TableInfo.GetTableName()) {
+	if f.ShouldIgnoreTable(dml.TableInfo.GetSchemaName(), dml.TableInfo.GetTableName(), nil) {
 		return true, nil
 	}
 
@@ -165,7 +196,7 @@ func (f *filter) ShouldIgnoreDMLEvent(
 // 0. By allow list.
 // 1. By schema name.
 // 2. By table name.
-func (f *filter) ShouldDiscardDDL(ddlType timodel.ActionType, schema, table string) bool {
+func (f *filter) ShouldDiscardDDL(ddlType timodel.ActionType, schema, table string, tableInfo *timodel.TableInfo) bool {
 	if !isAllowedDDL(ddlType) {
 		return true
 	}
@@ -173,7 +204,7 @@ func (f *filter) ShouldDiscardDDL(ddlType timodel.ActionType, schema, table stri
 	if IsSchemaDDL(ddlType) {
 		return f.ShouldIgnoreSchema(schema)
 	}
-	return f.ShouldIgnoreTable(schema, table)
+	return f.ShouldIgnoreTable(schema, table, tableInfo)
 }
 
 // ShouldIgnoreDDLEvent checks if a DDL event should be ignore by conditions below:
@@ -199,10 +230,16 @@ func (f *filter) ShouldIgnoreDDLEvent(ddl *model.DDLEvent) (bool, error) {
 
 // ShouldIgnoreTable returns true if the specified table should be ignored by this changefeed.
 // NOTICE: Set `tbl` to an empty string to test against the whole database.
-func (f *filter) ShouldIgnoreTable(db, tbl string) bool {
+func (f *filter) ShouldIgnoreTable(db, tbl string, tableInfo *timodel.TableInfo) bool {
 	if IsSysSchema(db) {
 		return true
 	}
+
+	if tableInfo != nil && !f.IsEligible(tableInfo) {
+		log.Info("table is not eligible, should ignore this table", zap.String("db", db), zap.String("table", tbl))
+		return true
+	}
+
 	return !f.tableFilter.MatchTable(db, tbl)
 }
 
@@ -273,10 +310,10 @@ func (s *SharedFilterStorage) GetOrSetFilter(
 	}
 	// convert eventpb.FilterConfig to config.FilterConfig
 	filterCfg := &config.FilterConfig{
-		Rules:            cfg.Rules,
-		IgnoreTxnStartTs: cfg.IgnoreTxnStartTs,
+		Rules:            cfg.FilterConfig.Rules,
+		IgnoreTxnStartTs: cfg.FilterConfig.IgnoreTxnStartTs,
 	}
-	for _, rule := range cfg.EventFilters {
+	for _, rule := range cfg.FilterConfig.EventFilters {
 		f := &config.EventFilterRule{
 			Matcher:                  rule.Matcher,
 			IgnoreSQL:                rule.IgnoreSql,
@@ -292,7 +329,7 @@ func (s *SharedFilterStorage) GetOrSetFilter(
 		filterCfg.EventFilters = append(filterCfg.EventFilters, f)
 	}
 	// generate table filter
-	f, err := NewFilter(filterCfg, tz, caseSensitive)
+	f, err := NewFilter(filterCfg, tz, cfg.CaseSensitive, cfg.ForceReplicate)
 	if err != nil {
 		return nil, err
 	}

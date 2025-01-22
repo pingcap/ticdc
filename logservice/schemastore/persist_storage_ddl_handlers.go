@@ -100,7 +100,7 @@ type persistStorageDDLHandler struct {
 
 var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionCreateSchema: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateDropSchema,
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForSchemaDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForTableTriggerOnlyDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForCreateSchema,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
@@ -108,8 +108,8 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForCreateSchema,
 	},
 	model.ActionDropSchema: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateDropSchema,
-		updateDDLHistoryFunc:       updateDDLHistoryForDropSchema,
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForSchemaDDL,
+		updateDDLHistoryFunc:       updateDDLHistoryForSchemaDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropSchema,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
@@ -299,7 +299,14 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
 	},
-
+	model.ActionModifySchemaCharsetAndCollate: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForSchemaDDL,
+		updateDDLHistoryFunc:       updateDDLHistoryForSchemaDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesIgnore,
+		extractTableInfoFunc:       extractTableInfoFuncIgnore,
+		buildDDLEventFunc:          buildDDLEventForModifySchemaCharsetAndCollate,
+	},
 	model.ActionSetTiFlashReplica: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
@@ -483,7 +490,7 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 	return event
 }
 
-func buildPersistedDDLEventForCreateDropSchema(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+func buildPersistedDDLEventForSchemaDDL(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
 	log.Info("buildPersistedDDLEvent for create/drop schema",
 		zap.Any("type", event.Type),
@@ -720,7 +727,7 @@ func updateDDLHistoryForTableTriggerOnlyDDL(args updateDDLHistoryFuncArgs) []uin
 	return args.tableTriggerDDLHistory
 }
 
-func updateDDLHistoryForDropSchema(args updateDDLHistoryFuncArgs) []uint64 {
+func updateDDLHistoryForSchemaDDL(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	for tableID := range args.databaseMap[args.ddlEvent.CurrentSchemaID].Tables {
 		if partitionInfo, ok := args.partitionMap[tableID]; ok {
@@ -1378,10 +1385,10 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 	filtered := false
 	// TODO: ShouldDiscardDDL is used for old architecture, should be removed later
 	if tableFilter != nil && rawEvent.CurrentSchemaName != "" && rawEvent.CurrentTableName != "" {
-		filtered = tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.CurrentSchemaName, rawEvent.CurrentTableName)
+		filtered = tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.CurrentSchemaName, rawEvent.CurrentTableName, rawEvent.TableInfo)
 		// if the ddl invovles another table name, only set filtered to true when all of them should be filtered
 		if rawEvent.PrevSchemaName != "" && rawEvent.PrevTableName != "" {
-			filtered = filtered && tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.PrevSchemaName, rawEvent.PrevTableName)
+			filtered = filtered && tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.PrevSchemaName, rawEvent.PrevTableName, rawEvent.TableInfo)
 		}
 	}
 	if rawEvent.TableInfo != nil {
@@ -1433,6 +1440,19 @@ func buildDDLEventForDropSchema(rawEvent *PersistedDDLEvent, tableFilter filter.
 	}
 	ddlEvent.TableNameChange = &commonEvent.TableNameChange{
 		DropDatabaseName: rawEvent.CurrentSchemaName,
+	}
+	return ddlEvent, true
+}
+
+func buildDDLEventForModifySchemaCharsetAndCollate(
+	rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool) {
+	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
+	if !ok {
+		return ddlEvent, false
+	}
+	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeDB,
+		SchemaID:      rawEvent.CurrentSchemaID,
 	}
 	return ddlEvent, true
 }
@@ -1589,8 +1609,8 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 	}
 	ddlEvent.PrevSchemaName = rawEvent.PrevSchemaName
 	ddlEvent.PrevTableName = rawEvent.PrevTableName
-	ignorePrevTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.PrevSchemaName, rawEvent.PrevTableName)
-	ignoreCurrentTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, rawEvent.CurrentTableName)
+	ignorePrevTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.PrevSchemaName, rawEvent.PrevTableName, rawEvent.TableInfo)
+	ignoreCurrentTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, rawEvent.CurrentTableName, rawEvent.TableInfo)
 	if isPartitionTable(rawEvent.TableInfo) {
 		allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 		if !ignorePrevTable {
@@ -1856,8 +1876,8 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 	if !ok {
 		return ddlEvent, false
 	}
-	ignoreNormalTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.PrevSchemaName, rawEvent.PrevTableName)
-	ignorePartitionTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, rawEvent.CurrentTableName)
+	ignoreNormalTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.PrevSchemaName, rawEvent.PrevTableName, rawEvent.TableInfo)
+	ignorePartitionTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, rawEvent.CurrentTableName, rawEvent.TableInfo)
 	physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 	droppedIDs := getDroppedIDs(rawEvent.PrevPartitions, physicalIDs)
 	if len(droppedIDs) != 1 {
@@ -1934,8 +1954,8 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	allFiltered := true
 	resultQuerys := make([]string, 0)
 	for i, tableInfo := range rawEvent.MultipleTableInfos {
-		ignorePrevTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.PrevSchemaNames[i], rawEvent.PrevTableNames[i])
-		ignoreCurrentTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaNames[i], tableInfo.Name.O)
+		ignorePrevTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.PrevSchemaNames[i], rawEvent.PrevTableNames[i], tableInfo)
+		ignoreCurrentTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaNames[i], tableInfo.Name.O, tableInfo)
 		if ignorePrevTable && ignoreCurrentTable {
 			continue
 		}
@@ -2044,7 +2064,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	logicalTableCount := 0
 	allFiltered := true
 	for _, info := range rawEvent.MultipleTableInfos {
-		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, info.Name.O) {
+		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, info.Name.O, info) {
 			continue
 		}
 		allFiltered = false
@@ -2072,7 +2092,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)
 	resultQuerys := make([]string, 0, logicalTableCount)
 	for i, info := range rawEvent.MultipleTableInfos {
-		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, info.Name.O) {
+		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, info.Name.O, info) {
 			log.Info("build ddl event for create tables filter table",
 				zap.String("schemaName", rawEvent.CurrentSchemaName),
 				zap.String("tableName", info.Name.O))

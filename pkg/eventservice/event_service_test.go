@@ -473,7 +473,7 @@ type mockDispatcherInfo struct {
 
 func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
 	cfg := config.NewDefaultFilterConfig()
-	filter, err := filter.NewFilter(cfg, "", false)
+	filter, err := filter.NewFilter(cfg, "", false, false)
 	require.NoError(t, err)
 	return &mockDispatcherInfo{
 		clusterID: 1,

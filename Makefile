@@ -107,7 +107,7 @@ FAILPOINT := tools/bin/failpoint-ctl
 FAILPOINT_ENABLE  := $$(echo $(FAILPOINT_DIR) | xargs $(FAILPOINT) enable >/dev/null)
 FAILPOINT_DISABLE := $$(echo $(FAILPOINT_DIR) | xargs $(FAILPOINT) disable >/dev/null)
 
-# go test -p parameter for unit tests
+# gotestsum -p parameter for unit tests
 P=3
 
 # The following packages are used in unit tests.
@@ -213,6 +213,7 @@ unit_test_in_verify_ci: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov 
 	@echo "Running unit tests..."
 	@export log_level=error;\
 	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 120s -p $(P) --race --tags=intest \
+	-parallel=16 \
 	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
 	$(UT_PACKAGES_DISPATCHER) \
 	$(UT_PACKAGES_MAINTAINER) \
