@@ -1721,25 +1721,8 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 				}
 			}
 		} else if !ignoreCurrentTable {
-			ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
-				InfluenceType: commonEvent.InfluenceTypeNormal,
-				TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
-			}
-			// the table is filtered out before rename table, we need add table here
-			ddlEvent.NeedAddedTables = []commonEvent.Table{
-				{
-					SchemaID: rawEvent.CurrentSchemaID,
-					TableID:  rawEvent.CurrentTableID,
-				},
-			}
-			ddlEvent.TableNameChange = &commonEvent.TableNameChange{
-				AddName: []commonEvent.SchemaTableName{
-					{
-						SchemaName: rawEvent.CurrentSchemaName,
-						TableName:  rawEvent.CurrentTableName,
-					},
-				},
-			}
+			// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
+			ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.CurrentTableID, rawEvent.Query)
 		} else {
 			// if the table is both filtered out before and after rename table, the ddl should not be fetched
 			log.Panic("should not build a ignored rename table ddl",
