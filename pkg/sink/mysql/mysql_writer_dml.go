@@ -16,6 +16,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"strings"
 	"time"
@@ -161,6 +162,11 @@ func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		return dmls.rowCount, dmls.approximateSize, nil
 	}
 	return retry.Do(w.ctx, func() error {
+		failpoint.Inject("MySQLSinkTxnRandomError", func() {
+			log.Warn("inject MySQLSinkTxnRandomError")
+			err := errors.Trace(driver.ErrBadConn)
+			failpoint.Return(err)
+		})
 
 		failpoint.Inject("MySQLDuplicateEntryError", func() {
 			log.Warn("inject MySQLDuplicateEntryError")
