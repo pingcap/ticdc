@@ -77,7 +77,7 @@ func NewMaintainerManager(mc messaging.MessageCenter) *mockMaintainerManager {
 }
 
 func (m *mockMaintainerManager) Run(ctx context.Context) error {
-	tick := time.NewTicker(time.Millisecond * 1000)
+	tick := time.NewTicker(time.Millisecond * 50)
 	for {
 		select {
 		case <-ctx.Done():
@@ -254,7 +254,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 		t.Fatal("unexpected args", argList)
 	}
 	cfSize := 100
-	sleepTime := 5
+	waitTime := 10
 	if len(argList) == 1 {
 		cfSize, _ = strconv.Atoi(argList[0])
 	}
@@ -282,17 +282,18 @@ func TestCoordinatorScheduling(t *testing.T) {
 	co := cr.(*coordinator)
 
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	go func() {
 		_ = cr.Run(ctx)
 	}()
-	time.Sleep(time.Second * time.Duration(sleepTime))
 
-	cancel()
-	// co.stream.Close()
-	require.Equal(t, cfSize,
-		co.controller.changefeedDB.GetReplicatingSize())
-	require.Equal(t, cfSize,
-		len(co.controller.changefeedDB.GetByNodeID(info.ID)))
+	require.Eventually(t, func() bool {
+		return co.controller.changefeedDB.GetReplicatingSize() == cfSize
+	}, time.Second*time.Duration(waitTime), time.Millisecond*5)
+	require.Eventually(t, func() bool {
+		return len(co.controller.changefeedDB.GetByNodeID(info.ID)) == cfSize
+	}, time.Second*time.Duration(waitTime), time.Millisecond*5)
+
 }
 
 func TestScaleNode(t *testing.T) {
@@ -314,8 +315,8 @@ func TestScaleNode(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	cfs := make(map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper)
-	cfSize := 6
-	for i := 0; i < cfSize; i++ {
+	changefeedNumber := 6
+	for i := 0; i < changefeedNumber; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			Name:      fmt.Sprintf("%d", i),
 			Namespace: model.DefaultNamespace,
@@ -331,14 +332,17 @@ func TestScaleNode(t *testing.T) {
 	}
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(cfs, nil).AnyTimes()
 
-	cr := New(info, &mockPdClient{}, pdutil.NewClock4Test(), backend, serviceID, 100, 10000, time.Millisecond*10)
+	cr := New(info, &mockPdClient{}, pdutil.NewClock4Test(), backend, serviceID, 100, 10000, time.Millisecond*1)
 
 	// run coordinator
 	go func() { cr.Run(ctx) }()
 
-	time.Sleep(time.Second * 5)
 	co := cr.(*coordinator)
-	require.Equal(t, cfSize, co.controller.changefeedDB.GetReplicatingSize())
+	waitTime := time.Second * 10
+
+	require.Eventually(t, func() bool {
+		return co.controller.changefeedDB.GetReplicatingSize() == changefeedNumber
+	}, waitTime, time.Millisecond*5)
 
 	// add two nodes
 	info2 := node.NewInfo("127.0.0.1:28400", "")
@@ -359,11 +363,15 @@ func TestScaleNode(t *testing.T) {
 			model.CaptureID(info3.ID): {ID: model.CaptureID(info3.ID), AdvertiseAddr: info3.AdvertiseAddr},
 		},
 	})
-	time.Sleep(time.Second * 5)
-	require.Equal(t, cfSize, co.controller.changefeedDB.GetReplicatingSize())
-	require.Equal(t, 2, len(co.controller.changefeedDB.GetByNodeID(info.ID)))
-	require.Equal(t, 2, len(co.controller.changefeedDB.GetByNodeID(info2.ID)))
-	require.Equal(t, 2, len(co.controller.changefeedDB.GetByNodeID(info3.ID)))
+
+	require.Eventually(t, func() bool {
+		return co.controller.changefeedDB.GetReplicatingSize() == changefeedNumber
+	}, waitTime, time.Millisecond*5)
+	require.Eventually(t, func() bool {
+		return len(co.controller.changefeedDB.GetByNodeID(info.ID)) == 2 &&
+			len(co.controller.changefeedDB.GetByNodeID(info2.ID)) == 2 &&
+			len(co.controller.changefeedDB.GetByNodeID(info3.ID)) == 2
+	}, waitTime, time.Millisecond*5)
 
 	// notify node changes
 	_, _ = nodeManager.Tick(ctx, &orchestrator.GlobalReactorState{
@@ -372,14 +380,18 @@ func TestScaleNode(t *testing.T) {
 			model.CaptureID(info2.ID): {ID: model.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
 		},
 	})
-	time.Sleep(time.Second * 5)
-	require.Equal(t, cfSize, co.controller.changefeedDB.GetReplicatingSize())
-	require.Equal(t, 3, len(co.controller.changefeedDB.GetByNodeID(info.ID)))
-	require.Equal(t, 3, len(co.controller.changefeedDB.GetByNodeID(info2.ID)))
+	require.Eventually(t, func() bool {
+		return co.controller.changefeedDB.GetReplicatingSize() == changefeedNumber
+	}, waitTime, time.Millisecond*5)
+	require.Eventually(t, func() bool {
+		return len(co.controller.changefeedDB.GetByNodeID(info.ID)) == 3 &&
+			len(co.controller.changefeedDB.GetByNodeID(info2.ID)) == 3
+	}, waitTime, time.Millisecond*5)
 }
 
 func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	info := node.NewInfo("127.0.0.1:28301", "")
 	etcdClient := newMockEtcdClient(string(info.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
@@ -457,11 +469,13 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	// run coordinator
 	go func() { cr.Run(ctx) }()
 
-	time.Sleep(time.Second * 5)
 	co := cr.(*coordinator)
-	require.Equal(t, 0, co.controller.changefeedDB.GetReplicatingSize())
-	require.Equal(t, 2, co.controller.changefeedDB.GetStoppedSize())
-	require.Equal(t, 0, co.controller.operatorController.OperatorSize())
+	waitTime := time.Second * 10
+	require.Eventually(t, func() bool {
+		return co.controller.changefeedDB.GetReplicatingSize() == 0 &&
+			co.controller.changefeedDB.GetStoppedSize() == 2 &&
+			co.controller.operatorController.OperatorSize() == 0
+	}, waitTime, time.Millisecond*5)
 }
 
 type maintainNode struct {
