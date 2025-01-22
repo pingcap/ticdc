@@ -40,6 +40,7 @@ func (m *mounter) rawKVToChunkV2(value []byte, tableInfo *common.TableInfo, chk 
 		return nil
 	}
 	handleColIDs, _, reqCols := tableInfo.GetRowColInfos()
+	log.Info("rawKVToChunkV2", zap.Any("tableInfo", tableInfo))
 	// This function is used to set the default value for the column that
 	// is not in the raw data.
 	defVal := func(i int, chk *chunk.Chunk) error {
@@ -62,6 +63,7 @@ func (m *mounter) rawKVToChunkV2(value []byte, tableInfo *common.TableInfo, chk 
 			log.Warn(warn, zap.String("table", tableInfo.TableName.String()),
 				zap.String("column", ci.Name.String()))
 		}
+		log.Info("rawKVToChunkV2", zap.Any("columnID", reqCols[i].ID), zap.Any("columnName", tableInfo.ForceGetColumnName(reqCols[i].ID)), zap.Any("colDatum is null", colDatum.IsNull()))
 		chk.AppendDatum(i, &colDatum)
 		return nil
 	}
