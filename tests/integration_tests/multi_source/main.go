@@ -199,6 +199,9 @@ func DropWithRecoverDDL(ctx context.Context, db *sql.DB) {
 	drop_sql := fmt.Sprintf("drop table test.`%s`", testName)
 	recover_sql := fmt.Sprintf("recover table test.`%s`", testName)
 	truncate_sql := fmt.Sprintf("truncate table test.`%s`", testName)
+
+	// clean the table frist
+	util.MustExec(db, truncate_sql)
 	for {
 		select {
 		case <-ctx.Done():
