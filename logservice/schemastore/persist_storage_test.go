@@ -1247,7 +1247,7 @@ func TestApplyDDLJobs(t *testing.T) {
 						100,
 						[]int64{304, 305},
 						[]string{"t4", "t5"},
-						"CREATE TABLE t4 (COL1 VARBINARY(10) NOT NULL, PRIMARY KEY(COL1)); CREATE TABLE t5 (COL2 ENUM('ABC','IRG','KT;J'), COL3 TINYINT(50) NOT NULL, PRIMARY KEY(COL3));",
+						[]string{"CREATE TABLE t4 (COL1 VARBINARY(10) NOT NULL, PRIMARY KEY(COL1));", "CREATE TABLE t5 (COL2 ENUM('ABC','IRG','KT;J'), COL3 TINYINT(50) NOT NULL, PRIMARY KEY(COL3));"},
 						1020), // create table 304, 305, 306 with query
 				}
 			}(),
