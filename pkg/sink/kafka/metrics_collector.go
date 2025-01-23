@@ -114,40 +114,28 @@ func (m *metricsCollector) collect(data string) {
 		log.Error("kafka metrics collect failed", zap.Error(err))
 		return
 	}
-	// compressionRatioGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
-	// 	Set(float64(statistics.Writes / RefreshMetricsInterval.Seconds()))
-	recordsPerRequestGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
+	recordsPerRequestGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "avg").
 		Set(float64(statistics.Tx) / RefreshMetricsInterval.Seconds())
-	requestsInFlightGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
+	requestsInFlightGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "avg").
 		Set(float64(statistics.MsgCount) / RefreshMetricsInterval.Seconds())
-	responseRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
+	responseRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "avg").
 		Set(float64(statistics.Rx) / RefreshMetricsInterval.Seconds())
-	// RequestRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg").
-	// 	Set(float64(statistics.Writes / RefreshMetricsInterval.Seconds()))
 
 	for _, broker := range statistics.Brokers {
 		// latency is in milliseconds
-		RequestLatencyGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), broker.Name, "avg").
+		RequestLatencyGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), broker.Name, "avg").
 			Set(float64(broker.Rtt.Avg) * 1000 / RefreshMetricsInterval.Seconds())
-		// OutgoingByteRateGauge.WithLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String()).
-		// 	Set(float64(statistics.Bytes / RefreshMetricsInterval.Seconds()))
 	}
 }
 
 func (m *metricsCollector) cleanupMetrics() {
-	// compressionRatioGauge.
-	// 	DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
 	recordsPerRequestGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
+		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "avg")
 	requestsInFlightGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
+		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "avg")
 	responseRateGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
-	// RequestRateGauge.
-	// 	DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
+		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "avg")
 
 	RequestLatencyGauge.
-		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
-	// OutgoingByteRateGauge.
-	// 	DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Id.String(), "avg")
+		DeleteLabelValues(m.changefeedID.Namespace(), m.changefeedID.Name(), "avg")
 }
