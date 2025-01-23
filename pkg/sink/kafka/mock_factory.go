@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -221,7 +222,11 @@ func (s *MockSyncProducer) SendMessage(
 		return ctx.Err()
 	default:
 	}
+	if s.Producer.getErr() != kafka.ErrNoError {
+		return kafka.NewError(s.Producer.getErr(), "", false)
+	}
 	if message.Length() > s.option.MaxMessageBytes {
+		s.Producer.setErr(kafka.ErrMsgSizeTooLarge)
 		return kafka.NewError(kafka.ErrMsgSizeTooLarge, "", false)
 	}
 	return nil
@@ -256,7 +261,7 @@ type MockAsyncProducer struct {
 
 // Close shuts down the producer
 func (a *MockAsyncProducer) Close() {
-	a.Producer.err = kafka.ErrUnknown
+	a.Producer.setErr(kafka.ErrUnknown)
 	close(a.ch)
 }
 
@@ -276,7 +281,7 @@ func (a *MockAsyncProducer) AsyncRunCallback(ctx context.Context) error {
 				}
 			}
 		case <-ticker.C:
-			if a.Producer.err != kafka.ErrNoError {
+			if a.Producer.getErr() != kafka.ErrNoError {
 				return kafka.NewError(a.Producer.err, "", false)
 			}
 		}
@@ -298,7 +303,7 @@ func (a *MockAsyncProducer) AsyncSend(ctx context.Context, topic string, partiti
 	case a.ch <- msg:
 	}
 	if message.Length() > a.option.MaxMessageBytes {
-		a.Producer.err = kafka.ErrMsgSizeTooLarge
+		a.Producer.setErr(kafka.ErrMsgSizeTooLarge)
 	}
 	return nil
 }
@@ -312,32 +317,47 @@ func (c *MockMetricsCollector) Run(_ context.Context) {
 
 type MockProducer struct {
 	err kafka.ErrorCode
+	mu  sync.Mutex
+}
+
+func (p *MockProducer) setErr(err kafka.ErrorCode) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.err = err
+}
+
+func (p *MockProducer) getErr() kafka.ErrorCode {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.err
 }
 
 // ExpectInputAndFail for test
-func (s *MockProducer) ExpectInputAndFail(err kafka.ErrorCode) {
-	if err != s.err {
-		panic(fmt.Sprintf("expect input and fail. actual err: %s expected err: %s", s.err, err))
+func (p *MockProducer) ExpectInputAndFail(err kafka.ErrorCode) {
+	// TODO: mock send message
+	if err != p.err {
+		panic(fmt.Sprintf("expect input and fail. actual err: %s expected err: %s", p.err, err))
 	}
 }
 
 // ExpectSendMessageAndFail for test
-func (s *MockProducer) ExpectSendMessageAndFail(err kafka.ErrorCode) {
-	if err != s.err {
-		panic(fmt.Sprintf("expect send message and succeed failed. actual err: %s expected err: %s", s.err, err))
+func (p *MockProducer) ExpectSendMessageAndFail(err kafka.ErrorCode) {
+	if err != p.err {
+		panic(fmt.Sprintf("expect send message and succeed failed. actual err: %s expected err: %s", p.err, err))
 	}
 }
 
 // ExpectInputAndSucceed for test
-func (s *MockProducer) ExpectInputAndSucceed() {
-	if s.err != kafka.ErrNoError {
-		panic(fmt.Sprintf("expect input and succeed failed. err: %s", s.err))
+func (p *MockProducer) ExpectInputAndSucceed() {
+	// TODO: mock send message
+	if p.err != kafka.ErrNoError {
+		panic(fmt.Sprintf("expect input and succeed failed. err: %s", p.err))
 	}
 }
 
 // ExpectInputAndSucceed for test
-func (s *MockProducer) ExpectSendMessageAndSucceed() {
-	if s.err != kafka.ErrNoError {
-		panic(fmt.Sprintf("expect send message and succeed failed. err: %s", s.err))
+func (p *MockProducer) ExpectSendMessageAndSucceed() {
+	if p.err != kafka.ErrNoError {
+		panic(fmt.Sprintf("expect send message and succeed failed. err: %s", p.err))
 	}
 }
