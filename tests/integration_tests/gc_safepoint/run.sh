@@ -17,7 +17,7 @@ source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
-MAX_RETRIES=10
+MAX_RETRIES=30
 
 function get_safepoint() {
 	pd_addr=$1
@@ -90,7 +90,8 @@ function run() {
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1" ;;
 	esac
 	# set gc safepoint update interval to 500ms to speed up the test, the default is 1 minute.
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/txnutil/gc/InjectGcSafepointUpdateInterval=return(500)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/txnutil/gc/InjectGcSafepointUpdateInterval=return(100)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/coordinator/InjectUpdateGCTickerInterval=return(100)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 	changefeed_id=$(cdc cli changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" 2>&1 | tail -n2 | head -n1 | awk '{print $2}')
 	case $SINK_TYPE in

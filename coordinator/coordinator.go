@@ -46,6 +46,8 @@ var (
 	metricsDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("coordinator")
 )
 
+var updateGCTickerInterval = 1 * time.Minute
+
 // coordinator implements the Coordinator interface
 type coordinator struct {
 	nodeInfo     *node.Info
@@ -142,7 +144,10 @@ func (c *coordinator) recvMessages(_ context.Context, msg *messaging.TargetMessa
 //     - if a node is removed, clean related state machine that bind to that node.
 //  3. Schedule changefeeds if all node is bootstrapped.
 func (c *coordinator) Run(ctx context.Context) error {
-	gcTick := time.NewTicker(time.Minute)
+	failpoint.Inject("InjectUpdateGCTickerInterval", func(val failpoint.Value) {
+		updateGCTickerInterval = time.Duration(val.(int) * int(time.Millisecond))
+	})
+	gcTick := time.NewTicker(updateGCTickerInterval)
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	defer gcTick.Stop()
