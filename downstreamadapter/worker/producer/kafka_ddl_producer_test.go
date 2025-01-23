@@ -20,7 +20,6 @@ import (
 	"time"
 
 	confluentKafka "github.com/confluentinc/confluent-kafka-go/v2/kafka"
-
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
