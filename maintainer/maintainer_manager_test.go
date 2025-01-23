@@ -241,7 +241,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	time.Sleep(5 * time.Second)
 
 	require.Eventually(t, func() bool {
-		return maintainer.state.Load() == int32(heartbeatpb.ComponentState_Stopped)
+		return maintainer.scheduleState.Load() == int32(heartbeatpb.ComponentState_Stopped)
 	}, 20*time.Second, 200*time.Millisecond)
 
 	_, ok = manager.maintainers.Load(cfID)

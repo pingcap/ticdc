@@ -103,23 +103,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 	}
 	s.schedulerController = NewScheduleController(changefeedID, batchSize, oc, replicaSetDB, nodeManager, balanceInterval, s.splitter)
-	go s.fizz()
 	return s
-}
-
-// fizz is only for test, remove it after test
-func (c *Controller) fizz() {
-	log.Info("start fuzz")
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		serviceGCSafepoint, err := c.pdAPIClient.ListGcServiceSafePoint(context.Background())
-		if err != nil {
-			log.Error("failed to get gc safepoint", zap.Error(err))
-			continue
-		}
-		log.Info("service gc safepoint", zap.Any("serviceGCSafepoint", serviceGCSafepoint))
-	}
 }
 
 // HandleStatus handle the status report from the node

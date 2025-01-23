@@ -110,10 +110,12 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 	}
 	// Ensure the start ts is valid in the next 3600 seconds, aka 1 hour
 	const ensureTTL = 60 * 60
+	createGcServiceID := h.server.GetEtcdClient().GetGCServiceID()
 	if err = gc.EnsureChangefeedStartTsSafety(
 		ctx,
 		h.server.GetPdClient(),
-		h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceCreating),
+		createGcServiceID,
+		gc.EnsureGCServiceCreating,
 		changefeedID,
 		ensureTTL, cfg.StartTs); err != nil {
 		if !errors.ErrStartTsBeforeGC.Equal(err) {
@@ -176,7 +178,7 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 		err := gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			pdClient,
-			h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceCreating),
+			createGcServiceID,
 			changefeedID,
 		)
 		if err != nil {
@@ -200,7 +202,9 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 
 	log.Info("Create changefeed successfully!",
 		zap.String("id", info.ChangefeedID.Name()),
-		zap.String("changefeed", info.String()))
+		zap.String("state", string(info.State)),
+		zap.String("changefeedInfo", info.String()))
+
 	c.JSON(http.StatusOK, toAPIModel(
 		info,
 		&config.ChangeFeedStatus{
@@ -657,6 +661,7 @@ func verifyResumeChangefeedConfig(
 		ctx,
 		pdClient,
 		gcServiceID,
+		gc.EnsureGCServiceResuming,
 		changefeedID,
 		gcTTL, overrideCheckpointTs)
 	if err != nil {

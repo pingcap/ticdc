@@ -295,12 +295,14 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.Mainta
 		}
 		if nodeID != from {
 			// todo: handle the case that the node id is mismatch
-			log.Warn("node id not match",
+			log.Warn("remote changefeed maintainer nodeID mismatch with local record",
 				zap.String("changefeed", cfID.Name()),
-				zap.Stringer("from", from),
-				zap.Stringer("node", nodeID))
+				zap.Stringer("remoteNodeID", from),
+				zap.Stringer("localNodeID", nodeID))
 			continue
 		}
+		cfs[cfID] = cf
+
 		changed, state, err := cf.UpdateStatus(status)
 		if changed {
 			log.Info("changefeed status changed",
@@ -322,7 +324,6 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.Mainta
 				err:          mErr,
 			}
 		}
-		cfs[cfID] = cf
 	}
 	select {
 	case c.updatedChangefeedCh <- cfs:

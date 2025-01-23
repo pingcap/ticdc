@@ -92,6 +92,7 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	log.Info("changefeed instance created",
 		zap.String("id", cfID.String()),
 		zap.Uint64("checkpointTs", checkpointTs),
+		zap.String("state", string(info.State)),
 		zap.String("info", info.String()))
 	return res
 }
@@ -138,6 +139,13 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 
 	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
 		c.status.Store(newStatus)
+		if old.BootstrapDone != newStatus.BootstrapDone {
+			log.Info("Received changefeed status with bootstrapDone",
+				zap.String("changefeed", c.ID.String()),
+				zap.Bool("bootstrapDone", newStatus.BootstrapDone))
+			return true, model.StateNormal, nil
+		}
+
 		info := c.GetInfo()
 		// the changefeed reaches the targetTs
 		if info.TargetTs != 0 && newStatus.CheckpointTs >= info.TargetTs {
@@ -145,6 +153,7 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 		}
 		return c.backoff.CheckStatus(newStatus)
 	}
+
 	return false, model.StateNormal, nil
 }
 

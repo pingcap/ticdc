@@ -91,7 +91,10 @@ func (m *gcManager) TryUpdateGCSafePoint(
 		actual = uint64(val.(int))
 	})
 
-	log.Debug("update gc safe point", zap.Uint64("checkpointTs", checkpointTs), zap.Uint64("actual", actual))
+	log.Debug("update gc safe point",
+		zap.String("gcServiceID", m.gcServiceID),
+		zap.Uint64("checkpointTs", checkpointTs),
+		zap.Uint64("actual", actual))
 
 	if actual == checkpointTs {
 		log.Info("update gc safe point success", zap.Uint64("gcSafePointTs", checkpointTs))
