@@ -578,6 +578,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
 		}
 		dml.AppendRow(e, c.mounter.DecodeToChunk)
+		log.Info("dml event", zap.Any("event", dml))
 	}
 }
 
