@@ -143,7 +143,7 @@ jobs:
     if: github.event.pull_request.draft == false
 
     runs-on: ubuntu-latest 
-    name: E2E Test Group 1
+    name: E2E Test Group 1-81
     steps:
       - name: Check out code
         uses: actions/checkout@v2
@@ -155,7 +155,7 @@ jobs:
 
       - name: Integration Build
         run: |
-          tests/scripts/download-integration-test-binaries.sh v8.1.0 true
+          tests/scripts/download-integration-test-binaries.sh master true v8.1.0
           go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
@@ -244,8 +244,7 @@ jobs:
         if: always()
         uses: ./.github/actions/upload-test-logs
         with:
-          log-name: e2e_test_group_1
-
+          log-name: e2e_test_group_1-81
   e2e_test_group_2:
     ## Only run ci when PR is not draft
     if: github.event.pull_request.draft == false
