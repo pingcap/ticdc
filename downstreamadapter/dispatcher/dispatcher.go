@@ -375,6 +375,10 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			}
 			block = true
 			syncPoint := event.(*commonEvent.SyncPointEvent)
+			log.Info("dispatcher receive sync point event",
+				zap.Stringer("dispatcher", d.id),
+				zap.Uint64("commitTs", event.GetCommitTs()),
+				zap.Uint64("seq", event.GetSeq()))
 			syncPoint.AddPostFlushFunc(func() {
 				wakeCallback()
 			})
