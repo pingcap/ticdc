@@ -308,7 +308,12 @@ func (c *coordinator) saveCheckpointTs(ctx context.Context, cfs map[common.Chang
 }
 
 func (c *coordinator) CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error {
-	return c.controller.CreateChangefeed(ctx, info)
+	err := c.controller.CreateChangefeed(ctx, info)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	// update gc safepoint after create changefeed
+	return c.updateGCSafepoint(ctx)
 }
 
 func (c *coordinator) RemoveChangefeed(ctx context.Context, id common.ChangeFeedID) (uint64, error) {

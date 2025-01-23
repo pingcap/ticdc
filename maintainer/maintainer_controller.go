@@ -52,7 +52,6 @@ type Controller struct {
 	messageCenter       messaging.MessageCenter
 	nodeManager         *watcher.NodeManager
 	tsoClient           replica.TSOClient
-	pdAPIClient         pdutil.PDAPIClient
 
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
@@ -98,7 +97,6 @@ func NewController(changefeedID common.ChangeFeedID,
 		taskScheduler:          taskScheduler,
 		cfConfig:               cfConfig,
 		tsoClient:              tsoClient,
-		pdAPIClient:            pdAPIClient,
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 	}

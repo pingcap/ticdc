@@ -19,7 +19,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	pd "github.com/tikv/pd/client"
@@ -44,35 +43,18 @@ func EnsureChangefeedStartTsSafety(
 	changefeedID common.ChangeFeedID,
 	TTL int64, startTs uint64,
 ) error {
-	cdcGcTTL := config.GetGlobalServerConfig().GcTTL
-	// set gc safepoint for ticdc gc service first
-	// This is to ensure that the ticdc gc service gcSafepoint is set before
-	// the changefeed gc service gcSafepoint
-	minServiceGCTs, err := SetServiceGCSafepoint(
-		ctx, pdCli,
-		ticdcServiceID,
-		cdcGcTTL, startTs)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	log.Info("set gc safepoint for ticdc service",
-		zap.String("gcServiceID", ticdcServiceID),
-		zap.Uint64("expectedGCSafepoint", startTs),
-		zap.Uint64("actualGCSafepoint", minServiceGCTs),
-		zap.Int64("ttl", cdcGcTTL))
+	gcServiceID := ticdcServiceID + tag + changefeedID.Namespace() + "_" + changefeedID.Name()
 
 	// set gc safepoint for the changefeed gc service
-	// set gc safepoint for the changefeed gc service
-	minServiceGCTs, err = SetServiceGCSafepoint(
+	minServiceGCTs, err := SetServiceGCSafepoint(
 		ctx, pdCli,
-		ticdcServiceID+tag+changefeedID.Namespace()+"_"+changefeedID.Name(),
+		gcServiceID,
 		TTL, startTs)
 	if err != nil {
 		return errors.Trace(err)
 	}
-
 	log.Info("set gc safepoint for changefeed",
-		zap.String("gcServiceID", ticdcServiceID+tag+changefeedID.Namespace()+"_"+changefeedID.Name()),
+		zap.String("gcServiceID", gcServiceID),
 		zap.Uint64("expectedGCSafepoint", startTs),
 		zap.Uint64("actualGCSafepoint", minServiceGCTs),
 		zap.Int64("ttl", TTL))
