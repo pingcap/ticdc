@@ -52,6 +52,7 @@ type Controller struct {
 	messageCenter       messaging.MessageCenter
 	nodeManager         *watcher.NodeManager
 	tsoClient           replica.TSOClient
+	pdAPIClient         pdutil.PDAPIClient
 
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
@@ -67,7 +68,7 @@ type Controller struct {
 
 func NewController(changefeedID common.ChangeFeedID,
 	checkpointTs uint64,
-	pdapi pdutil.PDAPIClient,
+	pdAPIClient pdutil.PDAPIClient,
 	tsoClient replica.TSOClient,
 	regionCache split.RegionCache,
 	taskScheduler threadpool.ThreadPool,
@@ -80,7 +81,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	var splitter *split.Splitter
 	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
 		enableTableAcrossNodes = true
-		splitter = split.NewSplitter(changefeedID, pdapi, regionCache, cfConfig.Scheduler)
+		splitter = split.NewSplitter(changefeedID, pdAPIClient, regionCache, cfConfig.Scheduler)
 	}
 	replicaSetDB := replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -97,11 +98,28 @@ func NewController(changefeedID common.ChangeFeedID,
 		taskScheduler:          taskScheduler,
 		cfConfig:               cfConfig,
 		tsoClient:              tsoClient,
+		pdAPIClient:            pdAPIClient,
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 	}
 	s.schedulerController = NewScheduleController(changefeedID, batchSize, oc, replicaSetDB, nodeManager, balanceInterval, s.splitter)
+	go s.fizz()
 	return s
+}
+
+// fizz is only for test, remove it after test
+func (c *Controller) fizz() {
+	log.Info("start fuzz")
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		serviceGCSafepoint, err := c.pdAPIClient.ListGcServiceSafePoint(context.Background())
+		if err != nil {
+			log.Error("failed to get gc safepoint", zap.Error(err))
+			continue
+		}
+		log.Info("service gc safepoint", zap.Any("serviceGCSafepoint", serviceGCSafepoint))
+	}
 }
 
 // HandleStatus handle the status report from the node
