@@ -29,6 +29,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	pmysql "github.com/pingcap/tiflow/pkg/sink/mysql"
 	"go.uber.org/zap"
@@ -169,6 +170,8 @@ func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls.sqls[0], dmls.rowCount, dmls.startTs)
 			failpoint.Return(err)
 		})
+
+		failpoint.Inject("MySQLSinkHangLongTime", func() { _ = util.Hang(w.ctx, time.Hour) })
 
 		failpoint.Inject("MySQLDuplicateEntryError", func() {
 			log.Warn("inject MySQLDuplicateEntryError")
