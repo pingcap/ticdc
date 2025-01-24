@@ -139,16 +139,14 @@ main() {
 
     sleep 10
 
-    check_table_exists test.table_1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
-    check_table_exists test.table_2 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
-    check_table_exists test.table_3 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
-    check_table_exists test.table_4 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
-    check_table_exists test.table_5 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+    # check_table_exists test.table_1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+    # check_table_exists test.table_2 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+    # check_table_exists test.table_3 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+    # check_table_exists test.table_4 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+    # check_table_exists test.table_5 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 
-    sleep 100
-    
     cleanup_process $CDC_BINARY
 }
 

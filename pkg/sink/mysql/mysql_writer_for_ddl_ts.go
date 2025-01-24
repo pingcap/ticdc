@@ -226,7 +226,7 @@ func (w *MysqlWriter) SendDDLTsPre(event commonEvent.BlockEvent) error {
 				builder.WriteString(", ")
 			}
 		}
-		builder.WriteString(" ON DUPLICATE KEY UPDATE ddl_ts=VALUES(ddl_ts), created_at=NOW();")
+		builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), related_table_id=VALUES(related_table_id), ddl_ts=VALUES(ddl_ts), created_at=NOW();")
 
 		query := builder.String()
 		log.Info("send ddl ts table query", zap.String("query", query))
@@ -329,7 +329,7 @@ func (w *MysqlWriter) SendDDLTs(event commonEvent.BlockEvent) error {
 				builder.WriteString(", ")
 			}
 		}
-		builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), created_at=NOW();")
+		builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), related_table_id=VALUES(related_table_id), ddl_ts=VALUES(ddl_ts), created_at=NOW();")
 
 		query := builder.String()
 		log.Info("send ddl ts table query", zap.String("query", query))
