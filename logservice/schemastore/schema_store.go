@@ -290,10 +290,6 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(tableFilter filter.Filter, star
 	if limit == 0 {
 		log.Panic("limit cannot be 0")
 	}
-	// TODO: remove the following log
-	log.Debug("FetchTableTriggerDDLEvents",
-		zap.Uint64("start", start),
-		zap.Int("limit", limit))
 	// must get resolved ts first
 	currentResolvedTs := s.resolvedTs.Load()
 	if currentResolvedTs <= start {

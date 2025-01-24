@@ -14,6 +14,8 @@
 package dispatchermanager
 
 import (
+	"context"
+
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/node"
 )
@@ -38,8 +40,13 @@ func (q *HeartbeatRequestQueue) Enqueue(request *HeartBeatRequestWithTargetID) {
 	q.queue <- request
 }
 
-func (q *HeartbeatRequestQueue) Dequeue() *HeartBeatRequestWithTargetID {
-	return <-q.queue
+func (q *HeartbeatRequestQueue) Dequeue(ctx context.Context) *HeartBeatRequestWithTargetID {
+	select {
+	case <-ctx.Done():
+		return nil
+	case request := <-q.queue:
+		return request
+	}
 }
 
 func (q *HeartbeatRequestQueue) Close() {
@@ -66,8 +73,13 @@ func (q *BlockStatusRequestQueue) Enqueue(request *BlockStatusRequestWithTargetI
 	q.queue <- request
 }
 
-func (q *BlockStatusRequestQueue) Dequeue() *BlockStatusRequestWithTargetID {
-	return <-q.queue
+func (q *BlockStatusRequestQueue) Dequeue(ctx context.Context) *BlockStatusRequestWithTargetID {
+	select {
+	case <-ctx.Done():
+		return nil
+	case request := <-q.queue:
+		return request
+	}
 }
 
 func (q *BlockStatusRequestQueue) Close() {

@@ -167,9 +167,7 @@ type Options struct {
 	SASL               *security.SASL
 
 	// Timeout for network configurations, default to `10s`
-	DialTimeout  time.Duration
-	WriteTimeout time.Duration
-	ReadTimeout  time.Duration
+	DialTimeout time.Duration
 }
 
 // NewOptions returns a default Kafka configuration
@@ -186,8 +184,6 @@ func NewOptions() *Options {
 		SASL:               &security.SASL{},
 		AutoCreate:         true,
 		DialTimeout:        10 * time.Second,
-		WriteTimeout:       10 * time.Second,
-		ReadTimeout:        10 * time.Second,
 	}
 }
 
@@ -284,22 +280,6 @@ func (o *Options) Apply(changefeedID common.ChangeFeedID,
 		o.DialTimeout = a
 	}
 
-	if urlParameter.WriteTimeout != nil && *urlParameter.WriteTimeout != "" {
-		a, err := time.ParseDuration(*urlParameter.WriteTimeout)
-		if err != nil {
-			return err
-		}
-		o.WriteTimeout = a
-	}
-
-	if urlParameter.ReadTimeout != nil && *urlParameter.ReadTimeout != "" {
-		a, err := time.ParseDuration(*urlParameter.ReadTimeout)
-		if err != nil {
-			return err
-		}
-		o.ReadTimeout = a
-	}
-
 	if urlParameter.RequiredAcks != nil {
 		r, err := requireAcksFromString(*urlParameter.RequiredAcks)
 		if err != nil {
@@ -336,8 +316,6 @@ func mergeConfig(
 		dest.KafkaClientID = fileConifg.KafkaClientID
 		dest.AutoCreateTopic = fileConifg.AutoCreateTopic
 		dest.DialTimeout = fileConifg.DialTimeout
-		dest.WriteTimeout = fileConifg.WriteTimeout
-		dest.ReadTimeout = fileConifg.ReadTimeout
 		dest.RequiredAcks = fileConifg.RequiredAcks
 		dest.SASLUser = fileConifg.SASLUser
 		dest.SASLPassword = fileConifg.SASLPassword
@@ -565,7 +543,7 @@ func NewKafkaClientID(captureAddr string,
 	return
 }
 
-// AdjustOptions adjust the `Options` and `sarama.Config` by condition.
+// AdjustOptions adjust the `Options` and `Config` by condition.
 func AdjustOptions(
 	ctx context.Context,
 	admin ClusterAdminClient,

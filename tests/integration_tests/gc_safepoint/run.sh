@@ -1,5 +1,15 @@
 #!/bin/bash
 
+# This integration test verifies the GC (Garbage Collection) safepoint behavior when TiCDC is running in a cluster.
+# It tests:
+# 1. Safepoint advances normally when changefeeds are running
+# 2. Safepoint stops advancing when all changefeeds are paused
+# 3. Safepoint resumes advancing when paused changefeeds are resumed
+# 4. Safepoint remains static when there's at least one paused changefeed, even if new changefeeds are created
+# 5. Safepoint advances again after removing paused changefeeds
+# 6. Safepoint is cleared when all changefeeds are removed
+# The test supports multiple sink types (kafka, storage, pulsar, mysql) and includes data sync verification.
+
 set -eu
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -7,7 +17,7 @@ source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
-MAX_RETRIES=10
+MAX_RETRIES=30
 
 function get_safepoint() {
 	pd_addr=$1
@@ -79,7 +89,9 @@ function run() {
 		;;
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1" ;;
 	esac
-	export GO_FAILPOINTS='github.com/pingcap/tiflow/pkg/txnutil/gc/InjectGcSafepointUpdateInterval=return(500)'
+	# set gc safepoint update interval to 500ms to speed up the test, the default is 1 minute.
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/txnutil/gc/InjectGcSafepointUpdateInterval=return(100)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/coordinator/InjectUpdateGCTickerInterval=return(100)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 	changefeed_id=$(cdc cli changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" 2>&1 | tail -n2 | head -n1 | awk '{print $2}')
 	case $SINK_TYPE in

@@ -231,8 +231,11 @@ func setNodeManagerAndMessageCenter() *watcher.NodeManager {
 	n := node.NewInfo("", "")
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-	appcontext.SetService(appcontext.MessageCenter, messaging.NewMessageCenter(context.Background(),
-		n.ID, 100, config.NewDefaultMessageCenterConfig(), nil))
+	mc := messaging.NewMessageCenter(context.Background(), n.ID, 100, config.NewDefaultMessageCenterConfig(), nil)
+	mc.Run(context.Background())
+	defer mc.Close()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	return nodeManager

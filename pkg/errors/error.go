@@ -165,6 +165,10 @@ var (
 		"MySQL txn error",
 		errors.RFCCodeText("CDC:ErrMySQLTxnError"),
 	)
+	ErrMySQLDuplicateEntry = errors.Normalize(
+		"MySQL duplicate entry error",
+		errors.RFCCodeText("CDC:ErrMySQLDuplicateEntry"),
+	)
 	ErrMySQLQueryError = errors.Normalize(
 		"MySQL query error",
 		errors.RFCCodeText("CDC:ErrMySQLQueryError"),
@@ -402,7 +406,10 @@ var (
 		"upstream not found, cluster-id: %d",
 		errors.RFCCodeText("CDC:ErrUpstreamNotFound"),
 	)
-
+	ErrUpdateServiceSafepointFailed = errors.Normalize(
+		"updating service safepoint failed",
+		errors.RFCCodeText("CDC:ErrUpdateServiceSafepointFailed"),
+	)
 	ErrUpstreamMissMatch = errors.Normalize(
 		"upstream missmatch,old: %d, new %d",
 		errors.RFCCodeText("CDC:ErrUpstreamMissMatch"),

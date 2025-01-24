@@ -37,19 +37,12 @@ GITHASH := $(shell git rev-parse HEAD)
 GITBRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 GOVERSION := $(shell go version)
 
-# Since TiDB add a new dependency on github.com/cloudfoundry/gosigar,
-# We need to add CGO_ENABLED=1 to make it work when build TiCDC in Darwin OS.
-# These logic is to check if the OS is Darwin, if so, add CGO_ENABLED=1.
-# ref: https://github.com/cloudfoundry/gosigar/issues/58#issuecomment-1150925711
-# ref: https://github.com/pingcap/tidb/pull/39526#issuecomment-1407952955
 OS := "$(shell go env GOOS)"
 SED_IN_PLACE ?= $(shell which sed)
 IS_ALPINE := $(shell if [ -f /etc/os-release ]; then grep -qi Alpine /etc/os-release && echo 1; else echo 0; fi)
 ifeq (${OS}, "linux")
-	CGO := 0
 	SED_IN_PLACE += -i
 else ifeq (${OS}, "darwin")
-	CGO := 1
 	SED_IN_PLACE += -i ''
 endif
 
@@ -60,7 +53,6 @@ GOEXPERIMENT=
 ifeq ("${ENABLE_FIPS}", "1")
 	BUILD_FLAG = -tags boringcrypto
 	GOEXPERIMENT = GOEXPERIMENT=boringcrypto
-	CGO = 1
 endif
 
 RELEASE_VERSION =
@@ -89,8 +81,8 @@ CONSUMER_BUILD_FLAG=
 ifeq ("${IS_ALPINE}", "1")
 	CONSUMER_BUILD_FLAG = -tags musl
 endif
-GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=$(CGO) $(GO) build $(BUILD_FLAG) -trimpath $(GOVENDORFLAG)
-CONSUMER_GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=1 $(GO) build $(CONSUMER_BUILD_FLAG) -trimpath $(GOVENDORFLAG)
+
+GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=1 $(GO) build $(BUILD_FLAG) -trimpath $(GOVENDORFLAG)
 
 PACKAGE_LIST := go list ./... | grep -vE 'vendor|proto|ticdc/tests|integration|testing_utils|pb|pbmock|ticdc/bin'
 PACKAGES := $$($(PACKAGE_LIST))
@@ -107,7 +99,7 @@ FAILPOINT := tools/bin/failpoint-ctl
 FAILPOINT_ENABLE  := $$(echo $(FAILPOINT_DIR) | xargs $(FAILPOINT) enable >/dev/null)
 FAILPOINT_DISABLE := $$(echo $(FAILPOINT_DIR) | xargs $(FAILPOINT) disable >/dev/null)
 
-# go test -p parameter for unit tests
+# gotestsum -p parameter for unit tests
 P=3
 
 # The following packages are used in unit tests.
@@ -132,7 +124,7 @@ cdc:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc
 
 kafka_consumer:
-	$(CONSUMER_GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_kafka_consumer ./cmd/kafka-consumer
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_kafka_consumer ./cmd/kafka-consumer
 
 storage_consumer:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_storage_consumer ./cmd/storage-consumer/main.go
@@ -213,6 +205,7 @@ unit_test_in_verify_ci: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov 
 	@echo "Running unit tests..."
 	@export log_level=error;\
 	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 120s -p $(P) --race --tags=intest \
+	-parallel=16 \
 	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
 	$(UT_PACKAGES_DISPATCHER) \
 	$(UT_PACKAGES_MAINTAINER) \

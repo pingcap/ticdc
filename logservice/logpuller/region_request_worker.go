@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
@@ -173,6 +174,17 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 		return s.receiveAndDispatchChangeEvents(conn)
 	})
 	g.Go(func() error { return s.processRegionSendTask(gctx, conn) })
+
+	failpoint.Inject("InjectForceReconnect", func() {
+		timer := time.After(10 * time.Second)
+		g.Go(func() error {
+			<-timer
+			err := errors.New("inject force reconnect")
+			log.Info("inject force reconnect", zap.Error(err))
+			return err
+		})
+	})
+
 	_ = g.Wait()
 	return isCanceled()
 }
@@ -426,4 +438,16 @@ func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
 		regions = append(regions, <-s.requestsCh)
 	}
 	return regions
+}
+
+func (s *regionRequestWorker) getAllRegionStates() regionFeedStates {
+	s.requestedRegions.RLock()
+	defer s.requestedRegions.RUnlock()
+	states := make(regionFeedStates)
+	for _, statesMap := range s.requestedRegions.subscriptions {
+		for regionID, state := range statesMap {
+			states[regionID] = state
+		}
+	}
+	return states
 }

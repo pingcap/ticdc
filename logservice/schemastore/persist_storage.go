@@ -263,8 +263,7 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 
 	start := time.Now()
 	defer func() {
-		log.Info("getAllPhysicalTables finish",
-			zap.Uint64("snapTs", snapTs),
+		log.Debug("getAllPhysicalTables finish",
 			zap.Any("duration(s)", time.Since(start).Seconds()))
 	}()
 	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
@@ -421,10 +420,6 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 	for {
 		allTargetTs := make([]uint64, 0, limit)
 		p.mu.RLock()
-		// log.Debug("fetchTableTriggerDDLEvents in persistentStorage",
-		// 	zap.Any("start", start),
-		// 	zap.Int("limit", limit),
-		// 	zap.Any("tableTriggerDDLHistory", p.tableTriggerDDLHistory))
 		index := sort.Search(len(p.tableTriggerDDLHistory), func(i int) bool {
 			return p.tableTriggerDDLHistory[i] > nextStartTs
 		})

@@ -228,7 +228,10 @@ func (c *Controller) sendMessages(msgs []*messaging.TargetMessage) {
 func (c *Controller) onMaintainerBootstrapResponse(msg *messaging.TargetMessage) {
 	log.Info("received maintainer bootstrap response",
 		zap.Any("server", msg.From))
-	cachedResp := c.bootstrapper.HandleBootstrapResponse(msg.From, msg.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse))
+	cachedResp := c.bootstrapper.HandleBootstrapResponse(
+		msg.From,
+		msg.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse),
+	)
 	c.onBootstrapDone(cachedResp)
 }
 
@@ -243,24 +246,25 @@ func (c *Controller) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Coordin
 	}
 	log.Info("all nodes have sent bootstrap response",
 		zap.Int("size", len(cachedResp)))
-	workingMap := make(map[common.ChangeFeedID]remoteMaintainer)
+	// runningCfs is the changefeeds that are already running on other nodes
+	runningCfs := make(map[common.ChangeFeedID]remoteMaintainer)
 	for server, bootstrapMsg := range cachedResp {
 		log.Info("received bootstrap response",
 			zap.Any("server", server),
 			zap.Int("size", len(bootstrapMsg.Statuses)))
 		for _, info := range bootstrapMsg.Statuses {
 			cfID := common.NewChangefeedIDFromPB(info.ChangefeedID)
-			if _, ok := workingMap[cfID]; ok {
+			if _, ok := runningCfs[cfID]; ok {
 				log.Panic("maintainer runs on multiple node",
 					zap.String("cf", cfID.Name()))
 			}
-			workingMap[cfID] = remoteMaintainer{
+			runningCfs[cfID] = remoteMaintainer{
 				nodeID: server,
 				status: info,
 			}
 		}
 	}
-	c.FinishBootstrap(workingMap)
+	c.FinishBootstrap(runningCfs)
 }
 
 // HandleStatus handle the status report from the node
@@ -291,12 +295,14 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.Mainta
 		}
 		if nodeID != from {
 			// todo: handle the case that the node id is mismatch
-			log.Warn("node id not match",
+			log.Warn("remote changefeed maintainer nodeID mismatch with local record",
 				zap.String("changefeed", cfID.Name()),
-				zap.Stringer("from", from),
-				zap.Stringer("node", nodeID))
+				zap.Stringer("remoteNodeID", from),
+				zap.Stringer("localNodeID", nodeID))
 			continue
 		}
+		cfs[cfID] = cf
+
 		changed, state, err := cf.UpdateStatus(status)
 		if changed {
 			log.Info("changefeed status changed",
@@ -318,7 +324,6 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.Mainta
 				err:          mErr,
 			}
 		}
-		cfs[cfID] = cf
 	}
 	select {
 	case c.updatedChangefeedCh <- cfs:
@@ -326,21 +331,27 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.Mainta
 	}
 }
 
-// FinishBootstrap adds working state tasks to this controller directly,
-// it reported by the bootstrap response
-func (c *Controller) FinishBootstrap(workingMap map[common.ChangeFeedID]remoteMaintainer) {
+// FinishBootstrap is called when all nodes have sent bootstrap response
+// It will load all changefeeds from metastore, and compare with running changefeeds
+// Then initialize the changefeeds that are not running on other nodes
+// And construct all changefeeds state in memory.
+func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]remoteMaintainer) {
 	if c.bootstrapped.Load() {
 		log.Panic("already bootstrapped",
-			zap.Any("workingMap", workingMap))
+			zap.Any("runningChangefeeds", runningChangefeeds))
 	}
-	cfs, err := c.backend.GetAllChangefeeds(context.Background())
+	// load all changefeeds from metastore, and check if the changefeed is already in workingMap
+	allChangefeeds, err := c.backend.GetAllChangefeeds(context.Background())
 	if err != nil {
 		log.Panic("load all changefeeds failed", zap.Error(err))
 	}
-	log.Info("load all changefeeds", zap.Int("size", len(cfs)))
-	for cfID, cfMeta := range cfs {
-		rm, ok := workingMap[cfID]
+	log.Info("load all changefeeds", zap.Int("size", len(allChangefeeds)))
+	// Compare all changefeeds and running changefeeds, and add them to changefeedDB
+	for cfID, cfMeta := range allChangefeeds {
+		rm, ok := runningChangefeeds[cfID]
 		if !ok {
+			// The changefeed is not running on other nodes, add it to changefeedDB.
+			// We will create this changefeed later.
 			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, cfMeta.Status.CheckpointTs, false)
 			if shouldRunChangefeed(cf.GetInfo().State) {
 				c.changefeedDB.AddAbsentChangefeed(cf)
@@ -348,12 +359,13 @@ func (c *Controller) FinishBootstrap(workingMap map[common.ChangeFeedID]remoteMa
 				c.changefeedDB.AddStoppedChangefeed(cf)
 			}
 		} else {
-			log.Info("maintainer already working in other server",
-				zap.String("changefeed", cfID.String()))
+			log.Info("changefeed maintainer already running in other server",
+				zap.String("changefeed", cfID.String()),
+				zap.String("node", rm.nodeID.String()),
+				zap.String("status", common.FormatMaintainerStatus(rm.status)))
 			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, rm.status.CheckpointTs, false)
 			c.changefeedDB.AddReplicatingMaintainer(cf, rm.nodeID)
-			// delete it
-			delete(workingMap, cfID)
+			delete(runningChangefeeds, cfID)
 		}
 
 		// check if the changefeed is stopping or removing, we need to stop all dispatchers completely
@@ -364,7 +376,9 @@ func (c *Controller) FinishBootstrap(workingMap map[common.ChangeFeedID]remoteMa
 			log.Info("stop changefeed when bootstrapping", zap.String("changefeed", cfID.String()), zap.Any("meta", cfMeta))
 		}
 	}
-	for id, rm := range workingMap {
+
+	// Remove the changefeeds that are not in allChangefeeds, there are stale changefeeds.
+	for id, rm := range runningChangefeeds {
 		log.Warn("maintainer not found in local, remove it",
 			zap.String("changefeed", id.Name()),
 			zap.String("node", rm.nodeID.String()),

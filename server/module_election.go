@@ -86,6 +86,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 				zap.Any("captureID", e.svr.info.ID))
 			return nil
 		}
+		log.Info("start to campaign coordinator", zap.Any("captureID", e.svr.info.ID))
 		// Campaign to be the coordinator, it blocks until it been elected.
 		err = e.election.Campaign(ctx, string(e.svr.info.ID))
 
@@ -132,7 +133,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 
 		co := coordinator.New(e.svr.info,
 			e.svr.pdClient, e.svr.PDClock, changefeed.NewEtcdBackend(e.svr.EtcdClient),
-			e.svr.EtcdClient.GetClusterID(),
+			e.svr.EtcdClient.GetGCServiceID(),
 			coordinatorVersion, 10000, time.Minute)
 		e.svr.setCoordinator(co)
 		err = co.Run(ctx)

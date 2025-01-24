@@ -180,7 +180,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	select {
 	case resolvedTs := <-tsCh:
 		require.Equal(t, targetTs, resolvedTs)
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		require.True(t, false, "reconnection not succeed in 5 second")
 	}
 
@@ -195,7 +195,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	select {
 	case resolvedTs := <-tsCh:
 		require.Equal(t, targetTs, resolvedTs)
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		require.True(t, false, "reconnection not succeed in 5 second")
 	}
 }

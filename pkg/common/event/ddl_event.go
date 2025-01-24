@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
@@ -76,6 +77,8 @@ type DDLEvent struct {
 	PostTxnFlushed []func() `json:"-"`
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
 	eventSize int64 `json:"-"`
+
+	Err error `json:"-"`
 }
 
 func (d *DDLEvent) GetType() int {
@@ -88,6 +91,10 @@ func (d *DDLEvent) GetDispatcherID() common.DispatcherID {
 
 func (d *DDLEvent) GetStartTs() common.Ts {
 	return 0
+}
+
+func (d *DDLEvent) GetError() error {
+	return d.Err
 }
 
 func (d *DDLEvent) GetCommitTs() common.Ts {
@@ -220,7 +227,7 @@ func (e *DDLEvent) GetDDLType() model.ActionType {
 }
 
 func (t DDLEvent) Marshal() ([]byte, error) {
-	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize
+	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | errorData | errorDataSize
 	data, err := json.Marshal(t)
 	if err != nil {
 		return nil, err
@@ -245,22 +252,41 @@ func (t DDLEvent) Marshal() ([]byte, error) {
 		binary.BigEndian.PutUint64(tableInfoDataSize, 0)
 		data = append(data, tableInfoDataSize...)
 	}
+
+	if t.Err != nil {
+		errData := []byte(t.Err.Error())
+		errDataSize := make([]byte, 8)
+		binary.BigEndian.PutUint64(errDataSize, uint64(len(errData)))
+		data = append(data, errData...)
+		data = append(data, errDataSize...)
+	} else {
+		errDataSize := make([]byte, 8)
+		binary.BigEndian.PutUint64(errDataSize, 0)
+		data = append(data, errDataSize...)
+	}
 	return data, nil
 }
 
 func (t *DDLEvent) Unmarshal(data []byte) error {
-	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize
+	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | errorData | errorDataSize
 	t.eventSize = int64(len(data))
-	tableInfoDataSize := binary.BigEndian.Uint64(data[len(data)-8:])
+	errorDataSize := binary.BigEndian.Uint64(data[len(data)-8:])
+	if errorDataSize > 0 {
+		errorData := data[len(data)-8-int(errorDataSize) : len(data)-8]
+		log.Info("errorData", zap.String("errorData", string(errorData)))
+		t.Err = apperror.ErrDDLEventError.FastGen(string(errorData))
+	}
+	end := len(data) - 8 - int(errorDataSize)
+	tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 	var err error
-	end := len(data) - 8 - int(tableInfoDataSize)
 	if tableInfoDataSize > 0 {
-		tableInfoData := data[len(data)-8-int(tableInfoDataSize) : len(data)-8]
+		tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
 		t.TableInfo, err = common.UnmarshalJSONToTableInfo(tableInfoData)
 		if err != nil {
 			return err
 		}
 	}
+	end -= 8 + int(tableInfoDataSize)
 	dispatcherIDDatSize := binary.BigEndian.Uint64(data[end-8 : end])
 	dispatcherIDData := data[end-8-int(dispatcherIDDatSize) : end-8]
 	err = t.DispatcherID.Unmarshal(dispatcherIDData)

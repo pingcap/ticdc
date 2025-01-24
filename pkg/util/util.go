@@ -14,8 +14,10 @@
 package util
 
 import (
+	"context"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/pingcap/errors"
 )
@@ -32,4 +34,18 @@ func ParseHostAndPortFromAddress(address string) (string, uint, error) {
 		return "", 0, errors.Errorf("Invalid address `%s`, expect port to be numeric", address)
 	}
 	return host, uint(portNumeric), nil
+}
+
+// Hang will block the goroutine for a given duration, or return when `ctx` is done.
+func Hang(ctx context.Context, dur time.Duration) error {
+	timer := time.NewTimer(dur)
+	select {
+	case <-ctx.Done():
+		if !timer.Stop() {
+			<-timer.C
+		}
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }

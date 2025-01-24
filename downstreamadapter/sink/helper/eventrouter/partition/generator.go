@@ -14,13 +14,13 @@
 package partition
 
 import (
-	"go.uber.org/zap"
 	"strings"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tiflow/pkg/sink"
+	"go.uber.org/zap"
 )
 
 type PartitionGenerator interface {

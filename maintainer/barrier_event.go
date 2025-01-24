@@ -94,7 +94,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 				event.rangeChecker = range_checker.NewTableCountChecker(len(status.BlockTables.TableIDs))
 			}
 		case heartbeatpb.InfluenceType_DB:
-			//TODO:clean code
+			// TODO:clean code
 			// create range checker if dispatcher is ddl dispatcher
 			// otherwise store dispatcherID in reportedDispatchers, and not create rangeChecker
 			if dispatcherID == controller.ddlDispatcherID {

@@ -220,6 +220,7 @@ func getDefaultOrZeroValue(
 			}
 			d = types.NewMysqlEnumDatum(enumValue)
 		case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
+			d = types.NewStringDatum("")
 			return d, emptyBytes, sizeOfEmptyBytes, "", nil
 		default:
 			d = table.GetZeroValue(col)

@@ -67,7 +67,7 @@ type Controller struct {
 
 func NewController(changefeedID common.ChangeFeedID,
 	checkpointTs uint64,
-	pdapi pdutil.PDAPIClient,
+	pdAPIClient pdutil.PDAPIClient,
 	tsoClient replica.TSOClient,
 	regionCache split.RegionCache,
 	taskScheduler threadpool.ThreadPool,
@@ -80,7 +80,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	var splitter *split.Splitter
 	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
 		enableTableAcrossNodes = true
-		splitter = split.NewSplitter(changefeedID, pdapi, regionCache, cfConfig.Scheduler)
+		splitter = split.NewSplitter(changefeedID, pdAPIClient, regionCache, cfConfig.Scheduler)
 	}
 	replicaSetDB := replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -402,8 +402,8 @@ func (c *Controller) addNewSpans(schemaID int64, tableSpans []*heartbeatpb.Table
 }
 
 func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
-	// todo: do we need to set timezone here?
-	f, err := filter.NewFilter(c.cfConfig.Filter, "", c.cfConfig.ForceReplicate)
+	// Use a empty timezone because table filter does not need it.
+	f, err := filter.NewFilter(c.cfConfig.Filter, "", c.cfConfig.CaseSensitive, c.cfConfig.ForceReplicate)
 	if err != nil {
 		return nil, errors.Cause(err)
 	}

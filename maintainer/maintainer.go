@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -37,7 +38,6 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
@@ -81,14 +81,12 @@ type Maintainer struct {
 
 	checkpointTsByCapture map[node.ID]heartbeatpb.Watermark
 
-	state        atomic.Int32
-	bootstrapper *bootstrap.Bootstrapper[heartbeatpb.MaintainerBootstrapResponse]
-
-	changefeedSate model.FeedState
+	scheduleState atomic.Int32
+	bootstrapper  *bootstrap.Bootstrapper[heartbeatpb.MaintainerBootstrapResponse]
 
 	removed *atomic.Bool
 
-	bootstrapped     bool
+	bootstrapped     atomic.Bool
 	postBootstrapMsg *heartbeatpb.MaintainerPostBootstrapRequest
 
 	// startCheckpointTs is the check point ts when the maintainer is created
@@ -99,11 +97,12 @@ type Maintainer struct {
 	// so when a maintainer is created, that means the dispatcher is gone and must be recreated.
 	ddlSpan *replica.SpanReplication
 
-	pdEndpoints []string
 	nodeManager *watcher.NodeManager
 	// closedNodes is used to record the nodes that dispatcherManager is closed
 	closedNodes map[node.ID]struct{}
 
+	// statusChanged is used to notify the maintainer manager to send heartbeat to coordinator
+	// to report the changefeed's status.
 	statusChanged *atomic.Bool
 
 	mutex       sync.Mutex // protect nodeChanged and do onNodeChanged()
@@ -123,8 +122,10 @@ type Maintainer struct {
 	// false when otherwise, such as maintainer move to different nodes.
 	newChangefeed bool
 
-	errLock             sync.Mutex
-	runningErrors       map[node.ID]*heartbeatpb.RunningError
+	runningErrors struct {
+		sync.Mutex
+		m map[node.ID]*heartbeatpb.RunningError
+	}
 	cancelUpdateMetrics context.CancelFunc
 
 	changefeedCheckpointTsGauge    prometheus.Gauge
@@ -184,7 +185,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 		ddlSpan:               ddlSpan,
 		checkpointTsByCapture: make(map[node.ID]heartbeatpb.Watermark),
-		runningErrors:         map[node.ID]*heartbeatpb.RunningError{},
 		newChangefeed:         newChangfeed,
 
 		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
@@ -197,14 +197,16 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		tableCountGauge:                metrics.TableGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		handleEventDuration:            metrics.MaintainerHandleEventDuration.WithLabelValues(cfID.Namespace(), cfID.Name()),
 	}
+	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
 	m.watermark.Watermark = &heartbeatpb.Watermark{
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
 	}
-	m.state.Store(int32(heartbeatpb.ComponentState_Working))
+	m.scheduleState.Store(int32(heartbeatpb.ComponentState_Working))
 	m.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](m.id.Name(), m.getNewBootstrapFn())
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
+		zap.String("state", string(cfg.State)),
 		zap.Uint64("checkpointTs", checkpointTs),
 		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()))
 	metrics.MaintainerGauge.WithLabelValues(cfID.Namespace(), cfID.Name()).Inc()
@@ -257,7 +259,7 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 		}
 		m.handleEventDuration.Observe(duration.Seconds())
 	}()
-	if m.state.Load() == int32(heartbeatpb.ComponentState_Stopped) {
+	if m.scheduleState.Load() == int32(heartbeatpb.ComponentState_Stopped) {
 		log.Warn("maintainer is stopped, ignore",
 			zap.String("changefeed", m.id.String()))
 		return false
@@ -298,23 +300,23 @@ func (m *Maintainer) Close() {
 }
 
 func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
-	m.errLock.Lock()
-	defer m.errLock.Unlock()
+	m.runningErrors.Lock()
+	defer m.runningErrors.Unlock()
 	var runningErrors []*heartbeatpb.RunningError
-	if len(m.runningErrors) > 0 {
-		runningErrors = make([]*heartbeatpb.RunningError, 0, len(m.runningErrors))
-		for _, e := range m.runningErrors {
+	if len(m.runningErrors.m) > 0 {
+		runningErrors = make([]*heartbeatpb.RunningError, 0, len(m.runningErrors.m))
+		for _, e := range m.runningErrors.m {
 			runningErrors = append(runningErrors, e)
 		}
-		clear(m.runningErrors)
+		m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 	}
 
 	status := &heartbeatpb.MaintainerStatus{
-		ChangefeedID: m.id.ToPB(),
-		FeedState:    string(m.changefeedSate),
-		State:        heartbeatpb.ComponentState(m.state.Load()),
-		CheckpointTs: m.getWatermark().CheckpointTs,
-		Err:          runningErrors,
+		ChangefeedID:  m.id.ToPB(),
+		State:         heartbeatpb.ComponentState(m.scheduleState.Load()),
+		CheckpointTs:  m.getWatermark().CheckpointTs,
+		Err:           runningErrors,
+		BootstrapDone: m.bootstrapped.Load(),
 	}
 	return status
 }
@@ -324,6 +326,9 @@ func (m *Maintainer) initialize() error {
 	log.Info("start to initialize changefeed maintainer",
 		zap.String("id", m.id.String()))
 
+	failpoint.Inject("NewChangefeedRetryError", func() {
+		failpoint.Return(errors.New("failpoint injected retriable error"))
+	})
 	// detect the capture changes
 	m.nodeManager.RegisterNodeChangeHandler(node.ID("maintainer-"+m.id.Name()), func(allNodes map[node.ID]*node.Info) {
 		m.mutex.Lock()
@@ -346,8 +351,8 @@ func (m *Maintainer) initialize() error {
 	}, time.Now().Add(periodEventInterval))
 	log.Info("changefeed maintainer initialized",
 		zap.String("id", m.id.String()),
+		zap.String("status", common.FormatMaintainerStatus(m.GetMaintainerStatus())),
 		zap.Duration("duration", time.Since(start)))
-	m.state.Store(int32(heartbeatpb.ComponentState_Working))
 	m.statusChanged.Store(true)
 	return nil
 }
@@ -403,7 +408,7 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	closed := m.tryCloseChangefeed()
 	if closed {
 		m.removed.Store(true)
-		m.state.Store(int32(heartbeatpb.ComponentState_Stopped))
+		m.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))
 		metrics.MaintainerGauge.WithLabelValues(m.id.Namespace(), m.id.Name()).Dec()
 	}
 }
@@ -446,7 +451,7 @@ func (m *Maintainer) onNodeChanged() {
 
 func (m *Maintainer) calCheckpointTs() {
 	defer m.updateMetrics()
-	if !m.bootstrapped {
+	if !m.bootstrapped.Load() {
 		log.Warn("can not advance checkpointTs since not bootstrapped",
 			zap.String("changefeed", m.id.Name()),
 			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
@@ -510,7 +515,7 @@ func (m *Maintainer) updateMetrics() {
 	lag = float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 	m.changefeedResolvedTsLagGauge.Set(lag)
 
-	m.changefeedStatusGauge.Set(float64(m.state.Load()))
+	m.changefeedStatusGauge.Set(float64(m.scheduleState.Load()))
 }
 
 // send message to remote
@@ -528,7 +533,7 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 
 func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 	// ignore the heartbeat if the maintianer not bootstrapped
-	if !m.bootstrapped {
+	if !m.bootstrapped.Load() {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
@@ -553,15 +558,15 @@ func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {
 	if info, ok := m.nodeManager.GetAliveNodes()[from]; ok {
 		err.Node = info.AdvertiseAddr
 	}
-	m.errLock.Lock()
+	m.runningErrors.Lock()
 	m.statusChanged.Store(true)
-	m.runningErrors[from] = err
-	m.errLock.Unlock()
+	m.runningErrors.m[from] = err
+	m.runningErrors.Unlock()
 }
 
 func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 	// the barrier is not initialized
-	if !m.bootstrapped {
+	if !m.bootstrapped.Load() {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
@@ -585,7 +590,7 @@ func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 	m.onBootstrapDone(cachedResp)
 
 	// when get the bootstrap response from the event dispatcher manager with table trigger event,
-	// set new changefeed to false, which means the changefeed is no longer new created.
+	// set new changefeed to false, which means the changefeed is not new created.
 	if msg.From == m.selfNode.ID {
 		m.newChangefeed = false
 	}
@@ -622,13 +627,16 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 		return
 	}
 	m.barrier = barrier
-	m.bootstrapped = true
+	m.bootstrapped.Store(true)
 
 	// Memory Consumption is 64(tableName/schemaName limit) * 4(utf8.UTFMax) * 2(tableName+schemaName) * tableNum
 	// For an extreme case(100w tables, and 64 utf8 characters for each name), the memory consumption is about 488MB.
 	// For a normal case(100w tables, and 16 ascii characters for each name), the memory consumption is about 30MB.
 	m.postBootstrapMsg = msg
 	m.sendPostBootstrapRequest()
+	// set status changed to true, trigger the maintainer manager to send heartbeat to coordinator
+	// to report the this changefeed's status
+	m.statusChanged.Store(true)
 }
 
 func (m *Maintainer) sendPostBootstrapRequest() {
@@ -663,7 +671,7 @@ func (m *Maintainer) handleResendMessage() {
 }
 
 func (m *Maintainer) tryCloseChangefeed() bool {
-	if m.state.Load() != int32(heartbeatpb.ComponentState_Stopped) {
+	if m.scheduleState.Load() != int32(heartbeatpb.ComponentState_Stopped) {
 		m.statusChanged.Store(true)
 	}
 	if !m.cascadeRemoving {
@@ -709,13 +717,14 @@ func (m *Maintainer) handleError(err error) {
 	} else {
 		code = string(errors.ErrOwnerUnknown.RFCCode())
 	}
-	m.runningErrors = map[node.ID]*heartbeatpb.RunningError{
-		m.selfNode.ID: {
-			Time:    time.Now().String(),
-			Node:    m.selfNode.AdvertiseAddr,
-			Code:    code,
-			Message: err.Error(),
-		},
+
+	m.runningErrors.Lock()
+	defer m.runningErrors.Unlock()
+	m.runningErrors.m[m.selfNode.ID] = &heartbeatpb.RunningError{
+		Time:    time.Now().String(),
+		Node:    m.selfNode.AdvertiseAddr,
+		Code:    code,
+		Message: err.Error(),
 	}
 	m.statusChanged.Store(true)
 }
@@ -768,7 +777,7 @@ func (m *Maintainer) onPeriodTask() {
 }
 
 func (m *Maintainer) collectMetrics() {
-	if !m.bootstrapped {
+	if !m.bootstrapped.Load() {
 		return
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {

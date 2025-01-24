@@ -80,11 +80,11 @@ function test_kill_capture() {
 	# wait for the tables to appear
 	check_table_exists test.availability1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 20
 
-	run_sql "INSERT INTO test.availability1(id, val) VALUES (1, 1);"
+	run_sql "REPLACE INTO test.availability1(id, val) VALUES (1, 1);"
 	ensure $MAX_RETRIES nonempty 'select id, val from test.availability1 where id=1 and val=1'
 
 	# start the second capture
-	echo "Start to run another server"
+	echo "Start to run another server in test_kill_capture case"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8301" --logsuffix test_kill_capture.server2
 	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep -v \"$owner_id\" | grep -v cluster_id | grep id"
 	capture_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}' | grep -v "$owner_id")
@@ -92,7 +92,7 @@ function test_kill_capture() {
 	# kill the owner
 	kill -9 $owner_pid
 
-	run_sql "INSERT INTO test.availability1(id, val) VALUES (2, 2);"
+	run_sql "REPLACE INTO test.availability1(id, val) VALUES (2, 2);"
 	ensure $MAX_RETRIES nonempty 'select id, val from test.availability1 where id=2 and val=2'
 
 	cleanup_process $CDC_BINARY
@@ -121,16 +121,15 @@ function test_hang_up_capture() {
 	capture_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}' | grep -v "$owner_id")
 
 	kill -STOP $owner_pid
-	run_sql "INSERT INTO test.availability1(id, val) VALUES (3, 3);"
+	run_sql "REPLACE INTO test.availability1(id, val) VALUES (3, 3);"
 	ensure $MAX_RETRIES nonempty 'select id, val from test.availability1 where id=3 and val=3'
 	kill -CONT $owner_pid
 	cleanup_process $CDC_BINARY
 }
 
 # test_expire_capture start one server and then stop it until
-# the session expires, and then resume the server.
-# We expect the capture suicides itself and then recovers. The data
-# should be replicated after recovering.
+# the session expires, and then we resume the server.
+# We expect the data to be replicated after resuming the server.
 function test_expire_capture() {
 	echo "run test case test_expire_capture"
 	# start one server
@@ -152,7 +151,6 @@ function test_expire_capture() {
 
 	# resume the owner
 	kill -SIGCONT $owner_pid
-	echo "process status:" $(ps -h -p $owner_pid -o "s")
 
 	run_sql "UPDATE test.availability1 set val = 22 where id = 2;"
 	run_sql "DELETE from test.availability1 where id = 3;"

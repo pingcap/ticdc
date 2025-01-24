@@ -231,12 +231,12 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 		pendingEvent, blockStatus := d.blockEventStatus.getEventAndStage()
 		if pendingEvent == nil && action.CommitTs > d.GetResolvedTs() {
 			// we have not receive the block event, and the action is for the future event, so just ignore
-			log.Info("pending event is nil, and the action's commit is larger than dispatchers resolvedTs", zap.Any("resolvedTs", d.GetResolvedTs()), zap.Any("action commitTs", action.CommitTs), zap.Any("dispatcher", d.id))
+			log.Info("pending event is nil, and the action's commit is larger than dispatchers resolvedTs", zap.Uint64("resolvedTs", d.GetResolvedTs()), zap.Uint64("actionCommitTs", action.CommitTs), zap.Any("dispatcher", d.id))
 			// we have not receive the block event, and the action is for the future event, so just ignore
 			return
 		}
 		if pendingEvent != nil && action.CommitTs == pendingEvent.GetCommitTs() && blockStatus == heartbeatpb.BlockStage_WAITING {
-			log.Info("pending event get the action", zap.Any("action", action), zap.Any("dispatcher", d.id), zap.Any("pendingEvent commitTs", pendingEvent.GetCommitTs()))
+			log.Info("pending event get the action", zap.Any("action", action), zap.Any("dispatcher", d.id), zap.Uint64("pendingEventCommitTs", pendingEvent.GetCommitTs()))
 			d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
 			pendingEvent.PushFrontFlushFunc(func() {
 				// clear blockEventStatus should be before wake ds.
@@ -333,12 +333,27 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			})
 			d.AddDMLEventToSink(dml)
 		case commonEvent.TypeDDLEvent:
-			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			if len(dispatcherEvents) != 1 {
 				log.Panic("ddl event should only be singly handled", zap.Any("dispatcherID", d.id))
 			}
+			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			block = true
 			ddl := event.(*commonEvent.DDLEvent)
+			// Some DDL have some problem to sync to downstream, such as rename table with inappropriate filter
+			// such as https://docs.pingcap.com/zh/tidb/stable/ticdc-ddl#rename-table-%E7%B1%BB%E5%9E%8B%E7%9A%84-ddl-%E6%B3%A8%E6%84%8F%E4%BA%8B%E9%A1%B9
+			// so we need report the error to maintainer.
+			err := ddl.GetError()
+			if err != nil {
+				select {
+				case d.errCh <- err:
+				default:
+					log.Error("error channel is full, discard error",
+						zap.Any("changefeedID", d.changefeedID.String()),
+						zap.Any("dispatcherID", d.id.String()),
+						zap.Error(err))
+				}
+				return
+			}
 			// Update the table info of the dispatcher, when it receives ddl event.
 			d.tableInfo = ddl.TableInfo
 			log.Info("dispatcher receive ddl event",
@@ -617,8 +632,8 @@ func (d *Dispatcher) Remove() {
 		zap.String("table", d.tableSpan.String()))
 	d.isRemoving.Store(true)
 
-	dispatcherStatusDynamicStream := GetDispatcherStatusDynamicStream()
-	err := dispatcherStatusDynamicStream.RemovePath(d.id)
+	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
+	err := dispatcherStatusDS.RemovePath(d.id)
 	if err != nil {
 		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
 	}
@@ -626,8 +641,8 @@ func (d *Dispatcher) Remove() {
 
 // addToDynamicStream add self to dynamic stream
 func (d *Dispatcher) addToStatusDynamicStream() {
-	dispatcherStatusDynamicStream := GetDispatcherStatusDynamicStream()
-	err := dispatcherStatusDynamicStream.AddPath(d.id, d)
+	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
+	err := dispatcherStatusDS.AddPath(d.id, d)
 	if err != nil {
 		log.Error("add dispatcher to dynamic stream failed", zap.Error(err))
 	}

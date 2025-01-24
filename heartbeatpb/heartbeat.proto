@@ -95,6 +95,7 @@ message MaintainerStatus {
     ComponentState state = 3;
     uint64 checkpoint_ts = 4;
     repeated RunningError err = 5;
+    bool bootstrap_done = 6;
 }
 
 message CoordinatorBootstrapRequest {

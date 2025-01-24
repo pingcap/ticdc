@@ -261,7 +261,7 @@ func getTs(client TSOClient) (uint64, error) {
 		}
 		ts = oracle.ComposeTS(phy, logic)
 		return nil
-	}, retry.WithTotalRetryDuratoin(300*time.Millisecond),
+	}, retry.WithTotalRetryDuration(300*time.Millisecond),
 		retry.WithBackoffBaseDelay(100))
 	return ts, errors.Trace(err)
 }
