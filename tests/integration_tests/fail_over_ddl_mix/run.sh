@@ -86,6 +86,9 @@ function kill_server() {
         case $((RANDOM % 2)) in
             0)
                 cdc_pid_1=$(ps aux | grep cdc | grep 8300 | awk '{print $2}')
+                if $cdc_pid_1 == "" ; then
+                    continue
+                fi
                 kill -9 $cdc_pid_1
 
                 sleep 5
@@ -93,6 +96,9 @@ function kill_server() {
             ;;
             1)
                 cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+                if $cdc_pid_2 == "" ; then
+                    continue
+                fi
                 kill -9 $cdc_pid_2
 
                 sleep 5
