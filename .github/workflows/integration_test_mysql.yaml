@@ -128,17 +128,21 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=savepoint
 
-      # The 14th case in this group     
       - name: Test server config compatibility
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=server_config_compatibility
 
-      # The 15th case in this group     
       - name: Test split region
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=split_region
+      
+      # The 16th case in this group     
+      - name: Test changefeed resume with checkpoint ts
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_resume_with_checkpoint_ts    
 
       - name: Upload test logs
         if: always()
