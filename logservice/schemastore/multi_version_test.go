@@ -132,9 +132,9 @@ func TestGCMultiVersionTableInfo(t *testing.T) {
 	store := newEmptyVersionedTableInfoStore(tableID)
 	store.setTableInfoInitialized()
 
-	store.infos = append(store.infos, &tableInfoItem{version: 100, info: &common.TableInfo{}})
-	store.infos = append(store.infos, &tableInfoItem{version: 200, info: &common.TableInfo{}})
-	store.infos = append(store.infos, &tableInfoItem{version: 300, info: &common.TableInfo{}})
+	store.infos = append(store.infos, &tableInfoItem{Version: 100, Info: &common.TableInfo{}})
+	store.infos = append(store.infos, &tableInfoItem{Version: 200, Info: &common.TableInfo{}})
+	store.infos = append(store.infos, &tableInfoItem{Version: 300, Info: &common.TableInfo{}})
 	store.deleteVersion = 1000
 
 	require.False(t, store.gc(200))
