@@ -128,21 +128,6 @@ func newRegionRequestWorker(
 		}
 	})
 
-	failpoint.Inject("ForceReconnect", func() {
-		ticker := time.NewTicker(5 * time.Second)
-		g.Go(func() error {
-			for range ticker.C {
-				for _, state := range worker.getAllRegionStates() {
-					worker.client.onRegionFail(regionErrorInfo{
-						regionInfo: state.region,
-						err:        &sendRequestToStoreErr{},
-					})
-				}
-			}
-			return nil
-		})
-	})
-
 	return worker
 }
 
@@ -189,6 +174,15 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 		return s.receiveAndDispatchChangeEvents(conn)
 	})
 	g.Go(func() error { return s.processRegionSendTask(gctx, conn) })
+
+	failpoint.Inject("InjectForceReconnect", func() {
+		timer := time.After(10 * time.Second)
+		g.Go(func() error {
+			<-timer
+			return errors.New("inject force reconnect")
+		})
+	})
+
 	_ = g.Wait()
 	return isCanceled()
 }
