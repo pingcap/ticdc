@@ -197,8 +197,6 @@ func (w *MysqlWriter) SendDDLTsPre(event commonEvent.BlockEvent) error {
 		if relatedTableID == 0 {
 			if len(tableIds) > 1 {
 				relatedTableID = tableIds[1]
-			} else {
-				log.Panic("relatedTableID is 0 and tableIds is empty, FIX IT", zap.Any("event", event))
 			}
 		}
 		// generate query
@@ -298,12 +296,10 @@ func (w *MysqlWriter) SendDDLTs(event commonEvent.BlockEvent) error {
 
 	if len(tableIds) > 0 {
 		// choose one related table_id to help table trigger event dispatcher to find the ddl jobs.
-		relatedTableID := tableIds[0]
+		relatedTableID := tableIds[0] // TODO: 这个 related table id 要合理挑选一下，主要是 partition 要选 physical table 才行？主要是看 tableID 用的是哪个
 		if relatedTableID == 0 {
 			if len(tableIds) > 1 {
 				relatedTableID = tableIds[1]
-			} else {
-				log.Panic("relatedTableID is 0 and tableIds is empty, FIX IT", zap.Any("event", event))
 			}
 		}
 		// generate query
@@ -464,10 +460,10 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, error) {
 					continue
 				}
 				// query the ddl_jobs table to find whether the ddl is executed
-				if tableId == 0 {
-					tableId = relatedTableId
-				}
-				query := fmt.Sprintf(queryDDLJobs, strconv.FormatInt(tableId, 10))
+				// if tableId == 0 {
+				// 	tableId = relatedTableId
+				// }
+				query := fmt.Sprintf(queryDDLJobs, strconv.FormatInt(relatedTableId, 10))
 				log.Info("query ddl jobs", zap.String("query", query))
 
 				start := time.Now()

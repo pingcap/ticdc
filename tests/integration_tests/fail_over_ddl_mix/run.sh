@@ -147,6 +147,8 @@ main() {
 
     check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 
+    sleep 100
+    
     cleanup_process $CDC_BINARY
 }
 
