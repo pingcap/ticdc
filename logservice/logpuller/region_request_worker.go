@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
@@ -125,6 +126,21 @@ func newRegionRequestWorker(
 				return err
 			}
 		}
+	})
+
+	failpoint.Inject("ForceReconnect", func() {
+		ticker := time.NewTicker(5 * time.Second)
+		g.Go(func() error {
+			for range ticker.C {
+				for _, state := range worker.getAllRegionStates() {
+					worker.client.onRegionFail(regionErrorInfo{
+						regionInfo: state.region,
+						err:        &sendRequestToStoreErr{},
+					})
+				}
+			}
+			return nil
+		})
 	})
 
 	return worker
@@ -426,4 +442,16 @@ func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
 		regions = append(regions, <-s.requestsCh)
 	}
 	return regions
+}
+
+func (s *regionRequestWorker) getAllRegionStates() regionFeedStates {
+	s.requestedRegions.RLock()
+	defer s.requestedRegions.RUnlock()
+	states := make(regionFeedStates)
+	for _, statesMap := range s.requestedRegions.subscriptions {
+		for regionID, state := range statesMap {
+			states[regionID] = state
+		}
+	}
+	return states
 }
