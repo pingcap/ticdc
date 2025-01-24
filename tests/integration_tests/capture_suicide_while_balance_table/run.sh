@@ -39,7 +39,6 @@ function run() {
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/sink/mysql/MySQLSinkHangLongTime=1*return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --pd $pd_addr --logsuffix 2 --addr "127.0.0.1:8301"
 
-
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1"
 	changefeed_id=$(cdc cli changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" 2>&1 | tail -n2 | head -n1 | awk '{print $2}')
 
@@ -57,7 +56,7 @@ function run() {
 
 	target_capture=$capture1_id
 	# find a table that capture2 is replicating
-	one_table_id=$(curl -X GET "http://127.0.0.1:8301/api/v2/changefeeds/${changefeed_id}/tables" |  jq -r --arg cid "$capture2_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
+	one_table_id=$(curl -X GET "http://127.0.0.1:8301/api/v2/changefeeds/${changefeed_id}/tables" | jq -r --arg cid "$capture2_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
 	if [[ $one_table_id == "null" || $one_table_id == "0" ]]; then
 		# if not found, find a table that capture1 is replicating
 		target_capture=$capture2_id

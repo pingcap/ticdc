@@ -28,7 +28,7 @@ function run() {
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1" ;;
 	esac
 
-	# this will be triggered every 5s in logpuller 
+	# this will be triggered every 5s in logpuller
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/logpuller/InjectForceReconnect=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 	if [ "$SINK_TYPE" == "pulsar" ]; then
