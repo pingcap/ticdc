@@ -15,6 +15,7 @@ package schemastore
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"sync"
@@ -28,6 +29,10 @@ import (
 type tableInfoItem struct {
 	version uint64
 	info    *common.TableInfo
+}
+
+func (v tableInfoItem) String() string {
+	return fmt.Sprintf("tableInfoItem{version: %d, info: %v}", v.version, v.info)
 }
 
 type versionedTableInfoStore struct {
