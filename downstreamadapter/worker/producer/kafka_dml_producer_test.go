@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	confluentKafka "github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/IBM/sarama"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -45,16 +45,16 @@ func TestProducerAck(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	ctx, cancel := context.WithCancel(context.Background())
-	config := kafka.NewConfig(options)
-	val, err := config.Get("queue.buffering.max.messages", -1)
-	require.NoError(t, err)
-	require.Equal(t, 1, val)
+	config, err := kafka.NewSaramaConfig(ctx, options)
+	require.Nil(t, err)
+	require.Equal(t, 1, config.Producer.Flush.MaxMessages)
 
 	changefeed := commonType.NewChangefeedID4Test("test", "test")
-	factory, err := kafka.NewMockFactory(options, changefeed)
+	factory, err := kafka.NewMockFactory(ctx, options, changefeed)
 	require.NoError(t, err)
+	factory.(*kafka.MockFactory).ErrorReporter = t
 
-	asyncProducer, err := factory.AsyncProducer()
+	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
 	producer := NewKafkaDMLProducer(changefeed, asyncProducer)
@@ -64,7 +64,7 @@ func TestProducerAck(t *testing.T) {
 
 	messageCount := 20
 	for i := 0; i < messageCount; i++ {
-		asyncProducer.(*kafka.MockAsyncProducer).Producer.ExpectInputAndSucceed()
+		asyncProducer.(*kafka.MockSaramaAsyncProducer).AsyncProducer.ExpectInputAndSucceed()
 	}
 
 	count := atomic.NewInt64(0)
@@ -113,14 +113,17 @@ func TestProducerSendMsgFailed(t *testing.T) {
 	errCh := make(chan error, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
+	_, err := kafka.NewSaramaConfig(ctx, options)
+	require.NoError(t, err)
 	options.MaxMessages = 1
 	options.MaxMessageBytes = 1
 
 	changefeed := commonType.NewChangefeedID4Test("test", "test")
-	factory, err := kafka.NewMockFactory(options, changefeed)
+	factory, err := kafka.NewMockFactory(ctx, options, changefeed)
 	require.NoError(t, err)
+	factory.(*kafka.MockFactory).ErrorReporter = t
 
-	asyncProducer, err := factory.AsyncProducer()
+	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
 	producer := NewKafkaDMLProducer(changefeed, asyncProducer)
@@ -143,6 +146,7 @@ func TestProducerSendMsgFailed(t *testing.T) {
 	go func(t *testing.T) {
 		defer wg.Done()
 
+		asyncProducer.(*kafka.MockSaramaAsyncProducer).AsyncProducer.ExpectInputAndFail(sarama.ErrMessageTooLarge)
 		err = producer.AsyncSendMessage(ctx, kafka.DefaultMockTopicName, int32(0), &common.Message{
 			Key:   []byte("test-key-1"),
 			Value: []byte("test-value"),
@@ -162,7 +166,7 @@ func TestProducerSendMsgFailed(t *testing.T) {
 		case <-ctx.Done():
 			t.Errorf("TestProducerSendMessageFailed timed out")
 		case err := <-errCh:
-			require.ErrorIs(t, err, confluentKafka.NewError(confluentKafka.ErrMsgSizeTooLarge, "", false))
+			require.ErrorIs(t, err, sarama.ErrMessageTooLarge)
 		}
 	}()
 
@@ -176,10 +180,11 @@ func TestProducerDoubleClose(t *testing.T) {
 	defer cancel()
 
 	changefeed := commonType.NewChangefeedID4Test("test", "test")
-	factory, err := kafka.NewMockFactory(options, changefeed)
+	factory, err := kafka.NewMockFactory(ctx, options, changefeed)
 	require.NoError(t, err)
+	factory.(*kafka.MockFactory).ErrorReporter = t
 
-	asyncProducer, err := factory.AsyncProducer()
+	asyncProducer, err := factory.AsyncProducer(ctx)
 	require.NoError(t, err)
 
 	producer := NewKafkaDMLProducer(changefeed, asyncProducer)

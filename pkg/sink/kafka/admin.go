@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,208 +16,170 @@ package kafka
 import (
 	"context"
 	"strconv"
+	"strings"
 
-	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/IBM/sarama"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
-const defaultTimeoutMs = 1000
+type saramaAdminClient struct {
+	changefeed common.ChangeFeedID
 
-type admin struct {
-	ClusterAdminClient
-	client       *kafka.AdminClient
-	changefeedID common.ChangeFeedID
+	client sarama.Client
+	admin  sarama.ClusterAdmin
 }
 
-func newClusterAdminClient(
-	client *kafka.AdminClient,
-	changefeedID common.ChangeFeedID,
-) ClusterAdminClient {
-	return &admin{
-		client:       client,
-		changefeedID: changefeedID,
-	}
-}
-
-func (a *admin) clusterMetadata(_ context.Context) (*kafka.Metadata, error) {
-	// request is not set, so it will return all metadata
-	return a.client.GetMetadata(nil, true, defaultTimeoutMs)
-}
-
-func (a *admin) GetAllBrokers(ctx context.Context) ([]Broker, error) {
-	response, err := a.clusterMetadata(ctx)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	result := make([]Broker, 0, len(response.Brokers))
-	for _, broker := range response.Brokers {
+func (a *saramaAdminClient) GetAllBrokers(_ context.Context) ([]Broker, error) {
+	brokers := a.client.Brokers()
+	result := make([]Broker, 0, len(brokers))
+	for _, broker := range brokers {
 		result = append(result, Broker{
-			ID: broker.ID,
+			ID: broker.ID(),
 		})
 	}
+
 	return result, nil
 }
 
-func (a *admin) GetBrokerConfig(ctx context.Context, configName string) (string, error) {
-	response, err := a.clusterMetadata(ctx)
+func (a *saramaAdminClient) GetBrokerConfig(
+	_ context.Context,
+	configName string,
+) (string, error) {
+	_, controller, err := a.admin.DescribeCluster()
 	if err != nil {
 		return "", errors.Trace(err)
 	}
-	controllerID := response.Brokers[0].ID
-	resources := []kafka.ConfigResource{
-		{
-			Type:   kafka.ResourceBroker,
-			Name:   strconv.Itoa(int(controllerID)),
-			Config: []kafka.ConfigEntry{{Name: configName}},
-		},
-	}
-	results, err := a.client.DescribeConfigs(ctx, resources)
+
+	configEntries, err := a.admin.DescribeConfig(sarama.ConfigResource{
+		Type:        sarama.BrokerResource,
+		Name:        strconv.Itoa(int(controller)),
+		ConfigNames: []string{configName},
+	})
 	if err != nil {
 		return "", errors.Trace(err)
 	}
-	if len(results) == 0 || len(results[0].Config) == 0 {
-		log.Warn("Kafka config item not found",
-			zap.String("configName", configName))
-		return "", errors.ErrKafkaConfigNotFound.GenWithStack(
-			"cannot find the `%s` from the broker's configuration", configName)
-	}
+
 	// For compatibility with KOP, we checked all return values.
 	// 1. Kafka only returns requested configs.
 	// 2. Kop returns all configs.
-	for _, entry := range results[0].Config {
+	for _, entry := range configEntries {
 		if entry.Name == configName {
 			return entry.Value, nil
 		}
 	}
+
 	log.Warn("Kafka config item not found",
+		zap.String("namespace", a.changefeed.Namespace()),
+		zap.String("changefeed", a.changefeed.Name()),
 		zap.String("configName", configName))
-	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
+	return "", cerror.ErrKafkaConfigNotFound.GenWithStack(
 		"cannot find the `%s` from the broker's configuration", configName)
 }
 
-func (a *admin) GetTopicConfig(ctx context.Context, topicName string, configName string) (string, error) {
-	resources := []kafka.ConfigResource{
-		{
-			Type:   kafka.ResourceTopic,
-			Name:   topicName,
-			Config: []kafka.ConfigEntry{{Name: configName}},
-		},
-	}
-	results, err := a.client.DescribeConfigs(ctx, resources)
+func (a *saramaAdminClient) GetTopicConfig(
+	_ context.Context, topicName string, configName string,
+) (string, error) {
+	configEntries, err := a.admin.DescribeConfig(sarama.ConfigResource{
+		Type:        sarama.TopicResource,
+		Name:        topicName,
+		ConfigNames: []string{configName},
+	})
 	if err != nil {
 		return "", errors.Trace(err)
 	}
-	if len(results) == 0 || len(results[0].Config) == 0 {
-		log.Warn("Kafka config item not found",
-			zap.String("configName", configName))
-		return "", errors.ErrKafkaConfigNotFound.GenWithStack(
-			"cannot find the `%s` from the topic's configuration", configName)
-	}
+
 	// For compatibility with KOP, we checked all return values.
 	// 1. Kafka only returns requested configs.
 	// 2. Kop returns all configs.
-	for _, entry := range results[0].Config {
+	for _, entry := range configEntries {
 		if entry.Name == configName {
 			log.Info("Kafka config item found",
-				zap.String("namespace", a.changefeedID.Namespace()),
-				zap.String("changefeed", a.changefeedID.Name()),
+				zap.String("namespace", a.changefeed.Namespace()),
+				zap.String("changefeed", a.changefeed.Name()),
 				zap.String("configName", configName),
 				zap.String("configValue", entry.Value))
 			return entry.Value, nil
 		}
 	}
+
 	log.Warn("Kafka config item not found",
+		zap.String("namespace", a.changefeed.Namespace()),
+		zap.String("changefeed", a.changefeed.Name()),
 		zap.String("configName", configName))
-	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
+	return "", cerror.ErrKafkaConfigNotFound.GenWithStack(
 		"cannot find the `%s` from the topic's configuration", configName)
 }
 
-func (a *admin) GetTopicsMeta(
-	ctx context.Context,
-	topics []string,
-	ignoreTopicError bool,
+func (a *saramaAdminClient) GetTopicsMeta(
+	_ context.Context, topics []string, ignoreTopicError bool,
 ) (map[string]TopicDetail, error) {
-	resp, err := a.clusterMetadata(ctx)
+	result := make(map[string]TopicDetail, len(topics))
+
+	metaList, err := a.admin.DescribeTopics(topics)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	result := make(map[string]TopicDetail, len(resp.Topics))
-	for _, topic := range topics {
-		msg, ok := resp.Topics[topic]
-		if !ok {
-			log.Warn("fetch topic meta failed",
-				zap.String("topic", topic), zap.Error(msg.Error))
-			continue
-		}
-		if msg.Error.Code() != kafka.ErrNoError {
+
+	for _, meta := range metaList {
+		if meta.Err != sarama.ErrNoError {
 			if !ignoreTopicError {
-				return nil, errors.Trace(msg.Error)
+				return nil, meta.Err
 			}
 			log.Warn("fetch topic meta failed",
-				zap.String("topic", topic), zap.Error(msg.Error))
+				zap.String("namespace", a.changefeed.Namespace()),
+				zap.String("changefeed", a.changefeed.Name()),
+				zap.String("topic", meta.Name),
+				zap.Error(meta.Err))
 			continue
 		}
-		result[topic] = TopicDetail{
-			Name:          topic,
-			NumPartitions: int32(len(msg.Partitions)),
+		result[meta.Name] = TopicDetail{
+			Name:          meta.Name,
+			NumPartitions: int32(len(meta.Partitions)),
 		}
 	}
 	return result, nil
 }
 
-func (a *admin) GetTopicsPartitionsNum(
-	ctx context.Context, topics []string,
+func (a *saramaAdminClient) GetTopicsPartitionsNum(
+	_ context.Context, topics []string,
 ) (map[string]int32, error) {
-	resp, err := a.clusterMetadata(ctx)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
 	result := make(map[string]int32, len(topics))
 	for _, topic := range topics {
-		msg, ok := resp.Topics[topic]
-		if !ok {
-			log.Warn("fetch topic meta failed",
-				zap.String("topic", topic), zap.Error(msg.Error))
-			continue
+		partition, err := a.client.Partitions(topic)
+		if err != nil {
+			return nil, errors.Trace(err)
 		}
-		result[topic] = int32(len(msg.Partitions))
+		result[topic] = int32(len(partition))
 	}
+
 	return result, nil
 }
 
-func (a *admin) CreateTopic(
-	ctx context.Context,
-	detail *TopicDetail,
-	validateOnly bool,
+func (a *saramaAdminClient) CreateTopic(
+	_ context.Context, detail *TopicDetail, validateOnly bool,
 ) error {
-	topics := []kafka.TopicSpecification{
-		{
-			Topic:             detail.Name,
-			NumPartitions:     int(detail.NumPartitions),
-			ReplicationFactor: int(detail.ReplicationFactor),
-		},
+	request := &sarama.TopicDetail{
+		NumPartitions:     detail.NumPartitions,
+		ReplicationFactor: detail.ReplicationFactor,
 	}
-	results, err := a.client.CreateTopics(ctx, topics)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	for _, res := range results {
-		if res.Error.Code() == kafka.ErrTopicAlreadyExists {
-			return errors.Trace(err)
-		}
+
+	err := a.admin.CreateTopic(detail.Name, request, validateOnly)
+	// Ignore the already exists error because it's not harmful.
+	if err != nil && !strings.Contains(err.Error(), sarama.ErrTopicAlreadyExists.Error()) {
+		return err
 	}
 	return nil
 }
 
-func (a *admin) Close() {
-	log.Info("admin client start closing",
-		zap.String("namespace", a.changefeedID.Namespace()),
-		zap.String("changefeed", a.changefeedID.Name()))
-	a.client.Close()
-	log.Info("kafka admin client is fully closed",
-		zap.String("namespace", a.changefeedID.Namespace()),
-		zap.String("changefeed", a.changefeedID.Name()))
+func (a *saramaAdminClient) Close() {
+	if err := a.admin.Close(); err != nil {
+		log.Warn("close admin client meet error",
+			zap.String("namespace", a.changefeed.Namespace()),
+			zap.String("changefeed", a.changefeed.Name()),
+			zap.Error(err))
+	}
 }

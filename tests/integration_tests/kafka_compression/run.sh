@@ -18,12 +18,11 @@ function test_compression() {
 	run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=canal-json&version=${KAFKA_VERSION}&enable-tidb-extension=true"
 	run_sql_file $CUR/data/$1_data.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	compression_algorithm=$(grep "kafka producer config.*compression.codec\\\\\":\\\\\"$1\\\\\".*" "$WORK_DIR/cdc.log")
+	compression_algorithm=$(grep "Kafka producer uses $1 compression algorithm" "$WORK_DIR/cdc.log")
 	if [[ "$compression_algorithm" -ne 1 ]]; then
 		echo "can't found producer compression algorithm"
 		exit 1
 	fi
-
 	check_table_exists test.$1_finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 200
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	run_cdc_cli changefeed pause -c $1

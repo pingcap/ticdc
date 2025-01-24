@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	v2 "github.com/pingcap/ticdc/pkg/sink/kafka/v2"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/br/pkg/utils"
 	"github.com/pingcap/tiflow/pkg/sink"
@@ -59,7 +60,7 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
 
-	kafkaComponent.Factory, err = factoryCreator(options, changefeedID)
+	kafkaComponent.Factory, err = factoryCreator(ctx, options, changefeedID)
 	if err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -93,9 +94,7 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 		options.DeriveTopicConfig(),
 		kafkaComponent.AdminClient,
 	)
-	if err != nil {
-		return kafkaComponent, protocol, errors.Trace(err)
-	}
+
 	scheme := sink.GetScheme(sinkURI)
 	kafkaComponent.EventRouter, err = eventrouter.NewEventRouter(sinkConfig, protocol, topic, scheme)
 	if err != nil {
@@ -130,7 +129,10 @@ func GetKafkaSinkComponent(
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
 ) (KafkaComponent, config.Protocol, error) {
-	factoryCreator := kafka.NewFactory
+	factoryCreator := kafka.NewSaramaFactory
+	if utils.GetOrZero(sinkConfig.EnableKafkaSinkV2) {
+		factoryCreator = v2.NewFactory
+	}
 	return getKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, factoryCreator)
 }
 
