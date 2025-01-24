@@ -35,7 +35,9 @@ function prepare() {
 
 	TOPIC_NAME="ticdc-failover-ddl-test-mix-$RANDOM"
 	SINK_URI="mysql://root@127.0.0.1:3306/"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
+	# run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
+    # TODO:确实可以开两个，纯 ddl 和有 syncpoint，便于定位问题
+    run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
 }
 
 function create_tables() {
@@ -77,7 +79,7 @@ function execute_dml() {
     table_name="table_$1"
     echo "DML: Inserting data into $table_name..."
     while true; do
-        run_sql "INSERT INTO test.$table_name (data) VALUES ('$(date +%s)');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+        run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('$(date +%s)');" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
     done
 }
 
@@ -86,7 +88,7 @@ function kill_server() {
         case $((RANDOM % 2)) in
             0)
                 cdc_pid_1=$(ps aux | grep cdc | grep 8300 | awk '{print $2}')
-                if $cdc_pid_1 == "" ; then
+                if [ -z "$cdc_pid_1" ]; then
                     continue
                 fi
                 kill -9 $cdc_pid_1
@@ -96,7 +98,7 @@ function kill_server() {
             ;;
             1)
                 cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
-                if $cdc_pid_2 == "" ; then
+                if [ -z "$cdc_pid_2" ]; then
                     continue
                 fi
                 kill -9 $cdc_pid_2

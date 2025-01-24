@@ -45,25 +45,6 @@ func (w *MysqlWriter) CreateSyncTable() error {
 	return w.CreateTable(database, filter.SyncPointTable, query)
 }
 
-func (w *MysqlWriter) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
-	if !w.syncPointTableInit {
-		// create sync point table if not exist
-		err := w.CreateSyncTable()
-		if err != nil {
-			return errors.Trace(err)
-		}
-		w.syncPointTableInit = true
-	}
-	err := w.SendSyncPointEvent(event)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	for _, callback := range event.PostTxnFlushed {
-		callback()
-	}
-	return nil
-}
-
 func (w *MysqlWriter) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
@@ -106,6 +87,8 @@ func (w *MysqlWriter) SendSyncPointEvent(event *commonEvent.SyncPointEvent) erro
 		}
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write syncpoint table; Exec Failed; Query is %s", query)))
 	}
+
+	log.Debug("exec syncpoint ts query", zap.String("query", query))
 
 	// set global tidb_external_ts to secondary ts
 	// TiDB supports tidb_external_ts system variable since v6.4.0.

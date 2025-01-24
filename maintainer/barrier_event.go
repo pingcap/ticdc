@@ -68,6 +68,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 	controller *Controller,
 	status *heartbeatpb.State,
 	dynamicSplitEnabled bool,
+	bootstraped bool,
 ) *BarrierEvent {
 	event := &BarrierEvent{
 		controller:          controller,
@@ -97,7 +98,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 			// TODO:clean code
 			// create range checker if dispatcher is ddl dispatcher
 			// otherwise store dispatcherID in reportedDispatchers, and not create rangeChecker
-			if dispatcherID == controller.ddlDispatcherID {
+			if bootstraped || dispatcherID == controller.ddlDispatcherID {
 				event.createRangeCheckerForTypeDB()
 			} else {
 				event.reportedDispatchers[dispatcherID] = struct{}{}
@@ -105,7 +106,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		case heartbeatpb.InfluenceType_All:
 			// create range checker if dispatcher is ddl dispatcher
 			// otherwise store dispatcherID in reportedDispatchers, and not create rangeChecker
-			if dispatcherID == controller.ddlDispatcherID {
+			if bootstraped || dispatcherID == controller.ddlDispatcherID {
 				event.createRangeCheckerForTypeAll()
 			} else {
 				event.reportedDispatchers[dispatcherID] = struct{}{}

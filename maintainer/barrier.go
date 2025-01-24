@@ -166,7 +166,7 @@ func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 			event, ok := b.blockedEvents.Get(key)
 			if !ok {
-				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.controller, blockState, b.splitTableEnabled)
+				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.controller, blockState, b.splitTableEnabled, true)
 				b.blockedEvents.Set(key, event)
 			}
 			switch blockState.Stage {
@@ -306,7 +306,7 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
 		// no block event found
-		be := NewBlockEvent(changefeedID, dispatcherID, b.controller, status.State, b.splitTableEnabled)
+		be := NewBlockEvent(changefeedID, dispatcherID, b.controller, status.State, b.splitTableEnabled, false)
 		// the event is a fake event, the dispatcher will not send the block event
 		be.rangeChecker = range_checker.NewBoolRangeChecker(false)
 		return be
@@ -361,7 +361,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	// it's not a blocked event, it must be sent by table event trigger dispatcher, just for doing scheduler
 	// and the ddl already synced to downstream , e.g.: create table
 	// if ack failed, dispatcher will send a heartbeat again, so we do not need to care about resend message here
-	event := NewBlockEvent(changefeedID, dispatcherID, b.controller, blockState, b.splitTableEnabled)
+	event := NewBlockEvent(changefeedID, dispatcherID, b.controller, blockState, b.splitTableEnabled, false)
 	event.scheduleBlockEvent()
 	return event, nil
 }
@@ -372,7 +372,7 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 ) *BarrierEvent {
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
-		event = NewBlockEvent(changefeedID, dispatcherID, b.controller, blockState, b.splitTableEnabled)
+		event = NewBlockEvent(changefeedID, dispatcherID, b.controller, blockState, b.splitTableEnabled, false)
 		b.blockedEvents.Set(key, event)
 	}
 	return event
