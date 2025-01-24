@@ -10,7 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package worker
+package writer
 
 import (
 	"bytes"
@@ -22,7 +22,6 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/worker/defragmenter"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -39,8 +38,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// CloudStorageWorker denotes a worker responsible for writing messages to cloud storage.
-type CloudStorageWorker struct {
+// Writer denotes a worker responsible for writing messages to cloud storage.
+type Writer struct {
 	// worker id
 	id           int
 	changeFeedID commonType.ChangeFeedID
@@ -48,7 +47,7 @@ type CloudStorageWorker struct {
 	config       *cloudstorage.Config
 	// toBeFlushedCh contains a set of batchedTask waiting to be flushed to cloud storage.
 	toBeFlushedCh          chan batchedTask
-	inputCh                *chann.DrainableChann[defragmenter.EventFragment]
+	inputCh                *chann.DrainableChann[EventFragment]
 	isClosed               uint64
 	statistics             *metrics.Statistics
 	filePathGenerator      *cloudstorage.FilePathGenerator
@@ -59,17 +58,17 @@ type CloudStorageWorker struct {
 	metricsWorkerBusyRatio prometheus.Counter
 }
 
-func NewCloudStorageWorker(
+func NewWriter(
 	id int,
 	changefeedID commonType.ChangeFeedID,
 	storage storage.ExternalStorage,
 	config *cloudstorage.Config,
 	extension string,
-	inputCh *chann.DrainableChann[defragmenter.EventFragment],
+	inputCh *chann.DrainableChann[EventFragment],
 	statistics *metrics.Statistics,
-) *CloudStorageWorker {
+) *Writer {
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
-	d := &CloudStorageWorker{
+	d := &Writer{
 		id:                id,
 		changeFeedID:      changefeedID,
 		storage:           storage,
@@ -94,7 +93,7 @@ func NewCloudStorageWorker(
 }
 
 // Run creates a set of background goroutines.
-func (d *CloudStorageWorker) Run(ctx context.Context) error {
+func (d *Writer) Run(ctx context.Context) error {
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		return d.flushMessages(ctx)
@@ -109,7 +108,7 @@ func (d *CloudStorageWorker) Run(ctx context.Context) error {
 
 // flushMessages flushed messages of active tables to cloud storage.
 // active tables are those tables that have received events after the last flush.
-func (d *CloudStorageWorker) flushMessages(ctx context.Context) error {
+func (d *Writer) flushMessages(ctx context.Context) error {
 	var flushTimeSlice time.Duration
 	overseerDuration := d.config.FlushInterval * 2
 	overseerTicker := time.NewTicker(overseerDuration)
@@ -198,14 +197,14 @@ func (d *CloudStorageWorker) flushMessages(ctx context.Context) error {
 	}
 }
 
-func (d *CloudStorageWorker) writeIndexFile(ctx context.Context, path, content string) error {
+func (d *Writer) writeIndexFile(ctx context.Context, path, content string) error {
 	start := time.Now()
 	err := d.storage.WriteFile(ctx, path, []byte(content))
 	d.metricFlushDuration.Observe(time.Since(start).Seconds())
 	return err
 }
 
-func (d *CloudStorageWorker) writeDataFile(ctx context.Context, path string, task *singleTableTask) error {
+func (d *Writer) writeDataFile(ctx context.Context, path string, task *singleTableTask) error {
 	var callbacks []func()
 	buf := bytes.NewBuffer(make([]byte, 0, task.size))
 	rowsCnt := 0
@@ -267,8 +266,8 @@ func (d *CloudStorageWorker) writeDataFile(ctx context.Context, path string, tas
 // genAndDispatchTask dispatches flush tasks in two conditions:
 // 1. the flush interval exceeds the upper limit.
 // 2. the file size exceeds the upper limit.
-func (d *CloudStorageWorker) genAndDispatchTask(ctx context.Context,
-	ch *chann.DrainableChann[defragmenter.EventFragment],
+func (d *Writer) genAndDispatchTask(ctx context.Context,
+	ch *chann.DrainableChann[EventFragment],
 ) error {
 	batchedTask := newBatchedTask()
 	ticker := time.NewTicker(d.config.FlushInterval)
@@ -300,12 +299,12 @@ func (d *CloudStorageWorker) genAndDispatchTask(ctx context.Context,
 			if !ok || atomic.LoadUint64(&d.isClosed) == 1 {
 				return nil
 			}
-			batchedTask.HandleSingleTableEvent(frag)
+			batchedTask.handleSingleTableEvent(frag)
 			// if the file size exceeds the upper limit, emit the flush task containing the table
 			// as soon as possible.
-			table := frag.VersionedTable
+			table := frag.versionedTable
 			if batchedTask.batch[table].size >= uint64(d.config.FileSize) {
-				task := batchedTask.GenerateTaskByTable(table)
+				task := batchedTask.generateTaskByTable(table)
 				select {
 				case <-ctx.Done():
 					return errors.Trace(ctx.Err())
@@ -319,66 +318,8 @@ func (d *CloudStorageWorker) genAndDispatchTask(ctx context.Context,
 	}
 }
 
-func (d *CloudStorageWorker) Close() {
+func (d *Writer) Close() {
 	if !atomic.CompareAndSwapUint64(&d.isClosed, 0, 1) {
-		return
-	}
-}
-
-// CloudStorageEncodingWorker denotes the worker responsible for encoding RowChangedEvents
-// to messages formatted in the specific protocol.
-type CloudStorageEncodingWorker struct {
-	id           int
-	changeFeedID commonType.ChangeFeedID
-	encoder      common.TxnEventEncoder
-	isClosed     uint64
-	inputCh      <-chan defragmenter.EventFragment
-	outputCh     chan<- defragmenter.EventFragment
-}
-
-func NewCloudStorageEncodingWorker(
-	workerID int,
-	changefeedID commonType.ChangeFeedID,
-	encoder common.TxnEventEncoder,
-	inputCh <-chan defragmenter.EventFragment,
-	outputCh chan<- defragmenter.EventFragment,
-) *CloudStorageEncodingWorker {
-	return &CloudStorageEncodingWorker{
-		id:           workerID,
-		changeFeedID: changefeedID,
-		encoder:      encoder,
-		inputCh:      inputCh,
-		outputCh:     outputCh,
-	}
-}
-
-func (w *CloudStorageEncodingWorker) Run(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
-		case frag, ok := <-w.inputCh:
-			if !ok || atomic.LoadUint64(&w.isClosed) == 1 {
-				return nil
-			}
-			err := w.encodeEvents(frag)
-			if err != nil {
-				return errors.Trace(err)
-			}
-		}
-	}
-}
-
-func (w *CloudStorageEncodingWorker) encodeEvents(frag defragmenter.EventFragment) error {
-	w.encoder.AppendTxnEvent(frag.Event)
-	frag.EncodedMsgs = w.encoder.Build()
-	w.outputCh <- frag
-
-	return nil
-}
-
-func (w *CloudStorageEncodingWorker) Close() {
-	if !atomic.CompareAndSwapUint64(&w.isClosed, 0, 1) {
 		return
 	}
 }
@@ -402,23 +343,23 @@ func newBatchedTask() batchedTask {
 	}
 }
 
-func (t *batchedTask) HandleSingleTableEvent(event defragmenter.EventFragment) {
-	table := event.VersionedTable
+func (t *batchedTask) handleSingleTableEvent(event EventFragment) {
+	table := event.versionedTable
 	if _, ok := t.batch[table]; !ok {
 		t.batch[table] = &singleTableTask{
 			size:      0,
-			tableInfo: event.Event.TableInfo,
+			tableInfo: event.event.TableInfo,
 		}
 	}
 
 	v := t.batch[table]
-	for _, msg := range event.EncodedMsgs {
+	for _, msg := range event.encodedMsgs {
 		v.size += uint64(len(msg.Value))
 	}
-	v.msgs = append(v.msgs, event.EncodedMsgs...)
+	v.msgs = append(v.msgs, event.encodedMsgs...)
 }
 
-func (t *batchedTask) GenerateTaskByTable(table cloudstorage.VersionedTableName) batchedTask {
+func (t *batchedTask) generateTaskByTable(table cloudstorage.VersionedTableName) batchedTask {
 	v := t.batch[table]
 	if v == nil {
 		log.Panic("table not found in dml task", zap.Any("table", table), zap.Any("task", t))

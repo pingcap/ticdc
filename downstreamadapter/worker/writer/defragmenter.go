@@ -10,7 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package defragmenter
+package writer
 
 import (
 	"context"
@@ -25,17 +25,25 @@ import (
 
 // EventFragment is used to attach a sequence number to TxnCallbackableEvent.
 type EventFragment struct {
-	Event          *commonEvent.DMLEvent
-	VersionedTable cloudstorage.VersionedTableName
+	event          *commonEvent.DMLEvent
+	versionedTable cloudstorage.VersionedTableName
 
 	// The sequence number is mainly useful for TxnCallbackableEvent defragmentation.
 	// e.g. TxnCallbackableEvent 1~5 are dispatched to a group of encoding workers, but the
 	// encoding completion time varies. Let's say the final completion sequence are 1,3,2,5,4,
 	// we can use the sequence numbers to do defragmentation so that the events can arrive
 	// at dmlWorker sequentially.
-	SeqNumber uint64
+	seqNumber uint64
 	// encodedMsgs denote the encoded messages after the event is handled in encodingWorker.
-	EncodedMsgs []*common.Message
+	encodedMsgs []*common.Message
+}
+
+func NewEventFragment(seq uint64, version cloudstorage.VersionedTableName, event *commonEvent.DMLEvent) EventFragment {
+	return EventFragment{
+		seqNumber:      seq,
+		versionedTable: version,
+		event:          event,
+	}
 }
 
 // Defragmenter is used to handle event fragments which can be registered
@@ -73,10 +81,10 @@ func (d *Defragmenter) Run(ctx context.Context) error {
 			}
 			// check whether to write messages to output channel right now
 			next := d.lastDispatchedSeq + 1
-			if frag.SeqNumber == next {
+			if frag.seqNumber == next {
 				d.writeMsgsConsecutive(ctx, frag)
-			} else if frag.SeqNumber > next {
-				d.future[frag.SeqNumber] = frag
+			} else if frag.seqNumber > next {
+				d.future[frag.seqNumber] = frag
 			} else {
 				return nil
 			}
@@ -108,12 +116,12 @@ func (d *Defragmenter) writeMsgsConsecutive(
 }
 
 func (d *Defragmenter) dispatchFragToDMLWorker(frag EventFragment) {
-	tableName := frag.VersionedTable.TableNameWithPhysicTableID
+	tableName := frag.versionedTable.TableNameWithPhysicTableID
 	d.hasher.Reset()
 	d.hasher.Write([]byte(tableName.Schema), []byte(tableName.Table))
 	workerID := d.hasher.Sum32() % uint32(len(d.outputChs))
 	d.outputChs[workerID].In() <- frag
-	d.lastDispatchedSeq = frag.SeqNumber
+	d.lastDispatchedSeq = frag.seqNumber
 }
 
 func (d *Defragmenter) close() {
