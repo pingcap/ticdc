@@ -402,7 +402,7 @@ func (c *Controller) addNewSpans(schemaID int64, tableSpans []*heartbeatpb.Table
 }
 
 func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
-	// todo: do we need to set timezone here?
+	// Use a empty timezone because table filter does not need it.
 	f, err := filter.NewFilter(c.cfConfig.Filter, "", c.cfConfig.CaseSensitive, c.cfConfig.ForceReplicate)
 	if err != nil {
 		return nil, errors.Cause(err)
