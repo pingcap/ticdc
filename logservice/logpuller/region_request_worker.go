@@ -179,7 +179,9 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 		timer := time.After(10 * time.Second)
 		g.Go(func() error {
 			<-timer
-			return errors.New("inject force reconnect")
+			err := errors.New("inject force reconnect")
+			log.Info("inject force reconnect", zap.Error(err))
+			return err
 		})
 	})
 
