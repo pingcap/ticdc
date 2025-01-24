@@ -142,7 +142,17 @@ jobs:
       - name: Test changefeed resume with checkpoint ts
         if: ${{ success() }}
         run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_resume_with_checkpoint_ts    
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_resume_with_checkpoint_ts  
+
+      - name: Test capture suicide while balance table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=capture_suicide_while_balance_table 
+
+      - name: Test kv client stream reconnect
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=kv_client_stream_reconnect  
 
       - name: Upload test logs
         if: always()
