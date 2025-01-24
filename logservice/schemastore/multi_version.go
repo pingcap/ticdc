@@ -30,10 +30,6 @@ type tableInfoItem struct {
 	Info    *common.TableInfo
 }
 
-// func (v *tableInfoItem) String() string {
-// 	return fmt.Sprintf("tableInfoItem{version: %d, info: %v}", v.version, v.info)
-// }
-
 type versionedTableInfoStore struct {
 	mu sync.Mutex
 
