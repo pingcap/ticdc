@@ -494,11 +494,19 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, error) {
 					if createdAt.Before(createdTime) {
 						// show the ddl is executed
 						retStartTsList[tableIdIdxMap[tableId]] = ddlTs
+						log.Debug("createdTime is larger than createdAt", zap.Int64("tableId", tableId), zap.Int64("relatedTableId", relatedTableId), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs))
+						continue
 					} else {
 						// show the ddl is not executed
 						retStartTsList[tableIdIdxMap[tableId]] = ddlTs - 1
+						log.Debug("createdTime is less than  createdAt", zap.Int64("tableId", tableId), zap.Int64("relatedTableId", relatedTableId), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs-1))
+						continue
 					}
 				}
+				// if no ddl job item
+				retStartTsList[tableIdIdxMap[tableId]] = ddlTs - 1
+				log.Debug("no ddl job item", zap.Int64("tableId", tableId), zap.Int64("relatedTableId", relatedTableId), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs-1))
+				continue
 			} else {
 				// if downstream is not tidb, we can't know whether the ddl is executed or not, so we just set the startTs to ddl_ts - 1.
 				retStartTsList[tableIdIdxMap[tableId]] = ddlTs - 1
