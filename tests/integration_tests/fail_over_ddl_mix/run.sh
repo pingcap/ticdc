@@ -2,7 +2,7 @@
 # This test case is going to test the situation with dmls, ddls and random server down.
 # The test case is as follows:
 # 1. Start two ticdc servers.
-# 2. Create 10 tables. And then randomly exec the ddls: 
+# 2. Create 10 tables. And then randomly exec the ddls:
 #    such as: drop table, and then create table
 #             drop table, and then recover table
 #             truncate table
@@ -30,115 +30,114 @@ function prepare() {
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
-    run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
 	TOPIC_NAME="ticdc-failover-ddl-test-mix-$RANDOM"
 	SINK_URI="mysql://root@127.0.0.1:3306/"
-    run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
+	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
 }
 
 function create_tables() {
-    for i in {1..5}; do
-        echo "Creating table table_$i..."
-        run_sql "CREATE TABLE IF NOT EXISTS test.table_$i (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-    done
+	for i in {1..5}; do
+		echo "Creating table table_$i..."
+		run_sql "CREATE TABLE IF NOT EXISTS test.table_$i (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	done
 }
 
 function execute_ddl() {
-    while true; do
-        table_num=$((RANDOM % 5 + 1))
-        table_name="table_$table_num"
+	while true; do
+		table_num=$((RANDOM % 5 + 1))
+		table_name="table_$table_num"
 
-        case $((RANDOM % 3)) in
-            0)
-                echo "DDL: Dropping and recreating $table_name..."
-                run_sql "DROP TABLE IF EXISTS test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-                sleep 0.5
-                run_sql "CREATE TABLE IF NOT EXISTS test.$table_name (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-                ;;
-            1)
-                echo "DDL: Dropping and recovering $table_name..."
-                run_sql "DROP TABLE IF EXISTS test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-                sleep 0.5
-                run_sql "RECOVER TABLE test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-                ;;
-            2)
-                echo "DDL: Truncating $table_name..."
-                run_sql "TRUNCATE TABLE test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-                ;;
-        esac
+		case $((RANDOM % 3)) in
+		0)
+			echo "DDL: Dropping and recreating $table_name..."
+			run_sql "DROP TABLE IF EXISTS test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			sleep 0.5
+			run_sql "CREATE TABLE IF NOT EXISTS test.$table_name (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			;;
+		1)
+			echo "DDL: Dropping and recovering $table_name..."
+			run_sql "DROP TABLE IF EXISTS test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			sleep 0.5
+			run_sql "RECOVER TABLE test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			;;
+		2)
+			echo "DDL: Truncating $table_name..."
+			run_sql "TRUNCATE TABLE test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			;;
+		esac
 
-        sleep 1
-    done
+		sleep 1
+	done
 }
 
 function execute_dml() {
-    table_name="table_$1"
-    echo "DML: Inserting data into $table_name..."
-    while true; do
-        run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('$(date +%s)');" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
-    done
+	table_name="table_$1"
+	echo "DML: Inserting data into $table_name..."
+	while true; do
+		run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('$(date +%s)');" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+	done
 }
 
 function kill_server() {
-    for count in {1..10}; do
-        case $((RANDOM % 2)) in
-            0)
-                cdc_pid_1=$(ps aux | grep cdc | grep 8300 | awk '{print $2}')
-                if [ -z "$cdc_pid_1" ]; then
-                    continue
-                fi
-                kill -9 $cdc_pid_1
+	for count in {1..10}; do
+		case $((RANDOM % 2)) in
+		0)
+			cdc_pid_1=$(ps aux | grep cdc | grep 8300 | awk '{print $2}')
+			if [ -z "$cdc_pid_1" ]; then
+				continue
+			fi
+			kill -9 $cdc_pid_1
 
-                sleep 5
-                run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-$count" --addr "127.0.0.1:8300"
-            ;;
-            1)
-                cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
-                if [ -z "$cdc_pid_2" ]; then
-                    continue
-                fi
-                kill -9 $cdc_pid_2
+			sleep 5
+			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-$count" --addr "127.0.0.1:8300"
+			;;
+		1)
+			cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+			if [ -z "$cdc_pid_2" ]; then
+				continue
+			fi
+			kill -9 $cdc_pid_2
 
-                sleep 5
-                run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-$count" --addr "127.0.0.1:8301"
-            ;;
-        esac
-        sleep 15
-    done
+			sleep 5
+			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-$count" --addr "127.0.0.1:8301"
+			;;
+		esac
+		sleep 15
+	done
 }
 
-
 main() {
-    prepare
-    
-    create_tables
-    execute_ddl &
-    DDL_PID=$!
+	prepare
 
-    # 启动 DML 线程
-    execute_dml 1 &
-    DML_PID_1=$!
-    execute_dml 2 &
-    DML_PID_2=$!
-    execute_dml 3 &
-    DML_PID_3=$!
-    execute_dml 4 &
-    DML_PID_4=$!
-    execute_dml 5 &
-    DML_PID_5=$!
+	create_tables
+	execute_ddl &
+	DDL_PID=$!
 
-    kill_server
+	# 启动 DML 线程
+	execute_dml 1 &
+	DML_PID_1=$!
+	execute_dml 2 &
+	DML_PID_2=$!
+	execute_dml 3 &
+	DML_PID_3=$!
+	execute_dml 4 &
+	DML_PID_4=$!
+	execute_dml 5 &
+	DML_PID_5=$!
 
-    sleep 10
+	kill_server
 
-    kill -9 $DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
+	sleep 10
 
-    sleep 10
+	kill -9 $DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
 
-    check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+	sleep 10
 
-    cleanup_process $CDC_BINARY
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+
+	cleanup_process $CDC_BINARY
 }
 
 trap stop_tidb_cluster EXIT
