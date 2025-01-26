@@ -223,7 +223,7 @@ func insertItemQuery(tableIds []int64, ticdcClusterID string, changefeedID strin
 		builder.WriteString(", ")
 		builder.WriteString(strconv.FormatInt(relatedTableID, 10))
 		builder.WriteString(", ")
-		builder.WriteString("finished")
+		builder.WriteString(finished)
 		builder.WriteString(")")
 		if idx < len(tableIds)-1 {
 			builder.WriteString(", ")

@@ -50,7 +50,7 @@ func TestScheduleEvent(t *testing.T) {
 		BlockTs:           10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{InfluenceType: heartbeatpb.InfluenceType_All},
 		NeedAddedTables:   []*heartbeatpb.Table{{2, 1}, {3, 1}},
-	}, true)
+	}, true, false)
 	event.scheduleBlockEvent()
 	// drop table will be executed first
 	require.Equal(t, 2, controller.replicationDB.GetAbsentSize())
@@ -63,7 +63,7 @@ func TestScheduleEvent(t *testing.T) {
 			SchemaID:      1,
 		},
 		NeedAddedTables: []*heartbeatpb.Table{{4, 1}},
-	}, false)
+	}, false, false)
 	event.scheduleBlockEvent()
 	// drop table will be executed first, then add the new table
 	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
@@ -76,7 +76,7 @@ func TestScheduleEvent(t *testing.T) {
 			TableIDs:      []int64{4},
 		},
 		NeedAddedTables: []*heartbeatpb.Table{{5, 1}},
-	}, false)
+	}, false, false)
 	event.scheduleBlockEvent()
 	// drop table will be executed first, then add the new table
 	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
@@ -111,7 +111,7 @@ func TestResendAction(t *testing.T) {
 		BlockTables: &heartbeatpb.InfluencedTables{
 			InfluenceType: heartbeatpb.InfluenceType_All,
 		},
-	}, false)
+	}, false, false)
 	// time is not reached
 	event.lastResendTime = time.Now()
 	event.selected.Store(true)
@@ -138,7 +138,7 @@ func TestResendAction(t *testing.T) {
 			InfluenceType: heartbeatpb.InfluenceType_DB,
 			SchemaID:      1,
 		},
-	}, false)
+	}, false, false)
 	event.selected.Store(true)
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend()
@@ -156,7 +156,7 @@ func TestResendAction(t *testing.T) {
 			InfluenceType: heartbeatpb.InfluenceType_All,
 			SchemaID:      1,
 		},
-	}, false)
+	}, false, false)
 	event.selected.Store(true)
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend()
@@ -175,7 +175,7 @@ func TestResendAction(t *testing.T) {
 			TableIDs:      []int64{1, 2},
 			SchemaID:      1,
 		},
-	}, false)
+	}, false, false)
 	event.selected.Store(true)
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend()
@@ -217,8 +217,7 @@ func TestUpdateSchemaID(t *testing.T) {
 				NewSchemaID: 2,
 			},
 		},
-	}, true,
-	)
+	}, true, false)
 	event.scheduleBlockEvent()
 	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
 	// check the schema id and map is updated

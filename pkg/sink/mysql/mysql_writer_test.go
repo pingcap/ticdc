@@ -20,9 +20,11 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"github.com/stretchr/testify/require"
 )
@@ -122,14 +124,16 @@ func TestMysqlWriter_FlushDDLEvent(t *testing.T) {
 			changefeed varchar(255),
 			ddl_ts varchar(18),
 			table_id bigint(21),
-			created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			finished bool,
+			related_table_id bigint(21),
+			created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			INDEX (ticdc_cluster_id, changefeed, table_id),
 			PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)
 		);`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id) VALUES ('default', 'test/test', '1', 0), ('default', 'test/test', '1', 1) ON DUPLICATE KEY UPDATE ddl_ts=VALUES(ddl_ts), created_at=CURRENT_TIMESTAMP;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, related_table_id, finished) VALUES ('default', 'test/test', '1',  0, 1, 1), ('default', 'test/test', '1', 1, 1, 1) ON DUPLICATE KEY UPDATE finished=VALUES(finished), related_table_id=VALUES(related_table_id), ddl_ts=VALUES(ddl_ts), created_at=NOW();").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	err := writer.FlushDDLEvent(ddlEvent)
@@ -159,7 +163,7 @@ func TestMysqlWriter_FlushDDLEvent(t *testing.T) {
 	mock.ExpectCommit()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id) VALUES ('default', 'test/test', '2', 1) ON DUPLICATE KEY UPDATE ddl_ts=VALUES(ddl_ts), created_at=CURRENT_TIMESTAMP;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, related_table_id, finished) VALUES ('default', 'test/test', '2', 1, 1, 1) ON DUPLICATE KEY UPDATE finished=VALUES(finished), related_table_id=VALUES(related_table_id), ddl_ts=VALUES(ddl_ts), created_at=NOW();").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	err = writer.FlushDDLEvent(ddlEvent)
@@ -189,6 +193,8 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	syncPointEvent := &commonEvent.SyncPointEvent{
 		CommitTs: 1,
 	}
+	tableSchemaStore := util.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
+	writer.SetTableSchemaStore(tableSchemaStore)
 
 	mock.ExpectBegin()
 	mock.ExpectExec("CREATE DATABASE IF NOT EXISTS tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -211,6 +217,27 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	mock.ExpectExec("set global tidb_external_ts = 0").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
+	mock.ExpectBegin()
+	mock.ExpectExec("CREATE DATABASE IF NOT EXISTS tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("USE tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS ddl_ts_v1
+		(
+			ticdc_cluster_id varchar (255),
+			changefeed varchar(255),
+			ddl_ts varchar(18),
+			table_id bigint(21),
+			finished bool,
+			related_table_id bigint(21),
+			created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			INDEX (ticdc_cluster_id, changefeed, table_id),
+			PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)
+		);`).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, related_table_id, finished) VALUES ('default', 'test/test', '1', 0, 0, 1) ON DUPLICATE KEY UPDATE finished=VALUES(finished), related_table_id=VALUES(related_table_id), ddl_ts=VALUES(ddl_ts), created_at=NOW();").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
 	err := writer.FlushSyncPointEvent(syncPointEvent)
 	require.NoError(t, err)
 
@@ -222,6 +249,10 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	mock.ExpectQuery("select @@tidb_current_ts").WillReturnRows(sqlmock.NewRows([]string{"@@tidb_current_ts"}).AddRow(2))
 	mock.ExpectExec("insert ignore into tidb_cdc.syncpoint_v1 (ticdc_cluster_id, changefeed, primary_ts, secondary_ts) VALUES ('default', 'test/test', 2, 2)").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("set global tidb_external_ts = 2").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, related_table_id, finished) VALUES ('default', 'test/test', '2', 0, 0, 1) ON DUPLICATE KEY UPDATE finished=VALUES(finished), related_table_id=VALUES(related_table_id), ddl_ts=VALUES(ddl_ts), created_at=NOW();").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	err = writer.FlushSyncPointEvent(syncPointEvent)
