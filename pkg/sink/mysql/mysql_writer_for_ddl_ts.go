@@ -93,7 +93,11 @@ func (w *MysqlWriter) SendDDLTsPre(event commonEvent.BlockEvent) error {
 	}
 
 	if len(tableIds) > 0 {
-		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "0")
+		isSyncpoint := "1"
+		if event.GetType() == commonEvent.TypeDDLEvent {
+			isSyncpoint = "0"
+		}
+		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint)
 		log.Info("send ddl ts table query", zap.String("query", query))
 
 		_, err = tx.Exec(query)
@@ -160,7 +164,11 @@ func (w *MysqlWriter) SendDDLTs(event commonEvent.BlockEvent) error {
 	}
 
 	if len(tableIds) > 0 {
-		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "1")
+		isSyncpoint := "1"
+		if event.GetType() == commonEvent.TypeDDLEvent {
+			isSyncpoint = "0"
+		}
+		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint)
 		log.Info("send ddl ts table query", zap.String("query", query))
 
 		_, err = tx.Exec(query)
@@ -196,7 +204,7 @@ func (w *MysqlWriter) SendDDLTs(event commonEvent.BlockEvent) error {
 	return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "failed to write ddl ts table; Commit Fail;"))
 }
 
-func insertItemQuery(tableIds []int64, ticdcClusterID string, changefeedID string, ddlTs string, finished string) string {
+func insertItemQuery(tableIds []int64, ticdcClusterID string, changefeedID string, ddlTs string, finished string, isSyncpoint string) string {
 	// choose one related table_id to help table trigger event dispatcher to find the ddl jobs.
 	relatedTableID := tableIds[0] // TODO: relatedID need to be selected carefully, especially for partitioned tables
 	if relatedTableID == 0 {
@@ -209,7 +217,7 @@ func insertItemQuery(tableIds []int64, ticdcClusterID string, changefeedID strin
 	builder.WriteString(filter.TiCDCSystemSchema)
 	builder.WriteString(".")
 	builder.WriteString(filter.DDLTsTable)
-	builder.WriteString(" (ticdc_cluster_id, changefeed, ddl_ts, table_id, related_table_id, finished) VALUES ")
+	builder.WriteString(" (ticdc_cluster_id, changefeed, ddl_ts, table_id, related_table_id, finished, is_syncpoint) VALUES ")
 
 	for idx, tableId := range tableIds {
 		builder.WriteString("('")
@@ -224,12 +232,14 @@ func insertItemQuery(tableIds []int64, ticdcClusterID string, changefeedID strin
 		builder.WriteString(strconv.FormatInt(relatedTableID, 10))
 		builder.WriteString(", ")
 		builder.WriteString(finished)
+		builder.WriteString(", ")
+		builder.WriteString(isSyncpoint)
 		builder.WriteString(")")
 		if idx < len(tableIds)-1 {
 			builder.WriteString(", ")
 		}
 	}
-	builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), related_table_id=VALUES(related_table_id), ddl_ts=VALUES(ddl_ts), created_at=NOW();")
+	builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), related_table_id=VALUES(related_table_id), ddl_ts=VALUES(ddl_ts), created_at=NOW(), is_syncpoint=VALUES(is_syncpoint);")
 
 	return builder.String()
 }
@@ -270,11 +280,13 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 //     (we use related table to find the ddl job -- take `truncate table` as an example, the ddl job used the table truncated, but not the new table)
 //     2.2.2.1 if the latest ddl job time is larger than the createdAt, startTs = ddlTs
 //     2.2.2.2 else startTs = ddlTs - 1
-func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, error) {
+func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	retStartTsList := make([]int64, len(tableIDs))
 	tableIdIdxMap := make(map[int64]int, 0)
+	isSyncpoints := make([]bool, len(tableIDs))
 	for i, tableID := range tableIDs {
 		tableIdIdxMap[tableID] = i
+		isSyncpoints[i] = false
 	}
 
 	changefeedID := w.ChangefeedID.String()
@@ -289,22 +301,23 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, error) {
 				zap.String("namespace", w.ChangefeedID.Namespace()),
 				zap.String("changefeedID", w.ChangefeedID.Name()),
 				zap.Error(err))
-			return retStartTsList, nil
+			return retStartTsList, isSyncpoints, nil
 		}
-		return retStartTsList, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
+		return retStartTsList, isSyncpoints, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 	}
 
 	defer rows.Close()
 	var ddlTs, tableId, relatedTableId int64
-	var finished bool
+	var finished, isSyncpoint bool
 	var createdAtBytes []byte
 	for rows.Next() {
-		err := rows.Scan(&tableId, &relatedTableId, &ddlTs, &finished, &createdAtBytes)
+		err := rows.Scan(&tableId, &relatedTableId, &ddlTs, &finished, &createdAtBytes, &isSyncpoint)
 		if err != nil {
-			return retStartTsList, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
+			return retStartTsList, isSyncpoints, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 		}
 		if finished {
 			retStartTsList[tableIdIdxMap[tableId]] = ddlTs
+			isSyncpoints[tableIdIdxMap[tableId]] = isSyncpoint
 		} else {
 			if !w.cfg.IsTiDB {
 				log.Panic("ddl ts table is not finished, but downstream is not tidb, FIX IT")
@@ -325,6 +338,7 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, error) {
 				if createdAt.Before(createdTime) {
 					// show the ddl is executed
 					retStartTsList[tableIdIdxMap[tableId]] = ddlTs
+					isSyncpoints[tableIdIdxMap[tableId]] = isSyncpoint
 					log.Debug("createdTime is larger than createdAt", zap.Int64("tableId", tableId), zap.Int64("relatedTableId", relatedTableId), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs))
 					continue
 				} else {
@@ -337,12 +351,12 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, error) {
 		}
 	}
 
-	return retStartTsList, nil
+	return retStartTsList, isSyncpoints, nil
 }
 
 func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID string) string {
 	var builder strings.Builder
-	builder.WriteString("SELECT table_id, related_table_id, ddl_ts, finished, created_at FROM ")
+	builder.WriteString("SELECT table_id, related_table_id, ddl_ts, finished, created_at, is_syncpoint FROM ")
 	builder.WriteString(filter.TiCDCSystemSchema)
 	builder.WriteString(".")
 	builder.WriteString(filter.DDLTsTable)
@@ -538,6 +552,7 @@ func (w *MysqlWriter) createDDLTsTable() error {
 		table_id bigint(21),
 		finished bool,
 		related_table_id bigint(21),
+		is_syncpoint bool,
 		created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		INDEX (ticdc_cluster_id, changefeed, table_id),
 		PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)

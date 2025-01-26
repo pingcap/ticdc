@@ -162,17 +162,20 @@ func (w *MysqlDDLWorker) SetTableSchemaStore(tableSchemaStore *util.TableSchemaS
 	w.mysqlWriter.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (w *MysqlDDLWorker) GetStartTsList(tableIds []int64, startTsList []int64) ([]int64, error) {
-	ddlTsList, err := w.mysqlWriter.GetStartTsList(tableIds)
+func (w *MysqlDDLWorker) GetStartTsList(tableIds []int64, startTsList []int64) ([]int64, []bool, error) {
+	ddlTsList, isSyncpointList, err := w.mysqlWriter.GetStartTsList(tableIds)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	resTs := make([]int64, len(ddlTsList))
 	for idx, ddlTs := range ddlTsList {
+		if startTsList[idx] > ddlTs {
+			isSyncpointList[idx] = false
+		}
 		resTs[idx] = max(ddlTs, startTsList[idx])
 	}
 
-	return resTs, nil
+	return resTs, isSyncpointList, nil
 }
 
 func (w *MysqlDDLWorker) WriteBlockEvent(event commonEvent.BlockEvent) error {
