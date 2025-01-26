@@ -297,8 +297,7 @@ func fromColValToCsvVal(csvConfig *common.Config, row *chunk.Row, idx int, colIn
 						csvConfig.BinaryEncodingMethod))
 			}
 		}
-		bytesValue := row.GetBytes(idx)
-		return string(bytesValue), nil
+		return row.GetString(idx), nil
 	case mysql.TypeEnum:
 		enumValue := row.GetEnum(idx).Value
 		enumVar, err := types.ParseEnumValue(colInfo.GetElems(), enumValue)
@@ -313,10 +312,13 @@ func fromColValToCsvVal(csvConfig *common.Config, row *chunk.Row, idx int, colIn
 			return nil, cerror.WrapError(cerror.ErrCSVEncodeFailed, err)
 		}
 		return setVar.Name, nil
-	case mysql.TypeTiDBVectorFloat32:
+	case mysql.TypeBit:
 		d := row.GetDatum(idx, &colInfo.FieldType)
-		value := d.GetVectorFloat32().String()
-		return value, nil
+		// Encode bits as integers to avoid pingcap/tidb#10988 (which also affects MySQL itself)
+		return d.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
+	case mysql.TypeTiDBVectorFloat32:
+		vec := row.GetVectorFloat32(idx)
+		return vec.String(), nil
 	default:
 		d := row.GetDatum(idx, &colInfo.FieldType)
 		return d.GetValue(), nil

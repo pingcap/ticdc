@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -31,7 +30,6 @@ import (
 	"github.com/pingcap/tidb/br/pkg/storage"
 	mcloudstorage "github.com/pingcap/tiflow/cdc/sink/metrics/cloudstorage"
 	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"go.uber.org/zap"
@@ -67,7 +65,6 @@ func NewWriter(
 	inputCh *chann.DrainableChann[EventFragment],
 	statistics *metrics.Statistics,
 ) *Writer {
-	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	d := &Writer{
 		id:                id,
 		changeFeedID:      changefeedID,
@@ -76,7 +73,7 @@ func NewWriter(
 		inputCh:           inputCh,
 		toBeFlushedCh:     make(chan batchedTask, 64),
 		statistics:        statistics,
-		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension, pdClock),
+		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
 		metricWriteBytes: mcloudstorage.CloudStorageWriteBytesGauge.
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String()),
 		metricFileCount: mcloudstorage.CloudStorageFileCountGauge.

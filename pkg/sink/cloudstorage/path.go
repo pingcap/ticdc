@@ -28,15 +28,17 @@ import (
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/engine/pkg/clock"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/hash"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
+
 	"go.uber.org/zap"
 )
 
@@ -152,10 +154,10 @@ func NewFilePathGenerator(
 	config *Config,
 	storage storage.ExternalStorage,
 	extension string,
-	pdclock pdutil.Clock,
 ) *FilePathGenerator {
-	if pdclock == nil {
-		pdclock = pdutil.NewMonotonicClock(clock.New())
+	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
+	if pdClock == nil {
+		pdClock = pdutil.NewMonotonicClock(clock.New())
 		log.Warn("pd clock is not set in storage sink, use local clock instead",
 			zap.String("namespace", changefeedID.Namespace()),
 			zap.Stringer("changefeedID", changefeedID.ID()))
@@ -165,7 +167,7 @@ func NewFilePathGenerator(
 		config:       config,
 		extension:    extension,
 		storage:      storage,
-		pdClock:      pdclock,
+		pdClock:      pdClock,
 		fileIndex:    make(map[VersionedTableName]*indexWithDate),
 		hasher:       hash.NewPositionInertia(),
 		versionMap:   make(map[VersionedTableName]uint64),
