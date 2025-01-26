@@ -60,9 +60,10 @@ type Controller struct {
 	nodeChanged bool
 	nodeManager *watcher.NodeManager
 
-	taskScheduler threadpool.ThreadPool
-	taskHandlers  []*threadpool.TaskHandle
-	messageCenter messaging.MessageCenter
+	taskScheduler    threadpool.ThreadPool
+	taskHandlerMutex sync.Mutex // protect taskHandlers
+	taskHandlers     []*threadpool.TaskHandle
+	messageCenter    messaging.MessageCenter
 
 	updatedChangefeedCh chan map[common.ChangeFeedID]*changefeed.Changefeed
 	stateChangedCh      chan *ChangefeedStateChangeEvent
@@ -387,6 +388,8 @@ func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 	}
 
 	// start operator and scheduler
+	c.taskHandlerMutex.Lock()
+	defer c.taskHandlerMutex.Unlock()
 	c.taskHandlers = append(c.taskHandlers, c.scheduler.Start(c.taskScheduler)...)
 	operatorControllerHandle := c.taskScheduler.Submit(c.operatorController, time.Now())
 	c.taskHandlers = append(c.taskHandlers, operatorControllerHandle)
@@ -394,6 +397,8 @@ func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 }
 
 func (c *Controller) Stop() {
+	c.taskHandlerMutex.Lock()
+	defer c.taskHandlerMutex.Unlock()
 	for _, h := range c.taskHandlers {
 		h.Cancel()
 	}
