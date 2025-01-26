@@ -29,7 +29,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func (w *MysqlWriter) CreateSyncTable() error {
+func (w *MysqlWriter) createSyncTable() error {
 	database := filter.TiCDCSystemSchema
 	query := `CREATE TABLE IF NOT EXISTS %s
 	(
@@ -42,7 +42,7 @@ func (w *MysqlWriter) CreateSyncTable() error {
 		PRIMARY KEY (changefeed, primary_ts)
 	);`
 	query = fmt.Sprintf(query, filter.SyncPointTable)
-	return w.CreateTable(database, filter.SyncPointTable, query)
+	return w.createTable(database, filter.SyncPointTable, query)
 }
 
 func (w *MysqlWriter) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {

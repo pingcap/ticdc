@@ -7,9 +7,8 @@
 #             drop table, and then recover table
 #             truncate table
 # 3. Simultaneously we exec the dmls, continues insert data to these 10 tables.
-# 4. Besides, we also enable sync point
-# 5. Furthermore, we will randomly kill the ticdc server, and then restart it.
-# 6. We execute these threads for a time, and then check the data consistency between the upstream and downstream.
+# 4. Furthermore, we will randomly kill the ticdc server, and then restart it.
+# 5. We execute these threads for a time, and then check the data consistency between the upstream and downstream.
 
 set -eux
 
@@ -35,8 +34,6 @@ function prepare() {
 
 	TOPIC_NAME="ticdc-failover-ddl-test-mix-$RANDOM"
 	SINK_URI="mysql://root@127.0.0.1:3306/"
-	# run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
-    # TODO:确实可以开两个，纯 ddl 和有 syncpoint，便于定位问题
     run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
 }
 
@@ -138,12 +135,6 @@ main() {
     kill -9 $DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
 
     sleep 10
-
-    # check_table_exists test.table_1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
-    # check_table_exists test.table_2 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
-    # check_table_exists test.table_3 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
-    # check_table_exists test.table_4 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
-    # check_table_exists test.table_5 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 
     check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 

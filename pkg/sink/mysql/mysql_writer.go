@@ -139,7 +139,7 @@ func (w *MysqlWriter) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 func (w *MysqlWriter) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	if !w.syncPointTableInit {
 		// create sync point table if not exist
-		err := w.CreateSyncTable()
+		err := w.createSyncTable()
 		if err != nil {
 			return errors.Trace(err)
 		}
