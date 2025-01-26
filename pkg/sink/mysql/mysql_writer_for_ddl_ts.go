@@ -398,6 +398,7 @@ func (w *MysqlWriter) queryDDLJobs(tableID int64) (time.Time, bool) {
 	log.Debug("no ddl job item", zap.Int64("relatedTableId", tableID))
 	return time.Time{}, false
 }
+
 func (w *MysqlWriter) RemoveDDLTsItem() error {
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
