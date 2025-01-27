@@ -135,6 +135,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 				// TableID:    d.TableID,
 				SchemaName: d.SchemaName,
 				TableName:  d.TableName,
+				TableInfo:  d.TableInfo,
 				Query:      d.Query,
 				FinishedTs: d.FinishedTs,
 			},
@@ -146,6 +147,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 				// TableID:    d.TableInfo.TableName.TableID,
 				SchemaName: d.PrevSchemaName,
 				TableName:  d.PrevTableName,
+				TableInfo:  d.TableInfo,
 				Query:      d.Query,
 				FinishedTs: d.FinishedTs,
 			},
@@ -165,6 +167,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 				Type:       d.Type,
 				SchemaName: schemaAndTable.SchemaName,
 				TableName:  schemaAndTable.TableName,
+				TableInfo:  d.TableInfo,
 				Query:      queries[i],
 				FinishedTs: d.FinishedTs,
 			})
@@ -185,6 +188,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 				Type:           d.Type,
 				PrevSchemaName: schemaAndTable.SchemaName,
 				PrevTableName:  schemaAndTable.TableName,
+				TableInfo:      d.TableInfo,
 				Query:          queries[i],
 				FinishedTs:     d.FinishedTs,
 			}
