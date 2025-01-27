@@ -206,14 +206,16 @@ type tableDefWithoutQuery struct {
 
 // FromDDLEvent converts from DDLEvent to TableDefinition.
 func (t *TableDefinition) FromDDLEvent(event *commonEvent.DDLEvent, outputColumnID bool) {
-	if event.GetCommitTs() != event.TableInfo.UpdateTS() {
-		log.Error("commit ts and table info version should be equal",
-			zap.Uint64("tableInfoVersion", event.TableInfo.UpdateTS()),
-			zap.Any("commitTs", event.GetCommitTs()),
-			zap.Any("tableInfo", event.TableInfo),
-		)
-	}
-	t.FromTableInfo(event.TableInfo, event.GetCommitTs(), outputColumnID)
+	// if event.GetCommitTs() != event.TableInfo.UpdateTS() {
+	// 	log.Warn("commit ts and table info version should be equal",
+	// 		zap.Uint64("tableInfoVersion", event.TableInfo.UpdateTS()),
+	// 		zap.Any("commitTs", event.GetCommitTs()),
+	// 		zap.Any("tableInfo", event.TableInfo),
+	// 	)
+	// }
+	schemaName := event.GetCurrentSchemaName()
+	tableName := event.GetCurrentTableName()
+	t.FromTableInfo(schemaName, tableName, event.TableInfo, event.GetCommitTs(), outputColumnID)
 	t.Query = event.Query
 	t.Type = event.Type
 }
@@ -234,13 +236,16 @@ func (t *TableDefinition) ToDDLEvent() (*commonEvent.DDLEvent, error) {
 
 // FromTableInfo converts from TableInfo to TableDefinition.
 func (t *TableDefinition) FromTableInfo(
-	info *common.TableInfo, tableInfoVersion uint64, outputColumnID bool,
+	schemaName string, tableName string, info *common.TableInfo, tableInfoVersion uint64, outputColumnID bool,
 ) {
 	t.Version = defaultTableDefinitionVersion
 	t.TableVersion = tableInfoVersion
 
-	t.Schema = info.TableName.Schema
-	t.Table = info.TableName.Table
+	t.Schema = schemaName
+	t.Table = tableName
+	if info == nil {
+		return
+	}
 	t.TotalColumns = len(info.GetColumns())
 	for _, col := range info.GetColumns() {
 		var tableCol TableCol

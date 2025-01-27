@@ -85,7 +85,9 @@ func (w *CloudStorageDDLWorker) WriteBlockEvent(event *commonEvent.DDLEvent) err
 	if event.GetDDLType() == model.ActionExchangeTablePartition {
 		// For exchange partition, we need to write the schema of the source table.
 		var sourceTableDef cloudstorage.TableDefinition
-		sourceTableDef.FromTableInfo(event.PrevTableInfo, event.PrevTableInfo.UpdateTS(), w.cfg.OutputColumnID)
+		schemaName := event.GetPrevSchemaName()
+		tableName := event.GetPrevTableName()
+		sourceTableDef.FromTableInfo(schemaName, tableName, event.PrevTableInfo, event.GetCommitTs(), w.cfg.OutputColumnID)
 		w.writeFile(event, sourceTableDef)
 	}
 	event.PostFlush()

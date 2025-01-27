@@ -76,7 +76,7 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 	}
 
 	var def TableDefinition
-	def.FromTableInfo(tableInfo, tableInfo.UpdateTS(), false)
+	def.FromTableInfo(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo, tableInfo.UpdateTS(), false)
 	return def, tableInfo
 }
 

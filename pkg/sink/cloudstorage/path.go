@@ -98,7 +98,7 @@ func generateSchemaFilePath(
 ) string {
 	if schema == "" || tableVersion == 0 {
 		log.Panic("invalid schema or tableVersion",
-			zap.String("schema", schema), zap.Uint64("tableVersion", tableVersion))
+			zap.String("schema", schema), zap.String("table", table), zap.Uint64("tableVersion", tableVersion))
 	}
 
 	var dir string
@@ -186,7 +186,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 
 	var def TableDefinition
-	def.FromTableInfo(tableInfo, table.TableInfoVersion, f.config.OutputColumnID)
+	def.FromTableInfo(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo, table.TableInfoVersion, f.config.OutputColumnID)
 	if !def.IsTableSchema() {
 		// only check schema for table
 		log.Error("invalid table schema",

@@ -128,12 +128,6 @@ func (w *CloudStorageDMLWorker) Run(ctx context.Context) error {
 			return worker.Run(ctx)
 		})
 	}
-	defer func() {
-		w.alive.Lock()
-		w.alive.isDead = true
-		w.alive.msgCh.CloseAndDrain()
-		w.alive.Unlock()
-	}()
 
 	return eg.Wait()
 }
@@ -171,18 +165,16 @@ func (w *CloudStorageDMLWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
 }
 
 func (w *CloudStorageDMLWorker) Close() {
-	for _, encodingWorker := range w.workers {
-		encodingWorker.Close()
-	}
+	w.alive.Lock()
+	w.alive.isDead = true
+	w.alive.msgCh.CloseAndDrain()
+	w.alive.Unlock()
 
-	for _, worker := range w.writers {
+	for _, worker := range w.workers {
 		worker.Close()
 	}
 
-	w.alive.Lock()
-	defer w.alive.Unlock()
-	if !w.alive.isDead {
-		w.alive.isDead = true
-		w.alive.msgCh.CloseAndDrain()
+	for _, writer := range w.writers {
+		writer.Close()
 	}
 }
