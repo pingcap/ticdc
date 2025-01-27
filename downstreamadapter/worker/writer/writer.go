@@ -31,7 +31,6 @@ import (
 	mcloudstorage "github.com/pingcap/tiflow/cdc/sink/metrics/cloudstorage"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
-
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )

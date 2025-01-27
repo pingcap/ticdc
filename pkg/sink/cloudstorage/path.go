@@ -38,7 +38,6 @@ import (
 	"github.com/pingcap/tiflow/pkg/hash"
 	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
-
 	"go.uber.org/zap"
 )
 

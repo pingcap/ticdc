@@ -18,7 +18,6 @@ import (
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-
 	"github.com/pingcap/tiflow/pkg/errors"
 )
 

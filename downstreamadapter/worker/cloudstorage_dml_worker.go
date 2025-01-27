@@ -18,9 +18,6 @@ import (
 	"sync/atomic"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/utils/chann"
-	"go.uber.org/zap"
-
 	"github.com/pingcap/ticdc/downstreamadapter/worker/writer"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -29,8 +26,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
-
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
