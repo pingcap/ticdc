@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -1907,7 +1906,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		InfluenceType: commonEvent.InfluenceTypeNormal,
 		TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
 	}
-	querys, err := event.SplitQueries(rawEvent.Query)
+	querys, err := commonEvent.SplitQueries(rawEvent.Query)
 	if err != nil {
 		log.Panic("split queries failed", zap.Error(err))
 	}
@@ -2041,7 +2040,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	if allFiltered {
 		return commonEvent.DDLEvent{}, false
 	}
-	querys, err := event.SplitQueries(rawEvent.Query)
+	querys, err := commonEvent.SplitQueries(rawEvent.Query)
 	if err != nil {
 		log.Panic("split queries failed", zap.Error(err))
 	}
