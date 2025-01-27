@@ -298,6 +298,10 @@ func fromColValToCsvVal(csvConfig *common.Config, row *chunk.Row, idx int, colIn
 			}
 		}
 		return row.GetString(idx), nil
+	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeNewDate, mysql.TypeTimestamp:
+		return row.GetTime(idx).String(), nil
+	case mysql.TypeDuration:
+		return row.GetDuration(idx, colInfo.GetDecimal()).String(), nil
 	case mysql.TypeEnum:
 		enumValue := row.GetEnum(idx).Value
 		enumVar, err := types.ParseEnumValue(colInfo.GetElems(), enumValue)
@@ -316,6 +320,10 @@ func fromColValToCsvVal(csvConfig *common.Config, row *chunk.Row, idx int, colIn
 		d := row.GetDatum(idx, &colInfo.FieldType)
 		// Encode bits as integers to avoid pingcap/tidb#10988 (which also affects MySQL itself)
 		return d.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
+	case mysql.TypeNewDecimal:
+		return row.GetMyDecimal(idx).String(), nil
+	case mysql.TypeJSON:
+		return row.GetJSON(idx).String(), nil
 	case mysql.TypeTiDBVectorFloat32:
 		vec := row.GetVectorFloat32(idx)
 		return vec.String(), nil
