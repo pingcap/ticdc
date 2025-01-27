@@ -10,7 +10,7 @@
 # 4. Furthermore, we will randomly kill the ticdc server, and then restart it.
 # 5. We execute these threads for a time, and then check the data consistency between the upstream and downstream.
 
-set -eux
+set -eu
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
