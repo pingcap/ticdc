@@ -256,10 +256,10 @@ func toTableInfosKey(schema, table string) string {
 	return schema + "." + table
 }
 
-// splitQueries takes a string containing multiple SQL statements and splits them into individual SQL statements.
+// SplitQueries takes a string containing multiple SQL statements and splits them into individual SQL statements.
 // This function is designed for scenarios like batch creation of tables, where multiple `CREATE TABLE` statements
 // might be combined into a single query string.
-func splitQueries(queries string) ([]string, error) {
+func SplitQueries(queries string) ([]string, error) {
 	// Note: The parser is not thread-safe, so we create a new instance of the parser for each use.
 	// However, the overhead of creating a new parser is minimal, so there is no need to worry about performance.
 	p := parser.New()

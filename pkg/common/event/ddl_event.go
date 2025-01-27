@@ -154,7 +154,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 		}
 	case model.ActionCreateTables:
 		events := make([]*DDLEvent, 0, len(d.TableNameChange.AddName))
-		queries, err := splitQueries(d.Query)
+		queries, err := SplitQueries(d.Query)
 		if err != nil {
 			log.Panic("split queries failed", zap.Error(err))
 		}
@@ -175,7 +175,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 		return events
 	case model.ActionRenameTables:
 		events := make([]*DDLEvent, 0, len(d.TableNameChange.DropName))
-		queries, err := splitQueries(d.Query)
+		queries, err := SplitQueries(d.Query)
 		if err != nil {
 			log.Panic("split queries failed", zap.Error(err))
 		}

@@ -184,7 +184,7 @@ INSERT INTO test VALUES (1);
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := splitQueries(tt.input)
+			result, err := SplitQueries(tt.input)
 			if tt.expectedError {
 				assert.Error(t, err)
 			} else {
