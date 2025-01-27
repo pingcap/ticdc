@@ -1913,19 +1913,22 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	var addNames, dropNames []commonEvent.SchemaTableName
 	allFiltered := true
 	resultQuerys := make([]string, 0)
+	if len(querys) != len(rawEvent.MultipleTableInfos) {
+		log.Panic("rename tables length is not equal table infos", zap.Any("querys", querys), zap.Any("tableInfos", rawEvent.MultipleTableInfos))
+	}
 	for i, tableInfo := range rawEvent.MultipleTableInfos {
 		ignorePrevTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.PrevSchemaNames[i], rawEvent.PrevTableNames[i], tableInfo)
 		ignoreCurrentTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaNames[i], tableInfo.Name.O, tableInfo)
 		if ignorePrevTable && ignoreCurrentTable {
 			continue
 		}
-		resultQuerys = append(resultQuerys, querys[i])
 		allFiltered = false
 		if isPartitionTable(rawEvent.TableInfo) {
 			allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 			if !ignorePrevTable {
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
 				if !ignoreCurrentTable {
+					resultQuerys = append(resultQuerys, querys[i])
 					// check whether schema change
 					if rawEvent.PrevSchemaIDs[i] != rawEvent.CurrentSchemaIDs[i] {
 						for _, id := range allPhysicalIDs {
@@ -1967,6 +1970,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			if !ignorePrevTable {
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
 				if !ignoreCurrentTable {
+					resultQuerys = append(resultQuerys, querys[i])
 					if rawEvent.PrevSchemaIDs[i] != rawEvent.CurrentSchemaIDs[i] {
 						ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
 							TableID:     tableInfo.ID,
