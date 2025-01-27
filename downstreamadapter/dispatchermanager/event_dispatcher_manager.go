@@ -391,7 +391,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 	// Besides, we batch the creatation for the dispatchers,
 	// mainly because we need to batch the query for startTs when sink is mysql-class to reduce the time cost.
 	var newStartTsList []int64
-	startTsIsSyncpointList := make([]bool, 0, len(startTsList))
+	startTsIsSyncpointList := make([]bool, len(startTsList))
 	var err error
 	if e.sink.SinkType() == common.MysqlSinkType {
 		newStartTsList, startTsIsSyncpointList, err = e.sink.(*sink.MysqlSink).GetStartTsList(tableIds, startTsList, removeDDLTs)
