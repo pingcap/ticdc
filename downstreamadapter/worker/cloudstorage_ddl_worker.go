@@ -77,18 +77,23 @@ func (w *CloudStorageDDLWorker) Run(ctx context.Context) error {
 }
 
 func (w *CloudStorageDDLWorker) WriteBlockEvent(event *commonEvent.DDLEvent) error {
-	var def cloudstorage.TableDefinition
-	def.FromDDLEvent(event, w.cfg.OutputColumnID)
-	if err := w.writeFile(event, def); err != nil {
-		return err
-	}
 	if event.GetDDLType() == model.ActionExchangeTablePartition {
 		// For exchange partition, we need to write the schema of the source table.
 		var sourceTableDef cloudstorage.TableDefinition
 		schemaName := event.GetPrevSchemaName()
 		tableName := event.GetPrevTableName()
 		sourceTableDef.FromTableInfo(schemaName, tableName, event.PrevTableInfo, event.GetCommitTs(), w.cfg.OutputColumnID)
-		w.writeFile(event, sourceTableDef)
+		if err := w.writeFile(event, sourceTableDef); err != nil {
+			return err
+		}
+	} else {
+		for _, e := range event.GetEvents() {
+			var def cloudstorage.TableDefinition
+			def.FromDDLEvent(e, w.cfg.OutputColumnID)
+			if err := w.writeFile(e, def); err != nil {
+				return err
+			}
+		}
 	}
 	event.PostFlush()
 	return nil
