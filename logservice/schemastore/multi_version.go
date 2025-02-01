@@ -120,7 +120,7 @@ func (v *versionedTableInfoStore) getTableInfo(ts uint64) (*common.TableInfo, er
 		return v.infos[i].version > ts
 	})
 	if target == 0 {
-		log.Error("no version found",
+		log.Error("no version found a",
 			zap.Any("ts", ts),
 			zap.Any("tableID", v.tableID),
 			zap.Any("infos", v.infos),
