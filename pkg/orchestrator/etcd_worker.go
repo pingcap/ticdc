@@ -19,12 +19,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/tiflow/pkg/chdelay"
-	cerrors "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/migrate"
 	tiorchestrator "github.com/pingcap/tiflow/pkg/orchestrator"
 	"github.com/pingcap/tiflow/pkg/orchestrator/util"
@@ -188,12 +187,12 @@ func (worker *EtcdWorker) Run(ctx context.Context, session *concurrency.Session,
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-sessionDone:
-			return cerrors.ErrEtcdSessionDone.GenWithStackByArgs()
+			return errors.ErrEtcdSessionDone.GenWithStackByArgs()
 		case <-ticker.C:
 			// There is no new event to handle on timer ticks, so we have nothing here.
 		case response := <-watchCh:
 			// In this select case, we receive new events from Etcd, and call handleEvent if appropriate.
-			if err := response.Err(); err != nil {
+			if err = response.Err(); err != nil {
 				return errors.Trace(err)
 			}
 
@@ -297,7 +296,7 @@ func (worker *EtcdWorker) Run(ctx context.Context, session *concurrency.Session,
 		}
 		worker.metrics.metricEtcdWorkerTickDuration.Observe(costTime.Seconds())
 		if err != nil {
-			if !cerrors.ErrReactorFinished.Equal(errors.Cause(err)) {
+			if !errors.ErrReactorFinished.Equal(errors.Cause(err)) {
 				return errors.Trace(err)
 			}
 			// normal exit
@@ -314,13 +313,14 @@ func (worker *EtcdWorker) Run(ctx context.Context, session *concurrency.Session,
 
 func isRetryableError(err error) bool {
 	err = errors.Cause(err)
-	if cerrors.ErrEtcdTryAgain.Equal(err) ||
-		context.DeadlineExceeded == err {
+	if errors.Is(err, errors.ErrEtcdTryAgain) ||
+		errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
 	// When encountering an abnormal connection with etcd, the worker will keep retrying
 	// until the session is done.
-	_, ok := err.(rpctypes.EtcdError)
+	var etcdError rpctypes.EtcdError
+	ok := errors.As(err, &etcdError)
 	return ok
 }
 
@@ -358,7 +358,7 @@ func (worker *EtcdWorker) handleEvent(_ context.Context, event *clientv3.Event) 
 		delete(worker.rawState, util.NewEtcdKeyFromBytes(event.Kv.Key))
 		if string(event.Kv.Key) == worker.ownerMetaKey {
 			if worker.isOwner {
-				err := cerrors.ErrNotOwner.GenWithStackByArgs()
+				err := errors.ErrNotOwner.GenWithStackByArgs()
 				log.Error("owner key is delete, it may causes by "+
 					"owner resign or externally delete operation"+
 					"exit etcd worker and campaign again",
@@ -495,7 +495,7 @@ func (worker *EtcdWorker) commitChangedState(ctx context.Context, changedState m
 
 	// Logs the conditions for the failed Etcd transaction.
 	worker.logEtcdCmps(cmps)
-	return cerrors.ErrEtcdTryAgain.GenWithStackByArgs()
+	return errors.ErrEtcdTryAgain.GenWithStackByArgs()
 }
 
 func (worker *EtcdWorker) applyUpdates() error {
@@ -583,7 +583,7 @@ func (worker *EtcdWorker) checkAndMigrateMetaData(
 	}
 
 	if role != pkgutil.RoleOwner.String() {
-		err := worker.migrator.WaitMetaVersionMatched(ctx)
+		err = worker.migrator.WaitMetaVersionMatched(ctx)
 		return errors.Trace(err)
 	}
 

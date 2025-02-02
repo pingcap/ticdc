@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
@@ -173,6 +174,17 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 		return s.receiveAndDispatchChangeEvents(conn)
 	})
 	g.Go(func() error { return s.processRegionSendTask(gctx, conn) })
+
+	failpoint.Inject("InjectForceReconnect", func() {
+		timer := time.After(10 * time.Second)
+		g.Go(func() error {
+			<-timer
+			err := errors.New("inject force reconnect")
+			log.Info("inject force reconnect", zap.Error(err))
+			return err
+		})
+	})
+
 	_ = g.Wait()
 	return isCanceled()
 }
@@ -258,8 +270,6 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Int64("regionID", int64(regionID)),
 			zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			// Update the resolvedTs of the region here for metrics.
-			state.region.subscribedSpan.resolvedTs.Store(resolvedTsEvent.Ts)
 			s.client.ds.Push(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
 				state:      state,
 				worker:     s,
@@ -332,7 +342,11 @@ func (s *regionRequestWorker) processRegionSendTask(
 			}
 			for _, state := range s.takeRegionStates(subID) {
 				state.markStopped(&sendRequestToStoreErr{})
-				// TODO: do we need mark remove here?
+				regionEvent := regionEvent{
+					state:  state,
+					worker: s,
+				}
+				s.client.ds.Push(subID, regionEvent)
 			}
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from
@@ -432,4 +446,16 @@ func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
 		regions = append(regions, <-s.requestsCh)
 	}
 	return regions
+}
+
+func (s *regionRequestWorker) getAllRegionStates() regionFeedStates {
+	s.requestedRegions.RLock()
+	defer s.requestedRegions.RUnlock()
+	states := make(regionFeedStates)
+	for _, statesMap := range s.requestedRegions.subscriptions {
+		for regionID, state := range statesMap {
+			states[regionID] = state
+		}
+	}
+	return states
 }

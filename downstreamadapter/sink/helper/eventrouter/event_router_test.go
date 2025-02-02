@@ -203,7 +203,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	tableInfo := &common.TableInfo{
 		TableName: common.TableName{Schema: "test_default1", Table: "table"},
 	}
-	partitionGenerator := d.GetPartitionGeneratorForRowChange(tableInfo)
+	partitionGenerator := d.GetPartitionGenerator(tableInfo)
 	p, _, err := partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 16, tableInfo, 0)
 	require.NoError(t, err)
 	require.Equal(t, int32(14), p)
@@ -212,7 +212,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	tableInfo = &common.TableInfo{
 		TableName: common.TableName{Schema: "test_default2", Table: "table"},
 	}
-	partitionGenerator = d.GetPartitionGeneratorForRowChange(tableInfo)
+	partitionGenerator = d.GetPartitionGenerator(tableInfo)
 	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 16, tableInfo, 0)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), p)
@@ -221,7 +221,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	tableInfo = &common.TableInfo{
 		TableName: common.TableName{Schema: "test_table", Table: "table"},
 	}
-	partitionGenerator = d.GetPartitionGeneratorForRowChange(tableInfo)
+	partitionGenerator = d.GetPartitionGenerator(tableInfo)
 	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 16, tableInfo, 1)
 	require.NoError(t, err)
 	require.Equal(t, int32(15), p)
@@ -246,7 +246,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
 
-	partitionGenerator = d.GetPartitionGeneratorForRowChange(dmlEvent.TableInfo)
+	partitionGenerator = d.GetPartitionGenerator(dmlEvent.TableInfo)
 	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&row, 10, dmlEvent.TableInfo, 2)
 	require.NoError(t, err)
 	require.Equal(t, int32(9), p)
@@ -255,7 +255,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	tableInfo = &common.TableInfo{
 		TableName: common.TableName{Schema: "a", Table: "table"},
 	}
-	partitionGenerator = d.GetPartitionGeneratorForRowChange(tableInfo)
+	partitionGenerator = d.GetPartitionGenerator(tableInfo)
 	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 2, tableInfo, 1)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), p)

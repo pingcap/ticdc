@@ -18,7 +18,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/errors"
-	tierrors "github.com/pingcap/tiflow/pkg/errors"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 )
 
 var (
@@ -29,6 +29,11 @@ var (
 	ErrChangefeedInitTableTriggerEventDispatcherFailed = errors.Normalize(
 		"failed to init table trigger event dispatcher",
 		errors.RFCCodeText("CDC:ErrChangefeedInitTableTriggerEventDispatcherFailed"),
+	)
+
+	ErrDDLEventError = errors.Normalize(
+		"ddl event meets error",
+		errors.RFCCodeText("CDC:ErrDDLEventError"),
 	)
 
 	ErrTableIsNotFounded = errors.Normalize(
@@ -154,24 +159,24 @@ func (e AppError) Equal(err AppError) bool {
 }
 
 var changefeedUnRetryableErrors = []*errors.Error{
-	tierrors.ErrExpressionColumnNotFound,
-	tierrors.ErrExpressionParseFailed,
-	tierrors.ErrSchemaSnapshotNotFound,
-	tierrors.ErrSyncRenameTableFailed,
-	tierrors.ErrChangefeedUnretryable,
-	tierrors.ErrCorruptedDataMutation,
-	tierrors.ErrDispatcherFailed,
-	tierrors.ErrColumnSelectorFailed,
+	cerrors.ErrExpressionColumnNotFound,
+	cerrors.ErrExpressionParseFailed,
+	cerrors.ErrSchemaSnapshotNotFound,
+	cerrors.ErrSyncRenameTableFailed,
+	cerrors.ErrChangefeedUnretryable,
+	cerrors.ErrCorruptedDataMutation,
+	cerrors.ErrDispatcherFailed,
+	cerrors.ErrColumnSelectorFailed,
 
-	tierrors.ErrSinkURIInvalid,
-	tierrors.ErrKafkaInvalidConfig,
-	tierrors.ErrMySQLInvalidConfig,
-	tierrors.ErrStorageSinkInvalidConfig,
+	cerrors.ErrSinkURIInvalid,
+	cerrors.ErrKafkaInvalidConfig,
+	cerrors.ErrMySQLInvalidConfig,
+	cerrors.ErrStorageSinkInvalidConfig,
 
 	// gc related errors
-	tierrors.ErrGCTTLExceeded,
-	tierrors.ErrSnapshotLostByGC,
-	tierrors.ErrStartTsBeforeGC,
+	cerrors.ErrGCTTLExceeded,
+	cerrors.ErrSnapshotLostByGC,
+	cerrors.ErrStartTsBeforeGC,
 }
 
 // ErrorCode returns the RFC error code for the given error.
@@ -180,15 +185,15 @@ var changefeedUnRetryableErrors = []*errors.Error{
 func ErrorCode(err error) errors.RFCErrorCode {
 	for _, e := range changefeedUnRetryableErrors {
 		if e.Equal(err) {
-			return tierrors.ErrChangefeedUnretryable.RFCCode()
+			return cerrors.ErrChangefeedUnretryable.RFCCode()
 		}
-		if code, ok := tierrors.RFCCode(err); ok {
+		if code, ok := cerrors.RFCCode(err); ok {
 			if code == e.RFCCode() {
-				return tierrors.ErrChangefeedUnretryable.RFCCode()
+				return cerrors.ErrChangefeedUnretryable.RFCCode()
 			}
 		}
 		if strings.Contains(err.Error(), string(e.RFCCode())) {
-			return tierrors.ErrChangefeedUnretryable.RFCCode()
+			return cerrors.ErrChangefeedUnretryable.RFCCode()
 		}
 	}
 

@@ -24,9 +24,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TODO:E2E 测一下double/float nan 和inf 的问题
-
-// test 每个 type 的解码，test column selector， test callback, handle only
+// TODO: Add E2E test for double/float nan and inf
+// Test all type, column selector, callback, handle only features.
 
 // Test Column Type: TinyInt, Tinyint(null), Bool, Bool(null), SmallInt, SmallInt(null), Int, Int(null), Float, Float(nulll), Double, Double(null),
 // Timestamp, Timestamp(null), BigInt, BigInt(null), MediumInt, MediumInt(null), Date, Date(null), Time, Time(null), Datetime, Datetime(null), Year, Year(null),
@@ -199,7 +198,7 @@ func TestHandleOnlyEvent(t *testing.T) {
 	key, value, _, err := encodeRowChangedEvent(insertRowEvent, protocolConfig, true, "")
 	require.NoError(t, err)
 
-	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(key))
+	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1,"ohk":true}`, string(key))
 	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1}}}`, string(value))
 }
 
@@ -273,5 +272,5 @@ func TestEncodeWithColumnSelector(t *testing.T) {
 	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(key))
 	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1}}}`, string(value))
 
-	// todo: column selector 匹配后没有 handle 列报错
+	// TODO: column selector should return error if no handle column
 }

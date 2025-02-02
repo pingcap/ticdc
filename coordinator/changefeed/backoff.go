@@ -21,8 +21,8 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerrors "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -67,7 +67,11 @@ type Backoff struct {
 }
 
 // NewBackoff creates Backoff and initialize the exponential backoff
-func NewBackoff(id common.ChangeFeedID, changefeedErrorStuckDuration time.Duration, checkpointTs uint64) *Backoff {
+func NewBackoff(
+	id common.ChangeFeedID,
+	changefeedErrorStuckDuration time.Duration,
+	checkpointTs uint64,
+) *Backoff {
 	m := &Backoff{
 		id:                           id,
 		errBackoff:                   backoff.NewExponentialBackOff(),
@@ -111,6 +115,7 @@ func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, model
 	if m.failed.Load() {
 		return false, model.StateFailed, nil
 	}
+
 	if m.checkpointTs < status.CheckpointTs {
 		m.checkpointTs = status.CheckpointTs
 		if m.retrying.Load() {

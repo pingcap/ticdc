@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	tconfig "github.com/pingcap/tiflow/pkg/config"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -44,6 +45,8 @@ func initEventService(
 	mc messaging.MessageCenter, mockStore eventstore.EventStore,
 ) *eventService {
 	mockSchemaStore := newMockSchemaStore()
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	appcontext.SetService(appcontext.EventStore, mockStore)
 	appcontext.SetService(appcontext.SchemaStore, mockSchemaStore)
@@ -470,7 +473,7 @@ type mockDispatcherInfo struct {
 
 func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
 	cfg := config.NewDefaultFilterConfig()
-	filter, err := filter.NewFilter(cfg, "", false)
+	filter, err := filter.NewFilter(cfg, "", false, false)
 	require.NoError(t, err)
 	return &mockDispatcherInfo{
 		clusterID: 1,

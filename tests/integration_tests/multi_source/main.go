@@ -80,7 +80,7 @@ func runDDLTest(srcs []*sql.DB) {
 
 	for i, ddlFunc := range []func(context.Context, *sql.DB){
 		createDropSchemaDDL, truncateDDL, addDropColumnDDL, addDropColumnDDL2,
-		modifyColumnDDL, addDropIndexDDL,
+		modifyColumnDDL, addDropIndexDDL, DropWithRecoverDDL,
 	} {
 		testName := getFunctionName(ddlFunc)
 		log.S().Info("running ddl test: ", i, " ", testName)
@@ -188,6 +188,35 @@ func truncateDDL(ctx context.Context, db *sql.DB) {
 		default:
 		}
 		util.MustExec(db, sql)
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func DropWithRecoverDDL(ctx context.Context, db *sql.DB) {
+	testName := getFunctionName(DropWithRecoverDDL)
+	mustCreateTable(db, testName)
+
+	drop_sql := fmt.Sprintf("drop table test.`%s`", testName)
+	recover_sql := fmt.Sprintf("recover table test.`%s`", testName)
+	truncate_sql := fmt.Sprintf("truncate table test.`%s`", testName)
+
+	// clean the table frist
+	util.MustExec(db, truncate_sql)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		// get a rand number bewteen 0 and 1
+		rand := time.Now().UnixNano() % 2
+		if rand == 0 {
+			util.MustExec(db, drop_sql)
+			time.Sleep(100 * time.Millisecond)
+			util.MustExec(db, recover_sql)
+		} else {
+			util.MustExec(db, truncate_sql)
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }

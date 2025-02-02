@@ -20,8 +20,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	tableFilter "github.com/pingcap/tidb/pkg/util/table-filter"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 )
 
 type Rule struct {
@@ -124,8 +124,8 @@ func (s *EventRouter) GetActiveTopics(activeTables []*commonEvent.SchemaTableNam
 	return topics
 }
 
-// GetPartitionForRowChange returns the target partition for row changes.
-func (s *EventRouter) GetPartitionGeneratorForRowChange(tableInfo *common.TableInfo) partition.PartitionGenerator {
+// GetPartitionGenerator returns the target partition by the table information.
+func (s *EventRouter) GetPartitionGenerator(tableInfo *common.TableInfo) partition.PartitionGenerator {
 	return s.GetPartitionDispatcher(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 }
 

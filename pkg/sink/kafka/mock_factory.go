@@ -20,8 +20,8 @@ import (
 	"github.com/IBM/sarama/mocks"
 	"github.com/pingcap/errors"
 	ticommon "github.com/pingcap/ticdc/pkg/common"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 )
 
 // MockFactory is a mock implementation of Factory interface.

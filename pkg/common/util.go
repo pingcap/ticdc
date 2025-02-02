@@ -13,70 +13,70 @@
 
 package common
 
-import (
-	"encoding/hex"
-	"fmt"
-	"strings"
+// import (
+// 	"encoding/hex"
+// 	"fmt"
+// 	"strings"
 
-	"github.com/pingcap/ticdc/heartbeatpb"
-)
+// 	"github.com/pingcap/ticdc/heartbeatpb"
+// )
 
-func FormatBlockStatusRequest(r *heartbeatpb.BlockStatusRequest) string {
-	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("changefeed: %s, changefeedID: %s",
-		r.ChangefeedID.GetName(),
-		NewChangefeedGIDFromPB(r.ChangefeedID).String()))
-	for _, status := range r.BlockStatuses {
-		sb.WriteString(FormatTableSpanBlockStatus(status))
-	}
-	sb.WriteString("\n")
-	return sb.String()
-}
+// func FormatBlockStatusRequest(r *heartbeatpb.BlockStatusRequest) string {
+// 	sb := strings.Builder{}
+// 	sb.WriteString(fmt.Sprintf("changefeed: %s, changefeedID: %s",
+// 		r.ChangefeedID.GetName(),
+// 		NewChangefeedGIDFromPB(r.ChangefeedID).String()))
+// 	for _, status := range r.BlockStatuses {
+// 		sb.WriteString(FormatTableSpanBlockStatus(status))
+// 	}
+// 	sb.WriteString("\n")
+// 	return sb.String()
+// }
 
-func FormatTableSpanBlockStatus(s *heartbeatpb.TableSpanBlockStatus) string {
-	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("[ dispatcherID: %s, state: %s ]",
-		NewDispatcherIDFromPB(s.ID).String(),
-		s.State.String()))
-	sb.WriteString("\n")
-	return sb.String()
-}
+// func FormatTableSpanBlockStatus(s *heartbeatpb.TableSpanBlockStatus) string {
+// 	sb := strings.Builder{}
+// 	sb.WriteString(fmt.Sprintf("[ dispatcherID: %s, state: %s ]",
+// 		NewDispatcherIDFromPB(s.ID).String(),
+// 		s.State.String()))
+// 	sb.WriteString("\n")
+// 	return sb.String()
+// }
 
-func FormatDispatcherStatus(d *heartbeatpb.DispatcherStatus) string {
-	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("action: %s, ack: %s, influencedDispatchers: %s",
-		d.Action.String(),
-		d.Ack.String(),
-		FormatInfluencedDispatchers(d.InfluencedDispatchers)))
-	sb.WriteString("\n")
-	return sb.String()
-}
+// func FormatDispatcherStatus(d *heartbeatpb.DispatcherStatus) string {
+// 	sb := strings.Builder{}
+// 	sb.WriteString(fmt.Sprintf("action: %s, ack: %s, influencedDispatchers: %s",
+// 		d.Action.String(),
+// 		d.Ack.String(),
+// 		FormatInfluencedDispatchers(d.InfluencedDispatchers)))
+// 	sb.WriteString("\n")
+// 	return sb.String()
+// }
 
-func FormatInfluencedDispatchers(d *heartbeatpb.InfluencedDispatchers) string {
-	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("schemaID: %d, influenceType: %s",
-		d.SchemaID,
-		d.InfluenceType.String()))
-	sb.WriteString("dispatcherIDs: [")
-	for _, dispatcherID := range d.DispatcherIDs {
-		sb.WriteString(fmt.Sprintf("%s, ",
-			NewDispatcherIDFromPB(dispatcherID).String()))
-	}
-	sb.WriteString("]")
-	if d.ExcludeDispatcherId != nil {
-		sb.WriteString(fmt.Sprintf(", excludeDispatcherID: %s",
-			NewDispatcherIDFromPB(d.ExcludeDispatcherId).String()))
-	}
-	sb.WriteString("\n")
-	return sb.String()
-}
+// func FormatInfluencedDispatchers(d *heartbeatpb.InfluencedDispatchers) string {
+// 	sb := strings.Builder{}
+// 	sb.WriteString(fmt.Sprintf("schemaID: %d, influenceType: %s",
+// 		d.SchemaID,
+// 		d.InfluenceType.String()))
+// 	sb.WriteString("dispatcherIDs: [")
+// 	for _, dispatcherID := range d.DispatcherIDs {
+// 		sb.WriteString(fmt.Sprintf("%s, ",
+// 			NewDispatcherIDFromPB(dispatcherID).String()))
+// 	}
+// 	sb.WriteString("]")
+// 	if d.ExcludeDispatcherId != nil {
+// 		sb.WriteString(fmt.Sprintf(", excludeDispatcherID: %s",
+// 			NewDispatcherIDFromPB(d.ExcludeDispatcherId).String()))
+// 	}
+// 	sb.WriteString("\n")
+// 	return sb.String()
+// }
 
-func FormatTableSpan(s *heartbeatpb.TableSpan) string {
-	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("tableID: %d, startKey: %s, endKey: %s",
-		s.TableID,
-		hex.EncodeToString(s.StartKey),
-		hex.EncodeToString(s.EndKey)))
-	sb.WriteString("\n")
-	return sb.String()
-}
+// func FormatTableSpan(s *heartbeatpb.TableSpan) string {
+// 	sb := strings.Builder{}
+// 	sb.WriteString(fmt.Sprintf("tableID: %d, startKey: %s, endKey: %s",
+// 		s.TableID,
+// 		hex.EncodeToString(s.StartKey),
+// 		hex.EncodeToString(s.EndKey)))
+// 	sb.WriteString("\n")
+// 	return sb.String()
+// }

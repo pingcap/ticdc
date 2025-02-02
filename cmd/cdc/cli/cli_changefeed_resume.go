@@ -21,9 +21,9 @@ import (
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	cmdcontext "github.com/pingcap/tiflow/pkg/cmd/context"
 	"github.com/pingcap/tiflow/pkg/cmd/util"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/tikv/client-go/v2/oracle"
 )

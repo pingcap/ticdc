@@ -28,8 +28,8 @@ function run() {
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1" ;;
 	esac
 
-	# this will be triggered every 5s in kv client
-	export GO_FAILPOINTS='github.com/pingcap/tiflow/cdc/kv/kvClientForceReconnect=return(true)'
+	# this will be triggered every 5s in logpuller
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/logpuller/InjectForceReconnect=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 	if [ "$SINK_TYPE" == "pulsar" ]; then
 		cat <<EOF >>$WORK_DIR/pulsar_test.toml
@@ -55,7 +55,7 @@ EOF
 		run_sql "create table kv_client_stream_reconnect.t$i (id int primary key auto_increment, a int default 10);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	done
 
-	for i in $(seq 30); do
+	for i in $(seq 60); do
 		tbl="t$((1 + $RANDOM % $TABLE_COUNT))"
 		run_sql "insert into kv_client_stream_reconnect.$tbl values (),(),();" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 		sleep 1

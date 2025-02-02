@@ -63,7 +63,14 @@ type MysqlWriter struct {
 	needFormat bool
 }
 
-func NewMysqlWriter(ctx context.Context, db *sql.DB, cfg *MysqlConfig, changefeedID common.ChangeFeedID, statistics *metrics.Statistics) *MysqlWriter {
+func NewMysqlWriter(
+	ctx context.Context,
+	db *sql.DB,
+	cfg *MysqlConfig,
+	changefeedID common.ChangeFeedID,
+	statistics *metrics.Statistics,
+	needFormatVectorType bool,
+) *MysqlWriter {
 	return &MysqlWriter{
 		ctx:                    ctx,
 		db:                     db,
@@ -77,7 +84,7 @@ func NewMysqlWriter(ctx context.Context, db *sql.DB, cfg *MysqlConfig, changefee
 		maxAllowedPacket:       cfg.MaxAllowedPacket,
 		stmtCache:              cfg.stmtCache,
 		statistics:             statistics,
-		needFormat:             checkVersionForVector(db, cfg),
+		needFormat:             needFormatVectorType,
 	}
 }
 
@@ -99,6 +106,12 @@ func (w *MysqlWriter) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 			return errors.Trace(err)
 		}
 	} else if !(event.TiDBOnly && !w.cfg.IsTiDB) {
+		if w.cfg.IsTiDB {
+			// if downstream is tidb, we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
+			// to ensure the atomic with ddl writing when server is restarted.
+			w.FlushDDLTsPre(event)
+		}
+
 		err := w.execDDLWithMaxRetries(event)
 		if err != nil {
 			return errors.Trace(err)
@@ -115,6 +128,44 @@ func (w *MysqlWriter) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	for _, callback := range event.PostTxnFlushed {
+		callback()
+	}
+	return nil
+}
+
+func (w *MysqlWriter) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
+	if !w.syncPointTableInit {
+		// create sync point table if not exist
+		err := w.createSyncTable()
+		if err != nil {
+			return errors.Trace(err)
+		}
+		w.syncPointTableInit = true
+	}
+	if w.cfg.IsTiDB {
+		// if downstream is tidb, we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
+		// to ensure the atomic with ddl writing when server is restarted.
+		w.FlushDDLTsPre(event)
+	}
+
+	err := w.SendSyncPointEvent(event)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	// We need to record ddl' ts after each ddl for each table in the downstream when sink is mysql-compatible.
+	// Only in this way, when the node restart, we can continue sync data from the last ddl ts at least.
+	// Otherwise, after restarting, we may sync old data in new schema, which will leading to data loss.
+
+	// We make Flush ddl ts before callback(), in order to make sure the ddl ts is flushed
+	// before new checkpointTs will report to maintainer. Therefore, when the table checkpointTs is forward,
+	// we can ensure the ddl and ddl ts are both flushed downstream successfully.
+	err = w.FlushDDLTs(event)
+	if err != nil {
+		return err
 	}
 
 	for _, callback := range event.PostTxnFlushed {

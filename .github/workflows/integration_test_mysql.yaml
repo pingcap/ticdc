@@ -28,7 +28,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # To boost the test speed, we split every 15 test cases into a group.
+  # # To boost the test speed, we split every 15 test cases into a group.
   e2e_test_group_1:
     ## Only run ci when PR is not draft
     if: github.event.pull_request.draft == false
@@ -178,7 +178,7 @@ jobs:
         if: always()
         uses: ./.github/actions/upload-test-logs
         with:
-          log-name: e2e_test_group_1
+          log-name: e2e_test_group_1_on_7.5
 
   e2e_test_group_2:
     ## Only run ci when PR is not draft
@@ -206,6 +206,36 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
 
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+        
       - name: Test multi_source
         if: ${{ success() }}
         run: |
@@ -337,6 +367,14 @@ jobs:
         uses: actions/setup-go@v3
         with:
           go-version: '1.23'
+      
+      - name: Set up S3cmd cli tool
+        uses: s3-actions/s3cmd@v1.9.0
+        with:
+          provider: linode 
+
+      - name: Run s3cmd command
+        run: s3cmd --version
 
       - name: Integration Build
         run: |
@@ -355,11 +393,36 @@ jobs:
       #   run: |
       #     export TICDC_NEWARCH=true && make integration_test CASE=partition_table
       
-      # - name: Test multi_tables_ddl
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
 
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+        
       - name: Test multi_source
         if: ${{ success() }}
         run: |
@@ -426,6 +489,54 @@ jobs:
       #   if: ${{ success() }}
       #   run: |
       #     export TICDC_NEWARCH=true && make integration_test CASE=syncpoint
+
+      - name: Test force_replicate_table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=force_replicate_table
+
+      - name: Test tidb_mysql_test
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=tidb_mysql_test
+
+
+      - name: Test resolve_lock
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=resolve_lock
+
+      - name: Test move_table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=move_table
+
+      - name: Test changefeed_error
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_error
+
+      # The 16th case in this group
+      - name: Test capture_session_done_during_task
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=capture_session_done_during_task
+
+      - name: Test changefeed_dup_error_restart
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_dup_error_restart
+
+      - name: Test mysql_sink_retry
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=mysql_sink_retry
+      
+      # The 19th case in this group
+      - name: Test cdc
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=cdc
 
       - name: Upload test logs
         if: always()

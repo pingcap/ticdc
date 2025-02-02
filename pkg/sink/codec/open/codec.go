@@ -21,13 +21,13 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 )
 
 func encodeRowChangedEvent(e *commonEvent.RowEvent, config *common.Config, largeMessageOnlyHandleKeyColumns bool, claimCheckLocationName string) ([]byte, []byte, int, error) {
@@ -44,6 +44,9 @@ func encodeRowChangedEvent(e *commonEvent.RowEvent, config *common.Config, large
 		keyWriter.WriteStringField("tbl", e.TableInfo.GetTableName())
 		keyWriter.WriteIntField("t", int(common.MessageTypeRow))
 
+		if largeMessageOnlyHandleKeyColumns {
+			keyWriter.WriteBoolField("ohk", true)
+		}
 		if claimCheckLocationName != "" {
 			keyWriter.WriteBoolField("ohk", false)
 			keyWriter.WriteStringField("ccl", claimCheckLocationName)
@@ -311,7 +314,7 @@ func writeColumnFieldValues(
 		}
 	}
 	if !flag {
-		return cerror.ErrOpenProtocolCodecInvalidData.GenWithStack("not found handle key columns for the delete event")
+		return errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found handle key columns for the delete event")
 	}
 	return nil
 }

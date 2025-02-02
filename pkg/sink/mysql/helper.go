@@ -26,13 +26,13 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/br/pkg/version"
 	"github.com/pingcap/tidb/dumpling/export"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	dmutils "github.com/pingcap/tiflow/dm/pkg/conn"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -354,8 +354,8 @@ func SetWriteSource(cfg *MysqlConfig, txn *sql.Tx) error {
 	return nil
 }
 
-// checkVersionForVector checks vector type support
-func checkVersionForVector(db *sql.DB, cfg *MysqlConfig) bool {
+// ShouldFormatVectorType return true if vector type should be converted to longtext.
+func ShouldFormatVectorType(db *sql.DB, cfg *MysqlConfig) bool {
 	if !cfg.HasVectorType {
 		log.Warn("please set `has-vector-type` to be true if a column is vector type when the downstream is not TiDB or TiDB version less than specify version",
 			zap.Any("hasVectorType", cfg.HasVectorType), zap.Any("supportVectorVersion", defaultSupportVectorVersion))
@@ -367,10 +367,38 @@ func checkVersionForVector(db *sql.DB, cfg *MysqlConfig) bool {
 		return false
 	}
 	serverInfo := version.ParseServerInfo(versionInfo)
-	version := semver.New(defaultSupportVectorVersion)
-	if !cfg.IsTiDB || serverInfo.ServerVersion.LessThan(*version) {
-		log.Error("downstream unsupport vector type. it will be converted to longtext", zap.String("version", serverInfo.ServerVersion.String()), zap.String("supportVectorVersion", defaultSupportVectorVersion), zap.Bool("isTiDB", cfg.IsTiDB))
+	ver := semver.New(defaultSupportVectorVersion)
+	if !cfg.IsTiDB || serverInfo.ServerVersion.LessThan(*ver) {
+		log.Error("downstream unsupport vector type. it will be converted to longtext",
+			zap.String("version", serverInfo.ServerVersion.String()), zap.String("supportVectorVersion", defaultSupportVectorVersion), zap.Bool("isTiDB", cfg.IsTiDB))
 		return true
 	}
 	return false
+}
+
+func isRetryableDMLError(err error) bool {
+	if !cerror.IsRetryableError(err) {
+		return false
+	}
+
+	errCode, ok := getSQLErrCode(err)
+	if !ok {
+		return true
+	}
+
+	switch errCode {
+	// when meet dup entry error, we don't retry and report the error directly to owner to restart the changefeed.
+	case mysql.ErrNoSuchTable, mysql.ErrBadDB, mysql.ErrDupEntry:
+		return false
+	}
+	return true
+}
+
+func getSQLErrCode(err error) (errors.ErrCode, bool) {
+	mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError)
+	if !ok {
+		return -1, false
+	}
+
+	return errors.ErrCode(mysqlErr.Number), true
 }

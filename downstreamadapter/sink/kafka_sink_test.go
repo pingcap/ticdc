@@ -27,7 +27,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	sink, dmlProducer, ddlProducer, err := newKafkaSinkForTest()
 	require.NoError(t, err)
 
-	count = 0
+	count.Store(0)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -48,7 +48,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 		},
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
-			func() { count++ },
+			func() { count.Add(1) },
 		},
 	}
 
@@ -63,13 +63,13 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 		},
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
-			func() { count++ },
+			func() { count.Add(1) },
 		},
 	}
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
 	dmlEvent.PostTxnFlushed = []func(){
-		func() { count++ },
+		func() { count.Add(1) },
 	}
 	dmlEvent.CommitTs = 2
 
@@ -84,5 +84,5 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	require.Len(t, dmlProducer.(*producer.MockProducer).GetAllEvents(), 2)
 	require.Len(t, ddlProducer.(*producer.MockProducer).GetAllEvents(), 1)
 
-	require.Equal(t, count, 3)
+	require.Equal(t, count.Load(), int64(3))
 }

@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -206,17 +207,22 @@ func (m *mockDispatcherManager) onDispatchRequest(
 		dispatchers := make([]*heartbeatpb.TableSpanStatus, 0, len(m.dispatchers))
 		delete(m.dispatchersMap, *request.Config.DispatcherID)
 		for _, status := range m.dispatchers {
-			if status.ID.High != request.Config.DispatcherID.High || status.ID.Low != request.Config.DispatcherID.Low {
-				dispatchers = append(dispatchers, status)
+			newStatus := &heartbeatpb.TableSpanStatus{
+				ID:              status.ID,
+				ComponentStatus: status.ComponentStatus,
+				CheckpointTs:    status.CheckpointTs,
+			}
+			if newStatus.ID.High != request.Config.DispatcherID.High || newStatus.ID.Low != request.Config.DispatcherID.Low {
+				dispatchers = append(dispatchers, newStatus)
 			} else {
-				status.ComponentStatus = heartbeatpb.ComponentState_Stopped
+				newStatus.ComponentStatus = heartbeatpb.ComponentState_Stopped
 				response := &heartbeatpb.HeartBeatRequest{
 					ChangefeedID: m.changefeedID,
 					Watermark: &heartbeatpb.Watermark{
 						CheckpointTs: m.checkpointTs,
 						ResolvedTs:   m.checkpointTs,
 					},
-					Statuses: []*heartbeatpb.TableSpanStatus{status},
+					Statuses: []*heartbeatpb.TableSpanStatus{newStatus},
 				}
 				m.sendMessages(response)
 			}
@@ -290,17 +296,23 @@ func TestMaintainerSchedule(t *testing.T) {
 			SchemaTableName: &commonEvent.SchemaTableName{},
 		})
 	}
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
 	schemaStore := &mockSchemaStore{tables: tables}
 	appcontext.SetService(appcontext.SchemaStore, schemaStore)
 
 	n := node.NewInfo("", "")
-	appcontext.SetService(appcontext.MessageCenter, messaging.NewMessageCenter(ctx,
-		n.ID, 100, config.NewDefaultMessageCenterConfig(), nil))
+	mc := messaging.NewMessageCenter(ctx, n.ID, 100, config.NewDefaultMessageCenterConfig(), nil)
+	mc.Run(ctx)
+	defer mc.Close()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[n.ID] = n
 	cfID := common.NewChangeFeedIDWithName("test")
-	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	dispatcherManager := MockDispatcherManager(mc, n.ID)
 
 	wg := &sync.WaitGroup{}

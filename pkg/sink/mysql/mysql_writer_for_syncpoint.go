@@ -24,12 +24,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/apperror"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
 
-func (w *MysqlWriter) CreateSyncTable() error {
+func (w *MysqlWriter) createSyncTable() error {
 	database := filter.TiCDCSystemSchema
 	query := `CREATE TABLE IF NOT EXISTS %s
 	(
@@ -42,26 +42,7 @@ func (w *MysqlWriter) CreateSyncTable() error {
 		PRIMARY KEY (changefeed, primary_ts)
 	);`
 	query = fmt.Sprintf(query, filter.SyncPointTable)
-	return w.CreateTable(database, filter.SyncPointTable, query)
-}
-
-func (w *MysqlWriter) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
-	if !w.syncPointTableInit {
-		// create sync point table if not exist
-		err := w.CreateSyncTable()
-		if err != nil {
-			return errors.Trace(err)
-		}
-		w.syncPointTableInit = true
-	}
-	err := w.SendSyncPointEvent(event)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	for _, callback := range event.PostTxnFlushed {
-		callback()
-	}
-	return nil
+	return w.createTable(database, filter.SyncPointTable, query)
 }
 
 func (w *MysqlWriter) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
@@ -106,6 +87,8 @@ func (w *MysqlWriter) SendSyncPointEvent(event *commonEvent.SyncPointEvent) erro
 		}
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write syncpoint table; Exec Failed; Query is %s", query)))
 	}
+
+	log.Debug("exec syncpoint ts query", zap.String("query", query))
 
 	// set global tidb_external_ts to secondary ts
 	// TiDB supports tidb_external_ts system variable since v6.4.0.

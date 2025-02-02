@@ -25,8 +25,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/tidb/pkg/kv"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -160,9 +160,9 @@ func (s *schemaStore) updateResolvedTsPeriodically(ctx context.Context) error {
 	tryUpdateResolvedTs := func() {
 		pendingTs := s.pendingResolvedTs.Load()
 		defer func() {
-			currentPhyTs := oracle.GetPhysical(s.pdClock.CurrentTime())
+			pdPhyTs := oracle.GetPhysical(s.pdClock.CurrentTime())
 			resolvedPhyTs := oracle.ExtractPhysical(pendingTs)
-			resolvedLag := float64(currentPhyTs-resolvedPhyTs) / 1e3
+			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
 			metrics.SchemaStoreResolvedTsLagGauge.Set(float64(resolvedLag))
 		}()
 

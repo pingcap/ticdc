@@ -19,7 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcherorchestrator"
@@ -30,19 +29,18 @@ import (
 	"github.com/pingcap/ticdc/logservice/txnutil"
 	"github.com/pingcap/ticdc/maintainer"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	appctx "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	tiserver "github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pingcap/tiflow/pkg/tcpserver"
 	"github.com/tikv/client-go/v2/tikv"
@@ -57,6 +55,9 @@ const (
 )
 
 type server struct {
+	// mu is used to protect the server's Run method
+	mu sync.Mutex
+
 	info *node.Info
 
 	liveness model.Liveness
@@ -78,7 +79,13 @@ type server struct {
 	RegionCache *tikv.RegionCache
 	PDClock     pdutil.Clock
 
-	tcpServer  tcpserver.TCPServer
+	tcpServer tcpserver.TCPServer
+
+	// preServices is the preServices will be start before the server is running
+	// And will be closed when the server is closing
+	preServices []common.Closeable
+	// subModules is the modules will be start after PreServices are started
+	// And will be closed when the server is closing
 	subModules []common.SubModule
 }
 
@@ -106,6 +113,7 @@ func New(conf *config.ServerConfig, pdEndpoints []string) (tiserver.Server, erro
 		pdEndpoints: pdEndpoints,
 		tcpServer:   tcpServer,
 		security:    conf.Security,
+		preServices: make([]common.Closeable, 0),
 	}
 	return s, nil
 }
@@ -117,18 +125,15 @@ func (c *server) initialize(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	appcontext.SetID(c.info.ID.String())
-	messageCenter := messaging.NewMessageCenter(ctx, c.info.ID, c.info.Epoch, config.NewDefaultMessageCenterConfig(), c.security)
-	appcontext.SetService(appcontext.MessageCenter, messageCenter)
-
-	appcontext.SetService(appcontext.EventCollector, eventcollector.New(ctx, c.info.ID))
-	appcontext.SetService(appcontext.HeartbeatCollector, dispatchermanager.NewHeartBeatCollector(c.info.ID))
-	appcontext.SetService(appcontext.DispatcherOrchestrator, dispatcherorchestrator.New())
+	if err := c.setPreServices(ctx); err != nil {
+		log.Error("server set pre services failed", zap.Any("server", c.info), zap.Error(err))
+		return errors.Trace(err)
+	}
 
 	nodeManager := watcher.NewNodeManager(c.session, c.EtcdClient)
 	nodeManager.RegisterNodeChangeHandler(
-		appcontext.MessageCenter,
-		appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter).OnNodeChanges)
+		appctx.MessageCenter,
+		appctx.GetService[messaging.MessageCenter](appctx.MessageCenter).OnNodeChanges)
 
 	conf := config.GetGlobalServerConfig()
 	subscriptionClient := logpuller.NewSubscriptionClient(
@@ -159,8 +164,52 @@ func (c *server) initialize(ctx context.Context) error {
 	return nil
 }
 
+// setPreServices sets the preServices
+func (c *server) setPreServices(ctx context.Context) error {
+	// Set ID to Global Context
+	appctx.SetID(c.info.ID.String())
+
+	// Set PDClock to Global Context
+	var err error
+	c.PDClock, err = pdutil.NewClock(ctx, c.pdClient)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	c.PDClock.Run(ctx)
+	appctx.SetService(appctx.DefaultPDClock, c.PDClock)
+	c.preServices = append(c.preServices, c.PDClock)
+	// Set MessageCenter to Global Context
+	messageCenter := messaging.NewMessageCenter(ctx, c.info.ID, c.info.Epoch, config.NewDefaultMessageCenterConfig(), c.security)
+	messageCenter.Run(ctx)
+	appctx.SetService(appctx.MessageCenter, messageCenter)
+	c.preServices = append(c.preServices, messageCenter)
+
+	// Set EventCollector to Global Context
+	ec := eventcollector.New(c.info.ID)
+	ec.Run(ctx)
+	appctx.SetService(appctx.EventCollector, ec)
+	c.preServices = append(c.preServices, ec)
+
+	// Set HeartbeatCollector to Global Context
+	hc := dispatchermanager.NewHeartBeatCollector(c.info.ID)
+	hc.Run(ctx)
+	appctx.SetService(appctx.HeartbeatCollector, hc)
+	c.preServices = append(c.preServices, hc)
+
+	// Set DispatcherOrchestrator to Global Context
+	dispatcherOrchestrator := dispatcherorchestrator.New()
+	appctx.SetService(appctx.DispatcherOrchestrator, dispatcherOrchestrator)
+	c.preServices = append(c.preServices, dispatcherOrchestrator)
+
+	log.Info("pre services all set", zap.Any("preServicesNum", len(c.preServices)))
+	return nil
+}
+
 // Run runs the server
 func (c *server) Run(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	err := c.initialize(ctx)
 	if err != nil {
 		log.Error("init server failed", zap.Error(err))
@@ -173,7 +222,7 @@ func (c *server) Run(ctx context.Context) error {
 		log.Info("tcp server start to run")
 		err := c.tcpServer.Run(ctx)
 		if err != nil {
-			log.Error("tcp server exited", zap.Error(cerror.Trace(err)))
+			log.Error("tcp server exited", zap.Error(errors.Trace(err)))
 		}
 		return nil
 	})
@@ -194,12 +243,7 @@ func (c *server) Run(ctx context.Context) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-
-	err = g.Wait()
-	if err != nil {
-		log.Error("server exited", zap.Error(cerror.Trace(err)))
-	}
-	return errors.Trace(err)
+	return g.Wait()
 }
 
 // SelfInfo gets the server info
@@ -208,7 +252,7 @@ func (c *server) SelfInfo() (*node.Info, error) {
 	if c.info != nil {
 		return c.info, nil
 	}
-	return nil, cerror.ErrCaptureNotInitialized.GenWithStackByArgs()
+	return nil, errors.ErrCaptureNotInitialized.GenWithStackByArgs()
 }
 
 func (c *server) setCoordinator(co tiserver.Coordinator) {
@@ -222,7 +266,7 @@ func (c *server) GetCoordinator() (tiserver.Coordinator, error) {
 	c.coordinatorMu.Lock()
 	defer c.coordinatorMu.Unlock()
 	if c.coordinator == nil {
-		return nil, cerror.ErrNotOwner.GenWithStackByArgs()
+		return nil, errors.ErrNotOwner.GenWithStackByArgs()
 	}
 	return c.coordinator, nil
 }
@@ -231,12 +275,17 @@ func (c *server) GetCoordinator() (tiserver.Coordinator, error) {
 // it also closes the coordinator and processorManager
 // Note: this function should be reentrant
 func (c *server) Close(ctx context.Context) {
+	log.Info("server closing", zap.Any("ServerInfo", c.info))
 	// Safety: Here we mainly want to stop the coordinator
 	// and ignore it if the coordinator does not exist or is not set.
 	o, _ := c.GetCoordinator()
 	if o != nil {
 		o.AsyncStop()
 		log.Info("coordinator closed", zap.String("captureID", string(c.info.ID)))
+	}
+
+	for _, service := range c.preServices {
+		service.Close()
 	}
 
 	for _, subModule := range c.subModules {
@@ -250,12 +299,14 @@ func (c *server) Close(ctx context.Context) {
 
 	// delete server info from etcd
 	timeoutCtx, cancel := context.WithTimeout(context.Background(), cleanMetaDuration)
+	defer cancel()
 	if err := c.EtcdClient.DeleteCaptureInfo(timeoutCtx, model.CaptureID(c.info.ID)); err != nil {
 		log.Warn("failed to delete server info when server exited",
 			zap.String("captureID", string(c.info.ID)),
 			zap.Error(err))
 	}
-	cancel()
+
+	log.Info("server closed", zap.Any("ServerInfo", c.info))
 }
 
 // Liveness returns liveness of the server.
@@ -302,7 +353,7 @@ func (c *server) GetCoordinatorInfo(ctx context.Context) (*node.Info, error) {
 			return res, nil
 		}
 	}
-	return nil, cerror.ErrOwnerNotFound.FastGenByArgs()
+	return nil, errors.ErrOwnerNotFound.FastGenByArgs()
 }
 
 func isErrCompacted(err error) bool {

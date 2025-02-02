@@ -17,17 +17,16 @@ import (
 	"context"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/fatih/color"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/server"
 	"github.com/pingcap/ticdc/version"
 	"github.com/pingcap/tiflow/pkg/cmd/util"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
 	cdcversion "github.com/pingcap/tiflow/pkg/version"
 	"github.com/spf13/cobra"
@@ -104,35 +103,23 @@ func (o *options) run(cmd *cobra.Command) error {
 	log.Info("The TiCDC release version is", zap.String("ReleaseVersion", cdcversion.ReleaseVersion))
 
 	util.LogHTTPProxies()
-
-	for {
-		svr, err := server.New(o.serverConfig, o.pdEndpoints)
-		if err != nil {
-			log.Error("create cdc server failed", zap.Error(err))
-			return errors.Trace(err)
-		}
-		log.Info("TiCDC(new arch) server created",
-			zap.Strings("pd", o.pdEndpoints), zap.Stringer("config", o.serverConfig))
-
-		err = svr.Run(ctx)
-		if err != nil && errors.Cause(err) != context.Canceled {
-			log.Warn("cdc server exits with error", zap.Error(err))
-		} else {
-			log.Info("cdc server exits normally")
-		}
-		// Close the server
-		svr.Close(ctx)
-
-		if strings.Contains(err.Error(), "ErrCaptureSuicide") {
-			log.Info("server exit with capture suicide error, restart it again", zap.Error(err))
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		break
+	svr, err := server.New(o.serverConfig, o.pdEndpoints)
+	if err != nil {
+		log.Error("create cdc server failed", zap.Error(err))
+		return errors.Trace(err)
 	}
+	log.Info("TiCDC(new arch) server created",
+		zap.Strings("pd", o.pdEndpoints), zap.Stringer("config", o.serverConfig))
 
-	return nil
+	err = svr.Run(ctx)
+	if err != nil && errors.Cause(err) != context.Canceled {
+		log.Warn("cdc server exits with error", zap.Error(err))
+	} else {
+		log.Info("cdc server exits normally")
+	}
+	// Gracefully close the server, and exit the process.
+	svr.Close(ctx)
+	return err
 }
 
 // complete adapts from the command line args and config file to the data required.

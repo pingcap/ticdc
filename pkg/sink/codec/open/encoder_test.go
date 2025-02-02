@@ -23,8 +23,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -198,7 +198,7 @@ func TestLargeMessage(t *testing.T) {
 	}
 
 	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
-	require.ErrorIs(t, err, cerror.ErrMessageTooLarge)
+	require.ErrorIs(t, err, errors.ErrMessageTooLarge)
 }
 
 func TestLargeMessageWithHandle(t *testing.T) {
@@ -240,7 +240,7 @@ func TestLargeMessageWithHandle(t *testing.T) {
 	message := messages[0]
 	require.Equal(t, batchVersion1, readByteToUint(message.Key[:8]))
 	require.Equal(t, uint64(len(message.Key[16:])), readByteToUint(message.Key[8:16]))
-	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message.Key[16:]))
+	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1,"ohk":true}`, string(message.Key[16:]))
 
 	require.Equal(t, uint64(len(message.Value[8:])), readByteToUint(message.Value[:8]))
 	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1}}}`, string(message.Value[8:]))
@@ -275,5 +275,5 @@ func TestLargeMessageWithoutHandle(t *testing.T) {
 	}
 
 	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
-	require.ErrorIs(t, err, cerror.ErrOpenProtocolCodecInvalidData)
+	require.ErrorIs(t, err, errors.ErrOpenProtocolCodecInvalidData)
 }

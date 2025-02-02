@@ -24,8 +24,8 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/pd/pkg/utils/tempurl"
 	"go.etcd.io/etcd/api/v3/mvccpb"
@@ -253,7 +253,7 @@ func (c *CDCEtcdClientImpl) GetAllChangeFeedInfo(ctx context.Context) (
 	allFeedInfo := make(map[common.ChangeFeedDisplayName]*model.ChangeFeedInfo, len(details))
 	for id, rawDetail := range details {
 		info := &model.ChangeFeedInfo{}
-		if err := info.Unmarshal(rawDetail.Value); err != nil {
+		if err = info.Unmarshal(rawDetail.Value); err != nil {
 			return nil, errors.Trace(err)
 		}
 		allFeedInfo[id] = info
@@ -317,7 +317,7 @@ func (c *CDCEtcdClientImpl) GetCaptures(ctx context.Context) (int64, []*model.Ca
 	infos := make([]*model.CaptureInfo, 0, resp.Count)
 	for _, kv := range resp.Kvs {
 		info := &model.CaptureInfo{}
-		err := info.Unmarshal(kv.Value)
+		err = info.Unmarshal(kv.Value)
 		if err != nil {
 			return 0, nil, errors.Trace(err)
 		}

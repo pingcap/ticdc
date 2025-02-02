@@ -34,7 +34,6 @@ import (
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/tiflow/pkg/chann"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -80,7 +79,6 @@ type EventCollector struct {
 	serverId      node.ID
 	dispatcherMap sync.Map
 	mc            messaging.MessageCenter
-	wg            sync.WaitGroup
 
 	// dispatcherRequestChan cached dispatcher request when some error occurs.
 	dispatcherRequestChan *chann.DrainableChann[DispatcherRequestWithTarget]
@@ -98,12 +96,15 @@ type EventCollector struct {
 		id node.ID
 	}
 
+	wg     sync.WaitGroup
+	cancel context.CancelFunc
+
 	metricDispatcherReceivedKVEventCount         prometheus.Counter
 	metricDispatcherReceivedResolvedTsEventCount prometheus.Counter
 	metricReceiveEventLagDuration                prometheus.Observer
 }
 
-func New(ctx context.Context, serverId node.ID) *EventCollector {
+func New(serverId node.ID) *EventCollector {
 	eventCollector := EventCollector{
 		serverId:                             serverId,
 		dispatcherMap:                        sync.Map{},
@@ -118,38 +119,53 @@ func New(ctx context.Context, serverId node.ID) *EventCollector {
 	eventCollector.ds = NewEventDynamicStream(&eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.RecvEventsMessage)
 
+	return &eventCollector
+}
+
+func (c *EventCollector) Run(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	c.cancel = cancel
+
 	for i := 0; i < config.DefaultBasicEventHandlerConcurrency; i++ {
 		ch := make(chan *messaging.TargetMessage, receiveChanSize)
-		eventCollector.receiveChannels[i] = ch
-		eventCollector.wg.Add(1)
+		c.receiveChannels[i] = ch
+		c.wg.Add(1)
 		go func() {
-			defer eventCollector.wg.Done()
-			eventCollector.runProcessMessage(ctx, ch)
+			defer c.wg.Done()
+			c.runProcessMessage(ctx, ch)
 		}()
 	}
 
-	eventCollector.wg.Add(1)
+	c.wg.Add(1)
 	go func() {
-		defer eventCollector.wg.Done()
-		eventCollector.processFeedback(ctx)
+		defer c.wg.Done()
+		c.processFeedback(ctx)
 	}()
 
-	eventCollector.wg.Add(1)
+	c.wg.Add(1)
 	go func() {
-		defer eventCollector.wg.Done()
-		eventCollector.processDispatcherRequests(ctx)
+		defer c.wg.Done()
+		c.processDispatcherRequests(ctx)
 	}()
-	eventCollector.wg.Add(1)
+
+	c.wg.Add(1)
 	go func() {
-		defer eventCollector.wg.Done()
-		eventCollector.processLogCoordinatorRequest(ctx)
+		defer c.wg.Done()
+		c.processLogCoordinatorRequest(ctx)
 	}()
-	eventCollector.wg.Add(1)
+
+	c.wg.Add(1)
 	go func() {
-		defer eventCollector.wg.Done()
-		eventCollector.updateMetrics(ctx)
+		defer c.wg.Done()
+		c.updateMetrics(ctx)
 	}()
-	return &eventCollector
+}
+
+func (c *EventCollector) Close() {
+	c.cancel()
+	c.ds.Close()
+	c.wg.Wait()
+	log.Info("event collector is closed")
 }
 
 func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota int) {
@@ -166,11 +182,10 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	c.dispatcherMap.Store(target.GetId(), stat)
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
-	areaSetting := dynstream.NewAreaSettings()
-	areaSetting.MaxPendingSize = memoryQuota
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota)
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
-		log.Error("add dispatcher to dynamic stream failed", zap.Error(err))
+		log.Info("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
 
 	// TODO: handle the return error(now even it return error, it will be retried later, we can just ignore it now)
@@ -328,7 +343,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 		message.RegisterDispatcherRequest.FilterConfig = req.Dispatcher.GetFilterConfig()
 		message.RegisterDispatcherRequest.EnableSyncPoint = req.Dispatcher.EnableSyncPoint()
 		message.RegisterDispatcherRequest.SyncPointInterval = uint64(req.Dispatcher.GetSyncPointInterval().Seconds())
-		message.RegisterDispatcherRequest.SyncPointTs = syncpoint.CalculateStartSyncPointTs(req.StartTs, req.Dispatcher.GetSyncPointInterval())
+		message.RegisterDispatcherRequest.SyncPointTs = syncpoint.CalculateStartSyncPointTs(req.StartTs, req.Dispatcher.GetSyncPointInterval(), req.Dispatcher.GetStartTsIsSyncpoint())
 	}
 
 	err := c.mc.SendCommand(&messaging.TargetMessage{
@@ -437,27 +452,7 @@ func (c *EventCollector) updateMetrics(ctx context.Context) {
 			metricsDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 			metricsDSUsedMemoryUsage.Set(float64(dsMetrics.MemoryControl.UsedMemory))
 			metricsDSMaxMemoryUsage.Set(float64(dsMetrics.MemoryControl.MaxMemory))
-			c.updateResolvedTsMetric()
 		}
-	}
-}
-
-func (c *EventCollector) updateResolvedTsMetric() {
-	var minResolvedTs uint64
-	c.dispatcherMap.Range(func(key, value interface{}) bool {
-		if stat, ok := value.(*dispatcherStat); ok {
-			d := stat.target
-			if minResolvedTs == 0 || d.GetResolvedTs() < minResolvedTs {
-				minResolvedTs = d.GetResolvedTs()
-			}
-		}
-		return true
-	})
-
-	if minResolvedTs > 0 {
-		phyResolvedTs := oracle.ExtractPhysical(minResolvedTs)
-		lagMs := float64(oracle.GetPhysical(time.Now())-phyResolvedTs) / 1e3
-		metrics.EventCollectorResolvedTsLagGauge.Set(lagMs)
 	}
 }
 

@@ -35,8 +35,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/chann"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -701,15 +701,15 @@ func (e *eventStore) updateMetrics(ctx context.Context) error {
 }
 
 func (e *eventStore) updateMetricsOnce() {
-	currentTime := e.pdClock.CurrentTime()
-	currentPhyTs := oracle.GetPhysical(currentTime)
+	pdTime := e.pdClock.CurrentTime()
+	pdPhyTs := oracle.GetPhysical(pdTime)
 	minResolvedTs := uint64(0)
 	e.dispatcherMeta.RLock()
 	for _, subscriptionStat := range e.dispatcherMeta.subscriptionStats {
 		// resolved ts lag
 		resolvedTs := subscriptionStat.resolvedTs.Load()
 		resolvedPhyTs := oracle.ExtractPhysical(resolvedTs)
-		resolvedLag := float64(currentPhyTs-resolvedPhyTs) / 1e3
+		resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
 		metrics.EventStoreDispatcherResolvedTsLagHist.Observe(float64(resolvedLag))
 		if minResolvedTs == 0 || resolvedTs < minResolvedTs {
 			minResolvedTs = resolvedTs
@@ -717,7 +717,7 @@ func (e *eventStore) updateMetricsOnce() {
 		// checkpoint ts lag
 		checkpointTs := subscriptionStat.checkpointTs.Load()
 		watermarkPhyTs := oracle.ExtractPhysical(checkpointTs)
-		watermarkLag := float64(currentPhyTs-watermarkPhyTs) / 1e3
+		watermarkLag := float64(pdPhyTs-watermarkPhyTs) / 1e3
 		metrics.EventStoreDispatcherWatermarkLagHist.Observe(float64(watermarkLag))
 	}
 	e.dispatcherMeta.RUnlock()
@@ -726,7 +726,7 @@ func (e *eventStore) updateMetricsOnce() {
 		return
 	}
 	minResolvedPhyTs := oracle.ExtractPhysical(minResolvedTs)
-	eventStoreResolvedTsLag := float64(currentPhyTs-minResolvedPhyTs) / 1e3
+	eventStoreResolvedTsLag := float64(pdPhyTs-minResolvedPhyTs) / 1e3
 	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLag)
 }
 

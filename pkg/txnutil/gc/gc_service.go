@@ -17,11 +17,10 @@ import (
 	"context"
 	"math"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerrors "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/retry"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/retry"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
@@ -39,22 +38,32 @@ const (
 // service GC safepoint and this function will update the service GC to startTs
 func EnsureChangefeedStartTsSafety(
 	ctx context.Context, pdCli pd.Client,
-	gcServiceIDPrefix string,
+	ticdcServiceID string,
+	tag string,
 	changefeedID common.ChangeFeedID,
 	TTL int64, startTs uint64,
 ) error {
+	gcServiceID := ticdcServiceID + tag + changefeedID.Namespace() + "_" + changefeedID.Name()
+
+	// set gc safepoint for the changefeed gc service
 	minServiceGCTs, err := SetServiceGCSafepoint(
 		ctx, pdCli,
-		gcServiceIDPrefix+changefeedID.Namespace()+"_"+changefeedID.Name(),
+		gcServiceID,
 		TTL, startTs)
 	if err != nil {
 		return errors.Trace(err)
 	}
+	log.Info("set gc safepoint for changefeed",
+		zap.String("gcServiceID", gcServiceID),
+		zap.Uint64("expectedGCSafepoint", startTs),
+		zap.Uint64("actualGCSafepoint", minServiceGCTs),
+		zap.Int64("ttl", TTL))
+
 	// startTs should be greater than or equal to minServiceGCTs + 1, otherwise gcManager
 	// would return a ErrSnapshotLostByGC even though the changefeed would appear to be successfully
 	// created/resumed. See issue #6350 for more detail.
 	if startTs > 0 && startTs < minServiceGCTs+1 {
-		return cerrors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
+		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
 	}
 	return nil
 }
@@ -100,7 +109,7 @@ func SetServiceGCSafepoint(
 		},
 		retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
 		retry.WithMaxTries(gcServiceMaxRetries),
-		retry.WithIsRetryableErr(cerrors.IsRetryableError))
+		retry.WithIsRetryableErr(errors.IsRetryableError))
 	return
 }
 
@@ -118,5 +127,5 @@ func RemoveServiceGCSafepoint(ctx context.Context, pdCli pd.Client, serviceID st
 		},
 		retry.WithBackoffBaseDelay(gcServiceBackoffDelay), // 1s
 		retry.WithMaxTries(gcServiceMaxRetries),
-		retry.WithIsRetryableErr(cerrors.IsRetryableError))
+		retry.WithIsRetryableErr(errors.IsRetryableError))
 }

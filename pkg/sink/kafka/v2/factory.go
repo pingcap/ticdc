@@ -22,11 +22,12 @@ import (
 	"github.com/jcmturner/gokrb5/v8/client"
 	"github.com/jcmturner/gokrb5/v8/config"
 	"github.com/jcmturner/gokrb5/v8/keytab"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	pkafka "github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
 	tiv2 "github.com/pingcap/tiflow/pkg/sink/kafka/v2"
 	"github.com/segmentio/kafka-go"
@@ -156,7 +157,7 @@ func completeSASLConfig(o *pkafka.Options) (sasl.Mechanism, error) {
 				o.SASL.GSSAPI.ServiceName), nil
 
 		case pkafka.SASLTypeOAuth:
-			return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
+			return nil, cerror.ErrKafkaInvalidConfig.GenWithStack(
 				"OAuth is not yet supported in Kafka sink v2")
 		}
 	}
@@ -396,6 +397,6 @@ func (a *asyncWriter) AsyncRunCallback(ctx context.Context) error {
 		if err == nil {
 			return nil
 		}
-		return errors.WrapError(errors.ErrKafkaAsyncSendMessage, err)
+		return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, err)
 	}
 }

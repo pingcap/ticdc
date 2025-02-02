@@ -52,8 +52,10 @@ func NewBootstrapper[T any](id string, newBootstrapMsg NewBootstrapMessageFn) *B
 	}
 }
 
-// HandleBootstrapResponse cache the message reported remote node
-// return cached bootstrap response if all node are initialized
+// HandleBootstrapResponse do the following:
+// 1. cache the bootstrap response reported from remote nodes
+// 2. check if all node are initialized
+// 3. return cached bootstrap response if all nodes are initialized
 func (b *Bootstrapper[T]) HandleBootstrapResponse(
 	from node.ID,
 	msg *T,

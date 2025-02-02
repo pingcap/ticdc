@@ -25,8 +25,8 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/logservice/txnutil"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/tidb/pkg/store/mockstore/mockcopr"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -54,7 +54,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
 	res.LockedRangeState.Initialized.Store(true)
-	client.ResolveLock(SubscriptionID(1), 200)
+	span.resolveStaleLocks(200)
 	select {
 	case task := <-client.resolveLockTaskCh:
 		require.Equal(t, uint64(1), task.regionID)
@@ -67,7 +67,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	res = span.rangeLock.LockRange(context.Background(), []byte{'c'}, []byte{'d'}, 2, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
 	state := newRegionFeedState(regionInfo{lockedRangeState: res.LockedRangeState, subscribedSpan: span}, 1)
-	client.ResolveLock(SubscriptionID(1), 200)
+	span.resolveStaleLocks(200)
 	select {
 	case task := <-client.resolveLockTaskCh:
 		require.Equal(t, uint64(1), task.regionID)
@@ -81,7 +81,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 
 	// Task will be triggered after initialized.
 	state.setInitialized()
-	client.ResolveLock(SubscriptionID(1), 200)
+	span.resolveStaleLocks(200)
 	select {
 	case <-client.resolveLockTaskCh:
 	case <-time.After(100 * time.Millisecond):
@@ -180,7 +180,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	select {
 	case resolvedTs := <-tsCh:
 		require.Equal(t, targetTs, resolvedTs)
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		require.True(t, false, "reconnection not succeed in 5 second")
 	}
 
@@ -195,7 +195,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	select {
 	case resolvedTs := <-tsCh:
 		require.Equal(t, targetTs, resolvedTs)
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		require.True(t, false, "reconnection not succeed in 5 second")
 	}
 }

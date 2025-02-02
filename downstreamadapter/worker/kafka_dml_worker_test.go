@@ -26,8 +26,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/errgroup"
 )
 
 var count int
@@ -48,13 +48,12 @@ func kafkaDMLWorkerForTest(t *testing.T) *KafkaDMLWorker {
 	require.NoError(t, err)
 
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	errGroup, ctx := errgroup.WithContext(ctx)
 	dmlMockProducer := producer.NewMockDMLProducer()
 
 	dmlWorker := NewKafkaDMLWorker(changefeedID, protocol, dmlMockProducer,
 		kafkaComponent.EncoderGroup, kafkaComponent.ColumnSelector,
 		kafkaComponent.EventRouter, kafkaComponent.TopicManager,
-		statistics, errGroup)
+		statistics)
 	return dmlWorker
 }
 
@@ -76,11 +75,17 @@ func TestWriteEvents(t *testing.T) {
 	dmlEvent.CommitTs = 2
 
 	dmlWorker := kafkaDMLWorkerForTest(t)
-	dmlWorker.Run(context.Background())
-	dmlWorker.GetEventChan() <- dmlEvent
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		err := dmlWorker.Run(ctx)
+		require.True(t, errors.Is(err, context.Canceled))
+	}()
+	dmlWorker.AddDMLEvent(dmlEvent)
 
 	// Wait for the events to be received by the worker.
 	time.Sleep(time.Second)
 	require.Len(t, dmlWorker.producer.(*producer.MockProducer).GetAllEvents(), 2)
 	require.Equal(t, count, 1)
+	cancel()
 }
