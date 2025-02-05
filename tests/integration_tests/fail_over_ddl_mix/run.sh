@@ -38,13 +38,27 @@ function prepare() {
 }
 
 function create_tables() {
+	## normal tables
 	for i in {1..5}; do
 		echo "Creating table table_$i..."
 		run_sql "CREATE TABLE IF NOT EXISTS test.table_$i (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	done
+
+	## partition tables
+	for i in {6..10}; do
+		echo "Creating partition table_$i..."
+		run_sql "CREATE TABLE IF NOT EXISTS test.table_$i (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			data VARCHAR(255)
+		)
+		PARTITION BY RANGE (id) (
+			PARTITION p0 VALUES LESS THAN (200),
+			PARTITION p1 VALUES LESS THAN (1000),
+			PARTITION p2 VALUES LESS THAN MAXVALUE);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	done
 }
 
-function execute_ddl() {
+function execute_ddl_for_normal_tables() {
 	while true; do
 		table_num=$((RANDOM % 5 + 1))
 		table_name="table_$table_num"
@@ -68,6 +82,51 @@ function execute_ddl() {
 			;;
 		esac
 
+		sleep 1
+	done
+}
+
+function execute_ddl_for_partition_tables() {
+	while true; do
+		table_num=$((RANDOM % 5 + 6))
+		table_name="table_$table_num"
+
+		case $((RANDOM % 4)) in
+		0)
+			echo "DDL: Dropping And creating partition $table_name..."
+			run_sql "ALTER TABLE test.$table_name DROP PARTITION p2;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			sleep 0.5
+			run_sql "ALTER TABLE test.$table_name ADD PARTITION (PARTITION p2 VALUES LESS THAN MAXVALUE);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			;;
+		1)
+			echo "DDL: Truncating partition $table_name..."
+			run_sql "ALTER TABLE test.$table_name TRUNCATE PARTITION p0;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			run_sql "ALTER TABLE test.$table_name TRUNCATE PARTITION p1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			run_sql "ALTER TABLE test.$table_name TRUNCATE PARTITION p2;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			;;
+		2)
+			echo "DDL: Removing and do partition $table_name..."
+			run_sql "ALTER TABLE test.$table_name REMOVE PARTITIONING;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			sleep 0.5
+			run_sql "ALTER TABLE test.$table_name PARTITION BY RANGE (id) (
+				PARTITION p0 VALUES LESS THAN (200),
+				PARTITION p1 VALUES LESS THAN (500),
+				PARTITION p2 VALUES LESS THAN MAXVALUE);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			;;
+		3)
+			echo "DDL: Exchange Partition With normal Table $table_name..."
+			exchange_table=$((RANDOM % 5 + 1))
+			exchange_table_name="table_$exchange_table"
+			run_sql_ignore_error "ALTER TABLE test.$table_name EXCHANGE PARTITION p0 with table test.$exchange_table_name" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+			echo "Exchange Partition Finished"
+			;;
+		4)
+			echo "DDL: REORGANIZE partition $table_name..."
+			run_sql "ALTER TABLE test.$table_name REORGANIZE PARTITION p0 INTO (PARTITION p00 VALUES LESS THAN (50), PARTITION p01 VALUES LESS THAN (100), PARTITION p02 VALUES LESS THAN (200))" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			sleep 0.5
+			run_sql "ALTER TABLE test.$table_name REORGANIZE PARTITION p00, p01, p02 INTO (PARTITION p0 VALUES LESS THAN (200))" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			;;
+		esac
 		sleep 1
 	done
 }
@@ -112,8 +171,10 @@ main() {
 	prepare
 
 	create_tables
-	execute_ddl &
-	DDL_PID=$!
+	execute_ddl_for_normal_tables &
+	NORMAL_TABLE_DDL_PID=$!
+	execute_ddl_for_partition_tables &
+	PARTITION_TABLE_DDL_PID=$!
 
 	# 启动 DML 线程
 	execute_dml 1 &
@@ -126,12 +187,22 @@ main() {
 	DML_PID_4=$!
 	execute_dml 5 &
 	DML_PID_5=$!
+	execute_dml 6 &
+	DML_PID_6=$!
+	execute_dml 7 &
+	DML_PID_7=$!
+	execute_dml 8 &
+	DML_PID_8=$!
+	execute_dml 9 &
+	DML_PID_9=$!
+	execute_dml 10 &
+	DML_PID_10=$!
 
 	kill_server
 
 	sleep 10
 
-	kill -9 $DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
+	kill -9 $NORMAL_TABLE_DDL_PID $PARTITION_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5 $DML_PID_6 $DML_PID_7 $DML_PID_8 $DML_PID_9 $DML_PID_10
 
 	sleep 10
 
