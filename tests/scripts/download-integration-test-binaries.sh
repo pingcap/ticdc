@@ -84,10 +84,12 @@ download_community_binaries() {
 
 	# Extract binaries
 	tar -xz -C ${TMP_DIR} -f ${TMP_DIR}/$tidb_tar_name
+	download_file "https://github.com/lidezhu/sdb_data/releases/download/v1.1/tikv-server.tar.gz" "tikv-server.tar.gz" "${TMP_DIR}/$tidb_file_name/tikv-${dist}.tar.gz"
 	tar -xz -C ${THIRD_BIN_DIR} -f ${TMP_DIR}/$tidb_file_name/pd-${dist}.tar.gz
 	tar -xz -C ${THIRD_BIN_DIR} -f ${TMP_DIR}/$tidb_file_name/tikv-${dist}.tar.gz
 	tar -xz -C ${THIRD_BIN_DIR} -f ${TMP_DIR}/$tidb_file_name/tidb-${dist}.tar.gz
 	tar -xz -C ${THIRD_BIN_DIR} -f ${TMP_DIR}/$tidb_file_name/tiflash-${dist}.tar.gz
+
 	mv ${THIRD_BIN_DIR}/tiflash ${THIRD_BIN_DIR}/_tiflash
 	mv ${THIRD_BIN_DIR}/_tiflash/* ${THIRD_BIN_DIR} && rm -rf ${THIRD_BIN_DIR}/_tiflash
 	tar -xz -C ${THIRD_BIN_DIR} pd-ctl -f ${TMP_DIR}/$tidb_file_name/ctl-${dist}.tar.gz
