@@ -92,12 +92,14 @@ func (w *MysqlWriter) SendDDLTsPre(event commonEvent.BlockEvent) error {
 		tableIds = append(tableIds, table.TableID)
 	}
 
+	TableIDInDDLJob := event.GetTableIDInDDLJob()
+
 	if len(tableIds) > 0 {
 		isSyncpoint := "1"
 		if event.GetType() == commonEvent.TypeDDLEvent {
 			isSyncpoint = "0"
 		}
-		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint)
+		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint, TableIDInDDLJob)
 		log.Info("send ddl ts table query", zap.String("query", query))
 
 		_, err = tx.Exec(query)
@@ -163,12 +165,14 @@ func (w *MysqlWriter) SendDDLTs(event commonEvent.BlockEvent) error {
 		tableIds = append(tableIds, table.TableID)
 	}
 
+	tableIDInDDLJob := event.GetTableIDInDDLJob()
+
 	if len(tableIds) > 0 {
 		isSyncpoint := "1"
 		if event.GetType() == commonEvent.TypeDDLEvent {
 			isSyncpoint = "0"
 		}
-		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint)
+		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint, tableIDInDDLJob)
 		log.Info("send ddl ts table query", zap.String("query", query))
 
 		_, err = tx.Exec(query)
@@ -204,14 +208,7 @@ func (w *MysqlWriter) SendDDLTs(event commonEvent.BlockEvent) error {
 	return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "failed to write ddl ts table; Commit Fail;"))
 }
 
-func insertItemQuery(tableIds []int64, ticdcClusterID string, changefeedID string, ddlTs string, finished string, isSyncpoint string) string {
-	// choose one related table_id to help table trigger event dispatcher to find the ddl jobs.
-	relatedTableID := tableIds[0] // TODO: relatedID need to be selected carefully, especially for partitioned tables
-	if relatedTableID == 0 {
-		if len(tableIds) > 1 {
-			relatedTableID = tableIds[1]
-		}
-	}
+func insertItemQuery(tableIds []int64, ticdcClusterID string, changefeedID string, ddlTs string, finished string, isSyncpoint string, relatedTableID int64) string {
 	var builder strings.Builder
 	builder.WriteString("INSERT INTO ")
 	builder.WriteString(filter.TiCDCSystemSchema)

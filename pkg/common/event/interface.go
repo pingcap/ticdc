@@ -48,6 +48,7 @@ type BlockEvent interface {
 	GetNeedDroppedTables() *InfluencedTables
 	GetNeedAddedTables() []Table
 	GetUpdatedSchemas() []SchemaIDChange
+	GetTableIDInDDLJob() int64
 }
 
 const (

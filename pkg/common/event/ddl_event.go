@@ -72,6 +72,11 @@ type DDLEvent struct {
 	TableNameChange *TableNameChange `json:"table_name_change"`
 
 	TiDBOnly bool `json:"tidb_only"`
+
+	// the tableID for the ddl job in the information_schema.ddl_jobs table(just ddl job.TableID)
+	// for the partition table, the TableIDInDDLJob is always the logical table id
+	// for truncate table, the TableIDInDDLJob is the table id of the old table
+	TableIDInDDLJob int64 `json:"table_id_in_ddl_job"`
 	// Call when event flush is completed
 	PostTxnFlushed []func() `json:"-"`
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
@@ -305,6 +310,10 @@ func (t *DDLEvent) GetSize() int64 {
 
 func (t *DDLEvent) IsPaused() bool {
 	return t.State.IsPaused()
+}
+
+func (t *DDLEvent) GetTableIDInDDLJob() int64 {
+	return t.TableIDInDDLJob
 }
 
 type SchemaTableName struct {
