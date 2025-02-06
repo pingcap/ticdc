@@ -121,7 +121,8 @@ func NewController(
 		c.nodeChanged = true
 		c.mutex.Unlock()
 	})
-	log.Info("changefeed bootstrap initial nodes",
+
+	log.Info("coordinator bootstrap initial nodes",
 		zap.Int("nodes", len(nodes)))
 	newNodes := make([]*node.Info, 0, len(nodes))
 	for _, n := range nodes {

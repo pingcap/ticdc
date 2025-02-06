@@ -152,7 +152,7 @@ func (m *Manager) Run(ctx context.Context) error {
 				if cf.removed.Load() {
 					cf.Close()
 					log.Info("maintainer removed, remove it from dynamic stream",
-						zap.String("changefeed", cf.id.String()))
+						zap.Stringer("changefeed", cf.id))
 					m.maintainers.Delete(key)
 				}
 				return true
@@ -173,7 +173,10 @@ func (m *Manager) sendMessages(msg *heartbeatpb.MaintainerHeartbeat) {
 	target := m.newCoordinatorTopicMessage(msg)
 	err := m.mc.SendCommand(target)
 	if err != nil {
-		log.Warn("send command failed", zap.Error(err))
+		log.Warn("send command failed",
+			zap.Stringer("from", m.selfNode.ID),
+			zap.Stringer("target", target.To),
+			zap.Error(err))
 	}
 }
 
@@ -232,12 +235,8 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 	}
 	maintainer := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.taskScheduler,
 		m.pdAPI, m.tsoClient, m.regionCache, req.CheckpointTs, req.IsNewChangefeed)
-	if err != nil {
-		log.Warn("add path to dynstream failed, coordinator will retry later", zap.Error(err))
-		return nil
-	}
-	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 	m.maintainers.Store(cfID, maintainer)
+	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 	return nil
 }
 
@@ -249,7 +248,7 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 		if !req.Cascade {
 			log.Warn("ignore remove maintainer request, "+
 				"since the maintainer not found",
-				zap.String("changefeed", cfID.String()),
+				zap.Stringer("changefeed", cfID),
 				zap.Any("request", req))
 			return &heartbeatpb.MaintainerStatus{
 				ChangefeedID: req.GetId(),
@@ -268,7 +267,7 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 		message:      msg,
 	})
 	log.Info("received remove maintainer request",
-		zap.String("changefeed", cfID.String()))
+		zap.Stringer("changefeed", cfID))
 	return nil
 }
 
@@ -279,7 +278,7 @@ func (m *Manager) onDispatchMaintainerRequest(
 		log.Warn("ignore invalid coordinator id",
 			zap.Any("request", msg),
 			zap.Any("coordinatorID", m.coordinatorID),
-			zap.Any("from", msg.From))
+			zap.Stringer("from", msg.From))
 		return nil
 	}
 	switch msg.Type {
@@ -338,22 +337,17 @@ func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 func (m *Manager) dispatcherMaintainerMessage(
 	ctx context.Context, changefeed common.ChangeFeedID, msg *messaging.TargetMessage,
 ) error {
-	_, ok := m.maintainers.Load(changefeed)
+	c, ok := m.maintainers.Load(changefeed)
 	if !ok {
 		log.Warn("maintainer is not found",
-			zap.String("changefeedID", changefeed.Name()), zap.String("message", msg.String()))
+			zap.Stringer("changefeed", changefeed),
+			zap.String("message", msg.String()))
 		return nil
 	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		c, ok := m.maintainers.Load(changefeed)
-		if !ok {
-			log.Warn("maintainer is not found",
-				zap.String("changefeedID", changefeed.Name()), zap.String("message", msg.String()))
-			return nil
-		}
 		maintainer := c.(*Maintainer)
 		maintainer.pushEvent(&Event{
 			changefeedID: changefeed,

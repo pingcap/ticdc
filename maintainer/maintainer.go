@@ -228,7 +228,10 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
 		zap.String("state", string(cfg.State)),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()))
+		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
+		zap.Bool("newChangefeed", newChangefeed),
+	)
+
 	return m
 }
 
@@ -354,7 +357,10 @@ func (m *Maintainer) initialize() error {
 	// register all nodes to bootstrapper
 	nodes := m.nodeManager.GetAliveNodes()
 	log.Info("changefeed bootstrap initial nodes",
-		zap.Int("nodes", len(nodes)))
+		zap.Stringer("selfNodeID", m.selfNode.ID),
+		zap.Stringer("changefeedID", m.id),
+		zap.Int("nodeCount", len(nodes)))
+
 	newNodes := make([]*node.Info, 0, len(nodes))
 	for _, n := range nodes {
 		newNodes = append(newNodes, n)
@@ -489,6 +495,7 @@ func (m *Maintainer) calCheckpointTs() {
 			zap.String("changefeed", m.id.Name()),
 			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
 			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
+		m.bootstrapper.PrintBootstrapStatus()
 		return
 	}
 	// make sure there is no task running
@@ -798,9 +805,12 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessa
 
 		// only send dispatcher id to dispatcher manager on the same node
 		if id == m.selfNode.ID {
-			log.Info("create table event trigger dispatcher", zap.String("changefeed", m.id.String()),
+			log.Info("create table event trigger dispatcher bootstrap message",
+				zap.String("changefeed", m.id.String()),
 				zap.String("server", id.String()),
-				zap.String("dispatcherID", m.ddlSpan.ID.String()))
+				zap.String("dispatcherID", m.ddlSpan.ID.String()),
+				zap.Uint64("startTs", m.startCheckpointTs),
+			)
 			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
 			msg.IsNewChangefeed = m.newChangefeed
 		}
@@ -808,8 +818,8 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessa
 		log.Info("New maintainer bootstrap message to dispatcher manager",
 			zap.String("changefeed", m.id.String()),
 			zap.String("server", id.String()),
-			zap.Uint64("startTs", m.startCheckpointTs),
-			zap.Bool("isNewChangefeed", msg.IsNewChangefeed))
+			zap.Uint64("startTs", m.startCheckpointTs))
+
 		return messaging.NewSingleTargetMessage(id, messaging.DispatcherManagerManagerTopic, msg)
 	}
 }

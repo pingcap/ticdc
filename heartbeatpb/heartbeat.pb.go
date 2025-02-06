@@ -1264,13 +1264,14 @@ type MaintainerBootstrapResponse struct {
 	ChangefeedID *ChangefeedID         `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
 	Spans        []*BootstrapTableSpan `protobuf:"bytes,2,rep,name=spans,proto3" json:"spans,omitempty"`
 	Err          *RunningError         `protobuf:"bytes,3,opt,name=err,proto3" json:"err,omitempty"`
-	// when the table trigger event dispatcher is created in this node,
-	// we need to return the checkpointTs(startTs) of the table trigger event dispatcher
-	// This checkpointTs will be the ts to check schema store to get table lists when maintainer is restarted.
-	// Because table trigger event dispatcher participates all create/delete tables ddls,
-	// so we need to align the table list with the progress of table trigger event dispatcher
-	// when it is restarted to keep correctness.
-	// If the table trigger event dispatcher is not created in this node, we can return 0 as the checkpointTs.
+	// For nodes with a table trigger event dispatcher:
+	// - Reports checkpoint_ts in bootstrap response
+	// - This checkpoint_ts is used to fetch table lists from schema store during maintainer restart
+	// to ensure maintainer's table list stays synchronized with the dispatcher's DDL progress
+	// since the dispatcher handles all table creation/deletion DDLs
+	//
+	// For nodes without a table trigger event dispatcher:
+	// - checkpoint_ts is set to 0
 	CheckpointTs uint64 `protobuf:"varint,4,opt,name=checkpoint_ts,json=checkpointTs,proto3" json:"checkpoint_ts,omitempty"`
 }
 

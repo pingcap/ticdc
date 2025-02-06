@@ -138,6 +138,25 @@ func (b *Bootstrapper[T]) GetAllNodes() map[node.ID]*NodeStatus[T] {
 	return b.nodes
 }
 
+func (b *Bootstrapper[T]) PrintBootstrapStatus() {
+	bootstrappedNodes := make([]node.ID, 0)
+	unbootstrappedNodes := make([]node.ID, 0)
+	for id, status := range b.nodes {
+		if status.state == NodeStateInitialized {
+			bootstrappedNodes = append(bootstrappedNodes, id)
+		} else {
+			unbootstrappedNodes = append(unbootstrappedNodes, id)
+		}
+	}
+	log.Info("bootstrap status",
+		zap.String("changefeed", b.id),
+		zap.Int("bootstrappedNodeCount", len(bootstrappedNodes)),
+		zap.Int("unbootstrappedNodeCount", len(unbootstrappedNodes)),
+		zap.Any("bootstrappedNodes", bootstrappedNodes),
+		zap.Any("unbootstrappedNodes", unbootstrappedNodes),
+	)
+}
+
 // CheckAllNodeInitialized check if all nodes are initialized.
 // returns true when all nodes report the bootstrap response and bootstrapped
 func (b *Bootstrapper[T]) CheckAllNodeInitialized() bool {
