@@ -1926,9 +1926,9 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		if isPartitionTable(rawEvent.TableInfo) {
 			allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 			if !ignorePrevTable {
+				resultQuerys = append(resultQuerys, querys[i])
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
 				if !ignoreCurrentTable {
-					resultQuerys = append(resultQuerys, querys[i])
 					// check whether schema change
 					if rawEvent.PrevSchemaIDs[i] != rawEvent.CurrentSchemaIDs[i] {
 						for _, id := range allPhysicalIDs {
@@ -1968,9 +1968,9 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			}
 		} else {
 			if !ignorePrevTable {
+				resultQuerys = append(resultQuerys, querys[i])
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
 				if !ignoreCurrentTable {
-					resultQuerys = append(resultQuerys, querys[i])
 					if rawEvent.PrevSchemaIDs[i] != rawEvent.CurrentSchemaIDs[i] {
 						ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
 							TableID:     tableInfo.ID,

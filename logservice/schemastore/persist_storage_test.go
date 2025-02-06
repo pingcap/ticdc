@@ -1125,7 +1125,7 @@ func TestApplyDDLJobs(t *testing.T) {
 					result: []commonEvent.DDLEvent{
 						{
 							Type:       byte(model.ActionRenameTables),
-							Query:      "RENAME TABLE `test`.`t1` TO `test`.`t101`;",
+							Query:      "RENAME TABLE `test`.`t1` TO `test`.`t101`;RENAME TABLE `test`.`t2` TO `test2`.`t102`;",
 							FinishedTs: 1010,
 							BlockedTables: &commonEvent.InfluencedTables{
 								InfluenceType: commonEvent.InfluenceTypeNormal,
