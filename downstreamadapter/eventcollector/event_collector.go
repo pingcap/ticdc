@@ -334,7 +334,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 		message.RegisterDispatcherRequest.FilterConfig = req.Dispatcher.GetFilterConfig()
 		message.RegisterDispatcherRequest.EnableSyncPoint = req.Dispatcher.EnableSyncPoint()
 		message.RegisterDispatcherRequest.SyncPointInterval = uint64(req.Dispatcher.GetSyncPointInterval().Seconds())
-		message.RegisterDispatcherRequest.SyncPointTs = syncpoint.CalculateStartSyncPointTs(req.StartTs, req.Dispatcher.GetSyncPointInterval())
+		message.RegisterDispatcherRequest.SyncPointTs = syncpoint.CalculateStartSyncPointTs(req.StartTs, req.Dispatcher.GetSyncPointInterval(), req.Dispatcher.GetStartTsIsSyncpoint())
 	}
 
 	err := c.mc.SendCommand(&messaging.TargetMessage{

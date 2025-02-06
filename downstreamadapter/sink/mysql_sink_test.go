@@ -90,14 +90,17 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 			changefeed varchar(255),
 			ddl_ts varchar(18),
 			table_id bigint(21),
-			created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			finished bool,
+			related_table_id bigint(21),
+			is_syncpoint bool,
+			created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			INDEX (ticdc_cluster_id, changefeed, table_id),
 			PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)
 		);`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id) VALUES ('default', 'test/test', '1', 0), ('default', 'test/test', '1', 1) ON DUPLICATE KEY UPDATE ddl_ts=VALUES(ddl_ts), created_at=CURRENT_TIMESTAMP;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, related_table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, 1, 1, 0), ('default', 'test/test', '1', 1, 1, 1, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), related_table_id=VALUES(related_table_id), ddl_ts=VALUES(ddl_ts), created_at=NOW(), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	mock.ExpectBegin()

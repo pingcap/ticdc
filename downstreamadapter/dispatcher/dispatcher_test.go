@@ -119,6 +119,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dis
 			SyncPointInterval:  time.Duration(5 * time.Second),
 			SyncPointRetention: time.Duration(10 * time.Minute),
 		}, // syncPointConfig
+		false,
 		nil,          // filterConfig
 		common.Ts(0), // pdTs
 		make(chan error, 1),

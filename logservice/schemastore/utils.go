@@ -25,36 +25,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func SplitQueries(queries string) ([]string, error) {
-	p := parser.New()
-	stmts, warns, err := p.ParseSQL(queries)
-	for _, w := range warns {
-		log.Warn("parse sql warnning", zap.Error(w))
-	}
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	var res []string
-	for _, stmt := range stmts {
-		var sb strings.Builder
-		err := stmt.Restore(&format.RestoreCtx{
-			Flags: format.DefaultRestoreFlags,
-			In:    &sb,
-		})
-		// The (ast.Node).Restore function generates a SQL string representation of the AST (Abstract Syntax Tree) node.
-		// By default, the resulting SQL string does not include a trailing semicolon ";".
-		// Therefore, we explicitly append a semicolon here to ensure the SQL statement is complete.
-		sb.WriteByte(';')
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		res = append(res, sb.String())
-	}
-
-	return res, nil
-}
-
 // transform ddl query based on sql mode.
 func transformDDLJobQuery(job *model.Job) (string, error) {
 	p := parser.New()

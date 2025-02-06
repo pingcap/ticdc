@@ -41,6 +41,7 @@ type EventDispatcher interface {
 	GetFilterConfig() *eventpb.FilterConfig
 	EnableSyncPoint() bool
 	GetSyncPointInterval() time.Duration
+	GetStartTsIsSyncpoint() bool
 	GetResolvedTs() uint64
 	SetInitialTableInfo(tableInfo *common.TableInfo)
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
@@ -85,7 +86,8 @@ type Dispatcher struct {
 	schemaID     int64
 	tableSpan    *heartbeatpb.TableSpan
 	// startTs is the timestamp that the dispatcher need to receive and flush events.
-	startTs uint64
+	startTs            uint64
+	startTsIsSyncpoint bool
 	// The ts from pd when the dispatcher is created.
 	// when downstream is mysql-class, for dml event we need to compare the commitTs with this ts
 	// to determine whether the insert event should use `Replace` or just `Insert`
@@ -154,6 +156,7 @@ func NewDispatcher(
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
 	syncPointConfig *syncpoint.SyncPointConfig,
+	startTsIsSyncpoint bool,
 	filterConfig *eventpb.FilterConfig,
 	currentPdTs uint64,
 	errCh chan error,
@@ -164,6 +167,7 @@ func NewDispatcher(
 		tableSpan:             tableSpan,
 		sink:                  sink,
 		startTs:               startTs,
+		startTsIsSyncpoint:    startTsIsSyncpoint,
 		blockStatusesChan:     blockStatusesChan,
 		syncPointConfig:       syncPointConfig,
 		componentStatus:       newComponentStateWithMutex(heartbeatpb.ComponentState_Working),
@@ -375,6 +379,10 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			}
 			block = true
 			syncPoint := event.(*commonEvent.SyncPointEvent)
+			log.Info("dispatcher receive sync point event",
+				zap.Stringer("dispatcher", d.id),
+				zap.Uint64("commitTs", event.GetCommitTs()),
+				zap.Uint64("seq", event.GetSeq()))
 			syncPoint.AddPostFlushFunc(func() {
 				wakeCallback()
 			})
@@ -625,6 +633,10 @@ func (d *Dispatcher) GetSyncPointInterval() time.Duration {
 		return d.syncPointConfig.SyncPointInterval
 	}
 	return time.Duration(0)
+}
+
+func (d *Dispatcher) GetStartTsIsSyncpoint() bool {
+	return d.startTsIsSyncpoint
 }
 
 func (d *Dispatcher) Remove() {

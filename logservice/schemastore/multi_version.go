@@ -26,8 +26,8 @@ import (
 )
 
 type tableInfoItem struct {
-	version uint64
-	info    *common.TableInfo
+	Version uint64
+	Info    *common.TableInfo
 }
 
 type versionedTableInfoStore struct {
@@ -64,7 +64,7 @@ func (v *versionedTableInfoStore) addInitialTableInfo(info *common.TableInfo, ve
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	// assertEmpty(v.infos)
-	v.infos = append(v.infos, &tableInfoItem{version: version, info: info})
+	v.infos = append(v.infos, &tableInfoItem{Version: version, Info: info})
 }
 
 func (v *versionedTableInfoStore) getTableID() int64 {
@@ -117,7 +117,7 @@ func (v *versionedTableInfoStore) getTableInfo(ts uint64) (*common.TableInfo, er
 	}
 
 	target := sort.Search(len(v.infos), func(i int) bool {
-		return v.infos[i].version > ts
+		return v.infos[i].Version > ts
 	})
 	if target == 0 {
 		log.Error("no version found",
@@ -127,7 +127,7 @@ func (v *versionedTableInfoStore) getTableInfo(ts uint64) (*common.TableInfo, er
 			zap.Any("deleteVersion", v.deleteVersion))
 		return nil, errors.New("no version found")
 	}
-	return v.infos[target-1].info, nil
+	return v.infos[target-1].Info, nil
 }
 
 // only keep one item with the largest version <= gcTS, return whether the store should be totally removed
@@ -146,7 +146,7 @@ func (v *versionedTableInfoStore) gc(gcTs uint64) bool {
 	}
 
 	target := sort.Search(len(v.infos), func(i int) bool {
-		return v.infos[i].version > gcTs
+		return v.infos[i].Version > gcTs
 	})
 	if target == 0 {
 		return false
@@ -157,26 +157,6 @@ func (v *versionedTableInfoStore) gc(gcTs uint64) bool {
 		log.Panic("should not happen")
 	}
 	return false
-}
-
-func assertEmpty(infos []*tableInfoItem, event *PersistedDDLEvent) {
-	if len(infos) != 0 {
-		log.Panic("shouldn't happen",
-			zap.Any("infosLen", len(infos)),
-			zap.Any("lastVersion", infos[len(infos)-1].version),
-			zap.String("query", event.Query),
-			zap.Int64("tableID", event.CurrentTableID),
-			zap.Uint64("finishedTs", event.FinishedTs),
-			zap.Int64("schemaVersion", event.SchemaVersion))
-	}
-}
-
-func assertNonEmpty(infos []*tableInfoItem, event *PersistedDDLEvent) {
-	if len(infos) == 0 {
-		log.Panic("shouldn't happen",
-			zap.Any("infos", infos),
-			zap.String("query", event.Query))
-	}
 }
 
 func assertNonDeleted(v *versionedTableInfoStore) {
@@ -213,7 +193,7 @@ func (v *versionedTableInfoStore) applyDDL(event *PersistedDDLEvent) {
 
 // lock must be hold by the caller
 func (v *versionedTableInfoStore) doApplyDDL(event *PersistedDDLEvent) {
-	if len(v.infos) != 0 && event.FinishedTs <= v.infos[len(v.infos)-1].version {
+	if len(v.infos) != 0 && event.FinishedTs <= v.infos[len(v.infos)-1].Version {
 		log.Warn("already applied ddl, ignore it.",
 			zap.Int64("tableID", v.tableID),
 			zap.String("query", event.Query),
@@ -228,7 +208,7 @@ func (v *versionedTableInfoStore) doApplyDDL(event *PersistedDDLEvent) {
 	}
 	tableInfo, deleted := handler.extractTableInfoFunc(event, v.tableID)
 	if tableInfo != nil {
-		v.infos = append(v.infos, &tableInfoItem{version: event.FinishedTs, info: tableInfo})
+		v.infos = append(v.infos, &tableInfoItem{Version: event.FinishedTs, Info: tableInfo})
 		if ddlType == model.ActionRecoverTable {
 			v.deleteVersion = math.MaxUint64
 		}

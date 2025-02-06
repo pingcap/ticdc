@@ -159,23 +159,24 @@ func (s *MysqlSink) GetStartTsList(
 	tableIds []int64,
 	startTsList []int64,
 	removeDDLTs bool,
-) ([]int64, error) {
+) ([]int64, []bool, error) {
 	if removeDDLTs {
 		// means we just need to remove the ddl ts item for this changefeed, and return startTsList directly.
 		err := s.ddlWorker.RemoveDDLTsItem()
 		if err != nil {
 			atomic.StoreUint32(&s.isNormal, 0)
-			return nil, err
+			return nil, nil, err
 		}
-		return startTsList, nil
+		isSyncpointList := make([]bool, len(startTsList))
+		return startTsList, isSyncpointList, nil
 	}
 
-	startTsList, err := s.ddlWorker.GetStartTsList(tableIds, startTsList)
+	startTsList, isSyncpointList, err := s.ddlWorker.GetStartTsList(tableIds, startTsList)
 	if err != nil {
 		atomic.StoreUint32(&s.isNormal, 0)
-		return nil, err
+		return nil, nil, err
 	}
-	return startTsList, nil
+	return startTsList, isSyncpointList, nil
 }
 
 func (s *MysqlSink) Close(removeChangefeed bool) {

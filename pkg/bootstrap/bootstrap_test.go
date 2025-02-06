@@ -106,15 +106,15 @@ func TestResendBootstrapMessage(t *testing.T) {
 		}
 	})
 	b.resendInterval = time.Second * 2
-	b.timeNowFunc = func() time.Time { return time.Unix(0, 0) }
+	b.currentTime = func() time.Time { return time.Unix(0, 0) }
 	msgs := b.HandleNewNodes([]*node.Info{{ID: "ab"}})
 	require.Len(t, msgs, 1)
-	b.timeNowFunc = func() time.Time {
+	b.currentTime = func() time.Time {
 		return time.Unix(1, 0)
 	}
 	msgs = b.HandleNewNodes([]*node.Info{{ID: "cd"}})
 	require.Len(t, msgs, 1)
-	b.timeNowFunc = func() time.Time {
+	b.currentTime = func() time.Time {
 		return time.Unix(2, 0)
 	}
 	msgs = b.ResendBootstrapMessage()

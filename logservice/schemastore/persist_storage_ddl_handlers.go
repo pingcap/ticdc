@@ -1907,24 +1907,27 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		InfluenceType: commonEvent.InfluenceTypeNormal,
 		TableIDs:      []int64{heartbeatpb.DDLSpan.TableID},
 	}
-	querys, err := SplitQueries(rawEvent.Query)
+	querys, err := commonEvent.SplitQueries(rawEvent.Query)
 	if err != nil {
 		log.Panic("split queries failed", zap.Error(err))
 	}
 	var addNames, dropNames []commonEvent.SchemaTableName
 	allFiltered := true
 	resultQuerys := make([]string, 0)
+	if len(querys) != len(rawEvent.MultipleTableInfos) {
+		log.Panic("rename tables length is not equal table infos", zap.Any("querys", querys), zap.Any("tableInfos", rawEvent.MultipleTableInfos))
+	}
 	for i, tableInfo := range rawEvent.MultipleTableInfos {
 		ignorePrevTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.PrevSchemaNames[i], rawEvent.PrevTableNames[i], tableInfo)
 		ignoreCurrentTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaNames[i], tableInfo.Name.O, tableInfo)
 		if ignorePrevTable && ignoreCurrentTable {
 			continue
 		}
-		resultQuerys = append(resultQuerys, querys[i])
 		allFiltered = false
 		if isPartitionTable(rawEvent.TableInfo) {
 			allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 			if !ignorePrevTable {
+				resultQuerys = append(resultQuerys, querys[i])
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
 				if !ignoreCurrentTable {
 					// check whether schema change
@@ -1966,6 +1969,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			}
 		} else {
 			if !ignorePrevTable {
+				resultQuerys = append(resultQuerys, querys[i])
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
 				if !ignoreCurrentTable {
 					if rawEvent.PrevSchemaIDs[i] != rawEvent.CurrentSchemaIDs[i] {
@@ -2041,7 +2045,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	if allFiltered {
 		return commonEvent.DDLEvent{}, false
 	}
-	querys, err := SplitQueries(rawEvent.Query)
+	querys, err := commonEvent.SplitQueries(rawEvent.Query)
 	if err != nil {
 		log.Panic("split queries failed", zap.Error(err))
 	}

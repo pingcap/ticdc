@@ -217,8 +217,7 @@ func TestUpdateSchemaID(t *testing.T) {
 				NewSchemaID: 2,
 			},
 		},
-	}, true,
-	)
+	}, true)
 	event.scheduleBlockEvent()
 	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
 	// check the schema id and map is updated
