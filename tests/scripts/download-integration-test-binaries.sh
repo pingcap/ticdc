@@ -98,9 +98,9 @@ download_community_binaries() {
 	mv ${THIRD_BIN_DIR}/$toolkit_file_name/* ${THIRD_BIN_DIR} && rm -rf ${THIRD_BIN_DIR}/$toolkit_file_name
 
 	# Download additional tools
-	download_ycsb
-	download_minio
-	download_jq
+	#download_ycsb
+	#download_minio
+	#download_jq
 
 	chmod a+x ${THIRD_BIN_DIR}/*
 }
