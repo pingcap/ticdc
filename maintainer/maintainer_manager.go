@@ -231,7 +231,7 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 			zap.Any("config", cfConfig))
 	}
 	maintainer := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.taskScheduler,
-		m.pdAPI, m.tsoClient, m.regionCache, req.CheckpointTs, req.IsNewChangfeed)
+		m.pdAPI, m.tsoClient, m.regionCache, req.CheckpointTs, req.IsNewChangefeed)
 	if err != nil {
 		log.Warn("add path to dynstream failed, coordinator will retry later", zap.Error(err))
 		return nil

@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	ScheduleTaskGuage = prometheus.NewGaugeVec(
+	ScheduleTaskGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "scheduler",
@@ -152,7 +152,7 @@ var (
 
 // InitMetrics registers all metrics used in scheduler
 func InitSchedulerMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(ScheduleTaskGuage)
+	registry.MustRegister(ScheduleTaskGauge)
 
 	registry.MustRegister(TableGauge)
 	registry.MustRegister(TableStateGauge)

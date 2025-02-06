@@ -130,7 +130,7 @@ func (m *DispatcherOrchestrator) handleAddDispatcherManager(from node.ID, req *h
 				zap.String("changefeedID", cfId.Name()), zap.Error(err))
 			return err
 		}
-		manager, startTs, err = dispatchermanager.NewEventDispatcherManager(cfId, cfConfig, req.TableTriggerEventDispatcherId, req.StartTs, from, req.IsNewChangfeed)
+		manager, startTs, err = dispatchermanager.NewEventDispatcherManager(cfId, cfConfig, req.TableTriggerEventDispatcherId, req.StartTs, from, req.IsNewChangefeed)
 		// Fast return the error to maintainer.
 		if err != nil {
 			log.Error("failed to create new dispatcher manager",

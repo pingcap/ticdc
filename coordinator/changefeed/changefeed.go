@@ -224,10 +224,10 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.AddMaintainerRequest{
-			Id:             c.ID.ToPB(),
-			CheckpointTs:   c.GetStatus().CheckpointTs,
-			Config:         c.configBytes,
-			IsNewChangfeed: c.isNew,
+			Id:              c.ID.ToPB(),
+			CheckpointTs:    c.GetStatus().CheckpointTs,
+			Config:          c.configBytes,
+			IsNewChangefeed: c.isNew,
 		})
 }
 

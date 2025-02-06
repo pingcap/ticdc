@@ -14,7 +14,6 @@
 package event
 
 import (
-	"reflect"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/apperror"
@@ -41,7 +40,7 @@ func TestDDLEvent(t *testing.T) {
 		Query:        ddlJob.Query,
 		TableInfo:    common.WrapTableInfo(ddlJob.SchemaID, ddlJob.SchemaName, ddlJob.BinlogInfo.TableInfo),
 		FinishedTs:   ddlJob.BinlogInfo.FinishedTS,
-		err:          apperror.ErrDDLEventError.GenWithStackByArgs("test"),
+		Err:          apperror.ErrDDLEventError.GenWithStackByArgs("test"),
 	}
 
 	data, err := ddlEvent.Marshal()
@@ -51,6 +50,17 @@ func TestDDLEvent(t *testing.T) {
 	err = reverseEvent.Unmarshal(data)
 	reverseEvent.eventSize = 0
 	require.Nil(t, err)
-	equal := reflect.DeepEqual(ddlEvent, ddlEvent)
-	require.True(t, equal)
+
+	// Compare individual fields instead of using DeepEqual
+	require.Equal(t, ddlEvent.Version, reverseEvent.Version)
+	require.Equal(t, ddlEvent.DispatcherID, reverseEvent.DispatcherID)
+	require.Equal(t, ddlEvent.Type, reverseEvent.Type)
+	require.Equal(t, ddlEvent.SchemaID, reverseEvent.SchemaID)
+	require.Equal(t, ddlEvent.TableID, reverseEvent.TableID)
+	require.Equal(t, ddlEvent.SchemaName, reverseEvent.SchemaName)
+	require.Equal(t, ddlEvent.TableName, reverseEvent.TableName)
+	require.Equal(t, ddlEvent.Query, reverseEvent.Query)
+	require.Equal(t, ddlEvent.TableInfo, reverseEvent.TableInfo)
+	require.Equal(t, ddlEvent.FinishedTs, reverseEvent.FinishedTs)
+	require.Equal(t, ddlEvent.Err.Error(), reverseEvent.Err.Error())
 }
