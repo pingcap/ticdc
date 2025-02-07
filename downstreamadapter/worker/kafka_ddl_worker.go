@@ -132,6 +132,7 @@ func (w *KafkaDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEv
 			return errors.Trace(err)
 		}
 	}
+	log.Info("kafka ddl worker send block event", zap.Any("event", event))
 	// after flush all the ddl event, we call the callback function.
 	event.PostFlush()
 	return nil
