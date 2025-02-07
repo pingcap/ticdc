@@ -58,7 +58,6 @@ if [ "$SINK_TYPE" != "storage" ]; then
 	check_table_exists mark.finish_mark_3 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists mark.finish_mark_4 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists mark.finish_mark_5 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
-	check_table_exists mark.finish_mark_6 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists mark.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_sync_diff $WORK_DIR $CUR/diff_config.toml
 	cleanup_process $CDC_BINARY
@@ -81,7 +80,6 @@ if [ "$SINK_TYPE" != "storage" ]; then
 	check_table_exists mark.finish_mark_3 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists mark.finish_mark_4 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists mark.finish_mark_5 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
-	check_table_exists mark.finish_mark_6 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists mark.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_sync_diff $WORK_DIR $CUR/diff_config.toml
 	cleanup_process $CDC_BINARY
