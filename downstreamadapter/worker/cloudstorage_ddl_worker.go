@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/robfig/cron"
 	"go.uber.org/zap"
@@ -77,22 +76,11 @@ func (w *CloudStorageDDLWorker) Run(ctx context.Context) error {
 }
 
 func (w *CloudStorageDDLWorker) WriteBlockEvent(event *commonEvent.DDLEvent) error {
-	if event.GetDDLType() == model.ActionExchangeTablePartition {
-		// For exchange partition, we need to write the schema of the source table.
-		var sourceTableDef cloudstorage.TableDefinition
-		schemaName := event.GetPrevSchemaName()
-		tableName := event.GetPrevTableName()
-		sourceTableDef.FromTableInfo(schemaName, tableName, event.PrevTableInfo, event.GetCommitTs(), w.cfg.OutputColumnID)
-		if err := w.writeFile(event, sourceTableDef); err != nil {
+	for _, e := range event.GetEvents() {
+		var def cloudstorage.TableDefinition
+		def.FromDDLEvent(e, w.cfg.OutputColumnID)
+		if err := w.writeFile(e, def); err != nil {
 			return err
-		}
-	} else {
-		for _, e := range event.GetEvents() {
-			var def cloudstorage.TableDefinition
-			def.FromDDLEvent(e, w.cfg.OutputColumnID)
-			if err := w.writeFile(e, def); err != nil {
-				return err
-			}
 		}
 	}
 	event.PostFlush()
