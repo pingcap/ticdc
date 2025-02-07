@@ -478,6 +478,7 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 	event := PersistedDDLEvent{
 		ID:              job.ID,
 		Type:            byte(job.Type),
+		TableIDInDDLJob: job.TableID,
 		CurrentSchemaID: job.SchemaID,
 		CurrentTableID:  job.TableID,
 		Query:           query,
@@ -1407,10 +1408,11 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 		SchemaName: rawEvent.CurrentSchemaName,
 		TableName:  rawEvent.CurrentTableName,
 
-		Query:      rawEvent.Query,
-		TableInfo:  wrapTableInfo,
-		FinishedTs: rawEvent.FinishedTs,
-		TiDBOnly:   tiDBOnly,
+		Query:           rawEvent.Query,
+		TableInfo:       wrapTableInfo,
+		FinishedTs:      rawEvent.FinishedTs,
+		TiDBOnly:        tiDBOnly,
+		TableIDInDDLJob: rawEvent.TableIDInDDLJob,
 	}, !filtered
 }
 

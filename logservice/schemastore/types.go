@@ -25,6 +25,11 @@ type PersistedDDLEvent struct {
 	ID   int64 `msg:"id"`
 	Type byte  `msg:"type"`
 
+	// the tableID for the ddl job in the information_schema.ddl_jobs table(just ddl job.TableID)
+	// for the partition table, the TableIDInDDLJob is always the logical table id
+	// for truncate table, the TableIDInDDLJob is the table id of the old table
+	TableIDInDDLJob int64 `msg:"table_id_in_ddl_job"`
+
 	// for exchange partition, it is the info of the partition table
 	CurrentSchemaID   int64  `msg:"current_schema_id"`
 	CurrentTableID    int64  `msg:"current_table_id"`
@@ -43,7 +48,7 @@ type PersistedDDLEvent struct {
 	PrevSchemaNames    []string `msg:"prev_schema_names"`
 	PrevTableNames     []string `msg:"prev_table_names"`
 	CurrentSchemaIDs   []int64  `msg:"current_schema_ids"`
-	CurrentSchemaNames []string `msg:"s"`
+	CurrentSchemaNames []string `msg:"current_schema_names"`
 
 	// The following fields are only set when the ddl job involves a partition table
 	PrevPartitions []int64 `msg:"prev_partitions"`

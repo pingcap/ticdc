@@ -36,6 +36,12 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 				err = msgp.WrapError(err, "Type")
 				return
 			}
+		case "table_id_in_ddl_job":
+			z.TableIDInDDLJob, err = dc.ReadInt64()
+			if err != nil {
+				err = msgp.WrapError(err, "TableIDInDDLJob")
+				return
+			}
 		case "current_schema_id":
 			z.CurrentSchemaID, err = dc.ReadInt64()
 			if err != nil {
@@ -160,7 +166,7 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 					return
 				}
 			}
-		case "s":
+		case "current_schema_names":
 			var zb0006 uint32
 			zb0006, err = dc.ReadArrayHeader()
 			if err != nil {
@@ -272,9 +278,9 @@ func (z *PersistedDDLEvent) DecodeMsg(dc *msgp.Reader) (err error) {
 
 // EncodeMsg implements msgp.Encodable
 func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
-	// map header, size 24
+	// map header, size 25
 	// write "id"
-	err = en.Append(0xde, 0x0, 0x18, 0xa2, 0x69, 0x64)
+	err = en.Append(0xde, 0x0, 0x19, 0xa2, 0x69, 0x64)
 	if err != nil {
 		return
 	}
@@ -291,6 +297,16 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 	err = en.WriteByte(z.Type)
 	if err != nil {
 		err = msgp.WrapError(err, "Type")
+		return
+	}
+	// write "table_id_in_ddl_job"
+	err = en.Append(0xb3, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x69, 0x64, 0x5f, 0x69, 0x6e, 0x5f, 0x64, 0x64, 0x6c, 0x5f, 0x6a, 0x6f, 0x62)
+	if err != nil {
+		return
+	}
+	err = en.WriteInt64(z.TableIDInDDLJob)
+	if err != nil {
+		err = msgp.WrapError(err, "TableIDInDDLJob")
 		return
 	}
 	// write "current_schema_id"
@@ -441,8 +457,8 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 			return
 		}
 	}
-	// write "s"
-	err = en.Append(0xa1, 0x73)
+	// write "current_schema_names"
+	err = en.Append(0xb4, 0x63, 0x75, 0x72, 0x72, 0x65, 0x6e, 0x74, 0x5f, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x73)
 	if err != nil {
 		return
 	}
@@ -568,13 +584,16 @@ func (z *PersistedDDLEvent) EncodeMsg(en *msgp.Writer) (err error) {
 // MarshalMsg implements msgp.Marshaler
 func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	o = msgp.Require(b, z.Msgsize())
-	// map header, size 24
+	// map header, size 25
 	// string "id"
-	o = append(o, 0xde, 0x0, 0x18, 0xa2, 0x69, 0x64)
+	o = append(o, 0xde, 0x0, 0x19, 0xa2, 0x69, 0x64)
 	o = msgp.AppendInt64(o, z.ID)
 	// string "type"
 	o = append(o, 0xa4, 0x74, 0x79, 0x70, 0x65)
 	o = msgp.AppendByte(o, z.Type)
+	// string "table_id_in_ddl_job"
+	o = append(o, 0xb3, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x5f, 0x69, 0x64, 0x5f, 0x69, 0x6e, 0x5f, 0x64, 0x64, 0x6c, 0x5f, 0x6a, 0x6f, 0x62)
+	o = msgp.AppendInt64(o, z.TableIDInDDLJob)
 	// string "current_schema_id"
 	o = append(o, 0xb1, 0x63, 0x75, 0x72, 0x72, 0x65, 0x6e, 0x74, 0x5f, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x69, 0x64)
 	o = msgp.AppendInt64(o, z.CurrentSchemaID)
@@ -623,8 +642,8 @@ func (z *PersistedDDLEvent) MarshalMsg(b []byte) (o []byte, err error) {
 	for za0004 := range z.CurrentSchemaIDs {
 		o = msgp.AppendInt64(o, z.CurrentSchemaIDs[za0004])
 	}
-	// string "s"
-	o = append(o, 0xa1, 0x73)
+	// string "current_schema_names"
+	o = append(o, 0xb4, 0x63, 0x75, 0x72, 0x72, 0x65, 0x6e, 0x74, 0x5f, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x73)
 	o = msgp.AppendArrayHeader(o, uint32(len(z.CurrentSchemaNames)))
 	for za0005 := range z.CurrentSchemaNames {
 		o = msgp.AppendString(o, z.CurrentSchemaNames[za0005])
@@ -693,6 +712,12 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 			z.Type, bts, err = msgp.ReadByteBytes(bts)
 			if err != nil {
 				err = msgp.WrapError(err, "Type")
+				return
+			}
+		case "table_id_in_ddl_job":
+			z.TableIDInDDLJob, bts, err = msgp.ReadInt64Bytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "TableIDInDDLJob")
 				return
 			}
 		case "current_schema_id":
@@ -819,7 +844,7 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 					return
 				}
 			}
-		case "s":
+		case "current_schema_names":
 			var zb0006 uint32
 			zb0006, bts, err = msgp.ReadArrayHeaderBytes(bts)
 			if err != nil {
@@ -932,7 +957,7 @@ func (z *PersistedDDLEvent) UnmarshalMsg(bts []byte) (o []byte, err error) {
 
 // Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
 func (z *PersistedDDLEvent) Msgsize() (s int) {
-	s = 3 + 3 + msgp.Int64Size + 5 + msgp.ByteSize + 18 + msgp.Int64Size + 17 + msgp.Int64Size + 20 + msgp.StringPrefixSize + len(z.CurrentSchemaName) + 19 + msgp.StringPrefixSize + len(z.CurrentTableName) + 15 + msgp.Int64Size + 14 + msgp.Int64Size + 17 + msgp.StringPrefixSize + len(z.PrevSchemaName) + 16 + msgp.StringPrefixSize + len(z.PrevTableName) + 16 + msgp.ArrayHeaderSize + (len(z.PrevSchemaIDs) * (msgp.Int64Size)) + 18 + msgp.ArrayHeaderSize
+	s = 3 + 3 + msgp.Int64Size + 5 + msgp.ByteSize + 20 + msgp.Int64Size + 18 + msgp.Int64Size + 17 + msgp.Int64Size + 20 + msgp.StringPrefixSize + len(z.CurrentSchemaName) + 19 + msgp.StringPrefixSize + len(z.CurrentTableName) + 15 + msgp.Int64Size + 14 + msgp.Int64Size + 17 + msgp.StringPrefixSize + len(z.PrevSchemaName) + 16 + msgp.StringPrefixSize + len(z.PrevTableName) + 16 + msgp.ArrayHeaderSize + (len(z.PrevSchemaIDs) * (msgp.Int64Size)) + 18 + msgp.ArrayHeaderSize
 	for za0002 := range z.PrevSchemaNames {
 		s += msgp.StringPrefixSize + len(z.PrevSchemaNames[za0002])
 	}
@@ -940,7 +965,7 @@ func (z *PersistedDDLEvent) Msgsize() (s int) {
 	for za0003 := range z.PrevTableNames {
 		s += msgp.StringPrefixSize + len(z.PrevTableNames[za0003])
 	}
-	s += 19 + msgp.ArrayHeaderSize + (len(z.CurrentSchemaIDs) * (msgp.Int64Size)) + 2 + msgp.ArrayHeaderSize
+	s += 19 + msgp.ArrayHeaderSize + (len(z.CurrentSchemaIDs) * (msgp.Int64Size)) + 21 + msgp.ArrayHeaderSize
 	for za0005 := range z.CurrentSchemaNames {
 		s += msgp.StringPrefixSize + len(z.CurrentSchemaNames[za0005])
 	}
