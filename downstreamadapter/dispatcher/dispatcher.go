@@ -217,8 +217,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 	log.Info("dispatcher handle dispatcher status",
 		zap.Any("dispatcherStatus", dispatcherStatus),
 		zap.Stringer("dispatcher", d.id),
-		zap.Any("action", dispatcherStatus.GetAction()),
-		zap.Any("ack", dispatcherStatus.GetAck()))
+		zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)))
 	// deal with the ack info
 	ack := dispatcherStatus.GetAck()
 	if ack != nil {

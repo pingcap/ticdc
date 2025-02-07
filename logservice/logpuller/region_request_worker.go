@@ -239,6 +239,11 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					zap.Any("error", eventData.Error))
 				regionEvent.err = eventData
 			case *cdcpb.Event_ResolvedTs:
+				log.Info("region request worker receives a region resolved ts",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Uint64("regionID", event.RegionId),
+					zap.Uint64("resolvedTs", eventData.ResolvedTs))
 				regionEvent.resolvedTs = eventData.ResolvedTs
 			case *cdcpb.Event_LongTxn_:
 				// ignore
@@ -261,6 +266,9 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	metricsResolvedTsCount.Add(float64(len(resolvedTsEvent.Regions)))
 	s.client.metrics.batchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
 	for _, regionID := range resolvedTsEvent.Regions {
+		log.Info("handle region batch resolved ts",
+			zap.Int64("regionID", int64(regionID)),
+			zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
 			s.client.ds.Push(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
 				state:      state,

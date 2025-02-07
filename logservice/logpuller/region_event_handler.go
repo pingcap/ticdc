@@ -191,7 +191,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("requestID", state.requestID),
-				zap.Stringer("span", &state.region.span))
+				zap.String("span", common.FormatTableSpan(&state.region.span)))
 
 			for _, cachedEvent := range state.matcher.matchCachedRow(true) {
 				span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, cachedEvent))
@@ -255,6 +255,11 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 }
 
 func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs uint64) {
+	log.Info("handleResolvedTs",
+		zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
+		zap.Uint64("regionID", state.getRegionID()),
+		zap.Bool("initializd", state.isInitialized()),
+		zap.Uint64("resolvedTs", resolvedTs))
 	if state.isStale() || !state.isInitialized() {
 		return
 	}

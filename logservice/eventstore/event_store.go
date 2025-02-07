@@ -518,6 +518,11 @@ func (e *eventStore) RegisterDispatcher(
 			subStat.dispatchers.Lock()
 			defer subStat.dispatchers.Unlock()
 			for _, notifier := range subStat.dispatchers.notifiers {
+				log.Debug("hyy advance resolved ts",
+					zap.Int64("tableID", int64(subStat.tableID)),
+					zap.Any("dispatcherID", dispatcherID),
+					zap.Uint64("resolvedTs", ts),
+					zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
 				notifier(ts, subStat.maxEventCommitTs.Load())
 			}
 			CounterResolved.Inc()

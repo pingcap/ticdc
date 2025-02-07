@@ -307,11 +307,6 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(tableFilter filter.Filter, star
 	if len(events) > 0 && events[len(events)-1].FinishedTs > currentResolvedTs {
 		end = events[len(events)-1].FinishedTs
 	}
-	log.Debug("FetchTableTriggerDDLEvents end",
-		zap.Uint64("start", start),
-		zap.Int("limit", limit),
-		zap.Uint64("end", end),
-		zap.Any("events", events))
 	return events, end, nil
 }
 

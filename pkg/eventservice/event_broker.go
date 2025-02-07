@@ -214,6 +214,12 @@ func (c *eventBroker) sendReadyEvent(
 	wrapEvent := newWrapReadyEvent(server, event)
 	c.getMessageCh(d.workerIndex) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
+	log.Debug("send ready event to dispatcher",
+		zap.Uint64("clusterID", d.info.GetClusterID()),
+		zap.String("changefeed", d.info.GetChangefeedID().String()),
+		zap.Stringer("dispatcher", d.id),
+		zap.Uint64("startTs", d.info.GetStartTs()),
+		zap.Int64("tableID", d.info.GetTableSpan().TableID))
 }
 
 func (c *eventBroker) sendNotReusableEvent(
@@ -326,6 +332,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e pevent.DD
 // If the dispatcher does not need to scan the event store, it send the watermark to the dispatcher
 func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common.DataRange) {
 	if !mustCheck && task.taskScanning.Load() {
+		log.Info("hyy task is already scanning", zap.Any("task", task))
 		return false, common.DataRange{}
 	}
 
@@ -380,6 +387,7 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 	if task.resetTs.Load() == 0 {
+		log.Info("hyy task going to send ready event", zap.Any("dispatcherID", task.id))
 		remoteID := node.ID(task.info.GetServerID())
 		c.sendReadyEvent(remoteID, task)
 		return false
@@ -407,6 +415,12 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 	}
 	c.getMessageCh(task.workerIndex) <- wrapE
 	metricEventServiceSendCommandCount.Inc()
+	log.Debug("send handshake event to dispatcher",
+		zap.Uint64("clusterID", task.info.GetClusterID()),
+		zap.String("changefeed", task.info.GetChangefeedID().String()),
+		zap.Stringer("dispatcher", task.id),
+		zap.Uint64("startTs", task.info.GetStartTs()),
+		zap.Int64("tableID", task.info.GetTableSpan().TableID))
 	return false
 }
 
@@ -778,6 +792,10 @@ func (c *eventBroker) close() {
 }
 
 func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommitTs uint64) {
+	log.Debug("hyy onNotify",
+		zap.String("dispatcherID", d.id.String()),
+		zap.Uint64("resolvedTs", resolvedTs),
+		zap.Uint64("latestCommitTs", latestCommitTs))
 	if d.onResolvedTs(resolvedTs) {
 		metricEventStoreOutputResolved.Inc()
 		d.onLatestCommitTs(latestCommitTs)

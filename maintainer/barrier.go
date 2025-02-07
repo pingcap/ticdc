@@ -117,7 +117,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 			log.Error("handle block status failed, event is nil",
 				zap.String("from", from.String()),
 				zap.String("changefeed", request.ChangefeedID.GetName()),
-				zap.String("detail", status.String()))
+				zap.String("detail", common.FormatTableSpanBlockStatus(status)))
 			continue
 		}
 		eventDispatcherIDsMap[event] = append(eventDispatcherIDsMap[event], status.ID)
@@ -141,7 +141,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 	if len(dispatcherStatus) <= 0 {
 		log.Warn("no dispatcher status to send",
 			zap.String("from", from.String()),
-			zap.String("changefeed", request.ChangefeedID.String()))
+			zap.String("changefeed", common.NewChangefeedIDFromPB(request.ChangefeedID).String()))
 		return nil
 	}
 	// send ack or write action message to dispatcher
@@ -272,13 +272,18 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 	return msgs
 }
 
-// ShouldBlockCheckpointTs returns ture there is a block event need block the checkpoint ts forwarding
-// currently, when the block event is a create table event, we should block the checkpoint ts forwarding
-// because on the
+// ShouldBlockCheckpointTs returns true if there is a block event need block the checkpoint ts forwarding
+// currently, when the block event has new tableID, we should block the checkpoint ts forwarding.
 func (b *Barrier) ShouldBlockCheckpointTs() bool {
 	flag := false
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		if barrierEvent.hasNewTable {
+			log.Debug("The block event has new table, block the checkpoint ts forwarding",
+				zap.String("changefeed", barrierEvent.cfID.Name()),
+				zap.String("writerDispatcher", barrierEvent.writerDispatcher.String()),
+				zap.Any("newTables", barrierEvent.newTables),
+				zap.String("blockedDispatchers", barrierEvent.blockedDispatchers.String()),
+				zap.Uint64("commitTs", barrierEvent.commitTs))
 			flag = true
 			return false
 		}
