@@ -324,7 +324,6 @@ func (s *SubscriptionClient) Unsubscribe(subID SubscriptionID) {
 		log.Warn("unknown subscription", zap.Uint64("subscriptionID", uint64(subID)))
 		return
 	}
-	s.ds.RemovePath(rt.subID)
 	s.setTableStopped(rt)
 
 	log.Info("unsubscribe span success",
@@ -399,6 +398,7 @@ func (s *SubscriptionClient) onTableDrained(rt *subscribedSpan) {
 	s.totalSpans.Lock()
 	defer s.totalSpans.Unlock()
 	delete(s.totalSpans.spanMap, rt.subID)
+	s.ds.RemovePath(rt.subID)
 }
 
 // Note: don't block the caller, otherwise there may be deadlock
