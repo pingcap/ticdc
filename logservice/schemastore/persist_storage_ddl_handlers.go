@@ -1915,6 +1915,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	var addNames, dropNames []commonEvent.SchemaTableName
 	allFiltered := true
 	resultQuerys := make([]string, 0)
+	tableInfos := make([]*common.TableInfo, 0)
 	if len(querys) != len(rawEvent.MultipleTableInfos) {
 		log.Panic("rename tables length is not equal table infos", zap.Any("querys", querys), zap.Any("tableInfos", rawEvent.MultipleTableInfos))
 	}
@@ -1929,6 +1930,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 			if !ignorePrevTable {
 				resultQuerys = append(resultQuerys, querys[i])
+				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.CurrentSchemaID, rawEvent.CurrentSchemaName, tableInfo))
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
 				if !ignoreCurrentTable {
 					// check whether schema change
@@ -1971,6 +1973,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		} else {
 			if !ignorePrevTable {
 				resultQuerys = append(resultQuerys, querys[i])
+				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.CurrentSchemaID, rawEvent.CurrentSchemaName, tableInfo))
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
 				if !ignoreCurrentTable {
 					if rawEvent.PrevSchemaIDs[i] != rawEvent.CurrentSchemaIDs[i] {
@@ -2019,6 +2022,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		}
 	}
 	ddlEvent.Query = strings.Join(resultQuerys, "")
+	ddlEvent.MultipleTableInfos = tableInfos
 	return ddlEvent, true
 }
 
@@ -2059,6 +2063,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, physicalTableCount)
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)
 	resultQuerys := make([]string, 0, logicalTableCount)
+	tableInfos := make([]*common.TableInfo, 0, logicalTableCount)
 	for i, info := range rawEvent.MultipleTableInfos {
 		if tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.CurrentSchemaName, info.Name.O, info) {
 			log.Info("build ddl event for create tables filter table",
@@ -2084,11 +2089,13 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			TableName:  info.Name.O,
 		})
 		resultQuerys = append(resultQuerys, querys[i])
+		tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.CurrentSchemaID, rawEvent.CurrentSchemaName, info))
 	}
 	ddlEvent.TableNameChange = &commonEvent.TableNameChange{
 		AddName: addName,
 	}
 	ddlEvent.Query = strings.Join(resultQuerys, "")
+	ddlEvent.MultipleTableInfos = tableInfos
 	if len(ddlEvent.NeedAddedTables) == 0 {
 		log.Fatal("should not happen")
 	}
