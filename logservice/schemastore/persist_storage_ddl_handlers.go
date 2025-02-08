@@ -1998,7 +1998,8 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 					ddlEvent.NeedDroppedTables.TableIDs = append(ddlEvent.NeedDroppedTables.TableIDs, tableInfo.ID)
 					dropNames = append(dropNames, commonEvent.SchemaTableName{
 						SchemaName: rawEvent.PrevSchemaNames[i],
-						TableName:  rawEvent.PrevTableNames[i]})
+						TableName:  rawEvent.PrevTableNames[i],
+					})
 				}
 			} else if !ignoreCurrentTable {
 				// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
