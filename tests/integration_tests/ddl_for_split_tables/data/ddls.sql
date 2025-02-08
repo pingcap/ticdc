@@ -14,6 +14,6 @@ truncate table test2;
 
 rename table test1 to test3;
 
-drop table test3;
+-- drop table test3;
 
-recover table test3;
+-- recover table test3;

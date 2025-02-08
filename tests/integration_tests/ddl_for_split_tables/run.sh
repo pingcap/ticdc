@@ -27,7 +27,9 @@ function prepare() {
     run_sql_file $CUR/data/pre.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
     run_sql_file $CUR/data/pre.sql ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-    SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" 
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+
+    SINK_URI="kafka://127.0.0.1:9094/$TOPIC_NAME?protocol=open-protocol&partition-num=1&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" 
 	# case $SINK_TYPE in
 	# kafka) SINK_URI="kafka://127.0.0.1:9094/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	# storage) SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true" ;;
@@ -42,7 +44,7 @@ function prepare() {
 
 	run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
 
-    run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" 
+    run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9094/$TOPIC_NAME?protocol=open-protocol&partition-num=1&version=${KAFKA_VERSION}&max-message-bytes=10485760" 
 
 	# case $SINK_TYPE in
 	# kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
@@ -56,10 +58,10 @@ trap stop_tidb_cluster EXIT
 prepare $*
 ## execute ddls
 run_sql_file $CUR/data/ddls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-## insert some datas
+# ## insert some datas
 run_sql_file $CUR/data/dmls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 30
 cleanup_process $CDC_BINARY
 
 check_logs $WORK_DIR
