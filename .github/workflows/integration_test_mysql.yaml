@@ -350,6 +350,11 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
       
       - name: Test multi_source
         if: ${{ success() }}
