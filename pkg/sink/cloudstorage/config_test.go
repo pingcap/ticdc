@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/pingcap/tiflow/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,7 +41,7 @@ func TestConfigApply(t *testing.T) {
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 	cfg := NewConfig()
-	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig)
+	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink)
 	require.Nil(t, err)
 	require.Equal(t, expected, cfg)
 }
@@ -118,7 +118,7 @@ func TestVerifySinkURIParams(t *testing.T) {
 		sinkURI, err := url.Parse(tc.uri)
 		require.Nil(t, err)
 		cfg := NewConfig()
-		err = cfg.Apply(context.TODO(), sinkURI, config.GetDefaultReplicaConfig())
+		err = cfg.Apply(context.TODO(), sinkURI, config.GetDefaultReplicaConfig().Sink)
 		if tc.expectedErr == "" {
 			require.Nil(t, err)
 			require.LessOrEqual(t, cfg.WorkerCount, maxWorkerCount)
@@ -142,7 +142,7 @@ func TestMergeConfig(t *testing.T) {
 		OutputColumnID: aws.Bool(false),
 	}
 	c := NewConfig()
-	err = c.Apply(context.TODO(), sinkURI, replicaConfig)
+	err = c.Apply(context.TODO(), sinkURI, replicaConfig.Sink)
 	require.NoError(t, err)
 	require.Equal(t, 12, c.WorkerCount)
 	require.Equal(t, 1485760, c.FileSize)
@@ -159,7 +159,7 @@ func TestMergeConfig(t *testing.T) {
 		OutputColumnID: aws.Bool(false),
 	}
 	c = NewConfig()
-	err = c.Apply(context.TODO(), sinkURI, replicaConfig)
+	err = c.Apply(context.TODO(), sinkURI, replicaConfig.Sink)
 	require.NoError(t, err)
 	require.Equal(t, 64, c.WorkerCount)
 	require.Equal(t, 33554432, c.FileSize)

@@ -23,14 +23,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/engine/pkg/clock"
-	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -48,21 +49,22 @@ func testFilePathGenerator(ctx context.Context, t *testing.T, dir string) *FileP
 	replicaConfig.Sink.Protocol = util.AddressOf(config.ProtocolOpen.String())
 	replicaConfig.Sink.FileIndexWidth = util.AddressOf(6)
 	cfg := NewConfig()
-	err = cfg.Apply(ctx, sinkURI, replicaConfig)
+	err = cfg.Apply(ctx, sinkURI, replicaConfig.Sink)
 	require.NoError(t, err)
 
-	f := NewFilePathGenerator(model.ChangeFeedID{}, cfg, storage, ".json", pdutil.NewMonotonicClock(clock.New()))
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	f := NewFilePathGenerator(commonType.ChangeFeedID{}, cfg, storage, ".json")
 	return f
 }
 
 func TestGenerateDataFilePath(t *testing.T) {
 	t.Parallel()
-
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
 
 	table := VersionedTableName{
-		TableNameWithPhysicTableID: model.TableName{
+		TableNameWithPhysicTableID: commonType.TableName{
 			Schema: "test",
 			Table:  "table1",
 		},
@@ -218,7 +220,7 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 
 	mockClock.Set(time.Date(2023, 3, 9, 23, 59, 59, 0, time.UTC))
 	table := VersionedTableName{
-		TableNameWithPhysicTableID: model.TableName{
+		TableNameWithPhysicTableID: commonType.TableName{
 			Schema: "test",
 			Table:  "table1",
 		},
@@ -305,30 +307,22 @@ func TestCheckOrWriteSchema(t *testing.T) {
 		DefaultValue: 10,
 	}
 	columns = append(columns, col)
-	tableInfo := &model.TableInfo{
-		TableInfo: &timodel.TableInfo{Columns: columns},
-		Version:   100,
-		TableName: model.TableName{
-			Schema:  "test",
-			Table:   "table1",
-			TableID: 20,
-		},
-	}
+	tableInfo := commonType.WrapTableInfo(101, "test", &timodel.TableInfo{Columns: columns})
 
 	table := VersionedTableName{
 		TableNameWithPhysicTableID: tableInfo.TableName,
-		TableInfoVersion:           tableInfo.Version,
+		TableInfoVersion:           100,
 	}
 
 	err := f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
-	require.Equal(t, tableInfo.Version, f.versionMap[table])
+	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
 
 	// test only table version changed, schema file should be reused
 	table.TableInfoVersion = 101
 	err = f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
-	require.Equal(t, tableInfo.Version, f.versionMap[table])
+	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
 
 	dir = filepath.Join(dir, "test/table1/meta")
 	files, err := os.ReadDir(dir)
@@ -372,7 +366,7 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 		FileCleanupCronSpec: util.AddressOf("* * * * * *"),
 	}
 	cfg := NewConfig()
-	err = cfg.Apply(ctx, sinkURI, replicaConfig)
+	err = cfg.Apply(ctx, sinkURI, replicaConfig.Sink)
 	require.NoError(t, err)
 
 	// generate some expired files
@@ -433,7 +427,7 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 
 	currTime := time.Date(2021, 1, 3, 0, 0, 0, 0, time.Local)
 	checkpointTs := oracle.GoTimeToTS(currTime)
-	cnt, err := RemoveExpiredFiles(ctx, model.ChangeFeedID{}, storage, cfg, checkpointTs)
+	cnt, err := RemoveExpiredFiles(ctx, commonType.ChangeFeedID{}, storage, cfg, checkpointTs)
 	require.NoError(t, err)
 	require.Equal(t, uint64(16), cnt)
 }
