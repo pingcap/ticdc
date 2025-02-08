@@ -1623,31 +1623,46 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 				InfluenceType: commonEvent.InfluenceTypeNormal,
 				TableIDs:      allPhysicalIDsAndDDLSpanID,
 			}
-			// only consider old table
-			// check whether schema change
-			if rawEvent.PrevSchemaID != rawEvent.CurrentSchemaID {
-				ddlEvent.UpdatedSchemas = make([]commonEvent.SchemaIDChange, 0, len(allPhysicalIDs))
-				for _, id := range allPhysicalIDs {
-					ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
-						TableID:     id,
-						OldSchemaID: rawEvent.PrevSchemaID,
-						NewSchemaID: rawEvent.CurrentSchemaID,
-					})
+			if !ignoreCurrentTable {
+				// check whether schema change
+				if rawEvent.PrevSchemaID != rawEvent.CurrentSchemaID {
+					ddlEvent.UpdatedSchemas = make([]commonEvent.SchemaIDChange, 0, len(allPhysicalIDs))
+					for _, id := range allPhysicalIDs {
+						ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
+							TableID:     id,
+							OldSchemaID: rawEvent.PrevSchemaID,
+							NewSchemaID: rawEvent.CurrentSchemaID,
+						})
+					}
 				}
-			}
-			ddlEvent.TableNameChange = &commonEvent.TableNameChange{
-				AddName: []commonEvent.SchemaTableName{
-					{
-						SchemaName: rawEvent.CurrentSchemaName,
-						TableName:  rawEvent.CurrentTableName,
+				ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+					AddName: []commonEvent.SchemaTableName{
+						{
+							SchemaName: rawEvent.CurrentSchemaName,
+							TableName:  rawEvent.CurrentTableName,
+						},
 					},
-				},
-				DropName: []commonEvent.SchemaTableName{
-					{
-						SchemaName: rawEvent.PrevSchemaName,
-						TableName:  rawEvent.PrevTableName,
+					DropName: []commonEvent.SchemaTableName{
+						{
+							SchemaName: rawEvent.PrevSchemaName,
+							TableName:  rawEvent.PrevTableName,
+						},
 					},
-				},
+				}
+			} else {
+				// the table is filtered out after rename table, we need drop the table
+				ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      allPhysicalIDs,
+				}
+				ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+					DropName: []commonEvent.SchemaTableName{
+						{
+							SchemaName: rawEvent.PrevSchemaName,
+							TableName:  rawEvent.PrevTableName,
+						},
+					},
+				}
 			}
 		} else if !ignoreCurrentTable {
 			// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
@@ -1666,29 +1681,44 @@ func buildDDLEventForRenameTable(rawEvent *PersistedDDLEvent, tableFilter filter
 				InfluenceType: commonEvent.InfluenceTypeNormal,
 				TableIDs:      []int64{rawEvent.CurrentTableID, heartbeatpb.DDLSpan.TableID},
 			}
-			// only consider old table
-			if rawEvent.PrevSchemaID != rawEvent.CurrentSchemaID {
-				ddlEvent.UpdatedSchemas = []commonEvent.SchemaIDChange{
-					{
-						TableID:     rawEvent.CurrentTableID,
-						OldSchemaID: rawEvent.PrevSchemaID,
-						NewSchemaID: rawEvent.CurrentSchemaID,
+			if !ignoreCurrentTable {
+				if rawEvent.PrevSchemaID != rawEvent.CurrentSchemaID {
+					ddlEvent.UpdatedSchemas = []commonEvent.SchemaIDChange{
+						{
+							TableID:     rawEvent.CurrentTableID,
+							OldSchemaID: rawEvent.PrevSchemaID,
+							NewSchemaID: rawEvent.CurrentSchemaID,
+						},
+					}
+				}
+				ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+					AddName: []commonEvent.SchemaTableName{
+						{
+							SchemaName: rawEvent.CurrentSchemaName,
+							TableName:  rawEvent.CurrentTableName,
+						},
+					},
+					DropName: []commonEvent.SchemaTableName{
+						{
+							SchemaName: rawEvent.PrevSchemaName,
+							TableName:  rawEvent.PrevTableName,
+						},
 					},
 				}
-			}
-			ddlEvent.TableNameChange = &commonEvent.TableNameChange{
-				AddName: []commonEvent.SchemaTableName{
-					{
-						SchemaName: rawEvent.CurrentSchemaName,
-						TableName:  rawEvent.CurrentTableName,
+			} else {
+				// the table is filtered out after rename table, we need drop the table
+				ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      []int64{rawEvent.CurrentTableID},
+				}
+				ddlEvent.TableNameChange = &commonEvent.TableNameChange{
+					DropName: []commonEvent.SchemaTableName{
+						{
+							SchemaName: rawEvent.PrevSchemaName,
+							TableName:  rawEvent.PrevTableName,
+						},
 					},
-				},
-				DropName: []commonEvent.SchemaTableName{
-					{
-						SchemaName: rawEvent.PrevSchemaName,
-						TableName:  rawEvent.PrevTableName,
-					},
-				},
+				}
 			}
 		} else if !ignoreCurrentTable {
 			// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
@@ -1900,25 +1930,38 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			if !ignorePrevTable {
 				resultQuerys = append(resultQuerys, querys[i])
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
-				// only consider old table
-				// check whether schema change
-				if rawEvent.PrevSchemaIDs[i] != rawEvent.CurrentSchemaIDs[i] {
-					for _, id := range allPhysicalIDs {
-						ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
-							TableID:     id,
-							OldSchemaID: rawEvent.PrevSchemaIDs[i],
-							NewSchemaID: rawEvent.CurrentSchemaIDs[i],
-						})
+				if !ignoreCurrentTable {
+					// check whether schema change
+					if rawEvent.PrevSchemaIDs[i] != rawEvent.CurrentSchemaIDs[i] {
+						for _, id := range allPhysicalIDs {
+							ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
+								TableID:     id,
+								OldSchemaID: rawEvent.PrevSchemaIDs[i],
+								NewSchemaID: rawEvent.CurrentSchemaIDs[i],
+							})
+						}
 					}
+					addNames = append(addNames, commonEvent.SchemaTableName{
+						SchemaName: rawEvent.CurrentSchemaNames[i],
+						TableName:  tableInfo.Name.O,
+					})
+					dropNames = append(dropNames, commonEvent.SchemaTableName{
+						SchemaName: rawEvent.PrevSchemaNames[i],
+						TableName:  rawEvent.PrevTableNames[i],
+					})
+				} else {
+					// the table is filtered out after rename table, we need drop the table
+					if ddlEvent.NeedDroppedTables == nil {
+						ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+							InfluenceType: commonEvent.InfluenceTypeNormal,
+						}
+					}
+					ddlEvent.NeedDroppedTables.TableIDs = append(ddlEvent.NeedDroppedTables.TableIDs, allPhysicalIDs...)
+					dropNames = append(dropNames, commonEvent.SchemaTableName{
+						SchemaName: rawEvent.PrevSchemaNames[i],
+						TableName:  rawEvent.PrevTableNames[i],
+					})
 				}
-				addNames = append(addNames, commonEvent.SchemaTableName{
-					SchemaName: rawEvent.CurrentSchemaNames[i],
-					TableName:  tableInfo.Name.O,
-				})
-				dropNames = append(dropNames, commonEvent.SchemaTableName{
-					SchemaName: rawEvent.PrevSchemaNames[i],
-					TableName:  rawEvent.PrevTableNames[i],
-				})
 			} else if !ignoreCurrentTable {
 				// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
 				ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.CurrentTableID, rawEvent.Query)
@@ -1929,22 +1972,34 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			if !ignorePrevTable {
 				resultQuerys = append(resultQuerys, querys[i])
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
-				// only consider old table
-				if rawEvent.PrevSchemaIDs[i] != rawEvent.CurrentSchemaIDs[i] {
-					ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
-						TableID:     tableInfo.ID,
-						OldSchemaID: rawEvent.PrevSchemaIDs[i],
-						NewSchemaID: rawEvent.CurrentSchemaIDs[i],
+				if !ignoreCurrentTable {
+					if rawEvent.PrevSchemaIDs[i] != rawEvent.CurrentSchemaIDs[i] {
+						ddlEvent.UpdatedSchemas = append(ddlEvent.UpdatedSchemas, commonEvent.SchemaIDChange{
+							TableID:     tableInfo.ID,
+							OldSchemaID: rawEvent.PrevSchemaIDs[i],
+							NewSchemaID: rawEvent.CurrentSchemaIDs[i],
+						})
+					}
+					addNames = append(addNames, commonEvent.SchemaTableName{
+						SchemaName: rawEvent.CurrentSchemaNames[i],
+						TableName:  tableInfo.Name.O,
 					})
+					dropNames = append(dropNames, commonEvent.SchemaTableName{
+						SchemaName: rawEvent.PrevSchemaNames[i],
+						TableName:  rawEvent.PrevTableNames[i],
+					})
+				} else {
+					// the table is filtered out after rename table, we need drop the table
+					if ddlEvent.NeedDroppedTables == nil {
+						ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
+							InfluenceType: commonEvent.InfluenceTypeNormal,
+						}
+					}
+					ddlEvent.NeedDroppedTables.TableIDs = append(ddlEvent.NeedDroppedTables.TableIDs, tableInfo.ID)
+					dropNames = append(dropNames, commonEvent.SchemaTableName{
+						SchemaName: rawEvent.PrevSchemaNames[i],
+						TableName:  rawEvent.PrevTableNames[i]})
 				}
-				addNames = append(addNames, commonEvent.SchemaTableName{
-					SchemaName: rawEvent.CurrentSchemaNames[i],
-					TableName:  tableInfo.Name.O,
-				})
-				dropNames = append(dropNames, commonEvent.SchemaTableName{
-					SchemaName: rawEvent.PrevSchemaNames[i],
-					TableName:  rawEvent.PrevTableNames[i],
-				})
 			} else if !ignoreCurrentTable {
 				// ignorePrevTable & !ignoreCurrentTable is not allowed as in: https://docs.pingcap.com/tidb/dev/ticdc-ddl
 				ddlEvent.Err = cerror.ErrSyncRenameTableFailed.GenWithStackByArgs(rawEvent.CurrentTableID, rawEvent.Query)

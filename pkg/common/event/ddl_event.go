@@ -151,7 +151,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 				FinishedTs: d.FinishedTs,
 			},
 		}
-	case model.ActionCreateTables, model.ActionRenameTables:
+	case model.ActionCreateTables:
 		events := make([]*DDLEvent, 0, len(d.TableNameChange.AddName))
 		queries, err := SplitQueries(d.Query)
 		if err != nil {
