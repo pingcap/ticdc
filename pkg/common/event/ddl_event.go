@@ -150,21 +150,22 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 				FinishedTs: d.FinishedTs,
 			},
 		}
-	case model.ActionCreateTables:
-		events := make([]*DDLEvent, 0, len(d.TableNameChange.AddName))
+	case model.ActionCreateTables, model.ActionRenameTables:
+		events := make([]*DDLEvent, 0, len(d.MultipleTableInfos))
 		queries, err := SplitQueries(d.Query)
 		if err != nil {
 			log.Panic("split queries failed", zap.Error(err))
 		}
-		if len(queries) != len(d.TableNameChange.AddName) {
-			log.Panic("queries length should be equal to addName length", zap.String("query", d.Query), zap.Any("addName", d.TableNameChange.AddName))
+		if len(queries) != len(d.MultipleTableInfos) {
+			log.Panic("queries length should be equal to multipleTableInfos length", zap.String("query", d.Query), zap.Any("multipleTableInfos", d.MultipleTableInfos))
 		}
-		for i, schemaAndTable := range d.TableNameChange.AddName {
+		for i, info := range d.MultipleTableInfos {
 			events = append(events, &DDLEvent{
 				Version:    d.Version,
 				Type:       d.Type,
-				SchemaName: schemaAndTable.SchemaName,
-				TableName:  schemaAndTable.TableName,
+				SchemaName: info.GetSchemaName(),
+				TableName:  info.GetTableName(),
+				TableInfo:  info,
 				Query:      queries[i],
 				FinishedTs: d.FinishedTs,
 			})
@@ -247,7 +248,7 @@ func (e *DDLEvent) GetDDLType() model.ActionType {
 }
 
 func (t DDLEvent) Marshal() ([]byte, error) {
-	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | errorData | errorDataSize
+	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize |errorData | errorDataSize
 	data, err := json.Marshal(t)
 	if err != nil {
 		return nil, err
@@ -273,6 +274,20 @@ func (t DDLEvent) Marshal() ([]byte, error) {
 		data = append(data, tableInfoDataSize...)
 	}
 
+	for _, info := range t.MultipleTableInfos {
+		tableInfoData, err := info.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		tableInfoDataSize := make([]byte, 8)
+		binary.BigEndian.PutUint64(tableInfoDataSize, uint64(len(tableInfoData)))
+		data = append(data, tableInfoData...)
+		data = append(data, tableInfoDataSize...)
+	}
+	multipletableInfosDataSize := make([]byte, 8)
+	binary.BigEndian.PutUint64(multipletableInfosDataSize, uint64(len(t.MultipleTableInfos)))
+	data = append(data, multipletableInfosDataSize...)
+
 	if t.Err != nil {
 		errData := []byte(t.Err.Error())
 		errDataSize := make([]byte, 8)
@@ -288,7 +303,7 @@ func (t DDLEvent) Marshal() ([]byte, error) {
 }
 
 func (t *DDLEvent) Unmarshal(data []byte) error {
-	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | errorData | errorDataSize
+	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize | errorData | errorDataSize
 	t.eventSize = int64(len(data))
 	errorDataSize := binary.BigEndian.Uint64(data[len(data)-8:])
 	if errorDataSize > 0 {
@@ -297,6 +312,18 @@ func (t *DDLEvent) Unmarshal(data []byte) error {
 		t.Err = apperror.ErrDDLEventError.FastGen(string(errorData))
 	}
 	end := len(data) - 8 - int(errorDataSize)
+	multipletableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+	for i := 0; i < int(multipletableInfosDataSize); i++ {
+		tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+		tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
+		info, err := common.UnmarshalJSONToTableInfo(tableInfoData)
+		if err != nil {
+			return err
+		}
+		t.MultipleTableInfos = append(t.MultipleTableInfos, info)
+		end -= 8 + int(tableInfoDataSize)
+	}
+	end -= 8 + int(multipletableInfosDataSize)
 	tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 	var err error
 	if tableInfoDataSize > 0 {
