@@ -126,6 +126,9 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 	// Such as rename table test.table1 to test.table10, test.table2 to test.table20
 	switch model.ActionType(d.Type) {
 	case model.ActionExchangeTablePartition:
+		if len(d.MultipleTableInfos) != 2 {
+			log.Panic("multipleTableInfos length should be equal to 2", zap.Any("multipleTableInfos", d.MultipleTableInfos))
+		}
 		return []*DDLEvent{
 			// partition table before exchange
 			{
@@ -135,7 +138,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 				// TableID:    d.TableID,
 				SchemaName: d.SchemaName,
 				TableName:  d.TableName,
-				TableInfo:  d.TableInfo,
+				TableInfo:  d.MultipleTableInfos[0],
 				Query:      d.Query,
 				FinishedTs: d.FinishedTs,
 			},
@@ -147,6 +150,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 				// TableID:    d.TableInfo.TableName.TableID,
 				SchemaName: d.PrevSchemaName,
 				TableName:  d.PrevTableName,
+				TableInfo:  d.MultipleTableInfos[1],
 				Query:      d.Query,
 				FinishedTs: d.FinishedTs,
 			},

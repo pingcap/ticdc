@@ -1899,6 +1899,10 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 	} else {
 		log.Fatal("should not happen")
 	}
+	ddlEvent.MultipleTableInfos = []*common.TableInfo{
+		common.WrapTableInfo(rawEvent.CurrentSchemaID, rawEvent.CurrentSchemaName, rawEvent.TableInfo),
+		rawEvent.PreTableInfo,
+	}
 	return ddlEvent, true
 }
 
@@ -1930,7 +1934,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 			if !ignorePrevTable {
 				resultQuerys = append(resultQuerys, querys[i])
-				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.CurrentSchemaID, rawEvent.CurrentSchemaName, tableInfo))
+				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.CurrentSchemaID, rawEvent.CurrentSchemaNames[i], tableInfo))
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
 				if !ignoreCurrentTable {
 					// check whether schema change
@@ -1973,7 +1977,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		} else {
 			if !ignorePrevTable {
 				resultQuerys = append(resultQuerys, querys[i])
-				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.CurrentSchemaID, rawEvent.CurrentSchemaName, tableInfo))
+				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.CurrentSchemaID, rawEvent.CurrentSchemaNames[i], tableInfo))
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
 				if !ignoreCurrentTable {
 					if rawEvent.PrevSchemaIDs[i] != rawEvent.CurrentSchemaIDs[i] {
