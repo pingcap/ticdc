@@ -171,26 +171,6 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 			})
 		}
 		return events
-	case model.ActionRenameTables:
-		events := make([]*DDLEvent, 0, len(d.TableNameChange.DropName))
-		queries, err := SplitQueries(d.Query)
-		if err != nil {
-			log.Panic("split queries failed", zap.Error(err))
-		}
-		if len(queries) != len(d.TableNameChange.DropName) {
-			log.Panic("queries length should be equal to dropName length", zap.String("query", d.Query), zap.Any("dropName", d.TableNameChange.DropName))
-		}
-		for i, schemaAndTable := range d.TableNameChange.DropName {
-			events = append(events, &DDLEvent{
-				Version:        d.Version,
-				Type:           d.Type,
-				PrevSchemaName: schemaAndTable.SchemaName,
-				PrevTableName:  schemaAndTable.TableName,
-				Query:          queries[i],
-				FinishedTs:     d.FinishedTs,
-			})
-		}
-		return events
 	default:
 	}
 	return []*DDLEvent{d}
