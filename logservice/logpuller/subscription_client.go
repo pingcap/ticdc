@@ -397,6 +397,7 @@ func (s *SubscriptionClient) onTableDrained(rt *subscribedSpan) {
 
 	s.totalSpans.Lock()
 	defer s.totalSpans.Unlock()
+	s.ds.RemovePath(rt.subID)
 	delete(s.totalSpans.spanMap, rt.subID)
 	s.ds.RemovePath(rt.subID)
 }
