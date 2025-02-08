@@ -116,7 +116,7 @@ func (c *server) prepare(ctx context.Context) error {
 	if err != nil {
 		log.Warn("Fail to verify region label rule",
 			zap.Error(err),
-			zap.String("upstreamID", conf.AdvertiseAddr),
+			zap.String("advertiseAddr", conf.AdvertiseAddr),
 			zap.Strings("upstreamEndpoints", c.pdEndpoints))
 	}
 
