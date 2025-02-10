@@ -190,7 +190,7 @@ func (s *schemaStore) updateResolvedTsPeriodically(ctx context.Context) error {
 				}
 				log.Info("handle ddl job",
 					zap.Int64("schemaID", event.Job.SchemaID),
-					zap.String("SchemaName", event.Job.SchemaName),
+					zap.String("schemaName", event.Job.SchemaName),
 					zap.Int64("tableID", event.Job.TableID),
 					zap.String("tableName", event.Job.TableName),
 					zap.Any("type", event.Job.Type),

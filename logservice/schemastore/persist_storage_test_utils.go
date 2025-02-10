@@ -141,8 +141,8 @@ func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos []mockDBInfo) {
 	writeGcTs(db, snapTs)
 }
 
-func buildTableFilterByNameForTest(SchemaName, tableName string) filter.Filter {
-	filterRule := fmt.Sprintf("%s.%s", SchemaName, tableName)
+func buildTableFilterByNameForTest(schemaName, tableName string) filter.Filter {
+	filterRule := fmt.Sprintf("%s.%s", schemaName, tableName)
 	filterConfig := &config.FilterConfig{
 		Rules: []string{filterRule},
 	}
@@ -176,14 +176,14 @@ func newEligiblePartitionTableInfoForTest(tableID int64, tableName string, parti
 	return tableInfo
 }
 
-func buildCreateSchemaJobForTest(schemaID int64, SchemaName string, finishedTs uint64) *model.Job {
+func buildCreateSchemaJobForTest(schemaID int64, schemaName string, finishedTs uint64) *model.Job {
 	return &model.Job{
 		Type:     model.ActionCreateSchema,
 		SchemaID: schemaID,
 		BinlogInfo: &model.HistoryInfo{
 			DBInfo: &model.DBInfo{
 				ID:   schemaID,
-				Name: pmodel.NewCIStr(SchemaName),
+				Name: pmodel.NewCIStr(schemaName),
 			},
 			FinishedTS: finishedTs,
 		},

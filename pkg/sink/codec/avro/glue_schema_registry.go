@@ -258,7 +258,7 @@ func (m *glueSchemaManager) createSchema(ctx context.Context, schemaName, schema
 		RegistryId: &types.RegistryId{
 			RegistryName: &m.registryName,
 		},
-		schemaName:       aws.String(schemaName),
+		SchemaName:       aws.String(schemaName),
 		DataFormat:       types.DataFormatAvro,
 		SchemaDefinition: aws.String(schemaDefinition),
 		// cdc don't need to set compatibility check for schema registry
@@ -278,7 +278,7 @@ func (m *glueSchemaManager) updateSchema(ctx context.Context, schemaName, schema
 	input := &glue.RegisterSchemaVersionInput{
 		SchemaId: &types.SchemaId{
 			RegistryName: aws.String(m.registryName),
-			schemaName:   &schemaName,
+			SchemaName:   &schemaName,
 		},
 		SchemaDefinition: aws.String(schemaDefinition),
 	}
@@ -294,7 +294,7 @@ func (m *glueSchemaManager) getSchemaByName(ctx context.Context, schemaName stri
 	input := &glue.GetSchemaVersionInput{
 		SchemaId: &types.SchemaId{
 			RegistryName: aws.String(m.registryName),
-			schemaName:   aws.String(schemaName),
+			SchemaName:   aws.String(schemaName),
 		},
 		SchemaVersionNumber: &types.SchemaVersionNumber{LatestVersion: true},
 	}
