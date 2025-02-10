@@ -63,10 +63,10 @@ func buildTruncateTableEventForTest(schemaID, oldTableID, newTableID int64, sche
 	return &PersistedDDLEvent{
 		Type:         byte(model.ActionTruncateTable),
 		SchemaID:     schemaID,
-		TableID:      newTableID,
+		TableID:      oldTableID,
 		SchemaName:   schemaName,
 		TableName:    tableName,
-		ExtraTableID: oldTableID,
+		ExtraTableID: newTableID,
 		TableInfo: &model.TableInfo{
 			ID:   newTableID,
 			Name: pmodel.NewCIStr(tableName),
@@ -106,14 +106,14 @@ func buildExchangePartitionTableEventForTest(
 	}
 	return &PersistedDDLEvent{
 		Type:            byte(model.ActionExchangeTablePartition),
-		SchemaID:        partitionSchemaID,
-		TableID:         partitionTableID,
-		SchemaName:      partitionSchemaName,
-		TableName:       partitionTableName,
-		ExtraSchemaID:   normalSchemaID,
-		ExtraTableID:    normalTableID,
-		ExtraSchemaName: normalSchemaName,
-		ExtraTableName:  normalTableName,
+		SchemaID:        normalSchemaID,
+		TableID:         normalTableID,
+		SchemaName:      normalSchemaName,
+		TableName:       normalTableName,
+		ExtraSchemaID:   partitionSchemaID,
+		ExtraTableID:    partitionTableID,
+		ExtraSchemaName: partitionSchemaName,
+		ExtraTableName:  partitionTableName,
 		TableInfo: &model.TableInfo{
 			ID:   partitionTableID,
 			Name: pmodel.NewCIStr(partitionTableName),
