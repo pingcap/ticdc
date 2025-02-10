@@ -246,45 +246,44 @@ func (g *replicationGroup[T, R]) GetTaskSizePerNode() map[node.ID]int {
 }
 
 type Map[T ReplicationID, R Replication[T]] struct {
-	mutex sync.Mutex
-	inner map[T]R
+	inner sync.Map
 }
 
 func newMap[T ReplicationID, R Replication[T]]() *Map[T, R] {
-	return &Map[T, R]{inner: make(map[T]R)}
+	return &Map[T, R]{inner: sync.Map{}}
 }
 
 func (m *Map[T, R]) Get(key T) (R, bool) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	value, exists := m.inner[key]
+	var value R
+	v, exists := m.inner.Load(key)
+	if v != nil {
+		value = v.(R)
+	}
 	return value, exists
 }
 
 func (m *Map[T, R]) Set(key T, value R) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	m.inner[key] = value
+	m.inner.Store(key, value)
 }
 
 func (m *Map[T, R]) Delete(key T) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	delete(m.inner, key)
+	m.inner.Delete(key)
 }
 
 func (m *Map[T, R]) Len() int {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	return len(m.inner)
+	var count int
+	m.inner.Range(func(_, _ interface{}) bool {
+		count++
+		return true
+	})
+	return count
 }
 
 func (m *Map[T, R]) Range(f func(T, R) bool) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	for k, v := range m.inner {
-		if !f(k, v) {
-			break
+	m.inner.Range(func(k, v interface{}) bool {
+		if rv, ok := v.(R); ok {
+			return f(k.(T), rv)
 		}
-	}
+		return true
+	})
 }
