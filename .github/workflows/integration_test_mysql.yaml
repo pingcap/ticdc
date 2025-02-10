@@ -413,125 +413,110 @@ jobs:
           make integration_test_build
           ls -l bin/ && ls -l tools/bin/
 
-      # - name: Test http_api
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=http_api
+      - name: Test http_api
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=http_api
 
-      # - name: Test partition_table
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=partition_table
+      - name: Test partition_table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=partition_table
       
-      # - name: Test multi_tables_ddl
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
+      - name: Test multi_tables_ddl
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
 
-      # - name: Test multi_source
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
 
      
-      # - name: Test ddl_attributes
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
+      - name: Test ddl_attributes
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_attributes
       
-      # - name: Test http_api_tls
+      - name: Test http_api_tls
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls
+
+      # - name: Test http_api_tls_with_user_auth
       #   if: ${{ success() }}
       #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls
-
-      # # - name: Test http_api_tls_with_user_auth
-      # #   if: ${{ success() }}
-      # #   run: |
-      # #     export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls_with_user_auth
+      #     export TICDC_NEWARCH=true && make integration_test CASE=http_api_tls_with_user_auth
       
-      # - name: Test default_value
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=default_value
+      - name: Test default_value
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=default_value
 
-      # - name: Test http_proxies
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=http_proxies
+      - name: Test http_proxies
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=http_proxies
 
-      # - name: Test ddl_reentrant
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=ddl_reentrant
+      - name: Test ddl_reentrant
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_reentrant
 
-      # - name: Test syncpoint
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=syncpoint
+      - name: Test syncpoint
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=syncpoint
 
-      # - name: Test force_replicate_table
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=force_replicate_table
+      - name: Test force_replicate_table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=force_replicate_table
 
-      # - name: Test tidb_mysql_test
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=tidb_mysql_test
+      - name: Test tidb_mysql_test
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=tidb_mysql_test
 
 
-      # - name: Test resolve_lock
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=resolve_lock
+      - name: Test resolve_lock
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=resolve_lock
 
-      # - name: Test move_table
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=move_table
+      - name: Test move_table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=move_table
 
-      # - name: Test changefeed_error
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=changefeed_error
+      - name: Test changefeed_error
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_error
 
-      # # The 16th case in this group
-      # - name: Test capture_session_done_during_task
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=capture_session_done_during_task
+      # The 16th case in this group
+      - name: Test capture_session_done_during_task
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=capture_session_done_during_task
 
-      # - name: Test changefeed_dup_error_restart
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=changefeed_dup_error_restart
+      - name: Test changefeed_dup_error_restart
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_dup_error_restart
 
-      # - name: Test mysql_sink_retry
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=mysql_sink_retry
+      - name: Test mysql_sink_retry
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=mysql_sink_retry
       
-      # - name: Test cdc
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=cdc
+      - name: Test cdc
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=cdc
 
       # The 20th case in this group
-      - name: Test overwrite_resume_with_syncpoint
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=overwrite_resume_with_syncpoint
-
-      - name: Test overwrite_resume_with_syncpoint
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=overwrite_resume_with_syncpoint
-
-      - name: Test overwrite_resume_with_syncpoint
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=overwrite_resume_with_syncpoint
-
       - name: Test overwrite_resume_with_syncpoint
         if: ${{ success() }}
         run: |
