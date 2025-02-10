@@ -481,7 +481,7 @@ func buildPersistedDDLEventForSchemaDDL(args buildPersistedDDLEventFuncArgs) Per
 	log.Info("buildPersistedDDLEvent for create/drop schema",
 		zap.Any("type", event.Type),
 		zap.Int64("schemaID", event.SchemaID),
-		zap.String("SchemaName", event.DBInfo.Name.O))
+		zap.String("schemaName", event.DBInfo.Name.O))
 	event.SchemaName = event.DBInfo.Name.O
 	return event
 }
@@ -1876,7 +1876,7 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 		}
 		ddlEvent.NeedAddedTables = []commonEvent.Table{
 			{
-				SchemaID: rawEvent.SchemaID,
+				SchemaID: rawEvent.ExtraSchemaID,
 				TableID:  rawEvent.TableID,
 			},
 		}

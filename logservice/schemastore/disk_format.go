@@ -646,6 +646,7 @@ func loadAllPhysicalTablesAtTs(
 		return nil, err
 	}
 	log.Info("after load tables in kv snap",
+		zap.Int("tableInfoMapLen", len(tableInfoMap)),
 		zap.Int("tableMapLen", len(tableMap)),
 		zap.Int("partitionMapLen", len(partitionMap)))
 
@@ -680,6 +681,7 @@ func loadAllPhysicalTablesAtTs(
 		})
 	}
 	log.Info("after load tables from ddl",
+		zap.Int("tableInfoMapLen", len(tableInfoMap)),
 		zap.Int("tableMapLen", len(tableMap)),
 		zap.Int("partitionMapLen", len(partitionMap)))
 	tables := make([]commonEvent.Table, 0)
