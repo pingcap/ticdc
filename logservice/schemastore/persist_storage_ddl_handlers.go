@@ -324,7 +324,6 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
-
 	model.ActionAlterIndexVisibility: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
@@ -333,7 +332,6 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
-
 	model.ActionExchangeTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForExchangePartition,
 		updateDDLHistoryFunc:       updateDDLHistoryForExchangeTablePartition,
@@ -350,7 +348,6 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForRenameTables,
 		buildDDLEventFunc:          buildDDLEventForRenameTables,
 	},
-
 	model.ActionCreateTables: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTables,
 		updateDDLHistoryFunc:       updateDDLHistoryForCreateTables,
@@ -367,7 +364,6 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
-
 	model.ActionReorganizePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForReorganizePartition,
@@ -376,7 +372,6 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForTruncateAndReorganizePartition,
 		buildDDLEventFunc:          buildDDLEventForTruncateAndReorganizePartition,
 	},
-
 	model.ActionAlterTTLInfo: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAlterTableTTL,
@@ -465,7 +460,6 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 
 	// Note: if a ddl involve multiple tables, job.TableID is different with job.BinlogInfo.TableInfo.ID
 	// and usually job.BinlogInfo.TableInfo.ID will be the newly created IDs.
-	// Here we just use job.TableID as TableID and let ddl specific logic to adjust it.s
 	event := PersistedDDLEvent{
 		ID:             job.ID,
 		Type:           byte(job.Type),
@@ -535,12 +529,12 @@ func buildPersistedDDLEventForNormalDDLOnSingleTable(args buildPersistedDDLEvent
 func buildPersistedDDLEventForTruncateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
 	// only table id change after truncate
-	event.ExtraTableID = event.TableID
-	event.TableID = event.TableInfo.ID
+	event.ExtraTableID = event.TableInfo.ID
+	// schema/table name remains the same, so it is ok to get them using old table/schema id
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
-	event.TableName = getTableName(args.tableMap, event.ExtraTableID)
+	event.TableName = getTableName(args.tableMap, event.TableID)
 	if isPartitionTable(event.TableInfo) {
-		for id := range args.partitionMap[event.ExtraTableID] {
+		for id := range args.partitionMap[event.TableID] {
 			event.PrevPartitions = append(event.PrevPartitions, id)
 		}
 	}
@@ -597,15 +591,15 @@ func buildPersistedDDLEventForNormalPartitionDDL(args buildPersistedDDLEventFunc
 
 func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
-	event.ExtraSchemaID = event.SchemaID
-	event.ExtraTableID = event.TableID
-	event.ExtraSchemaName = getSchemaName(args.databaseMap, event.ExtraSchemaID)
-	event.ExtraTableName = getTableName(args.tableMap, event.ExtraTableID)
-	event.TableID = event.TableInfo.ID
-	event.SchemaID = getSchemaID(args.tableMap, event.TableInfo.ID)
-	event.TableName = getTableName(args.tableMap, event.TableInfo.ID)
+	event.TableName = getTableName(args.tableMap, event.TableID)
+	event.SchemaID = getSchemaID(args.tableMap, event.TableID)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
-	for id := range args.partitionMap[event.TableID] {
+
+	event.ExtraTableID = event.TableInfo.ID
+	event.ExtraTableName = getTableName(args.tableMap, event.ExtraTableID)
+	event.ExtraSchemaID = getSchemaID(args.tableMap, event.ExtraTableID)
+	event.ExtraSchemaName = getSchemaName(args.databaseMap, event.ExtraSchemaID)
+	for id := range args.partitionMap[event.ExtraTableID] {
 		event.PrevPartitions = append(event.PrevPartitions, id)
 	}
 	return event
@@ -629,15 +623,15 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 	var querys []string
 	for i, tableInfo := range args.job.BinlogInfo.MultipleTableInfos {
 		info := renameArgs.RenameTableInfos[i]
-		ExtraSchemaID := getSchemaID(args.tableMap, tableInfo.ID)
-		event.ExtraSchemaIDs = append(event.ExtraSchemaIDs, ExtraSchemaID)
-		event.ExtraSchemaNames = append(event.ExtraSchemaNames, getSchemaName(args.databaseMap, ExtraSchemaID))
-		ExtraTableName := getTableName(args.tableMap, tableInfo.ID)
-		event.ExtraTableNames = append(event.ExtraTableNames, ExtraTableName)
+		extraSchemaID := getSchemaID(args.tableMap, tableInfo.ID)
+		event.ExtraSchemaIDs = append(event.ExtraSchemaIDs, extraSchemaID)
+		event.ExtraSchemaNames = append(event.ExtraSchemaNames, getSchemaName(args.databaseMap, extraSchemaID))
+		extraTableName := getTableName(args.tableMap, tableInfo.ID)
+		event.ExtraTableNames = append(event.ExtraTableNames, extraTableName)
 		event.SchemaIDs = append(event.SchemaIDs, info.NewSchemaID)
 		SchemaName := getSchemaName(args.databaseMap, info.NewSchemaID)
 		event.SchemaNames = append(event.SchemaNames, SchemaName)
-		querys = append(querys, fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`;", info.OldSchemaName.O, ExtraTableName, SchemaName, tableInfo.Name.L))
+		querys = append(querys, fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`;", info.OldSchemaName.O, extraTableName, SchemaName, tableInfo.Name.L))
 	}
 
 	event.Query = strings.Join(querys, "")
@@ -804,7 +798,7 @@ func updateDDLHistoryForExchangeTablePartition(args updateDDLHistoryFuncArgs) []
 	if len(droppedIDs) != 1 {
 		log.Panic("exchange table partition should only drop one partition", zap.Int64s("droppedIDs", droppedIDs))
 	}
-	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, droppedIDs[0], args.ddlEvent.ExtraTableID)
+	args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, droppedIDs[0], args.ddlEvent.TableID)
 	return args.tableTriggerDDLHistory
 }
 
@@ -921,8 +915,8 @@ func updateSchemaMetadataForDropTable(args updateSchemaMetadataFuncArgs) {
 func updateSchemaMetadataIgnore(args updateSchemaMetadataFuncArgs) {}
 
 func updateSchemaMetadataForTruncateTable(args updateSchemaMetadataFuncArgs) {
-	oldTableID := args.event.ExtraTableID
-	newTableID := args.event.TableID
+	oldTableID := args.event.TableID
+	newTableID := args.event.ExtraTableID
 	schemaID := args.event.SchemaID
 	args.removeTableFromDB(oldTableID, schemaID)
 	delete(args.tableMap, oldTableID)
@@ -985,19 +979,19 @@ func updateSchemaMetadataForExchangeTablePartition(args updateSchemaMetadataFunc
 		log.Panic("exchange table partition should only drop one partition",
 			zap.Int64s("droppedIDs", droppedIDs))
 	}
-	normalTableID := args.event.ExtraTableID
-	normalSchemaID := args.event.ExtraSchemaID
-	partitionID := droppedIDs[0]
+	normalTableID := args.event.TableID
+	normalSchemaID := args.event.SchemaID
+	partitionTableID := args.event.ExtraTableID
+	targetPartitionID := droppedIDs[0]
 	normalTableName := getTableName(args.tableMap, normalTableID)
 	args.removeTableFromDB(normalTableID, normalSchemaID)
 	delete(args.tableMap, normalTableID)
-	args.addTableToDB(partitionID, normalSchemaID)
-	args.tableMap[partitionID] = &BasicTableInfo{
+	args.addTableToDB(targetPartitionID, normalSchemaID)
+	args.tableMap[targetPartitionID] = &BasicTableInfo{
 		SchemaID: normalSchemaID,
 		Name:     normalTableName,
 	}
-	partitionTableID := args.event.TableID
-	delete(args.partitionMap[partitionTableID], partitionID)
+	delete(args.partitionMap[partitionTableID], targetPartitionID)
 	args.partitionMap[partitionTableID][normalTableID] = nil
 }
 
@@ -1133,7 +1127,7 @@ func iterateEventTablesForExchangeTablePartition(event *PersistedDDLEvent, apply
 			zap.Int64s("droppedIDs", droppedIDs))
 	}
 	targetPartitionID := droppedIDs[0]
-	apply(targetPartitionID, event.ExtraTableID)
+	apply(targetPartitionID, event.TableID)
 }
 
 func iterateEventTablesForRenameTables(event *PersistedDDLEvent, apply func(tableId ...int64)) {
@@ -1199,7 +1193,7 @@ func extractTableInfoFuncForSingleTableDDL(event *PersistedDDLEvent, tableID int
 }
 
 func extractTableInfoFuncForExchangeTablePartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
-	if tableID == event.ExtraTableID {
+	if tableID == event.TableID {
 		// old normal table id, return the table info of the partition table
 		return common.WrapTableInfo(event.SchemaID, event.SchemaName, event.TableInfo), false
 	} else {
@@ -1212,15 +1206,15 @@ func extractTableInfoFuncForExchangeTablePartition(event *PersistedDDLEvent, tab
 		if tableID != droppedIDs[0] {
 			log.Panic("should not reach here", zap.Int64("tableID", tableID), zap.Int64("expectedPartitionID", droppedIDs[0]))
 		}
-		if event.PreTableInfo == nil {
-			log.Panic("cannot find pre table info", zap.Int64("tableID", tableID))
+		if event.ExtraTableInfo == nil {
+			log.Panic("cannot find extra table info", zap.Int64("tableID", tableID))
 		}
 		// old partition id, return the table info of the normal table
-		columnSchema := event.PreTableInfo.ShadowCopyColumnSchema()
+		columnSchema := event.ExtraTableInfo.ShadowCopyColumnSchema()
 		tableInfo := common.NewTableInfo(
-			event.ExtraSchemaID,
-			event.ExtraSchemaName,
-			pmodel.NewCIStr(event.ExtraTableName).O,
+			event.SchemaID,
+			event.SchemaName,
+			pmodel.NewCIStr(event.TableName).O,
 			tableID,
 			false,
 			columnSchema)
@@ -1249,9 +1243,9 @@ func extractTableInfoFuncForTruncateTable(event *PersistedDDLEvent, tableID int6
 		}
 		return nil, true
 	} else {
-		if tableID == event.TableID {
+		if tableID == event.ExtraTableID {
 			return common.WrapTableInfo(event.SchemaID, event.SchemaName, event.TableInfo), false
-		} else if tableID == event.ExtraTableID {
+		} else if tableID == event.TableID {
 			return nil, true
 		}
 	}
@@ -1579,17 +1573,17 @@ func buildDDLEventForTruncateTable(rawEvent *PersistedDDLEvent, tableFilter filt
 	} else {
 		ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{rawEvent.ExtraTableID},
+			TableIDs:      []int64{rawEvent.TableID},
 		}
 		ddlEvent.NeedAddedTables = []commonEvent.Table{
 			{
 				SchemaID: rawEvent.SchemaID,
-				TableID:  rawEvent.TableID,
+				TableID:  rawEvent.ExtraTableID,
 			},
 		}
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{rawEvent.ExtraTableID, heartbeatpb.DDLSpan.TableID},
+			TableIDs:      []int64{rawEvent.TableID, heartbeatpb.DDLSpan.TableID},
 		}
 	}
 	return ddlEvent, true
@@ -1827,8 +1821,9 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 	if !ok {
 		return ddlEvent, false
 	}
-	ignoreNormalTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.ExtraSchemaName, rawEvent.ExtraTableName, rawEvent.TableInfo)
-	ignorePartitionTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.SchemaName, rawEvent.TableName, rawEvent.TableInfo)
+	// TODO: rawEvent.TableInfo is not correct for ignoreNormalTable
+	ignoreNormalTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.SchemaName, rawEvent.TableName, rawEvent.TableInfo)
+	ignorePartitionTable := tableFilter != nil && tableFilter.ShouldIgnoreTable(rawEvent.ExtraSchemaName, rawEvent.ExtraTableName, rawEvent.TableInfo)
 	physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 	droppedIDs := getDroppedIDs(rawEvent.PrevPartitions, physicalIDs)
 	if len(droppedIDs) != 1 {
@@ -1839,34 +1834,34 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 	if !ignoreNormalTable && !ignorePartitionTable {
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{rawEvent.ExtraTableID, targetPartitionID, heartbeatpb.DDLSpan.TableID},
+			TableIDs:      []int64{rawEvent.TableID, targetPartitionID, heartbeatpb.DDLSpan.TableID},
 		}
 		if rawEvent.SchemaID != rawEvent.ExtraSchemaID {
 			ddlEvent.UpdatedSchemas = []commonEvent.SchemaIDChange{
 				{
 					TableID:     targetPartitionID,
-					OldSchemaID: rawEvent.SchemaID,
-					NewSchemaID: rawEvent.ExtraSchemaID,
-				},
-				{
-					TableID:     rawEvent.ExtraTableID,
 					OldSchemaID: rawEvent.ExtraSchemaID,
 					NewSchemaID: rawEvent.SchemaID,
+				},
+				{
+					TableID:     rawEvent.TableID,
+					OldSchemaID: rawEvent.SchemaID,
+					NewSchemaID: rawEvent.ExtraSchemaID,
 				},
 			}
 		}
 	} else if !ignoreNormalTable {
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{rawEvent.ExtraTableID, heartbeatpb.DDLSpan.TableID},
+			TableIDs:      []int64{rawEvent.TableID, heartbeatpb.DDLSpan.TableID},
 		}
 		ddlEvent.NeedDroppedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{rawEvent.ExtraTableID},
+			TableIDs:      []int64{rawEvent.TableID},
 		}
 		ddlEvent.NeedAddedTables = []commonEvent.Table{
 			{
-				SchemaID: rawEvent.ExtraSchemaID,
+				SchemaID: rawEvent.SchemaID,
 				TableID:  targetPartitionID,
 			},
 		}
@@ -1882,7 +1877,7 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 		ddlEvent.NeedAddedTables = []commonEvent.Table{
 			{
 				SchemaID: rawEvent.SchemaID,
-				TableID:  rawEvent.ExtraTableID,
+				TableID:  rawEvent.TableID,
 			},
 		}
 	} else {

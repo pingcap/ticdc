@@ -26,6 +26,7 @@ type PersistedDDLEvent struct {
 	Type byte  `msg:"type"`
 
 	// SchemaID is from upstream Job.SchemaID, it corresponds to TableID
+	//it is the DB id of the table after the ddl
 	SchemaID int64 `msg:"schema_id"`
 	// TableID is from upstream Job.TableID
 	// - for most ddl types which just involve a single table id, it is the table id of the table
@@ -40,8 +41,7 @@ type PersistedDDLEvent struct {
 
 	// ExtraSchemaID corresponds to ExtraTableID
 	ExtraSchemaID int64 `msg:"extra_schema_id"`
-	// - for ExchangeTablePartition, it is the one of the partition ids before exchange
-	//   and it is the table id of the normal table after exchange
+	// - for ExchangeTablePartition, it is the table id of the partition table
 	// - for TruncateTable, it the table ID of the new table
 	ExtraTableID int64 `msg:"extra_table_id"`
 	// ExtraSchemaName corresponds to ExtraSchemaID
@@ -65,8 +65,10 @@ type PersistedDDLEvent struct {
 	FinishedTs    uint64 `msg:"finished_ts"`
 
 	DBInfo *model.DBInfo `msg:"-"`
+	// it is from upstream job.TableInfo
 	// - for most ddl types which just involve a single table id, it is the table info of the table after the ddl
 	// - for ExchangeTablePartition, it is the table info of the partition table after exchange
+	//   note: ExtraTableID is the partition table id. (it is a little tricky)
 	TableInfo      *model.TableInfo `msg:"-"`
 	TableInfoValue []byte           `msg:"table_info_value"`
 	// - for ExchangeTablePartition, it is the the info of the normal table before exchange
