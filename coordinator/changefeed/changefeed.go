@@ -141,7 +141,7 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 		c.status.Store(newStatus)
 		if old.BootstrapDone != newStatus.BootstrapDone {
 			log.Info("Received changefeed status with bootstrapDone",
-				zap.String("changefeed", c.ID.String()),
+				zap.Stringer("changefeed", c.ID),
 				zap.Bool("bootstrapDone", newStatus.BootstrapDone))
 			return true, model.StateNormal, nil
 		}
