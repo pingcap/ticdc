@@ -405,7 +405,7 @@ func (c *Controller) updateChangefeedStatus(
 
 	log.Info("changefeed status changed",
 		zap.Stringer("changefeed", cfID),
-		zap.Stringer("state", state),
+		zap.String("state", string(state)),
 		zap.Stringer("error", err))
 
 	var mErr *model.RunningError
