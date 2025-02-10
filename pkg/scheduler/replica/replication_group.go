@@ -38,49 +38,6 @@ type replicationGroup[T ReplicationID, R Replication[T]] struct {
 	checker GroupChecker[T, R]
 }
 
-type Map[T ReplicationID, R Replication[T]] struct {
-	mutex sync.Mutex
-	inner map[T]R
-}
-
-func newMap[T ReplicationID, R Replication[T]]() *Map[T, R] {
-	return &Map[T, R]{inner: make(map[T]R)}
-}
-
-func (m *Map[T, R]) Get(key T) (R, bool) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	value, exists := m.inner[key]
-	return value, exists
-}
-func (m *Map[T, R]) Set(key T, value R) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	m.inner[key] = value
-}
-
-func (m *Map[T, R]) Delete(key T) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	delete(m.inner, key)
-}
-
-func (m *Map[T, R]) Len() int {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	return len(m.inner)
-}
-
-func (m *Map[T, R]) Range(f func(T, R) bool) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	for k, v := range m.inner {
-		if !f(k, v) {
-			break
-		}
-	}
-}
-
 func newReplicationGroup[T ReplicationID, R Replication[T]](
 	id string, groupID GroupID, checker GroupChecker[T, R],
 ) *replicationGroup[T, R] {
@@ -286,4 +243,48 @@ func (g *replicationGroup[T, R]) GetTaskSizePerNode() map[node.ID]int {
 		res[nodeID] = len(tasks)
 	}
 	return res
+}
+
+type Map[T ReplicationID, R Replication[T]] struct {
+	mutex sync.Mutex
+	inner map[T]R
+}
+
+func newMap[T ReplicationID, R Replication[T]]() *Map[T, R] {
+	return &Map[T, R]{inner: make(map[T]R)}
+}
+
+func (m *Map[T, R]) Get(key T) (R, bool) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	value, exists := m.inner[key]
+	return value, exists
+}
+
+func (m *Map[T, R]) Set(key T, value R) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.inner[key] = value
+}
+
+func (m *Map[T, R]) Delete(key T) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	delete(m.inner, key)
+}
+
+func (m *Map[T, R]) Len() int {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	return len(m.inner)
+}
+
+func (m *Map[T, R]) Range(f func(T, R) bool) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	for k, v := range m.inner {
+		if !f(k, v) {
+			break
+		}
+	}
 }
