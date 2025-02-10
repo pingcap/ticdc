@@ -578,7 +578,7 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 }
 
 func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
-	// ignore the heartbeat if the maintianer not bootstrapped
+	// ignore the heartbeat if the maintainer not bootstrapped
 	if !m.bootstrapped.Load() {
 		return
 	}
@@ -592,8 +592,8 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 	m.controller.HandleStatus(msg.From, req.Statuses)
 	if req.Err != nil {
 		log.Warn("dispatcher report an error",
-			zap.String("changefeed", m.id.Name()),
-			zap.String("from", msg.From.String()),
+			zap.Stringer("changefeed", m.id),
+			zap.Stringer("sourceNode", msg.From),
 			zap.String("error", req.Err.Message))
 		m.onError(msg.From, req.Err)
 	}

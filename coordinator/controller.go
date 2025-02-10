@@ -313,16 +313,19 @@ func (c *Controller) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Coordin
 
 // handleMaintainerStatus handle the status report from the maintainers
 func (c *Controller) handleMaintainerStatus(from node.ID, statusList []*heartbeatpb.MaintainerStatus) {
-	cfs := make(map[common.ChangeFeedID]*changefeed.Changefeed, len(statusList))
+	changedCfs := make(map[common.ChangeFeedID]*changefeed.Changefeed, len(statusList))
 
 	for _, status := range statusList {
 		cfID := common.NewChangefeedIDFromPB(status.ChangefeedID)
-		c.handleSingleMaintainerStatus(from, status, cfID, cfs)
+		cf := c.handleSingleMaintainerStatus(from, status, cfID)
+		if cf != nil {
+			changedCfs[cfID] = cf
+		}
 	}
 
 	// Try to send updated changefeeds without blocking
 	select {
-	case c.updatedChangefeedCh <- cfs:
+	case c.updatedChangefeedCh <- changedCfs:
 	default:
 	}
 }
@@ -331,23 +334,22 @@ func (c *Controller) handleSingleMaintainerStatus(
 	from node.ID,
 	status *heartbeatpb.MaintainerStatus,
 	cfID common.ChangeFeedID,
-	cfs map[common.ChangeFeedID]*changefeed.Changefeed,
-) {
+) *changefeed.Changefeed {
 	// Update the operator status first
 	c.operatorController.UpdateOperatorStatus(cfID, from, status)
 
 	cf := c.getChangefeed(cfID)
 	if cf == nil {
 		c.handleNonExistentChangefeed(cfID, from, status)
-		return
+		return nil
 	}
 
 	if !c.validateMaintainerNode(cf, from, cfID) {
-		return
+		return nil
 	}
 
-	cfs[cfID] = cf
 	c.updateChangefeedStatus(cf, cfID, status)
+	return cf
 }
 
 func (c *Controller) handleNonExistentChangefeed(
