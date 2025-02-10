@@ -26,7 +26,7 @@ type PersistedDDLEvent struct {
 	Type byte  `msg:"type"`
 
 	// SchemaID is from upstream Job.SchemaID, it corresponds to TableID
-	//it is the DB id of the table after the ddl
+	// it is the DB id of the table after the ddl
 	SchemaID int64 `msg:"schema_id"`
 	// TableID is from upstream Job.TableID
 	// - for most ddl types which just involve a single table id, it is the table id of the table
