@@ -278,7 +278,10 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 
 	if m.scheduleState.Load() == int32(heartbeatpb.ComponentState_Stopped) {
 		log.Warn("maintainer is stopped, stop handling event",
-			zap.String("changefeed", m.id.String()))
+			zap.String("changefeed", m.id.String()),
+			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
+			zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs),
+		)
 		return false
 	}
 
@@ -444,6 +447,9 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	m.changefeedRemoved.Store(changefeedRemoved)
 	closed := m.tryCloseChangefeed()
 	if closed {
+		log.Info("changefeed maintainer closed",
+			zap.Stringer("changefeed", m.id),
+			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs))
 		m.removed.Store(true)
 		m.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))
 		metrics.MaintainerGauge.WithLabelValues(m.id.Namespace(), m.id.Name()).Dec()
@@ -749,9 +755,10 @@ func (m *Maintainer) trySendMaintainerCloseRequestToAllNode() bool {
 	}
 	if len(msgs) > 0 {
 		m.sendMessages(msgs)
-		log.Info("send maintainer close request",
-			zap.String("changefeed", m.id.Name()),
-			zap.Int("count", len(msgs)))
+		log.Info("send maintainer close request to all dispatcher managers",
+			zap.Stringer("changefeed", m.id),
+			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
+			zap.Int("nodeCount", len(msgs)))
 	}
 	return len(msgs) == 0
 }
