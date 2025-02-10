@@ -594,15 +594,15 @@ func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 	return result
 }
 
-func NewTableInfo(schemaID int64, schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
+func NewTableInfo(schemaID int64, SchemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
 	ti := &TableInfo{
 		SchemaID: schemaID,
 		TableName: TableName{
-			Schema:      schemaName,
+			Schema:      SchemaName,
 			Table:       tableName,
 			TableID:     tableID,
 			IsPartition: isPartition,
-			quotedName:  QuoteSchema(schemaName, tableName),
+			quotedName:  QuoteSchema(SchemaName, tableName),
 		},
 		columnSchema: columnSchema,
 	}
@@ -617,12 +617,12 @@ func NewTableInfo(schemaID int64, schemaName string, tableName string, tableID i
 }
 
 // WrapTableInfo creates a TableInfo from a model.TableInfo
-func WrapTableInfo(schemaID int64, schemaName string, info *model.TableInfo) *TableInfo {
+func WrapTableInfo(schemaID int64, SchemaName string, info *model.TableInfo) *TableInfo {
 	// search column schema object
 	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
 	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
 
-	return NewTableInfo(schemaID, schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema)
+	return NewTableInfo(schemaID, SchemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema)
 }
 
 // GetColumnDefaultValue returns the default definition of a column.

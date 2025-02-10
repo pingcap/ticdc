@@ -102,10 +102,10 @@ func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonTy
 			},
 		}
 		for _, schema := range schemaInfo {
-			schemaName := schema.SchemaName
+			SchemaName := schema.SchemaName
 			for _, table := range schema.Tables {
 				tableName := table.TableName
-				tableSchemaStore.tableNameStore.Add(schemaName, tableName)
+				tableSchemaStore.tableNameStore.Add(SchemaName, tableName)
 			}
 		}
 

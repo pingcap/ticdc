@@ -662,7 +662,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	// TODO: do we have a better way to do this?
 	if ddlEvent.Type == byte(model.ActionExchangeTablePartition) {
-		ddlEvent.PreTableInfo, _ = p.forceGetTableInfo(ddlEvent.PrevTableID, ddlEvent.FinishedTs)
+		ddlEvent.ExtraTableInfo, _ = p.forceGetTableInfo(ddlEvent.TableID, ddlEvent.FinishedTs)
 	}
 
 	// Note: need write ddl event to disk before update ddl history,

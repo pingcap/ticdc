@@ -224,7 +224,7 @@ func loadTablesInKVSnap(
 		if !ok {
 			log.Panic("database not found",
 				zap.Int64("schemaID", table_info_entry.SchemaID),
-				zap.String("schemaName", table_info_entry.SchemaName),
+				zap.String("SchemaName", table_info_entry.SchemaName),
 				zap.String("tableName", tableInfo.Name.O))
 		}
 		// TODO: add a unit test for this case
@@ -283,7 +283,7 @@ func loadFullTablesInKVSnap(
 		if !ok {
 			log.Panic("database not found",
 				zap.Int64("schemaID", table_info_entry.SchemaID),
-				zap.String("schemaName", table_info_entry.SchemaName),
+				zap.String("SchemaName", table_info_entry.SchemaName),
 				zap.String("tableName", tableInfo.Name.O))
 		}
 		// TODO: add a unit test for this case
@@ -400,13 +400,13 @@ func unmarshalPersistedDDLEvent(value []byte) PersistedDDLEvent {
 	}
 	ddlEvent.TableInfoValue = nil
 
-	if ddlEvent.PreTableInfoValue != nil {
+	if ddlEvent.ExtraTableInfoValue != nil {
 		var err error
-		ddlEvent.PreTableInfo, err = common.UnmarshalJSONToTableInfo(ddlEvent.PreTableInfoValue)
+		ddlEvent.ExtraTableInfo, err = common.UnmarshalJSONToTableInfo(ddlEvent.ExtraTableInfoValue)
 		if err != nil {
 			log.Fatal("unmarshal pre table info failed", zap.Error(err))
 		}
-		ddlEvent.PreTableInfoValue = nil
+		ddlEvent.ExtraTableInfoValue = nil
 	}
 
 	if len(ddlEvent.MultipleTableInfosValue) > 0 {
@@ -446,8 +446,8 @@ func writePersistedDDLEvent(db *pebble.DB, ddlEvent *PersistedDDLEvent) error {
 	if err != nil {
 		return err
 	}
-	if ddlEvent.PreTableInfo != nil {
-		ddlEvent.PreTableInfoValue, err = ddlEvent.PreTableInfo.Marshal()
+	if ddlEvent.ExtraTableInfo != nil {
+		ddlEvent.ExtraTableInfoValue, err = ddlEvent.ExtraTableInfo.Marshal()
 		if err != nil {
 			return err
 		}
@@ -691,12 +691,12 @@ func loadAllPhysicalTablesAtTs(
 				zap.String("tableName", tableInfo.Name),
 				zap.Any("databaseMapLen", len(databaseMap)))
 		}
-		schemaName := databaseMap[tableInfo.SchemaID].Name
+		SchemaName := databaseMap[tableInfo.SchemaID].Name
 		fullTableInfo, ok := tableInfoMap[tableID]
 		if !ok {
 			log.Error("table info not found", zap.Int64("tableID", tableID))
 		}
-		if tableFilter != nil && tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name, fullTableInfo) {
+		if tableFilter != nil && tableFilter.ShouldIgnoreTable(SchemaName, tableInfo.Name, fullTableInfo) {
 			continue
 		}
 		if partitionInfo, ok := partitionMap[tableID]; ok {
@@ -705,7 +705,7 @@ func loadAllPhysicalTablesAtTs(
 					SchemaID: tableInfo.SchemaID,
 					TableID:  partitionID,
 					SchemaTableName: &commonEvent.SchemaTableName{
-						SchemaName: schemaName,
+						SchemaName: SchemaName,
 						TableName:  tableInfo.Name,
 					},
 				})
@@ -715,7 +715,7 @@ func loadAllPhysicalTablesAtTs(
 				SchemaID: tableInfo.SchemaID,
 				TableID:  tableID,
 				SchemaTableName: &commonEvent.SchemaTableName{
-					SchemaName: schemaName,
+					SchemaName: SchemaName,
 					TableName:  tableInfo.Name,
 				},
 			})

@@ -25,42 +25,55 @@ type PersistedDDLEvent struct {
 	ID   int64 `msg:"id"`
 	Type byte  `msg:"type"`
 
-	// for exchange partition, it is the info of the partition table
-	CurrentSchemaID   int64  `msg:"current_schema_id"`
-	CurrentTableID    int64  `msg:"current_table_id"`
-	CurrentSchemaName string `msg:"current_schema_name"`
-	CurrentTableName  string `msg:"current_table_name"`
+	// SchemaID is from upstream Job.SchemaID, it corresponds to TableID
+	SchemaID int64 `msg:"schema_id"`
+	// TableID is from upstream Job.TableID
+	// - for most ddl types which just involve a single table id, it is the table id of the table
+	// - for ExchangeTablePartition, it is the table id of the normal table before exchange
+	//   and it is one of of the partition ids after exchange
+	// - for TruncateTable, it the table ID of the old table
+	TableID int64 `msg:"table_id"`
+	// SchemaName corresponds to SchemaID
+	SchemaName string `msg:"schema_name"`
+	// TableName corresponds to TableID
+	TableName string `msg:"table_name"`
 
-	// The following fields are only set when the ddl job involves a prev table
-	// for exchange partition, it is the info of the normal table before exchange
-	PrevSchemaID   int64  `msg:"prev_schema_id"`
-	PrevTableID    int64  `msg:"prev_table_id"`
-	PrevSchemaName string `msg:"prev_schema_name"`
-	PrevTableName  string `msg:"prev_table_name"`
+	// ExtraSchemaID corresponds to ExtraTableID
+	ExtraSchemaID int64 `msg:"extra_schema_id"`
+	// - for ExchangeTablePartition, it is the one of the partition ids before exchange
+	//   and it is the table id of the normal table after exchange
+	// - for TruncateTable, it the table ID of the new table
+	ExtraTableID int64 `msg:"extra_table_id"`
+	// ExtraSchemaName corresponds to ExtraSchemaID
+	ExtraSchemaName string `msg:"extra_schema_name"`
+	// ExtraTableName corresponds to ExtraTableID
+	ExtraTableName string `msg:"extra_table_name"`
 
-	// only used for rename tables
-	PrevSchemaIDs      []int64  `msg:"prev_schema_ids"`
-	PrevSchemaNames    []string `msg:"prev_schema_names"`
-	PrevTableNames     []string `msg:"prev_table_names"`
-	CurrentSchemaIDs   []int64  `msg:"current_schema_ids"`
-	CurrentSchemaNames []string `msg:"s"`
+	// the following fields are only used for RenameTables
+	SchemaIDs        []int64  `msg:"schema_ids"`
+	SchemaNames      []string `msg:"schema_names"`
+	ExtraSchemaIDs   []int64  `msg:"extra_schema_ids"`
+	ExtraSchemaNames []string `msg:"extra_schema_names"`
+	ExtraTableNames  []string `msg:"extra_table_names"`
 
-	// The following fields are only set when the ddl job involves a partition table
+	// the following fields are only set when the ddl job involves a partition table
+	// it is the partition info of the table before this ddl
 	PrevPartitions []int64 `msg:"prev_partitions"`
 
-	Query         string        `msg:"query"`
-	SchemaVersion int64         `msg:"schema_version"`
-	DBInfo        *model.DBInfo `msg:"-"`
-	// for exchange partition, it is the info of the partition table
-	TableInfo *model.TableInfo `msg:"-"`
-	// TODO: use a custom struct to store the table info?
-	TableInfoValue []byte `msg:"table_info_value"`
-	// for exchange partition, it is the info of the normal table
-	PreTableInfo *common.TableInfo `msg:"-"`
-	// TODO: is there a better way to store PreTableInfo?
-	PreTableInfoValue []byte `msg:"pre_table_info_value"`
-	FinishedTs        uint64 `msg:"finished_ts"`
+	Query         string `msg:"query"`
+	SchemaVersion int64  `msg:"schema_version"`
+	FinishedTs    uint64 `msg:"finished_ts"`
 
+	DBInfo *model.DBInfo `msg:"-"`
+	// - for most ddl types which just involve a single table id, it is the table info of the table after the ddl
+	// - for ExchangeTablePartition, it is the table info of the partition table after exchange
+	TableInfo      *model.TableInfo `msg:"-"`
+	TableInfoValue []byte           `msg:"table_info_value"`
+	// - for ExchangeTablePartition, it is the the info of the normal table before exchange
+	//   and we derive the normal table info after exchange from this field(by clone it with a different table id)
+	ExtraTableInfo      *common.TableInfo `msg:"-"`
+	ExtraTableInfoValue []byte            `msg:"extra_table_info_value"`
+	// the following fields are just used for CreateTables and RenameTables
 	MultipleTableInfos      []*model.TableInfo `msg:"-"`
 	MultipleTableInfosValue [][]byte           `msg:"multi_table_info_value"`
 

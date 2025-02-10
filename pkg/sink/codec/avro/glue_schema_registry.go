@@ -95,27 +95,27 @@ func NewGlueSchemaManager(
 // Register a schema into schema registry, no cache
 func (m *glueSchemaManager) Register(
 	ctx context.Context,
-	schemaName string,
+	SchemaName string,
 	schemaDefinition string,
 ) (schemaID, error) {
 	id := schemaID{}
-	ok, _, err := m.getSchemaByName(ctx, schemaName)
+	ok, _, err := m.getSchemaByName(ctx, SchemaName)
 	if err != nil {
 		return id, errors.Trace(err)
 	}
 	if ok {
-		log.Info("Schema already exists in registry, update it", zap.String("schemaName", schemaName))
-		schemaID, err := m.updateSchema(ctx, schemaName, schemaDefinition)
+		log.Info("Schema already exists in registry, update it", zap.String("SchemaName", SchemaName))
+		schemaID, err := m.updateSchema(ctx, SchemaName, schemaDefinition)
 		if err != nil {
 			return id, errors.Trace(err)
 		}
-		log.Info("Schema updated", zap.String("schemaName", schemaName),
+		log.Info("Schema updated", zap.String("SchemaName", SchemaName),
 			zap.String("schemaID", schemaID))
 		id.glueSchemaID = schemaID
 		return id, nil
 	}
-	log.Info("Schema does not exist, create it", zap.String("schemaName", schemaName))
-	schemaID, err := m.createSchema(ctx, schemaName, schemaDefinition)
+	log.Info("Schema does not exist, create it", zap.String("SchemaName", SchemaName))
+	schemaID, err := m.createSchema(ctx, SchemaName, schemaDefinition)
 	if err != nil {
 		return id, errors.Trace(err)
 	}
@@ -125,14 +125,14 @@ func (m *glueSchemaManager) Register(
 
 func (m *glueSchemaManager) Lookup(
 	ctx context.Context,
-	schemaName string,
+	SchemaName string,
 	schemaID schemaID,
 ) (*goavro.Codec, error) {
 	m.cacheRWLock.RLock()
-	entry, exists := m.cache[schemaName]
+	entry, exists := m.cache[SchemaName]
 	if exists && entry.schemaID.confluentSchemaID == schemaID.confluentSchemaID {
 		log.Debug("Avro schema lookup cache hit",
-			zap.String("key", schemaName),
+			zap.String("key", SchemaName),
 			zap.Int("schemaID", entry.schemaID.confluentSchemaID))
 		m.cacheRWLock.RUnlock()
 		return entry.codec, nil
@@ -140,7 +140,7 @@ func (m *glueSchemaManager) Lookup(
 	m.cacheRWLock.RUnlock()
 
 	log.Info("Avro schema lookup cache miss",
-		zap.String("key", schemaName),
+		zap.String("key", SchemaName),
 		zap.Int("schemaID", schemaID.confluentSchemaID))
 
 	ok, schema, err := m.getSchemaByID(ctx, schemaID.glueSchemaID)
@@ -149,7 +149,7 @@ func (m *glueSchemaManager) Lookup(
 	}
 	if !ok {
 		return nil, errors.ErrAvroSchemaAPIError.
-			GenWithStackByArgs("schema not found in registry, name: %s, id: %s", schemaName, schemaID.glueSchemaID)
+			GenWithStackByArgs("schema not found in registry, name: %s, id: %s", SchemaName, schemaID.glueSchemaID)
 	}
 
 	codec, err := goavro.NewCodec(schema)
@@ -166,7 +166,7 @@ func (m *glueSchemaManager) Lookup(
 
 	m.cacheRWLock.Lock()
 	defer m.cacheRWLock.Unlock()
-	m.cache[schemaName] = &schemaCacheEntry{
+	m.cache[SchemaName] = &schemaCacheEntry{
 		schemaID: schemaID,
 		codec:    codec,
 		header:   header,
@@ -181,14 +181,14 @@ func (m *glueSchemaManager) Lookup(
 // cache is out-of-sync with schema registry, we could reload it.
 func (m *glueSchemaManager) GetCachedOrRegister(
 	ctx context.Context,
-	schemaName string,
+	SchemaName string,
 	tableVersion uint64,
 	schemaGen SchemaGenerator,
 ) (*goavro.Codec, []byte, error) {
 	m.cacheRWLock.RLock()
-	if entry, exists := m.cache[schemaName]; exists && entry.tableVersion == tableVersion {
+	if entry, exists := m.cache[SchemaName]; exists && entry.tableVersion == tableVersion {
 		log.Debug("Avro schema GetCachedOrRegister cache hit",
-			zap.String("schemaName", schemaName),
+			zap.String("SchemaName", SchemaName),
 			zap.Uint64("tableVersion", tableVersion),
 			zap.String("schemaID", entry.schemaID.glueSchemaID))
 		m.cacheRWLock.RUnlock()
@@ -197,7 +197,7 @@ func (m *glueSchemaManager) GetCachedOrRegister(
 	m.cacheRWLock.RUnlock()
 
 	log.Info("Avro schema lookup cache miss",
-		zap.String("schemaName", schemaName),
+		zap.String("SchemaName", SchemaName),
 		zap.Uint64("tableVersion", tableVersion))
 
 	schema, err := schemaGen()
@@ -213,7 +213,7 @@ func (m *glueSchemaManager) GetCachedOrRegister(
 
 	log.Info(fmt.Sprintf("The code to be registered: %#v", schema))
 
-	id, err := m.Register(ctx, schemaName, schema)
+	id, err := m.Register(ctx, SchemaName, schema)
 	if err != nil {
 		log.Error("GetCachedOrRegister: Could not register schema", zap.Error(err))
 		return nil, nil, errors.Trace(err)
@@ -233,11 +233,11 @@ func (m *glueSchemaManager) GetCachedOrRegister(
 	}
 
 	m.cacheRWLock.Lock()
-	m.cache[schemaName] = cacheEntry
+	m.cache[SchemaName] = cacheEntry
 	m.cacheRWLock.Unlock()
 
 	log.Info("Avro schema GetCachedOrRegister successful with cache miss",
-		zap.String("schemaName", schemaName),
+		zap.String("SchemaName", SchemaName),
 		zap.Uint64("tableVersion", tableVersion),
 		zap.String("schemaID", id.glueSchemaID))
 
@@ -253,12 +253,12 @@ func (m *glueSchemaManager) RegistryType() string {
 	return m.registryType
 }
 
-func (m *glueSchemaManager) createSchema(ctx context.Context, schemaName, schemaDefinition string) (string, error) {
+func (m *glueSchemaManager) createSchema(ctx context.Context, SchemaName, schemaDefinition string) (string, error) {
 	createSchemaInput := &glue.CreateSchemaInput{
 		RegistryId: &types.RegistryId{
 			RegistryName: &m.registryName,
 		},
-		SchemaName:       aws.String(schemaName),
+		SchemaName:       aws.String(SchemaName),
 		DataFormat:       types.DataFormatAvro,
 		SchemaDefinition: aws.String(schemaDefinition),
 		// cdc don't need to set compatibility check for schema registry
@@ -274,11 +274,11 @@ func (m *glueSchemaManager) createSchema(ctx context.Context, schemaName, schema
 	return *output.SchemaVersionId, nil
 }
 
-func (m *glueSchemaManager) updateSchema(ctx context.Context, schemaName, schemaDefinition string) (string, error) {
+func (m *glueSchemaManager) updateSchema(ctx context.Context, SchemaName, schemaDefinition string) (string, error) {
 	input := &glue.RegisterSchemaVersionInput{
 		SchemaId: &types.SchemaId{
 			RegistryName: aws.String(m.registryName),
-			SchemaName:   &schemaName,
+			SchemaName:   &SchemaName,
 		},
 		SchemaDefinition: aws.String(schemaDefinition),
 	}
@@ -290,11 +290,11 @@ func (m *glueSchemaManager) updateSchema(ctx context.Context, schemaName, schema
 	return *resp.SchemaVersionId, nil
 }
 
-func (m *glueSchemaManager) getSchemaByName(ctx context.Context, schemaNAme string) (bool, string, error) {
+func (m *glueSchemaManager) getSchemaByName(ctx context.Context, SchemaName string) (bool, string, error) {
 	input := &glue.GetSchemaVersionInput{
 		SchemaId: &types.SchemaId{
 			RegistryName: aws.String(m.registryName),
-			SchemaName:   aws.String(schemaNAme),
+			SchemaName:   aws.String(SchemaName),
 		},
 		SchemaVersionNumber: &types.SchemaVersionNumber{LatestVersion: true},
 	}

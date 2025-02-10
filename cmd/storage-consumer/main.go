@@ -617,9 +617,9 @@ func (c *consumer) run(ctx context.Context) error {
 
 // copied from kafka-consumer
 type fakeTableIDGenerator struct {
-	tableIDs       map[string]int64
-	currentTableID int64
-	mu             sync.Mutex
+	tableIDs map[string]int64
+	TableID  int64
+	mu       sync.Mutex
 }
 
 func (g *fakeTableIDGenerator) generateFakeTableID(schema, table string, partition int64) int64 {
@@ -632,9 +632,9 @@ func (g *fakeTableIDGenerator) generateFakeTableID(schema, table string, partiti
 	if tableID, ok := g.tableIDs[key]; ok {
 		return tableID
 	}
-	g.currentTableID++
-	g.tableIDs[key] = g.currentTableID
-	return g.currentTableID
+	g.TableID++
+	g.tableIDs[key] = g.TableID
+	return g.TableID
 }
 
 func main() {
