@@ -116,12 +116,12 @@ func NewConfluentSchemaManager(
 // Register a schema in schema registry, no cache
 func (m *confluentSchemaManager) Register(
 	ctx context.Context,
-	SchemaName string,
+	schemaName string,
 	schemaDefinition string,
 ) (schemaID, error) {
 	// The Schema Registry expects the JSON to be without newline characters
 	id := schemaID{}
-	log.Info("confluentSchemaManager", zap.String("schemaDefinition", schemaDefinition), zap.String("SchemaName", SchemaName))
+	log.Info("confluentSchemaManager", zap.String("schemaDefinition", schemaDefinition), zap.String("schemaName", schemaName))
 
 	buffer := new(bytes.Buffer)
 	err := json.Compact(buffer, []byte(schemaDefinition))
@@ -137,7 +137,7 @@ func (m *confluentSchemaManager) Register(
 		log.Error("Could not marshal request to the Registry", zap.Error(err))
 		return id, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
-	uri := m.registryURL + "/subjects/" + url.QueryEscape(SchemaName) + "/versions"
+	uri := m.registryURL + "/subjects/" + url.QueryEscape(schemaName) + "/versions"
 	log.Info("Registering schema", zap.String("uri", uri), zap.ByteString("payload", payload))
 
 	req, err := http.NewRequestWithContext(ctx, "POST", uri, bytes.NewReader(payload))
@@ -203,11 +203,11 @@ func (m *confluentSchemaManager) Register(
 // Lookup the cached schema entry first, if not found, fetch from the Registry server.
 func (m *confluentSchemaManager) Lookup(
 	ctx context.Context,
-	SchemaName string,
+	schemaName string,
 	schemaID schemaID,
 ) (*goavro.Codec, error) {
 	m.cacheRWLock.RLock()
-	entry, exists := m.cache[SchemaName]
+	entry, exists := m.cache[schemaName]
 	if exists && entry.schemaID.confluentSchemaID == schemaID.confluentSchemaID {
 		m.cacheRWLock.RUnlock()
 		return entry.codec, nil
@@ -251,7 +251,7 @@ func (m *confluentSchemaManager) Lookup(
 
 	if resp.StatusCode == 404 {
 		log.Warn("Specified schema not found in Registry",
-			zap.String("key", SchemaName),
+			zap.String("key", schemaName),
 			zap.Int("schemaID", schemaID.confluentSchemaID))
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
 			"Schema not found in Registry",
@@ -278,7 +278,7 @@ func (m *confluentSchemaManager) Lookup(
 	}
 
 	m.cacheRWLock.Lock()
-	m.cache[SchemaName] = cacheEntry
+	m.cache[schemaName] = cacheEntry
 	m.cacheRWLock.Unlock()
 	return cacheEntry.codec, nil
 }

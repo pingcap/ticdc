@@ -47,7 +47,7 @@ func main() {
 
 func runFilter(cmd *cobra.Command, args []string) {
 	// fmt.Printf("Filter Rules: %v\n", filterRules)
-	// fmt.Printf("Schema Name: %s\n", SchemaName)
+	// fmt.Printf("Schema Name: %s\n", schemaName)
 	// fmt.Printf("Table Name: %s\n", tableName)
 	cfg := &config.ReplicaConfig{}
 	err := util.StrictDecodeFile(cfgPath, "cdc filter helper", cfg)

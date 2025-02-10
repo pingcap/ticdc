@@ -39,8 +39,8 @@ type glueClient interface {
 }
 
 type mockGlueClientImpl struct {
-	createSchemaInput           map[string]*glue.CreateSchemaInput          // SchemaName -> schema
-	registerSchemaVersionsInput map[string]*glue.RegisterSchemaVersionInput // SchemaName -> schema
+	createSchemaInput           map[string]*glue.CreateSchemaInput          // schemaName -> schema
+	registerSchemaVersionsInput map[string]*glue.RegisterSchemaVersionInput // schemaName -> schema
 }
 
 func newMockGlueClientImpl() *mockGlueClientImpl {

@@ -224,7 +224,7 @@ func loadTablesInKVSnap(
 		if !ok {
 			log.Panic("database not found",
 				zap.Int64("schemaID", table_info_entry.SchemaID),
-				zap.String("SchemaName", table_info_entry.SchemaName),
+				zap.String("schemaName", table_info_entry.SchemaName),
 				zap.String("tableName", tableInfo.Name.O))
 		}
 		// TODO: add a unit test for this case
@@ -283,7 +283,7 @@ func loadFullTablesInKVSnap(
 		if !ok {
 			log.Panic("database not found",
 				zap.Int64("schemaID", table_info_entry.SchemaID),
-				zap.String("SchemaName", table_info_entry.SchemaName),
+				zap.String("schemaName", table_info_entry.SchemaName),
 				zap.String("tableName", tableInfo.Name.O))
 		}
 		// TODO: add a unit test for this case
@@ -691,12 +691,12 @@ func loadAllPhysicalTablesAtTs(
 				zap.String("tableName", tableInfo.Name),
 				zap.Any("databaseMapLen", len(databaseMap)))
 		}
-		SchemaName := databaseMap[tableInfo.SchemaID].Name
+		schemaName := databaseMap[tableInfo.SchemaID].Name
 		fullTableInfo, ok := tableInfoMap[tableID]
 		if !ok {
 			log.Error("table info not found", zap.Int64("tableID", tableID))
 		}
-		if tableFilter != nil && tableFilter.ShouldIgnoreTable(SchemaName, tableInfo.Name, fullTableInfo) {
+		if tableFilter != nil && tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name, fullTableInfo) {
 			continue
 		}
 		if partitionInfo, ok := partitionMap[tableID]; ok {
@@ -705,7 +705,7 @@ func loadAllPhysicalTablesAtTs(
 					SchemaID: tableInfo.SchemaID,
 					TableID:  partitionID,
 					SchemaTableName: &commonEvent.SchemaTableName{
-						SchemaName: SchemaName,
+						SchemaName: schemaName,
 						TableName:  tableInfo.Name,
 					},
 				})
@@ -715,7 +715,7 @@ func loadAllPhysicalTablesAtTs(
 				SchemaID: tableInfo.SchemaID,
 				TableID:  tableID,
 				SchemaTableName: &commonEvent.SchemaTableName{
-					SchemaName: SchemaName,
+					SchemaName: schemaName,
 					TableName:  tableInfo.Name,
 				},
 			})
