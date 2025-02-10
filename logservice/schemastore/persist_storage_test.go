@@ -1681,7 +1681,6 @@ func TestApplyDDLJobs(t *testing.T) {
 		// test add/drop primary key and alter index visibility for table
 		// test modify table charset
 		// test alter table ttl/remove ttl
-		// test set TiFlash replica
 		// test multi schema change
 		// test add/drop column
 		{
