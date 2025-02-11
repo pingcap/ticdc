@@ -31,9 +31,9 @@ type replicationGroup[T ReplicationID, R Replication[T]] struct {
 	nodeTasks map[node.ID]map[T]R // group the tasks by the node id
 
 	// maps that maintained base on the replica scheduling status
-	replicating *Map[T, R]
-	scheduling  *Map[T, R]
-	absent      *Map[T, R]
+	replicating *iMap[T, R]
+	scheduling  *iMap[T, R]
+	absent      *iMap[T, R]
 
 	checker GroupChecker[T, R]
 }
@@ -46,9 +46,9 @@ func newReplicationGroup[T ReplicationID, R Replication[T]](
 		groupID:     groupID,
 		groupName:   GetGroupName(groupID),
 		nodeTasks:   make(map[node.ID]map[T]R),
-		replicating: newMap[T, R](),
-		scheduling:  newMap[T, R](),
-		absent:      newMap[T, R](),
+		replicating: newIMap[T, R](),
+		scheduling:  newIMap[T, R](),
+		absent:      newIMap[T, R](),
 		checker:     checker,
 	}
 }
@@ -245,15 +245,15 @@ func (g *replicationGroup[T, R]) GetTaskSizePerNode() map[node.ID]int {
 	return res
 }
 
-type Map[T ReplicationID, R Replication[T]] struct {
+type iMap[T ReplicationID, R Replication[T]] struct {
 	inner sync.Map
 }
 
-func newMap[T ReplicationID, R Replication[T]]() *Map[T, R] {
-	return &Map[T, R]{inner: sync.Map{}}
+func newIMap[T ReplicationID, R Replication[T]]() *iMap[T, R] {
+	return &iMap[T, R]{inner: sync.Map{}}
 }
 
-func (m *Map[T, R]) Get(key T) (R, bool) {
+func (m *iMap[T, R]) Get(key T) (R, bool) {
 	var value R
 	v, exists := m.inner.Load(key)
 	if v != nil {
@@ -262,15 +262,15 @@ func (m *Map[T, R]) Get(key T) (R, bool) {
 	return value, exists
 }
 
-func (m *Map[T, R]) Set(key T, value R) {
+func (m *iMap[T, R]) Set(key T, value R) {
 	m.inner.Store(key, value)
 }
 
-func (m *Map[T, R]) Delete(key T) {
+func (m *iMap[T, R]) Delete(key T) {
 	m.inner.Delete(key)
 }
 
-func (m *Map[T, R]) Len() int {
+func (m *iMap[T, R]) Len() int {
 	var count int
 	m.inner.Range(func(_, _ interface{}) bool {
 		count++
@@ -279,7 +279,7 @@ func (m *Map[T, R]) Len() int {
 	return count
 }
 
-func (m *Map[T, R]) Range(f func(T, R) bool) {
+func (m *iMap[T, R]) Range(f func(T, R) bool) {
 	m.inner.Range(func(k, v interface{}) bool {
 		if rv, ok := v.(R); ok {
 			return f(k.(T), rv)
