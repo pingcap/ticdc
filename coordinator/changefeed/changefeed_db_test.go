@@ -79,6 +79,9 @@ func TestResume(t *testing.T) {
 	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test")}
 	db.AddStoppedChangefeed(cf)
 	cf.backoff = NewBackoff(cf.ID, 0, 0)
+	cf.status = atomic.NewPointer(&heartbeatpb.MaintainerStatus{
+		CheckpointTs: 100,
+	})
 
 	db.Resume(cf.ID, true, false)
 
