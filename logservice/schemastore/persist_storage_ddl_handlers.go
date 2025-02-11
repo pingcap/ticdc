@@ -609,6 +609,7 @@ func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncA
 
 		// Note that partition name should be parsed from original query, not the upperQuery.
 		partName := strings.TrimSpace(event.Query[idx1:idx2])
+		partName = strings.Replace(partName, "`", "", -1)
 		event.Query = fmt.Sprintf("ALTER TABLE `%s`.`%s` EXCHANGE PARTITION `%s` WITH TABLE `%s`.`%s`",
 			event.SchemaName, event.TableName, partName, event.ExtraSchemaName, event.ExtraTableName)
 
