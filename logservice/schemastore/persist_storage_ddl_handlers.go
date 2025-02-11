@@ -999,9 +999,9 @@ func updateSchemaMetadataForExchangeTablePartition(args updateSchemaMetadataFunc
 	}
 	normalTableID := args.event.TableID
 	normalSchemaID := args.event.SchemaID
+	normalTableName := getTableName(args.tableMap, normalTableID)
 	partitionTableID := args.event.ExtraTableID
 	targetPartitionID := droppedIDs[0]
-	normalTableName := getTableName(args.tableMap, normalTableID)
 	args.removeTableFromDB(normalTableID, normalSchemaID)
 	delete(args.tableMap, normalTableID)
 	args.addTableToDB(targetPartitionID, normalSchemaID)
@@ -1213,7 +1213,7 @@ func extractTableInfoFuncForSingleTableDDL(event *PersistedDDLEvent, tableID int
 func extractTableInfoFuncForExchangeTablePartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
 	if tableID == event.TableID {
 		// old normal table id, return the table info of the partition table
-		return common.WrapTableInfo(event.SchemaID, event.SchemaName, event.TableInfo), false
+		return common.WrapTableInfo(event.ExtraSchemaID, event.ExtraSchemaName, event.TableInfo), false
 	} else {
 		physicalIDs := getAllPartitionIDs(event.TableInfo)
 		droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
