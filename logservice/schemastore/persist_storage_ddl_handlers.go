@@ -602,6 +602,23 @@ func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncA
 	for id := range args.partitionMap[event.ExtraTableID] {
 		event.PrevPartitions = append(event.PrevPartitions, id)
 	}
+	if event.Query != "" {
+		upperQuery := strings.ToUpper(event.Query)
+		idx1 := strings.Index(upperQuery, "EXCHANGE PARTITION") + len("EXCHANGE PARTITION")
+		idx2 := strings.Index(upperQuery, "WITH TABLE")
+
+		// Note that partition name should be parsed from original query, not the upperQuery.
+		partName := strings.TrimSpace(event.Query[idx1:idx2])
+		event.Query = fmt.Sprintf("ALTER TABLE `%s`.`%s` EXCHANGE PARTITION `%s` WITH TABLE `%s`.`%s`",
+			event.SchemaName, event.TableName, partName, event.ExtraSchemaName, event.ExtraTableName)
+
+		if strings.HasSuffix(upperQuery, "WITHOUT VALIDATION") {
+			event.Query += " WITHOUT VALIDATION"
+		}
+	} else {
+		log.Warn("exchange partition query is empty, should only happen in unit tests",
+			zap.Int64("jobID", event.ID))
+	}
 	return event
 }
 
