@@ -611,7 +611,7 @@ func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncA
 		partName := strings.TrimSpace(event.Query[idx1:idx2])
 		partName = strings.Replace(partName, "`", "", -1)
 		event.Query = fmt.Sprintf("ALTER TABLE `%s`.`%s` EXCHANGE PARTITION `%s` WITH TABLE `%s`.`%s`",
-			event.SchemaName, event.TableName, partName, event.ExtraSchemaName, event.ExtraTableName)
+			event.ExtraSchemaName, event.ExtraTableName, partName, event.SchemaName, event.TableName)
 
 		if strings.HasSuffix(upperQuery, "WITHOUT VALIDATION") {
 			event.Query += " WITHOUT VALIDATION"
