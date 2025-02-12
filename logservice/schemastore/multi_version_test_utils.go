@@ -21,11 +21,11 @@ import (
 
 func buildCreateTableEventForTest(schemaID, tableID int64, schemaName, tableName string, finishedTs uint64) *PersistedDDLEvent {
 	return &PersistedDDLEvent{
-		Type:              byte(model.ActionCreateTable),
-		CurrentSchemaID:   schemaID,
-		CurrentTableID:    tableID,
-		CurrentSchemaName: schemaName,
-		CurrentTableName:  tableName,
+		Type:       byte(model.ActionCreateTable),
+		SchemaID:   schemaID,
+		TableID:    tableID,
+		SchemaName: schemaName,
+		TableName:  tableName,
 		TableInfo: &model.TableInfo{
 			ID:   tableID,
 			Name: pmodel.NewCIStr(tableName),
@@ -42,11 +42,11 @@ func buildCreatePartitionTableEventForTest(schemaID, tableID int64, schemaName, 
 		})
 	}
 	return &PersistedDDLEvent{
-		Type:              byte(model.ActionCreateTable),
-		CurrentSchemaID:   schemaID,
-		CurrentTableID:    tableID,
-		CurrentSchemaName: schemaName,
-		CurrentTableName:  tableName,
+		Type:       byte(model.ActionCreateTable),
+		SchemaID:   schemaID,
+		TableID:    tableID,
+		SchemaName: schemaName,
+		TableName:  tableName,
 		TableInfo: &model.TableInfo{
 			ID:   tableID,
 			Name: pmodel.NewCIStr(tableName),
@@ -61,12 +61,12 @@ func buildCreatePartitionTableEventForTest(schemaID, tableID int64, schemaName, 
 
 func buildTruncateTableEventForTest(schemaID, oldTableID, newTableID int64, schemaName, tableName string, finishedTs uint64) *PersistedDDLEvent {
 	return &PersistedDDLEvent{
-		Type:              byte(model.ActionTruncateTable),
-		CurrentSchemaID:   schemaID,
-		CurrentTableID:    newTableID,
-		CurrentSchemaName: schemaName,
-		CurrentTableName:  tableName,
-		PrevTableID:       oldTableID,
+		Type:         byte(model.ActionTruncateTable),
+		SchemaID:     schemaID,
+		TableID:      oldTableID,
+		SchemaName:   schemaName,
+		TableName:    tableName,
+		ExtraTableID: newTableID,
 		TableInfo: &model.TableInfo{
 			ID:   newTableID,
 			Name: pmodel.NewCIStr(tableName),
@@ -75,16 +75,16 @@ func buildTruncateTableEventForTest(schemaID, oldTableID, newTableID int64, sche
 	}
 }
 
-func buildRenameTableEventForTest(prevSchemaID, schemaID, tableID int64, prevSchemaName, prevTableName, schemaName, tableName string, finishedTs uint64) *PersistedDDLEvent {
+func buildRenameTableEventForTest(extraSchemaID, schemaID, tableID int64, extraSchemaName, extraTableName, schemaName, tableName string, finishedTs uint64) *PersistedDDLEvent {
 	return &PersistedDDLEvent{
-		Type:              byte(model.ActionRenameTable),
-		CurrentSchemaID:   schemaID,
-		CurrentTableID:    tableID,
-		CurrentSchemaName: schemaName,
-		CurrentTableName:  tableName,
-		PrevSchemaID:      prevSchemaID,
-		PrevSchemaName:    prevSchemaName,
-		PrevTableName:     prevTableName,
+		Type:            byte(model.ActionRenameTable),
+		SchemaID:        schemaID,
+		TableID:         tableID,
+		SchemaName:      schemaName,
+		TableName:       tableName,
+		ExtraSchemaID:   extraSchemaID,
+		ExtraSchemaName: extraSchemaName,
+		ExtraTableName:  extraTableName,
 		TableInfo: &model.TableInfo{
 			ID:   tableID,
 			Name: pmodel.NewCIStr(tableName),
@@ -105,15 +105,15 @@ func buildExchangePartitionTableEventForTest(
 		})
 	}
 	return &PersistedDDLEvent{
-		Type:              byte(model.ActionExchangeTablePartition),
-		CurrentSchemaID:   partitionSchemaID,
-		CurrentTableID:    partitionTableID,
-		CurrentSchemaName: partitionSchemaName,
-		CurrentTableName:  partitionTableName,
-		PrevSchemaID:      normalSchemaID,
-		PrevTableID:       normalTableID,
-		PrevSchemaName:    normalSchemaName,
-		PrevTableName:     normalTableName,
+		Type:            byte(model.ActionExchangeTablePartition),
+		SchemaID:        normalSchemaID,
+		TableID:         normalTableID,
+		SchemaName:      normalSchemaName,
+		TableName:       normalTableName,
+		ExtraSchemaID:   partitionSchemaID,
+		ExtraTableID:    partitionTableID,
+		ExtraSchemaName: partitionSchemaName,
+		ExtraTableName:  partitionTableName,
 		TableInfo: &model.TableInfo{
 			ID:   partitionTableID,
 			Name: pmodel.NewCIStr(partitionTableName),
@@ -122,7 +122,7 @@ func buildExchangePartitionTableEventForTest(
 				Enable:      true,
 			},
 		},
-		PreTableInfo: common.WrapTableInfo(normalSchemaID, normalSchemaName, &model.TableInfo{
+		ExtraTableInfo: common.WrapTableInfo(normalSchemaID, normalSchemaName, &model.TableInfo{
 			ID:   normalTableID,
 			Name: pmodel.NewCIStr(normalTableName),
 		}),

@@ -152,7 +152,9 @@ func (m *Manager) Run(ctx context.Context) error {
 				if cf.removed.Load() {
 					cf.Close()
 					log.Info("maintainer removed, remove it from dynamic stream",
-						zap.Stringer("changefeed", cf.id))
+						zap.Stringer("changefeed", cf.id),
+						zap.Uint64("checkpointTs", cf.getWatermark().CheckpointTs),
+					)
 					m.maintainers.Delete(key)
 				}
 				return true

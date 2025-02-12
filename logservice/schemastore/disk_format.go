@@ -400,13 +400,13 @@ func unmarshalPersistedDDLEvent(value []byte) PersistedDDLEvent {
 	}
 	ddlEvent.TableInfoValue = nil
 
-	if ddlEvent.PreTableInfoValue != nil {
+	if ddlEvent.ExtraTableInfoValue != nil {
 		var err error
-		ddlEvent.PreTableInfo, err = common.UnmarshalJSONToTableInfo(ddlEvent.PreTableInfoValue)
+		ddlEvent.ExtraTableInfo, err = common.UnmarshalJSONToTableInfo(ddlEvent.ExtraTableInfoValue)
 		if err != nil {
 			log.Fatal("unmarshal pre table info failed", zap.Error(err))
 		}
-		ddlEvent.PreTableInfoValue = nil
+		ddlEvent.ExtraTableInfoValue = nil
 	}
 
 	if len(ddlEvent.MultipleTableInfosValue) > 0 {
@@ -446,8 +446,8 @@ func writePersistedDDLEvent(db *pebble.DB, ddlEvent *PersistedDDLEvent) error {
 	if err != nil {
 		return err
 	}
-	if ddlEvent.PreTableInfo != nil {
-		ddlEvent.PreTableInfoValue, err = ddlEvent.PreTableInfo.Marshal()
+	if ddlEvent.ExtraTableInfo != nil {
+		ddlEvent.ExtraTableInfoValue, err = ddlEvent.ExtraTableInfo.Marshal()
 		if err != nil {
 			return err
 		}
@@ -646,6 +646,7 @@ func loadAllPhysicalTablesAtTs(
 		return nil, err
 	}
 	log.Info("after load tables in kv snap",
+		zap.Int("tableInfoMapLen", len(tableInfoMap)),
 		zap.Int("tableMapLen", len(tableMap)),
 		zap.Int("partitionMapLen", len(partitionMap)))
 
@@ -680,6 +681,7 @@ func loadAllPhysicalTablesAtTs(
 		})
 	}
 	log.Info("after load tables from ddl",
+		zap.Int("tableInfoMapLen", len(tableInfoMap)),
 		zap.Int("tableMapLen", len(tableMap)),
 		zap.Int("partitionMapLen", len(partitionMap)))
 	tables := make([]commonEvent.Table, 0)

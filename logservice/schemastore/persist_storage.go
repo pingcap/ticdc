@@ -662,7 +662,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	// TODO: do we have a better way to do this?
 	if ddlEvent.Type == byte(model.ActionExchangeTablePartition) {
-		ddlEvent.PreTableInfo, _ = p.forceGetTableInfo(ddlEvent.PrevTableID, ddlEvent.FinishedTs)
+		ddlEvent.ExtraTableInfo, _ = p.forceGetTableInfo(ddlEvent.TableID, ddlEvent.FinishedTs)
 	}
 
 	// Note: need write ddl event to disk before update ddl history,
@@ -743,11 +743,31 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 			return true
 		}
 	// DDLs ignored
-	case model.ActionCreateSequence,
+	case model.ActionLockTable,
+		model.ActionUnlockTable,
+		model.ActionRepairTable,
+		model.ActionSetTiFlashReplica,
+		model.ActionUpdateTiFlashReplicaStatus,
+		model.ActionCreateSequence,
 		model.ActionAlterSequence,
 		model.ActionDropSequence,
+		model.ActionModifyTableAutoIDCache,
+		model.ActionRebaseAutoRandomBase,
+		model.ActionAddCheckConstraint,
+		model.ActionDropCheckConstraint,
+		model.ActionAlterCheckConstraint,
 		model.ActionAlterTableAttributes,
 		model.ActionAlterTablePartitionAttributes,
+		model.ActionCreatePlacementPolicy,
+		model.ActionAlterPlacementPolicy,
+		model.ActionDropPlacementPolicy,
+		model.ActionAlterTablePartitionPlacement,
+		model.ActionModifySchemaDefaultPlacement,
+		model.ActionAlterTablePlacement,
+		model.ActionAlterCacheTable,
+		model.ActionAlterNoCacheTable,
+		model.ActionFlashbackCluster,
+		model.ActionRecoverSchema,
 		model.ActionCreateResourceGroup,
 		model.ActionAlterResourceGroup,
 		model.ActionDropResourceGroup:

@@ -1199,7 +1199,11 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=multi_source
       
+<<<<<<< HEAD
       - name: Test multi_source
+=======
+      - name: Test cdc
+>>>>>>> master
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=multi_source
@@ -1513,6 +1517,22 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      - name: Test overwrite_resume_with_syncpoint
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=overwrite_resume_with_syncpoint
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      # The 20th case in this group
+      - name: Test multi_tables_ddl
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
 
       - name: Upload test logs
         if: always()

@@ -508,18 +508,6 @@ func buildRemoveTTLJobForTest(schemaID, tableID int64, finishedTs uint64) *model
 	}
 }
 
-func buildSetTiFlashReplicaJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
-	return &model.Job{
-		Type:     model.ActionSetTiFlashReplica,
-		SchemaID: schemaID,
-		TableID:  tableID,
-		BinlogInfo: &model.HistoryInfo{
-			TableInfo:  newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID)),
-			FinishedTS: finishedTs,
-		},
-	}
-}
-
 func buildMultiSchemaChangeJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
 	return &model.Job{
 		Type:     model.ActionMultiSchemaChange,
