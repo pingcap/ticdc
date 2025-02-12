@@ -34,6 +34,9 @@ import (
 // Controller is the operator controller, it manages all operators.
 // And the Controller is responsible for the execution of the operator.
 type Controller struct {
+	mu sync.RWMutex
+
+	role          string
 	changefeedDB  *changefeed.ChangefeedDB
 	operators     map[common.ChangeFeedID]*operator.OperatorWithTime[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]
 	runningQueue  operator.OperatorQueue[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]
@@ -42,8 +45,6 @@ type Controller struct {
 	selfNode      *node.Info
 	backend       changefeed.Backend
 	nodeManger    *watcher.NodeManager
-
-	lock sync.RWMutex
 }
 
 func NewOperatorController(mc messaging.MessageCenter,
@@ -54,6 +55,7 @@ func NewOperatorController(mc messaging.MessageCenter,
 	batchSize int,
 ) *Controller {
 	oc := &Controller{
+		role:          "coordinator",
 		operators:     make(map[common.ChangeFeedID]*operator.OperatorWithTime[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]),
 		runningQueue:  make(operator.OperatorQueue[common.ChangeFeedID, *heartbeatpb.MaintainerStatus], 0),
 		messageCenter: mc,
@@ -79,13 +81,14 @@ func (oc *Controller) Execute() time.Time {
 			continue
 		}
 
-		oc.lock.RLock()
+		oc.mu.RLock()
 		msg := r.Schedule()
-		oc.lock.RUnlock()
+		oc.mu.RUnlock()
 
 		if msg != nil {
 			_ = oc.messageCenter.SendCommand(msg)
 			log.Info("send command to maintainer",
+				zap.String("role", oc.role),
 				zap.String("operator", r.String()))
 		}
 		executedItem++
@@ -97,17 +100,19 @@ func (oc *Controller) Execute() time.Time {
 
 // AddOperator adds an operator to the controller, if the operator already exists, return false.
 func (oc *Controller) AddOperator(op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]) bool {
-	oc.lock.Lock()
-	defer oc.lock.Unlock()
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
 
 	if pre, ok := oc.operators[op.ID()]; ok {
 		log.Info("add operator failed, operator already exists",
+			zap.String("role", oc.role),
 			zap.Stringer("operator", op), zap.Stringer("previousOperator", pre.OP))
 		return false
 	}
 	cf := oc.changefeedDB.GetByID(op.ID())
 	if cf == nil {
 		log.Warn("add operator failed, changefeed not found",
+			zap.String("role", oc.role),
 			zap.String("operator", op.String()))
 		return false
 	}
@@ -119,12 +124,13 @@ func (oc *Controller) AddOperator(op operator.Operator[common.ChangeFeedID, *hea
 // if remove is true, it will remove the changefeed from the chagnefeed DB
 // if remove is false, it only marks as the changefeed stooped in changefeed DB, so we will not schedule the changefeed again
 func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID, removed bool) {
-	oc.lock.Lock()
-	defer oc.lock.Unlock()
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
 
 	scheduledNode := oc.changefeedDB.StopByChangefeedID(cfID, removed)
 	if scheduledNode == "" {
 		log.Info("changefeed is not scheduled, try stop maintainer using coordinator node",
+			zap.String("role", oc.role),
 			zap.Bool("removed", removed),
 			zap.String("changefeed", cfID.Name()))
 		scheduledNode = oc.selfNode.ID
@@ -142,11 +148,13 @@ func (oc *Controller) pushStopChangefeedOperator(cfID common.ChangeFeedID, nodeI
 		if ok {
 			if oldStop.changefeedIsRemoved {
 				log.Info("changefeed is in removing progress, skip the stop operator",
+					zap.String("role", oc.role),
 					zap.String("changefeed", cfID.Name()))
 				return
 			}
 		}
 		log.Info("changefeed is stopped , replace the old one",
+			zap.String("role", oc.role),
 			zap.String("changefeed", cfID.Name()),
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
@@ -160,8 +168,8 @@ func (oc *Controller) pushStopChangefeedOperator(cfID common.ChangeFeedID, nodeI
 func (oc *Controller) UpdateOperatorStatus(id common.ChangeFeedID, from node.ID,
 	status *heartbeatpb.MaintainerStatus,
 ) {
-	oc.lock.RLock()
-	defer oc.lock.RUnlock()
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
 
 	op, ok := oc.operators[id]
 	if ok {
@@ -173,8 +181,8 @@ func (oc *Controller) UpdateOperatorStatus(id common.ChangeFeedID, from node.ID,
 // the controller will mark all maintainers on the node as absent if no operator is handling it,
 // then the controller will notify all operators.
 func (oc *Controller) OnNodeRemoved(n node.ID) {
-	oc.lock.RLock()
-	defer oc.lock.RUnlock()
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
 
 	for _, cf := range oc.changefeedDB.GetByNodeID(n) {
 		_, ok := oc.operators[cf.ID]
@@ -189,8 +197,8 @@ func (oc *Controller) OnNodeRemoved(n node.ID) {
 
 // GetOperator returns the operator by id.
 func (oc *Controller) GetOperator(id common.ChangeFeedID) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
-	oc.lock.RLock()
-	defer oc.lock.RUnlock()
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
 
 	if op, ok := oc.operators[id]; !ok {
 		return nil
@@ -201,8 +209,8 @@ func (oc *Controller) GetOperator(id common.ChangeFeedID) operator.Operator[comm
 
 // HasOperator returns true if the operator with the ChangeFeedDisplayName exists in the controller.
 func (oc *Controller) HasOperator(dispName common.ChangeFeedDisplayName) bool {
-	oc.lock.RLock()
-	defer oc.lock.RUnlock()
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
 
 	for id := range oc.operators {
 		if id.DisplayName == dispName {
@@ -214,8 +222,8 @@ func (oc *Controller) HasOperator(dispName common.ChangeFeedDisplayName) bool {
 
 // OperatorSize returns the number of operators in the controller.
 func (oc *Controller) OperatorSize() int {
-	oc.lock.RLock()
-	defer oc.lock.RUnlock()
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
 	return len(oc.operators)
 }
 
@@ -223,8 +231,8 @@ func (oc *Controller) OperatorSize() int {
 // "next" is true to indicate that it may exist in next attempt,
 // and false is the end for the poll.
 func (oc *Controller) pollQueueingOperator() (operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus], bool) {
-	oc.lock.Lock()
-	defer oc.lock.Unlock()
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
 
 	if oc.runningQueue.Len() == 0 {
 		return nil, false
@@ -243,6 +251,7 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.ChangeFee
 		metrics.CoordinatorFinishedOperatorCount.WithLabelValues(op.Type()).Inc()
 		metrics.CoordinatorOperatorDuration.WithLabelValues(op.Type()).Observe(time.Since(item.EnqueueTime).Seconds())
 		log.Info("operator finished",
+			zap.String("role", oc.role),
 			zap.String("operator", opID.String()),
 			zap.String("operator", op.String()))
 		return nil, true
@@ -262,6 +271,7 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.ChangeFee
 func (oc *Controller) pushOperator(op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]) {
 	oc.checkAffectedNodes(op)
 	log.Info("add operator to running queue",
+		zap.String("role", oc.role),
 		zap.String("operator", op.String()))
 	opWithTime := operator.NewOperatorWithTime(op, time.Now())
 	oc.operators[op.ID()] = opWithTime

@@ -30,10 +30,10 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/tiflow/pkg/security"
-	"github.com/pingcap/tiflow/pkg/spanz"
 	"github.com/prometheus/client_golang/prometheus"
 	kvclientv2 "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -324,7 +324,6 @@ func (s *SubscriptionClient) Unsubscribe(subID SubscriptionID) {
 		log.Warn("unknown subscription", zap.Uint64("subscriptionID", uint64(subID)))
 		return
 	}
-	s.ds.RemovePath(rt.subID)
 	s.setTableStopped(rt)
 
 	log.Info("unsubscribe span success",
@@ -398,6 +397,7 @@ func (s *SubscriptionClient) onTableDrained(rt *subscribedSpan) {
 
 	s.totalSpans.Lock()
 	defer s.totalSpans.Unlock()
+	s.ds.RemovePath(rt.subID)
 	delete(s.totalSpans.spanMap, rt.subID)
 }
 

@@ -37,6 +37,7 @@ var _ operator.Controller[common.DispatcherID, *heartbeatpb.TableSpanStatus] = &
 // Controller is the operator controller, it manages all operators.
 // And the Controller is responsible for the execution of the operator.
 type Controller struct {
+	role          string
 	changefeedID  common.ChangeFeedID
 	batchSize     int
 	messageCenter messaging.MessageCenter
@@ -54,6 +55,7 @@ func NewOperatorController(
 	batchSize int,
 ) *Controller {
 	oc := &Controller{
+		role:          "maintainer",
 		changefeedID:  changefeedID,
 		operators:     make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
 		runningQueue:  make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
@@ -86,6 +88,7 @@ func (oc *Controller) Execute() time.Time {
 		if msg != nil {
 			_ = oc.messageCenter.SendCommand(msg)
 			log.Info("send command to dispatcher",
+				zap.String("role", oc.role),
 				zap.String("changefeed", oc.changefeedID.Name()),
 				zap.String("operator", r.String()))
 		}
@@ -134,6 +137,7 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 
 	if _, ok := oc.operators[op.ID()]; ok {
 		log.Info("add operator failed, operator already exists",
+			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
 			zap.String("operator", op.String()))
 		return false
@@ -141,6 +145,7 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 	span := oc.replicationDB.GetTaskByID(op.ID())
 	if span == nil {
 		log.Warn("add operator failed, span not found",
+			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
 			zap.String("operator", op.String()))
 		return false
@@ -219,6 +224,7 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.Dispatche
 		metrics.FinishedOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
 		metrics.OperatorDuration.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Observe(time.Since(item.EnqueueTime).Seconds())
 		log.Info("operator finished",
+			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
 			zap.String("operator", opID.String()),
 			zap.String("operator", op.String()))
@@ -240,6 +246,7 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.Dispatche
 func (oc *Controller) removeReplicaSet(op *RemoveDispatcherOperator) {
 	if old, ok := oc.operators[op.ID()]; ok {
 		log.Info("replica set is removed , replace the old one",
+			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
 			zap.String("replicaset", old.OP.ID().String()),
 			zap.String("operator", old.OP.String()))
@@ -255,6 +262,7 @@ func (oc *Controller) removeReplicaSet(op *RemoveDispatcherOperator) {
 func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
 	oc.checkAffectedNodes(op)
 	log.Info("add operator to running queue",
+		zap.String("role", oc.role),
 		zap.String("changefeed", oc.changefeedID.Name()),
 		zap.String("operator", op.String()))
 	withTime := operator.NewOperatorWithTime(op, time.Now())
@@ -318,6 +326,7 @@ func (oc *Controller) AddMergeSplitOperator(
 	for _, replicaSet := range affectedReplicaSets {
 		if _, ok := oc.operators[replicaSet.ID]; ok {
 			log.Info("add operator failed, operator already exists",
+				zap.String("role", oc.role),
 				zap.String("changefeed", oc.changefeedID.Name()),
 				zap.String("dispatcherID", replicaSet.ID.String()),
 			)
@@ -326,6 +335,7 @@ func (oc *Controller) AddMergeSplitOperator(
 		span := oc.replicationDB.GetTaskByID(replicaSet.ID)
 		if span == nil {
 			log.Warn("add operator failed, span not found",
+				zap.String("role", oc.role),
 				zap.String("changefeed", oc.changefeedID.Name()),
 				zap.String("dispatcherID", replicaSet.ID.String()))
 			return false
@@ -344,6 +354,7 @@ func (oc *Controller) AddMergeSplitOperator(
 		oc.pushOperator(op)
 	}
 	log.Info("add merge split operator",
+		zap.String("role", oc.role),
 		zap.String("changefeed", oc.changefeedID.Name()),
 		zap.String("primary", primaryID.String()),
 		zap.Int64("tableID", splitSpans[0].TableID),

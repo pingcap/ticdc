@@ -22,8 +22,9 @@ import (
 
 func TestBuildVersionedTableInfoStore(t *testing.T) {
 	type QueryTableInfoTestCase struct {
-		snapTs uint64
-		name   string
+		snapTs     uint64
+		schemaName string
+		tableName  string
 	}
 	testCases := []struct {
 		tableID       int64
@@ -41,8 +42,9 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 			}(),
 			queryCases: []QueryTableInfoTestCase{
 				{
-					snapTs: 1000,
-					name:   "t",
+					snapTs:     1000,
+					schemaName: "test",
+					tableName:  "t",
 				},
 			},
 			deleteVersion: 1010,
@@ -57,12 +59,14 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 			}(),
 			queryCases: []QueryTableInfoTestCase{
 				{
-					snapTs: 1010,
-					name:   "t",
+					snapTs:     1010,
+					schemaName: "test",
+					tableName:  "t",
 				},
 				{
-					snapTs: 1020,
-					name:   "t2",
+					snapTs:     1020,
+					schemaName: "test",
+					tableName:  "t2",
 				},
 			},
 		},
@@ -71,18 +75,20 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 			tableID: 101,
 			ddlEvents: func() []*PersistedDDLEvent {
 				return []*PersistedDDLEvent{
-					buildCreatePartitionTableEventForTest(10, 100, "test", "partition_table", []int64{101, 102, 103}, 1010),                                                            // create partition table 100 with partitions 101, 102, 103
-					buildExchangePartitionTableEventForTest(10, 200, 10, 100, "test", "normal_table", "test", "partition_table", []int64{101, 102, 103}, []int64{200, 102, 103}, 1020), // rename table 101
+					buildCreatePartitionTableEventForTest(10, 100, "test", "partition_table", []int64{101, 102, 103}, 1010),                                                             // create partition table 100 with partitions 101, 102, 103
+					buildExchangePartitionTableEventForTest(12, 200, 10, 100, "test2", "normal_table", "test", "partition_table", []int64{101, 102, 103}, []int64{200, 102, 103}, 1020), // rename table 101
 				}
 			}(),
 			queryCases: []QueryTableInfoTestCase{
 				{
-					snapTs: 1010,
-					name:   "partition_table",
+					snapTs:     1010,
+					schemaName: "test",
+					tableName:  "partition_table",
 				},
 				{
-					snapTs: 1020,
-					name:   "normal_table",
+					snapTs:     1020,
+					schemaName: "test2",
+					tableName:  "normal_table",
 				},
 			},
 		},
@@ -91,18 +97,20 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 			tableID: 200,
 			ddlEvents: func() []*PersistedDDLEvent {
 				return []*PersistedDDLEvent{
-					buildCreateTableEventForTest(10, 200, "test", "normal_table", 1010),                                                                                                // create table 200
-					buildExchangePartitionTableEventForTest(10, 200, 10, 100, "test", "normal_table", "test", "partition_table", []int64{101, 102, 103}, []int64{200, 102, 103}, 1020), // rename table 101
+					buildCreateTableEventForTest(10, 200, "test", "normal_table", 1010),                                                                                                 // create table 200
+					buildExchangePartitionTableEventForTest(10, 200, 12, 100, "test", "normal_table", "test2", "partition_table", []int64{101, 102, 103}, []int64{200, 102, 103}, 1020), // rename table 101
 				}
 			}(),
 			queryCases: []QueryTableInfoTestCase{
 				{
-					snapTs: 1010,
-					name:   "normal_table",
+					snapTs:     1010,
+					schemaName: "test",
+					tableName:  "normal_table",
 				},
 				{
-					snapTs: 1020,
-					name:   "partition_table",
+					snapTs:     1020,
+					schemaName: "test2",
+					tableName:  "partition_table",
 				},
 			},
 		},
@@ -116,7 +124,8 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 		for _, c := range tt.queryCases {
 			tableInfo, err := store.getTableInfo(c.snapTs)
 			require.Nil(t, err)
-			require.Equal(t, c.name, tableInfo.TableName.Table)
+			require.Equal(t, c.schemaName, tableInfo.TableName.Schema)
+			require.Equal(t, c.tableName, tableInfo.TableName.Table)
 			if !tableInfo.TableName.IsPartition {
 				require.Equal(t, tt.tableID, tableInfo.TableName.TableID)
 			}
