@@ -94,12 +94,14 @@ func (w *MysqlWriter) SendDDLTsPre(event commonEvent.BlockEvent) error {
 
 	if len(tableIds) > 0 {
 		isSyncpoint := "1"
-		DDLQuery := ""
+		tableNameInDDLJob := ""
+		dbNameInDDLJob := ""
 		if event.GetType() == commonEvent.TypeDDLEvent {
 			isSyncpoint = "0"
-			DDLQuery = event.(*commonEvent.DDLEvent).Query
+			tableNameInDDLJob = event.(*commonEvent.DDLEvent).GetTableNameInDDLJob()
+			dbNameInDDLJob = event.(*commonEvent.DDLEvent).GetDBNameInDDLJob()
 		}
-		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint, DDLQuery)
+		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint, tableNameInDDLJob, dbNameInDDLJob)
 		log.Info("send ddl ts table query", zap.String("query", query))
 
 		_, err = tx.Exec(query)
@@ -167,12 +169,14 @@ func (w *MysqlWriter) SendDDLTs(event commonEvent.BlockEvent) error {
 
 	if len(tableIds) > 0 {
 		isSyncpoint := "1"
-		ddlQuery := ""
+		tableNameInDDLJob := ""
+		dbNameInDDLJob := ""
 		if event.GetType() == commonEvent.TypeDDLEvent {
 			isSyncpoint = "0"
-			ddlQuery = event.(*commonEvent.DDLEvent).Query
+			tableNameInDDLJob = event.(*commonEvent.DDLEvent).GetTableNameInDDLJob()
+			dbNameInDDLJob = event.(*commonEvent.DDLEvent).GetDBNameInDDLJob()
 		}
-		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint, ddlQuery)
+		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint, tableNameInDDLJob, dbNameInDDLJob)
 		log.Info("send ddl ts table query", zap.String("query", query))
 
 		_, err = tx.Exec(query)
@@ -208,13 +212,13 @@ func (w *MysqlWriter) SendDDLTs(event commonEvent.BlockEvent) error {
 	return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "failed to write ddl ts table; Commit Fail;"))
 }
 
-func insertItemQuery(tableIds []int64, ticdcClusterID string, changefeedID string, ddlTs string, finished string, isSyncpoint string, query string) string {
+func insertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs, finished, isSyncpoint, tableNameInDDLJob, dbNameInDDlJob string) string {
 	var builder strings.Builder
 	builder.WriteString("INSERT INTO ")
 	builder.WriteString(filter.TiCDCSystemSchema)
 	builder.WriteString(".")
 	builder.WriteString(filter.DDLTsTable)
-	builder.WriteString(" (ticdc_cluster_id, changefeed, ddl_ts, table_id, query, finished, is_syncpoint) VALUES ")
+	builder.WriteString(" (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint) VALUES ")
 
 	for idx, tableId := range tableIds {
 		builder.WriteString("('")
@@ -226,7 +230,9 @@ func insertItemQuery(tableIds []int64, ticdcClusterID string, changefeedID strin
 		builder.WriteString("', ")
 		builder.WriteString(strconv.FormatInt(tableId, 10))
 		builder.WriteString(", '")
-		builder.WriteString(query)
+		builder.WriteString(tableNameInDDLJob)
+		builder.WriteString("', '")
+		builder.WriteString(dbNameInDDlJob)
 		builder.WriteString("', ")
 		builder.WriteString(finished)
 		builder.WriteString(", ")
@@ -236,7 +242,7 @@ func insertItemQuery(tableIds []int64, ticdcClusterID string, changefeedID strin
 			builder.WriteString(", ")
 		}
 	}
-	builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), query=VALUES(query), ddl_ts=VALUES(ddl_ts), created_at=NOW(), is_syncpoint=VALUES(is_syncpoint);")
+	builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), created_at=NOW(), is_syncpoint=VALUES(is_syncpoint);")
 
 	return builder.String()
 }
@@ -305,11 +311,11 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) 
 
 	defer rows.Close()
 	var ddlTs, tableId int64
-	var ddlQuery string
+	var tableNameInDDLJob, dbNameInDDLJob string
 	var finished, isSyncpoint bool
 	var createdAtBytes []byte
 	for rows.Next() {
-		err := rows.Scan(&tableId, &ddlQuery, &ddlTs, &finished, &createdAtBytes, &isSyncpoint)
+		err := rows.Scan(&tableId, &tableNameInDDLJob, &dbNameInDDLJob, &ddlTs, &finished, &createdAtBytes, &isSyncpoint)
 		if err != nil {
 			return retStartTsList, isSyncpoints, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 		}
@@ -329,7 +335,7 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) 
 			}
 
 			// query the ddl_jobs table to find whether the ddl is executed and the ddl created time
-			createdTime, ok := w.queryDDLJobs(ddlQuery)
+			createdTime, ok := w.queryDDLJobs(dbNameInDDLJob, tableNameInDDLJob)
 			if !ok {
 				retStartTsList[tableIdIdxMap[tableId]] = ddlTs - 1
 			} else {
@@ -337,12 +343,12 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) 
 					// show the ddl is executed
 					retStartTsList[tableIdIdxMap[tableId]] = ddlTs
 					isSyncpoints[tableIdIdxMap[tableId]] = isSyncpoint
-					log.Debug("createdTime is larger than createdAt", zap.Int64("tableId", tableId), zap.Any("ddlQuery", ddlQuery), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs))
+					log.Debug("createdTime is larger than createdAt", zap.Int64("tableId", tableId), zap.Any("tableNameInDDLJob", tableNameInDDLJob), zap.Any("dbNameInDDLJob", dbNameInDDLJob), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs))
 					continue
 				} else {
 					// show the ddl is not executed
 					retStartTsList[tableIdIdxMap[tableId]] = ddlTs - 1
-					log.Debug("createdTime is less than  createdAt", zap.Int64("tableId", tableId), zap.Any("ddlQuery", ddlQuery), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs-1))
+					log.Debug("createdTime is less than  createdAt", zap.Int64("tableId", tableId), zap.Any("tableNameInDDLJob", tableNameInDDLJob), zap.Any("dbNameInDDLJob", dbNameInDDLJob), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs-1))
 					continue
 				}
 			}
@@ -354,7 +360,7 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) 
 
 func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID string) string {
 	var builder strings.Builder
-	builder.WriteString("SELECT table_id, query, ddl_ts, finished, created_at, is_syncpoint FROM ")
+	builder.WriteString("SELECT table_id, table_name_in_ddl_job, db_name_in_ddl_job, ddl_ts, finished, created_at, is_syncpoint FROM ")
 	builder.WriteString(filter.TiCDCSystemSchema)
 	builder.WriteString(".")
 	builder.WriteString(filter.DDLTsTable)
@@ -376,15 +382,15 @@ func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID stri
 	return builder.String()
 }
 
-var queryDDLJobs = `SELECT CREATE_TIME FROM information_schema.ddl_jobs WHERE QUERY = "%s" order by CREATE_TIME desc limit 1;`
+var queryDDLJobs = `SELECT CREATE_TIME FROM information_schema.ddl_jobs WHERE DB_NAME = '%s' AND TABLE_NAME = '%s' order by CREATE_TIME desc limit 1;`
 
-func (w *MysqlWriter) queryDDLJobs(ddlQuery string) (time.Time, bool) {
-	if ddlQuery == "" {
-		log.Info("ddlQuery is empty")
+func (w *MysqlWriter) queryDDLJobs(dbNameInDDLJob, tableNameInDDLJob string) (time.Time, bool) {
+	if dbNameInDDLJob == "" && tableNameInDDLJob == "" {
+		log.Info("tableNameInDDLJob and dbNameInDDLJob both are nil")
 		return time.Time{}, false
 	}
 	// query the ddl_jobs table to find whether the ddl is executed
-	query := fmt.Sprintf(queryDDLJobs, ddlQuery)
+	query := fmt.Sprintf(queryDDLJobs, dbNameInDDLJob, tableNameInDDLJob)
 	log.Info("query the info from ddl jobs", zap.String("query", query))
 
 	start := time.Now()
@@ -411,7 +417,7 @@ func (w *MysqlWriter) queryDDLJobs(ddlQuery string) (time.Time, bool) {
 		}
 		return createdTime, true
 	}
-	log.Debug("no ddl job item", zap.Any("query", ddlQuery))
+	log.Debug("no ddl job item", zap.Any("tableNameInDDLJob", tableNameInDDLJob), zap.Any("dbNameInDDLJob", dbNameInDDLJob))
 	return time.Time{}, false
 }
 
@@ -553,7 +559,8 @@ func (w *MysqlWriter) createDDLTsTable() error {
 		ddl_ts varchar(18),
 		table_id bigint(21),
 		finished bool,
-		query varchar(1024),
+		table_name_in_ddl_job varchar(1024),
+		db_name_in_ddl_job varchar(1024),
 		is_syncpoint bool,
 		created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		INDEX (ticdc_cluster_id, changefeed, table_id),

@@ -461,17 +461,19 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 	// Note: if a ddl involve multiple tables, job.TableID is different with job.BinlogInfo.TableInfo.ID
 	// and usually job.BinlogInfo.TableInfo.ID will be the newly created IDs.
 	event := PersistedDDLEvent{
-		ID:             job.ID,
-		Type:           byte(job.Type),
-		SchemaID:       job.SchemaID,
-		TableID:        job.TableID,
-		Query:          query,
-		SchemaVersion:  job.BinlogInfo.SchemaVersion,
-		DBInfo:         job.BinlogInfo.DBInfo,
-		TableInfo:      job.BinlogInfo.TableInfo,
-		FinishedTs:     job.BinlogInfo.FinishedTS,
-		BDRRole:        job.BDRRole,
-		CDCWriteSource: job.CDCWriteSource,
+		ID:                job.ID,
+		Type:              byte(job.Type),
+		TableNameInDDLJob: job.TableName,
+		DBNameInDDLJob:    job.SchemaName,
+		SchemaID:          job.SchemaID,
+		TableID:           job.TableID,
+		Query:             query,
+		SchemaVersion:     job.BinlogInfo.SchemaVersion,
+		DBInfo:            job.BinlogInfo.DBInfo,
+		TableInfo:         job.BinlogInfo.TableInfo,
+		FinishedTs:        job.BinlogInfo.FinishedTS,
+		BDRRole:           job.BDRRole,
+		CDCWriteSource:    job.CDCWriteSource,
 	}
 	return event
 }
@@ -1414,6 +1416,9 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 		TableInfo:  wrapTableInfo,
 		FinishedTs: rawEvent.FinishedTs,
 		TiDBOnly:   tiDBOnly,
+
+		TableNameInDDLJob: rawEvent.TableNameInDDLJob,
+		DBNameInDDLJob:    rawEvent.DBNameInDDLJob,
 	}, !filtered
 }
 
