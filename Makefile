@@ -102,7 +102,7 @@ generate_mock: tools/bin/mockgen
 	scripts/generate-mock.sh
 
 cdc:
-	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -tags dynamic -o bin/cdc ./cmd/cdc
 
 kafka_consumer:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_kafka_consumer ./cmd/kafka-consumer
