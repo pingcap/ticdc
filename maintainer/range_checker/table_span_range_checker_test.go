@@ -17,7 +17,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/pingcap/tiflow/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/stretchr/testify/require"
 )
 

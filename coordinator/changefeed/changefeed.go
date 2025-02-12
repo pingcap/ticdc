@@ -141,7 +141,7 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 		c.status.Store(newStatus)
 		if old.BootstrapDone != newStatus.BootstrapDone {
 			log.Info("Received changefeed status with bootstrapDone",
-				zap.String("changefeed", c.ID.String()),
+				zap.Stringer("changefeed", c.ID),
 				zap.Bool("bootstrapDone", newStatus.BootstrapDone))
 			return true, model.StateNormal, nil
 		}
@@ -224,10 +224,10 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.AddMaintainerRequest{
-			Id:             c.ID.ToPB(),
-			CheckpointTs:   c.GetStatus().CheckpointTs,
-			Config:         c.configBytes,
-			IsNewChangfeed: c.isNew,
+			Id:              c.ID.ToPB(),
+			CheckpointTs:    c.GetStatus().CheckpointTs,
+			Config:          c.configBytes,
+			IsNewChangefeed: c.isNew,
 		})
 }
 

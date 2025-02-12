@@ -193,7 +193,10 @@ func NewEventDispatcherManager(
 				return
 			case manager.errCh <- err:
 			default:
-				log.Error("error channel is full, discard error", zap.Any("changefeedID", changefeedID.String()), zap.Error(err))
+				log.Error("error channel is full, discard error",
+					zap.Stringer("changefeedID", changefeedID),
+					zap.Error(err),
+				)
 			}
 		}
 	}()
@@ -240,7 +243,9 @@ func (e *EventDispatcherManager) TryClose(removeChangefeed bool) bool {
 }
 
 func (e *EventDispatcherManager) close(removeChangefeed bool) {
-	log.Info("closing event dispatcher manager", zap.Stringer("changefeedID", e.changefeedID))
+	log.Info("closing event dispatcher manager",
+		zap.Stringer("changefeedID", e.changefeedID))
+
 	defer e.closing.Store(false)
 
 	toCloseDispatchers := make([]*dispatcher.Dispatcher, 0)
@@ -249,7 +254,10 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 		if dispatcher.IsTableTriggerEventDispatcher() && e.sink.SinkType() != common.MysqlSinkType {
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(e.changefeedID)
 			if err != nil {
-				log.Error("remove checkpointTs message failed", zap.Any("changefeedID", e.changefeedID), zap.Error(err))
+				log.Error("remove checkpointTs message failed",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Error(err),
+				)
 			}
 		}
 
@@ -264,7 +272,11 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 	})
 
 	for _, dispatcher := range toCloseDispatchers {
-		log.Info("waiting for dispatcher to close", zap.Any("tableSpan", dispatcher.GetTableSpan()))
+		log.Info("closing dispatcher",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Stringer("dispatcherID", dispatcher.GetId()),
+			zap.Any("tableSpan", common.FormatTableSpan(dispatcher.GetTableSpan())),
+		)
 		ok := false
 		for !ok {
 			_, ok = dispatcher.TryClose()
@@ -277,7 +289,10 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 
 	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(e)
 	if err != nil {
-		log.Error("remove event dispatcher manager from heartbeat collector failed", zap.Error(err))
+		log.Error("remove event dispatcher manager from heartbeat collector failed",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Error(err),
+		)
 		return
 	}
 
@@ -302,7 +317,8 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 	metrics.EventDispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 
 	e.closed.Store(true)
-	log.Info("event dispatcher manager closed", zap.Stringer("changefeedID", e.changefeedID))
+	log.Info("event dispatcher manager closed",
+		zap.Stringer("changefeedID", e.changefeedID))
 }
 
 type dispatcherCreateInfo struct {
@@ -327,8 +343,8 @@ func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.
 		return 0, errors.Trace(err)
 	}
 	log.Info("table trigger event dispatcher created",
-		zap.Any("changefeedID", e.changefeedID.Name()),
-		zap.Any("dispatcher", e.tableTriggerEventDispatcher.GetId()),
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", e.tableTriggerEventDispatcher.GetId()),
 		zap.Uint64("startTs", e.tableTriggerEventDispatcher.GetStartTs()),
 	)
 	return e.tableTriggerEventDispatcher.GetStartTs(), nil
@@ -399,7 +415,11 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			return errors.Trace(err)
 		}
 		log.Info("calculate real startTs for dispatchers",
-			zap.Any("receiveStartTs", startTsList), zap.Any("realStartTs", newStartTsList), zap.Any("removeDDLTs", removeDDLTs))
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Any("receiveStartTs", startTsList),
+			zap.Any("realStartTs", newStartTsList),
+			zap.Bool("removeDDLTs", removeDDLTs),
+		)
 	} else {
 		newStartTsList = startTsList
 	}
@@ -449,17 +469,15 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 		}
 
 		log.Info("new dispatcher created",
-			zap.String("ID", id.String()),
-			zap.Any("changefeedID", e.changefeedID.Name()),
-			zap.Any("namespace", e.changefeedID.Namespace()),
-			zap.Any("tableSpan", tableSpans[idx]),
-			zap.Any("startTs", newStartTsList[idx]))
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Stringer("dispatcherID", id),
+			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
+			zap.Int64("startTs", newStartTsList[idx]))
 
 	}
 	e.metricCreateDispatcherDuration.Observe(time.Since(start).Seconds() / float64(len(dispatcherIds)))
 	log.Info("batch create new dispatchers",
-		zap.Any("changefeedID", e.changefeedID.Name()),
-		zap.Any("namespace", e.changefeedID.Namespace()),
+		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Int("count", len(dispatcherIds)),
 		zap.Duration("duration", time.Since(start)))
 	return nil
@@ -474,8 +492,9 @@ func (e *EventDispatcherManager) collectErrors(ctx context.Context) {
 		case err := <-e.errCh:
 			if !errors.Is(errors.Cause(err), context.Canceled) {
 				log.Error("Event Dispatcher Manager Meets Error",
-					zap.String("changefeedID", e.changefeedID.String()),
-					zap.Error(err))
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Error(err),
+				)
 
 				// report error to maintainer
 				var message heartbeatpb.HeartBeatRequest
@@ -714,7 +733,9 @@ func (e *EventDispatcherManager) cleanDispatcher(id common.DispatcherID, schemaI
 		e.metricEventDispatcherCount.Dec()
 	}
 	log.Info("table event dispatcher completely stopped, and delete it from event dispatcher manager",
-		zap.Any("dispatcherID", id))
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", id),
+	)
 }
 
 func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap {

@@ -422,17 +422,6 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=partition_table
-      
-      - name: Test multi_tables_ddl
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
-
-      - name: Test multi_source
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
-
      
       - name: Test ddl_attributes
         if: ${{ success() }}
@@ -511,11 +500,26 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=mysql_sink_retry
       
-      # The 19th case in this group
       - name: Test cdc
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=cdc
+
+      - name: Test overwrite_resume_with_syncpoint
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=overwrite_resume_with_syncpoint
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      # The 20th case in this group
+      - name: Test multi_tables_ddl
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
 
       - name: Upload test logs
         if: always()

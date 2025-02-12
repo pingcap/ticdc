@@ -13,8 +13,10 @@ TiCDC pulls change logs from TiDB clusters and pushes them to downstream systems
 Go to [pingcap/ticdc/tags](https://github.com/pingcap/ticdc/tags) to find the latest tag, e.g. `v9.0.0-alpha`
 
 ### Download the patch binary
-* For Linux: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-linux-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-linux-amd64.tar.gz)
-* For MacOS: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-darwin-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-darwin-amd64.tar.gz)
+* For Linux x86-64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-linux-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-linux-amd64.tar.gz)
+* For Linux ARM64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-linux-arm64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-linux-arm64.tar.gz)
+* For MacOS x86-64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-darwin-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-darwin-amd64.tar.gz)
+* For MacOS ARM64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-darwin-arm64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-darwin-arm64.tar.gz)
 
 ### Patch to the existing TiCDC nodes
 Examples:

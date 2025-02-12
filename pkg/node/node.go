@@ -15,6 +15,7 @@ package node
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,6 +62,11 @@ func NewInfo(addr string, deployPath string) *Info {
 		DeployPath:     deployPath,
 		StartTimestamp: time.Now().Unix(),
 	}
+}
+
+func (c *Info) String() string {
+	return fmt.Sprintf("ID: %s, AdvertiseAddr: %s, Version: %s, GitHash: %s, DeployPath: %s, StartTimestamp: %d, Epoch: %d",
+		c.ID, c.AdvertiseAddr, c.Version, c.GitHash, c.DeployPath, c.StartTimestamp, c.Epoch)
 }
 
 // Marshal using json.Marshal.
