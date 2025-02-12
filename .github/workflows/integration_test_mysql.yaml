@@ -1199,11 +1199,7 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=multi_source
       
-<<<<<<< HEAD
       - name: Test multi_source
-=======
-      - name: Test cdc
->>>>>>> master
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=multi_source
