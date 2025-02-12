@@ -1179,8 +1179,10 @@ type ServerStatus struct {
 
 // Capture holds common information of a capture in cdc
 type Capture struct {
-	ID            string `json:"id"`
-	IsCoordinator bool   `json:"is_coordinator"`
+	ID string `json:"id"`
+	// IsCoordinator is true if the capture is the coordinator of the TiCDC cluster
+	// We make its json key as `is_owner` to keep the compatibility with old TiCDC.
+	IsCoordinator bool   `json:"is_owner"`
 	AdvertiseAddr string `json:"address"`
 	ClusterID     string `json:"cluster_id"`
 }
