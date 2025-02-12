@@ -237,7 +237,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					zap.Uint64("regionID", event.RegionId),
 					zap.Bool("stateIsNil", state == nil),
 					zap.Any("error", eventData.Error))
-				regionEvent.err = eventData
+				state.markStopped(&eventError{err: eventData.Error})
 			case *cdcpb.Event_ResolvedTs:
 				regionEvent.resolvedTs = eventData.ResolvedTs
 			case *cdcpb.Event_LongTxn_:

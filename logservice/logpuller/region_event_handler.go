@@ -43,13 +43,6 @@ type regionEvent struct {
 	// only one of the following fields will be set
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
-	err        *cdcpb.Event_Error
-}
-
-type pathHasher struct{}
-
-func (h pathHasher) HashPath(subID SubscriptionID) uint64 {
-	return uint64(subID)
 }
 
 type regionEventHandler struct {
@@ -76,9 +69,6 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			handleEventEntries(span, event.state, event.entries)
 		} else if event.resolvedTs != 0 {
 			handleResolvedTs(span, event.state, event.resolvedTs)
-		} else if event.err != nil {
-			event.state.markStopped(&eventError{err: event.err.Error})
-			h.handleRegionError(event.state, event.worker)
 		} else {
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
 		}
@@ -129,7 +119,7 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	} else if event.resolvedTs != 0 {
 		// Note: resolved ts may from different region, so there are not periodic signal
 		return dynstream.EventType{DataGroup: DataGroupResolvedTs, Property: dynstream.BatchableData}
-	} else if event.err != nil || event.state.isStale() {
+	} else if event.state.isStale() {
 		return dynstream.EventType{DataGroup: DataGroupError, Property: dynstream.BatchableData}
 	} else {
 		log.Panic("unknown event type",
