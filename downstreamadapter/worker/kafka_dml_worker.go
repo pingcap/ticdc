@@ -123,7 +123,6 @@ func (w *KafkaDMLWorker) calculateKeyPartitions(ctx context.Context) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case event := <-w.eventChan:
-
 			topic := w.eventRouter.GetTopicForRowChange(event.TableInfo)
 			partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
 			if err != nil {
@@ -144,7 +143,6 @@ func (w *KafkaDMLWorker) calculateKeyPartitions(ctx context.Context) error {
 			}
 
 			rowsCount := uint64(event.Len())
-			log.Debug("hyy MQ sink worker received DML event", zap.Any("event", event), zap.Any("rowCount", rowsCount))
 			rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
 
 			for {
@@ -328,7 +326,6 @@ func (w *KafkaDMLWorker) sendMessages(ctx context.Context) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case future, ok := <-outCh:
-			log.Debug("hyy KafkaDMLWorker send messages get future", zap.Any("future", future))
 			if !ok {
 				log.Warn("MQ sink encoder's output channel closed",
 					zap.String("namespace", w.changeFeedID.Namespace()),
@@ -348,7 +345,6 @@ func (w *KafkaDMLWorker) sendMessages(ctx context.Context) error {
 						message); err != nil {
 						return 0, 0, err
 					}
-					log.Debug("hyy async send message", zap.Any("message key", string(message.Key)), zap.Any("message value", string(message.Value)))
 					return message.GetRowsCount(), int64(message.Length()), nil
 				}); err != nil {
 					return errors.Trace(err)
