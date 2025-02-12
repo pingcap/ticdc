@@ -213,9 +213,7 @@ func (t *TableDefinition) FromDDLEvent(event *commonEvent.DDLEvent, outputColumn
 	// 		zap.Any("tableInfo", event.TableInfo),
 	// 	)
 	// }
-	schemaName := event.GetCurrentSchemaName()
-	tableName := event.GetCurrentTableName()
-	t.FromTableInfo(schemaName, tableName, event.TableInfo, event.GetCommitTs(), outputColumnID)
+	t.FromTableInfo(event.SchemaName, event.TableName, event.TableInfo, event.GetCommitTs(), outputColumnID)
 	t.Query = event.Query
 	t.Type = event.Type
 }
