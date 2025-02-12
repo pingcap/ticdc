@@ -34,10 +34,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	prime = 31
-)
-
 // MysqlSink is responsible for writing data to mysql downstream.
 // Including DDL and DML.
 type MysqlSink struct {
@@ -133,10 +129,9 @@ func (s *MysqlSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore)
 }
 
 func (s *MysqlSink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	// Considering that the parity of tableID is not necessarily even,
-	// directly dividing by the number of buckets may cause unevenness between buckets.
-	// Therefore, we first take the modulus of the prime number and then take the modulus of the bucket.
-	index := int64(event.PhysicalTableID) % prime % int64(s.workerCount)
+	// We use low value of dispatcherID to divide different tables into different workers.
+	// And ensure the same table always goes to the same worker.
+	index := int64(event.GetDispatcherID().GetLow()) % int64(s.workerCount)
 	s.dmlWorker[index].AddDMLEvent(event)
 }
 
