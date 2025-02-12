@@ -290,11 +290,11 @@ func (m *glueSchemaManager) updateSchema(ctx context.Context, schemaName, schema
 	return *resp.SchemaVersionId, nil
 }
 
-func (m *glueSchemaManager) getSchemaByName(ctx context.Context, schemaNAme string) (bool, string, error) {
+func (m *glueSchemaManager) getSchemaByName(ctx context.Context, schemaName string) (bool, string, error) {
 	input := &glue.GetSchemaVersionInput{
 		SchemaId: &types.SchemaId{
 			RegistryName: aws.String(m.registryName),
-			SchemaName:   aws.String(schemaNAme),
+			SchemaName:   aws.String(schemaName),
 		},
 		SchemaVersionNumber: &types.SchemaVersionNumber{LatestVersion: true},
 	}

@@ -33,24 +33,28 @@ type DDLEvent struct {
 	Version      byte                `json:"version"`
 	DispatcherID common.DispatcherID `json:"-"`
 	Type         byte                `json:"type"`
-	// SchemaID means different for different job types:
-	// - ExchangeTablePartition: db id of non-partitioned table
+	// SchemaID is from upstream job.SchemaID
 	SchemaID int64 `json:"schema_id"`
+	// TableID is from upstream job.TableID
 	// TableID means different for different job types:
-	// - ExchangeTablePartition: non-partitioned table id
-	TableID        int64             `json:"table_id"`
-	SchemaName     string            `json:"schema_name"`
-	TableName      string            `json:"table_name"`
-	PrevSchemaName string            `json:"prev_schema_name"`
-	PrevTableName  string            `json:"prev_table_name"`
-	Query          string            `json:"query"`
-	TableInfo      *common.TableInfo `json:"-"`
-	FinishedTs     uint64            `json:"finished_ts"`
+	// - for most ddl types which just involve a single table id, it is the table id of the table
+	// - for ExchangeTablePartition, it is the table id of the normal table before exchange
+	//   and it is one of of the partition ids after exchange
+	// - for TruncateTable, it the table ID of the old table
+	TableID    int64  `json:"table_id"`
+	SchemaName string `json:"schema_name"`
+	TableName  string `json:"table_name"`
+	// the following two fields are just used for RenameTable,
+	// they are the old schema/table name of the table
+	ExtraSchemaName string            `json:"extra_schema_name"`
+	ExtraTableName  string            `json:"extra_table_name"`
+	Query           string            `json:"query"`
+	TableInfo       *common.TableInfo `json:"-"`
+	FinishedTs      uint64            `json:"finished_ts"`
 	// The seq of the event. It is set by event service.
 	Seq uint64 `json:"seq"`
 	// State is the state of sender when sending this event.
-	State EventSenderState `json:"state"`
-	// TODO: just here for compile, may be changed later
+	State              EventSenderState    `json:"state"`
 	MultipleTableInfos []*common.TableInfo `json:"-"`
 
 	BlockedTables     *InfluencedTables `json:"blocked_tables"`
@@ -105,20 +109,20 @@ func (d *DDLEvent) PostFlush() {
 	}
 }
 
-func (d *DDLEvent) GetCurrentSchemaName() string {
+func (d *DDLEvent) GetSchemaName() string {
 	return d.SchemaName
 }
 
-func (d *DDLEvent) GetCurrentTableName() string {
+func (d *DDLEvent) GetTableName() string {
 	return d.TableName
 }
 
-func (d *DDLEvent) GetPrevSchemaName() string {
-	return d.PrevSchemaName
+func (d *DDLEvent) GetExtraSchemaName() string {
+	return d.ExtraSchemaName
 }
 
-func (d *DDLEvent) GetPrevTableName() string {
-	return d.PrevTableName
+func (d *DDLEvent) GetExtraTableName() string {
+	return d.ExtraTableName
 }
 
 func (d *DDLEvent) GetEvents() []*DDLEvent {
@@ -148,9 +152,9 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 				Type:    d.Type,
 				// SchemaID:   d.TableInfo.SchemaID,
 				// TableID:    d.TableInfo.TableName.TableID,
-				SchemaName: d.PrevSchemaName,
-				TableName:  d.PrevTableName,
 				TableInfo:  d.MultipleTableInfos[1],
+				SchemaName: d.ExtraSchemaName,
+				TableName:  d.ExtraTableName,
 				Query:      d.Query,
 				FinishedTs: d.FinishedTs,
 			},

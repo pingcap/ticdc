@@ -387,8 +387,8 @@ func NewJSONRowEventEncoder(ctx context.Context, config *common.Config) (common.
 func (c *JSONRowEventEncoder) newJSONMessageForDDL(e *commonEvent.DDLEvent) canalJSONMessageInterface {
 	msg := &JSONMessage{
 		ID:            0, // ignored by both Canal Adapter and Flink
-		Schema:        e.GetCurrentSchemaName(),
-		Table:         e.GetCurrentTableName(),
+		Schema:        e.GetSchemaName(),
+		Table:         e.GetTableName(),
 		IsDDL:         true,
 		EventType:     convertDdlEventType(e.Type).String(),
 		ExecutionTime: convertToCanalTs(e.GetCommitTs()),
