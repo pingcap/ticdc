@@ -577,6 +577,14 @@ func (ti *TableInfo) OffsetsByNames(names []string) ([]int, bool) {
 	return result, true
 }
 
+func (ti *TableInfo) HasHandleKey() bool {
+	return ti.columnSchema.GetPkColInfo() != nil
+}
+
+func (ti *TableInfo) GetPkColInfo() *model.ColumnInfo {
+	return ti.columnSchema.GetPkColInfo()
+}
+
 // GetPrimaryKeyColumnNames returns the primary key column names
 func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 	var result []string
@@ -633,4 +641,30 @@ func GetColumnDefaultValue(col *model.ColumnInfo) interface{} {
 	}
 	defaultDatum := datumTypes.NewDatum(defaultValue)
 	return defaultDatum.GetValue()
+}
+
+// BuildTiDBTableInfoWithoutVirtualColumns build a TableInfo without virual columns from the source table info
+func BuildTiDBTableInfoWithoutVirtualColumns(source *model.TableInfo) *model.TableInfo {
+	ret := source.Clone()
+	ret.Columns = make([]*model.ColumnInfo, 0, len(source.Columns))
+	rowColumnsCurrentOffset := 0
+	columnsOffset := make(map[string]int, len(source.Columns))
+	for _, srcCol := range source.Columns {
+		if !IsColCDCVisible(srcCol) {
+			continue
+		}
+		colInfo := srcCol.Clone()
+		colInfo.Offset = rowColumnsCurrentOffset
+		ret.Columns = append(ret.Columns, colInfo)
+		columnsOffset[colInfo.Name.O] = rowColumnsCurrentOffset
+		rowColumnsCurrentOffset += 1
+	}
+	// Keep all the index info even if it contains virtual columns for simplicity
+	for _, indexInfo := range ret.Indices {
+		for _, col := range indexInfo.Columns {
+			col.Offset = columnsOffset[col.Name.O]
+		}
+	}
+
+	return ret
 }
