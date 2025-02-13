@@ -41,7 +41,7 @@ tiup cluster edit-config test-cluster
 tiup cluster reload test-cluster -R cdc
 ```
 
-> TiUP has integrated the monitoring dashboard for TiCDC new architecture into the Grafana page, named <cluster-name>-TiCDC-New-Arch. 
+> Note that TiUP has integrated the monitoring dashboard for TiCDC new architecture into the Grafana page, named `<cluster-name>`-TiCDC-New-Arch. 
 
 ## How to compile TiCDC from source code
 
