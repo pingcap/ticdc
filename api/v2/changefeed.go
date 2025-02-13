@@ -891,7 +891,6 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 // Note: This feature has not been implemented yet. It will be implemented in the future.
 // Currently, it always returns false.
 func (h *OpenAPIV2) syncState(c *gin.Context) {
-
 	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), getNamespaceValueWithDefault(c))
 	co, err := h.server.GetCoordinator()
 	if err != nil {
