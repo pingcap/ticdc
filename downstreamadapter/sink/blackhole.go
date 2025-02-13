@@ -61,7 +61,7 @@ func (s *BlackHoleSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	case commonEvent.TypeDDLEvent:
 		e := event.(*commonEvent.DDLEvent)
 		// NOTE: don't change the log, integration test `lossy_ddl` depends on it. 
-		// https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L17
+		// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L17
 		log.Debug("BlackHoleSink: DDL Event", zap.Any("ddl", e))
 		for _, callback := range e.PostTxnFlushed {
 			callback()
