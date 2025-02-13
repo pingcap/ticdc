@@ -377,6 +377,7 @@ func (m *Maintainer) initialize() error {
 	}, time.Now().Add(periodEventInterval))
 
 	log.Info("changefeed maintainer initialized",
+		zap.String("info", m.config.String()),
 		zap.String("id", m.id.String()),
 		zap.String("status", common.FormatMaintainerStatus(m.GetMaintainerStatus())),
 		zap.Duration("duration", time.Since(start)))

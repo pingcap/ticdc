@@ -108,26 +108,33 @@ func toFilterConfigPB(filter *config.FilterConfig) *eventpb.InnerFilterConfig {
 	filterConfig := &eventpb.InnerFilterConfig{
 		Rules:            filter.Rules,
 		IgnoreTxnStartTs: filter.IgnoreTxnStartTs,
-		EventFilters:     make([]*eventpb.EventFilterRule, len(filter.EventFilters)),
+		EventFilters:     make([]*eventpb.EventFilterRule, 0),
 	}
 
-	for _, eventFilter := range filter.EventFilters {
-		ignoreEvent := make([]string, len(eventFilter.IgnoreEvent))
-		for _, event := range eventFilter.IgnoreEvent {
-			ignoreEvent = append(ignoreEvent, string(event))
-		}
-		filterConfig.EventFilters = append(filterConfig.EventFilters, &eventpb.EventFilterRule{
-			Matcher:                  eventFilter.Matcher,
-			IgnoreEvent:              ignoreEvent,
-			IgnoreSql:                eventFilter.IgnoreSQL,
-			IgnoreInsertValueExpr:    eventFilter.IgnoreInsertValueExpr,
-			IgnoreUpdateNewValueExpr: eventFilter.IgnoreUpdateNewValueExpr,
-			IgnoreUpdateOldValueExpr: eventFilter.IgnoreUpdateOldValueExpr,
-			IgnoreDeleteValueExpr:    eventFilter.IgnoreDeleteValueExpr,
-		})
+	for _, eventFilterRule := range filter.EventFilters {
+		filterConfig.EventFilters = append(filterConfig.EventFilters, toEventFilterRulePB(eventFilterRule))
 	}
 
 	return filterConfig
+}
+
+func toEventFilterRulePB(rule *config.EventFilterRule) *eventpb.EventFilterRule {
+	eventFilterPB := &eventpb.EventFilterRule{
+		IgnoreInsertValueExpr:    rule.IgnoreInsertValueExpr,
+		IgnoreUpdateNewValueExpr: rule.IgnoreUpdateNewValueExpr,
+		IgnoreUpdateOldValueExpr: rule.IgnoreUpdateOldValueExpr,
+		IgnoreDeleteValueExpr:    rule.IgnoreDeleteValueExpr,
+	}
+
+	eventFilterPB.Matcher = append(eventFilterPB.Matcher, rule.Matcher...)
+
+	for _, ignoreEvent := range rule.IgnoreEvent {
+		eventFilterPB.IgnoreEvent = append(eventFilterPB.IgnoreEvent, string(ignoreEvent))
+	}
+
+	eventFilterPB.IgnoreSql = append(eventFilterPB.IgnoreSql, rule.IgnoreSQL...)
+
+	return eventFilterPB
 }
 
 type TableSpanStatusWithSeq struct {

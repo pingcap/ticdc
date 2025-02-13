@@ -135,6 +135,15 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 
 	// fill replicaConfig
 	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
+
+	// verify changefeed filter
+	_, err = filter.NewFilter(replicaCfg.Filter, "", replicaCfg.CaseSensitive, replicaCfg.ForceReplicate)
+	if err != nil {
+		_ = c.Error(errors.ErrChangefeedUpdateRefused.
+			GenWithStackByArgs(errors.Cause(err).Error()))
+		return
+	}
+
 	// verify replicaConfig
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
 	if err != nil {
@@ -205,7 +214,7 @@ func (h *OpenAPIV2) createChangefeed(c *gin.Context) {
 		zap.String("state", string(info.State)),
 		zap.String("changefeedInfo", info.String()))
 
-	c.JSON(http.StatusOK, toAPIModel(
+	c.JSON(http.StatusOK, cfInfoToAPIModel(
 		info,
 		&config.ChangeFeedStatus{
 			CheckpointTs: info.StartTs,
@@ -300,11 +309,11 @@ func (h *OpenAPIV2) getChangeFeed(c *gin.Context) {
 	}
 
 	taskStatus := make([]model.CaptureTaskStatus, 0)
-	detail := toAPIModel(cfInfo, status, taskStatus)
+	detail := cfInfoToAPIModel(cfInfo, status, taskStatus)
 	c.JSON(http.StatusOK, detail)
 }
 
-func toAPIModel(
+func cfInfoToAPIModel(
 	info *config.ChangeFeedInfo,
 	status *config.ChangeFeedStatus,
 	taskStatus []model.CaptureTaskStatus,
@@ -627,7 +636,7 @@ func (h *OpenAPIV2) updateChangefeed(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, toAPIModel(oldCfInfo, status, nil))
+	c.JSON(http.StatusOK, cfInfoToAPIModel(oldCfInfo, status, nil))
 }
 
 // verifyResumeChangefeedConfig verifies the changefeed config before resuming a changefeed

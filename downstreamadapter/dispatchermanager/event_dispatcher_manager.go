@@ -130,6 +130,17 @@ func NewEventDispatcherManager(
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
+
+	filterCfg := &eventpb.FilterConfig{
+		CaseSensitive:  cfConfig.CaseSensitive,
+		ForceReplicate: cfConfig.ForceReplicate,
+		FilterConfig:   toFilterConfigPB(cfConfig.Filter),
+	}
+	log.Info("New EventDispatcherManager",
+		zap.Stringer("changefeedID", changefeedID),
+		zap.String("config", cfConfig.String()),
+		zap.String("filterConfig", filterCfg.String()),
+	)
 	manager := &EventDispatcherManager{
 		dispatcherMap:                          newDispatcherMap(),
 		changefeedID:                           changefeedID,
@@ -140,7 +151,7 @@ func NewEventDispatcherManager(
 		errCh:                                  make(chan error, 1),
 		cancel:                                 cancel,
 		config:                                 cfConfig,
-		filterConfig:                           &eventpb.FilterConfig{CaseSensitive: cfConfig.CaseSensitive, ForceReplicate: cfConfig.ForceReplicate, FilterConfig: toFilterConfigPB(cfConfig.Filter)},
+		filterConfig:                           filterCfg,
 		schemaIDToDispatchers:                  dispatcher.NewSchemaIDToDispatchers(),
 		latestWatermark:                        NewWatermark(startTs),
 		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
