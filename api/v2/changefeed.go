@@ -760,7 +760,7 @@ func (h *OpenAPIV2) moveTable(c *gin.Context) {
 // listTables lists all tables in a changefeed
 // Usage:
 // curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/tables
-// Note: This api is for inner test use, not public use. It may be removed in the future.
+// Note: This api is for inner test use, not public use. It may be changed or removed in the future.
 func (h *OpenAPIV2) listTables(c *gin.Context) {
 	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), getNamespaceValueWithDefault(c))
 	if err := model.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
@@ -883,6 +883,44 @@ func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
 
 	number := maintainer.GetDispatcherCount()
 	c.JSON(http.StatusOK, &DispatcherCount{Count: number})
+}
+
+// syncState returns the sync state of a changefeed.
+// Usage:
+// curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/synced
+// Note: This feature has not been implemented yet. It will be implemented in the future.
+// Currently, it always returns false.
+func (h *OpenAPIV2) syncState(c *gin.Context) {
+
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), getNamespaceValueWithDefault(c))
+	co, err := h.server.GetCoordinator()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	_, status, err := co.GetChangefeed(c, changefeedDisplayName)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	// get time from pd
+	ctx := c.Request.Context()
+	ts, _, err := h.server.GetPdClient().GetTS(ctx)
+	if err != nil {
+		_ = c.Error(errors.ErrPDEtcdAPIError.GenWithStackByArgs("fail to get ts from pd client"))
+		return
+	}
+
+	c.JSON(http.StatusOK, SyncedStatus{
+		Synced:           false,
+		SinkCheckpointTs: model.JSONTime(oracle.GetTimeFromTS(status.CheckpointTs)),
+		PullerResolvedTs: model.JSONTime(oracle.GetTimeFromTS(status.CheckpointTs)),
+		LastSyncedTs:     model.JSONTime(oracle.GetTimeFromTS(status.CheckpointTs)),
+		NowTs:            model.JSONTime(time.Unix(ts/1e3, 0)),
+		Info:             "The data syncing is not finished, please wait",
+	})
 }
 
 func getNamespaceValueWithDefault(c *gin.Context) string {

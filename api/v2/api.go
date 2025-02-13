@@ -57,6 +57,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, authenticateMiddleware, api.resumeChangefeed)
 	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, authenticateMiddleware, api.pauseChangefeed)
 	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, api.deleteChangefeed)
+	changefeedGroup.GET("/:changefeed_id/synced", coordinatorMiddleware, authenticateMiddleware, api.syncState)
 
 	// internal APIs
 	changefeedGroup.POST("/:changefeed_id/move_table", authenticateMiddleware, api.moveTable)
@@ -70,6 +71,13 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	verifyTableGroup := v2.Group("/verify_table")
 	verifyTableGroup.POST("", api.verifyTable)
+
+	// processor apis
+	// Note: They are not useful in new arch cdc,
+	// we implement them for compatibility with old arch cdc only.
+	processorGroup := v2.Group("/processors")
+	processorGroup.GET("", api.listProcessor)
+	processorGroup.GET("/:changefeed_id/:capture_id", api.getProcessor)
 
 	// owner apis
 	ownerGroup := v2.Group("/owner")
