@@ -44,7 +44,8 @@ func (s *BlackHoleSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaSt
 }
 
 func (s *BlackHoleSink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	log.Debug("BlackHoleSink: DML Event", zap.Any("dml", event))
+	// NOTE: don't change the log, some tests depend on it.
+	log.Debug("BlackHoleSink: WriteEvents", zap.Any("dml", event))
 	for _, callback := range event.PostTxnFlushed {
 		callback()
 	}
@@ -58,6 +59,8 @@ func (s *BlackHoleSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		e := event.(*commonEvent.DDLEvent)
+		// NOTE: don't change the log, some tests depend on it.
+		log.Debug("BlackHoleSink: DDL Event", zap.Any("ddl", e))
 		for _, callback := range e.PostTxnFlushed {
 			callback()
 		}
