@@ -37,7 +37,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/chann"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -491,20 +490,20 @@ func (e *eventStore) RegisterDispatcher(
 	e.dispatcherMeta.Unlock()
 
 	consumeKVEvents := func(kvs []common.RawKVEntry, finishCallback func()) bool {
-		maxCommitTs := uint64(0)
-		// Must find the max commit ts in the kvs, since the kvs is not sorted yet.
-		for _, kv := range kvs {
-			if kv.CRTs > maxCommitTs {
-				maxCommitTs = kv.CRTs
-			}
-		}
-		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
-		subStat.eventCh.Push(eventWithCallback{
-			subID:    subStat.subID,
-			tableID:  subStat.tableID,
-			kvs:      kvs,
-			callback: finishCallback,
-		})
+		// maxCommitTs := uint64(0)
+		// // Must find the max commit ts in the kvs, since the kvs is not sorted yet.
+		// for _, kv := range kvs {
+		// 	if kv.CRTs > maxCommitTs {
+		// 		maxCommitTs = kv.CRTs
+		// 	}
+		// }
+		// util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
+		// subStat.eventCh.Push(eventWithCallback{
+		// 	subID:    subStat.subID,
+		// 	tableID:  subStat.tableID,
+		// 	kvs:      kvs,
+		// 	callback: finishCallback,
+		// })
 		return true
 	}
 	advanceResolvedTs := func(ts uint64) {
