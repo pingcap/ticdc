@@ -47,7 +47,7 @@ const (
 	clearTimeout                  = 300           // seconds
 )
 
-var MinSpanNumberCoefficient = 2
+var MinSpanNumberCoefficient = 15 // mysql should same with worker count
 
 type CheckResult struct {
 	OpType       OpType

@@ -323,6 +323,7 @@ func (db *ReplicationDB) UpdateStatus(span *SpanReplication, status *heartbeatpb
 	span.UpdateStatus(status)
 	checker := db.GetGroupChecker(span.GetGroupID()) // Note: need RLock here
 
+	log.Info("ReplicationDB UpdateStatus get checker", zap.Any("checker", checker.Name()))
 	db.lock.Lock()
 	defer db.lock.Unlock()
 	checker.UpdateStatus(span)
