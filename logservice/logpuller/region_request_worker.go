@@ -246,7 +246,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			// s.client.ds.Push(SubscriptionID(event.RequestId), regionEvent)
+			s.client.ds.Push(SubscriptionID(event.RequestId), regionEvent)
 		} else {
 			log.Warn("region request worker receives a region event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
