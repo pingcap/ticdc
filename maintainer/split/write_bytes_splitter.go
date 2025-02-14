@@ -139,6 +139,7 @@ func (m *writeSplitter) splitRegionsByWrittenKeysV1(
 	// 1. If the total write is less than writeKeyThreshold
 	// don't need to split the regions
 	if totalWrite < uint64(m.writeKeyThreshold) {
+		log.Info("total write less than writeKeyThreshold, skip split", zap.Any("totalWrite", totalWrite), zap.Any("writeKeyThreshold", m.writeKeyThreshold))
 		return &splitRegionsInfo{
 			RegionCounts: []int{len(regions)},
 			Weights:      []uint64{totalWriteNormalized},
