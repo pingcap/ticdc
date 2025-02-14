@@ -41,11 +41,8 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 
-	log.Info("prepareDMLs", zap.Any("events len", len(events)))
-
 	for _, event := range events {
 		if event.Len() == 0 {
-			log.Info("event len is 0")
 			continue
 		}
 

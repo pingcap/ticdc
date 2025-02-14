@@ -498,7 +498,6 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 
 	colSchema.InitPreSQLs(tableInfo.Name.O)
 
-	log.Info("columnSchema", zap.Any("columnSchema", colSchema))
 	SharedColumnSchemaCountGauge.Inc()
 	return colSchema
 }

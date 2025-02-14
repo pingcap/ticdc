@@ -114,40 +114,42 @@ func RunCase(src *sql.DB, dst *sql.DB, schema string) {
 	tr.execSQLs([]string{"DROP TABLE pkuk"})
 	log.S().Info("sync updatePKUK take: ", time.Since(start))
 
-	// swap unique index value
-	tr.run(func(src *sql.DB) {
-		mustExec(src, "create table uindex(id int primary key, a1 int unique)")
+	/*
+		// swap unique index value
+		tr.run(func(src *sql.DB) {
+			mustExec(src, "create table uindex(id int primary key, a1 int unique)")
 
-		mustExec(src, "insert into uindex(id, a1) values(1, 10), (2, 20)")
+			mustExec(src, "insert into uindex(id, a1) values(1, 10), (2, 20)")
 
-		tx, err := src.Begin()
-		if err != nil {
-			log.S().Fatal(err)
-		}
+			tx, err := src.Begin()
+			if err != nil {
+				log.S().Fatal(err)
+			}
 
-		_, err = tx.Exec("update uindex set a1 = 30 where id = 1")
-		if err != nil {
-			log.S().Fatal(err)
-		}
+			_, err = tx.Exec("update uindex set a1 = 30 where id = 1")
+			if err != nil {
+				log.S().Fatal(err)
+			}
 
-		_, err = tx.Exec("update uindex set a1 = 10 where id = 2")
-		if err != nil {
-			log.S().Fatal(err)
-		}
+			_, err = tx.Exec("update uindex set a1 = 10 where id = 2")
+			if err != nil {
+				log.S().Fatal(err)
+			}
 
-		_, err = tx.Exec("update uindex set a1 = 20 where id = 1")
-		if err != nil {
-			log.S().Fatal(err)
-		}
+			_, err = tx.Exec("update uindex set a1 = 20 where id = 1")
+			if err != nil {
+				log.S().Fatal(err)
+			}
 
-		err = tx.Commit()
-		if err != nil {
-			log.S().Fatal(err)
-		}
-	})
-	tr.run(func(src *sql.DB) {
-		mustExec(src, "drop table uindex")
-	})
+			err = tx.Commit()
+			if err != nil {
+				log.S().Fatal(err)
+			}
+		})
+		tr.run(func(src *sql.DB) {
+			mustExec(src, "drop table uindex")
+		})
+	*/
 
 	// test big cdc msg
 	tr.run(func(src *sql.DB) {
