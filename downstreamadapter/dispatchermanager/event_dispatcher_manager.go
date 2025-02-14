@@ -677,13 +677,13 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 
 		message.Watermark.UpdateMin(heartBeatInfo.Watermark)
 		if needCompleteStatus {
-			log.Info("need compelete status", zap.Any("EventSizePerSecond", dispatcherItem.GetEventSizePerSecond()))
 			message.Statuses = append(message.Statuses, &heartbeatpb.TableSpanStatus{
 				ID:                 id.ToPB(),
 				ComponentStatus:    heartBeatInfo.ComponentStatus,
 				CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
 				EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
 			})
+			log.Info("add status to message", zap.Any("status", message.Statuses), zap.Any("status.EventSizePerSecond", message.Statuses[len(message.Statuses)-1].EventSizePerSecond))
 		}
 	})
 	message.Watermark.Seq = seq

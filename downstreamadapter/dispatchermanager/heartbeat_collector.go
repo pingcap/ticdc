@@ -149,6 +149,9 @@ func (c *HeartBeatCollector) sendHeartBeatMessages(ctx context.Context) error {
 				continue
 			}
 			log.Info("send heartbeat request message", zap.Any("Request", heartBeatRequestWithTargetID.Request))
+			for _, status := range heartBeatRequestWithTargetID.Request.Statuses {
+				log.Info("send heartbeat request message", zap.Any("TableStatus", status), zap.Any("EventSizePerSecond", status.EventSizePerSecond))
+			}
 			err := c.mc.SendCommand(
 				messaging.NewSingleTargetMessage(
 					heartBeatRequestWithTargetID.TargetID,
