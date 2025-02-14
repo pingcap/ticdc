@@ -83,6 +83,10 @@ func (m *writeSplitter) split(
 			zap.String("namespace", m.changefeedID.Namespace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("span", span.String()),
+			zap.Int("captureNum", captureNum),
+			zap.Int("expectedSpanNum", expectedSpanNum),
+			zap.Int("DefaultMaxSpanNumber", DefaultMaxSpanNumber),
+			zap.Int("regions len", len(regions)),
 			zap.Error(err))
 		return []*heartbeatpb.TableSpan{span}
 	}

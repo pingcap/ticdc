@@ -135,8 +135,8 @@ func (s *splitScheduler) doCheck(ret pkgReplica.GroupCheckResult, start time.Tim
 		case replica.OpSplit:
 			fallthrough
 		case replica.OpMergeAndSplit:
-			log.Info("into OpMergeAndSplit")
 			expectedSpanNum := split.NextExpectedSpansNumber(len(ret.Replications))
+			log.Info("into OpMergeAndSplit", zap.Any("expectedSpanNum", expectedSpanNum))
 			spans := s.splitter.SplitSpans(context.Background(), totalSpan, len(s.nodeManager.GetAliveNodes()), expectedSpanNum)
 			if len(spans) > 1 {
 				log.Info("split span",
