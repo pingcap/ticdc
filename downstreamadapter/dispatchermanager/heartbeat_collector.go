@@ -148,6 +148,7 @@ func (c *HeartBeatCollector) sendHeartBeatMessages(ctx context.Context) error {
 			if heartBeatRequestWithTargetID == nil {
 				continue
 			}
+			log.Info("send heartbeat request message", zap.Any("Request", heartBeatRequestWithTargetID.Request))
 			err := c.mc.SendCommand(
 				messaging.NewSingleTargetMessage(
 					heartBeatRequestWithTargetID.TargetID,
