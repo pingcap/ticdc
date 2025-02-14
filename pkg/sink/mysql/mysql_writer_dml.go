@@ -177,7 +177,7 @@ func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		if err = tx.Commit(); err != nil {
 			return 0, 0, err
 		}
-		log.Debug("Exec Rows succeeded", zap.Any("row count", dmls.rowCount))
+		log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount))
 		return dmls.rowCount, dmls.approximateSize, nil
 	}
 	return retry.Do(w.ctx, func() error {
