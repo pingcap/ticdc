@@ -228,6 +228,7 @@ func NewSubscriptionClient(
 	option := dynstream.NewOption()
 	option.BatchCount = 1024
 	option.UseBuffer = false
+	option.StreamCount = 8
 	ds := dynstream.NewParallelDynamicStream(
 		func(subID SubscriptionID) uint64 { return uint64(subID) },
 		&regionEventHandler{subClient: subClient},
