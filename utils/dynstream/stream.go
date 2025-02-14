@@ -184,7 +184,7 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 			// The path is removed, so we don't need to handle its events.
 			return
 		default:
-			s.eventQueue.appendEvent(e)
+			// s.eventQueue.appendEvent(e)
 		}
 	}
 
