@@ -50,9 +50,9 @@ func (d *preparedDMLs) fmtSqls() string {
 var dmlsPool = sync.Pool{
 	New: func() interface{} {
 		return &preparedDMLs{
-			sqls:    make([]string, 0, 128),
-			values:  make([][]interface{}, 0, 128),
-			startTs: make([]uint64, 0, 128),
+			sqls:    make([]string, 0, 64),
+			values:  make([][]interface{}, 0, 64),
+			startTs: make([]uint64, 0, 64),
 		}
 	},
 }
@@ -63,6 +63,11 @@ func (d *preparedDMLs) reset() {
 	d.startTs = d.startTs[:0]
 	d.rowCount = 0
 	d.approximateSize = 0
+}
+
+func (d *preparedDMLs) release() {
+	d.reset()
+	dmlsPool.Put(d)
 }
 
 // prepareReplace builds a parametrics REPLACE statement as following

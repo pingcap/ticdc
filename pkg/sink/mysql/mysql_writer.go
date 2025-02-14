@@ -179,7 +179,7 @@ func (w *MysqlWriter) Flush(events []*commonEvent.DMLEvent) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	defer dmlsPool.Put(dmls) // Return dmls to pool after use
+	defer dmls.release() // Return dmls to pool after use
 
 	if dmls.rowCount == 0 {
 		return nil

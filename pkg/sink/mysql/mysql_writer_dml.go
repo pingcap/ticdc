@@ -68,7 +68,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 			if event.TableInfo.HasHandleKey() {
 				sql, value, err := w.batchSingleTxnDmls(event, event.TableInfo, inSafeMode)
 				if err != nil {
-					dmlsPool.Put(dmls) // Return to pool on error
+					dmls.release() // Return to pool on error
 					return nil, errors.Trace(err)
 				}
 				dmls.sqls = append(dmls.sqls, sql...)
@@ -94,7 +94,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 				} else {
 					query, args, err = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
 					if err != nil {
-						dmlsPool.Put(dmls) // Return to pool on error
+						dmls.release() // Return to pool on error
 						return nil, errors.Trace(err)
 					}
 					if query != "" {
@@ -110,7 +110,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 			}
 
 			if err != nil {
-				dmlsPool.Put(dmls) // Return to pool on error
+				dmls.release() // Return to pool on error
 				return nil, errors.Trace(err)
 			}
 
