@@ -26,12 +26,7 @@ import (
 func (h *OpenAPIV2) ListProcessor(c *gin.Context) {
 	prcInfos := make([]ProcessorCommonInfo, 0)
 
-	resp := &ListResponse[ProcessorCommonInfo]{
-		Total: len(prcInfos),
-		Items: prcInfos,
-	}
-
-	c.JSON(http.StatusOK, resp)
+	c.JSON(http.StatusOK, toListResponse(c, prcInfos))
 }
 
 // GetProcessor gets a processor in the ticdc cluster.

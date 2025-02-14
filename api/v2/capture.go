@@ -47,9 +47,5 @@ func (h *OpenAPIV2) ListCaptures(c *gin.Context) {
 				ClusterID:     h.server.GetEtcdClient().GetClusterID(),
 			})
 	}
-	resp := &ListResponse[Capture]{
-		Total: len(captures),
-		Items: captures,
-	}
-	c.JSON(http.StatusOK, resp)
+	c.JSON(http.StatusOK, toListResponse(c, captures))
 }

@@ -33,9 +33,9 @@ import (
 	"go.uber.org/zap"
 )
 
-func adjustStatusForV1(c *gin.Context) {
-	c.Status(http.StatusAccepted)
-	c.Next()
+// setV1Header adds a special header to mark the request as coming from TiCDC API v1
+func setV1Header(c *gin.Context) {
+	c.Request.Header.Set("from-ticdc-api-v1", "true")
 }
 
 // OpenAPIV1 provides CDC v1 APIs
@@ -61,41 +61,41 @@ func RegisterOpenAPIV1Routes(router *gin.Engine, api OpenAPIV1) {
 
 	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
 	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
-	v1.GET("health", coordinatorMiddleware, api.v2.ServerHealth)
+	v1.GET("health", coordinatorMiddleware, setV1Header, api.v2.ServerHealth)
 
 	// changefeed API
 	changefeedGroup := v1.Group("/changefeeds")
-	changefeedGroup.GET("", coordinatorMiddleware, api.v2.ListChangeFeeds)
-	changefeedGroup.GET("/:changefeed_id", coordinatorMiddleware, api.v2.GetChangeFeed)
+	changefeedGroup.GET("", coordinatorMiddleware, setV1Header, api.v2.ListChangeFeeds)
+	changefeedGroup.GET("/:changefeed_id", coordinatorMiddleware, setV1Header, api.v2.GetChangeFeed)
 
 	// These two APIs need to be adjusted to be compatible with the API v1.
-	changefeedGroup.POST("", coordinatorMiddleware, authenticateMiddleware, api.createChangefeed)
-	changefeedGroup.PUT("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, api.updateChangefeed)
+	changefeedGroup.POST("", coordinatorMiddleware, authenticateMiddleware, setV1Header, api.createChangefeed)
+	changefeedGroup.PUT("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, setV1Header, api.updateChangefeed)
 
-	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, authenticateMiddleware, api.v2.PauseChangefeed, adjustStatusForV1)
-	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, authenticateMiddleware, api.v2.ResumeChangefeed, adjustStatusForV1)
-	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, api.v2.DeleteChangefeed, adjustStatusForV1)
+	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, authenticateMiddleware, setV1Header, api.v2.PauseChangefeed)
+	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, authenticateMiddleware, setV1Header, api.v2.ResumeChangefeed)
+	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, setV1Header, api.v2.DeleteChangefeed)
 
 	// These two APIs are not useful in new arch cdc, we implement them for compatibility with old arch cdc only.
-	changefeedGroup.POST("/:changefeed_id/tables/rebalance_table", coordinatorMiddleware, authenticateMiddleware, api.rebalanceTables)
-	changefeedGroup.POST("/:changefeed_id/tables/move_table", coordinatorMiddleware, authenticateMiddleware, api.moveTable)
+	changefeedGroup.POST("/:changefeed_id/tables/rebalance_table", coordinatorMiddleware, authenticateMiddleware, setV1Header, api.rebalanceTables)
+	changefeedGroup.POST("/:changefeed_id/tables/move_table", coordinatorMiddleware, authenticateMiddleware, setV1Header, api.moveTable)
 
 	// owner API
 	ownerGroup := v1.Group("/owner")
-	ownerGroup.POST("/resign", coordinatorMiddleware, api.v2.ResignOwner, adjustStatusForV1)
+	ownerGroup.POST("/resign", coordinatorMiddleware, setV1Header, api.v2.ResignOwner)
 
 	// processor API
 	processorGroup := v1.Group("/processors")
-	processorGroup.GET("", coordinatorMiddleware, api.v2.ListProcessor)
+	processorGroup.GET("", coordinatorMiddleware, setV1Header, api.v2.ListProcessor)
 	processorGroup.GET("/:changefeed_id/:capture_id",
-		coordinatorMiddleware, api.v2.GetProcessor)
+		coordinatorMiddleware, setV1Header, api.v2.GetProcessor)
 
 	// capture API
 	captureGroup := v1.Group("/captures")
 	captureGroup.Use(coordinatorMiddleware)
-	captureGroup.GET("", api.v2.ListCaptures)
+	captureGroup.GET("", setV1Header, api.v2.ListCaptures)
 	// This API need to be adjusted to be compatible with the API v1.
-	captureGroup.PUT("/drain", api.drainCapture)
+	captureGroup.PUT("/drain", setV1Header, api.drainCapture)
 }
 
 func (o *OpenAPIV1) createChangefeed(c *gin.Context) {
@@ -148,7 +148,6 @@ func (o *OpenAPIV1) updateChangefeed(c *gin.Context) {
 	}
 	changefeedConfig.SinkURI = muskURI
 	log.Info("update changefeed api v1", zap.Any("changefeedConfig", changefeedConfig))
-
 	o.v2.UpdateChangefeed(c)
 }
 
@@ -180,7 +179,7 @@ func (o *OpenAPIV1) moveTable(c *gin.Context) {
 	log.Info("api v1 moveTable", zap.Any("url", url.String()))
 
 	o.v2.MoveTable(c)
-	adjustStatusForV1(c)
+	setV1Header(c)
 }
 
 // rebalanceTables is not useful in new arch cdc, we implement it for compatibility with old arch cdc only.

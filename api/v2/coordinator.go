@@ -14,8 +14,6 @@
 package v2
 
 import (
-	"net/http"
-
 	"github.com/gin-gonic/gin"
 )
 
@@ -34,5 +32,5 @@ func (h *OpenAPIV2) ResignOwner(c *gin.Context) {
 		o.AsyncStop()
 	}
 
-	c.JSON(http.StatusOK, &EmptyResponse{})
+	c.JSON(getStatus(c), &EmptyResponse{})
 }

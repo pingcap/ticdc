@@ -214,7 +214,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		zap.String("state", string(info.State)),
 		zap.String("changefeedInfo", info.String()))
 
-	c.JSON(http.StatusOK, CfInfoToAPIModel(
+	c.JSON(getStatus(c), CfInfoToAPIModel(
 		info,
 		&config.ChangeFeedStatus{
 			CheckpointTs: info.StartTs,
@@ -270,11 +270,8 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 			RunningError:   runningErr,
 		})
 	}
-	resp := &ListResponse[ChangefeedCommonInfo]{
-		Total: len(commonInfos),
-		Items: commonInfos,
-	}
-	c.JSON(http.StatusOK, resp)
+
+	c.JSON(http.StatusOK, toListResponse(c, commonInfos))
 }
 
 // VerifyTable verify table, return ineligibleTables and EligibleTables.
@@ -385,7 +382,7 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 	cfInfo, _, err := coordinator.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		if errors.ErrChangeFeedNotExists.Equal(err) {
-			c.JSON(http.StatusOK, nil)
+			c.JSON(getStatus(c), nil)
 			return
 		}
 		_ = c.Error(err)
@@ -396,7 +393,7 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, &EmptyResponse{})
+	c.JSON(getStatus(c), &EmptyResponse{})
 }
 
 // PauseChangefeed handles pause changefeed request
@@ -435,7 +432,7 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, &EmptyResponse{})
+	c.JSON(getStatus(c), &EmptyResponse{})
 }
 
 // ResumeChangefeed handles resume changefeed request.
@@ -527,7 +524,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 	c.Errors = nil
-	c.JSON(http.StatusOK, &EmptyResponse{})
+	c.JSON(getStatus(c), &EmptyResponse{})
 }
 
 // UpdateChangefeed handles update changefeed request,
@@ -636,7 +633,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, CfInfoToAPIModel(oldCfInfo, status, nil))
+	c.JSON(getStatus(c), CfInfoToAPIModel(oldCfInfo, status, nil))
 }
 
 // verifyResumeChangefeedConfig verifies the changefeed config before resuming a changefeed
@@ -754,7 +751,7 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	c.JSON(http.StatusOK, &EmptyResponse{})
+	c.JSON(getStatus(c), &EmptyResponse{})
 }
 
 // ListTables lists all tables in a changefeed
@@ -826,11 +823,7 @@ func (h *OpenAPIV2) ListTables(c *gin.Context) {
 		infos = append(infos, *nodeTableInfo)
 	}
 
-	resp := &ListResponse[NodeTableInfo]{
-		Total: len(infos),
-		Items: infos,
-	}
-	c.JSON(http.StatusOK, resp)
+	c.JSON(http.StatusOK, toListResponse(c, infos))
 }
 
 // getDispatcherCount returns the count of dispatcher.
