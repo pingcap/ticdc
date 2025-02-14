@@ -104,7 +104,7 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	mock.ExpectCommit()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)").
+	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)").
 		WithArgs(1, "test", 2, "test2").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
@@ -144,7 +144,7 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 	dmlEvent.CommitTs = 2
 
 	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)").
+	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)").
 		WithArgs(1, "test", 2, "test2").
 		WillReturnError(errors.New("connect: connection refused"))
 	mock.ExpectRollback()

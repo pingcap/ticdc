@@ -17,7 +17,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/pingcap/log"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"go.uber.org/zap"
 )
 
 func getColsAndValuesOfIdx(
@@ -25,6 +27,7 @@ func getColsAndValuesOfIdx(
 	indexColumns *timodel.IndexInfo,
 	data []interface{},
 ) ([]*timodel.ColumnInfo, []interface{}) {
+	log.Info("len columns", zap.Int("len(columns)", len(columns)), zap.Int("len(indexColumns.Columns)", len(indexColumns.Columns)), zap.Int("len(data)", len(data)))
 	cols := make([]*timodel.ColumnInfo, 0, len(indexColumns.Columns))
 	values := make([]interface{}, 0, len(indexColumns.Columns))
 	for _, col := range indexColumns.Columns {

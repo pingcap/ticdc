@@ -41,8 +41,11 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 
+	log.Info("prepareDMLs", zap.Any("events len", len(events)))
+
 	for _, event := range events {
 		if event.Len() == 0 {
+			log.Info("event len is 0")
 			continue
 		}
 
@@ -64,6 +67,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 		enableBatchModeThreshold := 1
 		// Determine whether to use batch dml feature here.
 		if w.cfg.BatchDMLEnable && int(event.Len()) > enableBatchModeThreshold {
+			log.Info("into batch dml")
 			// only use batch dml when the table has a handle key
 			if event.TableInfo.HasHandleKey() {
 				sql, value, err := w.batchSingleTxnDmls(event, event.TableInfo, inSafeMode)
@@ -315,6 +319,8 @@ func (w *MysqlWriter) batchSingleTxnDmls(
 		return nil, nil, errors.Trace(err)
 	}
 
+	log.Info("batchSingleTxnDmls", zap.Any("len(insertRows)", len(insertRows)), zap.Any("len(updateRows)", len(updateRows)), zap.Any("len(deleteRows)", len(deleteRows)), zap.Any("event len", event.Len()))
+
 	// handle delete
 	if len(deleteRows) > 0 {
 		for _, rows := range deleteRows {
@@ -377,15 +383,23 @@ func (w *MysqlWriter) groupRowsByType(
 	updateRow := make([]*sqlmodel.RowChange, 0, rowSize)
 	deleteRow := make([]*sqlmodel.RowChange, 0, rowSize)
 
+	eventTableInfo := tableInfo
+	log.Info("eventTableInfo", zap.Any("eventTableInfo columnschema", eventTableInfo.GetColumnSchema()))
+	// RowChangedEvent doesn't contain data for virtual columns,
+	// so we need to create a new table info without virtual columns before pass it to NewRowChange.
+	if eventTableInfo.HasVirtualColumns() {
+		eventTableInfo = common.BuildTiDBTableInfoWithoutVirtualColumns(eventTableInfo)
+	}
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
 			break
 		}
 
+		log.Info("next row", zap.Any("type", row.RowType))
 		switch row.RowType {
 		case commonEvent.RowTypeInsert:
-			args, err := getArgs(&row.Row, tableInfo)
+			args, err := getArgs(&row.Row, tableInfo, true)
 			if err != nil {
 				return nil, nil, nil, errors.Trace(err)
 			}
@@ -395,7 +409,7 @@ func (w *MysqlWriter) groupRowsByType(
 				nil,
 				nil,
 				args,
-				tableInfo,
+				eventTableInfo,
 				nil, nil)
 
 			insertRow = append(insertRow, newInsertRow)
@@ -403,13 +417,12 @@ func (w *MysqlWriter) groupRowsByType(
 				insertRows = append(insertRows, insertRow)
 				insertRow = make([]*sqlmodel.RowChange, 0, rowSize)
 			}
-
 		case commonEvent.RowTypeUpdate:
-			args, err := getArgs(&row.Row, tableInfo)
+			args, err := getArgs(&row.Row, tableInfo, true)
 			if err != nil {
 				return nil, nil, nil, errors.Trace(err)
 			}
-			preArgs, err := getArgs(&row.PreRow, tableInfo)
+			preArgs, err := getArgs(&row.PreRow, tableInfo, true)
 			if err != nil {
 				return nil, nil, nil, errors.Trace(err)
 			}
@@ -418,7 +431,7 @@ func (w *MysqlWriter) groupRowsByType(
 				nil,
 				preArgs,
 				args,
-				tableInfo,
+				eventTableInfo,
 				nil, nil)
 			updateRow = append(updateRow, newUpdateRow)
 			if len(updateRow) >= w.cfg.MaxTxnRow {
@@ -426,7 +439,7 @@ func (w *MysqlWriter) groupRowsByType(
 				updateRow = make([]*sqlmodel.RowChange, 0, rowSize)
 			}
 		case commonEvent.RowTypeDelete:
-			preArgs, err := getArgs(&row.PreRow, tableInfo)
+			preArgs, err := getArgs(&row.PreRow, tableInfo, true)
 			if err != nil {
 				return nil, nil, nil, errors.Trace(err)
 			}
@@ -435,7 +448,7 @@ func (w *MysqlWriter) groupRowsByType(
 				nil,
 				preArgs,
 				nil,
-				tableInfo,
+				eventTableInfo,
 				nil, nil)
 			deleteRow = append(deleteRow, newDeleteRow)
 			if len(deleteRow) >= w.cfg.MaxTxnRow {

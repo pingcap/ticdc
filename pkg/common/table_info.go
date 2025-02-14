@@ -309,6 +309,10 @@ type TableInfo struct {
 	} `json:"-"`
 }
 
+func (ti *TableInfo) GetColumnSchema() *columnSchema {
+	return ti.columnSchema
+}
+
 var count atomic.Int64
 
 func (ti *TableInfo) InitPrivateFields() {
@@ -644,27 +648,14 @@ func GetColumnDefaultValue(col *model.ColumnInfo) interface{} {
 }
 
 // BuildTiDBTableInfoWithoutVirtualColumns build a TableInfo without virual columns from the source table info
-func BuildTiDBTableInfoWithoutVirtualColumns(source *model.TableInfo) *model.TableInfo {
-	ret := source.Clone()
-	ret.Columns = make([]*model.ColumnInfo, 0, len(source.Columns))
-	rowColumnsCurrentOffset := 0
-	columnsOffset := make(map[string]int, len(source.Columns))
-	for _, srcCol := range source.Columns {
-		if !IsColCDCVisible(srcCol) {
-			continue
-		}
-		colInfo := srcCol.Clone()
-		colInfo.Offset = rowColumnsCurrentOffset
-		ret.Columns = append(ret.Columns, colInfo)
-		columnsOffset[colInfo.Name.O] = rowColumnsCurrentOffset
-		rowColumnsCurrentOffset += 1
-	}
-	// Keep all the index info even if it contains virtual columns for simplicity
-	for _, indexInfo := range ret.Indices {
-		for _, col := range indexInfo.Columns {
-			col.Offset = columnsOffset[col.Name.O]
-		}
+func BuildTiDBTableInfoWithoutVirtualColumns(source *TableInfo) *TableInfo {
+	newColumnSchema := source.columnSchema.getColumnSchemaWithoutVirtualColumns()
+	tableInfo := &TableInfo{
+		SchemaID:     source.SchemaID,
+		TableName:    source.TableName,
+		columnSchema: newColumnSchema,
 	}
 
-	return ret
+	tableInfo.InitPrivateFields()
+	return tableInfo
 }
