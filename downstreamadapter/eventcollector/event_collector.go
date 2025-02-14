@@ -259,17 +259,14 @@ func (c *EventCollector) processFeedback(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case feedback := <-c.ds.Feedback():
-			if feedback.IsAreaFeedback() {
-				if feedback.IsPauseArea() {
-					feedback.Dest.pauseChangefeed(c)
-				} else {
-					feedback.Dest.resumeChangefeed(c)
-				}
-			}
-
-			if feedback.IsPausePath() {
+			switch feedback.FeedbackType {
+			case dynstream.PauseArea:
+				feedback.Dest.pauseChangefeed(c)
+			case dynstream.ResumeArea:
+				feedback.Dest.resumeChangefeed(c)
+			case dynstream.PausePath:
 				feedback.Dest.pauseDispatcher(c)
-			} else {
+			case dynstream.ResumePath:
 				feedback.Dest.resumeDispatcher(c)
 			}
 		}
@@ -665,6 +662,9 @@ func (d *dispatcherStat) pauseChangefeed(eventCollector *EventCollector) {
 	defer d.eventServiceInfo.RUnlock()
 
 	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
+		log.Info("ignore pause changefeed request because the eventService is not ready",
+			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Any("eventServiceID", d.eventServiceInfo.serverID))
 		// Just ignore the request if the dispatcher is not ready.
 		return
 	}
@@ -685,6 +685,9 @@ func (d *dispatcherStat) resumeChangefeed(eventCollector *EventCollector) {
 	defer d.eventServiceInfo.RUnlock()
 
 	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
+		log.Info("ignore resume changefeed request because the eventService is not ready",
+			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Any("eventServiceID", d.eventServiceInfo.serverID))
 		// Just ignore the request if the dispatcher is not ready.
 		return
 	}
@@ -704,6 +707,9 @@ func (d *dispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
 	defer d.eventServiceInfo.RUnlock()
 
 	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
+		log.Info("ignore pause dispatcher request because the eventService is not ready",
+			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Any("eventServiceID", d.eventServiceInfo.serverID))
 		// Just ignore the request if the dispatcher is not ready.
 		return
 	}
@@ -719,6 +725,9 @@ func (d *dispatcherStat) resumeDispatcher(eventCollector *EventCollector) {
 	defer d.eventServiceInfo.RUnlock()
 
 	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
+		log.Info("ignore resume dispatcher request because the eventService is not ready",
+			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Any("eventServiceID", d.eventServiceInfo.serverID))
 		// Just ignore the request if the dispatcher is not ready.
 		return
 	}

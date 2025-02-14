@@ -63,7 +63,7 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	path *pathInfo[A, P, T, D, H],
 	event eventWrap[A, P, T, D, H],
-	handler H,
+	_ H,
 ) bool {
 	defer as.updatePathPauseState(path)
 	defer as.updateAreaPauseState(path)
@@ -91,77 +91,111 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 // It needs to be called after a event is appended.
 // Note: Our gaol is to fast pause, and lazy resume.
 func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, T, D, H]) {
-	shouldPause := as.shouldPausePath(path)
+	pause, resume := as.shouldPausePath(path)
 
 	sendFeedback := func(pause bool) {
+		if !(time.Since(path.lastSendFeedbackTime.Load().(time.Time)) >= as.settings.Load().FeedbackInterval) {
+			return
+		}
+
+		feedbackType := PausePath
+		if !pause {
+			feedbackType = ResumePath
+		}
+
 		as.feedbackChan <- Feedback[A, P, D]{
 			Area:         path.area,
 			Path:         path.path,
 			Dest:         path.dest,
-			FeedbackType: 0,
-			PausePath:    pause,
+			FeedbackType: feedbackType,
 		}
 		path.lastSendFeedbackTime.Store(time.Now())
+		path.paused.Store(pause)
 	}
 
-	// If the path is not paused previously but should be paused, we need to pause it.
-	// And send pause feedback.
-	if path.paused.Load() != shouldPause &&
-		time.Since(path.lastSendFeedbackTime.Load().(time.Time)) >= as.settings.Load().FeedbackInterval {
-		path.paused.Store(shouldPause)
-		sendFeedback(shouldPause)
+	switch {
+	case pause:
+		sendFeedback(true)
+	case resume:
+		sendFeedback(false)
 	}
 }
 
 func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, T, D, H]) {
-	shouldPause := as.shouldPauseArea()
+	pause, resume := as.shouldPauseArea()
 
 	sendFeedback := func(pause bool) {
+
+		feedbackType := PauseArea
+		if !pause {
+			feedbackType = ResumeArea
+		}
+
+		if !(time.Since(as.lastSendFeedbackTime.Load().(time.Time)) >= as.settings.Load().FeedbackInterval) {
+			return
+		}
 		as.feedbackChan <- Feedback[A, P, D]{
 			Area:         as.area,
 			Path:         path.path,
 			Dest:         path.dest,
-			PauseArea:    pause,
-			FeedbackType: 1,
+			FeedbackType: feedbackType,
 		}
+
 		as.lastSendFeedbackTime.Store(time.Now())
+		as.paused.Store(pause)
 	}
 
-	prevPaused := as.paused.Load()
-	if prevPaused != shouldPause &&
-		time.Since(as.lastSendFeedbackTime.Load().(time.Time)) >= as.settings.Load().FeedbackInterval {
-		as.paused.Store(shouldPause)
-		sendFeedback(shouldPause)
-		return
+	switch {
+	case pause:
+		sendFeedback(true)
+	case resume:
+		sendFeedback(false)
 	}
 }
 
 // shouldPausePath determines if a path should be paused based on memory usage.
 // If the memory usage is greater than the 20% of max pending size, the path should be paused.
-func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D, H]) bool {
+func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D, H]) (pause bool, resume bool) {
 	memoryUsageRatio := float64(path.pendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
 
-	// If the path is paused, we only need to resume it when the memory usage is less than 10%.
-	if path.paused.Load() {
-		return memoryUsageRatio >= 0.1
+	switch {
+	case path.paused.Load():
+		// If the path is paused, we only need to resume it when the memory usage is less than 10%.
+		if memoryUsageRatio < 0.1 {
+			log.Info("resume path", zap.Any("area", as.area), zap.Any("path", path.path), zap.Float64("memoryUsageRatio", memoryUsageRatio))
+			resume = true
+		}
+	default:
+		// If the path is not paused, we need to pause it when the memory usage is greater than 20% of max pending size.
+		if memoryUsageRatio >= 0.2 {
+			log.Info("pause path", zap.Any("area", as.area), zap.Any("path", path.path), zap.Float64("memoryUsageRatio", memoryUsageRatio))
+			pause = true
+		}
 	}
 
-	// If the path is not paused, we need to pause it when the memory usage is greater than 20% of max pending size.
-	return memoryUsageRatio >= 0.2
+	return
 }
 
 // shouldPauseArea determines if the area should be paused based on memory usage.
 // If the memory usage is greater than the 80% of max pending size, the area should be paused.
-func (as *areaMemStat[A, P, T, D, H]) shouldPauseArea() bool {
+func (as *areaMemStat[A, P, T, D, H]) shouldPauseArea() (pause bool, resume bool) {
 	memoryUsageRatio := float64(as.totalPendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
-
-	// If the area is paused, we only need to resume it when the memory usage is less than 50%.
-	if as.paused.Load() {
-		return memoryUsageRatio >= 0.5
+	switch {
+	case as.paused.Load():
+		// If the area is already paused, we need to resume it when the memory usage is less than 50%.
+		if memoryUsageRatio < 0.5 {
+			resume = true
+			log.Info("resume area", zap.Any("area", as.area), zap.Float64("memoryUsageRatio", memoryUsageRatio))
+		}
+	default:
+		// If the area is not paused, we need to pause it when the memory usage is greater than 80% of max pending size.
+		if memoryUsageRatio >= 0.8 {
+			pause = true
+			log.Info("pause area", zap.Any("area", as.area), zap.Float64("memoryUsageRatio", memoryUsageRatio))
+		}
 	}
 
-	// If the area is not paused, we need to pause it when the memory usage is greater than 80% of max pending size.
-	return memoryUsageRatio >= 0.8
+	return
 }
 
 func (as *areaMemStat[A, P, T, D, H]) decPendingSize(size int64) {

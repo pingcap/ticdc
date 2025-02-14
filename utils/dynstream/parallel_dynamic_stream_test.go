@@ -136,12 +136,10 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 
 func TestFeedBack(t *testing.T) {
 	fb1 := Feedback[int, string, any]{
-		FeedbackType: 0,
+		FeedbackType: PauseArea,
 	}
-	require.False(t, fb1.IsAreaFeedback())
-	require.False(t, fb1.PauseArea)
-	require.False(t, fb1.PausePath)
+	require.Equal(t, PauseArea, fb1.FeedbackType)
 
-	fb1.PauseArea = true
-	require.True(t, fb1.PauseArea)
+	fb1.FeedbackType = ResumeArea
+	require.Equal(t, ResumeArea, fb1.FeedbackType)
 }
