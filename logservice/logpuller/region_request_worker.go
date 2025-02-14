@@ -226,6 +226,13 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			}
 			switch eventData := event.Event.(type) {
 			case *cdcpb.Event_Entries_:
+				if eventData == nil {
+					log.Warn("region request worker receives a region event with nil entries, ignore it",
+						zap.Uint64("workerID", s.workerID),
+						zap.Uint64("subscriptionID", uint64(subscriptionID)),
+						zap.Uint64("regionID", regionID))
+					continue
+				}
 				regionEvent.entries = eventData
 			case *cdcpb.Event_Admin_:
 				// ignore
