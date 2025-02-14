@@ -517,9 +517,9 @@ func (e *eventStore) RegisterDispatcher(
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
 			subStat.dispatchers.Lock()
 			defer subStat.dispatchers.Unlock()
-			for _, notifier := range subStat.dispatchers.notifiers {
-				notifier(ts, subStat.maxEventCommitTs.Load())
-			}
+			// for _, notifier := range subStat.dispatchers.notifiers {
+			// 	notifier(ts, subStat.maxEventCommitTs.Load())
+			// }
 			CounterResolved.Inc()
 		}
 	}
