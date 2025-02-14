@@ -182,10 +182,10 @@ const (
 	writeWorkerNumPerDB = 2
 
 	// Pebble options
-	targetMemoryLimit = 2 << 30   // 2GB
-	memTableSize      = 256 << 20 // 256MB
+	targetMemoryLimit = 1 << 30  // 512MB
+	memTableSize      = 64 << 20 // 64MB
 	memTableCount     = 4
-	blockCacheSize    = targetMemoryLimit - (memTableSize * memTableCount) // 1GB
+	blockCacheSize    = targetMemoryLimit - (memTableSize * memTableCount) // 256MB
 )
 
 func New(
