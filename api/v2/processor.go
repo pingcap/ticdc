@@ -19,11 +19,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// listProcessor lists all processors in the ticdc cluster.
+// ListProcessor lists all processors in the ticdc cluster.
 // Usage:
 // curl -X GET http://127.0.0.1:8300/api/v2/processors
 // Note: It is not useful in new arch cdc, we implement it for compatibility with old arch cdc only.
-func (h *OpenAPIV2) listProcessor(c *gin.Context) {
+func (h *OpenAPIV2) ListProcessor(c *gin.Context) {
 	prcInfos := make([]ProcessorCommonInfo, 0)
 
 	resp := &ListResponse[ProcessorCommonInfo]{
@@ -34,11 +34,11 @@ func (h *OpenAPIV2) listProcessor(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// getProcessor gets a processor in the ticdc cluster.
+// GetProcessor gets a processor in the ticdc cluster.
 // Usage:
 // curl -X GET http://127.0.0.1:8300/api/v2/{changefeed_id}/{capture_id}
 // Note: It is not useful in new arch cdc, we implement it for compatibility with old arch cdc only.
-func (h *OpenAPIV2) getProcessor(c *gin.Context) {
+func (h *OpenAPIV2) GetProcessor(c *gin.Context) {
 	processorDetail := ProcessorDetail{}
 	c.JSON(http.StatusOK, processorDetail)
 }

@@ -36,53 +36,53 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	v2.Use(middleware.LogMiddleware())
 	v2.Use(middleware.ErrorHandleMiddleware())
 
-	v2.GET("status", api.serverStatus)
-	v2.POST("log", api.setLogLevel)
+	v2.GET("status", api.ServerStatus)
+	v2.POST("log", api.SetLogLevel)
 	// For compatibility with the old API.
 	// TiDB Operator relies on this API to determine whether the TiCDC node is healthy.
-	router.GET("/status", api.serverStatus)
+	router.GET("/status", api.ServerStatus)
 	// Integration test relies on this API to determine whether the TiCDC node is healthy.
 	router.GET("/debug/info", gin.WrapF(api.handleDebugInfo))
 
 	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
 	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
-	v2.GET("health", coordinatorMiddleware, api.serverHealth)
+	v2.GET("health", coordinatorMiddleware, api.ServerHealth)
 
 	// changefeed apis
 	changefeedGroup := v2.Group("/changefeeds")
-	changefeedGroup.GET("/:changefeed_id", coordinatorMiddleware, api.getChangeFeed)
-	changefeedGroup.POST("", coordinatorMiddleware, authenticateMiddleware, api.createChangefeed)
-	changefeedGroup.GET("", coordinatorMiddleware, api.listChangeFeeds)
-	changefeedGroup.PUT("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, api.updateChangefeed)
-	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, authenticateMiddleware, api.resumeChangefeed)
-	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, authenticateMiddleware, api.pauseChangefeed)
-	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, api.deleteChangefeed)
+	changefeedGroup.GET("/:changefeed_id", coordinatorMiddleware, api.GetChangeFeed)
+	changefeedGroup.POST("", coordinatorMiddleware, authenticateMiddleware, api.CreateChangefeed)
+	changefeedGroup.GET("", coordinatorMiddleware, api.ListChangeFeeds)
+	changefeedGroup.PUT("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, api.UpdateChangefeed)
+	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, authenticateMiddleware, api.ResumeChangefeed)
+	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, authenticateMiddleware, api.PauseChangefeed)
+	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, api.DeleteChangefeed)
 	changefeedGroup.GET("/:changefeed_id/synced", coordinatorMiddleware, authenticateMiddleware, api.syncState)
 
 	// internal APIs
-	changefeedGroup.POST("/:changefeed_id/move_table", authenticateMiddleware, api.moveTable)
+	changefeedGroup.POST("/:changefeed_id/move_table", authenticateMiddleware, api.MoveTable)
 	changefeedGroup.GET("/:changefeed_id/get_dispatcher_count", api.getDispatcherCount)
-	changefeedGroup.GET("/:changefeed_id/tables", api.listTables)
+	changefeedGroup.GET("/:changefeed_id/tables", api.ListTables)
 
 	// capture apis
 	captureGroup := v2.Group("/captures")
 	captureGroup.Use(coordinatorMiddleware)
-	captureGroup.GET("", api.listCaptures)
+	captureGroup.GET("", api.ListCaptures)
 
 	verifyTableGroup := v2.Group("/verify_table")
-	verifyTableGroup.POST("", api.verifyTable)
+	verifyTableGroup.POST("", api.VerifyTable)
 
 	// processor apis
 	// Note: They are not useful in new arch cdc,
 	// we implement them for compatibility with old arch cdc only.
 	processorGroup := v2.Group("/processors")
-	processorGroup.GET("", api.listProcessor)
-	processorGroup.GET("/:changefeed_id/:capture_id", api.getProcessor)
+	processorGroup.GET("", api.ListProcessor)
+	processorGroup.GET("/:changefeed_id/:capture_id", api.GetProcessor)
 
 	// owner apis
 	ownerGroup := v2.Group("/owner")
 	ownerGroup.Use(coordinatorMiddleware)
-	ownerGroup.POST("/resign", api.resignOwner)
+	ownerGroup.POST("/resign", api.ResignOwner)
 
 	// common APIs
 	v2.POST("/tso", api.QueryTso)

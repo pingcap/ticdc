@@ -28,7 +28,7 @@ import (
 // @Success 200 {object} EmptyResponse
 // @Failure 500,400 {object} model.HTTPError
 // @Router	/api/v2/owner/resign [post]
-func (h *OpenAPIV2) resignOwner(c *gin.Context) {
+func (h *OpenAPIV2) ResignOwner(c *gin.Context) {
 	o, _ := h.server.GetCoordinator()
 	if o != nil {
 		o.AsyncStop()

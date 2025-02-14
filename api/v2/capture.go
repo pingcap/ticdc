@@ -21,7 +21,7 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 )
 
-// listCaptures lists all captures
+// ListCaptures lists all captures
 // @Summary List captures
 // @Description list all captures in cdc cluster
 // @Tags capture,v2
@@ -29,7 +29,7 @@ import (
 // @Success 200 {array} Capture
 // @Failure 500,400 {object} model.HTTPError
 // @Router	/api/v2/captures [get]
-func (h *OpenAPIV2) listCaptures(c *gin.Context) {
+func (h *OpenAPIV2) ListCaptures(c *gin.Context) {
 	info, err := h.server.SelfInfo()
 	if err != nil {
 		_ = c.Error(err)
