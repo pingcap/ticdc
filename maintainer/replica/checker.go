@@ -127,7 +127,7 @@ func (s *hotSpanChecker) UpdateStatus(span *SpanReplication) {
 		return
 	}
 
-	log.Info("hotSpanChecker EventSizePerSecond", zap.Any("EventSizePerSecond", status.EventSizePerSecond), zap.Any("writeThreshold", s.writeThreshold))
+	log.Info("hotSpanChecker EventSizePerSecond", zap.Any("span", span.Span), zap.Any("dispatcher", span.ID), zap.Any("EventSizePerSecond", status.EventSizePerSecond), zap.Any("writeThreshold", s.writeThreshold))
 	if status.EventSizePerSecond != 0 && status.EventSizePerSecond < s.writeThreshold {
 		if hotSpan, ok := s.hotTasks[span.ID]; ok {
 			hotSpan.score--

@@ -683,7 +683,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 				CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
 				EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
 			})
-			log.Info("add status to message", zap.Any("status", message.Statuses), zap.Any("status.EventSizePerSecond", message.Statuses[len(message.Statuses)-1].EventSizePerSecond))
+			log.Info("add status to message", zap.Any("status", message.Statuses), zap.Any("status.EventSizePerSecond", message.Statuses[len(message.Statuses)-1].EventSizePerSecond), zap.Any("dispatcher id", id))
 		}
 	})
 	message.Watermark.Seq = seq
