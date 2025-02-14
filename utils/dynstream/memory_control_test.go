@@ -251,7 +251,6 @@ func TestShouldPauseArea(t *testing.T) {
 	pause, resume = areaMemStat.shouldPauseArea()
 	require.False(t, pause)
 	require.False(t, resume)
-
 }
 
 func TestSetAreaSettings(t *testing.T) {

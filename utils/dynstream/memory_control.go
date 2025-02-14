@@ -125,7 +125,6 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 	pause, resume := as.shouldPauseArea()
 
 	sendFeedback := func(pause bool) {
-
 		feedbackType := PauseArea
 		if !pause {
 			feedbackType = ResumeArea

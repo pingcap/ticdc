@@ -98,6 +98,8 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			log.Error("failed to create new dispatcher manager",
 				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 
+			appcontext.GetService[*dispatchermanager.HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(manager)
+
 			response := &heartbeatpb.MaintainerBootstrapResponse{
 				ChangefeedID: req.ChangefeedID,
 				Err: &heartbeatpb.RunningError{
