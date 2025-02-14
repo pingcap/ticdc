@@ -47,7 +47,7 @@ const (
 	clearTimeout                  = 300           // seconds
 )
 
-var MinSpanNumberCoefficient = 15
+var MinSpanNumberCoefficient = 2
 
 type CheckResult struct {
 	OpType       OpType
@@ -151,9 +151,11 @@ func (s *hotSpanChecker) UpdateStatus(span *SpanReplication) {
 }
 
 func (s *hotSpanChecker) Check(batchSize int) replica.GroupCheckResult {
+	log.Info("check hot span", zap.Any("changefeedID", s.changefeedID))
 	cache := make([]CheckResult, 0)
 
 	for _, hotSpan := range s.hotTasks {
+		log.Info("hot span", zap.String("changefeed", s.changefeedID.Name()), zap.String("span", hotSpan.ID.String()), zap.Int("score", hotSpan.score), zap.Int("scoreThreshold", s.scoreThreshold))
 		if time.Since(hotSpan.lastUpdateTime) > clearTimeout*time.Second {
 			// should not happen
 			log.Panic("remove hot span since it is outdated",
@@ -270,6 +272,7 @@ func (s *rebalanceChecker) UpdateStatus(replica *SpanReplication) {
 }
 
 func (s *rebalanceChecker) Check(_ int) replica.GroupCheckResult {
+	log.Info("check table rebalance", zap.String("changefeed", s.changefeedID.Name()))
 	nodeLoads := make(map[node.ID]float64)
 	replications := []*SpanReplication{}
 	totalEventSizePerSecond := float32(0)
@@ -285,6 +288,8 @@ func (s *rebalanceChecker) Check(_ int) replica.GroupCheckResult {
 		nodeLoads[span.GetNodeID()] += float64(status.EventSizePerSecond)
 		replications = append(replications, span.SpanReplication)
 	}
+
+	log.Info("check table rebalance", zap.Any("totalEventSizePerSecond", totalEventSizePerSecond), zap.Any("s.softWriteThreshold", s.softWriteThreshold), zap.Any("s.softMergeScore", s.softMergeScore), zap.Any("s.softMergeScoreThreshold", s.softMergeScoreThreshold))
 
 	// check merge
 	if totalEventSizePerSecond < s.softWriteThreshold {
@@ -309,6 +314,7 @@ func (s *rebalanceChecker) Check(_ int) replica.GroupCheckResult {
 func (s *rebalanceChecker) checkRebalance(
 	nodeLoads map[node.ID]float64, replications []*SpanReplication,
 ) []CheckResult {
+	log.Info("check rebalance", zap.Any("len(s.allTasks)", len(s.allTasks)))
 	ret := []CheckResult{
 		{
 			OpType:       OpMergeAndSplit,
