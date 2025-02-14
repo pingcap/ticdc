@@ -47,7 +47,7 @@ const (
 	clearTimeout                  = 300           // seconds
 )
 
-var MinSpanNumberCoefficient = 9
+var MinSpanNumberCoefficient = 15
 
 type CheckResult struct {
 	OpType       OpType
