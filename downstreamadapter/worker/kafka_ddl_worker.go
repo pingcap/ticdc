@@ -96,52 +96,8 @@ func NewKafkaDDLWorker(
 }
 
 func (w *KafkaDDLWorker) Run(ctx context.Context) error {
-	return w.encodeAndSendCheckpointEvents(ctx)
-}
-
-func (w *KafkaDDLWorker) AddCheckpoint(ts uint64) {
-	w.checkpointTsChan <- ts
-}
-
-func (w *KafkaDDLWorker) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
-	w.tableSchemaStore = tableSchemaStore
-}
-
-func (w *KafkaDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent) error {
-	for _, e := range event.GetEvents() {
-		message, err := w.encoder.EncodeDDLEvent(e)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		topic := w.eventRouter.GetTopicForDDL(e)
-
-		if w.partitionRule == PartitionAll {
-			partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
-			if err != nil {
-				return errors.Trace(err)
-			}
-			err = w.statistics.RecordDDLExecution(func() error {
-				return w.producer.SyncBroadcastMessage(ctx, topic, partitionNum, message)
-			})
-		} else {
-			err = w.statistics.RecordDDLExecution(func() error {
-				return w.producer.SyncSendMessage(ctx, topic, 0, message)
-			})
-		}
-		if err != nil {
-			return errors.Trace(err)
-		}
-	}
-	log.Info("kafka ddl worker send block event", zap.Any("event", event))
-	// after flush all the ddl event, we call the callback function.
-	event.PostFlush()
-	return nil
-}
-
-func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) error {
 	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
 	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
-
 	defer func() {
 		metrics.CheckpointTsMessageDuration.DeleteLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
 		metrics.CheckpointTsMessageCount.DeleteLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
@@ -163,10 +119,11 @@ func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) erro
 					zap.String("changefeed", w.changeFeedID.Name()))
 				return nil
 			}
-			start := time.Now()
 
+			start := time.Now()
 			msg, err = w.encoder.EncodeCheckpointEvent(ts)
 			if err != nil {
+				
 				return errors.Trace(err)
 			}
 
@@ -209,6 +166,46 @@ func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) erro
 	}
 }
 
+func (w *KafkaDDLWorker) AddCheckpoint(ts uint64) {
+	w.checkpointTsChan <- ts
+}
+
+func (w *KafkaDDLWorker) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+	w.tableSchemaStore = tableSchemaStore
+}
+
+func (w *KafkaDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent) error {
+	for _, e := range event.GetEvents() {
+		message, err := w.encoder.EncodeDDLEvent(e)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		topic := w.eventRouter.GetTopicForDDL(e)
+
+		if w.partitionRule == PartitionAll {
+			partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			err = w.statistics.RecordDDLExecution(func() error {
+				return w.producer.SyncBroadcastMessage(ctx, topic, partitionNum, message)
+			})
+		} else {
+			err = w.statistics.RecordDDLExecution(func() error {
+				return w.producer.SyncSendMessage(ctx, topic, 0, message)
+			})
+		}
+		if err != nil {
+			return errors.Trace(err)
+		}
+	}
+	log.Info("kafka ddl worker send block event", zap.Any("event", event))
+	// after flush all the ddl event, we call the callback function.
+	event.PostFlush()
+	return nil
+}
+
 func (w *KafkaDDLWorker) Close() {
+	close(w.checkpointTsChan)
 	w.producer.Close()
 }
