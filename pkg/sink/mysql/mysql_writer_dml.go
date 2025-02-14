@@ -64,7 +64,6 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 		enableBatchModeThreshold := 1
 		// Determine whether to use batch dml feature here.
 		if w.cfg.BatchDMLEnable && int(event.Len()) > enableBatchModeThreshold {
-			log.Info("into batch dml")
 			// only use batch dml when the table has a handle key
 			if event.TableInfo.HasHandleKey() {
 				sql, value, err := w.batchSingleTxnDmls(event, event.TableInfo, inSafeMode)
@@ -178,7 +177,7 @@ func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		if err = tx.Commit(); err != nil {
 			return 0, 0, err
 		}
-		log.Debug("Exec Rows succeeded", zap.Any("row count", dmls.rowCount), zap.Any("approximate size", dmls.approximateSize))
+		log.Debug("Exec Rows succeeded", zap.Any("row count", dmls.rowCount))
 		return dmls.rowCount, dmls.approximateSize, nil
 	}
 	return retry.Do(w.ctx, func() error {
@@ -316,8 +315,6 @@ func (w *MysqlWriter) batchSingleTxnDmls(
 		return nil, nil, errors.Trace(err)
 	}
 
-	log.Info("batchSingleTxnDmls", zap.Any("len(insertRows)", len(insertRows)), zap.Any("len(updateRows)", len(updateRows)), zap.Any("len(deleteRows)", len(deleteRows)), zap.Any("event len", event.Len()))
-
 	// handle delete
 	if len(deleteRows) > 0 {
 		for _, rows := range deleteRows {
@@ -381,7 +378,6 @@ func (w *MysqlWriter) groupRowsByType(
 	deleteRow := make([]*sqlmodel.RowChange, 0, rowSize)
 
 	eventTableInfo := tableInfo
-	log.Info("eventTableInfo", zap.Any("eventTableInfo columnschema", eventTableInfo.GetColumnSchema()))
 	// RowChangedEvent doesn't contain data for virtual columns,
 	// so we need to create a new table info without virtual columns before pass it to NewRowChange.
 	if eventTableInfo.HasVirtualColumns() {
@@ -393,7 +389,6 @@ func (w *MysqlWriter) groupRowsByType(
 			break
 		}
 
-		log.Info("next row", zap.Any("type", row.RowType))
 		switch row.RowType {
 		case commonEvent.RowTypeInsert:
 			args, err := getArgs(&row.Row, tableInfo, true)
