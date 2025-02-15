@@ -170,6 +170,11 @@ func TestSplitRegionsByWrittenKeysHotspot2(t *testing.T) {
 
 func TestSplitRegionsByWrittenKeysCold(t *testing.T) {
 	t.Parallel()
+	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
+	baseSpanNumberCoefficient = 3
+	defer func() {
+		baseSpanNumberCoefficient = oldBaseSpanNumberCoefficient
+	}()
 	re := require.New(t)
 	cfID := common.NewChangeFeedIDWithName("test")
 	splitter := newWriteSplitter(cfID, nil, 0)
@@ -196,6 +201,11 @@ func TestSplitRegionsByWrittenKeysCold(t *testing.T) {
 
 func TestNotSplitRegionsByWrittenKeysCold(t *testing.T) {
 	t.Parallel()
+	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
+	baseSpanNumberCoefficient = 3
+	defer func() {
+		baseSpanNumberCoefficient = oldBaseSpanNumberCoefficient
+	}()
 	re := require.New(t)
 	cfID := common.NewChangeFeedIDWithName("test")
 	splitter := newWriteSplitter(cfID, nil, 1)
