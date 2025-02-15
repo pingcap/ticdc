@@ -232,6 +232,7 @@ func NewSubscriptionClient(
 	option := dynstream.NewOption()
 	option.BatchCount = 1024
 	option.UseBuffer = false
+	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
 		func(subID SubscriptionID) uint64 { return uint64(subID) },
 		&regionEventHandler{subClient: subClient},
@@ -314,7 +315,7 @@ func (s *SubscriptionClient) Subscribe(
 	s.totalSpans.Unlock()
 
 	s.ds.AddPath(rt.subID, rt, dynstream.AreaSettings{
-		MaxPendingSize: 10 * 1024 * 1024 * 1024, // 10GB
+		MaxPendingSize: 8 * 1024 * 1024 * 1024, // 8GB
 	})
 
 	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt}
