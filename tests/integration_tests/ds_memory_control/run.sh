@@ -27,7 +27,7 @@ function run() {
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_sql "CREATE DATABASE ds_memory_control;"
 	go-ycsb load mysql -P $CUR/conf/workload -p mysql.host=${UP_TIDB_HOST} -p mysql.port=${UP_TIDB_PORT} -p mysql.user=root -p mysql.db=ds_memory_control
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/utils/dynstream/PausePath=40%return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/utils/dynstream/PausePath=10%return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306"
@@ -41,7 +41,7 @@ function run() {
 	
 	export GO_FAILPOINTS=''
 	cleanup_process $CDC_BINARY
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/utils/dynstream/PauseArea=40%return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/utils/dynstream/PauseArea=10%return(true)'
 
 	
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
