@@ -184,7 +184,7 @@ func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D,
 		}
 	default:
 		// If the path is not paused, we need to pause it when the memory usage is greater than 20% of max pending size.
-		if memoryUsageRatio >= 0.2 {
+		if memoryUsageRatio >= 0.5 {
 			pause = true
 		}
 	}
@@ -199,13 +199,13 @@ func (as *areaMemStat[A, P, T, D, H]) shouldPauseArea() (pause bool, resume bool
 	switch {
 	case as.paused.Load():
 		// If the area is already paused, we need to resume it when the memory usage is less than 50%.
-		if memoryUsageRatio < 0.5 {
+		if memoryUsageRatio < 0.2 {
 			resume = true
 			log.Info("resume area", zap.Any("area", as.area), zap.Float64("memoryUsageRatio", memoryUsageRatio))
 		}
 	default:
 		// If the area is not paused, we need to pause it when the memory usage is greater than 80% of max pending size.
-		if memoryUsageRatio >= 0.8 {
+		if memoryUsageRatio >= 0.5 {
 			pause = true
 			log.Info("pause area", zap.Any("area", as.area), zap.Float64("memoryUsageRatio", memoryUsageRatio))
 		}
