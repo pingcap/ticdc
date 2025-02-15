@@ -169,7 +169,7 @@ func TestSplitRegionsByWrittenKeysHotspot2(t *testing.T) {
 }
 
 func TestSplitRegionsByWrittenKeysCold(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
 	baseSpanNumberCoefficient = 3
 	defer func() {
@@ -200,7 +200,7 @@ func TestSplitRegionsByWrittenKeysCold(t *testing.T) {
 }
 
 func TestNotSplitRegionsByWrittenKeysCold(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
 	baseSpanNumberCoefficient = 3
 	defer func() {

@@ -29,7 +29,7 @@ import (
 )
 
 func TestRegionCountSplitSpan(t *testing.T) {
-	t.Parallel()
+	//t.Parallel()
 
 	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
 	baseSpanNumberCoefficient = 3
@@ -140,7 +140,7 @@ func TestRegionCountSplitSpan(t *testing.T) {
 }
 
 func TestRegionCountEvenlySplitSpan(t *testing.T) {
-	t.Parallel()
+	//t.Parallel()
 
 	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
 	baseSpanNumberCoefficient = 3
