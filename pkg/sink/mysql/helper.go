@@ -122,6 +122,9 @@ func GenBasicDSN(cfg *MysqlConfig) (*dmysql.Config, error) {
 	dsn.Params["readTimeout"] = cfg.ReadTimeout
 	dsn.Params["writeTimeout"] = cfg.WriteTimeout
 	dsn.Params["timeout"] = cfg.DialTimeout
+
+	setDryRunConfig(cfg)
+
 	return dsn, nil
 }
 
@@ -142,6 +145,7 @@ func setDryRunConfig(cfg *MysqlConfig) {
 			log.Error("invalid dry-run-delay", zap.Error(err))
 			return
 		}
+		log.Info("set dry-run-delay", zap.Duration("duration", time.Duration(dryRunDelayInt)*time.Millisecond))
 		cfg.DryRunDelay = time.Duration(dryRunDelayInt) * time.Millisecond
 	}
 
@@ -152,6 +156,7 @@ func setDryRunConfig(cfg *MysqlConfig) {
 			log.Error("invalid dry-run-block-interval", zap.Error(err))
 			return
 		}
+		log.Info("set dry-run-block-interval", zap.Duration("duration", time.Duration(dryRunBlockIntervalInt)*time.Second))
 		cfg.DryRunBlockInterval = time.Duration(dryRunBlockIntervalInt) * time.Second
 	}
 }
