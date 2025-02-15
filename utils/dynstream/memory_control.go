@@ -98,7 +98,9 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 		// Use CompareAndSwap for thread-safe time update
 		now := time.Now()
 		lastTime := path.lastSendFeedbackTime.Load().(time.Time)
-		if time.Since(lastTime) < as.settings.Load().FeedbackInterval {
+
+		// Fast pause, lazy resume.
+		if time.Since(lastTime) < as.settings.Load().FeedbackInterval && !pause {
 			return
 		}
 
@@ -107,12 +109,8 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 		}
 
 		feedbackType := PausePath
-
 		if !pause {
-			log.Info("resume path", zap.Any("area", as.area), zap.Any("path", path.path), zap.Float64("memoryUsageRatio", memoryUsageRatio))
 			feedbackType = ResumePath
-		} else {
-			log.Info("pause path", zap.Any("area", as.area), zap.Any("path", path.path), zap.Float64("memoryUsageRatio", memoryUsageRatio))
 		}
 
 		as.feedbackChan <- Feedback[A, P, D]{
@@ -122,6 +120,11 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 			FeedbackType: feedbackType,
 		}
 		path.paused.Store(pause)
+
+		log.Info("send path feedback", zap.Any("area", as.area),
+			zap.Any("path", path.path), zap.Stringer("feedbackType", feedbackType),
+			zap.Float64("memoryUsageRatio", memoryUsageRatio))
+
 	}
 
 	failpoint.Inject("PausePath", func() {
@@ -141,10 +144,13 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 	pause, resume, memoryUsageRatio := as.shouldPauseArea()
 
 	sendFeedback := func(pause bool) {
+
 		// Use CompareAndSwap for thread-safe time update
 		now := time.Now()
 		lastTime := as.lastSendFeedbackTime.Load().(time.Time)
-		if time.Since(lastTime) < as.settings.Load().FeedbackInterval {
+
+		// Fast pause, lazy resume.
+		if time.Since(lastTime) < as.settings.Load().FeedbackInterval && !pause {
 			return
 		}
 
@@ -155,10 +161,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 
 		feedbackType := PauseArea
 		if !pause {
-			log.Info("resume area", zap.Any("area", as.area), zap.Float64("memoryUsageRatio", memoryUsageRatio))
 			feedbackType = ResumeArea
-		} else {
-			log.Info("pause area", zap.Any("area", as.area), zap.Float64("memoryUsageRatio", memoryUsageRatio))
 		}
 
 		as.feedbackChan <- Feedback[A, P, D]{
@@ -167,8 +170,10 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 			Dest:         path.dest,
 			FeedbackType: feedbackType,
 		}
-
 		as.paused.Store(pause)
+
+		log.Info("send area feedback", zap.Any("area", as.area), zap.Stringer("feedbackType", feedbackType), zap.Float64("memoryUsageRatio", memoryUsageRatio))
+
 	}
 
 	failpoint.Inject("PauseArea", func() {
@@ -203,7 +208,7 @@ func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D,
 	// 	}
 	// }
 
-	return
+	return pause, resume, memoryUsageRatio
 }
 
 // shouldPauseArea determines if the area should be paused based on memory usage.
