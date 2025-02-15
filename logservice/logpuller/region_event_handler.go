@@ -61,7 +61,7 @@ func (event *regionEvent) getSize() int {
 			size += len(row.OldValue)
 		}
 	}
-	return 0
+	return size
 }
 
 type regionEventHandler struct {
