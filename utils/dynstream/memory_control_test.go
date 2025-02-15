@@ -179,35 +179,35 @@ func TestShouldPausePath(t *testing.T) {
 	path.areaMemStat = areaMemStat
 
 	path.pendingSize.Store(int64(10))
-	pause, resume := path.areaMemStat.shouldPausePath(path)
+	pause, resume, _ := path.areaMemStat.shouldPausePath(path)
 	require.False(t, pause)
 	require.False(t, resume)
 
 	path.pendingSize.Store(int64(15))
-	pause, resume = path.areaMemStat.shouldPausePath(path)
+	pause, resume, _ = path.areaMemStat.shouldPausePath(path)
 	require.False(t, pause)
 	require.False(t, resume)
 
 	path.pendingSize.Store(int64(20))
-	pause, resume = path.areaMemStat.shouldPausePath(path)
+	pause, resume, _ = path.areaMemStat.shouldPausePath(path)
 	require.True(t, pause)
 	path.paused.Store(true)
 	require.False(t, resume)
 
 	path.pendingSize.Store(int64(15))
-	pause, resume = path.areaMemStat.shouldPausePath(path)
+	pause, resume, _ = path.areaMemStat.shouldPausePath(path)
 	require.False(t, pause)
 	require.False(t, resume)
 
 	path.pendingSize.Store(int64(9))
-	pause, resume = path.areaMemStat.shouldPausePath(path)
+	pause, resume, _ = path.areaMemStat.shouldPausePath(path)
 	require.False(t, pause)
 
 	require.True(t, resume)
 	path.paused.Store(false)
 
 	path.pendingSize.Store(int64(15))
-	pause, resume = path.areaMemStat.shouldPausePath(path)
+	pause, resume, _ = path.areaMemStat.shouldPausePath(path)
 	require.False(t, pause)
 	require.False(t, resume)
 }

@@ -91,7 +91,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 // It needs to be called after a event is appended.
 // Note: Our gaol is to fast pause, and lazy resume.
 func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, T, D, H]) {
-	pause, resume := as.shouldPausePath(path)
+	pause, resume, memoryUsageRatio := as.shouldPausePath(path)
 
 	sendFeedback := func(pause bool) {
 		// Use CompareAndSwap for thread-safe time update
@@ -106,8 +106,12 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 		}
 
 		feedbackType := PausePath
+
 		if !pause {
+			log.Info("resume path", zap.Any("area", as.area), zap.Any("path", path.path), zap.Float64("memoryUsageRatio", memoryUsageRatio))
 			feedbackType = ResumePath
+		} else {
+			log.Info("pause path", zap.Any("area", as.area), zap.Any("path", path.path), zap.Float64("memoryUsageRatio", memoryUsageRatio))
 		}
 
 		as.feedbackChan <- Feedback[A, P, D]{
@@ -169,25 +173,23 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 
 // shouldPausePath determines if a path should be paused based on memory usage.
 // If the memory usage is greater than the 20% of max pending size, the path should be paused.
-func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D, H]) (pause bool, resume bool) {
-	memoryUsageRatio := float64(path.pendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
+func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D, H]) (pause bool, resume bool, memoryUsageRatio float64) {
+	memoryUsageRatio = float64(path.pendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
 
 	switch {
 	case path.paused.Load():
 		// If the path is paused, we only need to resume it when the memory usage is less than 10%.
 		if memoryUsageRatio < 0.1 {
-			log.Info("resume path", zap.Any("area", as.area), zap.Any("path", path.path), zap.Float64("memoryUsageRatio", memoryUsageRatio))
 			resume = true
 		}
 	default:
 		// If the path is not paused, we need to pause it when the memory usage is greater than 20% of max pending size.
 		if memoryUsageRatio >= 0.2 {
-			log.Info("pause path", zap.Any("area", as.area), zap.Any("path", path.path), zap.Float64("memoryUsageRatio", memoryUsageRatio))
 			pause = true
 		}
 	}
 
-	return
+	return pause, resume, memoryUsageRatio
 }
 
 // shouldPauseArea determines if the area should be paused based on memory usage.
