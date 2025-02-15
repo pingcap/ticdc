@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/coreos/go-semver/semver"
 	dmysql "github.com/go-sql-driver/mysql"
@@ -101,12 +102,6 @@ func GenBasicDSN(cfg *MysqlConfig) (*dmysql.Config, error) {
 		port = "4000"
 	}
 
-	dryRun := cfg.sinkURI.Query().Get("dry-run")
-	if dryRun == "true" {
-		log.Info("dry-run mode is enabled, will not write data to downstream")
-		cfg.DryRun = true
-	}
-
 	// This will handle the IPv6 address format.
 	var dsn *dmysql.Config
 	var err error
@@ -128,6 +123,37 @@ func GenBasicDSN(cfg *MysqlConfig) (*dmysql.Config, error) {
 	dsn.Params["writeTimeout"] = cfg.WriteTimeout
 	dsn.Params["timeout"] = cfg.DialTimeout
 	return dsn, nil
+}
+
+func setDryRunConfig(cfg *MysqlConfig) {
+	dryRun := cfg.sinkURI.Query().Get("dry-run")
+	if dryRun == "true" {
+		log.Info("dry-run mode is enabled, will not write data to downstream")
+		cfg.DryRun = true
+	}
+	if !cfg.DryRun {
+		return
+	}
+
+	dryRunDelay := cfg.sinkURI.Query().Get("dry-run-delay")
+	if dryRunDelay != "" {
+		dryRunDelayInt, err := strconv.Atoi(dryRunDelay)
+		if err != nil {
+			log.Error("invalid dry-run-delay", zap.Error(err))
+			return
+		}
+		cfg.DryRunDelay = time.Duration(dryRunDelayInt) * time.Millisecond
+	}
+
+	dryRunBlockInterval := cfg.sinkURI.Query().Get("dry-run-block-interval")
+	if dryRunBlockInterval != "" {
+		dryRunBlockIntervalInt, err := strconv.Atoi(dryRunBlockInterval)
+		if err != nil {
+			log.Error("invalid dry-run-block-interval", zap.Error(err))
+			return
+		}
+		cfg.DryRunBlockInterval = time.Duration(dryRunBlockIntervalInt) * time.Second
+	}
 }
 
 // GetTestDB checks and adjusts the password of the given DSN,

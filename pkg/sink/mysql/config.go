@@ -114,8 +114,6 @@ type MysqlConfig struct {
 	BatchDMLEnable  bool
 	MultiStmtEnable bool
 	CachePrepStmts  bool
-	// DryRun is used to enable dry-run mode. In dry-run mode, the writer will not write data to the downstream.
-	DryRun bool
 
 	// sync point
 	SyncPointRetention time.Duration
@@ -125,6 +123,13 @@ type MysqlConfig struct {
 	MaxAllowedPacket int64
 
 	HasVectorType bool // HasVectorType is true if the column is vector type
+
+	// DryRun is used to enable dry-run mode. In dry-run mode, the writer will not write data to the downstream.
+	DryRun bool
+	// DryRunDelay is the delay time for dry-run mode, it is used to simulate the delay time of real write.
+	DryRunDelay time.Duration
+	// DryRunBlockInterval is the interval time for blocking in dry-run mode.
+	DryRunBlockInterval time.Duration
 }
 
 // NewConfig returns the default mysql backend config.

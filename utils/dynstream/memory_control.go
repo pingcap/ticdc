@@ -82,7 +82,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	// Add the event to the pending queue.
 	path.pendingQueue.PushBack(event)
 	// Update the pending size.
-	path.pendingSize.Add(uint32(event.eventSize))
+	path.updatePendingSize(int64(event.eventSize))
 	as.totalPendingSize.Add(int64(event.eventSize))
 	return true
 }
@@ -94,8 +94,15 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 	pause, resume := as.shouldPausePath(path)
 
 	sendFeedback := func(pause bool) {
-		if !(time.Since(path.lastSendFeedbackTime.Load().(time.Time)) >= as.settings.Load().FeedbackInterval) {
+		// Use CompareAndSwap for thread-safe time update
+		now := time.Now()
+		lastTime := path.lastSendFeedbackTime.Load().(time.Time)
+		if time.Since(lastTime) < as.settings.Load().FeedbackInterval {
 			return
+		}
+
+		if !path.lastSendFeedbackTime.CompareAndSwap(lastTime, now) {
+			return // Another goroutine already updated the time
 		}
 
 		feedbackType := PausePath
@@ -109,7 +116,6 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 			Dest:         path.dest,
 			FeedbackType: feedbackType,
 		}
-		path.lastSendFeedbackTime.Store(time.Now())
 		path.paused.Store(pause)
 	}
 
@@ -125,6 +131,17 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 	pause, resume := as.shouldPauseArea()
 
 	sendFeedback := func(pause bool) {
+		// Use CompareAndSwap for thread-safe time update
+		now := time.Now()
+		lastTime := as.lastSendFeedbackTime.Load().(time.Time)
+		if time.Since(lastTime) < as.settings.Load().FeedbackInterval {
+			return
+		}
+
+		if !as.lastSendFeedbackTime.CompareAndSwap(lastTime, now) {
+			return // Another goroutine already updated the time
+		}
+
 		feedbackType := PauseArea
 		if !pause {
 			feedbackType = ResumeArea
@@ -139,8 +156,6 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 			Dest:         path.dest,
 			FeedbackType: feedbackType,
 		}
-
-		as.lastSendFeedbackTime.Store(time.Now())
 		as.paused.Store(pause)
 	}
 
