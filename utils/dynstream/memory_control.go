@@ -100,7 +100,7 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 		lastTime := path.lastSendFeedbackTime.Load().(time.Time)
 
 		// Fast pause, lazy resume.
-		if time.Since(lastTime) < as.settings.Load().FeedbackInterval && !pause {
+		if !pause && time.Since(lastTime) < as.settings.Load().FeedbackInterval {
 			return
 		}
 
@@ -149,8 +149,17 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 		now := time.Now()
 		lastTime := as.lastSendFeedbackTime.Load().(time.Time)
 
+		log.Info("fizz update area pause state",
+			zap.Any("area", as.area),
+			zap.Bool("pause", pause),
+			zap.Time("lastTime", lastTime),
+			zap.Time("now", now),
+			zap.Duration("since", time.Since(lastTime)),
+			zap.Duration("feedbackInterval", as.settings.Load().FeedbackInterval),
+		)
+
 		// Fast pause, lazy resume.
-		if time.Since(lastTime) < as.settings.Load().FeedbackInterval && !pause {
+		if !pause && time.Since(lastTime) < as.settings.Load().FeedbackInterval {
 			return
 		}
 
