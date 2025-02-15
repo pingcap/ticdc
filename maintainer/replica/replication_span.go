@@ -152,7 +152,6 @@ func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
 }
 
 func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) {
-	log.Info("SpanReplication Updating status", zap.Any("new status", newStatus), zap.Any("old status", r.status.Load()))
 	if newStatus != nil {
 		// we don't update the status when there exist block status and block status's checkpointTs is less than newStatus's checkpointTs
 		// It's ensure the checkpointTs can be forward until the block event is finished;
