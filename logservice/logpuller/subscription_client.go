@@ -361,11 +361,13 @@ func (s *SubscriptionClient) handleDSFeedBack(ctx context.Context) error {
 			case dynstream.PauseArea:
 				s.mu.Lock()
 				s.paused = true
+				log.Info("subscription client pause push event")
 				s.mu.Unlock()
 			case dynstream.ResumeArea:
 				s.mu.Lock()
 				s.paused = false
 				s.cond.Broadcast()
+				log.Info("subscription client resume push event")
 				s.mu.Unlock()
 			case dynstream.PausePath, dynstream.ResumePath:
 				// ignore? because it is meaningless to pause and resume a path.
