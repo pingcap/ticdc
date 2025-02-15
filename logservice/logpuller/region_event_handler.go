@@ -16,6 +16,7 @@ package logpuller
 import (
 	"encoding/hex"
 	"time"
+	"unsafe"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
@@ -43,6 +44,24 @@ type regionEvent struct {
 	// only one of the following fields will be set
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
+}
+
+func (event *regionEvent) getSize() int {
+	if event == nil {
+		return 0
+	}
+	size := int(unsafe.Sizeof(*event))
+	if event.entries != nil {
+		size += int(unsafe.Sizeof(*event.entries))
+		size += int(unsafe.Sizeof(*event.entries.Entries))
+		for _, row := range event.entries.Entries.GetEntries() {
+			size += int(unsafe.Sizeof(*row))
+			size += len(row.Key)
+			size += len(row.Value)
+			size += len(row.OldValue)
+		}
+	}
+	return 0
 }
 
 type regionEventHandler struct {
@@ -88,7 +107,10 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	return false
 }
 
-func (h *regionEventHandler) GetSize(event regionEvent) int { return 0 }
+func (h *regionEventHandler) GetSize(event regionEvent) int {
+	return event.getSize()
+}
+
 func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) int {
 	return 0
 }

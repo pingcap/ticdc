@@ -111,7 +111,7 @@ func newRegionRequestWorker(
 						state:  state,
 						worker: worker,
 					}
-					worker.client.ds.Push(subID, regionEvent)
+					worker.client.pushRegionEventToDS(subID, regionEvent)
 				}
 			}
 			// The store may fail forever, so we need try to re-schedule all pending regions.
@@ -253,7 +253,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.ds.Push(SubscriptionID(event.RequestId), regionEvent)
+			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
 		} else {
 			log.Warn("region request worker receives a region event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
@@ -269,7 +269,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	s.client.metrics.batchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
 	for _, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			s.client.ds.Push(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
+			s.client.pushRegionEventToDS(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
 				state:      state,
 				worker:     s,
 				resolvedTs: resolvedTsEvent.Ts,
@@ -345,7 +345,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 					state:  state,
 					worker: s,
 				}
-				s.client.ds.Push(subID, regionEvent)
+				s.client.pushRegionEventToDS(subID, regionEvent)
 			}
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from

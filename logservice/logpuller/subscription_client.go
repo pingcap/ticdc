@@ -175,6 +175,10 @@ type SubscriptionClient struct {
 	lockResolver txnutil.LockResolver
 
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
+	// the following three fields are used to manage feedback from ds and notify other goroutines
+	mu     sync.Mutex
+	cond   *sync.Cond
+	paused bool
 
 	// the credential to connect tikv
 	credential *security.Credential
@@ -227,7 +231,7 @@ func NewSubscriptionClient(
 
 	option := dynstream.NewOption()
 	option.BatchCount = 1024
-	option.UseBuffer = true
+	option.UseBuffer = false
 	ds := dynstream.NewParallelDynamicStream(
 		func(subID SubscriptionID) uint64 { return uint64(subID) },
 		&regionEventHandler{subClient: subClient},
@@ -235,6 +239,7 @@ func NewSubscriptionClient(
 	)
 	ds.Start()
 	subClient.ds = ds
+	subClient.cond = sync.NewCond(&subClient.mu)
 
 	subClient.initMetrics()
 	return subClient
@@ -308,7 +313,9 @@ func (s *SubscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	s.ds.AddPath(rt.subID, rt, dynstream.AreaSettings{})
+	s.ds.AddPath(rt.subID, rt, dynstream.AreaSettings{
+		MaxPendingSize: 10 * 1024 * 1024 * 1024, // 10GB
+	})
 
 	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt}
 }
@@ -335,6 +342,38 @@ func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
 	s.ds.Wake(subID)
 }
 
+func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
+	s.mu.Lock()
+	for s.paused {
+		s.cond.Wait()
+	}
+	s.mu.Unlock()
+	s.ds.Push(subID, event)
+}
+
+func (s *SubscriptionClient) handleDSFeedBack(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case feedback := <-s.ds.Feedback():
+			switch feedback.FeedbackType {
+			case dynstream.PauseArea:
+				s.mu.Lock()
+				s.paused = true
+				s.mu.Unlock()
+			case dynstream.ResumeArea:
+				s.mu.Lock()
+				s.paused = false
+				s.cond.Broadcast()
+				s.mu.Unlock()
+			case dynstream.PausePath, dynstream.ResumePath:
+				// ignore? because it is meaningless to pause and resume a path.
+			}
+		}
+	}
+}
+
 // RegionCount returns subscribed region count for the span.
 func (s *SubscriptionClient) RegionCount(subID SubscriptionID) uint64 {
 	s.totalSpans.RLock()
@@ -356,6 +395,7 @@ func (s *SubscriptionClient) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error { return s.updateMetrics(ctx) })
+	g.Go(func() error { return s.handleDSFeedBack(ctx) })
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.handleRegions(ctx, g) })
 	g.Go(func() error { return s.handleErrors(ctx) })
