@@ -86,7 +86,7 @@ func (m *writeSplitter) split(
 			zap.Int("captureNum", captureNum),
 			zap.Int("expectedSpanNum", expectedSpanNum),
 			zap.Int("DefaultMaxSpanNumber", DefaultMaxSpanNumber),
-			zap.Int("regions len", len(regions)),
+			zap.Int("regionsLen", len(regions)),
 			zap.Error(err))
 		return []*heartbeatpb.TableSpan{span}
 	}
