@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
 )
@@ -123,6 +124,11 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 		path.paused.Store(pause)
 	}
 
+	failpoint.Inject("PausePath", func() {
+		log.Warn("inject PausePath")
+		sendFeedback(true)
+	})
+
 	switch {
 	case pause:
 		sendFeedback(true)
@@ -132,7 +138,7 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 }
 
 func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, T, D, H]) {
-	pause, resume := as.shouldPauseArea()
+	pause, resume, memoryUsageRatio := as.shouldPauseArea()
 
 	sendFeedback := func(pause bool) {
 		// Use CompareAndSwap for thread-safe time update
@@ -148,7 +154,10 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 
 		feedbackType := PauseArea
 		if !pause {
+			log.Info("resume area", zap.Any("area", as.area), zap.Float64("memoryUsageRatio", memoryUsageRatio))
 			feedbackType = ResumeArea
+		} else {
+			log.Info("pause area", zap.Any("area", as.area), zap.Float64("memoryUsageRatio", memoryUsageRatio))
 		}
 
 		if !(time.Since(as.lastSendFeedbackTime.Load().(time.Time)) >= as.settings.Load().FeedbackInterval) {
@@ -163,6 +172,11 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 		as.paused.Store(pause)
 	}
 
+	failpoint.Inject("PauseArea", func() {
+		log.Warn("inject PauseArea")
+		sendFeedback(true)
+	})
+
 	switch {
 	case pause:
 		sendFeedback(true)
@@ -175,9 +189,6 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 // If the memory usage is greater than the 20% of max pending size, the path should be paused.
 func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D, H]) (pause bool, resume bool, memoryUsageRatio float64) {
 	memoryUsageRatio = float64(path.pendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
-
-	// fizz restore me after testing
-	return false, false, 0
 
 	switch {
 	case path.paused.Load():
@@ -197,8 +208,8 @@ func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D,
 
 // shouldPauseArea determines if the area should be paused based on memory usage.
 // If the memory usage is greater than the 80% of max pending size, the area should be paused.
-func (as *areaMemStat[A, P, T, D, H]) shouldPauseArea() (pause bool, resume bool) {
-	memoryUsageRatio := float64(as.totalPendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
+func (as *areaMemStat[A, P, T, D, H]) shouldPauseArea() (pause bool, resume bool, memoryUsageRatio float64) {
+	memoryUsageRatio = float64(as.totalPendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
 	switch {
 	case as.paused.Load():
 		// If the area is already paused, we need to resume it when the memory usage is less than 50%.

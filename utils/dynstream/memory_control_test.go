@@ -221,34 +221,34 @@ func TestShouldPauseArea(t *testing.T) {
 	areaMemStat := newAreaMemStat(path.area, mc, settings, nil)
 
 	areaMemStat.totalPendingSize.Store(int64(10))
-	pause, resume := areaMemStat.shouldPauseArea()
+	pause, resume, _ := areaMemStat.shouldPauseArea()
 	require.False(t, pause)
 	require.False(t, resume)
 
 	areaMemStat.totalPendingSize.Store(int64(60))
-	pause, resume = areaMemStat.shouldPauseArea()
+	pause, resume, _ = areaMemStat.shouldPauseArea()
 	require.False(t, pause)
 	require.False(t, resume)
 
 	areaMemStat.totalPendingSize.Store(int64(80))
-	pause, resume = areaMemStat.shouldPauseArea()
+	pause, resume, _ = areaMemStat.shouldPauseArea()
 	require.True(t, pause)
 	areaMemStat.paused.Store(true)
 	require.False(t, resume)
 
 	areaMemStat.totalPendingSize.Store(int64(60))
-	pause, resume = areaMemStat.shouldPauseArea()
+	pause, resume, _ = areaMemStat.shouldPauseArea()
 	require.False(t, pause)
 	require.False(t, resume)
 
 	areaMemStat.totalPendingSize.Store(int64(49))
-	pause, resume = areaMemStat.shouldPauseArea()
+	pause, resume, _ = areaMemStat.shouldPauseArea()
 	require.False(t, pause)
 	require.True(t, resume)
 	areaMemStat.paused.Store(false)
 
 	areaMemStat.totalPendingSize.Store(int64(60))
-	pause, resume = areaMemStat.shouldPauseArea()
+	pause, resume, _ = areaMemStat.shouldPauseArea()
 	require.False(t, pause)
 	require.False(t, resume)
 }
