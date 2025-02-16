@@ -342,7 +342,7 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 	pi.pendingSize.Add(uint32(-e.eventSize))
 
 	if pi.areaMemStat != nil {
-		pi.areaMemStat.decPendingSize(int64(e.eventSize))
+		pi.areaMemStat.decPendingSize(pi, int64(e.eventSize))
 	}
 	return e, true
 }
