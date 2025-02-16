@@ -251,7 +251,7 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 // This method is called after the path is removed.
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
-	area.decPendingSize(int64(path.pendingSize.Load()))
+	area.decPendingSize(path, int64(path.pendingSize.Load()))
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
