@@ -673,6 +673,13 @@ func loadAllPhysicalTablesAtTs(
 		if !ok {
 			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
 		}
+		// Note: updateFullTableInfoFunc must be called before updateSchemaMetadataFunc,
+		// because it depends on some info which may be updated by updateSchemaMetadataFunc.
+		handler.updateFullTableInfoFunc(updateFullTableInfoFuncArgs{
+			event:        &ddlEvent,
+			databaseMap:  databaseMap,
+			tableInfoMap: tableInfoMap,
+		})
 		handler.updateSchemaMetadataFunc(updateSchemaMetadataFuncArgs{
 			event:        &ddlEvent,
 			databaseMap:  databaseMap,
