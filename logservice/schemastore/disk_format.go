@@ -696,7 +696,7 @@ func loadAllPhysicalTablesAtTs(
 		schemaName := databaseMap[tableInfo.SchemaID].Name
 		fullTableInfo, ok := tableInfoMap[tableID]
 		if !ok {
-			log.Error("table info not found", zap.Int64("tableID", tableID))
+			log.Panic("table info not found", zap.Int64("tableID", tableID))
 		}
 		if tableFilter != nil && tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name, fullTableInfo) {
 			continue

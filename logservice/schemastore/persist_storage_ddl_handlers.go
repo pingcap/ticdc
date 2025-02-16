@@ -89,6 +89,8 @@ type persistStorageDDLHandler struct {
 	updateDDLHistoryFunc func(args updateDDLHistoryFuncArgs) []uint64
 	// updateSchemaMetadataFunc update database info, table info and partition info according to the ddl event
 	updateSchemaMetadataFunc func(args updateSchemaMetadataFuncArgs)
+	// updateFullTableInfoFunc update the full table info map according to the ddl event
+	updateFullTableInfoFunc func(tableInfoMap map[int64]*model.TableInfo)
 	// iterateEventTablesFunc iterates through all physical table IDs affected by the DDL event
 	// and calls the provided `apply` function with those IDs. For partition tables, it includes
 	// all partition IDs.
@@ -602,6 +604,8 @@ func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncA
 	for id := range args.partitionMap[event.ExtraTableID] {
 		event.PrevPartitions = append(event.PrevPartitions, id)
 	}
+	// Note: event.ExtraTableInfo is set somewhere else,
+	// because it is hard to get the table info of the normal table in this func.
 	if event.Query != "" {
 		upperQuery := strings.ToUpper(event.Query)
 		idx1 := strings.Index(upperQuery, "EXCHANGE PARTITION") + len("EXCHANGE PARTITION")
