@@ -233,12 +233,14 @@ func (as *areaMemStat[A, P, T, D, H]) shouldPauseArea() (pause bool, resume bool
 	return
 }
 
-func (as *areaMemStat[A, P, T, D, H]) decPendingSize(size int64) {
+func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, H], size int64) {
 	as.totalPendingSize.Add(int64(-size))
 	if as.totalPendingSize.Load() < 0 {
 		log.Warn("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()))
 		as.totalPendingSize.Store(0)
 	}
+	as.updatePathPauseState(path)
+	as.updateAreaPauseState(path)
 }
 
 // A memControl is used to control the memory usage of the dynamic stream.
@@ -285,7 +287,7 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 // This method is called after the path is removed.
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
-	area.decPendingSize(int64(path.pendingSize.Load()))
+	area.decPendingSize(path, int64(path.pendingSize.Load()))
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()

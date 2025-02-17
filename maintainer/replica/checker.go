@@ -47,7 +47,7 @@ const (
 	clearTimeout                  = 300           // seconds
 )
 
-var MinSpanNumberCoefficient = 2
+var MinSpanNumberCoefficient = 32 // // This number is twice the default worker count of the MySQL sink. It can help evenly split and dispatch high - throughput tables.
 
 type CheckResult struct {
 	OpType       OpType
@@ -127,7 +127,9 @@ func (s *hotSpanChecker) UpdateStatus(span *SpanReplication) {
 		return
 	}
 
-	if status.EventSizePerSecond < s.writeThreshold {
+	log.Debug("hotSpanChecker EventSizePerSecond", zap.Any("span", span.Span), zap.Any("dispatcher", span.ID), zap.Any("EventSizePerSecond", status.EventSizePerSecond), zap.Any("writeThreshold", s.writeThreshold))
+
+	if status.EventSizePerSecond != 0 && status.EventSizePerSecond < s.writeThreshold {
 		if hotSpan, ok := s.hotTasks[span.ID]; ok {
 			hotSpan.score--
 			if hotSpan.score == 0 {
@@ -154,6 +156,7 @@ func (s *hotSpanChecker) Check(batchSize int) replica.GroupCheckResult {
 	cache := make([]CheckResult, 0)
 
 	for _, hotSpan := range s.hotTasks {
+		log.Debug("hot span", zap.String("changefeed", s.changefeedID.Name()), zap.String("span", hotSpan.ID.String()), zap.Int("score", hotSpan.score), zap.Int("scoreThreshold", s.scoreThreshold))
 		if time.Since(hotSpan.lastUpdateTime) > clearTimeout*time.Second {
 			// should not happen
 			log.Panic("remove hot span since it is outdated",
