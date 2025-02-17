@@ -28,8 +28,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pingcap/log"
-	"github.com/pingcap/tiflow/pkg/logutil"
-	"github.com/pingcap/tiflow/pkg/version"
+	"github.com/pingcap/ticdc/pkg/logger"
+	"github.com/pingcap/ticdc/version"
 	"go.uber.org/zap"
 )
 
@@ -55,7 +55,7 @@ func main() {
 	flag.BoolVar(&consumerOption.enableProfiling, "enable-profiling", false, "enable pprof profiling")
 	flag.Parse()
 
-	err := logutil.InitLogger(&logutil.Config{
+	err := logger.InitLogger(&logger.Config{
 		Level: consumerOption.logLevel,
 		File:  consumerOption.logPath,
 	})

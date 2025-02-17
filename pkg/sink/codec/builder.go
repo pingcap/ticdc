@@ -16,16 +16,16 @@ package codec
 import (
 	"context"
 	"database/sql"
-	"github.com/pingcap/log"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"go.uber.org/zap"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
+	cerror "github.com/pingcap/tiflow/pkg/errors"
+	"go.uber.org/zap"
 )
 
 func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncoder, error) {
