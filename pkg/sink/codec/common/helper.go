@@ -58,6 +58,22 @@ func withZerofill4MySQLType(mysqlType string, zerofill bool) string {
 	return mysqlType
 }
 
+// IsBinaryMySQLType return true if the given mysqlType string is a binary type
+func IsBinaryMySQLType(mysqlType string) bool {
+	return strings.Contains(mysqlType, "blob") || strings.Contains(mysqlType, "binary")
+}
+
+// ExtractBasicMySQLType return the mysql type
+func ExtractBasicMySQLType(mysqlType string) byte {
+	for i := 0; i < len(mysqlType); i++ {
+		if mysqlType[i] == '(' || mysqlType[i] == ' ' {
+			return types.StrToType(mysqlType[:i])
+		}
+	}
+
+	return types.StrToType(mysqlType)
+}
+
 // ColumnsHolder read columns from sql.Rows
 type ColumnsHolder struct {
 	Values        []interface{}

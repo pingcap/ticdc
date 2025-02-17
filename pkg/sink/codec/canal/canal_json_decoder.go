@@ -36,8 +36,6 @@ import (
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"github.com/pingcap/tiflow/pkg/util"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
@@ -114,12 +112,12 @@ func NewBatchDecoder(
 		storageURI := codecConfig.LargeMessageHandle.ClaimCheckStorageURI
 		externalStorage, err = util.GetExternalStorage(ctx, storageURI, nil, util.NewS3Retryer(10, 10*time.Second, 10*time.Second))
 		if err != nil {
-			return nil, cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
+			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
 	}
 
 	if codecConfig.LargeMessageHandle.HandleKeyOnly() && db == nil {
-		return nil, cerror.ErrCodecDecode.
+		return nil, errors.ErrCodecDecode.
 			GenWithStack("handle-key-only is enabled, but upstream TiDB is not provided")
 	}
 
@@ -215,7 +213,7 @@ func (b *canalJSONDecoder) buildData(holder *common.ColumnsHolder) (map[string]i
 
 		var value string
 		rawValue := holder.Values[i].([]uint8)
-		if utils.IsBinaryMySQLType(mysqlType) {
+		if common.IsBinaryMySQLType(mysqlType) {
 			rawValue, err := b.bytesDecoder.Bytes(rawValue)
 			if err != nil {
 				return nil, nil, errors.Trace(err)
@@ -308,7 +306,7 @@ func setColumnInfos(
 		columnInfo := new(timodel.ColumnInfo)
 		columnInfo.ID = mockColumnID
 		columnInfo.Name = pmodel.NewCIStr(name)
-		if utils.IsBinaryMySQLType(mysqlType[name]) {
+		if common.IsBinaryMySQLType(mysqlType[name]) {
 			columnInfo.AddFlag(mysql.BinaryFlag)
 		}
 		if _, isPK := pkNames[name]; isPK {
@@ -347,7 +345,7 @@ func setIndexes(
 // `HasNext` should be called before this.
 func (b *canalJSONDecoder) NextRowChangedEvent() (*model.RowChangedEvent, error) {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeRow {
-		return nil, cerror.ErrCanalDecodeFailed.
+		return nil, errors.ErrCodecDecode.
 			GenWithStack("not found row changed event message")
 	}
 
@@ -373,7 +371,7 @@ func (b *canalJSONDecoder) NextRowChangedEvent() (*model.RowChangedEvent, error)
 // `HasNext` should be called before this.
 func (b *canalJSONDecoder) NextDDLEvent() (*model.DDLEvent, error) {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeDDL {
-		return nil, cerror.ErrCanalDecodeFailed.
+		return nil, errors.ErrDecodeFailed.
 			GenWithStack("not found ddl event message")
 	}
 
@@ -412,7 +410,7 @@ func (b *canalJSONDecoder) NextDDLEvent() (*model.DDLEvent, error) {
 // `HasNext` should be called before this.
 func (b *canalJSONDecoder) NextResolvedEvent() (uint64, error) {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeResolved {
-		return 0, cerror.ErrCanalDecodeFailed.
+		return 0, errors.ErrDecodeFailed.
 			GenWithStack("not found resolved event message")
 	}
 
@@ -420,7 +418,7 @@ func (b *canalJSONDecoder) NextResolvedEvent() (uint64, error) {
 	if !ok {
 		log.Error("canal-json resolved event message should have tidb extension, but not found",
 			zap.Any("msg", b.msg))
-		return 0, cerror.ErrCanalDecodeFailed.
+		return 0, errors.ErrDecodeFailed.
 			GenWithStack("MessageTypeResolved tidb extension not found")
 	}
 	return withExtensionEvent.Extensions.WatermarkTs, nil
@@ -471,7 +469,7 @@ func canalJSONColumnMap2RowChangeColumns(
 }
 
 func canalJSONFormatColumn(columnID int64, value interface{}, mysqlTypeStr string) *model.ColumnData {
-	mysqlType := utils.ExtractBasicMySQLType(mysqlTypeStr)
+	mysqlType := common.ExtractBasicMySQLType(mysqlTypeStr)
 	result := &model.ColumnData{
 		ColumnID: columnID,
 		Value:    value,
@@ -486,7 +484,7 @@ func canalJSONFormatColumn(columnID int64, value interface{}, mysqlTypeStr strin
 	}
 
 	var err error
-	if utils.IsBinaryMySQLType(mysqlTypeStr) {
+	if common.IsBinaryMySQLType(mysqlTypeStr) {
 		// when encoding the `JavaSQLTypeBLOB`, use `ISO8859_1` decoder, now reverse it back.
 		encoder := charmap.ISO8859_1.NewEncoder()
 		value, err = encoder.String(data)
