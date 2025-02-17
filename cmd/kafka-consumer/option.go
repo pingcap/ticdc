@@ -14,6 +14,7 @@
 package main
 
 import (
+	util2 "github.com/pingcap/ticdc/cmd/util"
 	"math"
 	"net/url"
 	"strconv"
@@ -25,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	cmdUtil "github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
@@ -136,7 +136,7 @@ func (o *option) Adjust(upstreamURI *url.URL, configFile string) error {
 	replicaConfig.Sink.TiDBSourceID = 1
 	replicaConfig.Sink.Protocol = util.AddressOf(protocol.String())
 	if configFile != "" {
-		err = cmdUtil.StrictDecodeFile(configFile, "kafka consumer", replicaConfig)
+		err = util2.StrictDecodeFile(configFile, "kafka consumer", replicaConfig)
 		if err != nil {
 			return errors.Trace(err)
 		}
