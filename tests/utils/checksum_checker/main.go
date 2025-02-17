@@ -17,12 +17,12 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	"github.com/pingcap/ticdc/cmd/util"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/sink/dmlsink/mq/transformer/columnselector"
 	"github.com/pingcap/tiflow/pkg/config"

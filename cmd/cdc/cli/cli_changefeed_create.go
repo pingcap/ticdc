@@ -16,7 +16,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	util2 "github.com/pingcap/ticdc/cmd/util"
 	"net/url"
 	"strings"
 
@@ -25,11 +24,11 @@ import (
 	"github.com/pingcap/log"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
+	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
 	putil "github.com/pingcap/tiflow/pkg/util"
 	"github.com/spf13/cobra"
 	"github.com/tikv/client-go/v2/oracle"
@@ -88,7 +87,7 @@ func (o *changefeedCommonOptions) addFlags(cmd *cobra.Command) {
 
 // strictDecodeConfig do strictDecodeFile check and only verify the rules for now.
 func (o *changefeedCommonOptions) strictDecodeConfig(component string, cfg *config.ReplicaConfig) error {
-	err := util2.StrictDecodeFile(o.configFile, component, cfg)
+	err := util.StrictDecodeFile(o.configFile, component, cfg)
 	if err != nil {
 		return err
 	}

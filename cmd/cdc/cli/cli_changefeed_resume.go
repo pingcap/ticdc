@@ -20,9 +20,9 @@ import (
 
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
+	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/spf13/cobra"
 	"github.com/tikv/client-go/v2/oracle"
 )

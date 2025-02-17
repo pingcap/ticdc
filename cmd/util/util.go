@@ -15,16 +15,19 @@ package util
 
 import (
 	"context"
+	"encoding/json"
+	"net/url"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+
 	"github.com/BurntSushi/toml"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"golang.org/x/net/http/httpproxy"
-	"os"
-	"os/signal"
-	"strings"
-	"syscall"
 )
 
 // StrictDecodeFile decodes the toml file strictly. If any item in confFile file is not mapped
@@ -138,4 +141,43 @@ func CheckErr(err error) {
 		}
 	}
 	cobra.CheckErr(err)
+}
+
+// JSONPrint will output the data in JSON format.
+func JSONPrint(cmd *cobra.Command, v interface{}) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	cmd.Printf("%s\n", data)
+	return nil
+}
+
+// Endpoint schemes.
+const (
+	HTTP  = "http"
+	HTTPS = "https"
+)
+
+// VerifyPdEndpoint verifies whether the pd endpoint is a valid http or https URL.
+// The certificate is required when using https.
+func VerifyPdEndpoint(pdEndpoint string, useTLS bool) error {
+	u, err := url.Parse(pdEndpoint)
+	if err != nil {
+		return errors.Annotate(err, "parse PD endpoint")
+	}
+	if (u.Scheme != HTTP && u.Scheme != HTTPS) || u.Host == "" {
+		return errors.New("PD endpoint should be a valid http or https URL")
+	}
+
+	if useTLS {
+		if u.Scheme == HTTP {
+			return errors.New("PD endpoint scheme should be https")
+		}
+	} else {
+		if u.Scheme == HTTPS {
+			return errors.New("PD endpoint scheme is https, please provide certificate")
+		}
+	}
+	return nil
 }

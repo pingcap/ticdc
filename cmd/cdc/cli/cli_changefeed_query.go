@@ -19,10 +19,10 @@ import (
 	"github.com/pingcap/errors"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
+	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/spf13/cobra"
 )
 

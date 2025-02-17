@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/pingcap/ticdc/cmd/util"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,6 +30,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tiflow/cdc/model"

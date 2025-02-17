@@ -15,11 +15,12 @@ package cli
 
 import (
 	"context"
+
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/spf13/cobra"
 	pd "github.com/tikv/pd/client"
 )

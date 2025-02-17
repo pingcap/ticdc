@@ -15,12 +15,13 @@ package cli
 
 import (
 	"context"
+	"os"
+
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/spf13/cobra"
-	"os"
 )
 
 // NewCmdCli creates the `cli` command.

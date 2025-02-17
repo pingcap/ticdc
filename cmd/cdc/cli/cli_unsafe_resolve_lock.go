@@ -14,14 +14,14 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"time"
 
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
+	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
-	"github.com/pingcap/tiflow/pkg/cmd/context"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/spf13/cobra"
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -47,7 +47,7 @@ func newUnsafeResolveLockOptions() *unsafeResolveLockOptions {
 
 // complete adapts from the command line args to the data and client required.
 func (o *unsafeResolveLockOptions) complete(f factory.Factory) error {
-	ctx := context.GetDefaultContext()
+	ctx := context.Background()
 	apiClient, err := f.APIV2Client()
 	if err != nil {
 		return err
@@ -78,7 +78,7 @@ func (o *unsafeResolveLockOptions) complete(f factory.Factory) error {
 
 // run runs the `cli unsafe show-metadata` command.
 func (o *unsafeResolveLockOptions) run() error {
-	ctx := context.GetDefaultContext()
+	ctx := context.Background()
 	var pdAddrs []string
 	if o.upstreamPDAddrs != "" {
 		pdAddrs = strings.Split(o.upstreamPDAddrs, ",")
