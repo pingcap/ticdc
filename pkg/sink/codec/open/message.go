@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/zap"
 )
 
@@ -43,12 +42,6 @@ type messageKey struct {
 	ClaimCheckLocation string `json:"ccl,omitempty"`
 }
 
-// Encode encodes the message key to a byte slice.
-func (m *messageKey) Encode() ([]byte, error) {
-	data, err := json.Marshal(m)
-	return data, errors.WrapError(errors.ErrMarshalFailed, err)
-}
-
 // Decode codes a message key from a byte slice.
 func (m *messageKey) Decode(data []byte) error {
 	return errors.WrapError(errors.ErrUnmarshalFailed, json.Unmarshal(data, m))
@@ -63,43 +56,8 @@ type column struct {
 	Value       any                    `json:"v"`
 }
 
-// FromRowChangeColumn converts from a row changed column to a codec column.
-func (c *column) FromRowChangeColumn(col *pCommon.Column) {
-	c.Type = col.Type
-	c.Flag = col.Flag
-	if c.Flag.IsHandleKey() {
-		whereHandle := true
-		c.WhereHandle = &whereHandle
-	}
-	if col.Value == nil {
-		c.Value = nil
-		return
-	}
-	switch col.Type {
-	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
-		var str string
-		switch col.Value.(type) {
-		case []byte:
-			str = string(col.Value.([]byte))
-		case string:
-			str = col.Value.(string)
-		default:
-			log.Panic("invalid column value, please report a bug", zap.Any("col", col))
-		}
-		if c.Flag.IsBinary() {
-			str = strconv.Quote(str)
-			str = str[1 : len(str)-1]
-		}
-		c.Value = str
-	case mysql.TypeTiDBVectorFloat32:
-		c.Value = col.Value.(types.VectorFloat32).String()
-	default:
-		c.Value = col.Value
-	}
-}
-
-// ToRowChangeColumn converts from a codec column to a row changed column.
-func (c *column) ToRowChangeColumn(name string) *pCommon.Column {
+// toRowChangeColumn converts from a codec column to a row changed column.
+func (c *column) toRowChangeColumn(name string) *pCommon.Column {
 	col := new(pCommon.Column)
 	col.Type = c.Type
 	col.Flag = c.Flag
@@ -136,8 +94,9 @@ func (c *column) ToRowChangeColumn(name string) *pCommon.Column {
 	return col
 }
 
-// FormatColumn formats a codec column.
-func FormatColumn(c column) column {
+// formatColumn formats a codec column.
+// todo: can we make this a method of the `column` ?
+func formatColumn(c column) column {
 	switch c.Type {
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob,
 		mysql.TypeLongBlob, mysql.TypeBlob:
@@ -192,11 +151,6 @@ type messageRow struct {
 	Delete     map[string]column `json:"d,omitempty"`
 }
 
-func (m *messageRow) encode() ([]byte, error) {
-	data, err := json.Marshal(m)
-	return data, errors.WrapError(errors.ErrMarshalFailed, err)
-}
-
 func (m *messageRow) decode(data []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
@@ -205,13 +159,13 @@ func (m *messageRow) decode(data []byte) error {
 		return errors.WrapError(errors.ErrUnmarshalFailed, err)
 	}
 	for colName, column := range m.Update {
-		m.Update[colName] = FormatColumn(column)
+		m.Update[colName] = formatColumn(column)
 	}
 	for colName, column := range m.Delete {
-		m.Delete[colName] = FormatColumn(column)
+		m.Delete[colName] = formatColumn(column)
 	}
 	for colName, column := range m.PreColumns {
-		m.PreColumns[colName] = FormatColumn(column)
+		m.PreColumns[colName] = formatColumn(column)
 	}
 	return nil
 }
@@ -219,11 +173,6 @@ func (m *messageRow) decode(data []byte) error {
 type messageDDL struct {
 	Query string             `json:"q"`
 	Type  timodel.ActionType `json:"t"`
-}
-
-func (m *messageDDL) encode() ([]byte, error) {
-	data, err := json.Marshal(m)
-	return data, errors.WrapError(errors.ErrMarshalFailed, err)
 }
 
 func (m *messageDDL) decode(data []byte) error {

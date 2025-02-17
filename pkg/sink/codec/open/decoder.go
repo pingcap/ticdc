@@ -411,7 +411,7 @@ func sortColumnArrays(arrays ...[]*pCommon.Column) {
 func codecColumns2RowChangeColumns(cols map[string]column) []*pCommon.Column {
 	sinkCols := make([]*pCommon.Column, 0, len(cols))
 	for name, col := range cols {
-		c := col.ToRowChangeColumn(name)
+		c := col.toRowChangeColumn(name)
 		sinkCols = append(sinkCols, c)
 	}
 	if len(sinkCols) == 0 {
