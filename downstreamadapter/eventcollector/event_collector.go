@@ -74,9 +74,11 @@ EventCollector is the relay between EventService and DispatcherManager, responsi
 EventCollector is an instance-level component.
 */
 type EventCollector struct {
-	serverId      node.ID
-	dispatcherMap sync.Map
-	mc            messaging.MessageCenter
+	serverId        node.ID
+	dispatcherMap   sync.Map // key: dispatcherID, value: dispatcherStat
+	changefeedIDMap sync.Map // key: changefeedID.GID, value: changefeedID
+
+	mc messaging.MessageCenter
 
 	// dispatcherRequestChan cached dispatcher request when some error occurs.
 	dispatcherRequestChan *chann.DrainableChann[DispatcherRequestWithTarget]
@@ -162,6 +164,23 @@ func (c *EventCollector) Run(ctx context.Context) {
 func (c *EventCollector) Close() {
 	c.cancel()
 	c.ds.Close()
+
+	c.changefeedIDMap.Range(func(key, value any) bool {
+		cfID := value.(common.ChangeFeedID)
+		// Remove metrics for the changefeed.
+		metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+			"event-collector",
+			"max",
+			cfID.String(),
+		)
+		metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+			"event-collector",
+			"used",
+			cfID.String(),
+		)
+		return true
+	})
+
 	c.wg.Wait()
 	log.Info("event collector is closed")
 }
@@ -178,6 +197,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	stat.reset()
 	stat.sentCommitTs.Store(target.GetStartTs())
 	c.dispatcherMap.Store(target.GetId(), stat)
+	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota)
@@ -437,16 +457,21 @@ func (c *EventCollector) updateMetrics(ctx context.Context) {
 			metricsDSInputChanLen.Set(float64(dsMetrics.EventChanSize))
 			metricsDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 			for _, areaMetric := range dsMetrics.MemoryControl.AreaMemoryMetrics {
+				cfID, ok := c.changefeedIDMap.Load(areaMetric.Area())
+				if !ok {
+					continue
+				}
+				changefeedID := cfID.(common.ChangeFeedID)
 				metrics.DynamicStreamMemoryUsage.WithLabelValues(
 					"event-collector",
 					"max",
-					areaMetric.Area().String(),
+					changefeedID.String(),
 				).Set(float64(areaMetric.MaxMemory()))
-
 				metrics.DynamicStreamMemoryUsage.WithLabelValues(
 					"event-collector",
 					"used",
-					areaMetric.Area().String()).Set(float64(areaMetric.MemoryUsage()))
+					changefeedID.String(),
+				).Set(float64(areaMetric.MemoryUsage()))
 			}
 		}
 	}

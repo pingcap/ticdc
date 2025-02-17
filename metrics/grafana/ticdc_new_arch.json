@@ -11001,7 +11001,7 @@
               "exemplar": true,
               "expr": "ticdc_dynamic_stream_memory_usage{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", component!=\"\", instance=~\"$ticdc_instance\"}",
               "interval": "",
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-memory-{{component}}-{{type}}",
+              "legendFormat": "{{area}}-{{instance}}-memory-{{component}}-{{type}}",
               "refId": "A"
             }
           ],
