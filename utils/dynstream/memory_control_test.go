@@ -286,14 +286,14 @@ func TestSetAreaSettings(t *testing.T) {
 func TestGetMetrics(t *testing.T) {
 	mc, path := setupTestComponents()
 	metrics := mc.getMetrics()
-	require.Equal(t, int64(0), metrics.AreaMemoryMetrics[0].usedMemory)
-	require.Equal(t, int64(0), metrics.AreaMemoryMetrics[0].maxMemory)
+	require.Equal(t, 0, len(metrics.AreaMemoryMetrics))
 
 	mc.addPathToArea(path, AreaSettings{
 		MaxPendingSize:   100,
 		FeedbackInterval: time.Second,
 	}, nil)
 	metrics = mc.getMetrics()
+	require.Equal(t, 1, len(metrics.AreaMemoryMetrics))
 	require.Equal(t, int64(0), metrics.AreaMemoryMetrics[0].usedMemory)
 	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].maxMemory)
 
