@@ -84,8 +84,8 @@ func (b *bufferedJSONDecoder) Bytes() []byte {
 	return b.buf.Bytes()
 }
 
-// batchDecoder decodes the byte into the original message.
-type batchDecoder struct {
+// canalJSONDecoder decodes the byte into the original message.
+type canalJSONDecoder struct {
 	msg     canalJSONMessageInterface
 	decoder *bufferedJSONDecoder
 
@@ -123,7 +123,7 @@ func NewBatchDecoder(
 			GenWithStack("handle-key-only is enabled, but upstream TiDB is not provided")
 	}
 
-	return &batchDecoder{
+	return &canalJSONDecoder{
 		config:             codecConfig,
 		decoder:            newBufferedJSONDecoder(),
 		storage:            externalStorage,
@@ -136,7 +136,7 @@ func NewBatchDecoder(
 }
 
 // AddKeyValue implements the RowEventDecoder interface
-func (b *batchDecoder) AddKeyValue(_, value []byte) error {
+func (b *canalJSONDecoder) AddKeyValue(_, value []byte) error {
 	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
 		log.Error("decompress data failed",
@@ -152,7 +152,7 @@ func (b *batchDecoder) AddKeyValue(_, value []byte) error {
 }
 
 // HasNext implements the RowEventDecoder interface
-func (b *batchDecoder) HasNext() (common.MessageType, bool, error) {
+func (b *canalJSONDecoder) HasNext() (common.MessageType, bool, error) {
 	if b.decoder.Len() == 0 {
 		return common.MessageTypeUnknown, false, nil
 	}
@@ -174,7 +174,7 @@ func (b *batchDecoder) HasNext() (common.MessageType, bool, error) {
 	return b.msg.messageType(), true, nil
 }
 
-func (b *batchDecoder) assembleClaimCheckRowChangedEvent(ctx context.Context, claimCheckLocation string) (*model.RowChangedEvent, error) {
+func (b *canalJSONDecoder) assembleClaimCheckRowChangedEvent(ctx context.Context, claimCheckLocation string) (*model.RowChangedEvent, error) {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
 	data, err := b.storage.ReadFile(ctx, claimCheckFileName)
 	if err != nil {
@@ -203,7 +203,7 @@ func (b *batchDecoder) assembleClaimCheckRowChangedEvent(ctx context.Context, cl
 	return b.NextRowChangedEvent()
 }
 
-func (b *batchDecoder) buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string, error) {
+func (b *canalJSONDecoder) buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string, error) {
 	columnsCount := holder.Length()
 	data := make(map[string]interface{}, columnsCount)
 	mysqlTypeMap := make(map[string]string, columnsCount)
@@ -234,7 +234,7 @@ func (b *batchDecoder) buildData(holder *common.ColumnsHolder) (map[string]inter
 	return data, mysqlTypeMap, nil
 }
 
-func (b *batchDecoder) assembleHandleKeyOnlyRowChangedEvent(
+func (b *canalJSONDecoder) assembleHandleKeyOnlyRowChangedEvent(
 	ctx context.Context, message *canalJSONMessageWithTiDBExtension,
 ) (*model.RowChangedEvent, error) {
 	var (
@@ -345,7 +345,7 @@ func setIndexes(
 
 // NextRowChangedEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
-func (b *batchDecoder) NextRowChangedEvent() (*model.RowChangedEvent, error) {
+func (b *canalJSONDecoder) NextRowChangedEvent() (*model.RowChangedEvent, error) {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeRow {
 		return nil, cerror.ErrCanalDecodeFailed.
 			GenWithStack("not found row changed event message")
@@ -371,7 +371,7 @@ func (b *batchDecoder) NextRowChangedEvent() (*model.RowChangedEvent, error) {
 
 // NextDDLEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
-func (b *batchDecoder) NextDDLEvent() (*model.DDLEvent, error) {
+func (b *canalJSONDecoder) NextDDLEvent() (*model.DDLEvent, error) {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeDDL {
 		return nil, cerror.ErrCanalDecodeFailed.
 			GenWithStack("not found ddl event message")
@@ -410,7 +410,7 @@ func (b *batchDecoder) NextDDLEvent() (*model.DDLEvent, error) {
 
 // NextResolvedEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
-func (b *batchDecoder) NextResolvedEvent() (uint64, error) {
+func (b *canalJSONDecoder) NextResolvedEvent() (uint64, error) {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeResolved {
 		return 0, cerror.ErrCanalDecodeFailed.
 			GenWithStack("not found resolved event message")
@@ -538,7 +538,7 @@ func canalJSONFormatColumn(columnID int64, value interface{}, mysqlTypeStr strin
 	return result
 }
 
-func (b *batchDecoder) canalJSONMessage2RowChange() (*model.RowChangedEvent, error) {
+func (b *canalJSONDecoder) canalJSONMessage2RowChange() (*model.RowChangedEvent, error) {
 	msg := b.msg
 	result := new(model.RowChangedEvent)
 	result.TableInfo = b.queryTableInfo(msg)
@@ -597,7 +597,7 @@ func (b *batchDecoder) canalJSONMessage2RowChange() (*model.RowChangedEvent, err
 	return result, nil
 }
 
-func (b *batchDecoder) queryTableInfo(msg canalJSONMessageInterface) *model.TableInfo {
+func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *model.TableInfo {
 	schema := *msg.getSchema()
 	table := *msg.getTable()
 	cacheKey := tableKey{
@@ -635,7 +635,7 @@ func newTableInfo(msg canalJSONMessageInterface, partitionInfo *timodel.Partitio
 	return model.WrapTableInfo(100, schema, 1000, tidbTableInfo)
 }
 
-func (b *batchDecoder) setPhysicalTableID(event *model.RowChangedEvent) error {
+func (b *canalJSONDecoder) setPhysicalTableID(event *model.RowChangedEvent) error {
 	if event.TableInfo.Partition == nil {
 		event.PhysicalTableID = event.TableInfo.ID
 		return nil
