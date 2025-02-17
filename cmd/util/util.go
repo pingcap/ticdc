@@ -14,9 +14,17 @@
 package util
 
 import (
+	"context"
 	"github.com/BurntSushi/toml"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/spf13/cobra"
+	"go.uber.org/zap"
+	"golang.org/x/net/http/httpproxy"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 )
 
 // StrictDecodeFile decodes the toml file strictly. If any item in confFile file is not mapped
@@ -57,4 +65,77 @@ func StrictDecodeFile(path, component string, cfg interface{}, ignoreCheckItems 
 		}
 	}
 	return errors.Trace(err)
+}
+
+// LogHTTPProxies logs HTTP proxy relative environment variables.
+func LogHTTPProxies() {
+	fields := findProxyFields()
+	if len(fields) > 0 {
+		log.Info("using proxy config", fields...)
+	}
+}
+
+func findProxyFields() []zap.Field {
+	proxyCfg := httpproxy.FromEnvironment()
+	fields := make([]zap.Field, 0, 3)
+	if proxyCfg.HTTPProxy != "" {
+		fields = append(fields, zap.String("http_proxy", proxyCfg.HTTPProxy))
+	}
+	if proxyCfg.HTTPSProxy != "" {
+		fields = append(fields, zap.String("https_proxy", proxyCfg.HTTPSProxy))
+	}
+	if proxyCfg.NoProxy != "" {
+		fields = append(fields, zap.String("no_proxy", proxyCfg.NoProxy))
+	}
+	return fields
+}
+
+// shutdownNotify is a callback to notify caller that TiCDC is about to shutdown.
+// It returns a done channel which receive an empty struct when shutdown is complete.
+// It must be non-blocking.
+type shutdownNotify func() <-chan struct{}
+
+// InitSignalHandling initializes signal handling.
+// It must be called after InitCmd.
+func InitSignalHandling(shutdown shutdownNotify, cancel context.CancelFunc) {
+	// systemd and k8s send signals twice. The first is for graceful shutdown,
+	// and the second is for force shutdown.
+	// We use 2 for channel length to ease testing.
+	signalChanLen := 2
+	sc := make(chan os.Signal, signalChanLen)
+	signal.Notify(sc,
+		syscall.SIGHUP,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+		syscall.SIGQUIT)
+
+	go func() {
+		sig := <-sc
+		log.Info("got signal, prepare to shutdown", zap.Stringer("signal", sig))
+		done := shutdown()
+		select {
+		case <-done:
+			log.Info("shutdown complete")
+		case sig = <-sc:
+			log.Info("got signal, force shutdown", zap.Stringer("signal", sig))
+		}
+		cancel()
+	}()
+}
+
+// CheckErr is used to cmd err.
+func CheckErr(err error) {
+	if errors.IsCliUnprintableError(err) {
+		err = nil
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), string(errors.ErrCredentialNotFound.RFCCode())) {
+			msg := ", please use the following command to create a new one:\n" +
+				"1. specify the credential in the command line with `cdc cli --user <user> --password <password>`.\n" +
+				"2. specify the credential in the environment variables with `export TICDC_USER=<user> TICDC_PASSWORD=<password>`.\n" +
+				"3. `cdc cli configure-credentials` to initialize the default credential config.\n"
+			err = errors.New(err.Error() + msg)
+		}
+	}
+	cobra.CheckErr(err)
 }
