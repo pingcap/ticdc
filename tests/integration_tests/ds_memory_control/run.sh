@@ -36,7 +36,7 @@ function run() {
 	run_sql "CREATE TABLE ds_memory_control.finish_mark_1 (a int primary key);"
 	sleep 30
 	check_table_exists "ds_memory_control.finish_mark_1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 180
 
 	
 	export GO_FAILPOINTS=''

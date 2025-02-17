@@ -104,6 +104,10 @@ func (w *MysqlWriter) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStor
 }
 
 func (w *MysqlWriter) FlushDDLEvent(event *commonEvent.DDLEvent) error {
+	if w.cfg.DryRun {
+		return nil
+	}
+
 	if w.cfg.IsTiDB {
 		// first we check whether there is some async ddl executed now.
 		w.waitAsyncDDLDone(event)
@@ -148,6 +152,10 @@ func (w *MysqlWriter) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 }
 
 func (w *MysqlWriter) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
+	if w.cfg.DryRun {
+		return nil
+	}
+
 	if !w.syncPointTableInit {
 		// create sync point table if not exist
 		err := w.createSyncTable()
