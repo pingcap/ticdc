@@ -38,16 +38,14 @@ function run() {
 	check_table_exists "ds_memory_control.finish_mark_1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 180
 
-	
 	export GO_FAILPOINTS=''
 	cleanup_process $CDC_BINARY
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/utils/dynstream/PauseArea=10%return(true)'
 
-	
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	go-ycsb run mysql -P $CUR/conf/workload-2 -p mysql.host=${UP_TIDB_HOST} -p mysql.port=${UP_TIDB_PORT} -p mysql.user=root -p mysql.db=ds_memory_control
-	
+
 	run_sql "CREATE TABLE ds_memory_control.finish_mark_2 (a int primary key);"
 	sleep 30
 	check_table_exists "ds_memory_control.finish_mark_2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 180
