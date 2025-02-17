@@ -14,9 +14,9 @@
 package cli
 
 import (
+	"context"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
-	cmdcontext "github.com/pingcap/tiflow/pkg/cmd/context"
 	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/spf13/cobra"
 )
@@ -43,8 +43,7 @@ func (o *listCaptureOptions) complete(f factory.Factory) error {
 
 // run runs the `cli capture list` command.
 func (o *listCaptureOptions) run(cmd *cobra.Command) error {
-	ctx := cmdcontext.GetDefaultContext()
-
+	ctx := context.Background()
 	raw, err := o.apiv2Client.Captures().List(ctx)
 	if err != nil {
 		return err

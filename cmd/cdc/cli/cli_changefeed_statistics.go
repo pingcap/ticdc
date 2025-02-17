@@ -21,7 +21,6 @@ import (
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
-	cmdcontext "github.com/pingcap/tiflow/pkg/cmd/context"
 	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/spf13/cobra"
 	"github.com/tikv/client-go/v2/oracle"
@@ -96,7 +95,7 @@ func (o *statisticsChangefeedOptions) runCliWithAPIClient(ctx context.Context, c
 
 // run the `cli changefeed statistics` command.
 func (o *statisticsChangefeedOptions) run(cmd *cobra.Command) error {
-	ctx := cmdcontext.GetDefaultContext()
+	ctx := context.Background()
 
 	tick := time.NewTicker(time.Duration(o.interval) * time.Second)
 	var lastTime time.Time

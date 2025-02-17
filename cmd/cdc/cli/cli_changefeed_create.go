@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tiflow/cdc/model"
-	cmdcontext "github.com/pingcap/tiflow/pkg/cmd/context"
 	"github.com/pingcap/tiflow/pkg/cmd/util"
 	putil "github.com/pingcap/tiflow/pkg/util"
 	"github.com/spf13/cobra"
@@ -355,8 +354,7 @@ func newCmdCreateChangefeed(f factory.Factory) *cobra.Command {
 		Short: "Create a new replication task (changefeed)",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			ctx := cmdcontext.GetDefaultContext()
-
+			ctx := context.Background()
 			util.CheckErr(o.complete(f))
 			util.CheckErr(o.validate(cmd))
 			util.CheckErr(o.run(ctx, cmd))

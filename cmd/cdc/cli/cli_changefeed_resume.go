@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	cmdcontext "github.com/pingcap/tiflow/pkg/cmd/context"
 	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/spf13/cobra"
 	"github.com/tikv/client-go/v2/oracle"
@@ -195,7 +194,7 @@ func (o *resumeChangefeedOptions) validateParams(ctx context.Context) error {
 
 // run the `cli changefeed resume` command.
 func (o *resumeChangefeedOptions) run(cmd *cobra.Command) error {
-	ctx := cmdcontext.GetDefaultContext()
+	ctx := context.Background()
 
 	if err := o.validateParams(ctx); err != nil {
 		return err

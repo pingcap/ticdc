@@ -14,6 +14,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -21,7 +22,6 @@ import (
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
-	cmdcontext "github.com/pingcap/tiflow/pkg/cmd/context"
 	"github.com/pingcap/tiflow/pkg/cmd/util"
 	putil "github.com/pingcap/tiflow/pkg/util"
 	"github.com/r3labs/diff"
@@ -91,7 +91,7 @@ func (o *updateChangefeedOptions) complete(f factory.Factory) error {
 
 // run the `cli changefeed update` command.
 func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
-	ctx := cmdcontext.GetDefaultContext()
+	ctx := context.Background()
 
 	old, err := o.apiV2Client.Changefeeds().Get(ctx, o.namespace, o.changefeedID)
 	if err != nil {

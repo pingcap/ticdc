@@ -14,11 +14,11 @@
 package cli
 
 import (
+	"context"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
-	cmdcontext "github.com/pingcap/tiflow/pkg/cmd/context"
 	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/spf13/cobra"
 	pd "github.com/tikv/pd/client"
@@ -66,7 +66,7 @@ func (o *unsafeResetOptions) addFlags(cmd *cobra.Command) {
 
 // run runs the `cli unsafe reset` command.
 func (o *unsafeResetOptions) run(cmd *cobra.Command) error {
-	ctx := cmdcontext.GetDefaultContext()
+	ctx := context.Background()
 	defer o.pdClient.Close()
 	defer o.etcdClient.Close()
 

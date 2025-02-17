@@ -14,13 +14,13 @@
 package cli
 
 import (
+	"context"
 	"strings"
 
 	"github.com/pingcap/errors"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
-	cmdcontext "github.com/pingcap/tiflow/pkg/cmd/context"
 	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/spf13/cobra"
 )
@@ -74,7 +74,7 @@ func (o *unsafeDeleteServiceGcSafepointOptions) complete(f factory.Factory) erro
 
 // run runs the `cli unsafe delete-service-gc-safepoint` command.
 func (o *unsafeDeleteServiceGcSafepointOptions) run(cmd *cobra.Command) error {
-	ctx := cmdcontext.GetDefaultContext()
+	ctx := context.Background()
 
 	err := o.apiClient.Unsafe().DeleteServiceGcSafePoint(ctx, o.getUpstreamConfig())
 	if err == nil {
