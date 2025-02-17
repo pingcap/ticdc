@@ -17,6 +17,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
 	"github.com/pingcap/log"
 	pCommon "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -29,10 +34,6 @@ import (
 	"github.com/pingcap/tiflow/pkg/sink/codec"
 	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
-	"path/filepath"
-	"sort"
-	"strings"
-	"time"
 )
 
 // BatchDecoder decodes the byte of a batch into the original messages.

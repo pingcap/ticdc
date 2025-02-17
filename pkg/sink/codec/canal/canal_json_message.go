@@ -64,11 +64,9 @@ func (c *JSONMessage) messageType() common.MessageType {
 	if c.IsDDL {
 		return common.MessageTypeDDL
 	}
-
 	if c.EventType == tidbWaterMarkType {
 		return common.MessageTypeResolved
 	}
-
 	return common.MessageTypeRow
 }
 

@@ -17,6 +17,8 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"strconv"
+
 	"github.com/pingcap/log"
 	pCommon "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -25,7 +27,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/zap"
-	"strconv"
 )
 
 type messageKey struct {
