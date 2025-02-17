@@ -258,6 +258,8 @@ func (c *Controller) FinishBootstrap(
 		}
 	}
 
+	log.Info("line 261")
+
 	schemaInfos := map[int64]*heartbeatpb.SchemaInfo{}
 	for _, table := range tables {
 		if _, ok := schemaInfos[table.SchemaID]; !ok {
@@ -303,9 +305,13 @@ func (c *Controller) FinishBootstrap(
 			zap.Int64("id", tableID))
 	}
 
+	log.Info("line 308")
+
 	// rebuild barrier status
 	barrier := NewBarrier(c, c.cfConfig.Scheduler.EnableTableAcrossNodes)
 	barrier.HandleBootstrapResponse(allNodesResp)
+
+	log.Info("line 314")
 
 	// start scheduler
 	c.taskHandlers = append(c.taskHandlers, c.schedulerController.Start(c.taskScheduler)...)
@@ -313,6 +319,8 @@ func (c *Controller) FinishBootstrap(
 	c.taskHandlers = append(c.taskHandlers, c.taskScheduler.Submit(c.operatorController, time.Now()))
 
 	c.bootstrapped = true
+
+	log.Info("line 323")
 
 	initSchemaInfos := make([]*heartbeatpb.SchemaInfo, 0, len(schemaInfos))
 	for _, info := range schemaInfos {
