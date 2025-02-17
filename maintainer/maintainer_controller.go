@@ -211,10 +211,15 @@ func (c *Controller) FinishBootstrap(
 			c.replicationDB.UpdateStatus(c.replicationDB.GetDDLDispatcher(), status)
 		}
 	}
+
+	log.Info("line 214")
+
 	if startTs == 0 {
 		log.Panic("cant not found the start ts from the bootstrap response",
 			zap.String("changefeed", c.changefeedID.Name()))
 	}
+
+	log.Info("line 222")
 	// 2. load tables from schema store using the start ts
 	tables, err := c.loadTables(startTs)
 	if err != nil {
@@ -223,6 +228,8 @@ func (c *Controller) FinishBootstrap(
 			zap.Error(err))
 		return nil, nil, errors.Trace(err)
 	}
+
+	log.Info("line 230")
 
 	workingMap := make(map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication])
 	for node, resp := range allNodesResp {
