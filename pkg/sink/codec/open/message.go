@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,31 +11,59 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package internal
+package open
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"strconv"
-
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common"
+	pCommon "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/zap"
+	"strconv"
 )
 
-// Column is a type only used in codec internally.
-type Column struct {
+type messageKey struct {
+	Ts        uint64             `json:"ts"`
+	Schema    string             `json:"scm,omitempty"`
+	Table     string             `json:"tbl,omitempty"`
+	RowID     int64              `json:"rid,omitempty"`
+	Partition *int64             `json:"ptn,omitempty"`
+	Type      common.MessageType `json:"t"`
+	// Only Handle Key Columns encoded in the message's value part.
+	OnlyHandleKey bool `json:"ohk,omitempty"`
+
+	// Claim check location for the message
+	ClaimCheckLocation string `json:"ccl,omitempty"`
+}
+
+// Encode encodes the message key to a byte slice.
+func (m *messageKey) Encode() ([]byte, error) {
+	data, err := json.Marshal(m)
+	return data, errors.WrapError(errors.ErrMarshalFailed, err)
+}
+
+// Decode codes a message key from a byte slice.
+func (m *messageKey) Decode(data []byte) error {
+	return errors.WrapError(errors.ErrUnmarshalFailed, json.Unmarshal(data, m))
+}
+
+// column is a type only used in codec internally.
+type column struct {
 	Type byte `json:"t"`
 	// Deprecated: please use Flag instead.
-	WhereHandle *bool                 `json:"h,omitempty"`
-	Flag        common.ColumnFlagType `json:"f"`
-	Value       any                   `json:"v"`
+	WhereHandle *bool                  `json:"h,omitempty"`
+	Flag        pCommon.ColumnFlagType `json:"f"`
+	Value       any                    `json:"v"`
 }
 
 // FromRowChangeColumn converts from a row changed column to a codec column.
-func (c *Column) FromRowChangeColumn(col *common.Column) {
+func (c *column) FromRowChangeColumn(col *pCommon.Column) {
 	c.Type = col.Type
 	c.Flag = col.Flag
 	if c.Flag.IsHandleKey() {
@@ -70,8 +98,8 @@ func (c *Column) FromRowChangeColumn(col *common.Column) {
 }
 
 // ToRowChangeColumn converts from a codec column to a row changed column.
-func (c *Column) ToRowChangeColumn(name string) *common.Column {
-	col := new(common.Column)
+func (c *column) ToRowChangeColumn(name string) *pCommon.Column {
+	col := new(pCommon.Column)
 	col.Type = c.Type
 	col.Flag = c.Flag
 	col.Name = name
@@ -108,7 +136,7 @@ func (c *Column) ToRowChangeColumn(name string) *common.Column {
 }
 
 // FormatColumn formats a codec column.
-func FormatColumn(c Column) Column {
+func FormatColumn(c column) column {
 	switch c.Type {
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob,
 		mysql.TypeLongBlob, mysql.TypeBlob:
@@ -155,4 +183,48 @@ func FormatColumn(c Column) Column {
 		}
 	}
 	return c
+}
+
+type messageRow struct {
+	Update     map[string]column `json:"u,omitempty"`
+	PreColumns map[string]column `json:"p,omitempty"`
+	Delete     map[string]column `json:"d,omitempty"`
+}
+
+func (m *messageRow) encode() ([]byte, error) {
+	data, err := json.Marshal(m)
+	return data, errors.WrapError(errors.ErrMarshalFailed, err)
+}
+
+func (m *messageRow) decode(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	err := decoder.Decode(m)
+	if err != nil {
+		return errors.WrapError(errors.ErrUnmarshalFailed, err)
+	}
+	for colName, column := range m.Update {
+		m.Update[colName] = FormatColumn(column)
+	}
+	for colName, column := range m.Delete {
+		m.Delete[colName] = FormatColumn(column)
+	}
+	for colName, column := range m.PreColumns {
+		m.PreColumns[colName] = FormatColumn(column)
+	}
+	return nil
+}
+
+type messageDDL struct {
+	Query string             `json:"q"`
+	Type  timodel.ActionType `json:"t"`
+}
+
+func (m *messageDDL) encode() ([]byte, error) {
+	data, err := json.Marshal(m)
+	return data, errors.WrapError(errors.ErrMarshalFailed, err)
+}
+
+func (m *messageDDL) decode(data []byte) error {
+	return errors.WrapError(errors.ErrUnmarshalFailed, json.Unmarshal(data, m))
 }

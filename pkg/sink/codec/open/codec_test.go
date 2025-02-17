@@ -27,7 +27,7 @@ import (
 // TODO: Add E2E test for double/float nan and inf
 // Test all type, column selector, callback, handle only features.
 
-// Test Column Type: TinyInt, Tinyint(null), Bool, Bool(null), SmallInt, SmallInt(null), Int, Int(null), Float, Float(nulll), Double, Double(null),
+// Test column Type: TinyInt, Tinyint(null), Bool, Bool(null), SmallInt, SmallInt(null), Int, Int(null), Float, Float(nulll), Double, Double(null),
 // Timestamp, Timestamp(null), BigInt, BigInt(null), MediumInt, MediumInt(null), Date, Date(null), Time, Time(null), Datetime, Datetime(null), Year, Year(null),
 // Varchar, Varchar(null), VarBinary, VarBinary(null), Bit, Bit(null), Json, Json(null), Decimal, Decimal(null), Enum, Enum(null), Set, Set(null), TinyText, TinyText(null), TinyBlob, TinyBlob(null), MediumText, MediumText(null), MediumBlob, MediumBlob(null),LongText, LongText(null),LongBlob, LongBlob(null), Text, Text(null), Blob, Blob(null), char, char(null), binary, binary(null)
 func TestBasicType(t *testing.T) {

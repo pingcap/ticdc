@@ -634,3 +634,24 @@ func GetColumnDefaultValue(col *model.ColumnInfo) interface{} {
 	defaultDatum := datumTypes.NewDatum(defaultValue)
 	return defaultDatum.GetValue()
 }
+
+// GetHandleAndUniqueIndexOffsets4Test is used to get the offsets of handle columns and other unique index columns in test
+func GetHandleAndUniqueIndexOffsets4Test(cols []*Column) [][]int {
+	result := make([][]int, 0)
+	handleColumns := make([]int, 0)
+	for i, col := range cols {
+		if col.Flag.IsHandleKey() {
+			handleColumns = append(handleColumns, i)
+		} else if col.Flag.IsUniqueKey() {
+			// When there is a unique key which is not handle key,
+			// we cannot get the accurate index info for this key.
+			// So just be aggressive to make each unique column a unique index
+			// to make sure there is no write conflict when syncing data in tests.
+			result = append(result, []int{i})
+		}
+	}
+	if len(handleColumns) != 0 {
+		result = append(result, handleColumns)
+	}
+	return result
+}
