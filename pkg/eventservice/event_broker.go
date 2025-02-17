@@ -888,8 +888,11 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	id := dispatcherInfo.GetID()
 	stat, ok := c.dispatchers.Load(id)
 	if !ok {
+		stat, ok = c.tableTriggerDispatchers.Load(id)
+		if !ok {
+			return
+		}
 		c.tableTriggerDispatchers.Delete(id)
-		return
 	}
 
 	stat.(*dispatcherStat).changefeedStat.removeDispatcher()
@@ -907,6 +910,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	c.eventStore.UnregisterDispatcher(id)
 	c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
 	c.dispatchers.Delete(id)
+
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
