@@ -608,7 +608,7 @@ func NewTableInfo(schemaID int64, schemaName string, tableName string, tableID i
 	}
 
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
-	// This function should be appear when tableInfo is created as a pair.
+	// This function should be appeared when tableInfo is created as a pair.
 	runtime.SetFinalizer(ti, func(ti *TableInfo) {
 		GetSharedColumnSchemaStorage().tryReleaseColumnSchema(ti.columnSchema)
 	})
@@ -633,25 +633,4 @@ func GetColumnDefaultValue(col *model.ColumnInfo) interface{} {
 	}
 	defaultDatum := datumTypes.NewDatum(defaultValue)
 	return defaultDatum.GetValue()
-}
-
-// GetHandleAndUniqueIndexOffsets is used to get the offsets of handle columns and other unique index columns
-func GetHandleAndUniqueIndexOffsets(cols []*Column) [][]int {
-	result := make([][]int, 0)
-	handleColumns := make([]int, 0)
-	for i, col := range cols {
-		if col.Flag.IsHandleKey() {
-			handleColumns = append(handleColumns, i)
-		} else if col.Flag.IsUniqueKey() {
-			// When there is a unique key which is not handle key,
-			// we cannot get the accurate index info for this key.
-			// So just be aggressive to make each unique column a unique index
-			// to make sure there is no write conflict when syncing data in tests.
-			result = append(result, []int{i})
-		}
-	}
-	if len(handleColumns) != 0 {
-		result = append(result, handleColumns)
-	}
-	return result
 }
