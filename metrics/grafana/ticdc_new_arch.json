@@ -1027,14 +1027,6 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_log_puller_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namesapce=~\"$namespace\", changefeed=~\"$changefeed\"}",
-              "hide": false,
-              "interval": "",
-              "legendFormat": "Log-Puller-{{type}}-resolvedTs-Lag-{{instance}}",
-              "refId": "A"
-            },
-            {
-              "exemplar": true,
               "expr": "ticdc_event_store_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
               "hide": false,
               "interval": "",
