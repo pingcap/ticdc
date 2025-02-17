@@ -26,10 +26,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/hack"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )

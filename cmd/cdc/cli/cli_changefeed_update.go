@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
-	putil "github.com/pingcap/tiflow/pkg/util"
+	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/r3labs/diff"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"

@@ -25,9 +25,9 @@ import (
 	"github.com/imdario/mergo"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/util"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	psink "github.com/pingcap/tiflow/pkg/sink"
-	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
 

@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/tiflow/pkg/util"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )

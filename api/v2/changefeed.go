@@ -26,7 +26,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
-	apperror "github.com/pingcap/ticdc/pkg/apperror"
+	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
