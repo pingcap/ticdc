@@ -26,7 +26,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/internal"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/tiflow/pkg/sink/codec"
 	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
@@ -209,8 +208,8 @@ func newJSONMessageForDML(
 		out.String("")
 	}
 
-	valueMap := make(map[int64]string, 0)                  // colId -> value
-	javaTypeMap := make(map[int64]internal.JavaSQLType, 0) // colId -> javaType
+	valueMap := make(map[int64]string, 0)         // colId -> value
+	javaTypeMap := make(map[int64]JavaSQLType, 0) // colId -> javaType
 
 	row := e.GetRows()
 	if e.IsDelete() {
