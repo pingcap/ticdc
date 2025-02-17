@@ -14,8 +14,10 @@
 package open
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"github.com/pingcap/ticdc/pkg/util"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -220,6 +222,35 @@ func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
 func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
-	key, value := encodeResolvedTs(ts)
+	keyBuf := &bytes.Buffer{}
+	keyWriter := util.BorrowJSONWriter(keyBuf)
+
+	keyWriter.WriteObject(func() {
+		keyWriter.WriteUint64Field("ts", ts)
+		keyWriter.WriteIntField("t", int(common.MessageTypeResolved))
+	})
+
+	util.ReturnJSONWriter(keyWriter)
+
+	key := keyBuf.Bytes()
+
+	var keyLenByte [8]byte
+	var valueLenByte [8]byte
+	var versionByte [8]byte
+	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
+	binary.BigEndian.PutUint64(valueLenByte[:], 0)
+	binary.BigEndian.PutUint64(versionByte[:], batchVersion1)
+
+	keyOutput := new(bytes.Buffer)
+
+	keyOutput.Write(versionByte[:])
+	keyOutput.Write(keyLenByte[:])
+	keyOutput.Write(key)
+
+	valueOutput := new(bytes.Buffer)
+	valueOutput.Write(valueLenByte[:])
+
+	key = keyOutput.Bytes()
+	value := valueOutput.Bytes()
 	return common.NewMsg(key, value), nil
 }
