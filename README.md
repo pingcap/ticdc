@@ -68,6 +68,7 @@ sudo tar -C /usr/local -xzf go1.23.2.darwin-amd64.tar.gz
 export PATH=$PATH:/usr/local/go/bin
 export GOPATH=$HOME/go
 export PATH=$PATH:$GOPATH/bin
+export CC=/path/to/musl-gcc
 ```
 
 ### Download the source code and compile

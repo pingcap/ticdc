@@ -40,7 +40,7 @@ endif
 
 GOTEST := CGO_ENABLED=1 $(GO) test -p 3 --race --tags=intest
 
-BUILD_FLAG =
+BUILD_FLAG = -tags musl
 GOEXPERIMENT=
 ifeq ("${ENABLE_FIPS}", "1")
 	BUILD_FLAG = -tags boringcrypto
@@ -68,11 +68,8 @@ LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.ReleaseVersion=$(RELEASE_VERSION)"
 LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitHash=$(GITHASH)"
 LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitBranch=$(GITBRANCH)"
 LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.BuildTS=$(BUILDTS)"
+LDFLAGS += -linkmode external -extldflags "-static"
 
-CONSUMER_BUILD_FLAG=
-ifeq ("${IS_ALPINE}", "1")
-	CONSUMER_BUILD_FLAG = -tags musl
-endif
 
 GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=1 $(GO) build $(BUILD_FLAG) -trimpath $(GOVENDORFLAG)
 
@@ -102,7 +99,7 @@ generate_mock: tools/bin/mockgen
 	scripts/generate-mock.sh
 
 cdc:
-	$(GOBUILD) -ldflags '$(LDFLAGS) -linkmode external -extldflags "-static"' -tags musl -o bin/cdc ./cmd/cdc
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc ./cmd/cdc
 
 kafka_consumer:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_kafka_consumer ./cmd/kafka-consumer
