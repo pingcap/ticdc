@@ -105,6 +105,9 @@ func (w *MysqlWriter) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStor
 
 func (w *MysqlWriter) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 	if w.cfg.DryRun {
+		for _, callback := range event.PostTxnFlushed {
+			callback()
+		}
 		return nil
 	}
 
@@ -153,6 +156,9 @@ func (w *MysqlWriter) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 
 func (w *MysqlWriter) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	if w.cfg.DryRun {
+		for _, callback := range event.PostTxnFlushed {
+			callback()
+		}
 		return nil
 	}
 

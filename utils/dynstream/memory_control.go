@@ -95,7 +95,6 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 	pause, resume, memoryUsageRatio := as.shouldPausePath(path)
 
 	sendFeedback := func(pause bool) {
-		// Use CompareAndSwap for thread-safe time update
 		now := time.Now()
 		lastTime := path.lastSendFeedbackTime.Load().(time.Time)
 
@@ -124,7 +123,6 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 		log.Info("send path feedback", zap.Any("area", as.area),
 			zap.Any("path", path.path), zap.Stringer("feedbackType", feedbackType),
 			zap.Float64("memoryUsageRatio", memoryUsageRatio))
-
 	}
 
 	failpoint.Inject("PausePath", func() {
@@ -144,19 +142,8 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 	pause, resume, memoryUsageRatio := as.shouldPauseArea()
 
 	sendFeedback := func(pause bool) {
-
-		// Use CompareAndSwap for thread-safe time update
 		now := time.Now()
 		lastTime := as.lastSendFeedbackTime.Load().(time.Time)
-
-		log.Info("fizz update area pause state",
-			zap.Any("area", as.area),
-			zap.Bool("pause", pause),
-			zap.Time("lastTime", lastTime),
-			zap.Time("now", now),
-			zap.Duration("since", time.Since(lastTime)),
-			zap.Duration("feedbackInterval", as.settings.Load().FeedbackInterval),
-		)
 
 		// Fast pause, lazy resume.
 		if !pause && time.Since(lastTime) < as.settings.Load().FeedbackInterval {
@@ -164,7 +151,6 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 		}
 
 		if !as.lastSendFeedbackTime.CompareAndSwap(lastTime, now) {
-			log.Info("fizz another goroutine already updated the time")
 			return // Another goroutine already updated the time
 		}
 
@@ -187,9 +173,8 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 			zap.Float64("memoryUsageRatio", memoryUsageRatio),
 			zap.Time("lastTime", lastTime),
 			zap.Time("now", now),
-			zap.Duration("since", time.Since(lastTime)),
+			zap.Duration("sinceLastTime", time.Since(lastTime)),
 		)
-
 	}
 
 	failpoint.Inject("PauseArea", func() {
