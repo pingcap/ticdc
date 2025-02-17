@@ -362,9 +362,11 @@ func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.
 }
 
 func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
+	log.Info("initialize table trigger event dispatcher")
 	if e.tableTriggerEventDispatcher == nil {
 		return nil
 	}
+	log.Info("initialize table trigger event dispatcher", zap.Any("table trigger event dispatcher", e.tableTriggerEventDispatcher.GetId()))
 	err := e.tableTriggerEventDispatcher.InitializeTableSchemaStore(schemaInfo)
 	if err != nil {
 		return errors.Trace(err)

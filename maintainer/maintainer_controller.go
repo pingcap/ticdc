@@ -318,6 +318,8 @@ func (c *Controller) FinishBootstrap(
 	for _, info := range schemaInfos {
 		initSchemaInfos = append(initSchemaInfos, info)
 	}
+
+	log.Info("finish bootstrap", zap.Any("TableTriggerEventDispatcherId", c.ddlDispatcherID), zap.Stringer("changefeed", c.changefeedID))
 	return barrier, &heartbeatpb.MaintainerPostBootstrapRequest{
 		ChangefeedID:                  c.changefeedID.ToPB(),
 		TableTriggerEventDispatcherId: c.ddlDispatcherID.ToPB(),

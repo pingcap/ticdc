@@ -155,6 +155,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	from node.ID,
 	req *heartbeatpb.MaintainerPostBootstrapRequest,
 ) error {
+	log.Info("Receive post bootstrap request", zap.Any("changefeed", req.ChangefeedID))
 	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
 	manager, exists := m.dispatcherManagers[cfId]
 	if !exists || manager.GetTableTriggerEventDispatcher() == nil {
