@@ -248,9 +248,32 @@ func (e *EventDispatcherManager) TryClose(removeChangefeed bool) bool {
 	if e.closing.Load() {
 		return e.closed.Load()
 	}
+	e.cleanMetrics()
 	e.closing.Store(true)
 	go e.close(removeChangefeed)
 	return false
+}
+
+func (e *EventDispatcherManager) cleanMetrics() {
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+		"event-collector",
+		"max",
+		e.changefeedID.String(),
+	)
+
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+		"event-collector",
+		"used",
+		e.changefeedID.String(),
+	)
+
+	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerCheckpointTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 }
 
 func (e *EventDispatcherManager) close(removeChangefeed bool) {
