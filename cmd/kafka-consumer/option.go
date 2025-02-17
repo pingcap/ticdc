@@ -21,11 +21,11 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	cmdUtil "github.com/pingcap/tiflow/pkg/cmd/util"
-	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/filter"
-	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
@@ -147,7 +147,7 @@ func (o *option) Adjust(upstreamURI *url.URL, configFile string) error {
 	o.replicaConfig = replicaConfig
 
 	o.codecConfig = common.NewConfig(protocol)
-	if err = o.codecConfig.Apply(upstreamURI, o.replicaConfig); err != nil {
+	if err = o.codecConfig.Apply(upstreamURI, o.replicaConfig.Sink); err != nil {
 		return errors.Trace(err)
 	}
 	tz, err := util.GetTimezone(o.timezone)

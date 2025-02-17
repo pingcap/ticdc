@@ -16,14 +16,16 @@ package main
 import (
 	"context"
 	"database/sql"
-	"errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"math"
 	"sync"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/cdc/sink/ddlsink"
@@ -32,41 +34,9 @@ import (
 	"github.com/pingcap/tiflow/cdc/sink/dmlsink/mq/dispatcher"
 	"github.com/pingcap/tiflow/cdc/sink/tablesink"
 	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/sink/codec"
-	"github.com/pingcap/tiflow/pkg/sink/codec/avro"
-	"github.com/pingcap/tiflow/pkg/sink/codec/canal"
-	"github.com/pingcap/tiflow/pkg/sink/codec/open"
 	"github.com/pingcap/tiflow/pkg/sink/codec/simple"
 	"go.uber.org/zap"
 )
-
-// NewDecoder will create a new event decoder
-func NewDecoder(ctx context.Context, option *option, upstreamTiDB *sql.DB) (codec.RowEventDecoder, error) {
-	var (
-		decoder codec.RowEventDecoder
-		err     error
-	)
-	switch option.protocol {
-	case config.ProtocolOpen, config.ProtocolDefault:
-		decoder, err = open.NewBatchDecoder(ctx, option.codecConfig, upstreamTiDB)
-	case config.ProtocolCanalJSON:
-		decoder, err = canal.NewBatchDecoder(ctx, option.codecConfig, upstreamTiDB)
-	case config.ProtocolAvro:
-		schemaM, err := avro.NewConfluentSchemaManager(ctx, option.schemaRegistryURI, nil)
-		if err != nil {
-			return decoder, cerror.Trace(err)
-		}
-		decoder = avro.NewDecoder(option.codecConfig, schemaM, option.topic, upstreamTiDB)
-	case config.ProtocolSimple:
-		decoder, err = simple.NewDecoder(ctx, option.codecConfig, upstreamTiDB)
-	default:
-		log.Panic("Protocol not supported", zap.Any("Protocol", option.protocol))
-	}
-	if err != nil {
-		return nil, cerror.Trace(err)
-	}
-	return decoder, err
-}
 
 type partitionProgress struct {
 	partition       int32
@@ -75,10 +45,10 @@ type partitionProgress struct {
 
 	tableSinkMap map[model.TableID]tablesink.TableSink
 	eventGroups  map[model.TableID]*eventsGroup
-	decoder      codec.RowEventDecoder
+	decoder      common.RowEventDecoder
 }
 
-func newPartitionProgress(partition int32, decoder codec.RowEventDecoder) *partitionProgress {
+func newPartitionProgress(partition int32, decoder common.RowEventDecoder) *partitionProgress {
 	return &partitionProgress{
 		partition:    partition,
 		eventGroups:  make(map[model.TableID]*eventsGroup),
@@ -143,7 +113,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		}
 	}
 	for i := 0; i < int(o.partitionNum); i++ {
-		decoder, err := NewDecoder(ctx, o, db)
+		decoder, err := codec.NewEventDecoder(ctx, o.codecConfig, db)
 		if err != nil {
 			log.Panic("cannot create the decoder", zap.Error(err))
 		}
