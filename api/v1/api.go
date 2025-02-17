@@ -24,8 +24,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
-	pv2 "github.com/pingcap/ticdc/api/v2"
-	v2 "github.com/pingcap/ticdc/api/v2"
+	"github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/server"
@@ -41,12 +40,12 @@ func setV1Header(c *gin.Context) {
 // OpenAPIV1 provides CDC v1 APIs
 type OpenAPIV1 struct {
 	server server.Server
-	v2     pv2.OpenAPIV2
+	v2     v2.OpenAPIV2
 }
 
 // NewOpenAPIV1 creates a new OpenAPIV1.
 func NewOpenAPIV1(c server.Server) OpenAPIV1 {
-	return OpenAPIV1{c, pv2.NewOpenAPIV2(c)}
+	return OpenAPIV1{c, v2.NewOpenAPIV2(c)}
 }
 
 // RegisterOpenAPIV1Routes registers routes for OpenAPIV1
