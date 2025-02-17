@@ -178,7 +178,7 @@ type SubscriptionClient struct {
 	// the following three fields are used to manage feedback from ds and notify other goroutines
 	mu     sync.Mutex
 	cond   *sync.Cond
-	paused bool
+	paused atomic.Bool
 
 	// the credential to connect tikv
 	credential *security.Credential
@@ -344,8 +344,14 @@ func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
 }
 
 func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
+	// fast path
+	if !s.paused.Load() {
+		s.ds.Push(subID, event)
+		return
+	}
+	// slow path: wait until paused is false
 	s.mu.Lock()
-	for s.paused {
+	for s.paused.Load() {
 		s.cond.Wait()
 	}
 	s.mu.Unlock()
@@ -360,18 +366,14 @@ func (s *SubscriptionClient) handleDSFeedBack(ctx context.Context) error {
 		case feedback := <-s.ds.Feedback():
 			switch feedback.FeedbackType {
 			case dynstream.PauseArea:
-				s.mu.Lock()
-				s.paused = true
+				s.paused.Store(true)
 				log.Info("subscription client pause push region event")
-				s.mu.Unlock()
 			case dynstream.ResumeArea:
-				s.mu.Lock()
-				s.paused = false
+				s.paused.Store(false)
 				s.cond.Broadcast()
 				log.Info("subscription client resume push region event")
-				s.mu.Unlock()
 			case dynstream.PausePath, dynstream.ResumePath:
-				// Ignore it, because it is no need to pause and resume a path in puller.  
+				// Ignore it, because it is no need to pause and resume a path in puller.
 			}
 		}
 	}
