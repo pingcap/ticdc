@@ -74,6 +74,7 @@ type DDLEvent struct {
 	//   Recover Table
 	TableNameChange *TableNameChange `json:"table_name_change"`
 
+	// shall we expose this field, and make can be marshalled ?
 	TiDBOnly bool `json:"tidb_only"`
 	// Call when event flush is completed
 	PostTxnFlushed []func() `json:"-"`

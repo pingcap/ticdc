@@ -123,7 +123,6 @@ func (w *KafkaDDLWorker) Run(ctx context.Context) error {
 			start := time.Now()
 			msg, err = w.encoder.EncodeCheckpointEvent(ts)
 			if err != nil {
-				
 				return errors.Trace(err)
 			}
 

@@ -234,12 +234,12 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 	if action != nil {
 		pendingEvent, blockStatus := d.blockEventStatus.getEventAndStage()
 		if pendingEvent == nil && action.CommitTs > d.GetResolvedTs() {
-			// we have not receive the block event, and the action is for the future event, so just ignore
+			// we have not received the block event, and the action is for the future event, so just ignore
 			log.Info("pending event is nil, and the action's commit is larger than dispatchers resolvedTs",
 				zap.Uint64("resolvedTs", d.GetResolvedTs()),
 				zap.Uint64("actionCommitTs", action.CommitTs),
 				zap.Stringer("dispatcher", d.id))
-			// we have not receive the block event, and the action is for the future event, so just ignore
+			// we have not received the block event, and the action is for the future event, so just ignore
 			return
 		}
 		if pendingEvent != nil && action.CommitTs == pendingEvent.GetCommitTs() && blockStatus == heartbeatpb.BlockStage_WAITING {

@@ -19,10 +19,9 @@ import (
 	"strings"
 
 	"github.com/fatih/color"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/server"
 	"github.com/pingcap/ticdc/version"
@@ -89,7 +88,7 @@ func (o *options) run(cmd *cobra.Command) error {
 	}
 	err := logger.InitLogger(loggerConfig)
 	if err != nil {
-		cmd.Printf("init logger error %v\n", errors.ErrorStack(err))
+		cmd.Printf("init logger error %v\n", errors.Trace(err))
 		os.Exit(1)
 	}
 	log.Info("init log", zap.String("file", loggerConfig.File), zap.String("level", loggerConfig.Level))
@@ -100,7 +99,7 @@ func (o *options) run(cmd *cobra.Command) error {
 
 	cdcversion.ReleaseVersion = version.ReleaseVersion
 	version.LogVersionInfo("Change Data Capture (CDC)")
-	log.Info("The TiCDC release version is", zap.String("ReleaseVersion", cdcversion.ReleaseVersion))
+	log.Info("The TiCDC release version", zap.String("ReleaseVersion", cdcversion.ReleaseVersion))
 
 	util.LogHTTPProxies()
 	svr, err := server.New(o.serverConfig, o.pdEndpoints)
@@ -112,7 +111,7 @@ func (o *options) run(cmd *cobra.Command) error {
 		zap.Strings("pd", o.pdEndpoints), zap.Stringer("config", o.serverConfig))
 
 	err = svr.Run(ctx)
-	if err != nil && errors.Cause(err) != context.Canceled {
+	if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 		log.Warn("cdc server exits with error", zap.Error(err))
 	} else {
 		log.Info("cdc server exits normally")
@@ -183,13 +182,13 @@ func (o *options) complete(cmd *cobra.Command) error {
 // validate checks that the provided attach options are specified.
 func (o *options) validate() error {
 	if len(o.pdEndpoints) == 0 {
-		return cerror.ErrInvalidServerOption.GenWithStack("empty PD address")
+		return errors.ErrInvalidServerOption.GenWithStack("empty PD address")
 	}
 	for _, ep := range o.pdEndpoints {
 		// NOTICE: The configuration used here is the one that has been completed,
 		// as it may be configured by the configuration file.
 		if err := util.VerifyPdEndpoint(ep, o.serverConfig.Security.IsTLSEnabled()); err != nil {
-			return cerror.WrapError(cerror.ErrInvalidServerOption, err)
+			return errors.WrapError(errors.ErrInvalidServerOption, err)
 		}
 	}
 	return nil
