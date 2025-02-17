@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
-	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"go.uber.org/zap"
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
@@ -141,7 +140,7 @@ func newJSONMessageForDML(
 		}
 	}
 	if columnLen == 0 {
-		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found invlaid columns for the event")
+		return nil, errors.ErrCanalEncodeFailed.GenWithStack("not found valid columns for the event")
 	}
 
 	mysqlTypeMap := make(map[string]string, columnLen)
@@ -246,7 +245,7 @@ func newJSONMessageForDML(
 				out.String(colName)
 				out.RawByte(':')
 				out.Int32(int32(javaTypeMap[colID]))
-				mysqlTypeMap[colName] = utils.GetMySQLType(col, config.ContentCompatible)
+				mysqlTypeMap[colName] = common.GetMySQLType(col, config.ContentCompatible)
 			}
 		}
 		if emptyColumn {
@@ -504,7 +503,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 
 		if c.config.LargeMessageHandle.EnableClaimCheck() {
 			claimCheckFileName := claimcheck.NewFileName()
-			if err := c.claimCheck.WriteMessage(ctx, m.Key, m.Value, claimCheckFileName); err != nil {
+			if err = c.claimCheck.WriteMessage(ctx, m.Key, m.Value, claimCheckFileName); err != nil {
 				return errors.Trace(err)
 			}
 

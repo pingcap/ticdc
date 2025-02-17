@@ -18,14 +18,45 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/tiflow/pkg/quotes"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	pMySQL "github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
 	"go.uber.org/zap"
 )
+
+// GetMySQLType get the mysql type from column info
+func GetMySQLType(columnInfo *model.ColumnInfo, fullType bool) string {
+	if !fullType {
+		result := types.TypeToStr(columnInfo.GetType(), columnInfo.GetCharset())
+		result = withUnsigned4MySQLType(result, pMySQL.HasUnsignedFlag(columnInfo.GetFlag()))
+		result = withZerofill4MySQLType(result, pMySQL.HasZerofillFlag(columnInfo.GetFlag()))
+		return result
+	}
+	return columnInfo.GetTypeDesc()
+}
+
+// when encoding the canal format, for unsigned mysql type, add `unsigned` keyword.
+// it should have the form `t unsigned`, such as `int unsigned`
+func withUnsigned4MySQLType(mysqlType string, unsigned bool) string {
+	if unsigned && mysqlType != "bit" && mysqlType != "year" {
+		return mysqlType + " unsigned"
+	}
+	return mysqlType
+}
+
+func withZerofill4MySQLType(mysqlType string, zerofill bool) string {
+	if zerofill && !strings.HasPrefix(mysqlType, "year") {
+		return mysqlType + " zerofill"
+	}
+	return mysqlType
+}
 
 // ColumnsHolder read columns from sql.Rows
 type ColumnsHolder struct {
@@ -320,12 +351,12 @@ func (g *FakeTableIDAllocator) allocateByKey(key string) int64 {
 
 // AllocateTableID allocates a table id
 func (g *FakeTableIDAllocator) AllocateTableID(schema, table string) int64 {
-	key := fmt.Sprintf("`%s`.`%s`", quotes.EscapeName(schema), quotes.EscapeName(table))
+	key := fmt.Sprintf("`%s`.`%s`", commonType.EscapeName(schema), commonType.EscapeName(table))
 	return g.allocateByKey(key)
 }
 
 // AllocatePartitionID allocates a partition id
 func (g *FakeTableIDAllocator) AllocatePartitionID(schema, table, name string) int64 {
-	key := fmt.Sprintf("`%s`.`%s`.`%s`", quotes.EscapeName(schema), quotes.EscapeName(table), quotes.EscapeName(name))
+	key := fmt.Sprintf("`%s`.`%s`.`%s`", commonType.EscapeName(schema), commonType.EscapeName(table), commonType.EscapeName(name))
 	return g.allocateByKey(key)
 }
