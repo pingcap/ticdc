@@ -635,8 +635,8 @@ func GetColumnDefaultValue(col *model.ColumnInfo) interface{} {
 	return defaultDatum.GetValue()
 }
 
-// GetHandleAndUniqueIndexOffsets4Test is used to get the offsets of handle columns and other unique index columns in test
-func GetHandleAndUniqueIndexOffsets4Test(cols []*Column) [][]int {
+// GetHandleAndUniqueIndexOffsets is used to get the offsets of handle columns and other unique index columns
+func GetHandleAndUniqueIndexOffsets(cols []*Column) [][]int {
 	result := make([][]int, 0)
 	handleColumns := make([]int, 0)
 	for i, col := range cols {

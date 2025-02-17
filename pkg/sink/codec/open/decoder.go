@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	pCommon "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -88,14 +87,13 @@ func (b *BatchDecoder) AddKeyValue(key, value []byte) error {
 	}
 	version := binary.BigEndian.Uint64(key[:8])
 	key = key[8:]
-	if version != codec.BatchVersion1 {
+	if version != batchVersion1 {
 		return errors.ErrOpenProtocolCodecInvalidData.
 			GenWithStack("unexpected key format version")
 	}
 
 	b.keyBytes = key
 	b.valueBytes = value
-
 	return nil
 }
 
@@ -144,7 +142,6 @@ func (b *BatchDecoder) HasNext() (common.MessageType, bool, error) {
 		b.valueBytes = b.valueBytes[valueLen+8:]
 
 		rowMsg := new(messageRow)
-
 		value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 		if err != nil {
 			return common.MessageTypeUnknown, false, cerror.ErrOpenProtocolCodecInvalidData.
@@ -360,15 +357,12 @@ func (b *BatchDecoder) msgToRowChange(key *messageKey, value *messageRow) *model
 
 	if len(value.Delete) != 0 {
 		preCols := codecColumns2RowChangeColumns(value.Delete)
-		sortColumnArrays(preCols)
-		indexColumns := pCommon.GetHandleAndUniqueIndexOffsets4Test(preCols)
+		indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(preCols)
 		e.TableInfo = model.BuildTableInfo(key.Schema, key.Table, preCols, indexColumns)
 		e.PreColumns = model.Columns2ColumnDatas(preCols, e.TableInfo)
 	} else {
 		cols := codecColumns2RowChangeColumns(value.Update)
 		preCols := codecColumns2RowChangeColumns(value.PreColumns)
-		sortColumnArrays(cols)
-		sortColumnArrays(preCols)
 		indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(cols)
 		e.TableInfo = model.BuildTableInfo(key.Schema, key.Table, cols, indexColumns)
 		e.Columns = model.Columns2ColumnDatas(cols, e.TableInfo)
@@ -385,55 +379,31 @@ func (b *BatchDecoder) msgToRowChange(key *messageKey, value *messageRow) *model
 	return e
 }
 
-type columnsArray []*pCommon.Column
-
-func (a columnsArray) Len() int {
-	return len(a)
-}
-
-func (a columnsArray) Less(i, j int) bool {
-	return a[i].Name < a[j].Name
-}
-
-func (a columnsArray) Swap(i, j int) {
-	a[i], a[j] = a[j], a[i]
-}
-
-// sortColumnArrays sort column arrays by name
-func sortColumnArrays(arrays ...[]*pCommon.Column) {
-	for _, array := range arrays {
-		if array != nil {
-			sort.Sort(columnsArray(array))
-		}
-	}
-}
-
-func codecColumns2RowChangeColumns(cols map[string]column) []*pCommon.Column {
-	sinkCols := make([]*pCommon.Column, 0, len(cols))
-	for name, col := range cols {
-		c := col.toRowChangeColumn(name)
-		sinkCols = append(sinkCols, c)
-	}
-	if len(sinkCols) == 0 {
+func codecColumns2RowChangeColumns(cols map[string]column) []*model.Column {
+	if len(cols) == 0 {
 		return nil
 	}
-	sort.Slice(sinkCols, func(i, j int) bool {
-		return strings.Compare(sinkCols[i].Name, sinkCols[j].Name) > 0
+	columns := make([]*model.Column, 0, len(cols))
+	for name, col := range cols {
+		c := col.toRowChangeColumn(name)
+		columns = append(columns, c)
+	}
+	sort.Slice(columns, func(i, j int) bool {
+		return columns[i].Name < columns[j].Name
 	})
-	return sinkCols
+	return columns
 }
 
 func msgToDDLEvent(key *messageKey, value *messageDDL) *model.DDLEvent {
-	e := new(model.DDLEvent)
-	e.TableInfo = new(model.TableInfo)
-	// TODO: we lost the startTs from kafka message
-	// startTs-based txn filter is out of work
-	e.CommitTs = key.Ts
-	e.TableInfo.TableName = model.TableName{
-		Schema: key.Schema,
-		Table:  key.Table,
+	return &model.DDLEvent{
+		CommitTs: key.Ts,
+		TableInfo: &model.TableInfo{
+			TableName: model.TableName{
+				Schema: key.Schema,
+				Table:  key.Table,
+			},
+		},
+		Type:  value.Type,
+		Query: value.Query,
 	}
-	e.Type = value.Type
-	e.Query = value.Query
-	return e
 }

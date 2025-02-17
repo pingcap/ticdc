@@ -20,11 +20,11 @@ import (
 	"strconv"
 
 	"github.com/pingcap/log"
-	pCommon "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
 
@@ -51,14 +51,14 @@ func (m *messageKey) Decode(data []byte) error {
 type column struct {
 	Type byte `json:"t"`
 	// Deprecated: please use Flag instead.
-	WhereHandle *bool                  `json:"h,omitempty"`
-	Flag        pCommon.ColumnFlagType `json:"f"`
-	Value       any                    `json:"v"`
+	WhereHandle *bool                `json:"h,omitempty"`
+	Flag        model.ColumnFlagType `json:"f"`
+	Value       any                  `json:"v"`
 }
 
 // toRowChangeColumn converts from a codec column to a row changed column.
-func (c *column) toRowChangeColumn(name string) *pCommon.Column {
-	col := new(pCommon.Column)
+func (c *column) toRowChangeColumn(name string) *model.Column {
+	col := new(model.Column)
 	col.Type = c.Type
 	col.Flag = c.Flag
 	col.Name = name
