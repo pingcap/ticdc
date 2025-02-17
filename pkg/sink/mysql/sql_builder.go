@@ -72,7 +72,7 @@ func buildInsert(
 	row commonEvent.RowChange,
 	translateToInsert bool,
 ) (string, []interface{}, error) {
-	args, err := getArgs(&row.Row, tableInfo)
+	args, err := getArgs(&row.Row, tableInfo, false)
 	if err != nil {
 		return "", nil, errors.Trace(err)
 	}
@@ -96,14 +96,14 @@ func buildInsert(
 
 // prepareDelete builds a parametric DELETE statement as following
 // sql: `DELETE FROM `test`.`t` WHERE x = ? AND y >= ? LIMIT 1`
-func buildDelete(tableInfo *common.TableInfo, row commonEvent.RowChange) (string, []interface{}, error) {
+func buildDelete(tableInfo *common.TableInfo, row commonEvent.RowChange, forceReplicate bool) (string, []interface{}, error) {
 	var builder strings.Builder
 	quoteTable := tableInfo.TableName.QuoteString()
 	builder.WriteString("DELETE FROM ")
 	builder.WriteString(quoteTable)
 	builder.WriteString(" WHERE ")
 
-	colNames, whereArgs, err := whereSlice(&row.PreRow, tableInfo)
+	colNames, whereArgs, err := whereSlice(&row.PreRow, tableInfo, forceReplicate)
 	if err != nil {
 		return "", nil, errors.Trace(err)
 	}
@@ -129,14 +129,14 @@ func buildDelete(tableInfo *common.TableInfo, row commonEvent.RowChange) (string
 	return sql, args, nil
 }
 
-func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange) (string, []interface{}, error) {
+func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceReplicate bool) (string, []interface{}, error) {
 	var builder strings.Builder
 	if tableInfo.GetPreUpdateSQL() == "" {
 		log.Panic("PreUpdateSQL should not be empty")
 	}
 	builder.WriteString(tableInfo.GetPreUpdateSQL())
 
-	args, err := getArgs(&row.Row, tableInfo)
+	args, err := getArgs(&row.Row, tableInfo, false)
 	if err != nil {
 		return "", nil, errors.Trace(err)
 	}
@@ -144,7 +144,7 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange) (string
 		return "", nil, nil
 	}
 
-	whereColNames, whereArgs, err := whereSlice(&row.PreRow, tableInfo)
+	whereColNames, whereArgs, err := whereSlice(&row.PreRow, tableInfo, forceReplicate)
 	if err != nil {
 		return "", nil, errors.Trace(err)
 	}
@@ -172,10 +172,10 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange) (string
 	return sql, args, nil
 }
 
-func getArgs(row *chunk.Row, tableInfo *common.TableInfo) ([]interface{}, error) {
+func getArgs(row *chunk.Row, tableInfo *common.TableInfo, enableGeneratedColumn bool) ([]interface{}, error) {
 	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
 	for i, col := range tableInfo.GetColumns() {
-		if col == nil || tableInfo.GetColumnFlags()[col.ID].IsGeneratedColumn() {
+		if col == nil || (tableInfo.GetColumnFlags()[col.ID].IsGeneratedColumn() && !enableGeneratedColumn) {
 			continue
 		}
 		v, err := common.FormatColVal(row, col, i)
@@ -188,7 +188,7 @@ func getArgs(row *chunk.Row, tableInfo *common.TableInfo) ([]interface{}, error)
 }
 
 // whereSlice returns the column names and values for the WHERE clause
-func whereSlice(row *chunk.Row, tableInfo *common.TableInfo) ([]string, []interface{}, error) {
+func whereSlice(row *chunk.Row, tableInfo *common.TableInfo, forceReplicate bool) ([]string, []interface{}, error) {
 	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
 	colNames := make([]string, 0, len(tableInfo.GetColumns()))
 	// Try to use unique key values when available
@@ -205,7 +205,7 @@ func whereSlice(row *chunk.Row, tableInfo *common.TableInfo) ([]string, []interf
 	}
 
 	// if no explicit row id but force replicate, use all key-values in where condition
-	if len(colNames) == 0 {
+	if len(colNames) == 0 && forceReplicate {
 		for i, col := range tableInfo.GetColumns() {
 			colNames = append(colNames, col.Name.O)
 			v, err := common.FormatColVal(row, col, i)

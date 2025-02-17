@@ -50,6 +50,8 @@ func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID 
 		return newMySQLSink(ctx, changefeedID, 16, config, sinkURI)
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
 		return newKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+	case sink.S3Scheme, sink.FileScheme, sink.GCSScheme, sink.GSScheme, sink.AzblobScheme, sink.AzureScheme, sink.CloudStorageNoopScheme:
+		return newCloudStorageSink(ctx, changefeedID, sinkURI, config.SinkConfig, nil)
 	case sink.BlackHoleScheme:
 		return newBlackHoleSink()
 	}
@@ -67,6 +69,8 @@ func VerifySink(ctx context.Context, config *config.ChangefeedConfig, changefeed
 		return verifyMySQLSink(ctx, sinkURI, config)
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
 		return verifyKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+	case sink.S3Scheme, sink.FileScheme, sink.GCSScheme, sink.GSScheme, sink.AzblobScheme, sink.AzureScheme, sink.CloudStorageNoopScheme:
+		return verifyCloudStorageSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.BlackHoleScheme:
 		return nil
 	}

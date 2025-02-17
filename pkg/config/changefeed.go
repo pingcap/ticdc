@@ -37,17 +37,40 @@ type ChangefeedConfig struct {
 	TargetTS     uint64              `json:"target_ts"`
 	SinkURI      string              `json:"sink_uri"`
 	// timezone used when checking sink uri
-	TimeZone string `json:"timezone" default:"system"`
+	TimeZone      string `json:"timezone" default:"system"`
+	CaseSensitive bool   `json:"case_sensitive" default:"false"`
 	// if true, force to replicate some ineligible tables
 	ForceReplicate bool          `json:"force_replicate" default:"false"`
 	Filter         *FilterConfig `toml:"filter" json:"filter"`
 	MemoryQuota    uint64        `toml:"memory-quota" json:"memory-quota"`
 	// sync point related
-	// TODO:syncPointRetention|default 可以不要吗
+	// TODO: Is syncPointRetention|default can be removed?
 	EnableSyncPoint    bool          `json:"enable_sync_point" default:"false"`
 	SyncPointInterval  time.Duration `json:"sync_point_interval" default:"1m"`
 	SyncPointRetention time.Duration `json:"sync_point_retention" default:"24h"`
 	SinkConfig         *SinkConfig   `json:"sink_config"`
+}
+
+// String implements fmt.Stringer interface, but hide some sensitive information
+func (cfg *ChangefeedConfig) String() string {
+	cloned := new(ChangefeedConfig)
+	str, err := json.Marshal(cfg)
+	if err != nil {
+		log.Error("failed to marshal changefeed config", zap.Error(err))
+		return ""
+	}
+	err = json.Unmarshal(str, cloned)
+	if err != nil {
+		log.Error("failed to unmarshal changefeed config", zap.Error(err))
+		return ""
+	}
+	cloned.SinkConfig.MaskSensitiveData()
+	res, err := json.Marshal(cloned)
+	if err != nil {
+		log.Error("failed to marshal changefeed config", zap.Error(err))
+		return ""
+	}
+	return string(res)
 }
 
 // ChangeFeedInfo describes the detail of a ChangeFeed
@@ -85,6 +108,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		StartTS:            info.StartTs,
 		TargetTS:           info.TargetTs,
 		SinkURI:            info.SinkURI,
+		CaseSensitive:      info.Config.CaseSensitive,
 		ForceReplicate:     info.Config.ForceReplicate,
 		SinkConfig:         info.Config.Sink,
 		Filter:             info.Config.Filter,
@@ -484,6 +508,10 @@ type ChangeFeedStatus struct {
 	CheckpointTs uint64 `json:"checkpoint-ts"`
 	// Progress indicates changefeed progress status
 	Progress Progress `json:"progress"`
+
+	// MaintainerAddr is the address of the changefeed's maintainer
+	// It is used to identify the changefeed's maintainer, and it is not stored in etcd.
+	maintainerAddr string `json:"-"`
 }
 
 // Marshal returns json encoded string of ChangeFeedStatus, only contains necessary fields stored in storage
@@ -492,9 +520,19 @@ func (status *ChangeFeedStatus) Marshal() (string, error) {
 	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
 }
 
-// Unmarshal unmarshals into *ChangeFeedStatus from json marshal byte slice
+// Unmarshal into *ChangeFeedStatus from json marshal byte slice
 func (status *ChangeFeedStatus) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, status)
 	return errors.Annotatef(
 		cerror.WrapError(cerror.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
+}
+
+// GetMaintainerAddr returns the address of the changefeed's maintainer
+func (status *ChangeFeedStatus) GetMaintainerAddr() string {
+	return status.maintainerAddr
+}
+
+// SetMaintainerAddr sets the address of the changefeed's maintainer
+func (status *ChangeFeedStatus) SetMaintainerAddr(addr string) {
+	status.maintainerAddr = addr
 }

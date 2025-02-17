@@ -26,11 +26,13 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -70,6 +72,7 @@ type eventBroker struct {
 	mounter     pevent.Mounter
 	// msgSender is used to send the events to the dispatchers.
 	msgSender messaging.MessageSender
+	pdClock   pdutil.Clock
 
 	// changefeedMap is used to track the changefeed status.
 	changefeedMap sync.Map
@@ -119,9 +122,15 @@ func newEventBroker(
 
 	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
+
+	// TODO: Retrieve the correct pdClock from the context once multiple upstreams are supported.
+	// For now, since there is only one upstream, using the default pdClock is sufficient.
+	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
+
 	c := &eventBroker{
 		tidbClusterID:           id,
 		eventStore:              eventStore,
+		pdClock:                 pdClock,
 		mounter:                 pevent.NewMounter(tz),
 		schemaStore:             schemaStore,
 		changefeedMap:           sync.Map{},
@@ -411,7 +420,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 			remoteID,
 			&pevent.SyncPointEvent{
 				DispatcherID: d.id,
-				CommitTs:     ts,
+				CommitTs:     d.nextSyncPoint,
 			},
 			d.getEventSenderState())
 		c.getMessageCh(d.workerIndex) <- syncPointEvent
@@ -727,11 +736,12 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			if receivedMinResolvedTs == 0 {
 				continue
 			}
+			pdTime := c.pdClock.CurrentTime()
 			phyResolvedTs := oracle.ExtractPhysical(receivedMinResolvedTs)
-			lag := float64(oracle.GetPhysical(time.Now())-phyResolvedTs) / 1e3
+			lag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 			c.metricEventServiceReceivedResolvedTs.Set(float64(phyResolvedTs))
 			c.metricEventServiceResolvedTsLag.Set(lag)
-			lag = float64(oracle.GetPhysical(time.Now())-oracle.ExtractPhysical(sentMinWaterMark)) / 1e3
+			lag = float64(oracle.GetPhysical(pdTime)-oracle.ExtractPhysical(sentMinWaterMark)) / 1e3
 			c.metricEventServiceSentResolvedTs.Set(lag)
 			metricEventBrokerPendingScanTaskCount.Set(float64(len(c.taskChan)))
 		}
@@ -805,9 +815,14 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 	dispatcher := newDispatcherStat(startTs, info, filter, workerIndex, changefeedStatus)
 	if span.Equal(heartbeatpb.DDLSpan) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
-		log.Info("table trigger dispatcher register dispatcher", zap.Uint64("clusterID", c.tidbClusterID),
-			zap.Any("dispatcherID", id), zap.Int64("tableID", span.TableID),
-			zap.Uint64("startTs", startTs), zap.Duration("brokerRegisterDuration", time.Since(start)))
+		log.Info("table trigger dispatcher register dispatcher",
+			zap.Uint64("clusterID", c.tidbClusterID),
+			zap.Stringer("changefeedID", changefeedID),
+			zap.Stringer("dispatcherID", id),
+			zap.String("span", common.FormatTableSpan(span)),
+			zap.Uint64("startTs", startTs),
+			zap.Duration("brokerRegisterDuration", time.Since(start)),
+		)
 		return
 	}
 
@@ -822,7 +837,10 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 		info.IsOnlyReuse(),
 	)
 	if err != nil {
-		log.Panic("register dispatcher to eventStore failed", zap.Error(err), zap.Any("dispatcherInfo", info))
+		log.Panic("register dispatcher to eventStore failed",
+			zap.Error(err),
+			zap.Any("dispatcherInfo", info),
+		)
 	}
 	if !success {
 		if !info.IsOnlyReuse() {
@@ -836,20 +854,33 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 
 	err = c.schemaStore.RegisterTable(span.GetTableID(), info.GetStartTs())
 	if err != nil {
-		log.Panic("register table to schemaStore failed", zap.Error(err), zap.Int64("tableID", span.TableID), zap.Uint64("startTs", info.GetStartTs()))
+		log.Panic("register table to schemaStore failed",
+			zap.Error(err),
+			zap.String("span", common.FormatTableSpan(span)),
+			zap.Uint64("startTs", info.GetStartTs()),
+		)
 	}
 	tableInfo, err := c.schemaStore.GetTableInfo(span.GetTableID(), info.GetStartTs())
 	if err != nil {
-		log.Panic("get table info from schemaStore failed", zap.Error(err), zap.Int64("tableID", span.TableID), zap.Uint64("startTs", info.GetStartTs()))
+		log.Panic("get table info from schemaStore failed",
+			zap.Error(err),
+			zap.Int64("tableID", span.TableID),
+			zap.Uint64("startTs", info.GetStartTs()),
+		)
 	}
 	dispatcher.updateTableInfo(tableInfo)
 	eventStoreRegisterDuration := time.Since(start)
 	c.dispatchers.Store(id, dispatcher)
 
-	log.Info("register dispatcher", zap.Uint64("clusterID", c.tidbClusterID),
-		zap.Any("dispatcherID", id), zap.Int64("tableID", span.TableID),
-		zap.Uint64("startTs", startTs), zap.Duration("brokerRegisterDuration", brokerRegisterDuration),
-		zap.Duration("eventStoreRegisterDuration", eventStoreRegisterDuration))
+	log.Info("register dispatcher",
+		zap.Uint64("clusterID", c.tidbClusterID),
+		zap.Stringer("changefeedID", changefeedID),
+		zap.Stringer("dispatcherID", id),
+		zap.String("span", common.FormatTableSpan(span)),
+		zap.Uint64("startTs", startTs),
+		zap.Duration("brokerRegisterDuration", brokerRegisterDuration),
+		zap.Duration("eventStoreRegisterDuration", eventStoreRegisterDuration),
+	)
 }
 
 func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
@@ -867,8 +898,10 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	c.dispatchers.Delete(id)
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
-		zap.Int64("tableID", dispatcherInfo.GetTableSpan().TableID),
-		zap.Any("dispatcherID", id))
+		zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+		zap.Stringer("dispatcherID", id),
+		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
+	)
 }
 
 func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
@@ -878,8 +911,9 @@ func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 	log.Info("pause dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
-		zap.Int64("tableID", stat.info.GetTableSpan().TableID),
-		zap.Any("dispatcher", stat.id),
+		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", stat.id),
+		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
 		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Uint64("seq", stat.seq.Load()))
 	stat.isRunning.Store(false)
@@ -891,8 +925,9 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 		return
 	}
 	log.Info("resume dispatcher",
-		zap.Int64("tableID", stat.info.GetTableSpan().TableID),
-		zap.Any("dispatcher", stat.id),
+		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", stat.id),
+		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
 		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Uint64("seq", stat.seq.Load()))
 	stat.isRunning.Store(true)
@@ -905,8 +940,9 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 	stat.resetState(dispatcherInfo.GetStartTs())
 	log.Info("reset dispatcher",
-		zap.Int64("tableID", stat.info.GetTableSpan().TableID),
-		zap.Any("dispatcher", stat.id),
+		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", stat.id),
+		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
 		zap.Uint64("startTs", stat.info.GetStartTs()))
 }
 
@@ -915,8 +951,9 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 	if !ok {
 		stat = newChangefeedStatus(changefeedID)
 		log.Info("new changefeed status",
-			zap.Any("changefeedID", changefeedID.String()),
-			zap.Any("stat", stat.(*changefeedStatus).isRunning.Load()))
+			zap.Stringer("changefeedID", changefeedID),
+			zap.Bool("isRunning", stat.(*changefeedStatus).isRunning.Load()),
+		)
 		c.changefeedMap.Store(changefeedID, stat)
 	}
 	return stat.(*changefeedStatus)

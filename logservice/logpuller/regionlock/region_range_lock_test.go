@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/tiflow/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/stretchr/testify/require"
 )
 

@@ -17,20 +17,23 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/google/btree"
-	"github.com/pingcap/tiflow/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/spanz"
 )
 
 // TableSpanRangeChecker is used to check if all ranges cover the start and end byte slices.
 type TableSpanRangeChecker struct {
 	tableSpans map[int64]*SpanCoverageChecker
+	covered    atomic.Bool
 }
 
 // NewTableSpanRangeChecker creates a new TableSpanRangeChecker with given start and end.
 func NewTableSpanRangeChecker(tables []int64) *TableSpanRangeChecker {
 	sc := &TableSpanRangeChecker{
 		tableSpans: make(map[int64]*SpanCoverageChecker),
+		covered:    atomic.Bool{},
 	}
 	for _, table := range tables {
 		span := spanz.TableIDToComparableSpan(table)
@@ -48,6 +51,9 @@ func (rc *TableSpanRangeChecker) AddSubRange(tableID int64, newStart, newEnd []b
 
 // IsFullyCovered checks if the entire range from start to end is covered.
 func (rc *TableSpanRangeChecker) IsFullyCovered() bool {
+	if rc.covered.Load() {
+		return true
+	}
 	for _, span := range rc.tableSpans {
 		if !span.IsFullyCovered() {
 			return false
@@ -61,6 +67,11 @@ func (rc *TableSpanRangeChecker) Reset() {
 	for _, span := range rc.tableSpans {
 		span.Reset()
 	}
+	rc.covered.Store(false)
+}
+
+func (rc *TableSpanRangeChecker) MarkCovered() {
+	rc.covered.Store(true)
 }
 
 func (rc *TableSpanRangeChecker) Detail() string {
@@ -79,19 +90,26 @@ func (rc *TableSpanRangeChecker) Detail() string {
 type SpanCoverageChecker struct {
 	start, end []byte
 	tree       *btree.BTreeG[*RangeNode]
+	covered    atomic.Bool // it's only be set to true when receive the nil range, it means the table is removed.
 }
 
 // NewTableSpanCoverageChecker creates a new NewTableSpanCoverageChecker with given start and end.
 func NewTableSpanCoverageChecker(start, end []byte) *SpanCoverageChecker {
 	return &SpanCoverageChecker{
-		start: start,
-		end:   end,
-		tree:  btree.NewG[*RangeNode](4, rangeLockEntryLess),
+		start:   start,
+		end:     end,
+		tree:    btree.NewG[*RangeNode](4, rangeLockEntryLess),
+		covered: atomic.Bool{},
 	}
 }
 
 // AddSubRange adds a sub-range to the range checker.
 func (rc *SpanCoverageChecker) AddSubRange(newStart, newEnd []byte) {
+	if newStart == nil && newEnd == nil {
+		rc.covered.Store(true)
+		return
+	}
+
 	// Iterate through the B-tree to find overlapping or adjacent ranges
 	var toDelete []*RangeNode
 
@@ -140,6 +158,9 @@ func (rc *SpanCoverageChecker) AddSubRange(newStart, newEnd []byte) {
 
 // IsFullyCovered checks if the entire range from start to end is covered.
 func (rc *SpanCoverageChecker) IsFullyCovered() bool {
+	if rc.covered.Load() {
+		return true
+	}
 	if rc.tree.Len() == 0 {
 		return false
 	}
@@ -163,6 +184,11 @@ func (rc *SpanCoverageChecker) IsFullyCovered() bool {
 // Reset resets the range checker reported sub spans
 func (rc *SpanCoverageChecker) Reset() {
 	rc.tree = btree.NewG[*RangeNode](4, rangeLockEntryLess)
+	rc.covered.Store(false)
+}
+
+func (rc *SpanCoverageChecker) MarkCovered() {
+	rc.covered.Store(true)
 }
 
 // RangeNode represents a node in the BTree.

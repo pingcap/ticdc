@@ -13,37 +13,35 @@ TiCDC pulls change logs from TiDB clusters and pushes them to downstream systems
 Go to [pingcap/ticdc/tags](https://github.com/pingcap/ticdc/tags) to find the latest tag, e.g. `v9.0.0-alpha`
 
 ### Download the patch binary
-* For Linux: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-linux-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-linux-amd64.tar.gz)
-* For MacOS: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-darwin-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-darwin-amd64.tar.gz)
+* For Linux x86-64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-linux-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-linux-amd64.tar.gz)
+* For Linux ARM64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-linux-arm64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-linux-arm64.tar.gz)
+* For MacOS x86-64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-darwin-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-darwin-amd64.tar.gz)
+* For MacOS ARM64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-darwin-arm64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-darwin-arm64.tar.gz)
 
 ### Patch to the existing TiCDC nodes
 Examples:
 ```bash
 # Scale out some old version TiCDC nodes, if you don't already have some
-tiup cluster scale-out test_cluster scale-out.yml
+tiup cluster scale-out test-cluster scale-out.yml
 
 #scale-out.yml
 #cdc_servers:
 #  - host: 172.31.10.1
 
-# Patch the new arch TiCDC to the cluster
-tiup cluster patch --overwrite test_cluster cdc-v9.0.0-alpha-nightly-linux-amd64.tar.gz -R cdc
+# Patch the download binary to the cluster
+tiup cluster patch --overwrite test-cluster cdc-v9.0.0-alpha-nightly-linux-amd64.tar.gz -R cdc
 
-# Enable the new architectural TiCDC by setting the "newarch" parameter
-tiup cluster edit-config test_cluster
+# Enable TiCDC new architecture by setting the "newarch" parameter
+tiup cluster edit-config test-cluster
 #cdc_servers:
 # ...
 # config:
 #    newarch: true
 
-tiup cluster reload test_cluster -R cdc
+tiup cluster reload test-cluster -R cdc
 ```
 
-### Import the new dashboard to grafana to monitor your workloads
-Download [ticdc_new_arch.json](https://github.com/pingcap/ticdc/blob/master/metrics/grafana/ticdc_new_arch.json), and use the import button.
-
-![](./docs/media/grafana_import.png)
-
+> Note that TiUP has integrated the monitoring dashboard for TiCDC new architecture into the Grafana page, named `<cluster-name>`-TiCDC-New-Arch. 
 
 ## How to compile TiCDC from source code
 

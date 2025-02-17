@@ -25,7 +25,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
 	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tiflow/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/stretchr/testify/require"
 )
 
@@ -119,6 +119,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dis
 			SyncPointInterval:  time.Duration(5 * time.Second),
 			SyncPointRetention: time.Duration(10 * time.Minute),
 		}, // syncPointConfig
+		false,
 		nil,          // filterConfig
 		common.Ts(0), // pdTs
 		make(chan error, 1),

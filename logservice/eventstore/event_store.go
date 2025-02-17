@@ -35,8 +35,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/utils/chann"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -400,15 +400,15 @@ func (e *eventStore) RegisterDispatcher(
 	onlyReuse bool,
 ) (bool, error) {
 	log.Info("register dispatcher",
-		zap.Any("dispatcherID", dispatcherID),
-		zap.String("span", tableSpan.String()),
+		zap.Stringer("dispatcherID", dispatcherID),
+		zap.String("span", common.FormatTableSpan(tableSpan)),
 		zap.Uint64("startTs", startTs))
 
 	start := time.Now()
 	defer func() {
 		log.Info("register dispatcher done",
-			zap.Any("dispatcherID", dispatcherID),
-			zap.String("span", tableSpan.String()),
+			zap.Stringer("dispatcherID", dispatcherID),
+			zap.String("span", common.FormatTableSpan(tableSpan)),
 			zap.Uint64("startTs", startTs),
 			zap.Duration("duration", time.Since(start)))
 	}()
@@ -444,7 +444,7 @@ func (e *eventStore) RegisterDispatcher(
 					candidateIDs[dispatcherID] = true
 					e.dispatcherMeta.Unlock()
 					log.Info("reuse existing subscription",
-						zap.Any("dispatcherID", dispatcherID),
+						zap.Stringer("dispatcherID", dispatcherID),
 						zap.Uint64("subID", uint64(stat.subID)),
 						zap.Uint64("checkpointTs", subscriptionStat.checkpointTs.Load()),
 						zap.Uint64("startTs", startTs))
@@ -532,7 +532,7 @@ func (e *eventStore) RegisterDispatcher(
 func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) error {
 	log.Info("unregister dispatcher", zap.Stringer("dispatcherID", dispatcherID))
 	defer func() {
-		log.Info("unregister dispatcher done", zap.Any("dispatcherID", dispatcherID))
+		log.Info("unregister dispatcher done", zap.Stringer("dispatcherID", dispatcherID))
 	}()
 	e.dispatcherMeta.Lock()
 	defer e.dispatcherMeta.Unlock()
@@ -623,7 +623,7 @@ func (e *eventStore) GetDispatcherDMLEventState(dispatcherID common.DispatcherID
 	defer e.dispatcherMeta.RUnlock()
 	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
 	if !ok {
-		log.Warn("fail to find dispatcher", zap.Any("dispatcherID", dispatcherID))
+		log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", dispatcherID))
 		return false, DMLEventState{
 			// ResolvedTs:       subscriptionStat.resolvedTs,
 			MaxEventCommitTs: math.MaxUint64,
@@ -640,14 +640,14 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	e.dispatcherMeta.RLock()
 	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
 	if !ok {
-		log.Warn("fail to find dispatcher", zap.Any("dispatcherID", dispatcherID))
+		log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", dispatcherID))
 		e.dispatcherMeta.RUnlock()
 		return nil, nil
 	}
 	subscriptionStat := e.dispatcherMeta.subscriptionStats[stat.subID]
 	if dataRange.StartTs < subscriptionStat.checkpointTs.Load() {
 		log.Panic("should not happen",
-			zap.Any("dispatcherID", dispatcherID),
+			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Uint64("checkpointTs", subscriptionStat.checkpointTs.Load()),
 			zap.Uint64("startTs", dataRange.StartTs))
 	}
@@ -696,15 +696,15 @@ func (e *eventStore) updateMetrics(ctx context.Context) error {
 }
 
 func (e *eventStore) updateMetricsOnce() {
-	currentTime := e.pdClock.CurrentTime()
-	currentPhyTs := oracle.GetPhysical(currentTime)
+	pdTime := e.pdClock.CurrentTime()
+	pdPhyTs := oracle.GetPhysical(pdTime)
 	minResolvedTs := uint64(0)
 	e.dispatcherMeta.RLock()
 	for _, subscriptionStat := range e.dispatcherMeta.subscriptionStats {
 		// resolved ts lag
 		resolvedTs := subscriptionStat.resolvedTs.Load()
 		resolvedPhyTs := oracle.ExtractPhysical(resolvedTs)
-		resolvedLag := float64(currentPhyTs-resolvedPhyTs) / 1e3
+		resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
 		metrics.EventStoreDispatcherResolvedTsLagHist.Observe(float64(resolvedLag))
 		if minResolvedTs == 0 || resolvedTs < minResolvedTs {
 			minResolvedTs = resolvedTs
@@ -712,7 +712,7 @@ func (e *eventStore) updateMetricsOnce() {
 		// checkpoint ts lag
 		checkpointTs := subscriptionStat.checkpointTs.Load()
 		watermarkPhyTs := oracle.ExtractPhysical(checkpointTs)
-		watermarkLag := float64(currentPhyTs-watermarkPhyTs) / 1e3
+		watermarkLag := float64(pdPhyTs-watermarkPhyTs) / 1e3
 		metrics.EventStoreDispatcherWatermarkLagHist.Observe(float64(watermarkLag))
 	}
 	e.dispatcherMeta.RUnlock()
@@ -721,7 +721,7 @@ func (e *eventStore) updateMetricsOnce() {
 		return
 	}
 	minResolvedPhyTs := oracle.ExtractPhysical(minResolvedTs)
-	eventStoreResolvedTsLag := float64(currentPhyTs-minResolvedPhyTs) / 1e3
+	eventStoreResolvedTsLag := float64(pdPhyTs-minResolvedPhyTs) / 1e3
 	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLag)
 }
 

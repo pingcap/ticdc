@@ -15,7 +15,8 @@ package common
 
 import "context"
 
-// SubModule identify the modules will be started when the server is starting
+// SubModule is the interface for the modules will be started when the server is starting
+// SubModule is server level module.
 type SubModule interface {
 	// Name returns the SubModule's Name
 	Name() string
@@ -23,4 +24,9 @@ type SubModule interface {
 	Run(ctx context.Context) error
 	// Close closes the module, it's a block call
 	Close(ctx context.Context) error
+}
+
+// Closeable is the interface for the services will be closed when the server is closing
+type Closeable interface {
+	Close()
 }

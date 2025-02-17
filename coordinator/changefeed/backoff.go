@@ -67,7 +67,11 @@ type Backoff struct {
 }
 
 // NewBackoff creates Backoff and initialize the exponential backoff
-func NewBackoff(id common.ChangeFeedID, changefeedErrorStuckDuration time.Duration, checkpointTs uint64) *Backoff {
+func NewBackoff(
+	id common.ChangeFeedID,
+	changefeedErrorStuckDuration time.Duration,
+	checkpointTs uint64,
+) *Backoff {
 	m := &Backoff{
 		id:                           id,
 		errBackoff:                   backoff.NewExponentialBackOff(),
@@ -111,6 +115,7 @@ func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, model
 	if m.failed.Load() {
 		return false, model.StateFailed, nil
 	}
+
 	if m.checkpointTs < status.CheckpointTs {
 		m.checkpointTs = status.CheckpointTs
 		if m.retrying.Load() {
@@ -183,15 +188,16 @@ func (m *Backoff) HandleError(errs []*heartbeatpb.RunningError) (bool, *heartbea
 		log.Error("The changefeed won't be restarted as it has been experiencing failures for "+
 			"an extended duration",
 			zap.Duration("maxElapsedTime", m.errBackoff.MaxElapsedTime),
-			zap.String("namespace", m.id.Namespace()),
-			zap.String("changefeed", m.id.Name()),
+			zap.Stringer("changefeed", m.id),
+			zap.Uint64("checkpointTs", m.checkpointTs),
 			zap.Time("nextRetryTime", m.nextRetryTime.Load()),
 		)
 		return true, lastError
 	}
 	// if any error is occurred , we should set the changefeed state to warning and stop the changefeed
 	log.Warn("changefeed meets an error, will be stopped",
-		zap.String("namespace", m.id.Name()),
+		zap.Stringer("changefeed", m.id),
+		zap.Uint64("checkpointTs", m.checkpointTs),
 		zap.Time("nextRetryTime", m.nextRetryTime.Load()),
 		zap.Any("error", errs))
 	// patch the last error to changefeed info

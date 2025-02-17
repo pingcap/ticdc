@@ -56,7 +56,7 @@ func NewStopChangefeedOperator(cfID common.ChangeFeedID,
 func (m *StopChangefeedOperator) Check(_ node.ID, status *heartbeatpb.MaintainerStatus) {
 	if !m.finished.Load() && status.State != heartbeatpb.ComponentState_Working {
 		log.Info("maintainer report non-working status",
-			zap.String("maintainer", m.cfID.String()))
+			zap.Stringer("maintainer", m.cfID))
 		m.finished.Store(true)
 	}
 }
@@ -69,8 +69,8 @@ func (m *StopChangefeedOperator) Schedule() *messaging.TargetMessage {
 func (m *StopChangefeedOperator) OnNodeRemove(n node.ID) {
 	if n == m.nodeID {
 		log.Info("node is stopped during stop maintainer, schedule stop command to coordinator node",
-			zap.String("changefeed", m.cfID.String()),
-			zap.String("node", n.String()))
+			zap.Stringer("changefeed", m.cfID),
+			zap.Stringer("node", n))
 		m.nodeID = m.coordinatorNodeID
 	}
 }
@@ -93,23 +93,29 @@ func (m *StopChangefeedOperator) OnTaskRemoved() {
 
 func (m *StopChangefeedOperator) Start() {
 	log.Info("start remove maintainer operator",
-		zap.String("changefeed", m.cfID.String()))
+		zap.Stringer("changefeed", m.cfID))
 }
 
 func (m *StopChangefeedOperator) PostFinish() {
 	if m.changefeedIsRemoved {
 		if err := m.backend.DeleteChangefeed(context.Background(), m.cfID); err != nil {
 			log.Warn("failed to delete changefeed",
-				zap.String("changefeed", m.cfID.String()), zap.Error(err))
+				zap.Stringer("changefeed", m.cfID),
+				zap.Error(err))
 		}
 	} else {
-		if err := m.backend.SetChangefeedProgress(context.Background(), m.cfID, config.ProgressNone); err != nil {
+		if err := m.backend.SetChangefeedProgress(
+			context.Background(),
+			m.cfID,
+			config.ProgressNone,
+		); err != nil {
 			log.Warn("failed to set changefeed progress",
-				zap.String("changefeed", m.cfID.String()), zap.Error(err))
+				zap.Stringer("changefeed", m.cfID),
+				zap.Error(err),
+			)
 		}
 	}
-	log.Info("stop maintainer operator finished",
-		zap.String("changefeed", m.cfID.String()))
+	log.Info("stop maintainer operator finished", zap.Stringer("changefeed", m.cfID))
 }
 
 func (m *StopChangefeedOperator) String() string {

@@ -13,12 +13,16 @@
 
 package range_checker
 
-import "fmt"
+import (
+	"fmt"
+	"sync/atomic"
+)
 
 // TableIDRangeChecker is used to check if all table IDs are covered.
 type TableIDRangeChecker struct {
 	needCount   int
 	reportedMap map[int64]struct{}
+	covered     atomic.Bool
 }
 
 // NewTableCountChecker creates a new TableIDRangeChecker.
@@ -26,6 +30,7 @@ func NewTableCountChecker(tables int) *TableIDRangeChecker {
 	tc := &TableIDRangeChecker{
 		needCount:   tables,
 		reportedMap: make(map[int64]struct{}, tables),
+		covered:     atomic.Bool{},
 	}
 	return tc
 }
@@ -37,14 +42,19 @@ func (rc *TableIDRangeChecker) AddSubRange(tableID int64, _, _ []byte) {
 
 // IsFullyCovered checks if all table IDs are covered.
 func (rc *TableIDRangeChecker) IsFullyCovered() bool {
-	return len(rc.reportedMap) >= rc.needCount
+	return rc.covered.Load() || len(rc.reportedMap) >= rc.needCount
 }
 
 // Reset resets the reported tables.
 func (rc *TableIDRangeChecker) Reset() {
 	rc.reportedMap = make(map[int64]struct{}, rc.needCount)
+	rc.covered.Store(false)
 }
 
 func (rc *TableIDRangeChecker) Detail() string {
 	return fmt.Sprintf("reported count: %d, require count: %d", len(rc.reportedMap), rc.needCount)
+}
+
+func (rc *TableIDRangeChecker) MarkCovered() {
+	rc.covered.Store(true)
 }

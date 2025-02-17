@@ -121,10 +121,8 @@ func main() {
 	newarch = parseNewarchFlagFromOSArgs() || (os.Getenv("TICDC_NEWARCH") == "true")
 
 	if newarch || isNewArchEnabledByConfig(serverConfigFilePath) {
-		cmd.Println("=== Command to ticdc(new arch).")
 		addNewArchCommandTo(cmd)
 	} else {
-		cmd.Println("=== Command to ticdc(tiflow).")
 		tiflowCmd.AddTiCDCCommandTo(cmd)
 	}
 

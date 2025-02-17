@@ -45,6 +45,8 @@ function run() {
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --config "$WORK_DIR/server.toml"
 
+	cdc_pid_1=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
+
 	TOPIC_NAME="ticdc-cli-test-$RANDOM"
 	case $SINK_TYPE in
 	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
@@ -155,9 +157,15 @@ EOF
 	run_cdc_cli unsafe reset --no-confirm --pd=$pd_addr
 	echo "Pass reset"
 
+	# ensure server exit
+	ensure 30 "! ps -p $cdc_pid_1 > /dev/null 2>&1"
+
+	# restart server
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "_${TEST_NAME}_restart" --addr "127.0.0.1:8300" --config "$WORK_DIR/server.toml"
+
 	# Check if the coordinator is online
 	for i in {1..100}; do
-		curl -s -X GET "http://127.0.0.1:8300/api/v2/captures" | grep -q "\"is_coordinator\":true"
+		curl -s -X GET "http://127.0.0.1:8300/api/v2/captures" | grep -q "\"is_owner\":true"
 		if [[ $? -eq 0 ]]; then
 			break
 		fi

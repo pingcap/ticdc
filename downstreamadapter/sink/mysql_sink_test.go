@@ -15,6 +15,7 @@ package sink
 
 import (
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,13 +24,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var count = 0
+var count atomic.Int64
 
 // Test callback and tableProgress works as expected after AddDMLEvent
 func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
 
-	count = 0
+	count.Store(0)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -50,7 +51,7 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 		},
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
-			func() { count++ },
+			func() { count.Add(1) },
 		},
 	}
 
@@ -65,13 +66,13 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 		},
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
-			func() { count++ },
+			func() { count.Add(1) },
 		},
 	}
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
 	dmlEvent.PostTxnFlushed = []func(){
-		func() { count++ },
+		func() { count.Add(1) },
 	}
 	dmlEvent.CommitTs = 2
 
@@ -89,18 +90,21 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 			changefeed varchar(255),
 			ddl_ts varchar(18),
 			table_id bigint(21),
-			created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			finished bool,
+			related_table_id bigint(21),
+			is_syncpoint bool,
+			created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			INDEX (ticdc_cluster_id, changefeed, table_id),
 			PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)
 		);`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id) VALUES ('default', 'test/test', '1', 0), ('default', 'test/test', '1', 1) ON DUPLICATE KEY UPDATE ddl_ts=VALUES(ddl_ts), created_at=CURRENT_TIMESTAMP;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, related_table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, 1, 1, 0), ('default', 'test/test', '1', 1, 1, 1, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), related_table_id=VALUES(related_table_id), ddl_ts=VALUES(ddl_ts), created_at=NOW(), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)").
+	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)").
 		WithArgs(1, "test", 2, "test2").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
@@ -116,14 +120,14 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
 
-	require.Equal(t, count, 3)
+	require.Equal(t, count.Load(), int64(3))
 }
 
 // test the situation meets error when executing DML
 // whether the sink state is correct
 func TestMysqlSinkMeetsDMLError(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
-	count = 0
+	count.Store(0)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -135,12 +139,12 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
 	dmlEvent.PostTxnFlushed = []func(){
-		func() { count++ },
+		func() { count.Add(1) },
 	}
 	dmlEvent.CommitTs = 2
 
 	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)").
+	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)").
 		WithArgs(1, "test", 2, "test2").
 		WillReturnError(errors.New("connect: connection refused"))
 	mock.ExpectRollback()
@@ -152,7 +156,7 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 	err := mock.ExpectationsWereMet()
 	require.NoError(t, err)
 
-	require.Equal(t, count, 0)
+	require.Equal(t, count.Load(), int64(0))
 	require.False(t, sink.IsNormal())
 }
 
@@ -161,7 +165,7 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 func TestMysqlSinkMeetsDDLError(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
 
-	count = 0
+	count.Store(0)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -182,7 +186,7 @@ func TestMysqlSinkMeetsDDLError(t *testing.T) {
 		},
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
-			func() { count++ },
+			func() { count.Add(1) },
 		},
 	}
 
@@ -197,7 +201,7 @@ func TestMysqlSinkMeetsDDLError(t *testing.T) {
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
 
-	require.Equal(t, count, 0)
+	require.Equal(t, count.Load(), int64(0))
 
 	require.Equal(t, sink.IsNormal(), false)
 }

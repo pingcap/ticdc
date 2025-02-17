@@ -27,11 +27,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/tidb/pkg/util/gctuner"
 	"github.com/pingcap/tiflow/cdc/kv"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/fsutil"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -116,7 +116,7 @@ func (c *server) prepare(ctx context.Context) error {
 	if err != nil {
 		log.Warn("Fail to verify region label rule",
 			zap.Error(err),
-			zap.Stringer("upstreamID", c.info.ID),
+			zap.String("advertiseAddr", conf.AdvertiseAddr),
 			zap.Strings("upstreamEndpoints", c.pdEndpoints))
 	}
 
@@ -126,10 +126,6 @@ func (c *server) prepare(ctx context.Context) error {
 	}
 
 	c.RegionCache = tikv.NewRegionCache(c.pdClient)
-	c.PDClock, err = pdutil.NewClock(ctx, c.pdClient)
-	if err != nil {
-		return errors.Trace(err)
-	}
 
 	if err = c.initDir(); err != nil {
 		return errors.Trace(err)

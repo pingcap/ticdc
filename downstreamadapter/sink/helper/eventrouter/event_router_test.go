@@ -315,10 +315,10 @@ func TestGetTopicForDDL(t *testing.T) {
 		},
 		{
 			ddl: &commonEvent.DDLEvent{
-				PrevSchemaName: "test1",
-				PrevTableName:  "tb1",
-				SchemaName:     "test1",
-				TableName:      "tb2",
+				ExtraSchemaName: "test1",
+				ExtraTableName:  "tb1",
+				SchemaName:      "test1",
+				TableName:       "tb2",
 			},
 			expectedTopic: "test1_tb1",
 		},

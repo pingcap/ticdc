@@ -27,10 +27,16 @@ import (
 	"github.com/pingcap/tidb/pkg/kv"
 	timeta "github.com/pingcap/tidb/pkg/meta"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/format"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	// NOTE: Do not remove the `test_driver` import.
+	// For details, refer to: https://github.com/pingcap/parser/issues/43
+	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
 	"github.com/pingcap/tidb/pkg/session"
 	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/pingcap/tidb/pkg/testkit"
+	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -183,7 +189,7 @@ func (s *EventTestHelper) DML2Event(schema, table string, dml ...string) *DMLEve
 	return dmlEvent
 }
 
-func (s EventTestHelper) DML2RawKv(schema, table string, dml ...string) []*common.RawKVEntry {
+func (s *EventTestHelper) DML2RawKv(schema, table string, dml ...string) []*common.RawKVEntry {
 	tableInfo, ok := s.tableInfos[toTableInfosKey(schema, table)]
 	require.True(s.t, ok)
 	ts := tableInfo.UpdateTS()
@@ -247,4 +253,39 @@ func (s *EventTestHelper) Close() {
 
 func toTableInfosKey(schema, table string) string {
 	return schema + "." + table
+}
+
+// SplitQueries takes a string containing multiple SQL statements and splits them into individual SQL statements.
+// This function is designed for scenarios like batch creation of tables, where multiple `CREATE TABLE` statements
+// might be combined into a single query string.
+func SplitQueries(queries string) ([]string, error) {
+	// Note: The parser is not thread-safe, so we create a new instance of the parser for each use.
+	// However, the overhead of creating a new parser is minimal, so there is no need to worry about performance.
+	p := parser.New()
+	stmts, warns, err := p.ParseSQL(queries)
+	for _, w := range warns {
+		log.Warn("parse sql warnning", zap.Error(w))
+	}
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrTiDBUnexpectedJobMeta, err)
+	}
+
+	var res []string
+	for _, stmt := range stmts {
+		var sb strings.Builder
+		err := stmt.Restore(&format.RestoreCtx{
+			Flags: format.DefaultRestoreFlags,
+			In:    &sb,
+		})
+		if err != nil {
+			return nil, errors.WrapError(errors.ErrTiDBUnexpectedJobMeta, err)
+		}
+		// The (ast.Node).Restore function generates a SQL string representation of the AST (Abstract Syntax Tree) node.
+		// By default, the resulting SQL string does not include a trailing semicolon ";".
+		// Therefore, we explicitly append a semicolon here to ensure the SQL statement is complete.
+		sb.WriteByte(';')
+		res = append(res, sb.String())
+	}
+
+	return res, nil
 }

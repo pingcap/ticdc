@@ -32,12 +32,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"github.com/pingcap/ticdc/utils/threadpool"
-	"github.com/pingcap/tiflow/pkg/pdutil"
-	"github.com/pingcap/tiflow/pkg/spanz"
 	"go.uber.org/zap"
 )
 
@@ -67,7 +67,7 @@ type Controller struct {
 
 func NewController(changefeedID common.ChangeFeedID,
 	checkpointTs uint64,
-	pdapi pdutil.PDAPIClient,
+	pdAPIClient pdutil.PDAPIClient,
 	tsoClient replica.TSOClient,
 	regionCache split.RegionCache,
 	taskScheduler threadpool.ThreadPool,
@@ -80,7 +80,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	var splitter *split.Splitter
 	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
 		enableTableAcrossNodes = true
-		splitter = split.NewSplitter(changefeedID, pdapi, regionCache, cfConfig.Scheduler)
+		splitter = split.NewSplitter(changefeedID, pdAPIClient, regionCache, cfConfig.Scheduler)
 	}
 	replicaSetDB := replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -182,26 +182,27 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 // FinishBootstrap adds working state tasks to this controller directly,
 // it reported by the bootstrap response
 func (c *Controller) FinishBootstrap(
-	cachedResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	isMysqlCompatibleBackend bool,
 ) (*Barrier, *heartbeatpb.MaintainerPostBootstrapRequest, error) {
 	if c.bootstrapped {
 		log.Panic("already bootstrapped",
-			zap.String("changefeed", c.changefeedID.Name()),
-			zap.Any("workingMap", cachedResp))
+			zap.Stringer("changefeed", c.changefeedID),
+			zap.Any("allNodesResp", allNodesResp))
 	}
 
-	log.Info("all nodes have sent bootstrap response",
-		zap.String("changefeed", c.changefeedID.Name()),
-		zap.Int("size", len(cachedResp)))
+	log.Info("all nodes have sent bootstrap response, start to handle them",
+		zap.Stringer("changefeed", c.changefeedID),
+		zap.Int("nodeCount", len(allNodesResp)))
 
 	// 1. get the real start ts from the table trigger event dispatcher
 	startTs := uint64(0)
-	for node, resp := range cachedResp {
-		log.Info("received bootstrap response",
-			zap.Any("changefeed", resp.ChangefeedID),
-			zap.Any("node", node),
-			zap.Any("startTs", resp.CheckpointTs))
+	for node, resp := range allNodesResp {
+		log.Info("handle bootstrap response",
+			zap.Stringer("changefeed", c.changefeedID),
+			zap.Stringer("nodeID", node),
+			zap.Uint64("checkpointTs", resp.CheckpointTs))
+
 		if resp.CheckpointTs > startTs {
 			startTs = resp.CheckpointTs
 			// update the ddl dispatcher status
@@ -209,7 +210,6 @@ func (c *Controller) FinishBootstrap(
 			status.CheckpointTs = startTs
 			c.replicationDB.UpdateStatus(c.replicationDB.GetDDLDispatcher(), status)
 		}
-
 	}
 	if startTs == 0 {
 		log.Panic("cant not found the start ts from the bootstrap response",
@@ -225,19 +225,19 @@ func (c *Controller) FinishBootstrap(
 	}
 
 	workingMap := make(map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication])
-	for server, bootstrapMsg := range cachedResp {
+	for node, resp := range allNodesResp {
 		log.Info("received bootstrap response",
-			zap.String("changefeed", c.changefeedID.Name()),
-			zap.Any("server", server),
-			zap.Int("size", len(bootstrapMsg.Spans)))
-		for _, info := range bootstrapMsg.Spans {
+			zap.Stringer("changefeed", c.changefeedID),
+			zap.Stringer("nodeID", node),
+			zap.Int("spanCount", len(resp.Spans)))
+		for _, info := range resp.Spans {
 			dispatcherID := common.NewDispatcherIDFromPB(info.ID)
 			if dispatcherID == c.ddlDispatcherID {
 				log.Info(
 					"skip table trigger event dispatcher",
-					zap.String("changefeed", c.changefeedID.Name()),
-					zap.String("dispatcher", dispatcherID.String()),
-					zap.String("server", server.String()))
+					zap.Stringer("changefeed", c.changefeedID),
+					zap.Stringer("dispatcher", dispatcherID),
+					zap.Stringer("nodeID", node))
 				continue
 			}
 			status := &heartbeatpb.TableSpanStatus{
@@ -248,7 +248,7 @@ func (c *Controller) FinishBootstrap(
 			span := info.Span
 
 			// working on remote, the state must be absent or working since it's reported by remote
-			stm := replica.NewWorkingReplicaSet(c.changefeedID, dispatcherID, c.tsoClient, info.SchemaID, span, status, server)
+			stm := replica.NewWorkingReplicaSet(c.changefeedID, dispatcherID, c.tsoClient, info.SchemaID, span, status, node)
 			tableMap, ok := workingMap[span.TableID]
 			if !ok {
 				tableMap = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](heartbeatpb.LessTableSpan)
@@ -276,8 +276,8 @@ func (c *Controller) FinishBootstrap(
 				StartKey: span.StartKey,
 				EndKey:   span.EndKey,
 			}
-			log.Info("table already working in other server",
-				zap.String("changefeed", c.changefeedID.Name()),
+			log.Info("table already working in other node",
+				zap.Stringer("changefeed", c.changefeedID),
 				zap.Int64("tableID", table.TableID))
 			c.addWorkingSpans(tableMap)
 			if c.enableTableAcrossNodes {
@@ -299,13 +299,13 @@ func (c *Controller) FinishBootstrap(
 	// here tableID is physical table id
 	for tableID := range workingMap {
 		log.Warn("found a tables not in initial table map",
-			zap.String("changefeed", c.changefeedID.Name()),
+			zap.Stringer("changefeed", c.changefeedID),
 			zap.Int64("id", tableID))
 	}
 
 	// rebuild barrier status
 	barrier := NewBarrier(c, c.cfConfig.Scheduler.EnableTableAcrossNodes)
-	barrier.HandleBootstrapResponse(cachedResp)
+	barrier.HandleBootstrapResponse(allNodesResp)
 
 	// start scheduler
 	c.taskHandlers = append(c.taskHandlers, c.schedulerController.Start(c.taskScheduler)...)
@@ -351,9 +351,9 @@ func (c *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	c.operatorController.RemoveTasksByTableIDs(tables...)
 }
 
-// GetTasksByTableIDs get all tasks by table id
-func (c *Controller) GetTasksByTableIDs(tableIDs ...int64) []*replica.SpanReplication {
-	return c.replicationDB.GetTasksByTableIDs(tableIDs...)
+// GetTasksByTableID get all tasks by table id
+func (c *Controller) GetTasksByTableID(tableID int64) []*replica.SpanReplication {
+	return c.replicationDB.GetTasksByTableID(tableID)
 }
 
 // GetAllTasks get all tasks
@@ -402,8 +402,8 @@ func (c *Controller) addNewSpans(schemaID int64, tableSpans []*heartbeatpb.Table
 }
 
 func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
-	// todo: do we need to set timezone here?
-	f, err := filter.NewFilter(c.cfConfig.Filter, "", c.cfConfig.ForceReplicate)
+	// Use a empty timezone because table filter does not need it.
+	f, err := filter.NewFilter(c.cfConfig.Filter, "", c.cfConfig.CaseSensitive, c.cfConfig.ForceReplicate)
 	if err != nil {
 		return nil, errors.Cause(err)
 	}
@@ -435,7 +435,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 		return apperror.ErrNodeIsNotFound.GenWithStackByArgs("targetNode", targetNode)
 	}
 
-	replications := c.replicationDB.GetTasksByTableIDs(tableId)
+	replications := c.replicationDB.GetTasksByTableID(tableId)
 	if len(replications) != 1 {
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("unexpected number of replications found for table in this node; tableID is %s, replication count is %s", tableId, len(replications))
 	}
@@ -449,7 +449,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 	count := 0
 	maxTry := 30
 	for !op.IsFinished() && count < maxTry {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(1 * time.Second)
 		count += 1
 		log.Info("wait for move table operator finished", zap.Int("count", count))
 	}

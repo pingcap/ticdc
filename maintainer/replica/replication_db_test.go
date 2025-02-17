@@ -20,7 +20,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	replica_mock "github.com/pingcap/ticdc/maintainer/replica/mock"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/tiflow/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/stretchr/testify/require"
 )
 
@@ -59,8 +59,8 @@ func TestBasicFunction(t *testing.T) {
 	require.Len(t, db.GetTasksBySchemaID(2), 0)
 	require.Equal(t, 2, db.GetTaskSizeBySchemaID(1))
 	require.Equal(t, 0, db.GetTaskSizeBySchemaID(2))
-	require.Len(t, db.GetTasksByTableIDs(3), 1)
-	require.Len(t, db.GetTasksByTableIDs(3, 4), 2)
+	require.Len(t, db.GetTasksByTableID(3), 1)
+	require.Len(t, db.GetTasksByTableID(4), 1)
 	require.Len(t, db.GetTaskByNodeID("node1"), 1)
 	require.Len(t, db.GetTaskByNodeID("node2"), 0)
 	require.Equal(t, 0, db.GetTaskSizeByNodeID("node2"))

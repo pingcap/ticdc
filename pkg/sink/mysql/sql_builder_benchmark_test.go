@@ -37,7 +37,7 @@ func BenchmarkBuildDelete(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _ = buildDelete(tableInfo, delete)
+			_, _, _ = buildDelete(tableInfo, delete, true)
 		}
 	})
 }
@@ -50,7 +50,7 @@ func BenchmarkBuildUpdate(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, _, _ = buildUpdate(tableInfo, update)
+			_, _, _ = buildUpdate(tableInfo, update, true)
 		}
 	})
 }

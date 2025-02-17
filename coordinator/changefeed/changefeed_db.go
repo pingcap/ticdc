@@ -61,6 +61,7 @@ func (db *ChangefeedDB) withRLock(action func()) {
 }
 
 // AddAbsentChangefeed adds the changefeed to the absent map
+// It will be scheduled later
 func (db *ChangefeedDB) AddAbsentChangefeed(tasks ...*Changefeed) {
 	db.lock.Lock()
 	defer db.lock.Unlock()
@@ -223,7 +224,10 @@ func (db *ChangefeedDB) Resume(id common.ChangeFeedID, resetBackoff bool, overwr
 		delete(db.stopped, id)
 		cf.isNew = overwriteCheckpointTs
 		db.AddAbsentWithoutLock(cf)
-		log.Info("resume changefeed", zap.String("changefeed", id.String()), zap.Any("overwriteCheckpointTs", overwriteCheckpointTs))
+		log.Info("resume changefeed",
+			zap.Stringer("changefeed", id),
+			zap.Uint64("checkpointTs", cf.GetStatus().CheckpointTs),
+			zap.Bool("overwriteCheckpointTs", overwriteCheckpointTs))
 	}
 }
 

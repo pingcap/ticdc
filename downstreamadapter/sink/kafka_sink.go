@@ -19,7 +19,6 @@ import (
 	"net/url"
 	"sync/atomic"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
 	"github.com/pingcap/ticdc/downstreamadapter/worker"
@@ -27,7 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
@@ -48,7 +47,9 @@ type KafkaSink struct {
 	statistics       *metrics.Statistics
 	metricsCollector kafka.MetricsCollector
 
-	isNormal uint32 // if sink is normal, isNormal is 1, otherwise is 0
+	// isNormal means the sink does not meet error.
+	// if sink is normal, isNormal is 1, otherwise is 0
+	isNormal uint32
 	ctx      context.Context
 }
 
@@ -86,7 +87,7 @@ func newKafkaSink(
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
 	asyncProducer, err := kafkaComponent.Factory.AsyncProducer()
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrKafkaNewProducer, err)
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 	dmlProducer := producer.NewKafkaDMLProducer(changefeedID, asyncProducer)
 	dmlWorker := worker.NewKafkaDMLWorker(

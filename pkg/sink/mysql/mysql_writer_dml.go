@@ -16,15 +16,22 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"strings"
 	"time"
 
+	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/retry"
+	"github.com/pingcap/ticdc/pkg/retry"
+	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
+	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	pmysql "github.com/pingcap/tiflow/pkg/sink/mysql"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -46,12 +53,29 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 			dmls.startTs = append(dmls.startTs, event.StartTs)
 		}
 
-		translateToInsert := !w.cfg.SafeMode && event.CommitTs > event.ReplicatingTs
-		log.Debug("translate to insert",
-			zap.Bool("translateToInsert", translateToInsert),
+		inSafeMode := !w.cfg.SafeMode && event.CommitTs > event.ReplicatingTs
+
+		log.Debug("inSafeMode",
+			zap.Bool("inSafeMode", inSafeMode),
 			zap.Uint64("firstRowCommitTs", event.CommitTs),
 			zap.Uint64("firstRowReplicatingTs", event.ReplicatingTs),
 			zap.Bool("safeMode", w.cfg.SafeMode))
+
+		enableBatchModeThreshold := 1
+		// Determine whether to use batch dml feature here.
+		if w.cfg.BatchDMLEnable && int(event.Len()) > enableBatchModeThreshold {
+			// only use batch dml when the table has a handle key
+			if event.TableInfo.HasHandleKey() {
+				sql, value, err := w.batchSingleTxnDmls(event, event.TableInfo, inSafeMode)
+				if err != nil {
+					dmlsPool.Put(dmls) // Return to pool on error
+					return nil, errors.Trace(err)
+				}
+				dmls.sqls = append(dmls.sqls, sql...)
+				dmls.values = append(dmls.values, value...)
+				continue
+			}
+		}
 
 		for {
 			row, ok := event.GetNextRow()
@@ -65,10 +89,10 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 
 			switch row.RowType {
 			case commonEvent.RowTypeUpdate:
-				if translateToInsert {
-					query, args, err = buildUpdate(event.TableInfo, row)
+				if inSafeMode {
+					query, args, err = buildUpdate(event.TableInfo, row, w.cfg.ForceReplicate)
 				} else {
-					query, args, err = buildDelete(event.TableInfo, row)
+					query, args, err = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
 					if err != nil {
 						dmlsPool.Put(dmls) // Return to pool on error
 						return nil, errors.Trace(err)
@@ -77,12 +101,12 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 						dmls.sqls = append(dmls.sqls, query)
 						dmls.values = append(dmls.values, args)
 					}
-					query, args, err = buildInsert(event.TableInfo, row, translateToInsert)
+					query, args, err = buildInsert(event.TableInfo, row, inSafeMode)
 				}
 			case commonEvent.RowTypeDelete:
-				query, args, err = buildDelete(event.TableInfo, row)
+				query, args, err = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
 			case commonEvent.RowTypeInsert:
-				query, args, err = buildInsert(event.TableInfo, row, translateToInsert)
+				query, args, err = buildInsert(event.TableInfo, row, inSafeMode)
 			}
 
 			if err != nil {
@@ -153,18 +177,38 @@ func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		if err = tx.Commit(); err != nil {
 			return 0, 0, err
 		}
-		log.Debug("Exec Rows succeeded")
+		log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount))
 		return dmls.rowCount, dmls.approximateSize, nil
 	}
 	return retry.Do(w.ctx, func() error {
+		failpoint.Inject("MySQLSinkTxnRandomError", func() {
+			log.Warn("inject MySQLSinkTxnRandomError")
+			err := errors.Trace(driver.ErrBadConn)
+			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls.sqls[0], dmls.rowCount, dmls.startTs)
+			failpoint.Return(err)
+		})
+
+		failpoint.Inject("MySQLSinkHangLongTime", func() { _ = util.Hang(w.ctx, time.Hour) })
+
+		failpoint.Inject("MySQLDuplicateEntryError", func() {
+			log.Warn("inject MySQLDuplicateEntryError")
+			err := cerror.WrapError(cerror.ErrMySQLDuplicateEntry, &dmysql.MySQLError{
+				Number: uint16(mysql.ErrDupEntry),
+			})
+			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls.sqls[0], dmls.rowCount, dmls.startTs)
+			failpoint.Return(err)
+		})
+
 		err := w.statistics.RecordBatchExecution(tryExec)
 		if err != nil {
+			logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls.sqls[0], dmls.rowCount, dmls.startTs)
 			return errors.Trace(err)
 		}
 		return nil
 	}, retry.WithBackoffBaseDelay(pmysql.BackoffBaseDelay.Milliseconds()),
 		retry.WithBackoffMaxDelay(pmysql.BackoffMaxDelay.Milliseconds()),
-		retry.WithMaxTries(w.cfg.DMLMaxRetry))
+		retry.WithMaxTries(w.cfg.DMLMaxRetry),
+		retry.WithIsRetryableErr(isRetryableDMLError))
 }
 
 func (w *MysqlWriter) sequenceExecute(
@@ -237,4 +281,205 @@ func (w *MysqlWriter) multiStmtExecute(
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQL, multiStmtArgs)))
 	}
 	return nil
+}
+
+func logDMLTxnErr(
+	err error, start time.Time, changefeed string,
+	query string, count int, startTs []common.Ts,
+) error {
+	if len(query) > 1024 {
+		query = query[:1024]
+	}
+	if isRetryableDMLError(err) {
+		log.Warn("execute DMLs with error, retry later",
+			zap.Error(err), zap.Duration("duration", time.Since(start)),
+			zap.String("query", query), zap.Int("count", count),
+			zap.Uint64s("startTs", startTs),
+			zap.String("changefeed", changefeed))
+	} else {
+		log.Error("execute DMLs with error, can not retry",
+			zap.Error(err), zap.Duration("duration", time.Since(start)),
+			zap.String("query", query), zap.Int("count", count),
+			zap.String("changefeed", changefeed))
+	}
+	return errors.WithMessage(err, fmt.Sprintf("Failed query info: %s; ", query))
+}
+
+func (w *MysqlWriter) batchSingleTxnDmls(
+	event *commonEvent.DMLEvent,
+	tableInfo *common.TableInfo,
+	translateToInsert bool,
+) (sqls []string, values [][]interface{}, err error) {
+	insertRows, updateRows, deleteRows, err := w.groupRowsByType(event, tableInfo)
+	if err != nil {
+		return nil, nil, errors.Trace(err)
+	}
+
+	// handle delete
+	if len(deleteRows) > 0 {
+		for _, rows := range deleteRows {
+			sql, value := sqlmodel.GenDeleteSQL(rows...)
+			sqls = append(sqls, sql)
+			values = append(values, value)
+		}
+	}
+
+	// handle update
+	if len(updateRows) > 0 {
+		if w.cfg.IsTiDB {
+			for _, rows := range updateRows {
+				s, v := w.genUpdateSQL(rows...)
+				sqls = append(sqls, s...)
+				values = append(values, v...)
+			}
+			// The behavior of update statement differs between TiDB and MySQL.
+			// So we don't use batch update statement when downstream is MySQL.
+			// Ref:https://docs.pingcap.com/tidb/stable/sql-statement-update#mysql-compatibility
+		} else {
+			for _, rows := range updateRows {
+				for _, row := range rows {
+					sql, value := row.GenSQL(sqlmodel.DMLUpdate)
+					sqls = append(sqls, sql)
+					values = append(values, value)
+				}
+			}
+		}
+	}
+
+	// handle insert
+	if len(insertRows) > 0 {
+		for _, rows := range insertRows {
+			if translateToInsert {
+				sql, value := sqlmodel.GenInsertSQL(sqlmodel.DMLInsert, rows...)
+				sqls = append(sqls, sql)
+				values = append(values, value)
+			} else {
+				sql, value := sqlmodel.GenInsertSQL(sqlmodel.DMLReplace, rows...)
+				sqls = append(sqls, sql)
+				values = append(values, value)
+			}
+		}
+	}
+
+	return
+}
+
+func (w *MysqlWriter) groupRowsByType(
+	event *commonEvent.DMLEvent,
+	tableInfo *common.TableInfo,
+) (insertRows, updateRows, deleteRows [][]*sqlmodel.RowChange, err error) {
+	rowSize := int(event.Len())
+	if rowSize > w.cfg.MaxTxnRow {
+		rowSize = w.cfg.MaxTxnRow
+	}
+
+	insertRow := make([]*sqlmodel.RowChange, 0, rowSize)
+	updateRow := make([]*sqlmodel.RowChange, 0, rowSize)
+	deleteRow := make([]*sqlmodel.RowChange, 0, rowSize)
+
+	eventTableInfo := tableInfo
+	// RowChangedEvent doesn't contain data for virtual columns,
+	// so we need to create a new table info without virtual columns before pass it to NewRowChange.
+	if eventTableInfo.HasVirtualColumns() {
+		eventTableInfo = common.BuildTiDBTableInfoWithoutVirtualColumns(eventTableInfo)
+	}
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			break
+		}
+
+		switch row.RowType {
+		case commonEvent.RowTypeInsert:
+			args, err := getArgs(&row.Row, tableInfo, true)
+			if err != nil {
+				return nil, nil, nil, errors.Trace(err)
+			}
+
+			newInsertRow := sqlmodel.NewRowChange(
+				&tableInfo.TableName,
+				nil,
+				nil,
+				args,
+				eventTableInfo,
+				nil, nil)
+
+			insertRow = append(insertRow, newInsertRow)
+			if len(insertRow) >= w.cfg.MaxTxnRow {
+				insertRows = append(insertRows, insertRow)
+				insertRow = make([]*sqlmodel.RowChange, 0, rowSize)
+			}
+		case commonEvent.RowTypeUpdate:
+			args, err := getArgs(&row.Row, tableInfo, true)
+			if err != nil {
+				return nil, nil, nil, errors.Trace(err)
+			}
+			preArgs, err := getArgs(&row.PreRow, tableInfo, true)
+			if err != nil {
+				return nil, nil, nil, errors.Trace(err)
+			}
+			newUpdateRow := sqlmodel.NewRowChange(
+				&tableInfo.TableName,
+				nil,
+				preArgs,
+				args,
+				eventTableInfo,
+				nil, nil)
+			updateRow = append(updateRow, newUpdateRow)
+			if len(updateRow) >= w.cfg.MaxTxnRow {
+				updateRows = append(updateRows, updateRow)
+				updateRow = make([]*sqlmodel.RowChange, 0, rowSize)
+			}
+		case commonEvent.RowTypeDelete:
+			preArgs, err := getArgs(&row.PreRow, tableInfo, true)
+			if err != nil {
+				return nil, nil, nil, errors.Trace(err)
+			}
+			newDeleteRow := sqlmodel.NewRowChange(
+				&tableInfo.TableName,
+				nil,
+				preArgs,
+				nil,
+				eventTableInfo,
+				nil, nil)
+			deleteRow = append(deleteRow, newDeleteRow)
+			if len(deleteRow) >= w.cfg.MaxTxnRow {
+				deleteRows = append(deleteRows, deleteRow)
+				deleteRow = make([]*sqlmodel.RowChange, 0, rowSize)
+			}
+		}
+
+	}
+	if len(insertRow) > 0 {
+		insertRows = append(insertRows, insertRow)
+	}
+	if len(updateRow) > 0 {
+		updateRows = append(updateRows, updateRow)
+	}
+	if len(deleteRow) > 0 {
+		deleteRows = append(deleteRows, deleteRow)
+	}
+
+	return
+}
+
+func (w *MysqlWriter) genUpdateSQL(rows ...*sqlmodel.RowChange) ([]string, [][]interface{}) {
+	size := 0
+	for _, r := range rows {
+		size += int(r.GetApproximateDataSize())
+	}
+	if size < w.cfg.MaxMultiUpdateRowSize*len(rows) {
+		// use multi update in one SQL
+		sql, value := sqlmodel.GenUpdateSQL(rows...)
+		return []string{sql}, [][]interface{}{value}
+	}
+	// each row has one independent update SQL.
+	sqls := make([]string, 0, len(rows))
+	values := make([][]interface{}, 0, len(rows))
+	for _, row := range rows {
+		sql, value := row.GenSQL(sqlmodel.DMLUpdate)
+		sqls = append(sqls, sql)
+		values = append(values, value)
+	}
+	return sqls, values
 }

@@ -154,7 +154,7 @@ func newEvenlySplitStepper(pages int, totalRegion int) evenlySplitStepper {
 		extraRegionPerSpan: extraRegionPerSpan,
 		remain:             remain,
 	}
-	log.Info("evenly split stepper", zap.Any("evenlySplitStepper", res))
+	log.Info("evenly split stepper", zap.Any("regionPerSpan", regionPerSpan), zap.Any("spanCount", pages), zap.Any("extraRegionPerSpan", extraRegionPerSpan))
 	return res
 }
 

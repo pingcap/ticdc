@@ -95,6 +95,7 @@ message MaintainerStatus {
     ComponentState state = 3;
     uint64 checkpoint_ts = 4;
     repeated RunningError err = 5;
+    bool bootstrap_done = 6;
 }
 
 message CoordinatorBootstrapRequest {
@@ -109,7 +110,7 @@ message AddMaintainerRequest  {
     ChangefeedID id = 1;
     bytes config = 2;
     uint64 checkpoint_ts = 3;
-    bool is_new_changfeed = 4; // only true when the changefeed is new created or resumed with overwriteCheckpointTs
+    bool is_new_changefeed = 4; // only true when the changefeed is new created or resumed with overwriteCheckpointTs
 }
 
 message RemoveMaintainerRequest  {
@@ -123,20 +124,21 @@ message MaintainerBootstrapRequest {
     bytes config = 2;
     uint64 start_ts = 3;
     DispatcherID table_trigger_event_dispatcher_id = 4;
-    bool is_new_changfeed = 5; // only true when the changefeed is new created or resumed with overwriteCheckpointTs
+    bool is_new_changefeed = 5; // only true when the changefeed is new created or resumed with overwriteCheckpointTs
 }
 
 message MaintainerBootstrapResponse {
     ChangefeedID changefeedID = 1;
     repeated BootstrapTableSpan spans = 2;
     RunningError err = 3;
-    // when the table trigger event dispatcher is created in this node,
-    // we need to return the checkpointTs(startTs) of the table trigger event dispatcher
-    // This checkpointTs will be the ts to check schema store to get table lists when maintainer is restarted.
-    // Because table trigger event dispatcher participates all create/delete tables ddls, 
-    // so we need to align the table list with the progress of table trigger event dispatcher 
-    // when it is restarted to keep correctness.
-    // If the table trigger event dispatcher is not created in this node, we can return 0 as the checkpointTs.
+    // For nodes with a table trigger event dispatcher:
+    // - Reports checkpoint_ts in bootstrap response
+    // - This checkpoint_ts is used to fetch table lists from schema store during maintainer restart
+    // to ensure maintainer's table list stays synchronized with the dispatcher's DDL progress
+    // since the dispatcher handles all table creation/deletion DDLs
+    //
+    // For nodes without a table trigger event dispatcher:
+    // - checkpoint_ts is set to 0
     uint64 checkpoint_ts = 4; 
 }
 

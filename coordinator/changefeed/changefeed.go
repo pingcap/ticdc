@@ -67,25 +67,34 @@ func NewChangefeed(cfID common.ChangeFeedID,
 		log.Panic("unable to marshal changefeed config",
 			zap.Error(err))
 	}
-	log.Info("changefeed instance created",
-		zap.String("id", cfID.String()),
-		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("state", string(info.State)))
-	return &Changefeed{
+
+	res := &Changefeed{
 		ID:                    cfID,
 		info:                  atomic.NewPointer(info),
 		configBytes:           bytes,
 		lastSavedCheckpointTs: atomic.NewUint64(checkpointTs),
 		isMQSink:              sink.IsMQScheme(uri.Scheme),
 		isNew:                 isNew,
-		// init the first Status
-		status: atomic.NewPointer[heartbeatpb.MaintainerStatus](
+		// Initialize the status
+		status: atomic.NewPointer(
 			&heartbeatpb.MaintainerStatus{
+				ChangefeedID: cfID.ToPB(),
 				CheckpointTs: checkpointTs,
 				FeedState:    string(info.State),
 			}),
 		backoff: NewBackoff(cfID, *info.Config.ChangefeedErrorStuckDuration, checkpointTs),
 	}
+	// Must set retrying to true when the changefeed is in warning state.
+	if info.State == model.StateWarning {
+		res.backoff.retrying.Store(true)
+	}
+
+	log.Info("changefeed instance created",
+		zap.String("id", cfID.String()),
+		zap.Uint64("checkpointTs", checkpointTs),
+		zap.String("state", string(info.State)),
+		zap.String("info", info.String()))
+	return res
 }
 
 func (c *Changefeed) GetInfo() *config.ChangeFeedInfo {
@@ -127,8 +136,16 @@ func (c *Changefeed) ShouldRun() bool {
 
 func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {
 	old := c.status.Load()
+
 	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
 		c.status.Store(newStatus)
+		if old.BootstrapDone != newStatus.BootstrapDone {
+			log.Info("Received changefeed status with bootstrapDone",
+				zap.Stringer("changefeed", c.ID),
+				zap.Bool("bootstrapDone", newStatus.BootstrapDone))
+			return true, model.StateNormal, nil
+		}
+
 		info := c.GetInfo()
 		// the changefeed reaches the targetTs
 		if info.TargetTs != 0 && newStatus.CheckpointTs >= info.TargetTs {
@@ -136,7 +153,13 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 		}
 		return c.backoff.CheckStatus(newStatus)
 	}
+
 	return false, model.StateNormal, nil
+}
+
+func (c *Changefeed) ForceUpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {
+	c.status.Store(newStatus)
+	return c.backoff.CheckStatus(newStatus)
 }
 
 func (c *Changefeed) IsMQSink() bool {
@@ -147,8 +170,46 @@ func (c *Changefeed) SetIsNew(isNew bool) {
 	c.isNew = isNew
 }
 
+// GetStatus returns the changefeed status.
+// Note: the returned status is a pointer, so it's not safe to modify it!
 func (c *Changefeed) GetStatus() *heartbeatpb.MaintainerStatus {
 	return c.status.Load()
+}
+
+// GetClonedStatus returns a deep copy of the changefeed status
+func (c *Changefeed) GetClonedStatus() *heartbeatpb.MaintainerStatus {
+	status := c.status.Load()
+	if status == nil {
+		return nil
+	}
+
+	clone := &heartbeatpb.MaintainerStatus{
+		CheckpointTs: status.CheckpointTs,
+		FeedState:    status.FeedState,
+		State:        status.State,
+		Err:          make([]*heartbeatpb.RunningError, 0, len(status.Err)),
+	}
+	for _, err := range status.Err {
+		clonedErr := &heartbeatpb.RunningError{
+			Time:    err.Time,
+			Node:    err.Node,
+			Code:    err.Code,
+			Message: err.Message,
+		}
+		clone.Err = append(clone.Err, clonedErr)
+	}
+
+	cfID := status.ChangefeedID
+	if cfID != nil {
+		clone.ChangefeedID = &heartbeatpb.ChangefeedID{
+			High:      cfID.High,
+			Low:       cfID.Low,
+			Name:      cfID.Name,
+			Namespace: cfID.Namespace,
+		}
+	}
+
+	return clone
 }
 
 func (c *Changefeed) SetLastSavedCheckPointTs(ts uint64) {
@@ -163,10 +224,10 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.AddMaintainerRequest{
-			Id:             c.ID.ToPB(),
-			CheckpointTs:   c.GetStatus().CheckpointTs,
-			Config:         c.configBytes,
-			IsNewChangfeed: c.isNew,
+			Id:              c.ID.ToPB(),
+			CheckpointTs:    c.GetStatus().CheckpointTs,
+			Config:          c.configBytes,
+			IsNewChangefeed: c.isNew,
 		})
 }
 

@@ -19,7 +19,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/tiflow/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -117,21 +117,21 @@ func TestGetCandidateNodes(t *testing.T) {
 	// test span1
 	{
 		nodes := coordinator.getCandidateNodes(nodeID1, span1, uint64(100))
-		assert.Equal(t, []node.ID{nodeID2}, nodes)
+		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 	{
 		nodes := coordinator.getCandidateNodes(nodeID3, span1, uint64(100))
-		assert.Equal(t, []node.ID{nodeID2, nodeID1}, nodes)
+		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
 	}
 
 	// test span2
 	{
 		nodes := coordinator.getCandidateNodes(nodeID1, span2, uint64(100))
-		assert.Equal(t, []node.ID{nodeID3, nodeID2}, nodes)
+		assert.Equal(t, []string{nodeID3.String(), nodeID2.String()}, nodes)
 	}
 	{
 		nodes := coordinator.getCandidateNodes(nodeID3, span2, uint64(100))
-		assert.Equal(t, []node.ID{nodeID2}, nodes)
+		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 
 	// update node1 and test
@@ -152,7 +152,7 @@ func TestGetCandidateNodes(t *testing.T) {
 		}
 		coordinator.updateEventStoreState(nodeID1, state)
 		nodes := coordinator.getCandidateNodes(nodeID3, span1, uint64(100))
-		assert.Equal(t, []node.ID{nodeID1, nodeID2}, nodes)
+		assert.Equal(t, []string{nodeID1.String(), nodeID2.String()}, nodes)
 	}
 
 	// update node2 and test
@@ -179,6 +179,6 @@ func TestGetCandidateNodes(t *testing.T) {
 		}
 		coordinator.updateEventStoreState(nodeID2, state)
 		nodes := coordinator.getCandidateNodes(nodeID3, span1, uint64(100))
-		assert.Equal(t, []node.ID{nodeID2, nodeID1}, nodes)
+		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
 	}
 }

@@ -104,30 +104,37 @@ func (d *DispatcherMap) ForEach(fn func(id common.DispatcherID, dispatcher *disp
 	return seq
 }
 
-func toFilterConfigPB(filter *config.FilterConfig) *eventpb.FilterConfig {
-	filterConfig := &eventpb.FilterConfig{
+func toFilterConfigPB(filter *config.FilterConfig) *eventpb.InnerFilterConfig {
+	filterConfig := &eventpb.InnerFilterConfig{
 		Rules:            filter.Rules,
 		IgnoreTxnStartTs: filter.IgnoreTxnStartTs,
-		EventFilters:     make([]*eventpb.EventFilterRule, len(filter.EventFilters)),
+		EventFilters:     make([]*eventpb.EventFilterRule, 0),
 	}
 
-	for _, eventFilter := range filter.EventFilters {
-		ignoreEvent := make([]string, len(eventFilter.IgnoreEvent))
-		for _, event := range eventFilter.IgnoreEvent {
-			ignoreEvent = append(ignoreEvent, string(event))
-		}
-		filterConfig.EventFilters = append(filterConfig.EventFilters, &eventpb.EventFilterRule{
-			Matcher:                  eventFilter.Matcher,
-			IgnoreEvent:              ignoreEvent,
-			IgnoreSql:                eventFilter.IgnoreSQL,
-			IgnoreInsertValueExpr:    eventFilter.IgnoreInsertValueExpr,
-			IgnoreUpdateNewValueExpr: eventFilter.IgnoreUpdateNewValueExpr,
-			IgnoreUpdateOldValueExpr: eventFilter.IgnoreUpdateOldValueExpr,
-			IgnoreDeleteValueExpr:    eventFilter.IgnoreDeleteValueExpr,
-		})
+	for _, eventFilterRule := range filter.EventFilters {
+		filterConfig.EventFilters = append(filterConfig.EventFilters, toEventFilterRulePB(eventFilterRule))
 	}
 
 	return filterConfig
+}
+
+func toEventFilterRulePB(rule *config.EventFilterRule) *eventpb.EventFilterRule {
+	eventFilterPB := &eventpb.EventFilterRule{
+		IgnoreInsertValueExpr:    rule.IgnoreInsertValueExpr,
+		IgnoreUpdateNewValueExpr: rule.IgnoreUpdateNewValueExpr,
+		IgnoreUpdateOldValueExpr: rule.IgnoreUpdateOldValueExpr,
+		IgnoreDeleteValueExpr:    rule.IgnoreDeleteValueExpr,
+	}
+
+	eventFilterPB.Matcher = append(eventFilterPB.Matcher, rule.Matcher...)
+
+	for _, ignoreEvent := range rule.IgnoreEvent {
+		eventFilterPB.IgnoreEvent = append(eventFilterPB.IgnoreEvent, string(ignoreEvent))
+	}
+
+	eventFilterPB.IgnoreSql = append(eventFilterPB.IgnoreSql, rule.IgnoreSQL...)
+
+	return eventFilterPB
 }
 
 type TableSpanStatusWithSeq struct {
@@ -213,26 +220,12 @@ func SetHeartBeatTaskScheduler(taskScheduler threadpool.ThreadPool) {
 	heartBeatTaskScheduler = taskScheduler
 }
 
-// schedulerDispatcherRequestDynamicStream is responsible for create or remove the dispatchers.
-var (
-	schedulerDispatcherRequestDynamicStream     dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler]
-	schedulerDispatcherRequestDynamicStreamOnce sync.Once
-)
-
-func GetSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler] {
-	schedulerDispatcherRequestDynamicStreamOnce.Do(func() {
-		option := dynstream.NewOption()
-		option.BatchCount = 128
-		schedulerDispatcherRequestDynamicStream = dynstream.NewParallelDynamicStream(
-			func(id common.GID) uint64 { return id.FastHash() },
-			&SchedulerDispatcherRequestHandler{}, option)
-		schedulerDispatcherRequestDynamicStream.Start()
-	})
-	return schedulerDispatcherRequestDynamicStream
-}
-
-func SetSchedulerDispatcherRequestDynamicStream(dynamicStream dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler]) {
-	schedulerDispatcherRequestDynamicStream = dynamicStream
+func newSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler] {
+	ds := dynstream.NewParallelDynamicStream(
+		func(id common.GID) uint64 { return id.FastHash() },
+		&SchedulerDispatcherRequestHandler{}, dynstream.NewOption())
+	ds.Start()
+	return ds
 }
 
 type SchedulerDispatcherRequest struct {
@@ -318,20 +311,12 @@ func (h *SchedulerDispatcherRequestHandler) GetType(event SchedulerDispatcherReq
 
 func (h *SchedulerDispatcherRequestHandler) OnDrop(event SchedulerDispatcherRequest) {}
 
-// heartBeatResponseDynamicStream is responsible for send heartBeatResponse to the related dispatchers.
-var (
-	heartBeatResponseDynamicStream     dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler]
-	heartBeatResponseDynamicStreamOnce sync.Once
-)
-
-func GetHeartBeatResponseDynamicStream() dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler] {
-	heartBeatResponseDynamicStreamOnce.Do(func() {
-		heartBeatResponseDynamicStream = dynstream.NewParallelDynamicStream(
-			func(id common.GID) uint64 { return id.FastHash() },
-			&HeartBeatResponseHandler{dispatcher.GetDispatcherStatusDynamicStream()})
-		heartBeatResponseDynamicStream.Start()
-	})
-	return heartBeatResponseDynamicStream
+func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, *dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]) dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler] {
+	ds := dynstream.NewParallelDynamicStream(
+		func(id common.GID) uint64 { return id.FastHash() },
+		newHeartBeatResponseHandler(dds))
+	ds.Start()
+	return ds
 }
 
 type HeartBeatResponse struct {
@@ -342,16 +327,12 @@ func NewHeartBeatResponse(resp *heartbeatpb.HeartBeatResponse) HeartBeatResponse
 	return HeartBeatResponse{resp}
 }
 
-func SetHeartBeatResponseDynamicStream(dynamicStream dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler]) {
-	heartBeatResponseDynamicStream = dynamicStream
-}
-
 type HeartBeatResponseHandler struct {
 	dispatcherStatusDynamicStream dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, *dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]
 }
 
-func NewHeartBeatResponseHandler() HeartBeatResponseHandler {
-	return HeartBeatResponseHandler{dispatcherStatusDynamicStream: dispatcher.GetDispatcherStatusDynamicStream()}
+func newHeartBeatResponseHandler(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, *dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]) *HeartBeatResponseHandler {
+	return &HeartBeatResponseHandler{dispatcherStatusDynamicStream: dds}
 }
 
 func (h *HeartBeatResponseHandler) Path(HeartbeatResponse HeartBeatResponse) common.GID {
@@ -412,19 +393,12 @@ func (h *HeartBeatResponseHandler) GetType(event HeartBeatResponse) dynstream.Ev
 func (h *HeartBeatResponseHandler) OnDrop(event HeartBeatResponse) {}
 
 // checkpointTsMessageDynamicStream is responsible for push checkpointTsMessage to the corresponding table trigger event dispatcher.
-var (
-	checkpointTsMessageDynamicStream     dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler]
-	checkpointTsMessageDynamicStreamOnce sync.Once
-)
-
-func GetCheckpointTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler] {
-	checkpointTsMessageDynamicStreamOnce.Do(func() {
-		checkpointTsMessageDynamicStream = dynstream.NewParallelDynamicStream(
-			func(id common.GID) uint64 { return id.FastHash() },
-			&CheckpointTsMessageHandler{})
-		checkpointTsMessageDynamicStream.Start()
-	})
-	return checkpointTsMessageDynamicStream
+func newCheckpointTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler] {
+	ds := dynstream.NewParallelDynamicStream(
+		func(id common.GID) uint64 { return id.FastHash() },
+		&CheckpointTsMessageHandler{})
+	ds.Start()
+	return ds
 }
 
 type CheckpointTsMessage struct {
@@ -451,9 +425,8 @@ func (h *CheckpointTsMessageHandler) Handle(eventDispatcherManager *EventDispatc
 		panic("invalid message count")
 	}
 	checkpointTsMessage := messages[0]
-	if eventDispatcherManager.tableTriggerEventDispatcher != nil && eventDispatcherManager.sink.SinkType() != common.MysqlSinkType {
-		tableTriggerEventDispatcher := eventDispatcherManager.tableTriggerEventDispatcher
-		tableTriggerEventDispatcher.HandleCheckpointTs(checkpointTsMessage.CheckpointTs)
+	if eventDispatcherManager.tableTriggerEventDispatcher != nil {
+		eventDispatcherManager.tableTriggerEventDispatcher.HandleCheckpointTs(checkpointTsMessage.CheckpointTs)
 	}
 	return false
 }

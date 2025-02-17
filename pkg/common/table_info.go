@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/pingcap/log"
@@ -302,7 +303,8 @@ type TableInfo struct {
 	columnSchema *columnSchema `json:"-"`
 
 	preSQLs struct {
-		isInitialized atomic.Bool
+		mutex         sync.Mutex
+		isInitialized bool
 		m             [4]string
 	} `json:"-"`
 }
@@ -314,7 +316,9 @@ func (ti *TableInfo) InitPrivateFields() {
 		return
 	}
 
-	if ti.preSQLs.isInitialized.Load() {
+	ti.preSQLs.mutex.Lock()
+	defer ti.preSQLs.mutex.Unlock()
+	if ti.preSQLs.isInitialized {
 		return
 	}
 
@@ -322,7 +326,7 @@ func (ti *TableInfo) InitPrivateFields() {
 	ti.preSQLs.m[preSQLInsert] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLInsert], ti.TableName.QuoteString())
 	ti.preSQLs.m[preSQLReplace] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLReplace], ti.TableName.QuoteString())
 	ti.preSQLs.m[preSQLUpdate] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLUpdate], ti.TableName.QuoteString())
-	ti.preSQLs.isInitialized.Store(true)
+	ti.preSQLs.isInitialized = true
 }
 
 func (ti *TableInfo) Marshal() ([]byte, error) {
@@ -573,6 +577,14 @@ func (ti *TableInfo) OffsetsByNames(names []string) ([]int, bool) {
 	return result, true
 }
 
+func (ti *TableInfo) HasHandleKey() bool {
+	return ti.columnSchema.GetPkColInfo() != nil
+}
+
+func (ti *TableInfo) GetPkColInfo() *model.ColumnInfo {
+	return ti.columnSchema.GetPkColInfo()
+}
+
 // GetPrimaryKeyColumnNames returns the primary key column names
 func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 	var result []string
@@ -629,4 +641,17 @@ func GetColumnDefaultValue(col *model.ColumnInfo) interface{} {
 	}
 	defaultDatum := datumTypes.NewDatum(defaultValue)
 	return defaultDatum.GetValue()
+}
+
+// BuildTiDBTableInfoWithoutVirtualColumns build a TableInfo without virual columns from the source table info
+func BuildTiDBTableInfoWithoutVirtualColumns(source *TableInfo) *TableInfo {
+	newColumnSchema := source.columnSchema.getColumnSchemaWithoutVirtualColumns()
+	tableInfo := &TableInfo{
+		SchemaID:     source.SchemaID,
+		TableName:    source.TableName,
+		columnSchema: newColumnSchema,
+	}
+
+	tableInfo.InitPrivateFields()
+	return tableInfo
 }

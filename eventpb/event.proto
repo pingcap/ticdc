@@ -14,10 +14,16 @@ message EventFilterRule {
     string ignore_delete_value_expr = 7;
 }
 
-message FilterConfig {
+message InnerFilterConfig {
     repeated string rules = 1;
     repeated uint64 ignore_txn_start_ts = 2;
     repeated EventFilterRule EventFilters = 3;
+}
+
+message FilterConfig {
+    bool caseSensitive = 1;
+	bool forceReplicate = 2;
+    InnerFilterConfig filterConfig = 3;
 }
 
 

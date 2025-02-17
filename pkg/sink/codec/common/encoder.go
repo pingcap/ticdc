@@ -35,6 +35,15 @@ type EventEncoder interface {
 	Clean()
 }
 
+// TxnEventEncoder is an abstraction for events encoder
+type TxnEventEncoder interface {
+	// AppendTxnEvent append a txn event into the buffer.
+	AppendTxnEvent(*commonEvent.DMLEvent) error
+	// Build builds the batch and returns the bytes of key and value.
+	// Should be called after `AppendTxnEvent`
+	Build() []*Message
+}
+
 // IsColumnValueEqual checks whether the preValue and updatedValue are equal.
 func IsColumnValueEqual(preValue, updatedValue interface{}) bool {
 	if preValue == nil || updatedValue == nil {

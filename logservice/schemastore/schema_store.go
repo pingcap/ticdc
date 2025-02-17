@@ -25,8 +25,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/tidb/pkg/kv"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -160,9 +160,9 @@ func (s *schemaStore) updateResolvedTsPeriodically(ctx context.Context) error {
 	tryUpdateResolvedTs := func() {
 		pendingTs := s.pendingResolvedTs.Load()
 		defer func() {
-			currentPhyTs := oracle.GetPhysical(s.pdClock.CurrentTime())
+			pdPhyTs := oracle.GetPhysical(s.pdClock.CurrentTime())
 			resolvedPhyTs := oracle.ExtractPhysical(pendingTs)
-			resolvedLag := float64(currentPhyTs-resolvedPhyTs) / 1e3
+			resolvedLag := float64(pdPhyTs-resolvedPhyTs) / 1e3
 			metrics.SchemaStoreResolvedTsLagGauge.Set(float64(resolvedLag))
 		}()
 
@@ -290,10 +290,6 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(tableFilter filter.Filter, star
 	if limit == 0 {
 		log.Panic("limit cannot be 0")
 	}
-	// TODO: remove the following log
-	log.Debug("FetchTableTriggerDDLEvents",
-		zap.Uint64("start", start),
-		zap.Int("limit", limit))
 	// must get resolved ts first
 	currentResolvedTs := s.resolvedTs.Load()
 	if currentResolvedTs <= start {

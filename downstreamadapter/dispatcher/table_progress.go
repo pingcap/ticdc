@@ -132,5 +132,11 @@ func (p *TableProgress) GetEventSizePerSecond() float32 {
 	p.cumulateEventSize = 0
 	p.lastQueryTime = time.Now()
 
+	if eventSizePerSecond == 0 {
+		// The event size will only send to maintainer once per second.
+		// So if no data is write, we use a tiny value instead of 0 to distinguish it from the status without eventSize
+		return 0.1
+	}
+
 	return eventSizePerSecond
 }

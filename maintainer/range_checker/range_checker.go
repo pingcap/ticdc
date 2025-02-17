@@ -23,4 +23,6 @@ type RangeChecker interface {
 	Reset()
 	// Detail returns the detail status of the range checker, it used for debugging.
 	Detail() string
+	// mark the range checker is fully covered
+	MarkCovered()
 }

@@ -146,6 +146,10 @@ func (c *NodeManager) GetAliveNodes() map[node.ID]*node.Info {
 	return *c.nodes.Load()
 }
 
+func (c *NodeManager) GetNodeInfo(id node.ID) *node.Info {
+	return (*c.nodes.Load())[id]
+}
+
 func (c *NodeManager) Run(ctx context.Context) error {
 	cfg := config.GetGlobalServerConfig()
 	watcher := NewEtcdWatcher(c.etcdClient,

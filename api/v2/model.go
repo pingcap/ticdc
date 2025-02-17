@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/model"
@@ -1086,6 +1087,9 @@ type ChangeFeedInfo struct {
 	CheckpointTs   uint64                    `json:"checkpoint_ts"`
 	CheckpointTime model.JSONTime            `json:"checkpoint_time"`
 	TaskStatus     []model.CaptureTaskStatus `json:"task_status,omitempty"`
+
+	GID            common.GID `json:"gid"`
+	MaintainerAddr string     `json:"maintainer_addr,omitempty"`
 }
 
 // SyncedStatus describes the detail of a changefeed's synced status
@@ -1175,8 +1179,10 @@ type ServerStatus struct {
 
 // Capture holds common information of a capture in cdc
 type Capture struct {
-	ID            string `json:"id"`
-	IsCoordinator bool   `json:"is_coordinator"`
+	ID string `json:"id"`
+	// IsCoordinator is true if the capture is the coordinator of the TiCDC cluster
+	// We make its json key as `is_owner` to keep the compatibility with old TiCDC.
+	IsCoordinator bool   `json:"is_owner"`
 	AdvertiseAddr string `json:"address"`
 	ClusterID     string `json:"cluster_id"`
 }

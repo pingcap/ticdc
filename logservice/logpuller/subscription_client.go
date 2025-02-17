@@ -29,11 +29,11 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
-	"github.com/pingcap/tiflow/pkg/pdutil"
 	"github.com/pingcap/tiflow/pkg/security"
-	"github.com/pingcap/tiflow/pkg/spanz"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
 	kvclientv2 "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -54,6 +54,8 @@ const (
 
 	loadRegionRetryInterval time.Duration = 100 * time.Millisecond
 	resolveLockMinInterval  time.Duration = 10 * time.Second
+	resolveLockTickInterval time.Duration = 2 * time.Second
+	resolveLockFence        time.Duration = 4 * time.Second
 )
 
 var (
@@ -128,8 +130,10 @@ type subscribedSpan struct {
 	staleLocksTargetTs atomic.Uint64
 
 	lastAdvanceTime atomic.Int64
-	// This is used to calculate the resolvedTs lag for metrics.
-	resolvedTs atomic.Uint64
+
+	initialized       atomic.Bool
+	resolvedTsUpdated atomic.Int64
+	resolvedTs        atomic.Uint64
 }
 
 func (span *subscribedSpan) clearKVEventsCache() {
@@ -171,6 +175,10 @@ type SubscriptionClient struct {
 	lockResolver txnutil.LockResolver
 
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
+	// the following three fields are used to manage feedback from ds and notify other goroutines
+	mu     sync.Mutex
+	cond   *sync.Cond
+	paused atomic.Bool
 
 	// the credential to connect tikv
 	credential *security.Credential
@@ -223,7 +231,8 @@ func NewSubscriptionClient(
 
 	option := dynstream.NewOption()
 	option.BatchCount = 1024
-	option.UseBuffer = true
+	option.UseBuffer = false
+	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
 		func(subID SubscriptionID) uint64 { return uint64(subID) },
 		&regionEventHandler{subClient: subClient},
@@ -231,6 +240,7 @@ func NewSubscriptionClient(
 	)
 	ds.Start()
 	subClient.ds = ds
+	subClient.cond = sync.NewCond(&subClient.mu)
 
 	subClient.initMetrics()
 	return subClient
@@ -304,7 +314,9 @@ func (s *SubscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	s.ds.AddPath(rt.subID, rt, dynstream.AreaSettings{})
+	s.ds.AddPath(rt.subID, rt, dynstream.AreaSettings{
+		MaxPendingSize: 2 * 1024 * 1024 * 1024, // 2GB
+	})
 
 	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt}
 }
@@ -320,7 +332,6 @@ func (s *SubscriptionClient) Unsubscribe(subID SubscriptionID) {
 		log.Warn("unknown subscription", zap.Uint64("subscriptionID", uint64(subID)))
 		return
 	}
-	s.ds.RemovePath(rt.subID)
 	s.setTableStopped(rt)
 
 	log.Info("unsubscribe span success",
@@ -332,14 +343,39 @@ func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
 	s.ds.Wake(subID)
 }
 
-// ResolveLock is a function. If outsider subscribers find a span resolved timestamp is
-// advanced slowly or stopped, they can try to resolve locks in the given span.
-func (s *SubscriptionClient) ResolveLock(subID SubscriptionID, targetTs uint64) {
-	s.totalSpans.Lock()
-	rt := s.totalSpans.spanMap[subID]
-	s.totalSpans.Unlock()
-	if rt != nil {
-		rt.resolveStaleLocks(targetTs)
+func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
+	// fast path
+	if !s.paused.Load() {
+		s.ds.Push(subID, event)
+		return
+	}
+	// slow path: wait until paused is false
+	s.mu.Lock()
+	for s.paused.Load() {
+		s.cond.Wait()
+	}
+	s.mu.Unlock()
+	s.ds.Push(subID, event)
+}
+
+func (s *SubscriptionClient) handleDSFeedBack(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case feedback := <-s.ds.Feedback():
+			switch feedback.FeedbackType {
+			case dynstream.PauseArea:
+				s.paused.Store(true)
+				log.Info("subscription client pause push region event")
+			case dynstream.ResumeArea:
+				s.paused.Store(false)
+				s.cond.Broadcast()
+				log.Info("subscription client resume push region event")
+			case dynstream.PausePath, dynstream.ResumePath:
+				// Ignore it, because it is no need to pause and resume a path in puller.
+			}
+		}
 	}
 }
 
@@ -364,9 +400,11 @@ func (s *SubscriptionClient) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error { return s.updateMetrics(ctx) })
+	g.Go(func() error { return s.handleDSFeedBack(ctx) })
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.handleRegions(ctx, g) })
 	g.Go(func() error { return s.handleErrors(ctx) })
+	g.Go(func() error { return s.runResolveLockChecker(ctx) })
 	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
 	g.Go(func() error { return s.logSlowRegions(ctx) })
 	g.Go(func() error { return s.errCache.dispatch(ctx) })
@@ -404,6 +442,7 @@ func (s *SubscriptionClient) onTableDrained(rt *subscribedSpan) {
 
 	s.totalSpans.Lock()
 	defer s.totalSpans.Unlock()
+	s.ds.RemovePath(rt.subID)
 	delete(s.totalSpans.spanMap, rt.subID)
 }
 
@@ -728,6 +767,60 @@ func (s *SubscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 	}
 }
 
+type subscriptionAndTargetTs struct {
+	subSpan  *subscribedSpan
+	targetTs uint64
+}
+
+func (s *SubscriptionClient) runResolveLockChecker(ctx context.Context) error {
+	resolveLockTicker := time.NewTicker(resolveLockTickInterval)
+	defer resolveLockTicker.Stop()
+	maxCacheSize := 1024
+	subSpanAndTsCache := make([]subscriptionAndTargetTs, 0, maxCacheSize)
+	// getResolvedTargetTs returns the targetTs to resolve stale locks. 0 means no need to resolve.
+	getResolvedTargetTs := func(subSpan *subscribedSpan, currentTime time.Time) uint64 {
+		resolvedTsUpdated := time.Unix(subSpan.resolvedTsUpdated.Load(), 0)
+		if !subSpan.initialized.Load() || time.Since(resolvedTsUpdated) < resolveLockFence {
+			return 0
+		}
+		resolvedTs := subSpan.resolvedTs.Load()
+		resolvedTime := oracle.GetTimeFromTS(resolvedTs)
+		if currentTime.Sub(resolvedTime) < resolveLockFence {
+			return 0
+		}
+		return oracle.GoTimeToTS(resolvedTime.Add(resolveLockFence))
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-resolveLockTicker.C:
+		}
+		currentTime := s.pdClock.CurrentTime()
+		s.totalSpans.Lock()
+		for _, subSpan := range s.totalSpans.spanMap {
+			if subSpan != nil {
+				targetTs := getResolvedTargetTs(subSpan, currentTime)
+				if targetTs > 0 {
+					subSpanAndTsCache = append(subSpanAndTsCache, subscriptionAndTargetTs{
+						subSpan:  subSpan,
+						targetTs: targetTs,
+					})
+				}
+			}
+		}
+		s.totalSpans.Unlock()
+		for _, subSpanAndTs := range subSpanAndTsCache {
+			subSpanAndTs.subSpan.resolveStaleLocks(subSpanAndTs.targetTs)
+		}
+		subSpanAndTsCache = subSpanAndTsCache[:0]
+		if cap(subSpanAndTsCache) > maxCacheSize {
+			subSpanAndTsCache = make([]subscriptionAndTargetTs, 0, maxCacheSize)
+		}
+	}
+}
+
 func (s *SubscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 	resolveLastRun := make(map[uint64]time.Time)
 
@@ -838,6 +931,8 @@ func (s *SubscriptionClient) newSubscribedSpan(
 		advanceResolvedTs: advanceResolvedTs,
 		advanceInterval:   advanceInterval,
 	}
+	rt.initialized.Store(false)
+	rt.resolvedTsUpdated.Store(time.Now().Unix())
 	rt.resolvedTs.Store(startTs)
 
 	rt.tryResolveLock = func(regionID uint64, state *regionlock.LockedRangeState) {
@@ -867,8 +962,9 @@ func (s *SubscriptionClient) GetResolvedTsLag() float64 {
 	if pullerMinResolvedTs == 0 {
 		return 0
 	}
+	pdTime := s.pdClock.CurrentTime()
 	phyResolvedTs := oracle.ExtractPhysical(pullerMinResolvedTs)
-	lag := float64(oracle.GetPhysical(time.Now())-phyResolvedTs) / 1e3
+	lag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 	return lag
 }
 

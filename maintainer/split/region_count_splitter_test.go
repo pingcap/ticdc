@@ -21,15 +21,21 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tiflow/cdc/processor/tablepb"
 	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/spanz"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
 func TestRegionCountSplitSpan(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
+
+	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
+	baseSpanNumberCoefficient = 3
+	defer func() {
+		baseSpanNumberCoefficient = oldBaseSpanNumberCoefficient
+	}()
 
 	cache := NewMockRegionCache(nil)
 	cache.regions.ReplaceOrInsert(tablepb.Span{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")}, 1)
@@ -134,7 +140,13 @@ func TestRegionCountSplitSpan(t *testing.T) {
 }
 
 func TestRegionCountEvenlySplitSpan(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
+
+	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
+	baseSpanNumberCoefficient = 3
+	defer func() {
+		baseSpanNumberCoefficient = oldBaseSpanNumberCoefficient
+	}()
 
 	cache := NewMockRegionCache(nil)
 	totalRegion := 1000

@@ -16,6 +16,7 @@ package logpuller
 import (
 	"encoding/hex"
 	"time"
+	"unsafe"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
@@ -43,13 +44,24 @@ type regionEvent struct {
 	// only one of the following fields will be set
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
-	err        *cdcpb.Event_Error
 }
 
-type pathHasher struct{}
-
-func (h pathHasher) HashPath(subID SubscriptionID) uint64 {
-	return uint64(subID)
+func (event *regionEvent) getSize() int {
+	if event == nil {
+		return 0
+	}
+	size := int(unsafe.Sizeof(*event))
+	if event.entries != nil {
+		size += int(unsafe.Sizeof(*event.entries))
+		size += int(unsafe.Sizeof(*event.entries.Entries))
+		for _, row := range event.entries.Entries.GetEntries() {
+			size += int(unsafe.Sizeof(*row))
+			size += len(row.Key)
+			size += len(row.Value)
+			size += len(row.OldValue)
+		}
+	}
+	return size
 }
 
 type regionEventHandler struct {
@@ -76,9 +88,6 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			handleEventEntries(span, event.state, event.entries)
 		} else if event.resolvedTs != 0 {
 			handleResolvedTs(span, event.state, event.resolvedTs)
-		} else if event.err != nil {
-			event.state.markStopped(&eventError{err: event.err.Error})
-			h.handleRegionError(event.state, event.worker)
 		} else {
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
 		}
@@ -98,7 +107,10 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	return false
 }
 
-func (h *regionEventHandler) GetSize(event regionEvent) int { return 0 }
+func (h *regionEventHandler) GetSize(event regionEvent) int {
+	return event.getSize()
+}
+
 func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) int {
 	return 0
 }
@@ -129,7 +141,7 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	} else if event.resolvedTs != 0 {
 		// Note: resolved ts may from different region, so there are not periodic signal
 		return dynstream.EventType{DataGroup: DataGroupResolvedTs, Property: dynstream.BatchableData}
-	} else if event.err != nil || event.state.isStale() {
+	} else if event.state.isStale() {
 		return dynstream.EventType{DataGroup: DataGroupError, Property: dynstream.BatchableData}
 	} else {
 		log.Panic("unknown event type",
@@ -140,7 +152,14 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
 
-func (h *regionEventHandler) OnDrop(event regionEvent) {}
+func (h *regionEventHandler) OnDrop(event regionEvent) {
+	log.Warn("drop region event",
+		zap.Uint64("regionID", event.state.getRegionID()),
+		zap.Uint64("requestID", event.state.requestID),
+		zap.Uint64("workerID", event.worker.workerID),
+		zap.Bool("hasEntries", event.entries != nil),
+		zap.Bool("stateIsStale", event.state.isStale()))
+}
 
 func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *regionRequestWorker) {
 	stepsToRemoved := state.markRemoved()
@@ -275,7 +294,16 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	lastAdvance := span.lastAdvanceTime.Load()
 	if now-lastAdvance > span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
 		ts := span.rangeLock.ResolvedTs()
-		if ts > span.startTs {
+		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
+			log.Info("subscription client is initialized",
+				zap.Uint64("subscriptionID", uint64(span.subID)),
+				zap.Uint64("regionID", regionID),
+				zap.Uint64("resolvedTs", ts))
+		}
+		lastResolvedTs := span.resolvedTs.Load()
+		if ts > lastResolvedTs {
+			span.resolvedTs.Store(ts)
+			span.resolvedTsUpdated.Store(time.Now().Unix())
 			span.advanceResolvedTs(ts)
 		}
 	}

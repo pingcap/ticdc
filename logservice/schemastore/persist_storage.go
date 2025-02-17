@@ -23,10 +23,12 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/bloom"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -248,16 +250,20 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 	defer storageSnap.Close()
 
 	p.mu.Lock()
+	failpoint.Inject("getAllPhysicalTablesGCFastFail", func() {
+		snapTs = 0
+	})
 	if snapTs < p.gcTs {
-		return nil, fmt.Errorf("snapTs %d is smaller than gcTs %d", snapTs, p.gcTs)
+		p.mu.Unlock()
+		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs("snapTs %d is smaller than gcTs %d", snapTs, p.gcTs)
 	}
+
 	gcTs := p.gcTs
 	p.mu.Unlock()
 
 	start := time.Now()
 	defer func() {
-		log.Info("getAllPhysicalTables finish",
-			zap.Uint64("snapTs", snapTs),
+		log.Debug("getAllPhysicalTables finish",
 			zap.Any("duration(s)", time.Since(start).Seconds()))
 	}()
 	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
@@ -414,10 +420,6 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 	for {
 		allTargetTs := make([]uint64, 0, limit)
 		p.mu.RLock()
-		// log.Debug("fetchTableTriggerDDLEvents in persistentStorage",
-		// 	zap.Any("start", start),
-		// 	zap.Int("limit", limit),
-		// 	zap.Any("tableTriggerDDLHistory", p.tableTriggerDDLHistory))
 		index := sort.Search(len(p.tableTriggerDDLHistory), func(i int) bool {
 			return p.tableTriggerDDLHistory[i] > nextStartTs
 		})
@@ -647,7 +649,8 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	handler, ok := allDDLHandlers[job.Type]
 	if !ok {
-		log.Panic("unknown ddl type", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
+		log.Error("unknown ddl type, ignore it", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
+		return nil
 	}
 	ddlEvent := handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
 		job:          job,
@@ -660,7 +663,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	// TODO: do we have a better way to do this?
 	if ddlEvent.Type == byte(model.ActionExchangeTablePartition) {
-		ddlEvent.PreTableInfo, _ = p.forceGetTableInfo(ddlEvent.PrevTableID, ddlEvent.FinishedTs)
+		ddlEvent.ExtraTableInfo, _ = p.forceGetTableInfo(ddlEvent.TableID, ddlEvent.FinishedTs)
 	}
 
 	// Note: need write ddl event to disk before update ddl history,
@@ -719,7 +722,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	case model.ActionCreateTable:
 		// Note: partition table's logical table id is also in tableMap
 		if _, ok := tableMap[job.BinlogInfo.TableInfo.ID]; ok {
-			log.Warn("table already exists. ignore DDL",
+			log.Info("table already exists. ignore DDL",
 				zap.String("DDL", job.Query),
 				zap.Int64("jobID", job.ID),
 				zap.Int64("schemaID", job.SchemaID),
@@ -731,7 +734,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	case model.ActionCreateTables:
 		// For duplicate create tables ddl job, the tables in the job should be same, check the first table is enough
 		if _, ok := tableMap[job.BinlogInfo.MultipleTableInfos[0].ID]; ok {
-			log.Warn("table already exists. ignore DDL",
+			log.Info("table already exists. ignore DDL",
 				zap.String("DDL", job.Query),
 				zap.Int64("jobID", job.ID),
 				zap.Int64("schemaID", job.SchemaID),
@@ -741,11 +744,31 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 			return true
 		}
 	// DDLs ignored
-	case model.ActionCreateSequence,
+	case model.ActionLockTable,
+		model.ActionUnlockTable,
+		model.ActionRepairTable,
+		model.ActionSetTiFlashReplica,
+		model.ActionUpdateTiFlashReplicaStatus,
+		model.ActionCreateSequence,
 		model.ActionAlterSequence,
 		model.ActionDropSequence,
+		model.ActionModifyTableAutoIDCache,
+		model.ActionRebaseAutoRandomBase,
+		model.ActionAddCheckConstraint,
+		model.ActionDropCheckConstraint,
+		model.ActionAlterCheckConstraint,
 		model.ActionAlterTableAttributes,
 		model.ActionAlterTablePartitionAttributes,
+		model.ActionCreatePlacementPolicy,
+		model.ActionAlterPlacementPolicy,
+		model.ActionDropPlacementPolicy,
+		model.ActionAlterTablePartitionPlacement,
+		model.ActionModifySchemaDefaultPlacement,
+		model.ActionAlterTablePlacement,
+		model.ActionAlterCacheTable,
+		model.ActionAlterNoCacheTable,
+		model.ActionFlashbackCluster,
+		model.ActionRecoverSchema,
 		model.ActionCreateResourceGroup,
 		model.ActionAlterResourceGroup,
 		model.ActionDropResourceGroup:
