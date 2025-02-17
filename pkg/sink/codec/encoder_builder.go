@@ -15,6 +15,10 @@ package codec
 
 import (
 	"context"
+	"database/sql"
+	"github.com/pingcap/log"
+	cerror "github.com/pingcap/tiflow/pkg/errors"
+	"go.uber.org/zap"
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -39,6 +43,34 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncod
 	default:
 		return nil, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(cfg.Protocol)
 	}
+}
+
+// NewEventDecoder will create a new event decoder
+func NewEventDecoder(ctx context.Context, codecConfig *common.Config, upstreamTiDB *sql.DB) (common.RowEventDecoder, error) {
+	var (
+		decoder common.RowEventDecoder
+		err     error
+	)
+	switch codecConfig.Protocol {
+	case config.ProtocolOpen, config.ProtocolDefault:
+		decoder, err = open.NewBatchDecoder(ctx, codecConfig, upstreamTiDB)
+	case config.ProtocolCanalJSON:
+		decoder, err = canal.NewBatchDecoder(ctx, codecConfig, upstreamTiDB)
+	//case config.ProtocolAvro:
+	//	schemaM, err := avro.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
+	//	if err != nil {
+	//		return decoder, cerror.Trace(err)
+	//	}
+	//	decoder = avro.NewDecoder(codecConfig, schemaM, option.topic, upstreamTiDB)
+	//case config.ProtocolSimple:
+	//	decoder, err = simple.NewDecoder(ctx, codecConfig, upstreamTiDB)
+	default:
+		log.Panic("Protocol not supported", zap.Any("Protocol", codecConfig.Protocol))
+	}
+	if err != nil {
+		return nil, cerror.Trace(err)
+	}
+	return decoder, err
 }
 
 // NewTxnEventEncoder returns an TxnEventEncoderBuilder.
