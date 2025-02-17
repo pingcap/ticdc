@@ -285,22 +285,22 @@ func TestSetAreaSettings(t *testing.T) {
 
 func TestGetMetrics(t *testing.T) {
 	mc, path := setupTestComponents()
-	usedMemory, maxMemory := mc.getMetrics()
-	require.Equal(t, int64(0), usedMemory)
-	require.Equal(t, int64(0), maxMemory)
+	metrics := mc.getMetrics()
+	require.Equal(t, int64(0), metrics.AreaMemoryMetrics[0].usedMemory)
+	require.Equal(t, int64(0), metrics.AreaMemoryMetrics[0].maxMemory)
 
 	mc.addPathToArea(path, AreaSettings{
 		MaxPendingSize:   100,
 		FeedbackInterval: time.Second,
 	}, nil)
-	usedMemory, maxMemory = mc.getMetrics()
-	require.Equal(t, int64(0), usedMemory)
-	require.Equal(t, int64(100), maxMemory)
+	metrics = mc.getMetrics()
+	require.Equal(t, int64(0), metrics.AreaMemoryMetrics[0].usedMemory)
+	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].maxMemory)
 
 	path.areaMemStat.totalPendingSize.Store(100)
-	usedMemory, maxMemory = mc.getMetrics()
-	require.Equal(t, int64(100), usedMemory)
-	require.Equal(t, int64(100), maxMemory)
+	metrics = mc.getMetrics()
+	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].usedMemory)
+	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].maxMemory)
 }
 
 func TestUpdateAreaPauseState(t *testing.T) {

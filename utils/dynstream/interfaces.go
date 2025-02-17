@@ -179,7 +179,7 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// This method can be called at any time. But to avoid the memory leak, setting on a area without existing paths is a no-op.
 	SetAreaSettings(area A, settings AreaSettings)
 
-	GetMetrics() Metrics
+	GetMetrics() Metrics[A]
 }
 
 // PathHasher is used to select target stream for the path.
@@ -315,14 +315,11 @@ func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 	return newParallelDynamicStream(hasher, handler, opt)
 }
 
-type Metrics struct {
+type Metrics[A Area] struct {
 	EventChanSize   int
 	PendingQueueLen int
 	AddPath         int
 	RemovePath      int
 
-	MemoryControl struct {
-		UsedMemory int64
-		MaxMemory  int64
-	}
+	MemoryControl MemoryMetric[A]
 }

@@ -297,14 +297,43 @@ func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D
 }
 
 // FIXME/TODO: We use global metric here, which is not good for multiple streams.
-func (m *memControl[A, P, T, D, H]) getMetrics() (usedMemory int64, maxMemory int64) {
+func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A] {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	usedMemory = int64(0)
-	maxMemory = int64(0)
+	metrics := MemoryMetric[A]{}
 	for _, area := range m.areaStatMap {
-		usedMemory += area.totalPendingSize.Load()
-		maxMemory += int64(area.settings.Load().MaxPendingSize)
+		areaMetric := AreaMemoryMetric[A]{
+			area:       area.area,
+			usedMemory: area.totalPendingSize.Load(),
+			maxMemory:  int64(area.settings.Load().MaxPendingSize),
+		}
+		metrics.AreaMemoryMetrics = append(metrics.AreaMemoryMetrics, areaMetric)
 	}
-	return usedMemory, maxMemory
+	return metrics
+}
+
+type MemoryMetric[A Area] struct {
+	AreaMemoryMetrics []AreaMemoryMetric[A]
+}
+
+type AreaMemoryMetric[A Area] struct {
+	area       A
+	usedMemory int64
+	maxMemory  int64
+}
+
+func (a *AreaMemoryMetric[A]) MemoryUsageRatio() float64 {
+	return float64(a.usedMemory) / float64(a.maxMemory)
+}
+
+func (a *AreaMemoryMetric[A]) MemoryUsage() int64 {
+	return a.usedMemory
+}
+
+func (a *AreaMemoryMetric[A]) MaxMemory() int64 {
+	return a.maxMemory
+}
+
+func (a *AreaMemoryMetric[A]) Area() A {
+	return a.area
 }

@@ -45,8 +45,6 @@ var (
 	metricsHandleEventDuration = metrics.EventCollectorHandleEventDuration
 	metricsDSInputChanLen      = metrics.DynamicStreamEventChanSize.WithLabelValues("event-collector")
 	metricsDSPendingQueueLen   = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-collector")
-	metricsDSMaxMemoryUsage    = metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "max")
-	metricsDSUsedMemoryUsage   = metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "used")
 )
 
 type DispatcherRequest struct {
@@ -438,8 +436,18 @@ func (c *EventCollector) updateMetrics(ctx context.Context) {
 			dsMetrics := c.ds.GetMetrics()
 			metricsDSInputChanLen.Set(float64(dsMetrics.EventChanSize))
 			metricsDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
-			metricsDSUsedMemoryUsage.Set(float64(dsMetrics.MemoryControl.UsedMemory))
-			metricsDSMaxMemoryUsage.Set(float64(dsMetrics.MemoryControl.MaxMemory))
+			for _, areaMetric := range dsMetrics.MemoryControl.AreaMemoryMetrics {
+				metrics.DynamicStreamMemoryUsage.WithLabelValues(
+					"event-collector",
+					"max",
+					areaMetric.Area().String(),
+				).Set(float64(areaMetric.MaxMemory()))
+
+				metrics.DynamicStreamMemoryUsage.WithLabelValues(
+					"event-collector",
+					"used",
+					areaMetric.Area().String()).Set(float64(areaMetric.MemoryUsage()))
+			}
 		}
 	}
 }
