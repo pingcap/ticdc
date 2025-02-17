@@ -39,7 +39,6 @@ GOVERSION := $(shell go version)
 
 OS := "$(shell go env GOOS)"
 SED_IN_PLACE ?= $(shell which sed)
-IS_ALPINE := $(shell if [ -f /etc/os-release ]; then grep -qi Alpine /etc/os-release && echo 1; else echo 0; fi)
 ifeq (${OS}, "linux")
 	SED_IN_PLACE += -i
 else ifeq (${OS}, "darwin")
@@ -76,7 +75,9 @@ LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.ReleaseVersion=$(RELEASE_VERSION)"
 LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitHash=$(GITHASH)"
 LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitBranch=$(GITBRANCH)"
 LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.BuildTS=$(BUILDTS)"
-LDFLAGS += -linkmode external -extldflags "-static"
+ifeq (${OS}, "linux")
+	LDFLAGS += -linkmode external -extldflags "-static"
+endif
 
 
 GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=1 $(GO) build $(BUILD_FLAG) -trimpath $(GOVENDORFLAG)
