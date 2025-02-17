@@ -16,6 +16,7 @@ package factory
 import (
 	"crypto/tls"
 	"fmt"
+	"github.com/pingcap/ticdc/cmd/util"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -25,7 +26,6 @@ import (
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/spf13/cobra"
 	pd "github.com/tikv/pd/client"

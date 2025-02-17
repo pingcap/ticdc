@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"fmt"
+	util2 "github.com/pingcap/ticdc/cmd/util"
 	"math"
 	"net/url"
 	"os"
@@ -39,7 +40,6 @@ import (
 	eventsinkfactory "github.com/pingcap/tiflow/cdc/sink/dmlsink/factory"
 	"github.com/pingcap/tiflow/cdc/sink/tablesink"
 	sutil "github.com/pingcap/tiflow/cdc/sink/util"
-	cmdUtil "github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/logutil"
 	"github.com/pingcap/tiflow/pkg/sink"
@@ -99,7 +99,7 @@ func (o *ConsumerOption) Adjust(upstreamURI *url.URL, configFile string) {
 
 	replicaConfig := config.GetDefaultReplicaConfig()
 	if configFile != "" {
-		err := cmdUtil.StrictDecodeFile(configFile, "pulsar consumer", replicaConfig)
+		err := util2.StrictDecodeFile(configFile, "pulsar consumer", replicaConfig)
 		if err != nil {
 			log.Panic("decode config file failed", zap.Error(err))
 		}

@@ -17,6 +17,7 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"github.com/pingcap/ticdc/cmd/util"
 	"os"
 	"strings"
 	"time"
@@ -24,7 +25,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tiflow/cdc/sink/dmlsink/mq/transformer/columnselector"
-	cmdUtil "github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/pingcap/tiflow/pkg/config"
 	"go.uber.org/zap"
 )
@@ -76,7 +76,7 @@ func main() {
 
 	replicaConfig := config.GetDefaultReplicaConfig()
 	if o.configFile != "" {
-		err = cmdUtil.StrictDecodeFile(o.configFile, "checksum checker", replicaConfig)
+		err = util.StrictDecodeFile(o.configFile, "checksum checker", replicaConfig)
 		if err != nil {
 			log.Panic("cannot decode config file", zap.Error(err))
 		}

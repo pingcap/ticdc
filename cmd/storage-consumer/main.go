@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/pingcap/ticdc/cmd/util"
 	"net/http"
 	"net/url"
 	"os"
@@ -38,7 +39,6 @@ import (
 	dmlfactory "github.com/pingcap/tiflow/cdc/sink/dmlsink/factory"
 	"github.com/pingcap/tiflow/cdc/sink/tablesink"
 	sinkutil "github.com/pingcap/tiflow/cdc/sink/util"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/logutil"
 	"github.com/pingcap/tiflow/pkg/quotes"
@@ -143,7 +143,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	config.StoreGlobalServerConfig(serverCfg)
 	replicaConfig := config.GetDefaultReplicaConfig()
 	if len(configFile) > 0 {
-		err := util.StrictDecodeFile(configFile, "storage consumer", replicaConfig)
+		err = util.StrictDecodeFile(configFile, "storage consumer", replicaConfig)
 		if err != nil {
 			log.Error("failed to decode config file", zap.Error(err))
 			return nil, err

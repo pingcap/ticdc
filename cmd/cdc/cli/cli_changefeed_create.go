@@ -16,6 +16,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	util2 "github.com/pingcap/ticdc/cmd/util"
 	"net/url"
 	"strings"
 
@@ -88,7 +89,7 @@ func (o *changefeedCommonOptions) addFlags(cmd *cobra.Command) {
 
 // strictDecodeConfig do strictDecodeFile check and only verify the rules for now.
 func (o *changefeedCommonOptions) strictDecodeConfig(component string, cfg *config.ReplicaConfig) error {
-	err := util.StrictDecodeFile(o.configFile, component, cfg)
+	err := util2.StrictDecodeFile(o.configFile, component, cfg)
 	if err != nil {
 		return err
 	}
