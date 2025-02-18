@@ -125,14 +125,8 @@ func (s *EventRouter) GetActiveTopics(activeTables []*commonEvent.SchemaTableNam
 }
 
 // GetPartitionGenerator returns the target partition by the table information.
-func (s *EventRouter) GetPartitionGenerator(tableInfo *common.TableInfo) partition.PartitionGenerator {
-	return s.GetPartitionDispatcher(tableInfo.GetSchemaName(), tableInfo.GetTableName())
-}
-
-// GetPartitionDispatcher returns the partition dispatcher for a specific table.
-func (s *EventRouter) GetPartitionDispatcher(schema, table string) partition.PartitionGenerator {
-	partitionGenerator := s.matchPartitonGenerator(schema, table)
-	return partitionGenerator
+func (s *EventRouter) GetPartitionGenerator(schema, table string) partition.PartitionGenerator {
+	return s.matchPartitionGenerator(schema, table)
 }
 
 // GetDefaultTopic returns the default topic name.
@@ -151,12 +145,11 @@ func (s *EventRouter) matchTopicGenerator(schema, table string) topic.TopicGener
 	return nil
 }
 
-func (s *EventRouter) matchPartitonGenerator(schema, table string) partition.PartitionGenerator {
+func (s *EventRouter) matchPartitionGenerator(schema, table string) partition.PartitionGenerator {
 	for _, rule := range s.rules {
-		if !rule.MatchTable(schema, table) {
-			continue
+		if rule.MatchTable(schema, table) {
+			return rule.partitionDispatcher
 		}
-		return rule.partitionDispatcher
 	}
 	log.Panic("the dispatch rule must cover all tables")
 	return nil

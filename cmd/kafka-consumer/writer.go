@@ -33,7 +33,8 @@ import (
 	ddlsinkfactory "github.com/pingcap/tiflow/cdc/sink/ddlsink/factory"
 	eventsinkfactory "github.com/pingcap/tiflow/cdc/sink/dmlsink/factory"
 	"github.com/pingcap/tiflow/cdc/sink/tablesink"
-	"github.com/pingcap/tiflow/pkg/sink/codec/simple"
+	tiflowConfig "github.com/pingcap/tiflow/pkg/config"
+	//"github.com/pingcap/tiflow/pkg/sink/codec/simple"
 	"go.uber.org/zap"
 )
 
@@ -132,7 +133,9 @@ func newWriter(ctx context.Context, o *option) *writer {
 	config.GetGlobalServerConfig().TZ = o.timezone
 	errChan := make(chan error, 1)
 	changefeed := model.DefaultChangeFeedID("kafka-consumer")
-	f, err := eventsinkfactory.New(ctx, changefeed, o.downstreamURI, o.replicaConfig, errChan, nil)
+	// todo: use local mysql sink, instead of the tiflow sink.
+	tiflowReplicaConfig := tiflowConfig.GetDefaultReplicaConfig()
+	f, err := eventsinkfactory.New(ctx, changefeed, o.downstreamURI, tiflowReplicaConfig, errChan, nil)
 	if err != nil {
 		log.Panic("cannot create the event sink factory", zap.Error(err))
 	}
@@ -147,7 +150,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		}
 	}()
 
-	ddlSink, err := ddlsinkfactory.New(ctx, changefeed, o.downstreamURI, o.replicaConfig)
+	ddlSink, err := ddlsinkfactory.New(ctx, changefeed, o.downstreamURI, tiflowReplicaConfig)
 	if err != nil {
 		log.Panic("cannot create the ddl sink factory", zap.Error(err))
 	}
@@ -312,16 +315,17 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 					zap.ByteString("value", value), zap.Error(err))
 			}
 
-			if dec, ok := progress.decoder.(*simple.Decoder); ok {
-				cachedEvents := dec.GetCachedEvents()
-				for _, row := range cachedEvents {
-					w.checkPartition(row, partition, message.TopicPartition.Offset)
-					log.Info("simple protocol cached event resolved, append to the group",
-						zap.Int64("tableID", row.GetTableID()), zap.Uint64("commitTs", row.CommitTs),
-						zap.Int32("partition", partition), zap.Any("offset", offset))
-					w.appendRow2Group(row, progress, offset)
-				}
-			}
+			// todo: enable this logic, after simple decoder is supported.
+			//if dec, ok := progress.decoder.(*simple.Decoder); ok {
+			//	cachedEvents := dec.GetCachedEvents()
+			//	for _, row := range cachedEvents {
+			//		w.checkPartition(row, partition, message.TopicPartition.Offset)
+			//		log.Info("simple protocol cached event resolved, append to the group",
+			//			zap.Int64("tableID", row.GetTableID()), zap.Uint64("commitTs", row.CommitTs),
+			//			zap.Int32("partition", partition), zap.Any("offset", offset))
+			//		w.appendRow2Group(row, progress, offset)
+			//	}
+			//}
 
 			// the Query maybe empty if using simple protocol, it's comes from `bootstrap` event, no need to handle it.
 			if ddl.Query == "" {
@@ -345,7 +349,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			if w.option.protocol == config.ProtocolSimple && row == nil {
 				continue
 			}
-			w.checkPartition(row, partition, message.TopicPartition.Offset)
+			//w.checkPartition(row, partition, message.TopicPartition.Offset)
 			w.appendRow2Group(row, progress, offset)
 		case common.MessageTypeResolved:
 			newWatermark, err := progress.decoder.NextResolvedEvent()
@@ -396,22 +400,19 @@ func (w *writer) resolveRowChangedEvents(progress *partitionProgress, newWaterma
 	}
 }
 
-func (w *writer) checkPartition(row *model.RowChangedEvent, partition int32, offset kafka.Offset) {
-	target, _, err := w.eventRouter.GetPartitionForRowChange(row, w.option.partitionNum)
-	if err != nil {
-		log.Panic("cannot calculate partition for the row changed event",
-			zap.Int32("partition", partition), zap.Any("offset", offset),
-			zap.Int32("partitionNum", w.option.partitionNum), zap.Int64("tableID", row.GetTableID()),
-			zap.Error(err), zap.Any("event", row))
-	}
-	if partition != target {
-		log.Panic("RowChangedEvent dispatched to wrong partition",
-			zap.Int32("partition", partition), zap.Int32("expected", target),
-			zap.Int32("partitionNum", w.option.partitionNum), zap.Any("offset", offset),
-			zap.Int64("tableID", row.GetTableID()), zap.Any("row", row),
-		)
-	}
-}
+//func (w *writer) checkPartition(row *model.RowChangedEvent, partition int32, offset kafka.Offset) {
+//	partitioner := w.eventRouter.GetPartitionGenerator(row.TableInfo.GetSchemaName(), row.TableInfo.GetSchemaName())
+//
+//	partitioner.GeneratePartitionIndexAndKey()
+//
+//	if partition != target {
+//		log.Panic("RowChangedEvent dispatched to wrong partition",
+//			zap.Int32("partition", partition), zap.Int32("expected", target),
+//			zap.Int32("partitionNum", w.option.partitionNum), zap.Any("offset", offset),
+//			zap.Int64("tableID", row.GetTableID()), zap.Any("row", row),
+//		)
+//	}
+//}
 
 func (w *writer) appendRow2Group(row *model.RowChangedEvent, progress *partitionProgress, offset kafka.Offset) {
 	// if the kafka cluster is normal, this should not hit.
