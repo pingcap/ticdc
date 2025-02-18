@@ -413,7 +413,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Sink Event Count / s",
+          "title": "Sink Event Row Count / s",
           "tooltip": {
             "shared": true,
             "sort": 2,
@@ -1666,7 +1666,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Puller output events",
+          "title": "Puller output event rows",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1769,7 +1769,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "EventService output events / s",
+          "title": "EventService output event row / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1874,7 +1874,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "EventService output events",
+          "title": "EventService output event rows",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1978,7 +1978,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event Collector received event / s",
+          "title": "Event Collector received event rows / s",
           "tooltip": {
             "shared": true,
             "sort": 2,
@@ -2081,7 +2081,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event collector Received events",
+          "title": "Event collector Received event rows",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -16691,7 +16691,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Puller output events / s",
+          "title": "Puller output event rows / s",
           "tooltip": {
             "shared": true,
             "sort": 0,

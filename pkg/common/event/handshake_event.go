@@ -81,6 +81,10 @@ func (e *HandshakeEvent) IsPaused() bool {
 	return e.State.IsPaused()
 }
 
+func (t *HandshakeEvent) Len() int32 {
+	return 0
+}
+
 func (e HandshakeEvent) Marshal() ([]byte, error) {
 	return e.encode()
 }
