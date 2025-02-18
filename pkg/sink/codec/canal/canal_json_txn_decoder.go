@@ -111,9 +111,9 @@ func (d *canalJSONTxnEventDecoder) NextRowChangedEvent() (*commonEvent.DMLEvent,
 	return result, nil
 }
 
-func (d *canalJSONTxnEventDecoder) canalJSONMessage2RowChange() (*model.RowChangedEvent, error) {
+func (d *canalJSONTxnEventDecoder) canalJSONMessage2RowChange() (*commonEvent.DMLEvent, error) {
 	msg := d.msg
-	result := new(model.RowChangedEvent)
+	result := new(commonEvent.DMLEvent)
 	result.TableInfo = newTableInfo(msg, nil)
 	result.CommitTs = msg.getCommitTs()
 

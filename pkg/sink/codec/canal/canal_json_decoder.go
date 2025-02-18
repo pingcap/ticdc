@@ -129,7 +129,7 @@ func NewBatchDecoder(
 		storage:            externalStorage,
 		upstreamTiDB:       db,
 		bytesDecoder:       charmap.ISO8859_1.NewDecoder(),
-		tableInfoCache:     make(map[tableKey]*model.TableInfo),
+		tableInfoCache:     make(map[tableKey]*commonType.TableInfo),
 		partitionInfoCache: make(map[tableKey]*timodel.PartitionInfo),
 		tableIDAllocator:   common.NewFakeTableIDAllocator(),
 	}, nil
@@ -431,6 +431,7 @@ func (b *canalJSONDecoder) NextResolvedEvent() (uint64, error) {
 func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEvent {
 	result := new(commonEvent.DDLEvent)
 	result.Query = msg.getQuery()
+	result.BlockedTables = nil // todo: set this
 	// todo: getDDLActionType can handle ActionExchangeTablePartition,
 	// it's used by the mysql sink.
 	result.Type = byte(getDDLActionType(result.Query))
@@ -443,7 +444,7 @@ func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEv
 func canalJSONColumnMap2RowChangeColumns(
 	cols map[string]interface{},
 	mysqlType map[string]string,
-	tableInfo *model.TableInfo,
+	tableInfo *commonType.TableInfo,
 ) ([]*model.ColumnData, error) {
 	result := make([]*model.ColumnData, 0, len(cols))
 	for _, columnInfo := range tableInfo.Columns {
@@ -605,20 +606,20 @@ func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *common
 	tableInfo, ok := b.tableInfoCache[cacheKey]
 	if !ok {
 		partitionInfo := b.partitionInfoCache[cacheKey]
-		tableInfo = newTableInfo(msg, partitionInfo)
-		tableInfo.ID = b.tableIDAllocator.AllocateTableID(schema, table)
-		if tableInfo.Partition != nil {
-			for idx, partition := range tableInfo.Partition.Definitions {
-				partitionID := b.tableIDAllocator.AllocatePartitionID(schema, table, partition.Name.O)
-				tableInfo.Partition.Definitions[idx].ID = partitionID
-			}
-		}
+		tableID := b.tableIDAllocator.AllocateTableID(schema, table)
+		tableInfo = newTableInfo(msg, tableID, partitionInfo)
+		//if tableInfo.Partition != nil {
+		//	for idx, partition := range tableInfo.Partition.Definitions {
+		//		partitionID := b.tableIDAllocator.AllocatePartitionID(schema, table, partition.Name.O)
+		//		tableInfo.Partition.Definitions[idx].ID = partitionID
+		//	}
+		//}
 		b.tableInfoCache[cacheKey] = tableInfo
 	}
 	return tableInfo
 }
 
-func newTableInfo(msg canalJSONMessageInterface, partitionInfo *timodel.PartitionInfo) *commonType.TableInfo {
+func newTableInfo(msg canalJSONMessageInterface, tableID int64, partitionInfo *timodel.PartitionInfo) *commonType.TableInfo {
 	//schema := *msg.getSchema()
 	//table := *msg.getTable()
 	//tidbTableInfo := &timodel.TableInfo{}
@@ -631,69 +632,80 @@ func newTableInfo(msg canalJSONMessageInterface, partitionInfo *timodel.Partitio
 	//setIndexes(tidbTableInfo, pkNames)
 	//tidbTableInfo.Partition = partitionInfo
 	//return model.WrapTableInfo(100, schema, 1000, tidbTableInfo)
-	result := new(commonType.TableInfo)
-	return result
+	//tableInfo := common.NewTableInfo(
+	//	event.SchemaName,
+	//	pmodel.NewCIStr(event.TableName).O,
+	//	tableID,
+	//	false,
+	//	columnSchema)
+	//var (
+	//	columnSchema *commonType.columnSchema
+	//)
+	isPartition := partitionInfo != nil
+	return commonType.NewTableInfo(*msg.getSchema(), pmodel.NewCIStr(*msg.getTable()).O, tableID, isPartition, columnSchema)
 }
 
-func (b *canalJSONDecoder) setPhysicalTableID(event *model.RowChangedEvent) error {
-	if event.TableInfo.Partition == nil {
-		event.PhysicalTableID = event.TableInfo.ID
-		return nil
-	}
-	switch event.TableInfo.Partition.Type {
-	case pmodel.PartitionTypeRange:
-		targetColumnID := event.TableInfo.ForceGetColumnIDByName(strings.ReplaceAll(event.TableInfo.Partition.Expr, "`", ""))
-		columns := event.Columns
-		if columns == nil {
-			columns = event.PreColumns
-		}
-		var columnValue string
-		for _, col := range columns {
-			if col.ColumnID == targetColumnID {
-				columnValue = model.ColumnValueString(col.Value)
-				break
-			}
-		}
-		for _, partition := range event.TableInfo.Partition.Definitions {
-			lessThan := partition.LessThan[0]
-			if lessThan == "MAXVALUE" {
-				event.PhysicalTableID = partition.ID
-				return nil
-			}
-			if len(columnValue) < len(lessThan) {
-				event.PhysicalTableID = partition.ID
-				return nil
-			}
-			if strings.Compare(columnValue, lessThan) == -1 {
-				event.PhysicalTableID = partition.ID
-				return nil
-			}
-		}
-		return fmt.Errorf("cannot found partition for column value %s", columnValue)
-	// todo: support following rule if meet the corresponding workload
-	case pmodel.PartitionTypeHash:
-		targetColumnID := event.TableInfo.ForceGetColumnIDByName(strings.ReplaceAll(event.TableInfo.Partition.Expr, "`", ""))
-		columns := event.Columns
-		if columns == nil {
-			columns = event.PreColumns
-		}
-		var columnValue int64
-		for _, col := range columns {
-			if col.ColumnID == targetColumnID {
-				columnValue = col.Value.(int64)
-				break
-			}
-		}
-		result := columnValue % int64(len(event.TableInfo.Partition.Definitions))
-		partitionID := event.TableInfo.GetPartitionInfo().Definitions[result].ID
-		event.PhysicalTableID = partitionID
-		return nil
-	case pmodel.PartitionTypeKey:
-	case pmodel.PartitionTypeList:
-	case pmodel.PartitionTypeNone:
-	default:
-	}
-	return fmt.Errorf("manually set partition id for partition type %s not supported yet", event.TableInfo.Partition.Type)
+func (b *canalJSONDecoder) setPhysicalTableID(event *commonEvent.DMLEvent) error {
+	event.PhysicalTableID = event.TableInfo.TableName.TableID
+	return nil
+	//if event.TableInfo.Partition == nil {
+	//	event.PhysicalTableID = event.TableInfo.ID
+	//	return nil
+	//}
+	//switch event.TableInfo.Partition.Type {
+	//case pmodel.PartitionTypeRange:
+	//	targetColumnID := event.TableInfo.ForceGetColumnIDByName(strings.ReplaceAll(event.TableInfo.Partition.Expr, "`", ""))
+	//	columns := event.Columns
+	//	if columns == nil {
+	//		columns = event.PreColumns
+	//	}
+	//	var columnValue string
+	//	for _, col := range columns {
+	//		if col.ColumnID == targetColumnID {
+	//			columnValue = model.ColumnValueString(col.Value)
+	//			break
+	//		}
+	//	}
+	//	for _, partition := range event.TableInfo.Partition.Definitions {
+	//		lessThan := partition.LessThan[0]
+	//		if lessThan == "MAXVALUE" {
+	//			event.PhysicalTableID = partition.ID
+	//			return nil
+	//		}
+	//		if len(columnValue) < len(lessThan) {
+	//			event.PhysicalTableID = partition.ID
+	//			return nil
+	//		}
+	//		if strings.Compare(columnValue, lessThan) == -1 {
+	//			event.PhysicalTableID = partition.ID
+	//			return nil
+	//		}
+	//	}
+	//	return fmt.Errorf("cannot found partition for column value %s", columnValue)
+	//// todo: support following rule if meet the corresponding workload
+	//case pmodel.PartitionTypeHash:
+	//	targetColumnID := event.TableInfo.ForceGetColumnIDByName(strings.ReplaceAll(event.TableInfo.Partition.Expr, "`", ""))
+	//	columns := event.Columns
+	//	if columns == nil {
+	//		columns = event.PreColumns
+	//	}
+	//	var columnValue int64
+	//	for _, col := range columns {
+	//		if col.ColumnID == targetColumnID {
+	//			columnValue = col.Value.(int64)
+	//			break
+	//		}
+	//	}
+	//	result := columnValue % int64(len(event.TableInfo.Partition.Definitions))
+	//	partitionID := event.TableInfo.GetPartitionInfo().Definitions[result].ID
+	//	event.PhysicalTableID = partitionID
+	//	return nil
+	//case pmodel.PartitionTypeKey:
+	//case pmodel.PartitionTypeList:
+	//case pmodel.PartitionTypeNone:
+	//default:
+	//}
+	//return fmt.Errorf("manually set partition id for partition type %s not supported yet", event.TableInfo.Partition.Type)
 }
 
 // return DDL ActionType by the prefix
