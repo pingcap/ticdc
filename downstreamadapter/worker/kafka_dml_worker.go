@@ -128,8 +128,10 @@ func (w *KafkaDMLWorker) calculateKeyPartitions(ctx context.Context) error {
 			if err != nil {
 				return errors.Trace(err)
 			}
-			partitionGenerator := w.eventRouter.GetPartitionGenerator(event.TableInfo)
-			selector := w.columnSelector.GetSelector(event.TableInfo.TableName.Schema, event.TableInfo.TableName.Table)
+			schema := event.TableInfo.GetSchemaName()
+			table := event.TableInfo.GetTableName()
+			partitionGenerator := w.eventRouter.GetPartitionGenerator(schema, table)
+			selector := w.columnSelector.GetSelector(schema, table)
 			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
 				var calledCount atomic.Uint64
 				// The callback of the last row will trigger the callback of the txn.

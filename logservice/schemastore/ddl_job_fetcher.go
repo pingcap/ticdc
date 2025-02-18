@@ -178,7 +178,7 @@ func initDDLTableInfo(kvStorage kv.Storage) error {
 	}
 
 	ddlTableInfo = &event.DDLTableInfo{}
-	ddlTableInfo.DDLJobTable = common.WrapTableInfo(db.ID, db.Name.L, tableInfo)
+	ddlTableInfo.DDLJobTable = common.WrapTableInfo(db.Name.L, tableInfo)
 	ddlTableInfo.JobMetaColumnIDinJobTable = col.ID
 
 	// for tidb_ddl_history
@@ -192,7 +192,7 @@ func initDDLTableInfo(kvStorage kv.Storage) error {
 		return errors.Trace(err)
 	}
 
-	ddlTableInfo.DDLHistoryTable = common.WrapTableInfo(db.ID, db.Name.L, historyTableInfo)
+	ddlTableInfo.DDLHistoryTable = common.WrapTableInfo(db.Name.L, historyTableInfo)
 	ddlTableInfo.JobMetaColumnIDinHistoryTable = historyTableCol.ID
 
 	return nil

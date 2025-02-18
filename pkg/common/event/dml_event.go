@@ -364,6 +364,10 @@ func (t *DMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	t.RawRows = nil
 }
 
+func (t *DMLEvent) GetTableID() int64 {
+	return t.PhysicalTableID
+}
+
 type RowChange struct {
 	PreRow  chunk.Row
 	Row     chunk.Row
