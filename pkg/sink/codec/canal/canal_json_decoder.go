@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -369,7 +370,7 @@ func (b *canalJSONDecoder) NextRowChangedEvent() (*model.RowChangedEvent, error)
 
 // NextDDLEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextDDLEvent() (*model.DDLEvent, error) {
+func (b *canalJSONDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeDDL {
 		return nil, errors.ErrDecodeFailed.
 			GenWithStack("not found ddl event message")
@@ -424,23 +425,21 @@ func (b *canalJSONDecoder) NextResolvedEvent() (uint64, error) {
 	return withExtensionEvent.Extensions.WatermarkTs, nil
 }
 
-func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *model.DDLEvent {
-	result := new(model.DDLEvent)
-	// we lost the startTs from kafka message
-	result.CommitTs = msg.getCommitTs()
-
-	result.TableInfo = new(model.TableInfo)
-	result.TableInfo.TableName = model.TableName{
-		Schema: *msg.getSchema(),
-		Table:  *msg.getTable(),
-	}
-
-	// we lost DDL type from canal json format, only got the DDL SQL.
+func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEvent {
+	result := new(commonEvent.DDLEvent)
 	result.Query = msg.getQuery()
-
-	// hack the DDL Type to be compatible with MySQL sink's logic
-	// see https://github.com/pingcap/tiflow/blob/0578db337d/cdc/sink/mysql.go#L362-L370
-	result.Type = getDDLActionType(result.Query)
+	//// we lost the startTs from kafka message
+	//result.CommitTs = msg.getCommitTs()
+	//
+	//result.TableInfo = new(model.TableInfo)
+	//result.TableInfo.TableName = model.TableName{
+	//	Schema: *msg.getSchema(),
+	//	Table:  *msg.getTable(),
+	//}
+	//
+	//// hack the DDL Type to be compatible with MySQL sink's logic
+	//// see https://github.com/pingcap/tiflow/blob/0578db337d/cdc/sink/mysql.go#L362-L370
+	//result.Type = getDDLActionType(result.Query)
 	return result
 }
 

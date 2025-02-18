@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -169,7 +170,7 @@ func (b *BatchDecoder) NextResolvedEvent() (uint64, error) {
 }
 
 // NextDDLEvent implements the RowEventDecoder interface
-func (b *BatchDecoder) NextDDLEvent() (*model.DDLEvent, error) {
+func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	if b.nextKey.Type != common.MessageTypeDDL {
 		return nil, cerror.ErrOpenProtocolCodecInvalidData.GenWithStack("not found ddl event message")
 	}

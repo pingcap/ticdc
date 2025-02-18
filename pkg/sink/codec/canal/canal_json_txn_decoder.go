@@ -16,6 +16,7 @@ package canal
 import (
 	"bytes"
 	"encoding/json"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -167,6 +168,6 @@ func (d *canalJSONTxnEventDecoder) NextResolvedEvent() (uint64, error) {
 }
 
 // NextDDLEvent implements the RowEventDecoder interface
-func (d *canalJSONTxnEventDecoder) NextDDLEvent() (*model.DDLEvent, error) {
+func (d *canalJSONTxnEventDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	return nil, nil
 }
