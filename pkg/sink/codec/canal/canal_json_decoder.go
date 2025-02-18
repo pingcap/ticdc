@@ -620,29 +620,17 @@ func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *common
 }
 
 func newTableInfo(msg canalJSONMessageInterface, tableID int64, partitionInfo *timodel.PartitionInfo) *commonType.TableInfo {
-	//schema := *msg.getSchema()
-	//table := *msg.getTable()
-	//tidbTableInfo := &timodel.TableInfo{}
-	//tidbTableInfo.Name = pmodel.NewCIStr(table)
-	//
-	//rawColumns := msg.getData()
-	//pkNames := msg.pkNameSet()
-	//mysqlType := msg.getMySQLType()
-	//setColumnInfos(tidbTableInfo, rawColumns, mysqlType, pkNames)
-	//setIndexes(tidbTableInfo, pkNames)
-	//tidbTableInfo.Partition = partitionInfo
-	//return model.WrapTableInfo(100, schema, 1000, tidbTableInfo)
-	//tableInfo := common.NewTableInfo(
-	//	event.SchemaName,
-	//	pmodel.NewCIStr(event.TableName).O,
-	//	tableID,
-	//	false,
-	//	columnSchema)
-	//var (
-	//	columnSchema *commonType.columnSchema
-	//)
-	isPartition := partitionInfo != nil
-	return commonType.NewTableInfo(*msg.getSchema(), pmodel.NewCIStr(*msg.getTable()).O, tableID, isPartition, columnSchema)
+	//result := &commonType.TableInfo{
+	//	TableName: commonType.TableName{
+	//		Schema:      *msg.getSchema(),
+	//		Table:       *msg.getTable(),
+	//		TableID:     tableID,
+	//		IsPartition: partitionInfo != nil,
+	//	},
+	//	columnSchema: nil,
+	//}
+	result ：：：:= commonType.WrapTableInfo()
+	return result
 }
 
 func (b *canalJSONDecoder) setPhysicalTableID(event *commonEvent.DMLEvent) error {
