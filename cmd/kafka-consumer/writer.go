@@ -205,7 +205,7 @@ func (w *writer) forEachPartition(fn func(p *partitionProgress)) {
 }
 
 // Write will synchronously write data downstream
-func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool {
+func (w *writer) flush(ctx context.Context, messageType common.MessageType) bool {
 	watermark := w.getMinWatermark()
 	var todoDDL *model.DDLEvent
 	for {
@@ -361,7 +361,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		return false
 	}
 	// flush when received DDL event or resolvedTs
-	return w.Write(ctx, messageType)
+	return w.flush(ctx, messageType)
 }
 
 func (w *writer) resolveRowChangedEvents(progress *partitionProgress, newWatermark uint64) {
