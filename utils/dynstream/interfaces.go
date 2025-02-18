@@ -151,17 +151,13 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// No more events can be sent to or processed by the stream after it is closed.
 	Close()
 
-	// // In returns the channel to send events into the dynamic stream.
-	// In(path ...P) chan<- T
-	// // Wake returns the channel to mark the the path as ready to process the next event.
-	// Wake(path ...P) chan<- P
-
-	// In returns the channel to send events into the dynamic stream.
+	// Push an event to path.
 	Push(path P, event T)
-	// Wake returns the channel to mark the the path as ready to process the next event.
+	// Wake marks the the path as ready to process the next event.
+	// It is used when the handler returns true in the Handle method.
 	Wake(path P)
 
-	// Feedback returns the channel to receive the feedbacks for the listener.
+	// Feedback returns the channel to receive the feedbacks for the listener. Currently the feedbacks are used for the memory control.
 	// Return nil if Option.EnableMemoryControl is false.
 	Feedback() <-chan Feedback[A, P, D]
 
