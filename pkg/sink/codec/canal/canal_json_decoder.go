@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -95,7 +96,7 @@ type canalJSONDecoder struct {
 	upstreamTiDB *sql.DB
 	bytesDecoder *encoding.Decoder
 
-	tableInfoCache     map[tableKey]*model.TableInfo
+	tableInfoCache     map[tableKey]*commonType.TableInfo
 	partitionInfoCache map[tableKey]*timodel.PartitionInfo
 
 	tableIDAllocator *common.FakeTableIDAllocator
@@ -173,7 +174,9 @@ func (b *canalJSONDecoder) HasNext() (common.MessageType, bool, error) {
 	return b.msg.messageType(), true, nil
 }
 
-func (b *canalJSONDecoder) assembleClaimCheckRowChangedEvent(ctx context.Context, claimCheckLocation string) (*model.RowChangedEvent, error) {
+func (b *canalJSONDecoder) assembleClaimCheckRowChangedEvent(
+	ctx context.Context, claimCheckLocation string,
+) (*commonEvent.DMLEvent, error) {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
 	data, err := b.storage.ReadFile(ctx, claimCheckFileName)
 	if err != nil {
@@ -235,7 +238,7 @@ func (b *canalJSONDecoder) buildData(holder *common.ColumnsHolder) (map[string]i
 
 func (b *canalJSONDecoder) assembleHandleKeyOnlyRowChangedEvent(
 	ctx context.Context, message *canalJSONMessageWithTiDBExtension,
-) (*model.RowChangedEvent, error) {
+) (*commonEvent.DMLEvent, error) {
 	var (
 		commitTs  = message.Extensions.CommitTs
 		schema    = message.Schema
@@ -529,10 +532,14 @@ func canalJSONFormatColumn(columnID int64, value interface{}, mysqlTypeStr strin
 	return result
 }
 
-func (b *canalJSONDecoder) canalJSONMessage2RowChange() (*model.RowChangedEvent, error) {
+func (b *canalJSONDecoder) canalJSONMessage2RowChange() (*commonEvent.DMLEvent, error) {
 	msg := b.msg
-	result := new(model.RowChangedEvent)
+	result := new(commonEvent.DMLEvent)
+	result.Length++                    // todo: set this field correctly
+	result.StartTs = msg.getCommitTs() // todo: how to set this correctly?
+	result.ApproximateSize = 0
 	result.TableInfo = b.queryTableInfo(msg)
+	result.Rows = nil // todo: set this correctly
 	result.CommitTs = msg.getCommitTs()
 
 	mysqlType := msg.getMySQLType()
@@ -588,7 +595,7 @@ func (b *canalJSONDecoder) canalJSONMessage2RowChange() (*model.RowChangedEvent,
 	return result, nil
 }
 
-func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *model.TableInfo {
+func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	schema := *msg.getSchema()
 	table := *msg.getTable()
 	cacheKey := tableKey{
@@ -611,19 +618,21 @@ func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *model.
 	return tableInfo
 }
 
-func newTableInfo(msg canalJSONMessageInterface, partitionInfo *timodel.PartitionInfo) *model.TableInfo {
-	schema := *msg.getSchema()
-	table := *msg.getTable()
-	tidbTableInfo := &timodel.TableInfo{}
-	tidbTableInfo.Name = pmodel.NewCIStr(table)
-
-	rawColumns := msg.getData()
-	pkNames := msg.pkNameSet()
-	mysqlType := msg.getMySQLType()
-	setColumnInfos(tidbTableInfo, rawColumns, mysqlType, pkNames)
-	setIndexes(tidbTableInfo, pkNames)
-	tidbTableInfo.Partition = partitionInfo
-	return model.WrapTableInfo(100, schema, 1000, tidbTableInfo)
+func newTableInfo(msg canalJSONMessageInterface, partitionInfo *timodel.PartitionInfo) *commonType.TableInfo {
+	//schema := *msg.getSchema()
+	//table := *msg.getTable()
+	//tidbTableInfo := &timodel.TableInfo{}
+	//tidbTableInfo.Name = pmodel.NewCIStr(table)
+	//
+	//rawColumns := msg.getData()
+	//pkNames := msg.pkNameSet()
+	//mysqlType := msg.getMySQLType()
+	//setColumnInfos(tidbTableInfo, rawColumns, mysqlType, pkNames)
+	//setIndexes(tidbTableInfo, pkNames)
+	//tidbTableInfo.Partition = partitionInfo
+	//return model.WrapTableInfo(100, schema, 1000, tidbTableInfo)
+	result := new(commonType.TableInfo)
+	return result
 }
 
 func (b *canalJSONDecoder) setPhysicalTableID(event *model.RowChangedEvent) error {
