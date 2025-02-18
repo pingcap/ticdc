@@ -81,7 +81,7 @@ func (e *HandshakeEvent) IsPaused() bool {
 	return e.State.IsPaused()
 }
 
-func (t *HandshakeEvent) Len() int32 {
+func (e *HandshakeEvent) Len() int32 {
 	return 0
 }
 
