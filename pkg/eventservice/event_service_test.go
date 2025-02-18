@@ -565,7 +565,7 @@ func genEvents(helper *pevent.EventTestHelper, t *testing.T, ddl string, dmls ..
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
 		Query:      ddl,
-		TableInfo:  common.WrapTableInfo(job.SchemaID, job.SchemaName, job.BinlogInfo.TableInfo),
+		TableInfo:  common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
 	}, kvEvents
 }
 

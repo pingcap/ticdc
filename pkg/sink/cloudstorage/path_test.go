@@ -307,7 +307,7 @@ func TestCheckOrWriteSchema(t *testing.T) {
 		DefaultValue: 10,
 	}
 	columns = append(columns, col)
-	tableInfo := commonType.WrapTableInfo(101, "test", &timodel.TableInfo{Columns: columns})
+	tableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{Columns: columns})
 
 	table := VersionedTableName{
 		TableNameWithPhysicTableID: tableInfo.TableName,

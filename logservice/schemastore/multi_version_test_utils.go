@@ -148,7 +148,7 @@ func buildExchangePartitionTableEventForTest(
 				Enable:      true,
 			},
 		},
-		ExtraTableInfo: common.WrapTableInfo(normalSchemaID, normalSchemaName, &model.TableInfo{
+		ExtraTableInfo: common.WrapTableInfo(normalSchemaName, &model.TableInfo{
 			ID:   normalTableID,
 			Name: pmodel.NewCIStr(normalTableName),
 		}),

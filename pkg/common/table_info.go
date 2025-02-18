@@ -24,7 +24,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	datumTypes "github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/tinylib/msgp/msgp"
@@ -287,7 +287,6 @@ const (
 
 // TableInfo provides meta data describing a DB table.
 type TableInfo struct {
-	SchemaID int64 `json:"schema-id"`
 	// NOTICE: We probably store the logical ID inside TableName,
 	// not the physical ID.
 	// For normal table, there is only one ID, which is the physical ID.
@@ -496,12 +495,12 @@ func (ti *TableInfo) IsPartitionTable() bool {
 }
 
 // GetRowColInfos returns all column infos for rowcodec
-func (ti *TableInfo) GetRowColInfos() ([]int64, map[int64]*datumTypes.FieldType, []rowcodec.ColInfo) {
+func (ti *TableInfo) GetRowColInfos() ([]int64, map[int64]*types.FieldType, []rowcodec.ColInfo) {
 	return ti.columnSchema.HandleColID, ti.columnSchema.RowColFieldTps, ti.columnSchema.RowColInfos
 }
 
 // GetFieldSlice returns the field types of all columns
-func (ti *TableInfo) GetFieldSlice() []*datumTypes.FieldType {
+func (ti *TableInfo) GetFieldSlice() []*types.FieldType {
 	return ti.columnSchema.RowColFieldTpsSlice
 }
 
@@ -602,9 +601,8 @@ func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 	return result
 }
 
-func NewTableInfo(schemaID int64, schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
+func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
 	ti := &TableInfo{
-		SchemaID: schemaID,
 		TableName: TableName{
 			Schema:      schemaName,
 			Table:       tableName,
@@ -625,12 +623,12 @@ func NewTableInfo(schemaID int64, schemaName string, tableName string, tableID i
 }
 
 // WrapTableInfo creates a TableInfo from a model.TableInfo
-func WrapTableInfo(schemaID int64, schemaName string, info *model.TableInfo) *TableInfo {
+func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 	// search column schema object
 	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
 	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
 
-	return NewTableInfo(schemaID, schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema)
+	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema)
 }
 
 // GetColumnDefaultValue returns the default definition of a column.
@@ -639,7 +637,7 @@ func GetColumnDefaultValue(col *model.ColumnInfo) interface{} {
 	if defaultValue == nil {
 		defaultValue = col.GetOriginDefaultValue()
 	}
-	defaultDatum := datumTypes.NewDatum(defaultValue)
+	defaultDatum := types.NewDatum(defaultValue)
 	return defaultDatum.GetValue()
 }
 
@@ -647,7 +645,6 @@ func GetColumnDefaultValue(col *model.ColumnInfo) interface{} {
 func BuildTiDBTableInfoWithoutVirtualColumns(source *TableInfo) *TableInfo {
 	newColumnSchema := source.columnSchema.getColumnSchemaWithoutVirtualColumns()
 	tableInfo := &TableInfo{
-		SchemaID:     source.SchemaID,
 		TableName:    source.TableName,
 		columnSchema: newColumnSchema,
 	}
