@@ -37,17 +37,7 @@ GITHASH := $(shell git rev-parse HEAD)
 GITBRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 GOVERSION := $(shell go version)
 
-OS := "$(shell go env GOOS)"
-SED_IN_PLACE ?= $(shell which sed)
-ifeq (${OS}, "linux")
-	SED_IN_PLACE += -i
-else ifeq (${OS}, "darwin")
-	SED_IN_PLACE += -i ''
-endif
-
-GOTEST := CGO_ENABLED=1 $(GO) test -p 3 --race --tags=intest
-
-BUILD_FLAG = -tags musl
+BUILD_FLAG =
 GOEXPERIMENT=
 ifeq ("${ENABLE_FIPS}", "1")
 	BUILD_FLAG = -tags boringcrypto
@@ -75,12 +65,19 @@ LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.ReleaseVersion=$(RELEASE_VERSION)"
 LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitHash=$(GITHASH)"
 LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.GitBranch=$(GITBRANCH)"
 LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.BuildTS=$(BUILDTS)"
+
+OS := "$(shell go env GOOS)"
+SED_IN_PLACE ?= $(shell which sed)
 ifeq (${OS}, "linux")
+	SED_IN_PLACE += -i
+	BUILD_FLAG += -tags musl
 	LDFLAGS += -linkmode external -extldflags "-static"
+else ifeq (${OS}, "darwin")
+	SED_IN_PLACE += -i ''
 endif
 
-
 GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=1 $(GO) build $(BUILD_FLAG) -trimpath $(GOVENDORFLAG)
+GOTEST := CGO_ENABLED=1 $(GO) test -p 3 --race --tags=intest
 
 PACKAGE_LIST := go list ./... | grep -vE 'vendor|proto|ticdc/tests|integration|testing_utils|pb|pbmock|ticdc/bin'
 PACKAGES := $$($(PACKAGE_LIST))
