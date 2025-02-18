@@ -15,7 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -63,7 +62,6 @@ type eventService struct {
 	// TODO: use a better way to cache the acceptorInfos
 	dispatcherInfo chan DispatcherInfo
 	tz             *time.Location
-	wg             sync.WaitGroup
 }
 
 func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) common.SubModule {

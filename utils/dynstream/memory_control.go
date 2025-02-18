@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
 )
@@ -63,7 +64,7 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	path *pathInfo[A, P, T, D, H],
 	event eventWrap[A, P, T, D, H],
-	handler H,
+	_ H,
 ) bool {
 	defer as.updatePathPauseState(path)
 	defer as.updateAreaPauseState(path)
@@ -82,7 +83,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	// Add the event to the pending queue.
 	path.pendingQueue.PushBack(event)
 	// Update the pending size.
-	path.pendingSize.Add(uint32(event.eventSize))
+	path.updatePendingSize(int64(event.eventSize))
 	as.totalPendingSize.Add(int64(event.eventSize))
 	return true
 }
@@ -91,85 +92,154 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 // It needs to be called after a event is appended.
 // Note: Our gaol is to fast pause, and lazy resume.
 func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, T, D, H]) {
-	shouldPause := as.shouldPausePath(path)
+	pause, resume, memoryUsageRatio := as.shouldPausePath(path)
 
 	sendFeedback := func(pause bool) {
+		now := time.Now()
+		lastTime := path.lastSendFeedbackTime.Load().(time.Time)
+
+		// Fast pause, lazy resume.
+		if !pause && time.Since(lastTime) < as.settings.Load().FeedbackInterval {
+			return
+		}
+
+		if !path.lastSendFeedbackTime.CompareAndSwap(lastTime, now) {
+			return // Another goroutine already updated the time
+		}
+
+		feedbackType := PausePath
+		if !pause {
+			feedbackType = ResumePath
+		}
+
 		as.feedbackChan <- Feedback[A, P, D]{
 			Area:         path.area,
 			Path:         path.path,
 			Dest:         path.dest,
-			FeedbackType: 0,
-			PausePath:    pause,
+			FeedbackType: feedbackType,
 		}
-		path.lastSendFeedbackTime.Store(time.Now())
+		path.paused.Store(pause)
+
+		log.Info("send path feedback", zap.Any("area", as.area),
+			zap.Any("path", path.path), zap.Stringer("feedbackType", feedbackType),
+			zap.Float64("memoryUsageRatio", memoryUsageRatio))
 	}
 
-	// If the path is not paused previously but should be paused, we need to pause it.
-	// And send pause feedback.
-	if path.paused.Load() != shouldPause &&
-		time.Since(path.lastSendFeedbackTime.Load().(time.Time)) >= as.settings.Load().FeedbackInterval {
-		path.paused.Store(shouldPause)
-		sendFeedback(shouldPause)
+	failpoint.Inject("PausePath", func() {
+		log.Warn("inject PausePath")
+		sendFeedback(true)
+	})
+
+	switch {
+	case pause:
+		sendFeedback(true)
+	case resume:
+		sendFeedback(false)
 	}
 }
 
 func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, T, D, H]) {
-	shouldPause := as.shouldPauseArea()
+	pause, resume, memoryUsageRatio := as.shouldPauseArea()
 
 	sendFeedback := func(pause bool) {
+		now := time.Now()
+		lastTime := as.lastSendFeedbackTime.Load().(time.Time)
+
+		// Fast pause, lazy resume.
+		if !pause && time.Since(lastTime) < as.settings.Load().FeedbackInterval {
+			return
+		}
+
+		if !as.lastSendFeedbackTime.CompareAndSwap(lastTime, now) {
+			return // Another goroutine already updated the time
+		}
+
+		feedbackType := PauseArea
+		if !pause {
+			feedbackType = ResumeArea
+		}
+
 		as.feedbackChan <- Feedback[A, P, D]{
 			Area:         as.area,
 			Path:         path.path,
 			Dest:         path.dest,
-			PauseArea:    pause,
-			FeedbackType: 1,
+			FeedbackType: feedbackType,
 		}
-		as.lastSendFeedbackTime.Store(time.Now())
+		as.paused.Store(pause)
+
+		log.Info("send area feedback",
+			zap.Any("area", as.area),
+			zap.Stringer("feedbackType", feedbackType),
+			zap.Float64("memoryUsageRatio", memoryUsageRatio),
+			zap.Time("lastTime", lastTime),
+			zap.Time("now", now),
+			zap.Duration("sinceLastTime", time.Since(lastTime)),
+		)
 	}
 
-	prevPaused := as.paused.Load()
-	if prevPaused != shouldPause &&
-		time.Since(as.lastSendFeedbackTime.Load().(time.Time)) >= as.settings.Load().FeedbackInterval {
-		as.paused.Store(shouldPause)
-		sendFeedback(shouldPause)
-		return
+	failpoint.Inject("PauseArea", func() {
+		log.Warn("inject PauseArea")
+		sendFeedback(true)
+	})
+
+	switch {
+	case pause:
+		sendFeedback(true)
+	case resume:
+		sendFeedback(false)
 	}
 }
 
 // shouldPausePath determines if a path should be paused based on memory usage.
 // If the memory usage is greater than the 20% of max pending size, the path should be paused.
-func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D, H]) bool {
-	memoryUsageRatio := float64(path.pendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
+func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D, H]) (pause bool, resume bool, memoryUsageRatio float64) {
+	memoryUsageRatio = float64(path.pendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
 
-	// If the path is paused, we only need to resume it when the memory usage is less than 10%.
-	if path.paused.Load() {
-		return memoryUsageRatio >= 0.1
+	switch {
+	case path.paused.Load():
+		// If the path is paused, we only need to resume it when the memory usage is less than 10%.
+		if memoryUsageRatio < 0.1 {
+			resume = true
+		}
+	default:
+		// If the path is not paused, we need to pause it when the memory usage is greater than 30% of max pending size.
+		if memoryUsageRatio >= 0.2 {
+			pause = true
+		}
 	}
 
-	// If the path is not paused, we need to pause it when the memory usage is greater than 20% of max pending size.
-	return memoryUsageRatio >= 0.2
+	return pause, resume, memoryUsageRatio
 }
 
 // shouldPauseArea determines if the area should be paused based on memory usage.
 // If the memory usage is greater than the 80% of max pending size, the area should be paused.
-func (as *areaMemStat[A, P, T, D, H]) shouldPauseArea() bool {
-	memoryUsageRatio := float64(as.totalPendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
+func (as *areaMemStat[A, P, T, D, H]) shouldPauseArea() (pause bool, resume bool, memoryUsageRatio float64) {
+	memoryUsageRatio = float64(as.totalPendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
 
-	// If the area is paused, we only need to resume it when the memory usage is less than 50%.
-	if as.paused.Load() {
-		return memoryUsageRatio >= 0.5
+	switch {
+	case as.paused.Load():
+		// If the area is already paused, we need to resume it when the memory usage is less than 50%.
+		if memoryUsageRatio < 0.5 {
+			resume = true
+		}
+	default:
+		// If the area is not paused, we need to pause it when the memory usage is greater than 80% of max pending size.
+		if memoryUsageRatio >= 0.8 {
+			pause = true
+		}
 	}
 
-	// If the area is not paused, we need to pause it when the memory usage is greater than 80% of max pending size.
-	return memoryUsageRatio >= 0.8
+	return
 }
 
-func (as *areaMemStat[A, P, T, D, H]) decPendingSize(size int64) {
+func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, H], size int64) {
 	as.totalPendingSize.Add(int64(-size))
 	if as.totalPendingSize.Load() < 0 {
 		log.Warn("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()))
 		as.totalPendingSize.Store(0)
 	}
+	as.updatePathPauseState(path)
+	as.updateAreaPauseState(path)
 }
 
 // A memControl is used to control the memory usage of the dynamic stream.
@@ -216,7 +286,7 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 // This method is called after the path is removed.
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
-	area.decPendingSize(int64(path.pendingSize.Load()))
+	area.decPendingSize(path, int64(path.pendingSize.Load()))
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
@@ -228,14 +298,43 @@ func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D
 }
 
 // FIXME/TODO: We use global metric here, which is not good for multiple streams.
-func (m *memControl[A, P, T, D, H]) getMetrics() (usedMemory int64, maxMemory int64) {
+func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A] {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	usedMemory = int64(0)
-	maxMemory = int64(0)
+	metrics := MemoryMetric[A]{}
 	for _, area := range m.areaStatMap {
-		usedMemory += area.totalPendingSize.Load()
-		maxMemory += int64(area.settings.Load().MaxPendingSize)
+		areaMetric := AreaMemoryMetric[A]{
+			area:       area.area,
+			usedMemory: area.totalPendingSize.Load(),
+			maxMemory:  int64(area.settings.Load().MaxPendingSize),
+		}
+		metrics.AreaMemoryMetrics = append(metrics.AreaMemoryMetrics, areaMetric)
 	}
-	return usedMemory, maxMemory
+	return metrics
+}
+
+type MemoryMetric[A Area] struct {
+	AreaMemoryMetrics []AreaMemoryMetric[A]
+}
+
+type AreaMemoryMetric[A Area] struct {
+	area       A
+	usedMemory int64
+	maxMemory  int64
+}
+
+func (a *AreaMemoryMetric[A]) MemoryUsageRatio() float64 {
+	return float64(a.usedMemory) / float64(a.maxMemory)
+}
+
+func (a *AreaMemoryMetric[A]) MemoryUsage() int64 {
+	return a.usedMemory
+}
+
+func (a *AreaMemoryMetric[A]) MaxMemory() int64 {
+	return a.maxMemory
+}
+
+func (a *AreaMemoryMetric[A]) Area() A {
+	return a.area
 }

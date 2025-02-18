@@ -178,10 +178,6 @@ func (v *versionedTableInfoStore) applyDDLFromPersistStorage(event *PersistedDDL
 func (v *versionedTableInfoStore) applyDDL(event *PersistedDDLEvent) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	// delete table should not receive more ddl except recover table
-	if model.ActionType(event.Type) != model.ActionRecoverTable {
-		assertNonDeleted(v)
-	}
 
 	if !v.initialized {
 		// The usage of the parameter `event` may outlive the function call, so we copy it.
@@ -208,10 +204,12 @@ func (v *versionedTableInfoStore) doApplyDDL(event *PersistedDDLEvent) {
 	}
 	tableInfo, deleted := handler.extractTableInfoFunc(event, v.tableID)
 	if tableInfo != nil {
-		v.infos = append(v.infos, &tableInfoItem{Version: event.FinishedTs, Info: tableInfo})
 		if ddlType == model.ActionRecoverTable {
 			v.deleteVersion = math.MaxUint64
+		} else {
+			assertNonDeleted(v)
 		}
+		v.infos = append(v.infos, &tableInfoItem{Version: event.FinishedTs, Info: tableInfo})
 	} else if deleted {
 		v.deleteVersion = event.FinishedTs
 	}

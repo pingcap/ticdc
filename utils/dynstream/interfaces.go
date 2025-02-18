@@ -179,7 +179,7 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// This method can be called at any time. But to avoid the memory leak, setting on a area without existing paths is a no-op.
 	SetAreaSettings(area A, settings AreaSettings)
 
-	GetMetrics() Metrics
+	GetMetrics() Metrics[A]
 }
 
 // PathHasher is used to select target stream for the path.
@@ -260,31 +260,40 @@ func NewAreaSettingsWithMaxPendingSize(size int) AreaSettings {
 	}
 }
 
+type FeedbackType int
+
+const (
+	PausePath FeedbackType = iota
+	ResumePath
+	PauseArea
+	ResumeArea
+)
+
+func (f FeedbackType) String() string {
+	switch f {
+	case PausePath:
+		return "PausePath"
+	case ResumePath:
+		return "ResumePath"
+	case PauseArea:
+		return "PauseArea"
+	case ResumeArea:
+		return "ResumeArea"
+	default:
+		return fmt.Sprintf("Unknown FeedbackType: %d", f)
+	}
+}
+
 type Feedback[A Area, P Path, D Dest] struct {
 	Area A
 	Path P
 	Dest D
 
-	FeedbackType int // 0: path feedback, 1: area feedback
-
-	PausePath bool // Pause or resume the path.
-	PauseArea bool // Pause or resume the area.
-}
-
-func (f *Feedback[A, P, D]) IsAreaFeedback() bool {
-	return f.FeedbackType == 1
-}
-
-func (f *Feedback[A, P, D]) IsPausePath() bool {
-	return f.PausePath
-}
-
-func (f *Feedback[A, P, D]) IsPauseArea() bool {
-	return f.PauseArea
+	FeedbackType FeedbackType
 }
 
 func (f *Feedback[A, P, D]) String() string {
-	return fmt.Sprintf("DynamicStream Feedback{Area: %v, Path: %v, Pause: %v, PauseArea: %v}", f.Area, f.Path, f.PausePath, f.PauseArea)
+	return fmt.Sprintf("DynamicStream Feedback{Area: %v, Path: %v, FeedbackType: %s}", f.Area, f.Path, f.FeedbackType.String())
 }
 
 func NewDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, option ...Option) DynamicStream[A, P, T, D, H] {
@@ -306,14 +315,11 @@ func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 	return newParallelDynamicStream(hasher, handler, opt)
 }
 
-type Metrics struct {
+type Metrics[A Area] struct {
 	EventChanSize   int
 	PendingQueueLen int
 	AddPath         int
 	RemovePath      int
 
-	MemoryControl struct {
-		UsedMemory int64
-		MaxMemory  int64
-	}
+	MemoryControl MemoryMetric[A]
 }

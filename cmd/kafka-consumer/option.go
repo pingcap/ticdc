@@ -14,7 +14,6 @@
 package main
 
 import (
-	util2 "github.com/pingcap/ticdc/cmd/util"
 	"math"
 	"net/url"
 	"strconv"
@@ -22,11 +21,12 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/pkg/util"
+	putil "github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -134,9 +134,9 @@ func (o *option) Adjust(upstreamURI *url.URL, configFile string) error {
 	replicaConfig := config.GetDefaultReplicaConfig()
 	// the TiDB source ID should never be set to 0
 	replicaConfig.Sink.TiDBSourceID = 1
-	replicaConfig.Sink.Protocol = util.AddressOf(protocol.String())
+	replicaConfig.Sink.Protocol = putil.AddressOf(protocol.String())
 	if configFile != "" {
-		err = util2.StrictDecodeFile(configFile, "kafka consumer", replicaConfig)
+		err = util.StrictDecodeFile(configFile, "kafka consumer", replicaConfig)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -150,7 +150,7 @@ func (o *option) Adjust(upstreamURI *url.URL, configFile string) error {
 	if err = o.codecConfig.Apply(upstreamURI, o.replicaConfig.Sink); err != nil {
 		return errors.Trace(err)
 	}
-	tz, err := util.GetTimezone(o.timezone)
+	tz, err := putil.GetTimezone(o.timezone)
 	if err != nil {
 		return errors.Trace(err)
 	}

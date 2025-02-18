@@ -20,12 +20,12 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/server"
 	"github.com/pingcap/ticdc/version"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/pingcap/tiflow/pkg/security"
 	cdcversion "github.com/pingcap/tiflow/pkg/version"
 	"github.com/spf13/cobra"
@@ -94,7 +94,6 @@ func (o *options) run(cmd *cobra.Command) error {
 	log.Info("init log", zap.String("file", loggerConfig.File), zap.String("level", loggerConfig.Level))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	setDefaultContext(ctx)
 	defer cancel()
 
 	cdcversion.ReleaseVersion = version.ReleaseVersion
@@ -122,7 +121,7 @@ func (o *options) run(cmd *cobra.Command) error {
 }
 
 // complete adapts from the command line args and config file to the data required.
-func (o *options) complete(cmd *cobra.Command) error {
+func (o *options) complete(command *cobra.Command) error {
 	cfg := config.GetDefaultServerConfig()
 	if len(o.serverConfigFilePath) > 0 {
 		// strict decode config file, but ignore debug item
@@ -132,7 +131,7 @@ func (o *options) complete(cmd *cobra.Command) error {
 	}
 
 	o.serverConfig.Security = o.getCredential()
-	cmd.Flags().Visit(func(flag *pflag.Flag) {
+	command.Flags().Visit(func(flag *pflag.Flag) {
 		switch flag.Name {
 		case "addr":
 			cfg.Addr = o.serverConfig.Addr
@@ -170,7 +169,7 @@ func (o *options) complete(cmd *cobra.Command) error {
 	}
 
 	if cfg.DataDir == "" {
-		cmd.Printf(color.HiYellowString("[WARN] TiCDC server data-dir is not set. " +
+		command.Printf(color.HiYellowString("[WARN] TiCDC server data-dir is not set. " +
 			"Please use `cdc server --data-dir` to start the cdc server if possible.\n"))
 	}
 

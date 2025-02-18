@@ -83,6 +83,10 @@ func (m *writeSplitter) split(
 			zap.String("namespace", m.changefeedID.Namespace()),
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("span", span.String()),
+			zap.Int("captureNum", captureNum),
+			zap.Int("expectedSpanNum", expectedSpanNum),
+			zap.Int("DefaultMaxSpanNumber", DefaultMaxSpanNumber),
+			zap.Int("regionsLen", len(regions)),
 			zap.Error(err))
 		return []*heartbeatpb.TableSpan{span}
 	}
@@ -139,6 +143,7 @@ func (m *writeSplitter) splitRegionsByWrittenKeysV1(
 	// 1. If the total write is less than writeKeyThreshold
 	// don't need to split the regions
 	if totalWrite < uint64(m.writeKeyThreshold) {
+		log.Info("total write less than writeKeyThreshold, skip split", zap.Any("totalWrite", totalWrite), zap.Any("writeKeyThreshold", m.writeKeyThreshold))
 		return &splitRegionsInfo{
 			RegionCounts: []int{len(regions)},
 			Weights:      []uint64{totalWriteNormalized},

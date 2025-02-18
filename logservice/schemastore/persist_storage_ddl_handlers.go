@@ -82,11 +82,23 @@ func (args *updateSchemaMetadataFuncArgs) removeTableFromDB(tableID int64, schem
 	delete(databaseInfo.Tables, tableID)
 }
 
+type updateFullTableInfoFuncArgs struct {
+	event       *PersistedDDLEvent
+	databaseMap map[int64]*BasicDatabaseInfo
+	// logical table id -> table info
+	tableInfoMap map[int64]*model.TableInfo
+}
+
 type persistStorageDDLHandler struct {
 	// buildPersistedDDLEventFunc build a PersistedDDLEvent which will be write to disk from a ddl job
 	buildPersistedDDLEventFunc func(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent
 	// updateDDLHistoryFunc add the finished ts of ddl event to the history of table trigger and related tables
 	updateDDLHistoryFunc func(args updateDDLHistoryFuncArgs) []uint64
+	// updateFullTableInfoFunc update the full table info map according to the ddl event
+	// Note: it must be called before updateSchemaMetadataFunc,
+	// because it depends on some info which may be updated by updateSchemaMetadataFunc
+	// TODO: add unit test
+	updateFullTableInfoFunc func(args updateFullTableInfoFuncArgs)
 	// updateSchemaMetadataFunc update database info, table info and partition info according to the ddl event
 	updateSchemaMetadataFunc func(args updateSchemaMetadataFuncArgs)
 	// iterateEventTablesFunc iterates through all physical table IDs affected by the DDL event
@@ -103,6 +115,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionCreateSchema: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForSchemaDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForTableTriggerOnlyDDL,
+		updateFullTableInfoFunc:    updateFullTableInfoIgnore,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForCreateSchema,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
@@ -111,6 +124,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionDropSchema: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForSchemaDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForSchemaDDL,
+		updateFullTableInfoFunc:    updateFullTableInfoForDropSchema,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropSchema,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
@@ -119,6 +133,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionCreateTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -127,6 +142,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionDropTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForDropTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForDropTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropTable,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForDropTable,
@@ -135,6 +151,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionAddColumn: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -143,6 +160,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionDropColumn: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -151,6 +169,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionAddIndex: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -159,6 +178,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionDropIndex: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -167,6 +187,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionAddForeignKey: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -175,6 +196,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionDropForeignKey: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -183,6 +205,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionTruncateTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForTruncateTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForTruncateTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForTruncateTable,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForTruncateTable,
 		iterateEventTablesFunc:     iterateEventTablesForTruncateTable,
 		extractTableInfoFunc:       extractTableInfoFuncForTruncateTable,
@@ -191,6 +214,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionModifyColumn: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -199,6 +223,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionRebaseAutoID: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -207,6 +232,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionRenameTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForRenameTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForRenameTable,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -215,6 +241,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionSetDefaultValue: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -223,6 +250,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionShardRowID: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -231,6 +259,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionModifyTableComment: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -239,6 +268,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionRenameIndex: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -247,6 +277,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionAddTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddPartition,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForAddPartition,
 		iterateEventTablesFunc:     iterateEventTablesForAddPartition,
 		extractTableInfoFunc:       extractTableInfoFuncForAddPartition,
@@ -255,6 +286,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionDropTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForDropPartition,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForDropPartition,
 		iterateEventTablesFunc:     iterateEventTablesForDropPartition,
 		extractTableInfoFunc:       extractTableInfoFuncForDropPartition,
@@ -263,6 +295,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionCreateView: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateView,
 		updateDDLHistoryFunc:       updateDDLHistoryForCreateView,
+		updateFullTableInfoFunc:    updateFullTableInfoIgnore,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
@@ -271,6 +304,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionModifyTableCharsetAndCollate: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -279,6 +313,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionTruncateTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForTruncatePartition,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForTruncateTablePartition,
 		iterateEventTablesFunc:     iterateEventTablesForTruncatePartition,
 		extractTableInfoFunc:       extractTableInfoFuncForTruncateAndReorganizePartition,
@@ -287,6 +322,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionDropView: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForDropView,
 		updateDDLHistoryFunc:       updateDDLHistoryForTableTriggerOnlyDDL,
+		updateFullTableInfoFunc:    updateFullTableInfoIgnore,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
@@ -295,6 +331,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionRecoverTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -303,6 +340,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionModifySchemaCharsetAndCollate: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForSchemaDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForSchemaDDL,
+		updateFullTableInfoFunc:    updateFullTableInfoIgnore,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesIgnore,
 		extractTableInfoFunc:       extractTableInfoFuncIgnore,
@@ -311,6 +349,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionAddPrimaryKey: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -319,6 +358,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionDropPrimaryKey: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -327,6 +367,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionAlterIndexVisibility: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -335,6 +376,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionExchangeTablePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForExchangePartition,
 		updateDDLHistoryFunc:       updateDDLHistoryForExchangeTablePartition,
+		updateFullTableInfoFunc:    updateFullTableInfoForExchangeTablePartition,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForExchangeTablePartition,
 		iterateEventTablesFunc:     iterateEventTablesForExchangeTablePartition,
 		extractTableInfoFunc:       extractTableInfoFuncForExchangeTablePartition,
@@ -343,6 +385,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionRenameTables: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForRenameTables,
 		updateDDLHistoryFunc:       updateDDLHistoryForRenameTables,
+		updateFullTableInfoFunc:    updateFullTableInfoForMultiTablesDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForRenameTables,
 		iterateEventTablesFunc:     iterateEventTablesForRenameTables,
 		extractTableInfoFunc:       extractTableInfoFuncForRenameTables,
@@ -351,6 +394,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionCreateTables: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTables,
 		updateDDLHistoryFunc:       updateDDLHistoryForCreateTables,
+		updateFullTableInfoFunc:    updateFullTableInfoForMultiTablesDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForCreateTables,
 		iterateEventTablesFunc:     iterateEventTablesForCreateTables,
 		extractTableInfoFunc:       extractTableInfoFuncForCreateTables,
@@ -359,6 +403,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionMultiSchemaChange: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -367,6 +412,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionReorganizePartition: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalPartitionDDL,
 		updateDDLHistoryFunc:       updateDDLHistoryForReorganizePartition,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForReorganizePartition,
 		iterateEventTablesFunc:     iterateEventTablesForReorganizePartition,
 		extractTableInfoFunc:       extractTableInfoFuncForTruncateAndReorganizePartition,
@@ -375,6 +421,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionAlterTTLInfo: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAlterTableTTL,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -383,6 +430,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionAlterTTLRemove: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAlterTableTTL,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
@@ -391,6 +439,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionAlterTablePartitioning: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForAlterTablePartitioning,
 		updateDDLHistoryFunc:       updateDDLHistoryForAlterTablePartitioning,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForAlterTablePartitioning,
 		iterateEventTablesFunc:     iterateEventTablesForAlterTablePartitioning,
 		extractTableInfoFunc:       extractTableInfoFuncForAlterTablePartitioning,
@@ -399,6 +448,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 	model.ActionRemovePartitioning: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForRemovePartitioning,
 		updateDDLHistoryFunc:       updateDDLHistoryForRemovePartitioning,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataForRemovePartitioning,
 		iterateEventTablesFunc:     iterateEventTablesForRemovePartitioning,
 		extractTableInfoFunc:       extractTableInfoFuncForRemovePartitioning,
@@ -602,6 +652,8 @@ func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncA
 	for id := range args.partitionMap[event.ExtraTableID] {
 		event.PrevPartitions = append(event.PrevPartitions, id)
 	}
+	// Note: event.ExtraTableInfo is set somewhere else,
+	// because it is hard to get the table info of the normal table in this func.
 	if event.Query != "" {
 		upperQuery := strings.ToUpper(event.Query)
 		idx1 := strings.Index(upperQuery, "EXCHANGE PARTITION") + len("EXCHANGE PARTITION")
@@ -882,6 +934,55 @@ func updateDDLHistoryForAlterTableTTL(args updateDDLHistoryFuncArgs) []uint64 {
 		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.TableID)
 	}
 	return args.tableTriggerDDLHistory
+}
+
+func updateFullTableInfoIgnore(args updateFullTableInfoFuncArgs) {}
+
+func updateFullTableInfoForDropSchema(args updateFullTableInfoFuncArgs) {
+	for tableID := range args.databaseMap[args.event.SchemaID].Tables {
+		delete(args.tableInfoMap, tableID)
+	}
+}
+
+func updateFullTableInfoForSingleTableDDL(args updateFullTableInfoFuncArgs) {
+	args.tableInfoMap[args.event.TableID] = args.event.TableInfo
+}
+
+func updateFullTableInfoForDropTable(args updateFullTableInfoFuncArgs) {
+	delete(args.tableInfoMap, args.event.TableID)
+}
+
+func updateFullTableInfoForTruncateTable(args updateFullTableInfoFuncArgs) {
+	delete(args.tableInfoMap, args.event.TableID)
+	args.tableInfoMap[args.event.ExtraTableID] = args.event.TableInfo
+}
+
+func updateFullTableInfoForExchangeTablePartition(args updateFullTableInfoFuncArgs) {
+	physicalIDs := getAllPartitionIDs(args.event.TableInfo)
+	droppedIDs := getDroppedIDs(args.event.PrevPartitions, physicalIDs)
+	if len(droppedIDs) != 1 {
+		log.Panic("exchange table partition should only drop one partition",
+			zap.Int64s("droppedIDs", droppedIDs))
+	}
+	// set new normal table info
+	targetPartitionID := droppedIDs[0]
+	normalTableID := args.event.TableID
+	normalTableInfo := args.tableInfoMap[normalTableID]
+	normalTableInfo.ID = targetPartitionID
+	args.tableInfoMap[targetPartitionID] = normalTableInfo
+	delete(args.tableInfoMap, normalTableID)
+	// update partition table info
+	partitionTableID := args.event.ExtraTableID
+	args.tableInfoMap[partitionTableID] = args.event.TableInfo
+}
+
+func updateFullTableInfoForMultiTablesDDL(args updateFullTableInfoFuncArgs) {
+	if args.event.MultipleTableInfos == nil {
+		log.Panic("multiple table infos should not be nil")
+	}
+	for _, info := range args.event.MultipleTableInfos {
+		args.tableInfoMap[info.ID] = info
+	}
 }
 
 // =======

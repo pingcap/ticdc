@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -25,7 +26,6 @@ import (
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 

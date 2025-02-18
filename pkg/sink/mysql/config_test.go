@@ -24,7 +24,7 @@ import (
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/tiflow/pkg/util"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 

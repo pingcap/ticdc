@@ -31,8 +31,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	putil "github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )

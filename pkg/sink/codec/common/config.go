@@ -25,7 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/util"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 

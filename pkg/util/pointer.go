@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,17 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package server
+package util
 
-import "context"
-
-var defaultContext context.Context
-
-func setDefaultContext(ctx context.Context) {
-	defaultContext = ctx
+// GetOrZero returns the value pointed to by p, or a zero value of
+// its type if p is nil.
+func GetOrZero[T any](p *T) T {
+	var val T
+	if p == nil {
+		return val
+	}
+	return *p
 }
 
-// GetDefaultContext returns the default context for command line usage.
-func GetDefaultContext() context.Context {
-	return defaultContext
-}
+// AddressOf return the address of the given input variable.
+func AddressOf[T any](v T) *T { return &v }

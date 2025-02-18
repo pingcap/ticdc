@@ -23,6 +23,7 @@ import (
 func TestBuildVersionedTableInfoStore(t *testing.T) {
 	type QueryTableInfoTestCase struct {
 		snapTs     uint64
+		deleted    bool
 		schemaName string
 		tableName  string
 	}
@@ -114,6 +115,36 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 				},
 			},
 		},
+		// test recover table
+		{
+			tableID: 200,
+			ddlEvents: func() []*PersistedDDLEvent {
+				return []*PersistedDDLEvent{
+					buildCreateTableEventForTest(10, 200, "test", "normal_table", 1010),  // create table 200
+					buildDropTableEventForTest(10, 200, "test", "normal_table", 1020),    // drop table 200
+					buildRecoverTableEventForTest(10, 200, "test", "normal_table", 1030), // recover table 200
+					buildDropTableEventForTest(10, 200, "test", "normal_table", 1040),    // drop table 200
+				}
+			}(),
+			queryCases: []QueryTableInfoTestCase{
+				{
+					snapTs:     1010,
+					schemaName: "test",
+					tableName:  "normal_table",
+				},
+				// Note: In 1020, the table is dropped, but this information is overridden by a subsequent table recovery.
+				// Since storing this information is meaningless, we retain the current behavior.
+				{
+					snapTs:     1030,
+					schemaName: "test",
+					tableName:  "normal_table",
+				},
+				{
+					snapTs:  1040,
+					deleted: true,
+				},
+			},
+		},
 	}
 	for _, tt := range testCases {
 		store := newEmptyVersionedTableInfoStore(tt.tableID)
@@ -123,11 +154,18 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 		}
 		for _, c := range tt.queryCases {
 			tableInfo, err := store.getTableInfo(c.snapTs)
-			require.Nil(t, err)
-			require.Equal(t, c.schemaName, tableInfo.TableName.Schema)
-			require.Equal(t, c.tableName, tableInfo.TableName.Table)
-			if !tableInfo.TableName.IsPartition {
-				require.Equal(t, tt.tableID, tableInfo.TableName.TableID)
+			if !c.deleted {
+				require.Nil(t, err)
+				require.Equal(t, c.schemaName, tableInfo.TableName.Schema)
+				require.Equal(t, c.tableName, tableInfo.TableName.Table)
+				if !tableInfo.TableName.IsPartition {
+					require.Equal(t, tt.tableID, tableInfo.TableName.TableID)
+				}
+			} else {
+				require.Nil(t, tableInfo)
+				if _, ok := err.(*TableDeletedError); !ok {
+					t.Error("expect TableDeletedError, but got", err)
+				}
 			}
 		}
 		if tt.deleteVersion != 0 {

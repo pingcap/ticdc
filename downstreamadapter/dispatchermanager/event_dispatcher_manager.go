@@ -130,6 +130,17 @@ func NewEventDispatcherManager(
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
+
+	filterCfg := &eventpb.FilterConfig{
+		CaseSensitive:  cfConfig.CaseSensitive,
+		ForceReplicate: cfConfig.ForceReplicate,
+		FilterConfig:   toFilterConfigPB(cfConfig.Filter),
+	}
+	log.Info("New EventDispatcherManager",
+		zap.Stringer("changefeedID", changefeedID),
+		zap.String("config", cfConfig.String()),
+		zap.String("filterConfig", filterCfg.String()),
+	)
 	manager := &EventDispatcherManager{
 		dispatcherMap:                          newDispatcherMap(),
 		changefeedID:                           changefeedID,
@@ -140,7 +151,7 @@ func NewEventDispatcherManager(
 		errCh:                                  make(chan error, 1),
 		cancel:                                 cancel,
 		config:                                 cfConfig,
-		filterConfig:                           &eventpb.FilterConfig{CaseSensitive: cfConfig.CaseSensitive, ForceReplicate: cfConfig.ForceReplicate, FilterConfig: toFilterConfigPB(cfConfig.Filter)},
+		filterConfig:                           filterCfg,
 		schemaIDToDispatchers:                  dispatcher.NewSchemaIDToDispatchers(),
 		latestWatermark:                        NewWatermark(startTs),
 		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
@@ -237,9 +248,32 @@ func (e *EventDispatcherManager) TryClose(removeChangefeed bool) bool {
 	if e.closing.Load() {
 		return e.closed.Load()
 	}
+	e.cleanMetrics()
 	e.closing.Store(true)
 	go e.close(removeChangefeed)
 	return false
+}
+
+func (e *EventDispatcherManager) cleanMetrics() {
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+		"event-collector",
+		"max",
+		e.changefeedID.String(),
+	)
+
+	metrics.DynamicStreamMemoryUsage.DeleteLabelValues(
+		"event-collector",
+		"used",
+		e.changefeedID.String(),
+	)
+
+	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerCheckpointTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
+	metrics.EventDispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Namespace(), e.changefeedID.Name())
 }
 
 func (e *EventDispatcherManager) close(removeChangefeed bool) {

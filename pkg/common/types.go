@@ -134,6 +134,10 @@ func NewGID() GID {
 	}
 }
 
+func (g *GID) PString() string {
+	return g.String()
+}
+
 func (g GID) String() string {
 	var buf bytes.Buffer
 	buf.WriteString(strconv.FormatUint(g.Low, 10))

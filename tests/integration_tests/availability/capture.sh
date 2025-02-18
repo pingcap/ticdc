@@ -71,7 +71,7 @@ function test_kill_capture() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix test_kill_capture.server1
 
 	# ensure the server become the owner
-	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_coordinator\": true'"
+	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_owner\": true'"
 	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}')
 	echo "owner pid:" $owner_pid
@@ -80,7 +80,7 @@ function test_kill_capture() {
 	# wait for the tables to appear
 	check_table_exists test.availability1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 20
 
-	run_sql "REPLACE INTO test.availability1(id, val) VALUES (1, 1);"
+	run_sql "REPLACE INTO test.availability1 (id, val) VALUES (1, 1);"
 	ensure $MAX_RETRIES nonempty 'select id, val from test.availability1 where id=1 and val=1'
 
 	# start the second capture
@@ -108,7 +108,7 @@ function test_hang_up_capture() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix test_hang_up_capture.server1
 
 	# ensure the server become the owner
-	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_coordinator\": true'"
+	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_owner\": true'"
 	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}')
 	echo "owner pid:" $owner_pid
@@ -136,7 +136,7 @@ function test_expire_capture() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix test_expire_capture.server1
 
 	# ensure the server become the owner
-	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_coordinator\": true'"
+	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_owner\": true'"
 	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}')
 	echo "owner pid:" $owner_pid

@@ -25,8 +25,8 @@ import (
 	ticonfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tiflow/pkg/sink"
-	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
 

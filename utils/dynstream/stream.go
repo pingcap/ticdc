@@ -288,8 +288,8 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Fields used by the memory control.
 	areaMemStat *areaMemStat[A, P, T, D, H]
 
-	pendingSize          atomic.Uint32 // The total size(bytes) of pending events in the pendingQueue of the path.
-	paused               atomic.Bool   // The path is paused to send events.
+	pendingSize          atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
+	paused               atomic.Bool  // The path is paused to send events.
 	lastSendFeedbackTime atomic.Value
 }
 
@@ -318,7 +318,7 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 
 	if event.eventType.Property != PeriodicSignal {
 		pi.pendingQueue.PushBack(event)
-		pi.pendingSize.Add(uint32(event.eventSize))
+		pi.updatePendingSize(int64(event.eventSize))
 		return true
 	}
 
@@ -339,12 +339,31 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 	if !ok {
 		return eventWrap[A, P, T, D, H]{}, false
 	}
-	pi.pendingSize.Add(uint32(-e.eventSize))
+	pi.updatePendingSize(int64(-e.eventSize))
 
 	if pi.areaMemStat != nil {
-		pi.areaMemStat.decPendingSize(int64(e.eventSize))
+		pi.areaMemStat.decPendingSize(pi, int64(e.eventSize))
 	}
 	return e, true
+}
+
+func (pi *pathInfo[A, P, T, D, H]) updatePendingSize(delta int64) {
+	oldSize := pi.pendingSize.Load()
+	// Check for integer overflow/underflow
+	newSize := oldSize + delta
+	if delta > 0 && newSize < oldSize {
+		log.Error("Integer overflow detected in updatePendingSize",
+			zap.Int64("oldSize", oldSize),
+			zap.Int64("delta", delta))
+		return
+	}
+	if delta < 0 && newSize > oldSize {
+		log.Error("Integer underflow detected in updatePendingSize",
+			zap.Int64("oldSize", oldSize),
+			zap.Int64("delta", delta))
+		return
+	}
+	pi.pendingSize.Store(newSize)
 }
 
 // eventWrap contains the event and the path info.

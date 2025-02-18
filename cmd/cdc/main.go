@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,10 +22,10 @@ import (
 	"github.com/pingcap/ticdc/cmd/cdc/cli"
 	"github.com/pingcap/ticdc/cmd/cdc/server"
 	"github.com/pingcap/ticdc/cmd/cdc/version"
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/tidb/pkg/util/collate"
 	tiflowCmd "github.com/pingcap/tiflow/pkg/cmd"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )

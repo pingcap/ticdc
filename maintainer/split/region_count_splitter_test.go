@@ -29,7 +29,13 @@ import (
 )
 
 func TestRegionCountSplitSpan(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
+
+	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
+	baseSpanNumberCoefficient = 3
+	defer func() {
+		baseSpanNumberCoefficient = oldBaseSpanNumberCoefficient
+	}()
 
 	cache := NewMockRegionCache(nil)
 	cache.regions.ReplaceOrInsert(tablepb.Span{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")}, 1)
@@ -134,7 +140,13 @@ func TestRegionCountSplitSpan(t *testing.T) {
 }
 
 func TestRegionCountEvenlySplitSpan(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
+
+	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
+	baseSpanNumberCoefficient = 3
+	defer func() {
+		baseSpanNumberCoefficient = oldBaseSpanNumberCoefficient
+	}()
 
 	cache := NewMockRegionCache(nil)
 	totalRegion := 1000

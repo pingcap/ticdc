@@ -820,3 +820,48 @@ func (s *columnSchema) getColumnList(isUpdate bool) (int, string) {
 	}
 	return nonGeneratedColumnCount, b.String()
 }
+
+func (s *columnSchema) getColumnSchemaWithoutVirtualColumns() *columnSchema {
+	newColumnSchema := &columnSchema{
+		Digest:                        s.Digest,
+		Columns:                       s.Columns,
+		Indices:                       s.Indices,
+		PKIsHandle:                    s.PKIsHandle,
+		IsCommonHandle:                s.IsCommonHandle,
+		UpdateTS:                      s.UpdateTS,
+		ColumnsOffset:                 s.ColumnsOffset,
+		NameToColID:                   s.NameToColID,
+		HasUniqueColumn:               s.HasUniqueColumn,
+		RowColumnsOffset:              s.RowColumnsOffset,
+		ColumnsFlag:                   s.ColumnsFlag,
+		HandleIndexID:                 s.HandleIndexID,
+		IndexColumnsOffset:            s.IndexColumnsOffset,
+		RowColInfos:                   s.RowColInfos,
+		RowColFieldTps:                s.RowColFieldTps,
+		HandleColID:                   s.HandleColID,
+		RowColFieldTpsSlice:           s.RowColFieldTpsSlice,
+		VirtualColumnCount:            s.VirtualColumnCount,
+		RowColInfosWithoutVirtualCols: s.RowColInfosWithoutVirtualCols,
+		PreSQLs:                       s.PreSQLs,
+	}
+	newColumnSchema.Columns = make([]*model.ColumnInfo, 0, len(s.Columns))
+	rowColumnsCurrentOffset := 0
+	columnsOffset := make(map[string]int, len(newColumnSchema.Columns))
+	for _, srcCol := range newColumnSchema.Columns {
+		if !IsColCDCVisible(srcCol) {
+			continue
+		}
+		colInfo := srcCol.Clone()
+		colInfo.Offset = rowColumnsCurrentOffset
+		newColumnSchema.Columns = append(newColumnSchema.Columns, colInfo)
+		columnsOffset[colInfo.Name.O] = rowColumnsCurrentOffset
+		rowColumnsCurrentOffset += 1
+	}
+	// Keep all the index info even if it contains virtual columns for simplicity
+	for _, indexInfo := range newColumnSchema.Indices {
+		for _, col := range indexInfo.Columns {
+			col.Offset = columnsOffset[col.Name.O]
+		}
+	}
+	return newColumnSchema
+}

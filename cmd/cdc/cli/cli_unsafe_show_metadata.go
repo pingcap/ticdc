@@ -14,11 +14,12 @@
 package cli
 
 import (
+	"context"
+
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
+	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
-	"github.com/pingcap/tiflow/pkg/cmd/context"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/spf13/cobra"
 )
 
@@ -45,7 +46,7 @@ func (o *unsafeShowMetadataOptions) complete(f factory.Factory) error {
 
 // run runs the `cli unsafe show-metadata` command.
 func (o *unsafeShowMetadataOptions) run(cmd *cobra.Command) error {
-	ctx := context.GetDefaultContext()
+	ctx := context.Background()
 
 	kvs, err := o.apiClient.Unsafe().Metadata(ctx)
 	if err != nil {

@@ -51,6 +51,28 @@ type ChangefeedConfig struct {
 	SinkConfig         *SinkConfig   `json:"sink_config"`
 }
 
+// String implements fmt.Stringer interface, but hide some sensitive information
+func (cfg *ChangefeedConfig) String() string {
+	cloned := new(ChangefeedConfig)
+	str, err := json.Marshal(cfg)
+	if err != nil {
+		log.Error("failed to marshal changefeed config", zap.Error(err))
+		return ""
+	}
+	err = json.Unmarshal(str, cloned)
+	if err != nil {
+		log.Error("failed to unmarshal changefeed config", zap.Error(err))
+		return ""
+	}
+	cloned.SinkConfig.MaskSensitiveData()
+	res, err := json.Marshal(cloned)
+	if err != nil {
+		log.Error("failed to marshal changefeed config", zap.Error(err))
+		return ""
+	}
+	return string(res)
+}
+
 // ChangeFeedInfo describes the detail of a ChangeFeed
 type ChangeFeedInfo struct {
 	ChangefeedID common.ChangeFeedID `json:"id"`

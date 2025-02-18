@@ -33,7 +33,7 @@ import (
 // @Success 200 {object} EmptyResponse
 // @Failure 400 {object} model.HTTPError
 // @Router	/api/v2/log [post]
-func (h *OpenAPIV2) setLogLevel(c *gin.Context) {
+func (h *OpenAPIV2) SetLogLevel(c *gin.Context) {
 	req := &LogLevelReq{Level: "info"}
 	err := c.BindJSON(&req)
 	if err != nil {
