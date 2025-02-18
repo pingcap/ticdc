@@ -16,9 +16,9 @@ package canal
 import (
 	"bytes"
 	"encoding/json"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 
 	"github.com/pingcap/log"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/cdc/model"

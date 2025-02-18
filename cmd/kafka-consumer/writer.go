@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
@@ -76,8 +77,8 @@ func (p *partitionProgress) loadWatermark() uint64 {
 }
 
 type writer struct {
-	ddlList            []*model.DDLEvent
-	ddlWithMaxCommitTs *model.DDLEvent
+	ddlList            []*commonEvent.DDLEvent
+	ddlWithMaxCommitTs *commonEvent.DDLEvent
 
 	progresses []*partitionProgress
 
@@ -143,12 +144,12 @@ func (w *writer) run(ctx context.Context) error {
 
 // append DDL wait to be handled, only consider the constraint among DDLs.
 // for DDL a / b received in the order, a.CommitTs < b.CommitTs should be true.
-func (w *writer) appendDDL(ddl *model.DDLEvent, offset kafka.Offset) {
+func (w *writer) appendDDL(ddl *commonEvent.DDLEvent, offset kafka.Offset) {
 	// DDL CommitTs fallback, just crash it to indicate the bug.
-	if w.ddlWithMaxCommitTs != nil && ddl.CommitTs < w.ddlWithMaxCommitTs.CommitTs {
+	if w.ddlWithMaxCommitTs != nil && ddl.GetCommitTs() < w.ddlWithMaxCommitTs.GetCommitTs() {
 		log.Warn("DDL CommitTs < maxCommitTsDDL.CommitTs",
-			zap.Uint64("commitTs", ddl.CommitTs),
-			zap.Uint64("maxCommitTs", w.ddlWithMaxCommitTs.CommitTs),
+			zap.Uint64("commitTs", ddl.GetCommitTs()),
+			zap.Uint64("maxCommitTs", w.ddlWithMaxCommitTs.GetCommitTs()),
 			zap.String("DDL", ddl.Query))
 		return
 	}
@@ -158,16 +159,17 @@ func (w *writer) appendDDL(ddl *model.DDLEvent, offset kafka.Offset) {
 	// the current DDL and the DDL with max CommitTs.
 	if ddl == w.ddlWithMaxCommitTs {
 		log.Warn("ignore redundant DDL, the DDL is equal to ddlWithMaxCommitTs",
-			zap.Uint64("commitTs", ddl.CommitTs), zap.String("DDL", ddl.Query))
+			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("DDL", ddl.Query))
 		return
 	}
 
 	w.ddlList = append(w.ddlList, ddl)
 	w.ddlWithMaxCommitTs = ddl
-	log.Info("DDL message received", zap.Any("offset", offset), zap.Uint64("commitTs", ddl.CommitTs), zap.String("DDL", ddl.Query))
+	log.Info("DDL message received", zap.Any("offset", offset),
+		zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("DDL", ddl.Query))
 }
 
-func (w *writer) getFrontDDL() *model.DDLEvent {
+func (w *writer) getFrontDDL() *commonEvent.DDLEvent {
 	if len(w.ddlList) > 0 {
 		return w.ddlList[0]
 	}
@@ -207,14 +209,14 @@ func (w *writer) forEachPartition(fn func(p *partitionProgress)) {
 // Write will synchronously write data downstream
 func (w *writer) flush(ctx context.Context, messageType common.MessageType) bool {
 	watermark := w.getMinWatermark()
-	var todoDDL *model.DDLEvent
+	var todoDDL *commonEvent.DDLEvent
 	for {
 		todoDDL = w.getFrontDDL()
 		// watermark is the min value for all partitions,
 		// the DDL only executed by the first partition, other partitions may be slow
 		// so that the watermark can be smaller than the DDL's commitTs,
 		// which means some DML events may not be consumed yet, so cannot execute the DDL right now.
-		if todoDDL == nil || todoDDL.CommitTs > watermark {
+		if todoDDL == nil || todoDDL.GetCommitTs() > watermark {
 			break
 		}
 		// flush DMLs
@@ -222,9 +224,9 @@ func (w *writer) flush(ctx context.Context, messageType common.MessageType) bool
 		//	syncFlushRowChangedEvents(ctx, sink, todoDDL.CommitTs)
 		//})
 		// DDL can be executed, do it first.
-		if err := w.mysqlSink.WriteBlockEvent(ctx, todoDDL); err != nil {
+		if err := w.mysqlSink.WriteBlockEvent(todoDDL); err != nil {
 			log.Panic("write DDL event failed", zap.Error(err),
-				zap.String("DDL", todoDDL.Query), zap.Uint64("commitTs", todoDDL.CommitTs))
+				zap.String("DDL", todoDDL.Query), zap.Uint64("commitTs", todoDDL.GetCommitTs()))
 		}
 		w.popDDL()
 	}
@@ -239,7 +241,7 @@ func (w *writer) flush(ctx context.Context, messageType common.MessageType) bool
 	if messageType == common.MessageTypeDDL && todoDDL != nil {
 		log.Info("DDL event will be flushed in the future",
 			zap.Uint64("watermark", watermark),
-			zap.Uint64("CommitTs", todoDDL.CommitTs),
+			zap.Uint64("CommitTs", todoDDL.GetCommitTs()),
 			zap.String("Query", todoDDL.Query))
 		return false
 	}
