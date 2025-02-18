@@ -16,16 +16,16 @@ package main
 import (
 	"context"
 	"database/sql"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"math"
 	"sync"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/cdc/sink/ddlsink"
@@ -33,7 +33,6 @@ import (
 	eventsinkfactory "github.com/pingcap/tiflow/cdc/sink/dmlsink/factory"
 	"github.com/pingcap/tiflow/cdc/sink/dmlsink/mq/dispatcher"
 	"github.com/pingcap/tiflow/cdc/sink/tablesink"
-	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/sink/codec/simple"
 	"go.uber.org/zap"
 )
@@ -141,7 +140,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 
 	go func() {
 		err := <-errChan
-		if !errors.Is(cerror.Cause(err), context.Canceled) {
+		if !errors.Is(errors.Cause(err), context.Canceled) {
 			log.Error("error on running consumer", zap.Error(err))
 		} else {
 			log.Info("consumer exited")
@@ -497,7 +496,7 @@ func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		log.Error("open db failed", zap.Error(err))
-		return nil, cerror.Trace(err)
+		return nil, errors.Trace(err)
 	}
 
 	db.SetMaxOpenConns(10)
@@ -508,7 +507,7 @@ func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
 	defer cancel()
 	if err = db.PingContext(ctx); err != nil {
 		log.Error("ping db failed", zap.String("dsn", dsn), zap.Error(err))
-		return nil, cerror.Trace(err)
+		return nil, errors.Trace(err)
 	}
 	log.Info("open db success", zap.String("dsn", dsn))
 	return db, nil
