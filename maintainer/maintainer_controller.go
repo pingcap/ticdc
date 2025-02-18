@@ -211,10 +211,15 @@ func (c *Controller) FinishBootstrap(
 			c.replicationDB.UpdateStatus(c.replicationDB.GetDDLDispatcher(), status)
 		}
 	}
+
+	log.Info("line 214")
+
 	if startTs == 0 {
 		log.Panic("cant not found the start ts from the bootstrap response",
 			zap.String("changefeed", c.changefeedID.Name()))
 	}
+
+	log.Info("line 222")
 	// 2. load tables from schema store using the start ts
 	tables, err := c.loadTables(startTs)
 	if err != nil {
@@ -223,6 +228,8 @@ func (c *Controller) FinishBootstrap(
 			zap.Error(err))
 		return nil, nil, errors.Trace(err)
 	}
+
+	log.Info("line 230")
 
 	workingMap := make(map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication])
 	for node, resp := range allNodesResp {
@@ -257,6 +264,8 @@ func (c *Controller) FinishBootstrap(
 			tableMap.ReplaceOrInsert(span, stm)
 		}
 	}
+
+	log.Info("line 261")
 
 	schemaInfos := map[int64]*heartbeatpb.SchemaInfo{}
 	for _, table := range tables {
@@ -303,9 +312,13 @@ func (c *Controller) FinishBootstrap(
 			zap.Int64("id", tableID))
 	}
 
+	log.Info("line 308")
+
 	// rebuild barrier status
 	barrier := NewBarrier(c, c.cfConfig.Scheduler.EnableTableAcrossNodes)
 	barrier.HandleBootstrapResponse(allNodesResp)
+
+	log.Info("line 314")
 
 	// start scheduler
 	c.taskHandlers = append(c.taskHandlers, c.schedulerController.Start(c.taskScheduler)...)
@@ -314,10 +327,14 @@ func (c *Controller) FinishBootstrap(
 
 	c.bootstrapped = true
 
+	log.Info("line 323")
+
 	initSchemaInfos := make([]*heartbeatpb.SchemaInfo, 0, len(schemaInfos))
 	for _, info := range schemaInfos {
 		initSchemaInfos = append(initSchemaInfos, info)
 	}
+
+	log.Info("finish bootstrap", zap.Any("TableTriggerEventDispatcherId", c.ddlDispatcherID), zap.Stringer("changefeed", c.changefeedID))
 	return barrier, &heartbeatpb.MaintainerPostBootstrapRequest{
 		ChangefeedID:                  c.changefeedID.ToPB(),
 		TableTriggerEventDispatcherId: c.ddlDispatcherID.ToPB(),
