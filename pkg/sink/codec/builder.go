@@ -56,13 +56,13 @@ func NewEventDecoder(ctx context.Context, codecConfig *common.Config, upstreamTi
 		decoder, err = open.NewBatchDecoder(ctx, codecConfig, upstreamTiDB)
 	case config.ProtocolCanalJSON:
 		decoder, err = canal.NewBatchDecoder(ctx, codecConfig, upstreamTiDB)
-	//case config.ProtocolAvro:
+	// case config.ProtocolAvro:
 	//	schemaM, err := avro.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
 	//	if err != nil {
 	//		return decoder, cerror.Trace(err)
 	//	}
 	//	decoder = avro.NewDecoder(codecConfig, schemaM, option.topic, upstreamTiDB)
-	//case config.ProtocolSimple:
+	// case config.ProtocolSimple:
 	//	decoder, err = simple.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	default:
 		log.Panic("Protocol not supported", zap.Any("Protocol", codecConfig.Protocol))

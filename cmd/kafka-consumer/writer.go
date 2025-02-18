@@ -349,7 +349,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			if w.option.protocol == config.ProtocolSimple && row == nil {
 				continue
 			}
-			//w.checkPartition(row, partition, message.TopicPartition.Offset)
+			// w.checkPartition(row, partition, message.TopicPartition.Offset)
 			w.appendRow2Group(row, progress, offset)
 		case common.MessageTypeResolved:
 			newWatermark, err := progress.decoder.NextResolvedEvent()
