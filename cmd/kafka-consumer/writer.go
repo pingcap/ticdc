@@ -22,6 +22,7 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
@@ -31,7 +32,6 @@ import (
 	"github.com/pingcap/tiflow/cdc/sink/ddlsink"
 	ddlsinkfactory "github.com/pingcap/tiflow/cdc/sink/ddlsink/factory"
 	eventsinkfactory "github.com/pingcap/tiflow/cdc/sink/dmlsink/factory"
-	"github.com/pingcap/tiflow/cdc/sink/dmlsink/mq/dispatcher"
 	"github.com/pingcap/tiflow/cdc/sink/tablesink"
 	"github.com/pingcap/tiflow/pkg/sink/codec/simple"
 	"go.uber.org/zap"
@@ -92,7 +92,7 @@ type writer struct {
 	sinkFactory *eventsinkfactory.SinkFactory
 	progresses  []*partitionProgress
 
-	eventRouter *dispatcher.EventRouter
+	eventRouter *eventrouter.EventRouter
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -119,7 +119,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		w.progresses[i] = newPartitionProgress(int32(i), decoder)
 	}
 
-	eventRouter, err := dispatcher.NewEventRouter(o.replicaConfig, o.protocol, o.topic, "kafka")
+	eventRouter, err := eventrouter.NewEventRouter(o.replicaConfig.Sink, o.protocol, o.topic, "kafka")
 	if err != nil {
 		log.Panic("initialize the event router failed",
 			zap.Any("protocol", o.protocol), zap.Any("topic", o.topic),
@@ -219,7 +219,7 @@ func (w *writer) forEachPartition(fn func(p *partitionProgress)) {
 }
 
 // Write will synchronously write data downstream
-func (w *writer) Write(ctx context.Context, messageType model.MessageType) bool {
+func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool {
 	watermark := w.getMinWatermark()
 	var todoDDL *model.DDLEvent
 	for {
@@ -243,14 +243,14 @@ func (w *writer) Write(ctx context.Context, messageType model.MessageType) bool 
 		w.popDDL()
 	}
 
-	if messageType == model.MessageTypeResolved {
+	if messageType == common.MessageTypeResolved {
 		w.forEachPartition(func(sink *partitionProgress) {
 			syncFlushRowChangedEvents(ctx, sink, watermark)
 		})
 	}
 
 	// The DDL events will only execute in partition0
-	if messageType == model.MessageTypeDDL && todoDDL != nil {
+	if messageType == common.MessageTypeDDL && todoDDL != nil {
 		log.Info("DDL event will be flushed in the future",
 			zap.Uint64("watermark", watermark),
 			zap.Uint64("CommitTs", todoDDL.CommitTs),
@@ -277,7 +277,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 	var (
 		counter     int
 		needFlush   bool
-		messageType model.MessageType
+		messageType common.MessageType
 	)
 	for {
 		ty, hasNext, err := progress.decoder.HasNext()
@@ -298,7 +298,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		}
 		messageType = ty
 		switch messageType {
-		case model.MessageTypeDDL:
+		case common.MessageTypeDDL:
 			// for some protocol, DDL would be dispatched to all partitions,
 			// Consider that DDL a, b, c received from partition-0, the latest DDL is c,
 			// if we receive `a` from partition-1, which would be seemed as DDL regression,
@@ -332,7 +332,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 				w.appendDDL(ddl, offset)
 			}
 			needFlush = true
-		case model.MessageTypeRow:
+		case common.MessageTypeRow:
 			row, err := progress.decoder.NextRowChangedEvent()
 			if err != nil {
 				log.Panic("decode message value failed",
@@ -347,7 +347,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			}
 			w.checkPartition(row, partition, message.TopicPartition.Offset)
 			w.appendRow2Group(row, progress, offset)
-		case model.MessageTypeResolved:
+		case common.MessageTypeResolved:
 			newWatermark, err := progress.decoder.NextResolvedEvent()
 			if err != nil {
 				log.Panic("decode message value failed",
