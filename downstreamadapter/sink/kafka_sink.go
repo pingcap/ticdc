@@ -85,7 +85,7 @@ func newKafkaSink(
 	}()
 
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	asyncProducer, err := kafkaComponent.Factory.AsyncProducer(ctx)
+	asyncProducer, err := kafkaComponent.Factory.AsyncProducer()
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -121,8 +121,8 @@ func newKafkaSink(
 		adminClient:      kafkaComponent.AdminClient,
 		topicManager:     kafkaComponent.TopicManager,
 		statistics:       statistics,
+		metricsCollector: kafkaComponent.Factory.MetricsCollector(),
 		ctx:              ctx,
-		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
 	}
 	return sink, nil
 }
@@ -203,10 +203,11 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	openProtocol := "open-protocol"
-	sinkConfig := &config.SinkConfig{Protocol: &openProtocol}
+	sinkConfig := config.GetDefaultReplicaConfig().Clone().Sink
+	sinkConfig.Protocol = &openProtocol
 	uriTemplate := "kafka://%s/%s?kafka-version=0.9.0.0&max-batch-size=1" +
 		"&max-message-bytes=1048576&partition-num=1" +
-		"&kafka-client-id=unit-test&auto-create-topic=false&compression=gzip&protocol=open-protocol"
+		"&kafka-client-id=unit-test&auto-create-topic=true&compression=gzip&protocol=open-protocol"
 	uri := fmt.Sprintf(uriTemplate, "127.0.0.1:9092", kafka.DefaultMockTopicName)
 
 	sinkURI, err := url.Parse(uri)
@@ -256,7 +257,7 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 		adminClient:      kafkaComponent.AdminClient,
 		topicManager:     kafkaComponent.TopicManager,
 		statistics:       statistics,
-		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
+		metricsCollector: kafkaComponent.Factory.MetricsCollector(),
 	}
 	go sink.Run(ctx)
 	return sink, dmlMockProducer, ddlMockProducer, nil
