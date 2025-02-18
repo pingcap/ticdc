@@ -22,19 +22,14 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/cdc/sink/ddlsink"
-	ddlsinkfactory "github.com/pingcap/tiflow/cdc/sink/ddlsink/factory"
-	eventsinkfactory "github.com/pingcap/tiflow/cdc/sink/dmlsink/factory"
-	"github.com/pingcap/tiflow/cdc/sink/tablesink"
-	tiflowConfig "github.com/pingcap/tiflow/pkg/config"
-	//"github.com/pingcap/tiflow/pkg/sink/codec/simple"
 	"go.uber.org/zap"
 )
 
@@ -43,17 +38,15 @@ type partitionProgress struct {
 	watermark       uint64
 	watermarkOffset kafka.Offset
 
-	tableSinkMap map[model.TableID]tablesink.TableSink
-	eventGroups  map[model.TableID]*eventsGroup
-	decoder      common.RowEventDecoder
+	eventGroups map[model.TableID]*eventsGroup
+	decoder     common.RowEventDecoder
 }
 
 func newPartitionProgress(partition int32, decoder common.RowEventDecoder) *partitionProgress {
 	return &partitionProgress{
-		partition:    partition,
-		eventGroups:  make(map[model.TableID]*eventsGroup),
-		tableSinkMap: make(map[model.TableID]tablesink.TableSink),
-		decoder:      decoder,
+		partition:   partition,
+		eventGroups: make(map[model.TableID]*eventsGroup),
+		decoder:     decoder,
 	}
 }
 
@@ -83,23 +76,24 @@ func (p *partitionProgress) loadWatermark() uint64 {
 }
 
 type writer struct {
-	option *option
-
 	ddlList            []*model.DDLEvent
 	ddlWithMaxCommitTs *model.DDLEvent
-	ddlSink            ddlsink.Sink
 
-	// sinkFactory is used to create table sink for each table.
-	sinkFactory *eventsinkfactory.SinkFactory
-	progresses  []*partitionProgress
+	progresses []*partitionProgress
 
-	eventRouter *eventrouter.EventRouter
+	eventRouter     *eventrouter.EventRouter
+	protocol        config.Protocol
+	maxMessageBytes int
+	maxBatchSize    int
+	mysqlSink       sink.Sink
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
 	w := &writer{
-		option:     o,
-		progresses: make([]*partitionProgress, o.partitionNum),
+		protocol:        o.protocol,
+		maxMessageBytes: o.maxMessageBytes,
+		maxBatchSize:    o.maxBatchSize,
+		progresses:      make([]*partitionProgress, o.partitionNum),
 	}
 	var (
 		db  *sql.DB
@@ -130,31 +124,42 @@ func newWriter(ctx context.Context, o *option) *writer {
 	log.Info("event router created", zap.Any("protocol", o.protocol),
 		zap.Any("topic", o.topic), zap.Any("dispatcherRules", o.replicaConfig.Sink.DispatchRules))
 
-	config.GetGlobalServerConfig().TZ = o.timezone
-	errChan := make(chan error, 1)
-	changefeed := model.DefaultChangeFeedID("kafka-consumer")
-	// todo: use local mysql sink, instead of the tiflow sink.
-	tiflowReplicaConfig := tiflowConfig.GetDefaultReplicaConfig()
-	f, err := eventsinkfactory.New(ctx, changefeed, o.downstreamURI, tiflowReplicaConfig, errChan, nil)
-	if err != nil {
-		log.Panic("cannot create the event sink factory", zap.Error(err))
+	changefeedID := commonType.NewChangeFeedIDWithName("kafka-consumer")
+	cfg := &config.ChangefeedConfig{
+		ChangefeedID: changefeedID,
+		SinkURI:      o.downstreamURI,
 	}
-	w.sinkFactory = f
-
-	go func() {
-		err := <-errChan
-		if !errors.Is(errors.Cause(err), context.Canceled) {
-			log.Error("error on running consumer", zap.Error(err))
-		} else {
-			log.Info("consumer exited")
-		}
-	}()
-
-	ddlSink, err := ddlsinkfactory.New(ctx, changefeed, o.downstreamURI, tiflowReplicaConfig)
+	mysqlSink, err := sink.NewSink(ctx, cfg, changefeedID)
 	if err != nil {
-		log.Panic("cannot create the ddl sink factory", zap.Error(err))
+		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
-	w.ddlSink = ddlSink
+	w.mysqlSink = mysqlSink
+
+	//config.GetGlobalServerConfig().TZ = o.timezone
+	//errChan := make(chan error, 1)
+
+	//// todo: use local mysql sink, instead of the tiflow sink.
+	//tiflowReplicaConfig := tiflowConfig.GetDefaultReplicaConfig()
+	//f, err := eventsinkfactory.New(ctx, changefeed, o.downstreamURI, tiflowReplicaConfig, errChan, nil)
+	//if err != nil {
+	//	log.Panic("cannot create the event sink factory", zap.Error(err))
+	//}
+	//w.sinkFactory = f
+
+	//go func() {
+	//	err := <-errChan
+	//	if !errors.Is(errors.Cause(err), context.Canceled) {
+	//		log.Error("error on running consumer", zap.Error(err))
+	//	} else {
+	//		log.Info("consumer exited")
+	//	}
+	//}()
+
+	//ddlSink, err := ddlsinkfactory.New(ctx, changefeed, o.downstreamURI, tiflowReplicaConfig)
+	//if err != nil {
+	//	log.Panic("cannot create the ddl sink factory", zap.Error(err))
+	//}
+	//w.ddlSink = ddlSink
 	return w
 }
 
@@ -235,22 +240,22 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 			break
 		}
 		// flush DMLs
-		w.forEachPartition(func(sink *partitionProgress) {
-			syncFlushRowChangedEvents(ctx, sink, todoDDL.CommitTs)
-		})
+		//w.forEachPartition(func(sink *partitionProgress) {
+		//	syncFlushRowChangedEvents(ctx, sink, todoDDL.CommitTs)
+		//})
 		// DDL can be executed, do it first.
-		if err := w.ddlSink.WriteDDLEvent(ctx, todoDDL); err != nil {
+		if err := w.mysqlSink.WriteBlockEvent(ctx, todoDDL); err != nil {
 			log.Panic("write DDL event failed", zap.Error(err),
 				zap.String("DDL", todoDDL.Query), zap.Uint64("commitTs", todoDDL.CommitTs))
 		}
 		w.popDDL()
 	}
 
-	if messageType == common.MessageTypeResolved {
-		w.forEachPartition(func(sink *partitionProgress) {
-			syncFlushRowChangedEvents(ctx, sink, watermark)
-		})
-	}
+	//if messageType == common.MessageTypeResolved {
+	//	w.forEachPartition(func(sink *partitionProgress) {
+	//		syncFlushRowChangedEvents(ctx, sink, watermark)
+	//	})
+	//}
 
 	// The DDL events will only execute in partition0
 	if messageType == common.MessageTypeDDL && todoDDL != nil {
@@ -293,10 +298,10 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		}
 		counter++
 		// If the message containing only one event exceeds the length limit, CDC will allow it and issue a warning.
-		if len(key)+len(value) > w.option.maxMessageBytes && counter > 1 {
+		if len(key)+len(value) > w.maxMessageBytes && counter > 1 {
 			log.Panic("kafka max-messages-bytes exceeded",
 				zap.Int32("partition", partition), zap.Any("offset", offset),
-				zap.Int("max-message-bytes", w.option.maxMessageBytes),
+				zap.Int("max-message-bytes", w.maxMessageBytes),
 				zap.Int("receivedBytes", len(key)+len(value)))
 		}
 		messageType = ty
@@ -346,7 +351,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			}
 			// when using simple protocol, the row may be nil, since it's table info not received yet,
 			// it's cached in the decoder, so just continue here.
-			if w.option.protocol == config.ProtocolSimple && row == nil {
+			if w.protocol == config.ProtocolSimple && row == nil {
 				continue
 			}
 			// w.checkPartition(row, partition, message.TopicPartition.Offset)
@@ -368,9 +373,9 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		}
 	}
 
-	if counter > w.option.maxBatchSize {
+	if counter > w.maxBatchSize {
 		log.Panic("Open Protocol max-batch-size exceeded",
-			zap.Int("maxBatchSize", w.option.maxBatchSize), zap.Int("actualBatchSize", counter),
+			zap.Int("maxBatchSize", w.maxBatchSize), zap.Int("actualBatchSize", counter),
 			zap.Int32("partition", partition), zap.Any("offset", offset))
 	}
 
@@ -382,21 +387,14 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 }
 
 func (w *writer) resolveRowChangedEvents(progress *partitionProgress, newWatermark uint64) {
-	for tableID, group := range progress.eventGroups {
+	for _, group := range progress.eventGroups {
 		events := group.Resolve(newWatermark)
 		if len(events) == 0 {
 			continue
 		}
-		tableSink, ok := progress.tableSinkMap[tableID]
-		if !ok {
-			tableSink = w.sinkFactory.CreateTableSinkForConsumer(
-				model.DefaultChangeFeedID("kafka-consumer"),
-				spanz.TableIDToComparableSpan(tableID),
-				events[0].CommitTs,
-			)
-			progress.tableSinkMap[tableID] = tableSink
+		for _, e := range events {
+			w.mysqlSink.AddDMLEvent(e)
 		}
-		tableSink.AppendRowChangedEvents(events...)
 	}
 }
 
@@ -433,14 +431,14 @@ func (w *writer) appendRow2Group(row *model.RowChangedEvent, progress *partition
 			zap.Uint64("watermark", watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
 			zap.String("schema", row.TableInfo.GetSchemaName()), zap.String("table", row.TableInfo.GetTableName()),
 			zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
-			zap.String("protocol", w.option.protocol.String()), zap.Bool("IsPartition", row.TableInfo.TableName.IsPartition))
+			zap.String("protocol", w.protocol.String()), zap.Bool("IsPartition", row.TableInfo.TableName.IsPartition))
 		return
 	}
 	if row.CommitTs >= group.highWatermark {
 		group.Append(row, offset)
 		return
 	}
-	switch w.option.protocol {
+	switch w.protocol {
 	case config.ProtocolSimple, config.ProtocolOpen, config.ProtocolCanalJSON:
 		// simple protocol set the table id for all row message, it can be known which table the row message belongs to,
 		// also consider the table partition.
@@ -454,7 +452,7 @@ func (w *writer) appendRow2Group(row *model.RowChangedEvent, progress *partition
 			zap.Any("partitionWatermark", watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
 			zap.String("schema", row.TableInfo.GetSchemaName()), zap.String("table", row.TableInfo.GetTableName()),
 			zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
-			zap.String("protocol", w.option.protocol.String()), zap.Bool("IsPartition", row.TableInfo.TableName.IsPartition))
+			zap.String("protocol", w.protocol.String()), zap.Bool("IsPartition", row.TableInfo.TableName.IsPartition))
 		return
 	default:
 	}
@@ -465,33 +463,33 @@ func (w *writer) appendRow2Group(row *model.RowChangedEvent, progress *partition
 		zap.Any("partitionWatermark", watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
 		zap.String("schema", row.TableInfo.GetSchemaName()), zap.String("table", row.TableInfo.GetTableName()),
 		zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
-		zap.String("protocol", w.option.protocol.String()))
+		zap.String("protocol", w.protocol.String()))
 	group.Append(row, offset)
 }
 
-func syncFlushRowChangedEvents(ctx context.Context, progress *partitionProgress, watermark uint64) {
-	resolvedTs := model.NewResolvedTs(watermark)
-	for {
-		select {
-		case <-ctx.Done():
-			log.Warn("sync flush row changed event canceled", zap.Error(ctx.Err()))
-			return
-		default:
-		}
-		flushedResolvedTs := true
-		for _, tableSink := range progress.tableSinkMap {
-			if err := tableSink.UpdateResolvedTs(resolvedTs); err != nil {
-				log.Panic("Failed to update resolved ts", zap.Error(err))
-			}
-			if tableSink.GetCheckpointTs().Less(resolvedTs) {
-				flushedResolvedTs = false
-			}
-		}
-		if flushedResolvedTs {
-			return
-		}
-	}
-}
+//func syncFlushRowChangedEvents(ctx context.Context, progress *partitionProgress, watermark uint64) {
+//	resolvedTs := model.NewResolvedTs(watermark)
+//	for {
+//		select {
+//		case <-ctx.Done():
+//			log.Warn("sync flush row changed event canceled", zap.Error(ctx.Err()))
+//			return
+//		default:
+//		}
+//		flushedResolvedTs := true
+//		for _, tableSink := range progress.tableSinkMap {
+//			if err := tableSink.UpdateResolvedTs(resolvedTs); err != nil {
+//				log.Panic("Failed to update resolved ts", zap.Error(err))
+//			}
+//			if tableSink.GetCheckpointTs().Less(resolvedTs) {
+//				flushedResolvedTs = false
+//			}
+//		}
+//		if flushedResolvedTs {
+//			return
+//		}
+//	}
+//}
 
 func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
 	db, err := sql.Open("mysql", dsn)
