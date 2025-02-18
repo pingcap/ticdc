@@ -134,33 +134,11 @@ func newWriter(ctx context.Context, o *option) *writer {
 		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
 	w.mysqlSink = mysqlSink
-
-	// config.GetGlobalServerConfig().TZ = o.timezone
-	// errChan := make(chan error, 1)
-
-	//// todo: use local mysql sink, instead of the tiflow sink.
-	//tiflowReplicaConfig := tiflowConfig.GetDefaultReplicaConfig()
-	//f, err := eventsinkfactory.New(ctx, changefeed, o.downstreamURI, tiflowReplicaConfig, errChan, nil)
-	//if err != nil {
-	//	log.Panic("cannot create the event sink factory", zap.Error(err))
-	//}
-	//w.sinkFactory = f
-
-	//go func() {
-	//	err := <-errChan
-	//	if !errors.Is(errors.Cause(err), context.Canceled) {
-	//		log.Error("error on running consumer", zap.Error(err))
-	//	} else {
-	//		log.Info("consumer exited")
-	//	}
-	//}()
-
-	//ddlSink, err := ddlsinkfactory.New(ctx, changefeed, o.downstreamURI, tiflowReplicaConfig)
-	//if err != nil {
-	//	log.Panic("cannot create the ddl sink factory", zap.Error(err))
-	//}
-	//w.ddlSink = ddlSink
 	return w
+}
+
+func (w *writer) run(ctx context.Context) error {
+	return w.mysqlSink.Run(ctx)
 }
 
 // append DDL wait to be handled, only consider the constraint among DDLs.

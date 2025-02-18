@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"golang.org/x/sync/errgroup"
 )
 
 func getPartitionNum(o *option) (int32, error) {
@@ -119,18 +120,17 @@ func newConsumer(ctx context.Context, o *option) *consumer {
 	}
 }
 
-// Consume will read message from Kafka.
-func (c *consumer) Consume(ctx context.Context) {
+func (c *consumer) readMessage(ctx context.Context) error {
 	defer func() {
 		if err := c.client.Close(); err != nil {
-			log.Panic("close kafka consumer failed", zap.Error(err))
+			log.Warn("close kafka consumer failed", zap.Error(err))
 		}
 	}()
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info("consumer exist: context cancelled")
-			return
+			return errors.Trace(ctx.Err())
 		default:
 		}
 		msg, err := c.client.ReadMessage(-1)
@@ -142,7 +142,6 @@ func (c *consumer) Consume(ctx context.Context) {
 		if !needCommit {
 			continue
 		}
-
 		topicPartition, err := c.client.CommitMessage(msg)
 		if err != nil {
 			log.Error("commit message failed, just continue",
@@ -154,4 +153,16 @@ func (c *consumer) Consume(ctx context.Context) {
 			zap.String("topic", topicPartition[0].String()), zap.Int32("partition", topicPartition[0].Partition),
 			zap.Any("offset", topicPartition[0].Offset))
 	}
+}
+
+// Consume will read message from Kafka.
+func (c *consumer) Consume(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		return c.writer.run(ctx)
+	})
+	g.Go(func() error {
+		return c.readMessage(ctx)
+	})
+	return g.Wait()
 }

@@ -86,8 +86,7 @@ func main() {
 
 	consumer := newConsumer(ctx, consumerOption)
 	g.Go(func() error {
-		consumer.Consume(ctx)
-		return nil
+		return consumer.Consume(ctx)
 	})
 
 	g.Go(func() error {
