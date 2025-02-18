@@ -32,7 +32,8 @@ type DDLEvent struct {
 	// Version is the version of the DDLEvent struct.
 	Version      byte                `json:"version"`
 	DispatcherID common.DispatcherID `json:"-"`
-	Type         byte                `json:"type"`
+	// todo: can we set this as ActionType ?
+	Type byte `json:"type"`
 	// SchemaID is from upstream job.SchemaID
 	SchemaID int64 `json:"schema_id"`
 	// TableID is from upstream job.TableID

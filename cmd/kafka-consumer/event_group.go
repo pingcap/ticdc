@@ -54,7 +54,7 @@ func (g *eventsGroup) Append(row *commonEvent.DMLEvent, offset kafka.Offset) {
 		zap.Int64("tableID", row.GetTableID()),
 		zap.String("schema", row.TableInfo.GetSchemaName()),
 		zap.String("table", row.TableInfo.GetTableName()))
-	//zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns))
+	// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns))
 }
 
 // Resolve will get events where CommitTs is less than resolveTs.

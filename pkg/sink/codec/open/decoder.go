@@ -184,15 +184,20 @@ func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 			GenWithStack("decompress DDL event failed")
 	}
 
-	ddlMsg := new(messageDDL)
-	if err = ddlMsg.decode(value); err != nil {
+	m := new(messageDDL)
+	if err = m.decode(value); err != nil {
 		return nil, errors.Trace(err)
 	}
-	ddlEvent := msgToDDLEvent(b.nextKey, ddlMsg)
 
+	result := new(commonEvent.DDLEvent)
+	result.Query = m.Query
+	result.Type = byte(m.Type)
+	result.FinishedTs = b.nextKey.Ts
+	result.SchemaName = b.nextKey.Schema
+	result.TableName = b.nextKey.Table
 	b.nextKey = nil
 	b.valueBytes = nil
-	return ddlEvent, nil
+	return result, nil
 }
 
 // NextRowChangedEvent implements the RowEventDecoder interface
@@ -393,18 +398,4 @@ func codecColumns2RowChangeColumns(cols map[string]column) []*model.Column {
 		return columns[i].Name < columns[j].Name
 	})
 	return columns
-}
-
-func msgToDDLEvent(key *messageKey, value *messageDDL) *model.DDLEvent {
-	return &model.DDLEvent{
-		CommitTs: key.Ts,
-		TableInfo: &model.TableInfo{
-			TableName: model.TableName{
-				Schema: key.Schema,
-				Table:  key.Table,
-			},
-		},
-		Type:  value.Type,
-		Query: value.Query,
-	}
 }

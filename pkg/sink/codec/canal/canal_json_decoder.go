@@ -428,18 +428,12 @@ func (b *canalJSONDecoder) NextResolvedEvent() (uint64, error) {
 func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEvent {
 	result := new(commonEvent.DDLEvent)
 	result.Query = msg.getQuery()
-	//// we lost the startTs from kafka message
-	//result.CommitTs = msg.getCommitTs()
-	//
-	//result.TableInfo = new(model.TableInfo)
-	//result.TableInfo.TableName = model.TableName{
-	//	Schema: *msg.getSchema(),
-	//	Table:  *msg.getTable(),
-	//}
-	//
-	//// hack the DDL Type to be compatible with MySQL sink's logic
-	//// see https://github.com/pingcap/tiflow/blob/0578db337d/cdc/sink/mysql.go#L362-L370
-	//result.Type = getDDLActionType(result.Query)
+	// todo: getDDLActionType can handle ActionExchangeTablePartition,
+	// it's used by the mysql sink.
+	result.Type = byte(getDDLActionType(result.Query))
+	result.FinishedTs = msg.getCommitTs()
+	result.SchemaName = *msg.getSchema()
+	result.TableName = *msg.getTable()
 	return result
 }
 
