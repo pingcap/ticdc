@@ -18,7 +18,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"path/filepath"
 	"strconv"
@@ -620,17 +619,17 @@ func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *common
 }
 
 func newTableInfo(msg canalJSONMessageInterface, tableID int64, partitionInfo *timodel.PartitionInfo) *commonType.TableInfo {
-	//result := &commonType.TableInfo{
-	//	TableName: commonType.TableName{
-	//		Schema:      *msg.getSchema(),
-	//		Table:       *msg.getTable(),
-	//		TableID:     tableID,
-	//		IsPartition: partitionInfo != nil,
-	//	},
-	//	columnSchema: nil,
-	//}
-	result ：：：:= commonType.WrapTableInfo()
-	return result
+	schemaName := *msg.getSchema()
+	tableName := *msg.getTable()
+	isPartition := partitionInfo != nil
+	tableInfo := new(timodel.TableInfo)
+	tableInfo.Columns = nil
+	tableInfo.Indices = nil
+	tableInfo.PKIsHandle = false
+	tableInfo.IsCommonHandle = false
+	tableInfo.UpdateTS = 0
+	columnSchema := commonType.NewColumnSchema(tableInfo, nil)
+	return commonType.NewTableInfo(schemaName, tableName, tableID, isPartition, columnSchema)
 }
 
 func (b *canalJSONDecoder) setPhysicalTableID(event *commonEvent.DMLEvent) error {
