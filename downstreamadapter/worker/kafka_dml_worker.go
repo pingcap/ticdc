@@ -138,6 +138,7 @@ func (w *KafkaDMLWorker) calculateKeyPartitions(ctx context.Context) error {
 						for _, callback := range postTxnFlushed {
 							callback()
 						}
+						w.statistics.MetricExecDMLCnt.Inc()
 					}
 				}
 			}

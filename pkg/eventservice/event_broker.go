@@ -527,7 +527,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		dml.Seq = task.seq.Add(1)
 		c.emitSyncPointEventIfNeeded(dml.CommitTs, task, remoteID)
 		c.getMessageCh(task.workerIndex) <- newWrapDMLEvent(remoteID, dml, task.getEventSenderState())
-		metricEventServiceSendKvCount.Add(float64(dml.Len()))
+		metricEventServiceSendKvCount.Inc()
 		lastSentDMLCommitTs = dml.CommitTs
 		return true
 	}

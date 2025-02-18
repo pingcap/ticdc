@@ -36,7 +36,8 @@ func NewStatistics(
 	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(namespace, changefeedID, sinkType)
 	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(namespace, changefeedID, sinkType)
 	statistics.metricExecErrCnt = ExecutionErrorCounter.WithLabelValues(namespace, changefeedID, sinkType)
-	statistics.metricExecDMLCnt = ExecDMLEventCounter.WithLabelValues(namespace, changefeedID)
+	statistics.MetricExecDMLCnt = ExecDMLEventCounter.WithLabelValues(namespace, changefeedID)
+	statistics.metricExecDDLCnt = ExecDDLEventCounter.WithLabelValues(namespace, changefeedID)
 	return statistics
 }
 
@@ -57,7 +58,9 @@ type Statistics struct {
 	// metricExecErrCnt record the error count of the Sink.
 	metricExecErrCnt prometheus.Counter
 	// metricExecDMLCnt record the executed DML event count of the Sink.
-	metricExecDMLCnt prometheus.Counter
+	MetricExecDMLCnt prometheus.Counter
+	// MetricExecDDLCnt record the executed DDL event count of the Sink.
+	metricExecDDLCnt prometheus.Counter
 }
 
 // RecordBatchExecution stats batch executors which return (batchRowCount, error).
@@ -68,7 +71,6 @@ func (b *Statistics) RecordBatchExecution(executor func() (int, int64, error)) e
 		return err
 	}
 	b.metricExecBatchHis.Observe(float64(batchSize))
-	b.metricExecDMLCnt.Add(float64(batchSize))
 	b.metricTotalWriteBytesCnt.Add(float64(batchWriteBytes))
 	return nil
 }
@@ -81,6 +83,7 @@ func (b *Statistics) RecordDDLExecution(executor func() error) error {
 		return err
 	}
 	b.metricExecDDLHis.Observe(time.Since(start).Seconds())
+	b.metricExecErrCnt.Inc()
 	return nil
 }
 
@@ -94,4 +97,5 @@ func (b *Statistics) Close() {
 	ExecutionErrorCounter.DeleteLabelValues(namespace, changefeedID)
 	TotalWriteBytesCounter.DeleteLabelValues(namespace, changefeedID)
 	ExecDMLEventCounter.DeleteLabelValues(namespace, changefeedID)
+	ExecDDLEventCounter.DeleteLabelValues(namespace, changefeedID)
 }

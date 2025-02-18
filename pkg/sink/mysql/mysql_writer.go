@@ -205,6 +205,7 @@ func (w *MysqlWriter) Flush(events []*commonEvent.DMLEvent) error {
 		return errors.Trace(err)
 	}
 	defer dmlsPool.Put(dmls) // Return dmls to pool after use
+	defer w.statistics.MetricExecDMLCnt.Add(float64(len(events)))
 
 	if dmls.rowCount == 0 {
 		return nil
