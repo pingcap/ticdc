@@ -344,7 +344,7 @@ func setIndexes(
 
 // NextRowChangedEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextRowChangedEvent() (*model.RowChangedEvent, error) {
+func (b *canalJSONDecoder) NextRowChangedEvent() (*commonEvent.DMLEvent, error) {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeRow {
 		return nil, errors.ErrCodecDecode.
 			GenWithStack("not found row changed event message")

@@ -18,7 +18,7 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
-	"github.com/pingcap/tiflow/cdc/model"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"go.uber.org/zap"
 )
 
@@ -27,7 +27,7 @@ type eventsGroup struct {
 	partition int32
 	tableID   int64
 
-	events        []*model.RowChangedEvent
+	events        []*commonEvent.DMLEvent
 	highWatermark uint64
 }
 
@@ -36,12 +36,12 @@ func NewEventsGroup(partition int32, tableID int64) *eventsGroup {
 	return &eventsGroup{
 		partition: partition,
 		tableID:   tableID,
-		events:    make([]*model.RowChangedEvent, 0, 1024),
+		events:    make([]*commonEvent.DMLEvent, 0, 1024),
 	}
 }
 
 // Append will append an event to event groups.
-func (g *eventsGroup) Append(row *model.RowChangedEvent, offset kafka.Offset) {
+func (g *eventsGroup) Append(row *commonEvent.DMLEvent, offset kafka.Offset) {
 	g.events = append(g.events, row)
 	if row.CommitTs > g.highWatermark {
 		g.highWatermark = row.CommitTs
@@ -53,12 +53,12 @@ func (g *eventsGroup) Append(row *model.RowChangedEvent, offset kafka.Offset) {
 		zap.Uint64("highWatermark", g.highWatermark),
 		zap.Int64("tableID", row.GetTableID()),
 		zap.String("schema", row.TableInfo.GetSchemaName()),
-		zap.String("table", row.TableInfo.GetTableName()),
-		zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns))
+		zap.String("table", row.TableInfo.GetTableName()))
+	//zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns))
 }
 
 // Resolve will get events where CommitTs is less than resolveTs.
-func (g *eventsGroup) Resolve(resolve uint64) []*model.RowChangedEvent {
+func (g *eventsGroup) Resolve(resolve uint64) []*commonEvent.DMLEvent {
 	i := sort.Search(len(g.events), func(i int) bool {
 		return g.events[i].CommitTs > resolve
 	})

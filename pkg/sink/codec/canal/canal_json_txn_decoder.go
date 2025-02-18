@@ -98,7 +98,7 @@ func (d *canalJSONTxnEventDecoder) HasNext() (common.MessageType, bool, error) {
 
 // NextRowChangedEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
-func (d *canalJSONTxnEventDecoder) NextRowChangedEvent() (*model.RowChangedEvent, error) {
+func (d *canalJSONTxnEventDecoder) NextRowChangedEvent() (*commonEvent.DMLEvent, error) {
 	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
 		return nil, cerror.ErrCanalDecodeFailed.
 			GenWithStack("not found row changed event message")

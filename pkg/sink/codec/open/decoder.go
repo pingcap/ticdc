@@ -196,7 +196,7 @@ func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 }
 
 // NextRowChangedEvent implements the RowEventDecoder interface
-func (b *BatchDecoder) NextRowChangedEvent() (*model.RowChangedEvent, error) {
+func (b *BatchDecoder) NextRowChangedEvent() (*commonEvent.DMLEvent, error) {
 	if b.nextKey.Type != common.MessageTypeRow {
 		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found row event message")
 	}

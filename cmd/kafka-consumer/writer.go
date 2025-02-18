@@ -392,7 +392,7 @@ func (w *writer) resolveRowChangedEvents(progress *partitionProgress, newWaterma
 //	}
 //}
 
-func (w *writer) appendRow2Group(row *model.RowChangedEvent, progress *partitionProgress, offset kafka.Offset) {
+func (w *writer) appendRow2Group(row *commonEvent.DMLEvent, progress *partitionProgress, offset kafka.Offset) {
 	// if the kafka cluster is normal, this should not hit.
 	// else if the cluster is abnormal, the consumer may consume old message, then cause the watermark fallback.
 	watermark := progress.loadWatermark()
@@ -410,7 +410,7 @@ func (w *writer) appendRow2Group(row *model.RowChangedEvent, progress *partition
 			zap.Uint64("commitTs", row.CommitTs), zap.Any("offset", offset),
 			zap.Uint64("watermark", watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
 			zap.String("schema", row.TableInfo.GetSchemaName()), zap.String("table", row.TableInfo.GetTableName()),
-			zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
+			//zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 			zap.String("protocol", w.protocol.String()), zap.Bool("IsPartition", row.TableInfo.TableName.IsPartition))
 		return
 	}
@@ -431,7 +431,7 @@ func (w *writer) appendRow2Group(row *model.RowChangedEvent, progress *partition
 			zap.Uint64("highWatermark", group.highWatermark),
 			zap.Any("partitionWatermark", watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
 			zap.String("schema", row.TableInfo.GetSchemaName()), zap.String("table", row.TableInfo.GetTableName()),
-			zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
+			//zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 			zap.String("protocol", w.protocol.String()), zap.Bool("IsPartition", row.TableInfo.TableName.IsPartition))
 		return
 	default:
@@ -442,7 +442,7 @@ func (w *writer) appendRow2Group(row *model.RowChangedEvent, progress *partition
 		zap.Uint64("highWatermark", group.highWatermark),
 		zap.Any("partitionWatermark", watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
 		zap.String("schema", row.TableInfo.GetSchemaName()), zap.String("table", row.TableInfo.GetTableName()),
-		zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
+		//zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 		zap.String("protocol", w.protocol.String()))
 	group.Append(row, offset)
 }
