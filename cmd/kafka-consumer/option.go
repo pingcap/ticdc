@@ -18,7 +18,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
@@ -28,12 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
-)
-
-var (
-	defaultVersion   = "2.4.0"
-	defaultRetryTime = 30
-	defaultTimeout   = time.Second * 10
 )
 
 type option struct {
@@ -61,22 +54,13 @@ type option struct {
 
 	// upstreamTiDBDSN is the dsn of the upstream TiDB cluster
 	upstreamTiDBDSN string
-
-	enableProfiling bool
-
-	// connect kafka retry times, default 30
-	retryTime int
-	// connect kafka  timeout, default 10s
-	timeout time.Duration
 }
 
 func newOption() *option {
 	return &option{
-		version:         defaultVersion,
+		version:         "2.4.0",
 		maxMessageBytes: math.MaxInt64,
 		maxBatchSize:    math.MaxInt64,
-		retryTime:       defaultRetryTime,
-		timeout:         defaultTimeout,
 	}
 }
 

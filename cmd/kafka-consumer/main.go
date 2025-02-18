@@ -21,7 +21,6 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 
 	"github.com/google/uuid"
@@ -29,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/version"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -38,8 +38,9 @@ var (
 
 func main() {
 	var (
-		upstreamURIStr string
-		configFile     string
+		upstreamURIStr  string
+		configFile      string
+		enableProfiling bool
 	)
 	groupID := fmt.Sprintf("ticdc_kafka_consumer_%s", uuid.New().String())
 	consumerOption := newOption()
@@ -48,6 +49,7 @@ func main() {
 	flag.StringVar(&upstreamURIStr, "upstream-uri", "", "Kafka uri")
 	flag.StringVar(&logPath, "log-file", "cdc_kafka_consumer.log", "log file path")
 	flag.StringVar(&logLevel, "log-level", "info", "log file path")
+	flag.BoolVar(&enableProfiling, "enable-profiling", false, "enable pprof profiling")
 
 	flag.StringVar(&consumerOption.downstreamURI, "downstream-uri", "", "downstream sink uri")
 	flag.StringVar(&consumerOption.schemaRegistryURI, "schema-registry-uri", "", "schema registry uri")
@@ -57,7 +59,6 @@ func main() {
 	flag.StringVar(&consumerOption.ca, "ca", "", "CA certificate path for Kafka SSL connection")
 	flag.StringVar(&consumerOption.cert, "cert", "", "Certificate path for Kafka SSL connection")
 	flag.StringVar(&consumerOption.key, "key", "", "Private key path for Kafka SSL connection")
-	flag.BoolVar(&consumerOption.enableProfiling, "enable-profiling", false, "enable pprof profiling")
 	flag.Parse()
 
 	err := logger.InitLogger(&logger.Config{
@@ -75,32 +76,36 @@ func main() {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	consumer := newConsumer(ctx, consumerOption)
-	var wg sync.WaitGroup
-	if consumerOption.enableProfiling {
-		log.Info("profiling is enabled")
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err = http.ListenAndServe(":6060", nil); err != nil {
-				log.Panic("cannot start the pprof", zap.Error(err))
-			}
-		}()
-	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		consumer.Consume(ctx)
-	}()
+	g, ctx := errgroup.WithContext(ctx)
 
-	sigterm := make(chan os.Signal, 1)
-	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case <-ctx.Done():
-		log.Info("terminating: context cancelled")
-	case <-sigterm:
-		log.Info("terminating: via signal")
+	if enableProfiling {
+		g.Go(func() error {
+			return http.ListenAndServe(":6060", nil)
+		})
 	}
-	cancel()
-	wg.Wait()
+
+	consumer := newConsumer(ctx, consumerOption)
+	g.Go(func() error {
+		consumer.Consume(ctx)
+		return nil
+	})
+
+	g.Go(func() error {
+		sigterm := make(chan os.Signal, 1)
+		signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
+		select {
+		case <-ctx.Done():
+			log.Info("terminating: context cancelled")
+		case <-sigterm:
+			log.Info("terminating: via signal")
+		}
+		cancel()
+		return nil
+	})
+	err = g.Wait()
+	if err != nil {
+		log.Error("kafka consumer exited with error", zap.Error(err))
+	} else {
+		log.Info("kafka consumer exited")
+	}
 }

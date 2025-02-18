@@ -42,7 +42,7 @@ func getPartitionNum(o *option) (int32, error) {
 	defer admin.Close()
 
 	timeout := 3000
-	for i := 0; i <= o.retryTime; i++ {
+	for i := 0; i <= 30; i++ {
 		resp, err := admin.GetMetadata(&o.topic, false, timeout)
 		if err != nil {
 			if err.(kafka.Error).Code() == kafka.ErrTransport {
@@ -100,8 +100,10 @@ func newConsumer(ctx context.Context, o *option) *consumer {
 		_ = configMap.SetKey("ssl.key.location", o.key)
 		_ = configMap.SetKey("ssl.certificate.location", o.cert)
 	}
-	if level, err := zapcore.ParseLevel(o.logLevel); err == nil && level.String() == "debug" {
-		configMap.SetKey("debug", "all")
+	if level, err := zapcore.ParseLevel(logLevel); err == nil && level == zapcore.DebugLevel {
+		if err = configMap.SetKey("debug", "all"); err != nil {
+			log.Error("set kafka debug log failed", zap.Error(err))
+		}
 	}
 	client, err := kafka.NewConsumer(configMap)
 	if err != nil {
