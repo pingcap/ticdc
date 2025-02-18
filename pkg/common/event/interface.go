@@ -30,7 +30,7 @@ type Event interface {
 	GetSize() int64
 	IsPaused() bool
 	// GetLen returns the number of rows in the event.
-	Len() int64
+	Len() int32
 }
 
 // FlushableEvent is an event that can be flushed to downstream by a dispatcher.

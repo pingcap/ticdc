@@ -52,9 +52,9 @@ func (b *BatchResolvedEvent) GetSeq() uint64 {
 	return 0
 }
 
-func (b *BatchResolvedEvent) Len() int64 {
+func (b *BatchResolvedEvent) Len() int32 {
 	// Return the length of events.
-	return int64(len(b.Events))
+	return int32(len(b.Events))
 }
 
 func (b *BatchResolvedEvent) Marshal() ([]byte, error) {
@@ -141,7 +141,7 @@ func (e ResolvedEvent) GetSeq() uint64 {
 	return 0
 }
 
-func (e ResolvedEvent) Len() int64 {
+func (e ResolvedEvent) Len() int32 {
 	return 1
 }
 
