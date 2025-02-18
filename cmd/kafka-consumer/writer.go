@@ -114,15 +114,15 @@ func newWriter(ctx context.Context, o *option) *writer {
 		w.progresses[i] = newPartitionProgress(int32(i), decoder)
 	}
 
-	eventRouter, err := eventrouter.NewEventRouter(o.replicaConfig.Sink, o.protocol, o.topic, "kafka")
+	eventRouter, err := eventrouter.NewEventRouter(o.sinkConfig, o.protocol, o.topic, "kafka")
 	if err != nil {
 		log.Panic("initialize the event router failed",
 			zap.Any("protocol", o.protocol), zap.Any("topic", o.topic),
-			zap.Any("dispatcherRules", o.replicaConfig.Sink.DispatchRules), zap.Error(err))
+			zap.Any("dispatcherRules", o.sinkConfig.DispatchRules), zap.Error(err))
 	}
 	w.eventRouter = eventRouter
 	log.Info("event router created", zap.Any("protocol", o.protocol),
-		zap.Any("topic", o.topic), zap.Any("dispatcherRules", o.replicaConfig.Sink.DispatchRules))
+		zap.Any("topic", o.topic), zap.Any("dispatcherRules", o.sinkConfig.DispatchRules))
 
 	changefeedID := commonType.NewChangeFeedIDWithName("kafka-consumer")
 	cfg := &config.ChangefeedConfig{
@@ -135,8 +135,8 @@ func newWriter(ctx context.Context, o *option) *writer {
 	}
 	w.mysqlSink = mysqlSink
 
-	//config.GetGlobalServerConfig().TZ = o.timezone
-	//errChan := make(chan error, 1)
+	// config.GetGlobalServerConfig().TZ = o.timezone
+	// errChan := make(chan error, 1)
 
 	//// todo: use local mysql sink, instead of the tiflow sink.
 	//tiflowReplicaConfig := tiflowConfig.GetDefaultReplicaConfig()

@@ -49,11 +49,8 @@ type option struct {
 	protocol config.Protocol
 
 	codecConfig *common.Config
-	// the replicaConfig of the changefeed which produce data to the kafka topic
-	replicaConfig *config.ReplicaConfig
+	sinkConfig  *config.SinkConfig
 
-	logPath       string
-	logLevel      string
 	timezone      string
 	ca, cert, key string
 
@@ -84,7 +81,17 @@ func newOption() *option {
 }
 
 // Adjust the consumer option by the upstream uri passed in parameters.
-func (o *option) Adjust(upstreamURI *url.URL, configFile string) error {
+func (o *option) Adjust(upstreamURIStr string, configFile string) error {
+	upstreamURI, err := url.Parse(upstreamURIStr)
+	if err != nil {
+		log.Panic("invalid upstream-uri", zap.Error(err))
+	}
+	scheme := strings.ToLower(upstreamURI.Scheme)
+	if scheme != "kafka" {
+		log.Panic("invalid upstream-uri scheme, the scheme of upstream-uri must be `kafka`",
+			zap.String("upstreamURI", upstreamURIStr))
+	}
+
 	s := upstreamURI.Query().Get("version")
 	if s != "" {
 		o.version = s
@@ -127,14 +134,11 @@ func (o *option) Adjust(upstreamURI *url.URL, configFile string) error {
 	}
 	protocol, err := config.ParseSinkProtocolFromString(s)
 	if err != nil {
-		log.Panic("invalid protocol", zap.Error(err), zap.String("protocol", s))
+		log.Panic("invalid protocol", zap.String("protocol", s), zap.Error(err))
 	}
 	o.protocol = protocol
 
 	replicaConfig := config.GetDefaultReplicaConfig()
-	// the TiDB source ID should never be set to 0
-	replicaConfig.Sink.TiDBSourceID = 1
-	replicaConfig.Sink.Protocol = putil.AddressOf(protocol.String())
 	if configFile != "" {
 		err = util.StrictDecodeFile(configFile, "kafka consumer", replicaConfig)
 		if err != nil {
@@ -144,10 +148,12 @@ func (o *option) Adjust(upstreamURI *url.URL, configFile string) error {
 			return errors.Trace(err)
 		}
 	}
-	o.replicaConfig = replicaConfig
+	// the TiDB source ID should never be set to 0
+	replicaConfig.Sink.TiDBSourceID = 1
+	replicaConfig.Sink.Protocol = putil.AddressOf(protocol.String())
 
 	o.codecConfig = common.NewConfig(protocol)
-	if err = o.codecConfig.Apply(upstreamURI, o.replicaConfig.Sink); err != nil {
+	if err = o.codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		return errors.Trace(err)
 	}
 	tz, err := putil.GetTimezone(o.timezone)
