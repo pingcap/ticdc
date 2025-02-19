@@ -47,7 +47,7 @@ const (
 	clearTimeout                  = 300           // seconds
 )
 
-var MinSpanNumberCoefficient = 32 // // This number is twice the default worker count of the MySQL sink. It can help evenly split and dispatch high - throughput tables.
+var MinSpanNumberCoefficient = 2
 
 type CheckResult struct {
 	OpType       OpType
