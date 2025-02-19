@@ -68,10 +68,15 @@ LDFLAGS += -X "$(TIFLOW_CDC_PKG)/pkg/version.BuildTS=$(BUILDTS)"
 
 OS := "$(shell go env GOOS)"
 SED_IN_PLACE ?= $(shell which sed)
+IS_ALPINE := $(shell if [ -f /etc/os-release ]; then grep -qi Alpine /etc/os-release && echo 1; else echo 0; fi)
 ifeq (${OS}, "linux")
 	SED_IN_PLACE += -i
-	BUILD_FLAG += -tags musl
-	LDFLAGS += -linkmode external -extldflags "-static"
+	ifeq ($(static), true)
+		BUILD_FLAG += -tags musl
+		LDFLAGS += -linkmode external -extldflags "-static"
+	else ifeq ("${IS_ALPINE}", "1")
+		BUILD_FLAG += -tags musl
+	endif
 else ifeq (${OS}, "darwin")
 	SED_IN_PLACE += -i ''
 endif

@@ -51,23 +51,25 @@ TiCDC can be built on the following operating systems:
 * Linux
 * MacOS
 
-Requirements:
+
+Install GoLang 1.23.2  
+
+For static build on Linux, you need to install following dependencies:
+ * [musl libc](https://musl.cc/#binaries)
  * zlib
  * openssl
  * zstd
  * curl
- * sasl (optional, for SASL GSSAPI support)
-
-Install GoLang 1.23.2  
-Install [musl libc](https://musl.cc/#binaries) (For Linux)
+ * sasl
 
 ```bash
 # Linux
 wget https://go.dev/dl/go1.23.2.linux-amd64.tar.gz
 sudo tar -C /usr/local -xzf go1.23.2.linux-amd64.tar.gz
-wget https://musl.cc/${arch}-${os}-musl-native.tgz 
-sudo tar -C /usr/local -xzf https://musl.cc/${arch}-${os}-musl-native.tgz
-export CC=/usr/local/${arch}-${os}-musl-native/bin/aarch64-linux-musl-gcc
+# static build on Linux
+# wget https://musl.cc/${arch}-${os}-musl-native.tgz 
+# sudo tar -C /usr/local -xzf https://musl.cc/${arch}-${os}-musl-native.tgz
+# export CC=/usr/local/${arch}-${os}-musl-native/bin/${arch}-${os}-musl-gcc
 
 # MacOS
 curl -O https://go.dev/dl/go1.23.2.darwin-amd64.tar.gz
@@ -88,8 +90,9 @@ cd ticdc
 
 2. Build TiCDC
 
+If the build is not supported on your platform or if you need to replicate to a Kafka cluster with GSSAPI support, you should use a static build.
 ```bash
-make cdc
+make cdc # or `make cdc static=true`
 
 # Generate the patchable tar file
 cd bin
