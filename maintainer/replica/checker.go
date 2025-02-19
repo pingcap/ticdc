@@ -322,8 +322,8 @@ func (s *rebalanceChecker) checkRebalance(
 	allNodes := s.nodeManager.GetAliveNodes()
 	if len(s.allTasks) < len(allNodes)*MinSpanNumberCoefficient {
 		log.Info("task number is smaller than node number * MinSpanNumberCoefficient",
-			zap.Any("allTasks number", len(s.allTasks)),
-			zap.Any("allNodes number", len(allNodes)),
+			zap.Any("allTasksNumber", len(s.allTasks)),
+			zap.Any("allNodesNumber", len(allNodes)),
 			zap.Any("MinSpanNumberCoefficient", MinSpanNumberCoefficient),
 		)
 		return ret
