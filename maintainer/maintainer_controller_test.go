@@ -586,8 +586,8 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	require.NotNil(t, barrier)
 	// total 8 regions,
 	// table 1: 2 holes will be inserted to absent
-	// table 2: split to 4 spans, will be inserted to absent
-	require.Equal(t, 6, s.replicationDB.GetAbsentSize())
+	// table 2: split to 2 spans, will be inserted to absent
+	require.Equal(t, 4, s.replicationDB.GetAbsentSize())
 	// table 1 has two working span
 	require.Equal(t, 2, s.replicationDB.GetReplicatingSize())
 	require.True(t, s.bootstrapped)
@@ -669,9 +669,9 @@ func TestDynamicSplitTableBasic(t *testing.T) {
 	}
 
 	// total 7 regions,
-	// table 1: split to 4 spans, will be inserted to absent
-	// table 2: split to 3 spans, will be inserted to absent
-	require.Equal(t, 7, s.replicationDB.GetAbsentSize())
+	// table 1: split to 2 spans, will be inserted to absent
+	// table 2: split to 2 spans, will be inserted to absent
+	require.Equal(t, 4, s.replicationDB.GetAbsentSize())
 }
 
 func TestDynamiSplitTableWhenScaleOut(t *testing.T) {
