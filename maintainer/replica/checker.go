@@ -43,8 +43,9 @@ const (
 	HotSpanScoreThreshold = 3           // TODO: bump to 10 befroe release
 	DefaultScoreThreshold = 10
 
-	defaultHardImbalanceThreshold = float64(1.35) // used to trigger the rebalance
-	clearTimeout                  = 300           // seconds
+	// defaultHardImbalanceThreshold = float64(1.35) // used to trigger the rebalance
+	defaultHardImbalanceThreshold = float64(5) // used to trigger the rebalance
+	clearTimeout                  = 300        // seconds
 )
 
 var MinSpanNumberCoefficient = 0
@@ -241,7 +242,7 @@ func newImbalanceChecker(cfID common.ChangeFeedID) *rebalanceChecker {
 		hardImbalanceThreshold: defaultHardImbalanceThreshold,
 
 		softWriteThreshold:          3 * HotSpanWriteThreshold,
-		softImbalanceThreshold:      1.2, // 2 * defaultHardImbalanceThreshold,
+		softImbalanceThreshold:      2 * defaultHardImbalanceThreshold,
 		softRebalanceScoreThreshold: DefaultScoreThreshold,
 		softMergeScoreThreshold:     DefaultScoreThreshold,
 	}
