@@ -601,18 +601,21 @@ func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 	return result
 }
 
-func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
-	ti := &TableInfo{
+func newTableInfo(schema, table string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
+	return &TableInfo{
 		TableName: TableName{
-			Schema:      schemaName,
-			Table:       tableName,
+			Schema:      schema,
+			Table:       table,
 			TableID:     tableID,
 			IsPartition: isPartition,
-			quotedName:  QuoteSchema(schemaName, tableName),
+			quotedName:  QuoteSchema(schema, table),
 		},
 		columnSchema: columnSchema,
 	}
+}
 
+func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
+	ti := newTableInfo(schemaName, tableName, tableID, isPartition, columnSchema)
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appeared when tableInfo is created as a pair.
 	runtime.SetFinalizer(ti, func(ti *TableInfo) {
@@ -620,6 +623,13 @@ func NewTableInfo(schemaName string, tableName string, tableID int64, isPartitio
 	})
 
 	return ti
+}
+
+// NewTableInfo4Decoder is only used by the codec decoder for the test purpose,
+// do not call this method on the production code.
+func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
+	cs := newColumnSchema4Decoder(tableInfo)
+	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs)
 }
 
 // WrapTableInfo creates a TableInfo from a model.TableInfo

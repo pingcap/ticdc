@@ -18,13 +18,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pingcap/log"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -36,7 +36,10 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
+	tiTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tiflow/cdc/model"
+	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"github.com/pingcap/tiflow/pkg/util"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
@@ -619,17 +622,58 @@ func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *common
 }
 
 func newTableInfo(msg canalJSONMessageInterface, tableID int64, partitionInfo *timodel.PartitionInfo) *commonType.TableInfo {
-	schemaName := *msg.getSchema()
-	tableName := *msg.getTable()
-	isPartition := partitionInfo != nil
 	tableInfo := new(timodel.TableInfo)
-	tableInfo.Columns = nil
-	tableInfo.Indices = nil
-	tableInfo.PKIsHandle = false
-	tableInfo.IsCommonHandle = false
-	tableInfo.UpdateTS = 0
-	columnSchema := commonType.NewColumnSchema(tableInfo, nil)
-	return commonType.NewTableInfo(schemaName, tableName, tableID, isPartition, columnSchema)
+	tableInfo.ID = tableID
+	tableInfo.Name = pmodel.NewCIStr(*msg.getTable())
+
+	columns := newTiColumns(msg)
+	indices := newTiIndices(columns, msg.pkNameSet())
+	tableInfo.Columns = columns
+	tableInfo.Indices = indices
+	return commonType.NewTableInfo4Decoder(*msg.getSchema(), tableInfo)
+}
+
+func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
+	var nextColumnID int64
+	result := make([]*timodel.ColumnInfo, 0, len(msg.getMySQLType()))
+	for name, mysqlType := range msg.getMySQLType() {
+		col := new(timodel.ColumnInfo)
+		col.ID = nextColumnID
+		col.Name = pmodel.NewCIStr(name)
+		col.FieldType = *types.NewFieldType(types.StrToType(mysqlType))
+		if utils.IsBinaryMySQLType(mysqlType) {
+			col.AddFlag(mysql.BinaryFlag)
+			col.SetCharset("binary")
+		}
+		if _, ok := msg.pkNameSet()[name]; ok {
+			col.AddFlag(mysql.PriKeyFlag)
+			col.AddFlag(mysql.UniqueKeyFlag)
+			col.AddFlag(mysql.NotNullFlag)
+		}
+		result = append(result, col)
+		nextColumnID++
+	}
+	return result
+}
+
+func newTiIndices(columns []*timodel.ColumnInfo, keys map[string]struct{}) []*timodel.IndexInfo {
+	indexColumns := make([]*timodel.IndexColumn, 0, len(keys))
+	for idx, col := range columns {
+		if mysql.HasPriKeyFlag(col.GetFlag()) {
+			indexColumns = append(indexColumns, &timodel.IndexColumn{
+				Name:   col.Name,
+				Offset: idx,
+			})
+		}
+	}
+	indexInfo := &timodel.IndexInfo{
+		ID:      1,
+		Name:    pmodel.NewCIStr("primary"),
+		Columns: indexColumns,
+		Primary: true,
+	}
+	result := []*timodel.IndexInfo{indexInfo}
+	return result
 }
 
 func (b *canalJSONDecoder) setPhysicalTableID(event *commonEvent.DMLEvent) error {
