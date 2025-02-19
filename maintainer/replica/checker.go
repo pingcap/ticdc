@@ -41,7 +41,7 @@ const (
 const (
 	HotSpanWriteThreshold = 1024 * 1024 // 1MB per second
 	HotSpanScoreThreshold = 3           // TODO: bump to 10 befroe release
-	DefaultScoreThreshold = 3
+	DefaultScoreThreshold = 10
 
 	defaultHardImbalanceThreshold = float64(1.35) // used to trigger the rebalance
 	clearTimeout                  = 300           // seconds
