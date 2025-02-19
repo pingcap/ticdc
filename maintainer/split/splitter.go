@@ -38,7 +38,7 @@ const (
 
 // baseSpanNumberCoefficient is the base coefficient that use to
 // multiply the number of captures to get the number of spans.
-var baseSpanNumberCoefficient = replica.MinSpanNumberCoefficient + 1
+var baseSpanNumberCoefficient = 1
 
 // RegionCache is a simplified interface of tikv.RegionCache.
 // It is useful to restrict RegionCache usage and mocking in tests.
@@ -53,7 +53,7 @@ type RegionCache interface {
 
 type splitter interface {
 	split(
-		ctx context.Context, span *heartbeatpb.TableSpan, totalCaptures int, expectedSpanNum int,
+		ctx context.Context, span *heartbeatpb.TableSpan, totalCaptures int,
 	) []*heartbeatpb.TableSpan
 }
 
@@ -82,11 +82,10 @@ func NewSplitter(
 func (s *Splitter) SplitSpans(ctx context.Context,
 	span *heartbeatpb.TableSpan,
 	totalCaptures int,
-	expectedSpanNum int,
 ) []*heartbeatpb.TableSpan {
 	spans := []*heartbeatpb.TableSpan{span}
 	for _, sp := range s.splitters {
-		spans = sp.split(ctx, span, totalCaptures, expectedSpanNum)
+		spans = sp.split(ctx, span, totalCaptures)
 		if len(spans) > 1 {
 			return spans
 		}
@@ -139,11 +138,20 @@ func NextExpectedSpansNumber(oldNum int) int {
 	return min(DefaultMaxSpanNumber, oldNum*3/2)
 }
 
-func getSpansNumber(regionNum, captureNum, expectedNum, maxSpanNum int) int {
-	coefficient := max(captureNum-1, baseSpanNumberCoefficient)
+// func getSpansNumber(regionNum, captureNum, expectedNum, maxSpanNum int) int {
+// 	spanNum := 1
+// 	if regionNum > 1 {
+// 		// spanNum = max(expectedNum, captureNum*baseSpanNumberCoefficient, regionNum/spanRegionLimit)
+// 		spanNum = captureNum * baseSpanNumberCoefficient
+// 	}
+// 	return min(spanNum, maxSpanNum)
+// }
+
+func getSpansNumber(regionNum, captureNum int) int {
 	spanNum := 1
 	if regionNum > 1 {
-		spanNum = max(expectedNum, captureNum*coefficient, regionNum/spanRegionLimit)
+		// spanNum = max(expectedNum, captureNum*baseSpanNumberCoefficient, regionNum/spanRegionLimit)
+		spanNum = captureNum * baseSpanNumberCoefficient
 	}
-	return min(spanNum, maxSpanNum)
+	return spanNum
 }
