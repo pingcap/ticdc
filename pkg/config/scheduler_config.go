@@ -29,6 +29,8 @@ type ChangefeedSchedulerConfig struct {
 	RegionThreshold int `toml:"region-threshold" json:"region-threshold"`
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
 	WriteKeyThreshold int `toml:"write-key-threshold" json:"write-key-threshold"`
+	// SplitNumberPerNode is the number of splits per node.
+	SplitNumberPerNode int `toml:"split-number-per-node" json:"split-number-per-node"`
 }
 
 // Validate validates the config.
@@ -41,6 +43,9 @@ func (c *ChangefeedSchedulerConfig) Validate() error {
 	}
 	if c.WriteKeyThreshold < 0 {
 		return errors.New("write-key-threshold must be larger than 0")
+	}
+	if c.SplitNumberPerNode < 0 {
+		return errors.New("split-number-per-node must be larger than 0")
 	}
 	return nil
 }
