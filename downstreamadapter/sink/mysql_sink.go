@@ -22,6 +22,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/conflictdetector"
 	"github.com/pingcap/ticdc/downstreamadapter/worker"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -30,8 +31,14 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
+	"github.com/pingcap/tiflow/pkg/causality"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+)
+
+const (
+	// DefaultConflictDetectorSlots indicates the default slot count of conflict detector. TODO:check this
+	DefaultConflictDetectorSlots uint64 = 16 * 1024
 )
 
 // MysqlSink is responsible for writing data to mysql downstream.
@@ -45,6 +52,8 @@ type MysqlSink struct {
 
 	db         *sql.DB
 	statistics *metrics.Statistics
+
+	conflictDetector *conflictdetector.ConflictDetector
 
 	isNormal uint32 // if sink is normal, isNormal is 1, otherwise is 0
 }
@@ -93,11 +102,16 @@ func newMysqlSinkWithDBAndConfig(
 		dmlWorker:    make([]*worker.MysqlDMLWorker, workerCount),
 		workerCount:  workerCount,
 		statistics:   stat,
-		isNormal:     1,
+		conflictDetector: conflictdetector.NewConflictDetector(DefaultConflictDetectorSlots, conflictdetector.TxnCacheOption{
+			Count:         workerCount,
+			Size:          1024,
+			BlockStrategy: causality.BlockStrategyWaitEmpty,
+		}),
+		isNormal: 1,
 	}
 	formatVectorType := mysql.ShouldFormatVectorType(db, cfg)
 	for i := 0; i < workerCount; i++ {
-		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, changefeedID, stat, formatVectorType)
+		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, changefeedID, stat, formatVectorType, mysqlSink.conflictDetector.GetOutChByCacheID(int64(i)))
 	}
 	mysqlSink.ddlWorker = worker.NewMysqlDDLWorker(ctx, db, cfg, changefeedID, stat, formatVectorType)
 	return mysqlSink
@@ -106,6 +120,7 @@ func newMysqlSinkWithDBAndConfig(
 func (s *MysqlSink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	for i := 0; i < s.workerCount; i++ {
+		i := i // capture loop variable
 		g.Go(func() error {
 			return s.dmlWorker[i].Run(ctx)
 		})
@@ -128,11 +143,13 @@ func (s *MysqlSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore)
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *MysqlSink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	// We use low value of dispatcherID to divide different tables into different workers.
-	// And ensure the same table always goes to the same worker.
-	index := event.GetDispatcherID().GetLow() % uint64(s.workerCount)
-	s.dmlWorker[index].AddDMLEvent(event)
+func (s *MysqlSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
+	return s.conflictDetector.Add(event)
+
+	// // We use low value of dispatcherID to divide different tables into different workers.
+	// // And ensure the same table always goes to the same worker.
+	// index := event.GetDispatcherID().GetLow() % uint64(s.workerCount)
+	// s.dmlWorker[index].AddDMLEvent(event)
 }
 
 func (s *MysqlSink) PassBlockEvent(event commonEvent.BlockEvent) {

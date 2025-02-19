@@ -392,6 +392,10 @@ func (ti *TableInfo) GetColumnsOffset() map[int64]int {
 	return ti.columnSchema.ColumnsOffset
 }
 
+func (ti *TableInfo) GetIndexColumnsOffset() [][]int {
+	return ti.columnSchema.IndexColumnsOffset
+}
+
 func (ti *TableInfo) PKIsHandle() bool {
 	return ti.columnSchema.PKIsHandle
 }
