@@ -131,10 +131,13 @@ func (s *splitScheduler) doCheck(ret pkgReplica.GroupCheckResult, start time.Tim
 
 		switch ret.OpType {
 		case replica.OpMerge:
+			log.Info("Into OP Merge")
 			s.opController.AddMergeSplitOperator(ret.Replications, []*heartbeatpb.TableSpan{totalSpan})
 		case replica.OpSplit:
+			log.Info("Into OP Split")
 			fallthrough
 		case replica.OpMergeAndSplit:
+			log.Info("Into OP MergeAndSplit")
 			expectedSpanNum := split.NextExpectedSpansNumber(len(ret.Replications))
 			spans := s.splitter.SplitSpans(context.Background(), totalSpan, len(s.nodeManager.GetAliveNodes()), expectedSpanNum)
 			if len(spans) > 1 {

@@ -321,6 +321,11 @@ func (s *rebalanceChecker) checkRebalance(
 	// case 1: too much nodes, need split more spans
 	allNodes := s.nodeManager.GetAliveNodes()
 	if len(s.allTasks) < len(allNodes)*MinSpanNumberCoefficient {
+		log.Info("task number is smaller than node number * MinSpanNumberCoefficient",
+			zap.Any("allTasks number", len(s.allTasks)),
+			zap.Any("allNodes number", len(allNodes)),
+			zap.Any("MinSpanNumberCoefficient", MinSpanNumberCoefficient),
+		)
 		return ret
 	}
 	if len(nodeLoads) != len(allNodes) {
@@ -340,6 +345,12 @@ func (s *rebalanceChecker) checkRebalance(
 	// case 2: check hard rebalance
 	if maxLoad-minLoad >= float64(s.hardWriteThreshold) && maxLoad/minLoad > s.hardImbalanceThreshold {
 		s.softRebalanceScore = 0
+		log.Info("satisfy hard rebalance condition",
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Any("maxLoad", maxLoad),
+			zap.Any("minLoad", minLoad),
+			zap.Any("s.hardWriteThreshold", s.hardWriteThreshold),
+			zap.Any("s.hardImbalanceThreshold", s.hardImbalanceThreshold))
 		return ret
 	}
 
@@ -351,6 +362,12 @@ func (s *rebalanceChecker) checkRebalance(
 	}
 	if s.softRebalanceScore >= s.softRebalanceScoreThreshold {
 		s.softRebalanceScore = 0
+		log.Info("satisfy soft rebalance condition",
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Any("maxLoad", maxLoad),
+			zap.Any("minLoad", minLoad),
+			zap.Any("s.softImbalanceThreshold", s.softImbalanceThreshold),
+			zap.Any("s.softRebalanceScoreThreshold", s.softRebalanceScoreThreshold))
 		return ret
 	}
 
