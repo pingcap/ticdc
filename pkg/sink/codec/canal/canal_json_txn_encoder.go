@@ -17,6 +17,7 @@ import (
 	"bytes"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -42,14 +43,17 @@ type JSONTxnEventEncoder struct {
 	txnCommitTs uint64
 	txnSchema   *string
 	txnTable    *string
+
+	columnSelector columnselector.Selector
 }
 
 // NewJSONTxnEventEncoderBuilder creates a new JSONTxnEventEncoder
 func NewJSONTxnEventEncoderBuilder(config *common.Config) common.TxnEventEncoder {
 	return &JSONTxnEventEncoder{
-		valueBuf:   &bytes.Buffer{},
-		terminator: []byte(config.Terminator),
-		config:     config,
+		valueBuf:       &bytes.Buffer{},
+		terminator:     []byte(config.Terminator),
+		columnSelector: columnselector.NewDefaultColumnSelector(),
+		config:         config,
 	}
 }
 
@@ -61,9 +65,10 @@ func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error 
 			break
 		}
 		value, err := newJSONMessageForDML(&commonEvent.RowEvent{
-			TableInfo: event.TableInfo,
-			CommitTs:  event.CommitTs,
-			Event:     row,
+			TableInfo:      event.TableInfo,
+			CommitTs:       event.CommitTs,
+			Event:          row,
+			ColumnSelector: j.columnSelector,
 		}, j.config, false, "")
 		if err != nil {
 			return err

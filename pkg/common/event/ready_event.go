@@ -73,6 +73,10 @@ func (e *ReadyEvent) IsPaused() bool {
 	return false
 }
 
+func (e *ReadyEvent) Len() int32 {
+	return 0
+}
+
 func (e ReadyEvent) Marshal() ([]byte, error) {
 	return e.encode()
 }

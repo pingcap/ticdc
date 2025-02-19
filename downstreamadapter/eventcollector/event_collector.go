@@ -432,9 +432,9 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 							event.Event = e
 							c.ds.Push(e.DispatcherID, event)
 						}
-						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(len(events)))
+						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(event.Len()))
 					default:
-						c.metricDispatcherReceivedKVEventCount.Inc()
+						c.metricDispatcherReceivedKVEventCount.Add(float64(event.Len()))
 						c.ds.Push(event.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, event))
 					}
 				default:

@@ -64,6 +64,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 		enableBatchModeThreshold := 1
 		// Determine whether to use batch dml feature here.
 		if w.cfg.BatchDMLEnable && int(event.Len()) > enableBatchModeThreshold {
+			log.Debug("use batch dml", zap.Int32("rowCount", event.Len()))
 			// only use batch dml when the table has a handle key
 			if event.TableInfo.HasHandleKey() {
 				sql, value, err := w.batchSingleTxnDmls(event, event.TableInfo, inSafeMode)

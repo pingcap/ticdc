@@ -346,6 +346,10 @@ func (t *DDLEvent) IsPaused() bool {
 	return t.State.IsPaused()
 }
 
+func (t *DDLEvent) Len() int32 {
+	return 1
+}
+
 type SchemaTableName struct {
 	SchemaName string
 	TableName  string
