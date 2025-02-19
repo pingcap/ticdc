@@ -15,7 +15,6 @@ package replica
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -41,7 +40,7 @@ const (
 const (
 	HotSpanWriteThreshold = 1024 * 1024 // 1MB per second
 	HotSpanScoreThreshold = 3           // TODO: bump to 10 befroe release
-	DefaultScoreThreshold = 10
+	DefaultScoreThreshold = 20
 
 	// defaultHardImbalanceThreshold = float64(1.35) // used to trigger the rebalance
 	defaultHardImbalanceThreshold = float64(5) // used to trigger the rebalance
@@ -307,9 +306,12 @@ func (s *rebalanceChecker) Check(_ int) replica.GroupCheckResult {
 	}
 	s.softMergeScore = 0
 
-	return s.checkRebalance(nodeLoads, replications)
+	return nil
+	// disable rebalance for now
+	//return s.checkRebalance(nodeLoads, replications)
 }
 
+/*
 func (s *rebalanceChecker) checkRebalance(
 	nodeLoads map[node.ID]float64, replications []*SpanReplication,
 ) []CheckResult {
@@ -375,6 +377,7 @@ func (s *rebalanceChecker) checkRebalance(
 	// default case: no need to rebalance
 	return nil
 }
+*/
 
 func (s *rebalanceChecker) Stat() string {
 	res := strings.Builder{}
