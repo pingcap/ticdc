@@ -70,7 +70,7 @@ func NewSplitter(
 	config *config.ChangefeedSchedulerConfig,
 ) *Splitter {
 	baseSpanNumberCoefficient = config.SplitNumberPerNode
-	log.Info("baseSpanNumberCoefficient", zap.Any("baseSpanNumberCoefficient", baseSpanNumberCoefficient))
+	log.Info("baseSpanNumberCoefficient", zap.Any("ChangefeedID", changefeedID.Name()), zap.Any("baseSpanNumberCoefficient", baseSpanNumberCoefficient))
 	return &Splitter{
 		changefeedID: changefeedID,
 		splitters: []splitter{

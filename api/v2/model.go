@@ -513,6 +513,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			EnableTableAcrossNodes: c.Scheduler.EnableTableAcrossNodes,
 			RegionThreshold:        c.Scheduler.RegionThreshold,
 			WriteKeyThreshold:      c.Scheduler.WriteKeyThreshold,
+			SplitNumberPerNode:     c.Scheduler.SplitNumberPerNode,
 		}
 	}
 	if c.Integrity != nil {
@@ -836,6 +837,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			EnableTableAcrossNodes: cloned.Scheduler.EnableTableAcrossNodes,
 			RegionThreshold:        cloned.Scheduler.RegionThreshold,
 			WriteKeyThreshold:      cloned.Scheduler.WriteKeyThreshold,
+			SplitNumberPerNode:     cloned.Scheduler.SplitNumberPerNode,
 		}
 	}
 
@@ -1043,6 +1045,8 @@ type ChangefeedSchedulerConfig struct {
 	RegionThreshold int `toml:"region_threshold" json:"region_threshold"`
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
 	WriteKeyThreshold int `toml:"write_key_threshold" json:"write_key_threshold"`
+	// SplitNumberPerNode is the number of splits per node.
+	SplitNumberPerNode int `toml:"split_number_per_node" json:"split_number_per_node"`
 }
 
 // IntegrityConfig is the config for integrity check
