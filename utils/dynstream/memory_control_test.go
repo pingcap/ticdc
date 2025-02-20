@@ -15,6 +15,7 @@ package dynstream
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -51,11 +52,11 @@ func TestMemControlAddRemovePath(t *testing.T) {
 	// Test adding path
 	mc.addPathToArea(path, settings, feedbackChan)
 	require.NotNil(t, path.areaMemStat)
-	require.Equal(t, 1, path.areaMemStat.pathCount)
+	require.Equal(t, int64(1), path.areaMemStat.pathCount.Load())
 
 	// Test removing path
 	mc.removePathFromArea(path)
-	require.Equal(t, 0, path.areaMemStat.pathCount)
+	require.Equal(t, int64(0), path.areaMemStat.pathCount.Load())
 	require.Empty(t, mc.areaStatMap)
 }
 
@@ -408,6 +409,7 @@ func TestShouldPausePathV2(t *testing.T) {
 		wantPause       bool
 		wantResume      bool
 		wantRatio       float64
+		pathCount       int64
 	}{
 		{
 			name:            "area usage <= 50%, not paused, should pause",
@@ -418,6 +420,7 @@ func TestShouldPausePathV2(t *testing.T) {
 			wantPause:       true,
 			wantResume:      false,
 			wantRatio:       0.25,
+			pathCount:       1,
 		},
 		{
 			name:            "area usage <= 50%, not paused, should not pause",
@@ -478,6 +481,7 @@ func TestShouldPausePathV2(t *testing.T) {
 				tt.pathPendingSize,
 				tt.areaPendingSize,
 				tt.maxPendingSize,
+				tt.pathCount,
 			)
 
 			if gotPause != tt.wantPause {
@@ -548,6 +552,140 @@ func TestShouldPauseAreaV2(t *testing.T) {
 			}
 			if gotRatio != tt.wantRatio {
 				t.Errorf("shouldPauseAreaV2() ratio = %v, want %v", gotRatio, tt.wantRatio)
+			}
+		})
+	}
+}
+
+func TestCalculateThresholds(t *testing.T) {
+	tests := []struct {
+		name               string
+		pathCount          int64
+		areaMemoryRatio    float64
+		expectedPauseLimit float64
+		expectedResume     float64
+		delta              float64
+	}{
+		// Special path count cases
+		{
+			name:               "path count 0 should be treated as 1",
+			pathCount:          0,
+			areaMemoryRatio:    0.3,
+			expectedPauseLimit: 0.8,
+			expectedResume:     0.4,
+			delta:              0,
+		},
+		{
+			name:               "single path",
+			pathCount:          1,
+			areaMemoryRatio:    0.3,
+			expectedPauseLimit: 0.8,
+			expectedResume:     0.4,
+			delta:              0,
+		},
+		{
+			name:               "two paths",
+			pathCount:          2,
+			areaMemoryRatio:    0.3,
+			expectedPauseLimit: 0.5,
+			expectedResume:     0.25,
+			delta:              0,
+		},
+		{
+			name:               "four paths",
+			pathCount:          4,
+			areaMemoryRatio:    0.3,
+			expectedPauseLimit: 0.22,
+			expectedResume:     0.11,
+			delta:              0,
+		},
+		// Area memory usage threshold boundaries
+		{
+			name:               "area usage exactly 0.5",
+			pathCount:          10,
+			areaMemoryRatio:    0.5,
+			expectedPauseLimit: 0.2,
+			expectedResume:     0.1,
+			delta:              0.05,
+		},
+		{
+			name:               "area usage exactly 0.8",
+			pathCount:          10,
+			areaMemoryRatio:    0.8,
+			expectedPauseLimit: 0.1,
+			expectedResume:     0.05,
+			delta:              0.05,
+		},
+		{
+			name:               "area usage exactly 1.0",
+			pathCount:          10,
+			areaMemoryRatio:    1.0,
+			expectedPauseLimit: 0.05,
+			expectedResume:     0.01,
+			delta:              0.05,
+		},
+		{
+			name:               "area usage > 1.0",
+			pathCount:          10,
+			areaMemoryRatio:    1.1,
+			expectedPauseLimit: 0.01,
+			expectedResume:     0.005,
+			delta:              0.05,
+		},
+
+		// Large number of paths
+		{
+			name:               "100 paths with low area usage",
+			pathCount:          100,
+			areaMemoryRatio:    0.3,
+			expectedPauseLimit: 0.2,
+			expectedResume:     0.1,
+			delta:              0.05,
+		},
+		{
+			name:               "1000 paths with high area usage",
+			pathCount:          1000,
+			areaMemoryRatio:    0.9,
+			expectedPauseLimit: 0.05,
+			expectedResume:     0.01,
+			delta:              0.05,
+		},
+
+		// Minimum threshold tests
+		{
+			name:               "very large path count should respect minimum threshold",
+			pathCount:          10000,
+			areaMemoryRatio:    1.2,
+			expectedPauseLimit: 0.01, // minimum threshold
+			expectedResume:     0.005,
+			delta:              0.05,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pauseLimit, resumeLimit := calculateThresholds(tt.pathCount, tt.areaMemoryRatio)
+
+			// Check if results are within acceptable margin of error
+			if math.Abs(pauseLimit-tt.expectedPauseLimit) > tt.delta {
+				t.Errorf("pauseLimit = %v, want %v", pauseLimit, tt.expectedPauseLimit)
+			}
+			if math.Abs(resumeLimit-tt.expectedResume) > tt.delta {
+				t.Errorf("resumeLimit = %v, want %v", resumeLimit, tt.expectedResume)
+			}
+
+			// Invariant checks
+			if resumeLimit >= pauseLimit {
+				t.Errorf("resumeLimit (%v) should be less than pauseLimit (%v)", resumeLimit, pauseLimit)
+			}
+			if resumeLimit < 0 {
+				t.Errorf("resumeLimit (%v) should not be negative", resumeLimit)
+			}
+			if pauseLimit < 0 {
+				t.Errorf("pauseLimit (%v) should not be negative", pauseLimit)
+			}
+			if pauseLimit > 1.0 {
+				t.Errorf("pauseLimit (%v) should not be greater than 1.0", pauseLimit)
 			}
 		})
 	}
