@@ -42,7 +42,7 @@ func newRegionCountSplitter(
 }
 
 func (m *regionCountSplitter) split(
-	ctx context.Context, span *heartbeatpb.TableSpan, captureNum int, expectedSpanNum int,
+	ctx context.Context, span *heartbeatpb.TableSpan, captureNum int,
 ) []*heartbeatpb.TableSpan {
 	bo := tikv.NewBackoffer(ctx, 500)
 	regions, err := m.regionCache.ListRegionIDsInKeyRange(bo, span.StartKey, span.EndKey)
@@ -64,7 +64,7 @@ func (m *regionCountSplitter) split(
 	}
 
 	stepper := newEvenlySplitStepper(
-		getSpansNumber(len(regions), captureNum, expectedSpanNum, DefaultMaxSpanNumber),
+		getSpansNumber(len(regions), captureNum),
 		len(regions))
 
 	spans := make([]*heartbeatpb.TableSpan, 0, stepper.SpanCount())

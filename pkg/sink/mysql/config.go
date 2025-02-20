@@ -211,6 +211,7 @@ func (c *MysqlConfig) Apply(
 	// c.EnableOldValue = config.EnableOldValue
 	c.ForceReplicate = config.ForceReplicate
 	c.SourceID = config.SinkConfig.TiDBSourceID
+
 	return nil
 }
 

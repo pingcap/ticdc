@@ -174,7 +174,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
 	if c.enableTableAcrossNodes {
 		// split the whole table span base on the configuration, todo: background split table
-		tableSpans = c.splitter.SplitSpans(context.Background(), tableSpan, len(c.nodeManager.GetAliveNodes()), 0)
+		tableSpans = c.splitter.SplitSpans(context.Background(), tableSpan, len(c.nodeManager.GetAliveNodes()))
 	}
 	c.addNewSpans(table.SchemaID, tableSpans, startTs)
 }

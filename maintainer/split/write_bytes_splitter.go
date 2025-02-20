@@ -56,7 +56,6 @@ func (m *writeSplitter) split(
 	ctx context.Context,
 	span *heartbeatpb.TableSpan,
 	captureNum int,
-	expectedSpanNum int,
 ) []*heartbeatpb.TableSpan {
 	if m.writeKeyThreshold == 0 {
 		return nil
@@ -76,7 +75,7 @@ func (m *writeSplitter) split(
 		return []*heartbeatpb.TableSpan{span}
 	}
 
-	spansNum := getSpansNumber(len(regions), captureNum, expectedSpanNum, DefaultMaxSpanNumber)
+	spansNum := getSpansNumber(len(regions), captureNum)
 	if spansNum <= 1 {
 		log.Warn("only one capture and the regions number less than"+
 			" the maxSpanRegionLimit, skip split span",
@@ -84,8 +83,6 @@ func (m *writeSplitter) split(
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("span", span.String()),
 			zap.Int("captureNum", captureNum),
-			zap.Int("expectedSpanNum", expectedSpanNum),
-			zap.Int("DefaultMaxSpanNumber", DefaultMaxSpanNumber),
 			zap.Int("regionsLen", len(regions)),
 			zap.Error(err))
 		return []*heartbeatpb.TableSpan{span}
@@ -143,7 +140,7 @@ func (m *writeSplitter) splitRegionsByWrittenKeysV1(
 	// 1. If the total write is less than writeKeyThreshold
 	// don't need to split the regions
 	if totalWrite < uint64(m.writeKeyThreshold) {
-		log.Info("total write less than writeKeyThreshold, skip split", zap.Any("totalWrite", totalWrite), zap.Any("writeKeyThreshold", m.writeKeyThreshold))
+		log.Info("total write less than writeKeyThreshold, skip split", zap.Any("changefeedID", m.changefeedID.Name()), zap.Any("totalWrite", totalWrite), zap.Any("writeKeyThreshold", m.writeKeyThreshold))
 		return &splitRegionsInfo{
 			RegionCounts: []int{len(regions)},
 			Weights:      []uint64{totalWriteNormalized},
@@ -154,6 +151,8 @@ func (m *writeSplitter) splitRegionsByWrittenKeysV1(
 			}},
 		}
 	}
+
+	log.Info("total write", zap.Any("changefeedID", m.changefeedID.Name()), zap.Any("totalWrite", totalWrite), zap.Any("writeKeyThreshold", m.writeKeyThreshold))
 
 	// calc the spansNum by totalWriteNormalized and writeKeyThreshold?
 

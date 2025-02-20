@@ -77,7 +77,6 @@ func verifyMySQLSink(
 func newMySQLSink(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	workerCount int,
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
 ) (*MysqlSink, error) {
@@ -85,7 +84,7 @@ func newMySQLSink(
 	if err != nil {
 		return nil, err
 	}
-	return newMysqlSinkWithDBAndConfig(ctx, changefeedID, workerCount, cfg, db), nil
+	return newMysqlSinkWithDBAndConfig(ctx, changefeedID, cfg.WorkerCount, cfg, db), nil
 }
 
 func newMysqlSinkWithDBAndConfig(
