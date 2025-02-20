@@ -336,7 +336,6 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 func (e *EventDispatcherManager) closeAllDispatchers() {
 	leftToCloseDispatchers := make([]*dispatcher.Dispatcher, 0)
 	e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
-
 		// Remove dispatcher from eventService
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
 

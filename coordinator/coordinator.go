@@ -238,7 +238,6 @@ func (c *coordinator) handleStateChangedEvent(
 	ctx context.Context,
 	event *ChangefeedStateChangeEvent,
 ) error {
-
 	cf := c.controller.getChangefeed(event.ChangefeedID)
 	if cf == nil {
 		log.Warn("changefeed not found", zap.String("changefeed", event.ChangefeedID.String()))

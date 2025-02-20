@@ -228,7 +228,6 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 	if algorithm == "v2" && as.paused.Load() {
 		log.Panic("area is paused, but the algorithm is v2, this should not happen")
 	}
-
 }
 
 func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, H], size int64) {
