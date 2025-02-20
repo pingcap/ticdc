@@ -18,7 +18,9 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/version"
+	"go.uber.org/zap"
 )
 
 // ServerStatus Get the status information of a TiCDC node
@@ -48,5 +50,6 @@ func (h *OpenAPIV2) ServerStatus(c *gin.Context) {
 		IsOwner:   h.server.IsCoordinator(),
 		Liveness:  Liveness(h.server.Liveness()),
 	}
+	log.Info("get status", zap.Any("status", status))
 	c.IndentedJSON(http.StatusOK, status)
 }
