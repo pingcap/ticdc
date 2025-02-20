@@ -798,6 +798,7 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 				EnableTableAcrossNodes: true,
 				RegionThreshold:        0,
 				WriteKeyThreshold:      1,
+				SplitNumberPerNode:     1,
 			},
 		}, ddlSpan, 1000, 0)
 	s.taskScheduler = &mockThreadPool{}
