@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/util"
+	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pingcap/tiflow/pkg/version"
 	"go.uber.org/zap"
@@ -101,12 +102,29 @@ func newRegionRequestWorker(
 			if err := waitForPreFetching(); err != nil {
 				return err
 			}
-			if canceled := worker.run(ctx, credential); canceled {
-				return nil
+			var regionErr error
+			if err := version.CheckStoreVersion(ctx, worker.client.pd, worker.store.storeID); err != nil {
+				log.Info("event feed check store version fails",
+					zap.Uint64("workerID", worker.workerID),
+					zap.Uint64("storeID", worker.store.storeID),
+					zap.String("addr", worker.store.storeAddr),
+					zap.Error(err))
+				if errors.Cause(err) == context.Canceled {
+					return nil
+				} else if cerror.Is(err, cerror.ErrGetAllStoresFailed) {
+					regionErr = &getStoreErr{}
+				} else {
+					regionErr = &sendRequestToStoreErr{}
+				}
+			} else {
+				if canceled := worker.run(ctx, credential); canceled {
+					return nil
+				}
+				regionErr = &sendRequestToStoreErr{}
 			}
 			for subID, m := range worker.clearRegionStates() {
 				for _, state := range m {
-					state.markStopped(&sendRequestToStoreErr{})
+					state.markStopped(regionErr)
 					regionEvent := regionEvent{
 						state:  state,
 						worker: worker,
@@ -120,7 +138,7 @@ func newRegionRequestWorker(
 					// It means it's a special task for stopping the table.
 					continue
 				}
-				client.onRegionFail(newRegionErrorInfo(region, &sendRequestToStoreErr{}))
+				client.onRegionFail(newRegionErrorInfo(region, regionErr))
 			}
 			if err := util.Hang(ctx, time.Second); err != nil {
 				return err
@@ -140,8 +158,6 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 			return false
 		}
 	}
-
-	// FIXME: check tikv store version
 
 	log.Info("region request worker going to create grpc stream",
 		zap.Uint64("workerID", s.workerID),
@@ -445,16 +461,4 @@ func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
 		regions = append(regions, <-s.requestsCh)
 	}
 	return regions
-}
-
-func (s *regionRequestWorker) getAllRegionStates() regionFeedStates {
-	s.requestedRegions.RLock()
-	defer s.requestedRegions.RUnlock()
-	states := make(regionFeedStates)
-	for _, statesMap := range s.requestedRegions.subscriptions {
-		for regionID, state := range statesMap {
-			states[regionID] = state
-		}
-	}
-	return states
 }
