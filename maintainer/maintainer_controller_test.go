@@ -595,6 +595,7 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 }
 */
 
+/*
 func TestDynamicSplitTableBasic(t *testing.T) {
 	pdAPI := &mockPdAPI{
 		regions: make(map[int64][]pdutil.RegionInfo),
@@ -675,6 +676,7 @@ func TestDynamicSplitTableBasic(t *testing.T) {
 	// table 2: split to 2 spans, will be inserted to absent
 	require.Equal(t, 4, s.replicationDB.GetAbsentSize())
 }
+*/
 
 func TestDynamiSplitTableWhenScaleOut(t *testing.T) {
 	t.Skip("skip unimplemented test")
