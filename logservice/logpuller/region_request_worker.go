@@ -104,14 +104,15 @@ func newRegionRequestWorker(
 			}
 			var regionErr error
 			if err := version.CheckStoreVersion(ctx, worker.client.pd, worker.store.storeID); err != nil {
-				log.Info("event feed check store version fails",
+				if errors.Cause(err) == context.Canceled {
+					return nil
+				}
+				log.Error("event feed check store version fails",
 					zap.Uint64("workerID", worker.workerID),
 					zap.Uint64("storeID", worker.store.storeID),
 					zap.String("addr", worker.store.storeAddr),
 					zap.Error(err))
-				if errors.Cause(err) == context.Canceled {
-					return nil
-				} else if cerror.Is(err, cerror.ErrGetAllStoresFailed) {
+				if cerror.Is(err, cerror.ErrGetAllStoresFailed) {
 					regionErr = &getStoreErr{}
 				} else {
 					regionErr = &sendRequestToStoreErr{}
