@@ -220,8 +220,8 @@ func (db *ChangefeedDB) MoveToSchedulingQueue(
 
 	cf := db.changefeeds[id]
 	if cf != nil {
-		// force retry the changefeed,
-		// it reset the backoff and set the state to normal, it's called when we resume a changefeed using cli
+		// Reset the backoff if resetBackoff is true.
+		// It means the changefeed is resumed by cli or API.
 		if resetBackoff {
 			cf.backoff.resetErrRetry()
 		}

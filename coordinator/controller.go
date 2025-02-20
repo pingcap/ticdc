@@ -696,7 +696,7 @@ func (c *Controller) collectMetrics() {
 func (c *Controller) updateChangefeedEpoch(ctx context.Context, id common.ChangeFeedID) {
 	cf := c.changefeedDB.GetByID(id)
 	if cf == nil {
-		log.Error("changefeed not found", zap.String("changefeed", id.String()))
+		log.Warn("changefeed not found, skip updating epoch", zap.String("changefeed", id.String()))
 		return
 	}
 	clonedInfo, err := cf.GetInfo().Clone()
