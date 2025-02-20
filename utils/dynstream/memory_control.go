@@ -475,13 +475,6 @@ func calculateThresholds(pathCount int64, areaMemoryUsageRatio float64) (pauseLi
 	for _, th := range baseThresholds {
 		if areaMemoryUsageRatio <= th.areaUsage {
 			t = th
-			log.Info("find applicable threshold",
-				zap.Any("pathCount", pathCount),
-				zap.Any("areaMemoryUsageRatio", areaMemoryUsageRatio),
-				zap.Float64("pauseLimit", t.pauseLimit),
-				zap.Float64("resumeLimit", t.resumeLimit),
-				zap.Float64("penaltyFactor", penaltyFactor),
-			)
 			break
 		}
 	}
