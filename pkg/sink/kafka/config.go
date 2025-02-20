@@ -15,6 +15,7 @@ package kafka
 
 import (
 	"crypto/x509"
+	"fmt"
 	"strings"
 	"time"
 
@@ -79,16 +80,20 @@ func completeSASLConfig(config *kafka.ConfigMap, o *Options) error {
 			_ = config.SetKey("sasl.username", o.SASL.SASLUser)
 			_ = config.SetKey("sasl.password", o.SASL.SASLPassword)
 		case SASLTypeGSSAPI:
-			_ = config.SetKey("sasl.username", o.SASL.SASLUser)
-			_ = config.SetKey("sasl.kerberos.service.name", o.SASL.GSSAPI.ServiceName)
 			switch o.SASL.GSSAPI.AuthType {
 			case security.UserAuth:
+				_ = config.SetKey("sasl.username", o.SASL.SASLUser)
 				_ = config.SetKey("sasl.password", o.SASL.SASLPassword)
 			case security.KeyTabAuth:
+				_ = config.SetKey("sasl.kerberos.service.name", o.SASL.GSSAPI.ServiceName)
 				_ = config.SetKey("sasl.kerberos.keytab", o.SASL.GSSAPI.KeyTabPath)
+				_ = config.SetKey("sasl.kerberos.principal", fmt.Sprintf("%s@%s", o.SASL.GSSAPI.ServiceName, o.SASL.GSSAPI.Realm))
 			}
 		case SASLTypeOAuth:
 			_ = config.SetKey("sasl.oauthbearer.token.endpoint.url", o.SASL.OAuth2.TokenURL)
+			_ = config.SetKey("sasl.oauthbearer.client.id", o.SASL.OAuth2.ClientID)
+			_ = config.SetKey("sasl.oauthbearer.client.secret", o.SASL.OAuth2.ClientSecret)
+			_ = config.SetKey("sasl.oauthbearer.scope", o.SASL.OAuth2.Scopes)
 		}
 	}
 

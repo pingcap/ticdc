@@ -27,7 +27,6 @@ import (
 const defaultTimeoutMs = 1000
 
 type admin struct {
-	ClusterAdminClient
 	client       *kafka.AdminClient
 	changefeedID common.ChangeFeedID
 }

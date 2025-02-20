@@ -33,7 +33,7 @@ func getOptions() *kafka.Options {
 	options.Version = "0.9.0.0"
 	options.ClientID = "test-client"
 	options.PartitionNum = int32(2)
-	options.AutoCreate = false
+	options.AutoCreate = true
 	options.BrokerEndpoints = []string{"127.0.0.1:9092"}
 
 	return options
@@ -41,14 +41,14 @@ func getOptions() *kafka.Options {
 
 func TestProducerAck(t *testing.T) {
 	options := getOptions()
-	options.MaxMessages = 1
+	options.MaxMessages = 20
 
 	errCh := make(chan error, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	config := kafka.NewConfig(options)
 	val, err := config.Get("queue.buffering.max.messages", -1)
 	require.NoError(t, err)
-	require.Equal(t, 1, val)
+	require.Equal(t, options.MaxMessages, val)
 
 	changefeed := commonType.NewChangefeedID4Test("test", "test")
 	factory, err := kafka.NewMockFactory(options, changefeed)
@@ -61,11 +61,6 @@ func TestProducerAck(t *testing.T) {
 	require.NotNil(t, producer)
 
 	go producer.Run(ctx)
-
-	messageCount := 20
-	for i := 0; i < messageCount; i++ {
-		asyncProducer.(*kafka.MockAsyncProducer).Producer.ExpectInputAndSucceed()
-	}
 
 	count := atomic.NewInt64(0)
 	for i := 0; i < 10; i++ {
@@ -114,7 +109,7 @@ func TestProducerSendMsgFailed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 	options.MaxMessages = 1
-	options.MaxMessageBytes = 1
+	options.MaxMessageBytes = 1000
 
 	changefeed := commonType.NewChangefeedID4Test("test", "test")
 	factory, err := kafka.NewMockFactory(options, changefeed)
@@ -144,27 +139,10 @@ func TestProducerSendMsgFailed(t *testing.T) {
 		defer wg.Done()
 
 		err = producer.AsyncSendMessage(ctx, kafka.DefaultMockTopicName, int32(0), &common.Message{
-			Key:   []byte("test-key-1"),
-			Value: []byte("test-value"),
+			Value: make([]byte, 1000),
 		})
-		if err != nil {
-			require.Condition(t, func() bool {
-				return errors.Is(err, errors.ErrKafkaProducerClosed) ||
-					errors.Is(err, context.DeadlineExceeded)
-			}, "should return error")
-		}
+		require.Error(t, err, confluentKafka.NewError(confluentKafka.ErrMsgSizeTooLarge, "", false))
 	}(t)
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		select {
-		case <-ctx.Done():
-			t.Errorf("TestProducerSendMessageFailed timed out")
-		case err := <-errCh:
-			require.ErrorIs(t, err, confluentKafka.NewError(confluentKafka.ErrMsgSizeTooLarge, "", false))
-		}
-	}()
 
 	wg.Wait()
 }

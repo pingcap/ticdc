@@ -42,9 +42,6 @@ func TestDDLSyncBroadcastMessage(t *testing.T) {
 
 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
 
-	for i := 0; i < kafka.DefaultMockPartitionNum; i++ {
-		syncProducer.(*kafka.MockSyncProducer).Producer.ExpectSendMessageAndSucceed()
-	}
 	err = p.SyncBroadcastMessage(ctx, kafka.DefaultMockTopicName,
 		kafka.DefaultMockPartitionNum, &common.Message{})
 	require.NoError(t, err)
@@ -69,7 +66,6 @@ func TestDDLSyncSendMessage(t *testing.T) {
 
 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
 
-	syncProducer.(*kafka.MockSyncProducer).Producer.ExpectSendMessageAndSucceed()
 	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &common.Message{})
 	require.NoError(t, err)
 
@@ -84,7 +80,7 @@ func TestDDLProducerSendMsgFailed(t *testing.T) {
 	defer cancel()
 	options := getOptions()
 	options.MaxMessages = 1
-	options.MaxMessageBytes = 1
+	options.MaxMessageBytes = 1000
 
 	ctx = context.WithValue(ctx, "testing.T", t)
 
@@ -99,7 +95,7 @@ func TestDDLProducerSendMsgFailed(t *testing.T) {
 	p := NewKafkaDDLProducer(ctx, changefeed, syncProducer)
 	defer p.Close()
 
-	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &common.Message{})
+	err = p.SyncSendMessage(ctx, kafka.DefaultMockTopicName, 0, &common.Message{Value: make([]byte, 1000)})
 	fmt.Println(err)
 	require.ErrorIs(t, err, confluentKafka.NewError(confluentKafka.ErrMsgSizeTooLarge, "", false))
 }

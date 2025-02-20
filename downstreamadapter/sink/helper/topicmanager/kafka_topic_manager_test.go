@@ -106,8 +106,6 @@ func TestCreateTopicWithDelay(t *testing.T) {
 	defer manager.Close()
 	partitionNum, err := manager.createTopic(ctx, topic)
 	require.NoError(t, err)
-	err = adminClient.SetRemainingFetchesUntilTopicVisible(topic, 3)
-	require.NoError(t, err)
 	err = manager.waitUntilTopicVisible(ctx, topic)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)

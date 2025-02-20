@@ -72,9 +72,6 @@ type ClusterAdminClient interface {
 
 	// Close shuts down the admin client.
 	Close()
-
-	// SetRemainingFetchesUntilTopicVisible for mock
-	SetRemainingFetchesUntilTopicVisible(topic string, num int) error
 }
 
 // SyncProducer is the kafka sync producer
