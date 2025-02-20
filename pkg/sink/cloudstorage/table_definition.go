@@ -270,7 +270,7 @@ func (t *TableDefinition) ToTableInfo() (*common.TableInfo, error) {
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, tiCol)
 		nextMockID += 1
 	}
-	info := common.WrapTableInfo(100, t.Schema, tidbTableInfo)
+	info := common.WrapTableInfo(t.Schema, tidbTableInfo)
 
 	return info, nil
 }
