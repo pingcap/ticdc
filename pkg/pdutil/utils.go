@@ -16,10 +16,12 @@ package pdutil
 import (
 	"context"
 	"strconv"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/tiflow/pkg/config"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
+	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
@@ -49,4 +51,14 @@ func GetSourceID(ctx context.Context, pdClient pd.Client) (uint64, error) {
 		}
 	}
 	return sourceID, nil
+}
+
+// GenerateChangefeedEpoch generates a unique changefeed epoch.
+func GenerateChangefeedEpoch(ctx context.Context, pdClient pd.Client) uint64 {
+	phyTs, logical, err := pdClient.GetTS(ctx)
+	if err != nil {
+		log.Warn("generate epoch using local timestamp due to error", zap.Error(err))
+		return uint64(time.Now().UnixNano())
+	}
+	return oracle.ComposeTS(phyTs, logical)
 }
