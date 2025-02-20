@@ -308,7 +308,7 @@ func (s *rebalanceChecker) Check(_ int) replica.GroupCheckResult {
 
 	return nil
 	// disable rebalance for now
-	//return s.checkRebalance(nodeLoads, replications)
+	// return s.checkRebalance(nodeLoads, replications)
 }
 
 /*
