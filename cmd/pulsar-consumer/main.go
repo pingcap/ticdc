@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/cdc/sink/ddlsink"
 	ddlsinkfactory "github.com/pingcap/tiflow/cdc/sink/ddlsink/factory"
@@ -47,7 +48,6 @@ import (
 	"github.com/pingcap/tiflow/pkg/sink/codec/canal"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 	tpulsar "github.com/pingcap/tiflow/pkg/sink/pulsar"
-	"github.com/pingcap/tiflow/pkg/version"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
