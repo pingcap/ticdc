@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/ticdc/server"
 	"github.com/pingcap/tiflow/pkg/security"
-	oldarchversion "github.com/pingcap/tiflow/pkg/version"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
@@ -97,9 +96,8 @@ func (o *options) run(cmd *cobra.Command) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	oldarchversion.ReleaseVersion = version.ReleaseVersion
 	version.LogVersionInfo("Change Data Capture (CDC)")
-	log.Info("The TiCDC release version is", zap.String("ReleaseVersion", oldarchversion.ReleaseVersion))
+	log.Info("The TiCDC release version is", zap.String("ReleaseVersion", version.ReleaseVersion))
 
 	util.LogHTTPProxies()
 	svr, err := server.New(o.serverConfig, o.pdEndpoints)
