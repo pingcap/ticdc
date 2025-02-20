@@ -246,25 +246,6 @@ type TiCDCClusterVersion struct {
 	*semver.Version
 }
 
-// LessThan500RC returns true if th cluster version is less than 5.0.0-rc
-func (v *TiCDCClusterVersion) LessThan500RC() bool {
-	// we assume the unknown version to be the latest version
-	return v.Version == nil || !v.LessThan(*semver.New("5.0.0-rc"))
-}
-
-// ShouldEnableUnifiedSorterByDefault returns whether Unified Sorter should be enabled by default
-func (v *TiCDCClusterVersion) ShouldEnableUnifiedSorterByDefault() bool {
-	if v.Version == nil {
-		// we assume the unknown version to be the latest version
-		return true
-	}
-	// x >= 4.0.13 AND x != 5.0.0-rc
-	if v.String() == "5.0.0-rc" {
-		return false
-	}
-	return !v.LessThan(*semver.New("4.0.13")) || (v.Major == 4 && v.Minor == 0 && v.Patch == 13)
-}
-
 // ShouldRunCliWithOpenAPI returns whether to run cmd cli with open api
 func (v *TiCDCClusterVersion) ShouldRunCliWithOpenAPI() bool {
 	// we assume the unknown version to be the latest version
