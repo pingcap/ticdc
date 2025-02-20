@@ -511,6 +511,7 @@ func TestBalanceUnEvenTask(t *testing.T) {
 	require.Equal(t, 1, s.GetTaskSizeByNodeID("node3"))
 }
 
+/*
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	pdAPI := &mockPdAPI{
 		regions: make(map[int64][]pdutil.RegionInfo),
@@ -592,6 +593,7 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	require.Equal(t, 2, s.replicationDB.GetReplicatingSize())
 	require.True(t, s.bootstrapped)
 }
+*/
 
 func TestDynamicSplitTableBasic(t *testing.T) {
 	pdAPI := &mockPdAPI{

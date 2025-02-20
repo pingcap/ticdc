@@ -101,7 +101,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		EnableTableAcrossNodes: false,
 		RegionThreshold:        100_000,
 		WriteKeyThreshold:      0,
-		SplitNumberPerNode:     2,
+		SplitNumberPerNode:     1,
 	},
 	Integrity: &integrity.Config{
 		IntegrityCheckLevel:   integrity.CheckLevelNone,
