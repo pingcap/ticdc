@@ -316,17 +316,18 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.Chan
 
 func (c *coordinator) saveCheckpointTs(ctx context.Context, cfs map[common.ChangeFeedID]*changefeed.Changefeed) error {
 	statusMap := make(map[common.ChangeFeedID]uint64)
-	for _, upCf := range cfs {
-		reportedCheckpointTs := upCf.GetStatus().CheckpointTs
-		if upCf.GetLastSavedCheckPointTs() < reportedCheckpointTs {
-			statusMap[upCf.ID] = reportedCheckpointTs
-			c.checkStaleCheckpointTs(ctx, upCf.ID, reportedCheckpointTs)
+	for _, cf := range cfs {
+		reportedCheckpointTs := cf.GetStatus().CheckpointTs
+		if cf.GetLastSavedCheckPointTs() < reportedCheckpointTs {
+			statusMap[cf.ID] = reportedCheckpointTs
+			c.checkStaleCheckpointTs(ctx, cf.ID, reportedCheckpointTs)
 		}
 	}
 	if len(statusMap) == 0 {
 		return nil
 	}
 	err := c.controller.backend.UpdateChangefeedCheckpointTs(ctx, statusMap)
+	log.Debug("update checkpointTs to meta store", zap.Any("statusMap", statusMap))
 	if err != nil {
 		log.Error("failed to update checkpointTs", zap.Error(err))
 		return errors.Trace(err)

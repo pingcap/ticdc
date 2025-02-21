@@ -134,11 +134,20 @@ func (c *Changefeed) ShouldRun() bool {
 	return c.backoff.ShouldRun()
 }
 
-func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {
+// UpdateState updates the changefeed state and returns:
+// - (true, newState) if the state was changed
+// - (false, currentState) if no change was needed
+func (c *Changefeed) UpdateState(newStatus *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {
 	old := c.status.Load()
 
 	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
+		log.Debug("get new changefeed Status",
+			zap.Stringer("changefeed", c.ID),
+			zap.Uint64("oldCheckpointTs", old.CheckpointTs),
+			zap.Uint64("newCheckpointTs", newStatus.CheckpointTs))
+
 		c.status.Store(newStatus)
+
 		if old.BootstrapDone != newStatus.BootstrapDone {
 			log.Info("Received changefeed status with bootstrapDone",
 				zap.Stringer("changefeed", c.ID),
@@ -151,10 +160,11 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 		if info.TargetTs != 0 && newStatus.CheckpointTs >= info.TargetTs {
 			return true, model.StateFinished, nil
 		}
+
 		return c.backoff.CheckStatus(newStatus)
 	}
 
-	return false, model.StateNormal, nil
+	return false, model.FeedState(old.FeedState), nil
 }
 
 func (c *Changefeed) ForceUpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {

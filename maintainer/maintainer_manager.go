@@ -201,7 +201,7 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	response := &heartbeatpb.CoordinatorBootstrapResponse{}
 	m.maintainers.Range(func(key, value interface{}) bool {
 		maintainer := value.(*Maintainer)
-		status := maintainer.GetMaintainerStatus()
+		status := maintainer.getMaintainerStatus()
 		response.Statuses = append(response.Statuses, status)
 		maintainer.statusChanged.Store(false)
 		maintainer.lastReportTime = time.Now()
@@ -302,7 +302,7 @@ func (m *Manager) sendHeartbeat() {
 			cfMaintainer := value.(*Maintainer)
 			if cfMaintainer.statusChanged.Load() ||
 				time.Since(cfMaintainer.lastReportTime) > reportMaintainerStatusInterval {
-				mStatus := cfMaintainer.GetMaintainerStatus()
+				mStatus := cfMaintainer.getMaintainerStatus()
 				response.Statuses = append(response.Statuses, mStatus)
 				cfMaintainer.statusChanged.Store(false)
 				cfMaintainer.lastReportTime = time.Now()

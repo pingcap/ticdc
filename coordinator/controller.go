@@ -72,8 +72,8 @@ type Controller struct {
 	taskHandlers     []*threadpool.TaskHandle
 	messageCenter    messaging.MessageCenter
 
-	updatedChangefeedCh chan map[common.ChangeFeedID]*changefeed.Changefeed
-	stateChangedCh      chan *ChangefeedStateChangeEvent
+	changefeedCh   chan map[common.ChangeFeedID]*changefeed.Changefeed
+	stateChangedCh chan *ChangefeedStateChangeEvent
 
 	lastPrintStatusTime time.Time
 
@@ -89,7 +89,7 @@ type ChangefeedStateChangeEvent struct {
 func NewController(
 	version int64,
 	selfNode *node.Info,
-	updatedChangefeedCh chan map[common.ChangeFeedID]*changefeed.Changefeed,
+	changefeedCh chan map[common.ChangeFeedID]*changefeed.Changefeed,
 	stateChangedCh chan *ChangefeedStateChangeEvent,
 	backend changefeed.Backend,
 	eventCh *chann.DrainableChann[*Event],
@@ -130,7 +130,7 @@ func NewController(
 		nodeManager:         nodeManager,
 		taskScheduler:       taskScheduler,
 		backend:             backend,
-		updatedChangefeedCh: updatedChangefeedCh,
+		changefeedCh:        changefeedCh,
 		stateChangedCh:      stateChangedCh,
 		lastPrintStatusTime: time.Now(),
 	}
@@ -313,19 +313,28 @@ func (c *Controller) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Coordin
 
 // handleMaintainerStatus handle the status report from the maintainers
 func (c *Controller) handleMaintainerStatus(from node.ID, statusList []*heartbeatpb.MaintainerStatus) {
-	changedCfs := make(map[common.ChangeFeedID]*changefeed.Changefeed, len(statusList))
+
+	// changefeedList use to collect all changefeeds that exist in both local and remote
+	// After collecting all changefeeds, the controller will send the changefeed list to the changefeed channel
+	// to notify the coordinator to update the changefeed status to memory and DB.
+	changefeedList := make(map[common.ChangeFeedID]*changefeed.Changefeed, len(statusList))
 
 	for _, status := range statusList {
+		log.Debug("handle maintainer status",
+			zap.Stringer("changefeed", status.ChangefeedID),
+			zap.Stringer("node", from),
+			zap.String("status", common.FormatMaintainerStatus(status)))
+
 		cfID := common.NewChangefeedIDFromPB(status.ChangefeedID)
 		cf := c.handleSingleMaintainerStatus(from, status, cfID)
 		if cf != nil {
-			changedCfs[cfID] = cf
+			changefeedList[cfID] = cf
 		}
 	}
 
 	// Try to send updated changefeeds without blocking
 	select {
-	case c.updatedChangefeedCh <- changedCfs:
+	case c.changefeedCh <- changefeedList:
 	default:
 	}
 }
@@ -348,7 +357,7 @@ func (c *Controller) handleSingleMaintainerStatus(
 		return nil
 	}
 
-	c.updateChangefeedStatus(cf, cfID, status)
+	c.updateChangefeedState(cf, cfID, status)
 	return cf
 }
 
@@ -393,12 +402,15 @@ func (c *Controller) validateMaintainerNode(
 	return true
 }
 
-func (c *Controller) updateChangefeedStatus(
+// updateChangefeedState tries to update the changefeed state
+// if the state is changed, it will send a state change event to the state changed channel
+// to notify the coordinator
+func (c *Controller) updateChangefeedState(
 	cf *changefeed.Changefeed,
 	cfID common.ChangeFeedID,
 	status *heartbeatpb.MaintainerStatus,
 ) {
-	changed, state, err := cf.UpdateStatus(status)
+	changed, state, err := cf.UpdateState(status)
 	if !changed {
 		return
 	}

@@ -74,6 +74,8 @@ type Maintainer struct {
 	taskScheduler threadpool.ThreadPool
 	mc            messaging.MessageCenter
 
+	// Note: Please don't access the Watermark field directly,
+	// use the getWatermark() and setWatermark() methods instead.
 	watermark struct {
 		mu sync.RWMutex
 		*heartbeatpb.Watermark
@@ -319,7 +321,7 @@ func (m *Maintainer) Close() {
 		zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs))
 }
 
-func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
+func (m *Maintainer) getMaintainerStatus() *heartbeatpb.MaintainerStatus {
 	m.runningErrors.Lock()
 	defer m.runningErrors.Unlock()
 	var runningErrors []*heartbeatpb.RunningError
@@ -379,7 +381,7 @@ func (m *Maintainer) initialize() error {
 	log.Info("changefeed maintainer initialized",
 		zap.String("info", m.config.String()),
 		zap.String("id", m.id.String()),
-		zap.String("status", common.FormatMaintainerStatus(m.GetMaintainerStatus())),
+		zap.String("status", common.FormatMaintainerStatus(m.getMaintainerStatus())),
 		zap.Duration("duration", time.Since(start)))
 	m.statusChanged.Store(true)
 	return nil
@@ -495,7 +497,7 @@ func (m *Maintainer) onNodeChanged() {
 	}
 }
 
-func (m *Maintainer) calCheckpointTs() {
+func (m *Maintainer) calculateCheckpointTs() {
 	defer m.updateMetrics()
 	if !m.bootstrapped.Load() {
 		log.Warn("can not advance checkpointTs since not bootstrapped",
@@ -527,13 +529,14 @@ func (m *Maintainer) calCheckpointTs() {
 		return
 	}
 	newWatermark := heartbeatpb.NewMaxWatermark()
-	// if there is no tables, there must be a table trigger dispatcher
+
 	for id := range m.bootstrapper.GetAllNodes() {
-		// maintainer node has the table trigger dispatcher
+		// If the node is not the maintainer node and has no task, ignore it.
 		if id != m.selfNode.ID && m.controller.GetTaskSizeByNodeID(id) <= 0 {
 			continue
 		}
-		// node level watermark reported, ignore this round
+		// A capture has not reported its watermark, ignore this round.
+		// We must wait for all captures to report their watermark before advancing the checkpointTs.
 		if _, ok := m.checkpointTsByCapture[id]; !ok {
 			log.Warn("checkpointTs can not be advanced, since missing capture heartbeat",
 				zap.String("changefeed", m.id.Name()),
@@ -836,7 +839,7 @@ func (m *Maintainer) onPeriodTask() {
 	// send scheduling messages
 	m.handleResendMessage()
 	m.collectMetrics()
-	m.calCheckpointTs()
+	m.calculateCheckpointTs()
 	m.submitScheduledEvent(m.taskScheduler, &Event{
 		changefeedID: m.id,
 		eventType:    EventPeriod,
@@ -929,10 +932,28 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 	m.watermark.mu.Lock()
 	defer m.watermark.mu.Unlock()
 	if newWatermark.CheckpointTs != math.MaxUint64 {
-		m.watermark.CheckpointTs = newWatermark.CheckpointTs
+		if newWatermark.CheckpointTs < m.watermark.CheckpointTs {
+			log.Warn("checkpointTs is less than watermark.CheckpointTs, ignore it",
+				zap.String("changefeed", m.id.String()),
+				zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
+				zap.Uint64("watermarkCheckpointTs", m.watermark.CheckpointTs))
+		}
+
+		if newWatermark.CheckpointTs > m.watermark.CheckpointTs {
+			m.watermark.CheckpointTs = newWatermark.CheckpointTs
+		}
 	}
 	if newWatermark.ResolvedTs != math.MaxUint64 {
-		m.watermark.ResolvedTs = newWatermark.ResolvedTs
+		if newWatermark.ResolvedTs < m.watermark.ResolvedTs {
+			log.Warn("resolvedTs is less than watermark.ResolvedTs, ignore it",
+				zap.String("changefeed", m.id.String()),
+				zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
+				zap.Uint64("watermarkResolvedTs", m.watermark.ResolvedTs))
+		}
+
+		if newWatermark.ResolvedTs > m.watermark.ResolvedTs {
+			m.watermark.ResolvedTs = newWatermark.ResolvedTs
+		}
 	}
 }
 

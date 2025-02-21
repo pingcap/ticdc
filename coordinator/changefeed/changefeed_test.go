@@ -84,7 +84,7 @@ func TestChangefeed_UpdateStatus(t *testing.T) {
 	cf := NewChangefeed(cfID, info, 100, true)
 
 	newStatus := &heartbeatpb.MaintainerStatus{CheckpointTs: 200}
-	updated, state, err := cf.UpdateStatus(newStatus)
+	updated, state, err := cf.UpdateState(newStatus)
 	require.False(t, updated)
 	require.Equal(t, model.StateNormal, state)
 	require.Nil(t, err)
