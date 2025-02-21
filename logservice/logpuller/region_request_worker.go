@@ -284,16 +284,16 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	subscriptionID := SubscriptionID(resolvedTsEvent.RequestId)
 	metricsResolvedTsCount.Add(float64(len(resolvedTsEvent.Regions)))
 	s.client.metrics.batchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
+	// TODO: resolvedTsEvent.Ts be 0 is impossible, we need find the root cause.
+	if resolvedTsEvent.Ts == 0 {
+		log.Warn("region request worker receives a resolved ts event with zero value, ignore it",
+			zap.Uint64("workerID", s.workerID),
+			zap.Uint64("subscriptionID", resolvedTsEvent.RequestId),
+			zap.Any("regionIDs", resolvedTsEvent.Regions))
+		return
+	}
 	for _, regionID := range resolvedTsEvent.Regions {
-		// Note: resolvedTsEvent.Ts be 0 is impossible,
-		// write this check in the loop is to print all region ids if it happens.
-		if resolvedTsEvent.Ts == 0 {
-			log.Warn("region request worker receives a resolved ts event with 0 ts, ignore it",
-				zap.Uint64("workerID", s.workerID),
-				zap.Uint64("subscriptionID", resolvedTsEvent.RequestId),
-				zap.Uint64("regionID", regionID))
-			continue
-		} else if state := s.getRegionState(subscriptionID, regionID); state != nil {
+		if state := s.getRegionState(subscriptionID, regionID); state != nil {
 			s.client.pushRegionEventToDS(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
 				state:      state,
 				worker:     s,
