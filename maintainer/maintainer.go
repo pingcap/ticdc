@@ -590,6 +590,11 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 	if req.Watermark != nil {
 		old, ok := m.checkpointTsByCapture[msg.From]
 		if !ok || req.Watermark.Seq >= old.Seq {
+			log.Debug("update checkpointTs by capture",
+				zap.String("changefeed", m.id.String()),
+				zap.Stringer("capture", msg.From),
+				zap.Uint64("oldCheckpointTs", old.CheckpointTs),
+				zap.Uint64("newCheckpointTs", req.Watermark.CheckpointTs))
 			m.checkpointTsByCapture[msg.From] = *req.Watermark
 		}
 	}
@@ -933,7 +938,7 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 	defer m.watermark.mu.Unlock()
 	if newWatermark.CheckpointTs != math.MaxUint64 {
 		if newWatermark.CheckpointTs < m.watermark.CheckpointTs {
-			log.Warn("checkpointTs is less than watermark.CheckpointTs, ignore it",
+			log.Panic("checkpointTs is less than watermark.CheckpointTs, ignore it",
 				zap.String("changefeed", m.id.String()),
 				zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
 				zap.Uint64("watermarkCheckpointTs", m.watermark.CheckpointTs))
@@ -945,7 +950,7 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 	}
 	if newWatermark.ResolvedTs != math.MaxUint64 {
 		if newWatermark.ResolvedTs < m.watermark.ResolvedTs {
-			log.Warn("resolvedTs is less than watermark.ResolvedTs, ignore it",
+			log.Panic("resolvedTs is less than watermark.ResolvedTs, ignore it",
 				zap.String("changefeed", m.id.String()),
 				zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
 				zap.Uint64("watermarkResolvedTs", m.watermark.ResolvedTs))
