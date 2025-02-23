@@ -39,7 +39,7 @@ import (
 
 // for the events, we try to batch the events of the same table into single update / insert / delete query,
 // to enhance the performance of the sink.
-// While we only support to batch the events with pks.
+// While we only support to batch the events with pks, and all the events inSafeMode or all not in inSafeMode.
 // the process is as follows:
 //  1. we group the events by dispatcherID, and hold the order for the events of the same dispatcher
 //  2. For each group,
@@ -80,6 +80,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 			continue
 		}
 
+		// if there only one row in the group, we can use the normal sql generate
 		if len(eventsInGroup) == 1 && eventsInGroup[0].Len() == 1 {
 			// use the normal sql generate
 			for _, event := range eventsInGroup {
@@ -95,7 +96,34 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 			continue
 		}
 
+		// if the events are in different safe mode, we can't use the batch dml generate
+		if len(eventsInGroup) > 0 {
+			firstEventSafeMode := !w.cfg.SafeMode && eventsInGroup[0].CommitTs > eventsInGroup[0].ReplicatingTs
+			finalEventSafeMode := !w.cfg.SafeMode && eventsInGroup[len(eventsInGroup)-1].CommitTs > eventsInGroup[len(eventsInGroup)-1].ReplicatingTs
+			if firstEventSafeMode != finalEventSafeMode {
+				for _, event := range eventsInGroup {
+					queryList, argsList, err := w.generateNormalSQL(event)
+					if err != nil {
+						return nil, errors.Trace(err)
+					}
+					for _, query := range queryList {
+						dmls.sqls = append(dmls.sqls, query)
+						dmls.values = append(dmls.values, argsList...)
+					}
+				}
+				continue
+			}
+		}
+
 		// use the batch dml generate
+		queryList, argsList, err := w.generateBatchSQL(eventsInGroup)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		for _, query := range queryList {
+			dmls.sqls = append(dmls.sqls, query)
+			dmls.values = append(dmls.values, argsList...)
+		}
 	}
 	// Pre-check log level to avoid dmls.String() being called unnecessarily
 	// This method is expensive, so we only log it when the log level is debug.
@@ -104,6 +132,58 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 	}
 
 	return dmls, nil
+}
+
+// for generate batch sql for multi events, we first need to compare the rows with the same pk, to genearte the final rows.
+// because for the batch sqls, we will first execute delete sqls, then update sqls, and finally insert sqls.
+// Here we mainly divide it into 2 cases:
+//  1. if all the events are in unsafe mode, we need to split update into delete and insert. So we first split each update row into a delete and a insert one.
+//     Then compare all delete and insert rows, to delete useless rows.
+//     if the previous row is Insert A, and the next row is Delete A -- Romove the `Insert A` one.
+//
+// 2. if all the events are in safe mode:
+// for the rows comparation, there are six situations:
+// 1. the previous row is Delete A, the next row is Insert A. --- we don't need to combine the rows.
+// 2. the previous row is Delete A, the next row is Update B to A. --- we don't need to combine the rows.
+// 3. the previous row is Insert A, the next row is Delete A. --- remove the row of `Insert A`
+// 4. the previous row is Insert A, the next row is Update A to C --  remove the row of `Insert A`, change the row `Update A to C` to `Insert C`
+// 5. the previous row is Update A to B, the next row is Delete B. --- remove the row `Delete B`, change the row `Update A to B` to `Delete A`
+// 6. the previous row is Update A to B, the next row is Update B to C. --- we don't need to combine the rows.
+//
+// For these all changes to row, we will continue to compare from the beginnning to the end, until there is no change.
+// Then we can generate the final sql of delete/update/insert.
+func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+	inSafeMode := !w.cfg.SafeMode && events[0].CommitTs > events[0].ReplicatingTs
+	tableInfo := events[0].TableInfo
+	if inSafeMode {
+
+	} else {
+		// unsafe mode
+		// step 1. divide update row to delete row and insert row
+		rowsList := []*commonEvent.RowChange{}
+
+		for _, event := range events {
+			row, ok := event.GetNextRow()
+			if !ok {
+				break
+			}
+			switch row.RowType {
+			case commonEvent.RowTypeUpdate:
+				deleteRow := commonEvent.RowChange{RowType: commonEvent.RowTypeDelete, Row: row.PreRow}
+				insertRow := commonEvent.RowChange{RowType: commonEvent.RowTypeInsert, Row: row.Row}
+				rowsList = append(rowsList, &deleteRow)
+				rowsList = append(rowsList, &insertRow)
+			case commonEvent.RowTypeDelete:
+				rowsList = append(rowsList, &row)
+			case commonEvent.RowTypeInsert:
+				rowsList = append(rowsList, &row)
+			}
+		}
+
+		// step 2. loop and compare whether there exist 'insert and delete' pair
+
+		// step 3. generate sqls
+	}
 }
 
 func (w *MysqlWriter) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
