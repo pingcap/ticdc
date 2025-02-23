@@ -152,6 +152,74 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 	tableInfo := events[0].TableInfo
 
 	if inSafeMode {
+		type RowChangeWithKeys struct {
+			RowChange  *commonEvent.RowChange
+			RowKeys    [][]byte
+			PreRowKeys [][]byte
+		}
+		// step 1. loop to combine the rows until there is no change
+		rowLists := make([]RowChangeWithKeys, 0)
+		for _, event := range events {
+			for {
+				row, ok := event.GetNextRow()
+				if !ok {
+					event.FinishGetRow()
+					break
+				}
+				rowChangeWithKeys := RowChangeWithKeys{RowChange: &row}
+				if !row.Row.IsEmpty() {
+					_, keys, err := genKeyAndHash(&row.Row, tableInfo)
+					if err != nil {
+						return nil, nil, errors.Trace(err)
+					}
+					rowChangeWithKeys.RowKeys = keys
+				}
+				if !row.PreRow.IsEmpty() {
+					_, keys, err := genKeyAndHash(&row.PreRow, tableInfo)
+					if err != nil {
+						return nil, nil, errors.Trace(err)
+					}
+					rowChangeWithKeys.PreRowKeys = keys
+				}
+				rowLists = append(rowLists, rowChangeWithKeys)
+			}
+		}
+
+		newRowLists := make([]RowChangeWithKeys, 0, len(rowLists))
+		for i := 0; i < len(rowLists); i++ {
+			for j := i + 1; j < len(rowLists); j++ {
+				firstRowExist := true
+				secondRowExist := true
+
+				rowType := rowLists[i].RowChange.RowType
+				nextRowType := rowLists[j].RowChange.RowType
+				switch rowType {
+				case commonEvent.RowTypeDelete:
+					rowKey := rowLists[i].PreRowKeys
+					if nextRowType == commonEvent.RowTypeDelete {
+						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
+							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+						}
+					} else if nextRowType == commonEvent.RowTypeUpdate {
+						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
+							log.Panic("Here are two invalid rows, one is Delete A, the other is Update A to B", zap.Any("Events", events))
+						}
+					}
+				case commonEvent.RowTypeInsert:
+					rowKey := rowLists[i].RowKeys
+					if nextRowType == commonEvent.RowTypeInsert {
+						if compareKeys(rowKey, rowLists[j].RowKeys) {
+							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+						}
+					} else if nextRowType == commonEvent.RowTypeDelete {
+						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
+							// remove the insert one
+						}
+					}
+				case commonEvent.RowTypeUpdate:
+				}
+			}
+		}
 
 	} else {
 		// unsafe mode
