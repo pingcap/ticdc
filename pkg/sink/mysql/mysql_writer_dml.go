@@ -67,15 +67,13 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 		tableInfo := eventsInGroup[0].TableInfo
 		if !tableInfo.HasHandleKey() {
 			// use the normal sql generate
-			for _, event := range eventsInGroup {
-				queryList, argsList, err := w.generateNormalSQL(event)
-				if err != nil {
-					return nil, errors.Trace(err)
-				}
-				for _, query := range queryList {
-					dmls.sqls = append(dmls.sqls, query)
-					dmls.values = append(dmls.values, argsList...)
-				}
+			queryList, argsList, err := w.generateNormalSQLs(eventsInGroup)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			for _, query := range queryList {
+				dmls.sqls = append(dmls.sqls, query)
+				dmls.values = append(dmls.values, argsList...)
 			}
 			continue
 		}
@@ -83,15 +81,13 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 		// if there only one row in the group, we can use the normal sql generate
 		if len(eventsInGroup) == 1 && eventsInGroup[0].Len() == 1 {
 			// use the normal sql generate
-			for _, event := range eventsInGroup {
-				queryList, argsList, err := w.generateNormalSQL(event)
-				if err != nil {
-					return nil, errors.Trace(err)
-				}
-				for _, query := range queryList {
-					dmls.sqls = append(dmls.sqls, query)
-					dmls.values = append(dmls.values, argsList...)
-				}
+			queryList, argsList, err := w.generateNormalSQLs(eventsInGroup)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			for _, query := range queryList {
+				dmls.sqls = append(dmls.sqls, query)
+				dmls.values = append(dmls.values, argsList...)
 			}
 			continue
 		}
@@ -101,15 +97,14 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 			firstEventSafeMode := !w.cfg.SafeMode && eventsInGroup[0].CommitTs > eventsInGroup[0].ReplicatingTs
 			finalEventSafeMode := !w.cfg.SafeMode && eventsInGroup[len(eventsInGroup)-1].CommitTs > eventsInGroup[len(eventsInGroup)-1].ReplicatingTs
 			if firstEventSafeMode != finalEventSafeMode {
-				for _, event := range eventsInGroup {
-					queryList, argsList, err := w.generateNormalSQL(event)
-					if err != nil {
-						return nil, errors.Trace(err)
-					}
-					for _, query := range queryList {
-						dmls.sqls = append(dmls.sqls, query)
-						dmls.values = append(dmls.values, argsList...)
-					}
+				// use the normal sql generate
+				queryList, argsList, err := w.generateNormalSQLs(eventsInGroup)
+				if err != nil {
+					return nil, errors.Trace(err)
+				}
+				for _, query := range queryList {
+					dmls.sqls = append(dmls.sqls, query)
+					dmls.values = append(dmls.values, argsList...)
 				}
 				continue
 			}
@@ -155,35 +150,148 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
 	inSafeMode := !w.cfg.SafeMode && events[0].CommitTs > events[0].ReplicatingTs
 	tableInfo := events[0].TableInfo
+
 	if inSafeMode {
 
 	} else {
 		// unsafe mode
-		// step 1. divide update row to delete row and insert row
-		rowsList := []*commonEvent.RowChange{}
+		// step 1. divide update row to delete row and insert row, and set into map based on the key hash
+		rowsMap := make(map[uint64][]*commonEvent.RowChange)
+		hashToKeyMap := make(map[uint64][][]byte)
 
+		// TODO: extract a function here to clean code
 		for _, event := range events {
 			row, ok := event.GetNextRow()
 			if !ok {
+				event.FinishGetRow()
 				break
 			}
 			switch row.RowType {
 			case commonEvent.RowTypeUpdate:
-				deleteRow := commonEvent.RowChange{RowType: commonEvent.RowTypeDelete, Row: row.PreRow}
-				insertRow := commonEvent.RowChange{RowType: commonEvent.RowTypeInsert, Row: row.Row}
-				rowsList = append(rowsList, &deleteRow)
-				rowsList = append(rowsList, &insertRow)
+				{
+					deleteRow := commonEvent.RowChange{RowType: commonEvent.RowTypeDelete, Row: row.PreRow}
+					hashValue, keyValue, err := genKeyAndHash(&row.PreRow, tableInfo)
+					if err != nil {
+						return nil, nil, errors.Trace(err)
+					}
+					if _, ok := hashToKeyMap[hashValue]; !ok {
+						hashToKeyMap[hashValue] = keyValue
+					} else {
+						if !compareKeys(hashToKeyMap[hashValue], keyValue) {
+							log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
+							event.FinishGetRow() // reset event
+							// use normal sql instead
+							return w.generateNormalSQLs(events)
+						}
+					}
+					rowsMap[hashValue] = append(rowsMap[hashValue], &deleteRow)
+				}
+
+				{
+					insertRow := commonEvent.RowChange{RowType: commonEvent.RowTypeInsert, Row: row.Row}
+					hashValue, keyValue, err := genKeyAndHash(&row.Row, tableInfo)
+					if err != nil {
+						return nil, nil, errors.Trace(err)
+					}
+					if _, ok := hashToKeyMap[hashValue]; !ok {
+						hashToKeyMap[hashValue] = keyValue
+					} else {
+						if !compareKeys(hashToKeyMap[hashValue], keyValue) {
+							log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
+							event.FinishGetRow() // reset event
+							// use normal sql instead
+							return w.generateNormalSQLs(events)
+						}
+					}
+
+					rowsMap[hashValue] = append(rowsMap[hashValue], &insertRow)
+				}
 			case commonEvent.RowTypeDelete:
-				rowsList = append(rowsList, &row)
+				hashValue, keyValue, err := genKeyAndHash(&row.PreRow, tableInfo)
+				if err != nil {
+					return nil, nil, errors.Trace(err)
+				}
+				if _, ok := hashToKeyMap[hashValue]; !ok {
+					hashToKeyMap[hashValue] = keyValue
+				} else {
+					if !compareKeys(hashToKeyMap[hashValue], keyValue) {
+						log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
+						event.FinishGetRow() // reset event
+						// use normal sql instead
+						return w.generateNormalSQLs(events)
+					}
+				}
+				rowsMap[hashValue] = append(rowsMap[hashValue], &row)
 			case commonEvent.RowTypeInsert:
-				rowsList = append(rowsList, &row)
+				hashValue, keyValue, err := genKeyAndHash(&row.Row, tableInfo)
+				if err != nil {
+					return nil, nil, errors.Trace(err)
+				}
+				if _, ok := hashToKeyMap[hashValue]; !ok {
+					hashToKeyMap[hashValue] = keyValue
+				} else {
+					if !compareKeys(hashToKeyMap[hashValue], keyValue) {
+						log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
+						event.FinishGetRow() // reset event
+						// use normal sql instead
+						return w.generateNormalSQLs(events)
+					}
+				}
+				rowsMap[hashValue] = append(rowsMap[hashValue], &row)
 			}
 		}
 
-		// step 2. loop and compare whether there exist 'insert and delete' pair
+		// step 2. compare the rows in the same key hash, to generate the final rows
+		rowsList := make([]*commonEvent.RowChange, 0, len(rowsMap))
+		for _, rowChanges := range rowsMap {
+			if len(rowChanges) == 0 {
+				continue
+			}
+			if len(rowChanges) == 1 {
+				rowsList = append(rowsList, rowChanges[0])
+			}
+			// should only happen the rows like 'insert / delete / insert / delete ...' or 'delete / insert /delete ...' ,
+			// should not happen 'insert / insert' or 'delete / delete'
+			// so only the last one can be the final row changes
+			prevType := rowChanges[0].RowType
+			for i := 1; i < len(rowChanges); i++ {
+				rowType := rowChanges[i].RowType
+				if rowType != prevType {
+					prevType = rowType
+				} else {
+					// TODO:add more info here
+					log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges), zap.Any("prevType", prevType), zap.Any("currentType", rowType))
+				}
+			}
+			rowsList = append(rowsList, rowChanges[len(rowChanges)-1])
+		}
 
 		// step 3. generate sqls
+		sql, value, err := w.batchSingleTxnDmls(rowsList, tableInfo, inSafeMode)
+		return sql, value, errors.Trace(err)
 	}
+}
+
+func (w *MysqlWriter) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+	var querys []string
+	var args [][]interface{}
+
+	for _, event := range events {
+		if event.Len() == 0 {
+			continue
+		}
+
+		queryList, argsList, err := w.generateNormalSQL(event)
+		if err != nil {
+			return nil, nil, errors.Trace(err)
+		}
+
+		for _, query := range queryList {
+			querys = append(querys, query)
+			args = append(args, argsList...)
+		}
+	}
+	return querys, args, nil
 }
 
 func (w *MysqlWriter) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
@@ -510,11 +618,11 @@ func logDMLTxnErr(
 }
 
 func (w *MysqlWriter) batchSingleTxnDmls(
-	event *commonEvent.DMLEvent,
+	rows []*commonEvent.RowChange,
 	tableInfo *common.TableInfo,
 	translateToInsert bool,
 ) (sqls []string, values [][]interface{}, err error) {
-	insertRows, updateRows, deleteRows, err := w.groupRowsByType(event, tableInfo)
+	insertRows, updateRows, deleteRows, err := w.groupRowsByType(rows, tableInfo)
 	if err != nil {
 		return nil, nil, errors.Trace(err)
 	}
@@ -569,10 +677,10 @@ func (w *MysqlWriter) batchSingleTxnDmls(
 }
 
 func (w *MysqlWriter) groupRowsByType(
-	event *commonEvent.DMLEvent,
+	rows []*commonEvent.RowChange,
 	tableInfo *common.TableInfo,
 ) (insertRows, updateRows, deleteRows [][]*sqlmodel.RowChange, err error) {
-	rowSize := int(event.Len())
+	rowSize := len(rows)
 	if rowSize > w.cfg.MaxTxnRow {
 		rowSize = w.cfg.MaxTxnRow
 	}
@@ -587,12 +695,7 @@ func (w *MysqlWriter) groupRowsByType(
 	if eventTableInfo.HasVirtualColumns() {
 		eventTableInfo = common.BuildTiDBTableInfoWithoutVirtualColumns(eventTableInfo)
 	}
-	for {
-		row, ok := event.GetNextRow()
-		if !ok {
-			break
-		}
-
+	for _, row := range rows {
 		switch row.RowType {
 		case commonEvent.RowTypeInsert:
 			args, err := getArgs(&row.Row, tableInfo, true)
