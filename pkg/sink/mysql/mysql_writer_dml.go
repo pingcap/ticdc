@@ -37,7 +37,130 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// for the events, we try to batch the events of the same table into single update / insert / delete query,
+// to enhance the performance of the sink.
+// While we only support to batch the events with pks.
+// the process is as follows:
+//  1. we group the events by dispatcherID, and hold the order for the events of the same dispatcher
+//  2. For each group,
+//     if the table does't have a handle key, we just generate the sqls for each event row.(TODO: support the case without pk but have uk)
+//     Otherwise,
+//     if there is only one rows of the whole group, we generate the sqls for the row.
+//     Otherwise, we batch all the event rows for the same dispatcherID to a single delete / update/ insert query(in order),
 func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
+	dmls := dmlsPool.Get().(*preparedDMLs)
+	dmls.reset()
+
+	// Step 1: group the events by dispatcher id
+	eventsGroup := make(map[common.DispatcherID][]*commonEvent.DMLEvent) // dispatcherID--> events
+	for _, event := range events {
+		dispatcherID := event.DispatcherID
+		if _, ok := eventsGroup[dispatcherID]; !ok {
+			eventsGroup[dispatcherID] = make([]*commonEvent.DMLEvent, 0)
+		}
+		eventsGroup[dispatcherID] = append(eventsGroup[dispatcherID], event)
+	}
+
+	// Step 2: prepare the dmls for each group
+	for _, eventsInGroup := range eventsGroup {
+		// check if the table has a handle key
+		tableInfo := eventsInGroup[0].TableInfo
+		if !tableInfo.HasHandleKey() {
+			// use the normal sql generate
+			for _, event := range eventsInGroup {
+				queryList, argsList, err := w.generateNormalSQL(event)
+				if err != nil {
+					return nil, errors.Trace(err)
+				}
+				for _, query := range queryList {
+					dmls.sqls = append(dmls.sqls, query)
+					dmls.values = append(dmls.values, argsList...)
+				}
+			}
+			continue
+		}
+
+		if len(eventsInGroup) == 1 && eventsInGroup[0].Len() == 1 {
+			// use the normal sql generate
+			for _, event := range eventsInGroup {
+				queryList, argsList, err := w.generateNormalSQL(event)
+				if err != nil {
+					return nil, errors.Trace(err)
+				}
+				for _, query := range queryList {
+					dmls.sqls = append(dmls.sqls, query)
+					dmls.values = append(dmls.values, argsList...)
+				}
+			}
+			continue
+		}
+
+		// use the batch dml generate
+	}
+	// Pre-check log level to avoid dmls.String() being called unnecessarily
+	// This method is expensive, so we only log it when the log level is debug.
+	if log.GetLevel() == zapcore.DebugLevel {
+		log.Debug("prepareDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
+	}
+
+	return dmls, nil
+}
+
+func (w *MysqlWriter) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+	var queryList []string
+	var argsList [][]interface{}
+
+	inSafeMode := !w.cfg.SafeMode && event.CommitTs > event.ReplicatingTs
+
+	log.Debug("inSafeMode",
+		zap.Bool("inSafeMode", inSafeMode),
+		zap.Uint64("firstRowCommitTs", event.CommitTs),
+		zap.Uint64("firstRowReplicatingTs", event.ReplicatingTs),
+		zap.Bool("safeMode", w.cfg.SafeMode))
+
+	var query string
+	var args []interface{}
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			return queryList, argsList, nil
+		}
+
+		var err error
+		switch row.RowType {
+		case commonEvent.RowTypeUpdate:
+			if inSafeMode {
+				query, args, err = buildUpdate(event.TableInfo, row, w.cfg.ForceReplicate)
+			} else {
+				query, args, err = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
+				if err != nil {
+					return queryList, argsList, errors.Trace(err)
+				}
+				if query != "" {
+					queryList = append(queryList, query)
+					argsList = append(argsList, args)
+				}
+				query, args, err = buildInsert(event.TableInfo, row, inSafeMode)
+			}
+		case commonEvent.RowTypeDelete:
+			query, args, err = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
+		case commonEvent.RowTypeInsert:
+			query, args, err = buildInsert(event.TableInfo, row, !w.cfg.SafeMode)
+		}
+
+		if err != nil {
+			return queryList, argsList, errors.Trace(err)
+		}
+
+		if query != "" {
+			queryList = append(queryList, query)
+			argsList = append(argsList, args)
+		}
+	}
+	return queryList, argsList, nil
+}
+
+func (w *MysqlWriter) prepareDMLsBackup(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 
