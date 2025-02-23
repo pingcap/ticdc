@@ -104,13 +104,13 @@ func NewController(changefeedID common.ChangeFeedID,
 	return s
 }
 
-// HandleStatus handle the status report from the node
+// HandleStatus handle the span status report from the node
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 		c.operatorController.UpdateOperatorStatus(dispatcherID, from, status)
-		stm := c.GetTask(dispatcherID)
-		if stm == nil {
+		spanTask := c.GetTask(dispatcherID)
+		if spanTask == nil {
 			if status.ComponentStatus != heartbeatpb.ComponentState_Working {
 				continue
 			}
@@ -127,7 +127,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 			}
 			continue
 		}
-		nodeID := stm.GetNodeID()
+		nodeID := spanTask.GetNodeID()
 		if nodeID != from {
 			// todo: handle the case that the node id is mismatch
 			log.Warn("node id not match",
@@ -136,7 +136,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 				zap.Stringer("node", nodeID))
 			continue
 		}
-		c.replicationDB.UpdateStatus(stm, status)
+		c.replicationDB.UpdateStatus(spanTask, status)
 	}
 }
 

@@ -581,6 +581,7 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 	}
 }
 
+// onHeartBeatRequest handles the heartbeat request from dispatcher managers.
 func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 	// ignore the heartbeat if the maintainer not bootstrapped
 	if !m.bootstrapped.Load() {
@@ -938,7 +939,7 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 	defer m.watermark.mu.Unlock()
 	if newWatermark.CheckpointTs != math.MaxUint64 {
 		if newWatermark.CheckpointTs < m.watermark.CheckpointTs {
-			log.Panic("checkpointTs is less than watermark.CheckpointTs, ignore it",
+			log.Panic("new checkpointTs is less than watermark.CheckpointTs, ignore it",
 				zap.String("changefeed", m.id.String()),
 				zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
 				zap.Uint64("watermarkCheckpointTs", m.watermark.CheckpointTs))
@@ -950,7 +951,7 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 	}
 	if newWatermark.ResolvedTs != math.MaxUint64 {
 		if newWatermark.ResolvedTs < m.watermark.ResolvedTs {
-			log.Panic("resolvedTs is less than watermark.ResolvedTs, ignore it",
+			log.Panic("new resolvedTs is less than watermark.ResolvedTs, ignore it",
 				zap.String("changefeed", m.id.String()),
 				zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
 				zap.Uint64("watermarkResolvedTs", m.watermark.ResolvedTs))
