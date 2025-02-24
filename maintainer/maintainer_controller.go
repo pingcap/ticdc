@@ -374,7 +374,17 @@ func (c *Controller) RemoveNode(id node.ID) {
 
 // ScheduleFinished return false if not all task are running in working state
 func (c *Controller) ScheduleFinished() bool {
-	return c.replicationDB.GetAbsentSize() == 0 && c.operatorController.OperatorSize() == 0
+	// the comparation sequence is important. Because the two comparison are not atomic
+	// so we need to compare the operator size first.
+	// Besides, each operator need to ensure that only when the operator is totally finished,
+	// can the scheduleFinished status be set to true.
+	// Especially, for the merge and split operator, we create new replication in `PostFinished`
+	// if we compare the absent size first, it may happen that:
+	// 1. absent size is 0
+	// 2. execute the post finish of merge and split operator, create the absent replication, and remove the operator
+	// 3. then the operator size is 0, and the scheduleFinished is set to true, while the scheduler is not finished actually.
+	// TODO: make the operators more appropriate or make the comparaison atomic
+	return c.operatorController.OperatorSize() == 0 && c.replicationDB.GetAbsentSize() == 0
 }
 
 func (c *Controller) TaskSize() int {
