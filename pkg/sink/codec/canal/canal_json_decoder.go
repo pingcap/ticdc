@@ -18,13 +18,17 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/tidb/pkg/parser/types"
+	tiTypes "github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
+	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pingcap/log"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -36,10 +40,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/parser/types"
-	tiTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"github.com/pingcap/tiflow/pkg/util"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
@@ -537,12 +538,15 @@ func canalJSONFormatColumn(columnID int64, value interface{}, mysqlTypeStr strin
 
 func (b *canalJSONDecoder) canalJSONMessage2RowChange() (*commonEvent.DMLEvent, error) {
 	msg := b.msg
+	tableInfo := b.queryTableInfo(msg)
+
 	result := new(commonEvent.DMLEvent)
 	result.Length++                    // todo: set this field correctly
 	result.StartTs = msg.getCommitTs() // todo: how to set this correctly?
 	result.ApproximateSize = 0
-	result.TableInfo = b.queryTableInfo(msg)
-	result.Rows = nil // todo: set this correctly
+	result.TableInfo = tableInfo
+	// write pre-columns and columns into the Rows
+	result.Rows = chunk.NewEmptyChunk(result.TableInfo.GetFieldSlice())
 	result.CommitTs = msg.getCommitTs()
 
 	mysqlType := msg.getMySQLType()
