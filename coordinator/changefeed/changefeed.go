@@ -141,7 +141,7 @@ func (c *Changefeed) UpdateState(newStatus *heartbeatpb.MaintainerStatus) (bool,
 	old := c.status.Load()
 
 	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
-		log.Debug("get new changefeed Status",
+		log.Info("hyy get new changefeed Status",
 			zap.Stringer("changefeed", c.ID),
 			zap.Uint64("oldCheckpointTs", old.CheckpointTs),
 			zap.Uint64("newCheckpointTs", newStatus.CheckpointTs))

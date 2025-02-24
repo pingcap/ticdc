@@ -591,7 +591,7 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 	if req.Watermark != nil {
 		old, ok := m.checkpointTsByCapture[msg.From]
 		if !ok || req.Watermark.Seq >= old.Seq {
-			log.Debug("update checkpointTs by capture",
+			log.Info("hyy update checkpointTs by capture",
 				zap.String("changefeed", m.id.String()),
 				zap.Stringer("capture", msg.From),
 				zap.Uint64("oldCheckpointTs", old.CheckpointTs),

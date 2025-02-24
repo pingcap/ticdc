@@ -320,7 +320,7 @@ func (c *Controller) handleMaintainerStatus(from node.ID, statusList []*heartbea
 	changefeedList := make(map[common.ChangeFeedID]*changefeed.Changefeed, len(statusList))
 
 	for _, status := range statusList {
-		log.Debug("handle maintainer status",
+		log.Info("hyy handle maintainer status",
 			zap.Stringer("changefeed", status.ChangefeedID),
 			zap.Stringer("node", from),
 			zap.String("status", common.FormatMaintainerStatus(status)))

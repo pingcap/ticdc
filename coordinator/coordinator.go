@@ -327,7 +327,7 @@ func (c *coordinator) saveCheckpointTs(ctx context.Context, cfs map[common.Chang
 		return nil
 	}
 	err := c.controller.backend.UpdateChangefeedCheckpointTs(ctx, statusMap)
-	log.Debug("update checkpointTs to meta store", zap.Any("statusMap", statusMap))
+	log.Info("hyy update checkpointTs to meta store", zap.Any("statusMap", statusMap))
 	if err != nil {
 		log.Error("failed to update checkpointTs", zap.Error(err))
 		return errors.Trace(err)

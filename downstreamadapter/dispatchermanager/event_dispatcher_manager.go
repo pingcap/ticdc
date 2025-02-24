@@ -650,7 +650,7 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 			message.ChangefeedID = e.changefeedID.ToPB()
 			message.Statuses = statusMessage
 			message.Watermark = newWatermark
-			log.Debug("hyy generate watermark", zap.Any("watermark", message.Watermark), zap.Any("changefeedID", message.ChangefeedID), zap.Any("message", message))
+			log.Info("hyy generate watermark", zap.Any("watermark", message.Watermark), zap.Any("changefeedID", message.ChangefeedID), zap.Any("message", message))
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 		}
 	}
@@ -712,7 +712,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	message.Watermark.Seq = seq
 	e.latestWatermark.Set(message.Watermark)
 
-	log.Debug("hyy aggregateDispatcherHeartbeats", zap.Any("watermark", message.Watermark), zap.Any("message", message))
+	log.Info("hyy aggregateDispatcherHeartbeats", zap.Any("watermark", message.Watermark), zap.Any("message", message))
 
 	// if the event dispatcher manager is closing, we don't to remove the stopped dispatchers.
 	if !e.closing.Load() {
