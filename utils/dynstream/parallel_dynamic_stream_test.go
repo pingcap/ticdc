@@ -119,7 +119,7 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 	pi := stream.pathMap["path1"]
 	stream.mutex.Unlock()
 	require.Equal(t, 0, pi.area)
-	require.Equal(t, 1024, pi.areaMemStat.settings.Load().maxPendingSize)
+	require.Equal(t, uint64(1024), pi.areaMemStat.settings.Load().maxPendingSize)
 	require.Equal(t, 10*time.Millisecond, pi.areaMemStat.settings.Load().feedbackInterval)
 
 	// case 2: add event to the path
@@ -135,6 +135,7 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 }
 
 func TestFeedBack(t *testing.T) {
+	t.Parallel()
 	fb1 := Feedback[int, string, any]{
 		FeedbackType: PauseArea,
 	}

@@ -199,7 +199,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota)
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2)
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Info("add dispatcher to dynamic stream failed", zap.Error(err))
@@ -277,10 +277,8 @@ func (c *EventCollector) processFeedback(ctx context.Context) {
 			return
 		case feedback := <-c.ds.Feedback():
 			switch feedback.FeedbackType {
-			case dynstream.PauseArea:
-				feedback.Dest.pauseChangefeed(c)
-			case dynstream.ResumeArea:
-				feedback.Dest.resumeChangefeed(c)
+			case dynstream.PauseArea, dynstream.ResumeArea:
+				// Ignore it, because it is no need to pause and resume an area in event collector.
 			case dynstream.PausePath:
 				feedback.Dest.pauseDispatcher(c)
 			case dynstream.ResumePath:

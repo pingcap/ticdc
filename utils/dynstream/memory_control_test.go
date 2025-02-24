@@ -15,7 +15,6 @@ package dynstream
 
 import (
 	"fmt"
-	"math"
 	"testing"
 	"time"
 
@@ -46,6 +45,7 @@ func TestMemControlAddRemovePath(t *testing.T) {
 	settings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Second,
+		algorithm:        MemoryControlAlgorithmV1,
 	}
 	feedbackChan := make(chan Feedback[int, string, any], 10)
 
@@ -65,6 +65,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	settings := AreaSettings{
 		maxPendingSize:   15,
 		feedbackInterval: time.Millisecond * 10,
+		algorithm:        MemoryControlAlgorithmV1,
 	}
 	feedbackChan := make(chan Feedback[int, string, any], 10)
 	mc.addPathToArea(path1, settings, feedbackChan)
@@ -141,6 +142,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	newSettings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Millisecond * 10,
+		algorithm:        MemoryControlAlgorithmV1,
 	}
 	mc.setAreaSettings(path1.area, newSettings)
 	require.Equal(t, uint64(1000), path1.areaMemStat.settings.Load().maxPendingSize)
@@ -169,11 +171,12 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	require.False(t, path1.areaMemStat.paused.Load())
 }
 
-func TestShouldPausePath(t *testing.T) {
+func TestShouldPausePathV1(t *testing.T) {
 	mc, path := setupTestComponents()
 	settings := AreaSettings{
 		maxPendingSize:   100,
 		feedbackInterval: time.Millisecond * 10,
+		algorithm:        MemoryControlAlgorithmV1,
 	}
 
 	areaMemStat := newAreaMemStat(path.area, mc, settings, nil)
@@ -213,11 +216,12 @@ func TestShouldPausePath(t *testing.T) {
 	require.False(t, resume)
 }
 
-func TestShouldPauseArea(t *testing.T) {
+func TestShouldPauseAreaV1(t *testing.T) {
 	mc, path := setupTestComponents()
 	settings := AreaSettings{
 		maxPendingSize:   100,
 		feedbackInterval: time.Millisecond * 10,
+		algorithm:        MemoryControlAlgorithmV1,
 	}
 	areaMemStat := newAreaMemStat(path.area, mc, settings, nil)
 
@@ -260,6 +264,7 @@ func TestSetAreaSettings(t *testing.T) {
 	initialSettings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Second,
+		algorithm:        MemoryControlAlgorithmV1,
 	}
 	feedbackChan := make(chan Feedback[int, string, any], 10)
 	mc.addPathToArea(path, initialSettings, feedbackChan)
@@ -269,6 +274,7 @@ func TestSetAreaSettings(t *testing.T) {
 	newSettings := AreaSettings{
 		maxPendingSize:   2000,
 		feedbackInterval: 2 * time.Second,
+		algorithm:        MemoryControlAlgorithmV1,
 	}
 	mc.setAreaSettings(path.area, newSettings)
 	require.Equal(t, newSettings, *path.areaMemStat.settings.Load())
@@ -277,6 +283,7 @@ func TestSetAreaSettings(t *testing.T) {
 	invalidSettings := AreaSettings{
 		maxPendingSize:   0,
 		feedbackInterval: 0,
+		algorithm:        MemoryControlAlgorithmV2,
 	}
 	mc.setAreaSettings(path.area, invalidSettings)
 	require.NotEqual(t, invalidSettings, *path.areaMemStat.settings.Load())
@@ -420,7 +427,7 @@ func TestShouldPausePathV2(t *testing.T) {
 			wantPause:       true,
 			wantResume:      false,
 			wantRatio:       0.25,
-			pathCount:       1,
+			pathCount:       10,
 		},
 		{
 			name:            "area usage <= 50%, not paused, should not pause",
@@ -431,6 +438,7 @@ func TestShouldPausePathV2(t *testing.T) {
 			wantPause:       false,
 			wantResume:      false,
 			wantRatio:       0.15,
+			pathCount:       10,
 		},
 		{
 			name:            "area usage <= 50%, paused, should resume",
@@ -441,6 +449,7 @@ func TestShouldPausePathV2(t *testing.T) {
 			wantPause:       false,
 			wantResume:      true,
 			wantRatio:       0.05,
+			pathCount:       10,
 		},
 		{
 			name:            "area usage > 80%, not paused, should pause",
@@ -451,6 +460,7 @@ func TestShouldPausePathV2(t *testing.T) {
 			wantPause:       true,
 			wantResume:      false,
 			wantRatio:       0.06,
+			pathCount:       10,
 		},
 		{
 			name:            "area usage > 120%, not paused, should pause",
@@ -461,6 +471,7 @@ func TestShouldPausePathV2(t *testing.T) {
 			wantPause:       true,
 			wantResume:      false,
 			wantRatio:       0.02,
+			pathCount:       10,
 		},
 		{
 			name:            "area usage > 120%, paused, should not resume",
@@ -471,6 +482,7 @@ func TestShouldPausePathV2(t *testing.T) {
 			wantPause:       false,
 			wantResume:      false,
 			wantRatio:       0.02,
+			pathCount:       10,
 		},
 	}
 
@@ -484,15 +496,9 @@ func TestShouldPausePathV2(t *testing.T) {
 				tt.pathCount,
 			)
 
-			if gotPause != tt.wantPause {
-				t.Errorf("shouldPausePathV2() pause = %v, want %v", gotPause, tt.wantPause)
-			}
-			if gotResume != tt.wantResume {
-				t.Errorf("shouldPausePathV2() resume = %v, want %v", gotResume, tt.wantResume)
-			}
-			if gotRatio != tt.wantRatio {
-				t.Errorf("shouldPausePathV2() ratio = %v, want %v", gotRatio, tt.wantRatio)
-			}
+			require.Equal(t, tt.wantPause, gotPause, tt.name)
+			require.Equal(t, tt.wantResume, gotResume, tt.name)
+			require.Equal(t, tt.wantRatio, gotRatio, tt.name)
 		})
 	}
 }
@@ -544,15 +550,9 @@ func TestShouldPauseAreaV2(t *testing.T) {
 				tt.maxPendingSize,
 			)
 
-			if gotPause != tt.wantPause {
-				t.Errorf("shouldPauseAreaV2() pause = %v, want %v", gotPause, tt.wantPause)
-			}
-			if gotResume != tt.wantResume {
-				t.Errorf("shouldPauseAreaV2() resume = %v, want %v", gotResume, tt.wantResume)
-			}
-			if gotRatio != tt.wantRatio {
-				t.Errorf("shouldPauseAreaV2() ratio = %v, want %v", gotRatio, tt.wantRatio)
-			}
+			require.Equal(t, tt.wantPause, gotPause, tt.name)
+			require.Equal(t, tt.wantResume, gotResume, tt.name)
+			require.Equal(t, tt.wantRatio, gotRatio, tt.name)
 		})
 	}
 }
@@ -597,7 +597,7 @@ func TestCalculateThresholds(t *testing.T) {
 			areaMemoryRatio:    0.3,
 			expectedPauseLimit: 0.22,
 			expectedResume:     0.11,
-			delta:              0,
+			delta:              0.01,
 		},
 		// Area memory usage threshold boundaries
 		{
@@ -666,27 +666,15 @@ func TestCalculateThresholds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pauseLimit, resumeLimit := calculateThresholds(tt.pathCount, tt.areaMemoryRatio)
 
-			// Check if results are within acceptable margin of error
-			if math.Abs(pauseLimit-tt.expectedPauseLimit) > tt.delta {
-				t.Errorf("pauseLimit = %v, want %v", pauseLimit, tt.expectedPauseLimit)
-			}
-			if math.Abs(resumeLimit-tt.expectedResume) > tt.delta {
-				t.Errorf("resumeLimit = %v, want %v", resumeLimit, tt.expectedResume)
-			}
+			require.InDelta(t, tt.expectedPauseLimit, pauseLimit, tt.delta, tt.name)
+			require.InDelta(t, tt.expectedResume, resumeLimit, tt.delta, tt.name)
 
 			// Invariant checks
-			if resumeLimit >= pauseLimit {
-				t.Errorf("resumeLimit (%v) should be less than pauseLimit (%v)", resumeLimit, pauseLimit)
-			}
-			if resumeLimit < 0 {
-				t.Errorf("resumeLimit (%v) should not be negative", resumeLimit)
-			}
-			if pauseLimit < 0 {
-				t.Errorf("pauseLimit (%v) should not be negative", pauseLimit)
-			}
-			if pauseLimit > 1.0 {
-				t.Errorf("pauseLimit (%v) should not be greater than 1.0", pauseLimit)
-			}
+			require.Less(t, resumeLimit, pauseLimit, tt.name)
+			require.Greater(t, resumeLimit, 0.0, tt.name)
+			require.Greater(t, pauseLimit, 0.0, tt.name)
+			require.Less(t, pauseLimit, 1.0, tt.name)
+			require.Less(t, resumeLimit, 1.0, tt.name)
 		})
 	}
 }

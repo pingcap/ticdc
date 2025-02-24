@@ -23,6 +23,16 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// MemoryControlAlgorithmV1 is the algorithm of the memory control.
+	// It sill send pause and resume [area, path] feedback.
+	MemoryControlAlgorithmV1 = "v1"
+	// MemoryControlAlgorithmV2 is the algorithm of the memory control.
+	// It will only send pause and resume [path] feedback.
+	// For now, we only use it in event collector.
+	MemoryControlAlgorithmV2 = "v2"
+)
+
 // areaMemStat is used to store the memory statistics of an area.
 // It is a global level struct, not stream level.
 type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {

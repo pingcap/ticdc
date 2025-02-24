@@ -252,11 +252,11 @@ func (s *AreaSettings) fix() {
 	}
 }
 
-func NewAreaSettingsWithMaxPendingSize(size uint64) AreaSettings {
+func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithmVersion string) AreaSettings {
 	return AreaSettings{
 		maxPendingSize:   size,
 		feedbackInterval: DefaultFeedbackInterval,
-		algorithm:        "v2",
+		algorithm:        memoryControlAlgorithmVersion,
 	}
 }
 
