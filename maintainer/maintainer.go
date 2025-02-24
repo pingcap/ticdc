@@ -961,6 +961,8 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 			m.watermark.ResolvedTs = newWatermark.ResolvedTs
 		}
 	}
+
+	log.Info("hyy set watermark", zap.Any("watermark", m.watermark), zap.Any("new value", newWatermark))
 }
 
 func (m *Maintainer) GetDispatcherCount() int {
