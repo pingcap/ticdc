@@ -365,7 +365,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 				return err
 			}
 			for _, state := range s.takeRegionStates(subID) {
-				state.markStopped(&sendRequestToStoreErr{})
+				state.markStopped(&requestCancelledErr{})
 				regionEvent := regionEvent{
 					state:  state,
 					worker: s,
