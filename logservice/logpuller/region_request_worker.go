@@ -274,7 +274,8 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
-				log.Warn("region request worker receives an error for a stale region, ignore it",
+				// it is normal to receive region error after deregister a subscription
+				log.Debug("region request worker receives an error for a stale region, ignore it",
 					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
 					zap.Uint64("regionID", event.RegionId))
