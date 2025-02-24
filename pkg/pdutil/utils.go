@@ -55,10 +55,15 @@ func GetSourceID(ctx context.Context, pdClient pd.Client) (uint64, error) {
 
 // GenerateChangefeedEpoch generates a unique changefeed epoch.
 func GenerateChangefeedEpoch(ctx context.Context, pdClient pd.Client) uint64 {
+	if pdClient == nil {
+		return uint64(time.Now().UnixNano())
+	}
+
 	phyTs, logical, err := pdClient.GetTS(ctx)
 	if err != nil {
 		log.Warn("generate epoch using local timestamp due to error", zap.Error(err))
 		return uint64(time.Now().UnixNano())
 	}
 	return oracle.ComposeTS(phyTs, logical)
+
 }
