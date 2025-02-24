@@ -68,7 +68,7 @@ type DMLEvent struct {
 
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
 	eventSize int64 `json:"-"`
-	// offset is the offset of the current row in the transaction.
+	// offset is the offset of the current row in the transaction. associated with the `RowTypes`.
 	// It is internal field, not exported. So it doesn't need to be marshalled.
 	offset int `json:"-"`
 }
@@ -97,8 +97,8 @@ func NewDMLEvent(
 
 func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	decode func(
-		rawKv *common.RawKVEntry,
-		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error),
+	rawKv *common.RawKVEntry,
+	tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error),
 ) error {
 	RowType := RowTypeInsert
 	if raw.OpType == common.OpTypeDelete {

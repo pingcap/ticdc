@@ -578,7 +578,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			}
 			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
 		}
-		dml.AppendRow(e, c.mounter.DecodeToChunk)
+		if err = dml.AppendRow(e, c.mounter.DecodeToChunk); err != nil {
+			log.Panic("append row failed", zap.Error(err))
+		}
 	}
 }
 
