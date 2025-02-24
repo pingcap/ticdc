@@ -272,10 +272,21 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			}
 			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
 		} else {
-			log.Warn("region request worker receives a region event for an untracked region",
-				zap.Uint64("workerID", s.workerID),
-				zap.Uint64("subscriptionID", uint64(subscriptionID)),
-				zap.Uint64("regionID", event.RegionId))
+			switch event.Event.(type) {
+			case *cdcpb.Event_Error:
+				log.Warn("region request worker receives an error for a stale region, ignore it",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Uint64("regionID", event.RegionId))
+			case *cdcpb.Event_Entries_,
+				*cdcpb.Event_ResolvedTs:
+				log.Warn("region request worker receives a normal region event for an untracked region",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Uint64("regionID", event.RegionId))
+			default:
+				// ignore
+			}
 		}
 	}
 }
