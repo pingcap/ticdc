@@ -65,5 +65,4 @@ func GenerateChangefeedEpoch(ctx context.Context, pdClient pd.Client) uint64 {
 		return uint64(time.Now().UnixNano())
 	}
 	return oracle.ComposeTS(phyTs, logical)
-
 }
