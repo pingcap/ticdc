@@ -97,8 +97,8 @@ func NewDMLEvent(
 
 func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	decode func(
-		rawKv *common.RawKVEntry,
-		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error),
+	rawKv *common.RawKVEntry,
+	tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error),
 ) error {
 	RowType := RowTypeInsert
 	if raw.OpType == common.OpTypeDelete {
@@ -111,10 +111,8 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	if err != nil {
 		return err
 	}
-	if count == 1 {
+	for i := 0; i < count; i++ {
 		t.RowTypes = append(t.RowTypes, RowType)
-	} else if count == 2 {
-		t.RowTypes = append(t.RowTypes, RowType, RowType)
 	}
 	t.Length += 1
 	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
@@ -130,11 +128,11 @@ func (t *DMLEvent) GetDispatcherID() common.DispatcherID {
 }
 
 func (t *DMLEvent) GetCommitTs() common.Ts {
-	return common.Ts(t.CommitTs)
+	return t.CommitTs
 }
 
 func (t *DMLEvent) GetStartTs() common.Ts {
-	return common.Ts(t.StartTs)
+	return t.StartTs
 }
 
 func (t *DMLEvent) PostFlush() {
@@ -384,16 +382,3 @@ const (
 	// RowTypeUpdate represents a update row.
 	RowTypeUpdate
 )
-
-func RowTypeToString(rowType RowType) string {
-	switch rowType {
-	case RowTypeInsert:
-		return "Insert"
-	case RowTypeDelete:
-		return "Delete"
-	case RowTypeUpdate:
-		return "Update"
-	default:
-		return "Unknown"
-	}
-}
