@@ -565,7 +565,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 				if task.isRemoved.Load() {
 					log.Warn("get table info failed, since the dispatcher is removed", zap.Error(err))
 					return
-				} else if errors.Is(err, &schemastore.TableDeletedError{}) {
+				}
+				if errors.Is(err, &schemastore.TableDeletedError{}) {
 					// After a table is truncated, it is possible to receive more dml events, just ignore is ok.
 					// TODO: tables may be deleted in many ways, we need to check if it is safe to ignore later dmls in all cases.
 					// We must send the remaining ddl events to the dispatcher in this case.
