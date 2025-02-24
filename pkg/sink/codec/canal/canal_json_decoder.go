@@ -340,10 +340,10 @@ func (b *canalJSONDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
 	switch msg.eventType() {
 	case canal.EventType_DELETE:
 		data := msg.getData()
-		append2Chunk(data, columns, chk)
+		appendRow2Chunk(data, columns, chk)
 	case canal.EventType_INSERT:
 		data := msg.getData()
-		append2Chunk(data, columns, chk)
+		appendRow2Chunk(data, columns, chk)
 	case canal.EventType_UPDATE:
 		previous := msg.getOld()
 		data := msg.getData()
@@ -352,8 +352,8 @@ func (b *canalJSONDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
 				previous[k] = v
 			}
 		}
-		append2Chunk(previous, columns, chk)
-		append2Chunk(data, columns, chk)
+		appendRow2Chunk(previous, columns, chk)
+		appendRow2Chunk(data, columns, chk)
 	default:
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}
@@ -433,77 +433,81 @@ func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEv
 	return result
 }
 
-func append2Chunk(data map[string]interface{}, columns []*timodel.ColumnInfo, chk *chunk.Chunk) {
+func appendCol2Chunk(idx int, raw interface{}, columnInfo *timodel.ColumnInfo, chk *chunk.Chunk) {
+	mysqlType := columnInfo.FieldType.GetType()
+	if raw == nil {
+		chk.AppendNull(idx)
+		return
+	}
+	rawValue, ok := raw.(string)
+	if !ok {
+		log.Panic("canal-json encoded message should have type in `string`")
+	}
+	if mysql.HasBinaryFlag(columnInfo.FieldType.GetFlag()) {
+		// when encoding the `JavaSQLTypeBLOB`, use `ISO8859_1` decoder, now reverse it back.
+		encoder := charmap.ISO8859_1.NewEncoder()
+		rawValue, err := encoder.String(rawValue)
+		if err != nil {
+			log.Panic("invalid column value, please report a bug", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+	}
+	switch mysqlType {
+	case mysql.TypeBit, mysql.TypeSet:
+		value, err := strconv.ParseUint(rawValue, 10, 64)
+		if err != nil {
+			log.Panic("invalid column value for bit", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		chk.AppendUint64(idx, value)
+	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeInt24, mysql.TypeYear:
+		value, err := strconv.ParseInt(rawValue, 10, 64)
+		if err != nil {
+			log.Panic("invalid column value for int", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		chk.AppendInt64(idx, value)
+	case mysql.TypeEnum:
+		value, err := strconv.ParseInt(rawValue, 10, 64)
+		if err != nil {
+			log.Panic("invalid column value for enum", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		chk.AppendInt64(idx, value)
+	case mysql.TypeLonglong:
+		value, err := strconv.ParseInt(rawValue, 10, 64)
+		if err == nil {
+			chk.AppendInt64(idx, value)
+			return
+		}
+		uValue, err := strconv.ParseUint(rawValue, 10, 64)
+		if err != nil {
+			log.Panic("invalid column value for bigint", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		chk.AppendUint64(idx, uValue)
+	case mysql.TypeFloat:
+		value, err := strconv.ParseFloat(rawValue, 32)
+		if err != nil {
+			log.Panic("invalid column value for float", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		chk.AppendFloat32(idx, float32(value))
+	case mysql.TypeDouble:
+		value, err := strconv.ParseFloat(rawValue, 64)
+		if err != nil {
+			log.Panic("invalid column value for double", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		chk.AppendFloat64(idx, value)
+	case mysql.TypeTiDBVectorFloat32:
+		value, err := tiTypes.ParseVectorFloat32(rawValue)
+		if err != nil {
+			log.Panic("cannot parse vector32 value from string", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		chk.AppendVectorFloat32(idx, value)
+	default:
+	}
+	log.Panic("unknown column type", zap.Any("mysqlType", mysqlType), zap.Any("rawValue", rawValue))
+}
+
+func appendRow2Chunk(data map[string]interface{}, columns []*timodel.ColumnInfo, chk *chunk.Chunk) {
 	for idx, col := range columns {
-		mysqlType := col.FieldType.GetType()
 		raw := data[col.Name.O]
-		if raw == nil {
-			chk.AppendNull(idx)
-			continue
-		}
-		rawValue, ok := raw.(string)
-		if !ok {
-			log.Panic("canal-json encoded message should have type in `string`")
-		}
-		if mysql.HasBinaryFlag(col.FieldType.GetFlag()) {
-			// when encoding the `JavaSQLTypeBLOB`, use `ISO8859_1` decoder, now reverse it back.
-			encoder := charmap.ISO8859_1.NewEncoder()
-			rawValue, err := encoder.String(rawValue)
-			if err != nil {
-				log.Panic("invalid column value, please report a bug", zap.Any("rawValue", rawValue), zap.Error(err))
-			}
-		}
-		switch mysqlType {
-		case mysql.TypeBit, mysql.TypeSet:
-			value, err := strconv.ParseUint(rawValue, 10, 64)
-			if err != nil {
-				log.Panic("invalid column value for bit", zap.Any("rawValue", rawValue), zap.Error(err))
-			}
-			chk.AppendUint64(idx, value)
-		case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeInt24, mysql.TypeYear:
-			value, err := strconv.ParseInt(rawValue, 10, 64)
-			if err != nil {
-				log.Panic("invalid column value for int", zap.Any("rawValue", rawValue), zap.Error(err))
-			}
-			chk.AppendInt64(idx, value)
-		case mysql.TypeEnum:
-			value, err := strconv.ParseInt(rawValue, 10, 64)
-			if err != nil {
-				log.Panic("invalid column value for enum", zap.Any("rawValue", rawValue), zap.Error(err))
-			}
-			chk.AppendInt64(idx, value)
-		case mysql.TypeLonglong:
-			value, err := strconv.ParseInt(rawValue, 10, 64)
-			if err == nil {
-				chk.AppendInt64(idx, value)
-				continue
-			}
-			uValue, err := strconv.ParseUint(rawValue, 10, 64)
-			if err != nil {
-				log.Panic("invalid column value for bigint", zap.Any("rawValue", rawValue), zap.Error(err))
-			}
-			chk.AppendUint64(idx, uValue)
-		case mysql.TypeFloat:
-			value, err := strconv.ParseFloat(rawValue, 32)
-			if err != nil {
-				log.Panic("invalid column value for float", zap.Any("rawValue", rawValue), zap.Error(err))
-			}
-			chk.AppendFloat32(idx, float32(value))
-		case mysql.TypeDouble:
-			value, err := strconv.ParseFloat(rawValue, 64)
-			if err != nil {
-				log.Panic("invalid column value for double", zap.Any("rawValue", rawValue), zap.Error(err))
-			}
-			chk.AppendFloat64(idx, value)
-		case mysql.TypeTiDBVectorFloat32:
-			value, err := tiTypes.ParseVectorFloat32(rawValue)
-			if err != nil {
-				log.Panic("cannot parse vector32 value from string", zap.Any("rawValue", rawValue), zap.Error(err))
-			}
-			chk.AppendVectorFloat32(idx, value)
-		default:
-			log.Panic("unknown column type", zap.Any("mysqlType", mysqlType), zap.Any("rawValue", rawValue))
-		}
+		appendCol2Chunk(idx, raw, col, chk)
 	}
 }
 
