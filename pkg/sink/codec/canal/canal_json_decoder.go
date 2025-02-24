@@ -18,17 +18,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	commonType "github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/tidb/pkg/parser/types"
-	tiTypes "github.com/pingcap/tidb/pkg/types"
-	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pingcap/log"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -40,7 +36,10 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tiflow/cdc/model"
+	"github.com/pingcap/tidb/pkg/parser/types"
+	tiTypes "github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
+	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"github.com/pingcap/tiflow/pkg/util"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
@@ -302,52 +301,6 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyRowChangedEvent(
 	return b.NextRowChangedEvent()
 }
 
-func setColumnInfos(
-	tableInfo *timodel.TableInfo,
-	rawColumns map[string]interface{},
-	mysqlType map[string]string,
-	pkNames map[string]struct{},
-) {
-	mockColumnID := int64(100)
-	for name := range rawColumns {
-		columnInfo := new(timodel.ColumnInfo)
-		columnInfo.ID = mockColumnID
-		columnInfo.Name = pmodel.NewCIStr(name)
-		if common.IsBinaryMySQLType(mysqlType[name]) {
-			columnInfo.AddFlag(mysql.BinaryFlag)
-		}
-		if _, isPK := pkNames[name]; isPK {
-			columnInfo.AddFlag(mysql.PriKeyFlag)
-		}
-		tableInfo.Columns = append(tableInfo.Columns, columnInfo)
-		mockColumnID++
-	}
-}
-
-func setIndexes(
-	tableInfo *timodel.TableInfo,
-	pkNames map[string]struct{},
-) {
-	indexColumns := make([]*timodel.IndexColumn, 0, len(pkNames))
-	for idx, col := range tableInfo.Columns {
-		name := col.Name.O
-		if _, ok := pkNames[name]; ok {
-			indexColumns = append(indexColumns, &timodel.IndexColumn{
-				Name:   pmodel.NewCIStr(name),
-				Offset: idx,
-			})
-		}
-	}
-	indexInfo := &timodel.IndexInfo{
-		ID:      1,
-		Name:    pmodel.NewCIStr("primary"),
-		Columns: indexColumns,
-		Unique:  true,
-		Primary: true,
-	}
-	tableInfo.Indices = append(tableInfo.Indices, indexInfo)
-}
-
 // NextRowChangedEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
 func (b *canalJSONDecoder) NextRowChangedEvent() (*commonEvent.DMLEvent, error) {
@@ -367,11 +320,47 @@ func (b *canalJSONDecoder) NextRowChangedEvent() (*commonEvent.DMLEvent, error) 
 		}
 	}
 
-	result, err := b.canalJSONMessage2RowChange()
-	if err != nil {
-		return nil, err
-	}
+	result := b.canalJSONMessage2RowChange()
 	return result, nil
+}
+
+func (b *canalJSONDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
+	msg := b.msg
+	tableInfo := b.queryTableInfo(msg)
+
+	result := new(commonEvent.DMLEvent)
+	result.Length++                    // todo: set this field correctly
+	result.StartTs = msg.getCommitTs() // todo: how to set this correctly?
+	result.ApproximateSize = 0
+	result.TableInfo = tableInfo
+	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
+	result.CommitTs = msg.getCommitTs()
+
+	columns := tableInfo.GetColumns()
+	switch msg.eventType() {
+	case canal.EventType_DELETE:
+		data := msg.getData()
+		append2Chunk(data, columns, chk)
+	case canal.EventType_INSERT:
+		data := msg.getData()
+		append2Chunk(data, columns, chk)
+	case canal.EventType_UPDATE:
+		previous := msg.getOld()
+		data := msg.getData()
+		for k, v := range data {
+			if _, ok := previous[k]; !ok {
+				previous[k] = v
+			}
+		}
+		append2Chunk(previous, columns, chk)
+		append2Chunk(data, columns, chk)
+	default:
+		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
+	}
+	result.Rows = chk
+	// todo: may fix this later.
+	result.PhysicalTableID = result.TableInfo.TableName.TableID
+	return result
 }
 
 // NextDDLEvent implements the RowEventDecoder interface
@@ -444,162 +433,78 @@ func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEv
 	return result
 }
 
-func canalJSONColumnMap2RowChangeColumns(
-	cols map[string]interface{},
-	mysqlType map[string]string,
-	tableInfo *commonType.TableInfo,
-) ([]*model.ColumnData, error) {
-	result := make([]*model.ColumnData, 0, len(cols))
-	for _, columnInfo := range tableInfo.Columns {
-		name := columnInfo.Name.O
-		value, ok := cols[name]
-		if !ok {
+func append2Chunk(data map[string]interface{}, columns []*timodel.ColumnInfo, chk *chunk.Chunk) {
+	for idx, col := range columns {
+		mysqlType := col.FieldType.GetType()
+		raw := data[col.Name.O]
+		if raw == nil {
+			chk.AppendNull(idx)
 			continue
 		}
-		mysqlTypeStr, ok := mysqlType[name]
+		rawValue, ok := raw.(string)
 		if !ok {
-			// this should not happen, else we have to check encoding for mysqlType.
-			return nil, errors.ErrCodecDecode.GenWithStack(
-				"mysql type does not found, column: %+v, mysqlType: %+v", name, mysqlType)
+			log.Panic("canal-json encoded message should have type in `string`")
 		}
-		col := canalJSONFormatColumn(columnInfo.ID, value, mysqlTypeStr)
-		result = append(result, col)
-	}
-	return result, nil
-}
-
-func canalJSONFormatColumn(columnID int64, value interface{}, mysqlTypeStr string) *model.ColumnData {
-	mysqlType := common.ExtractBasicMySQLType(mysqlTypeStr)
-	result := &model.ColumnData{
-		ColumnID: columnID,
-		Value:    value,
-	}
-	if result.Value == nil {
-		return result
-	}
-
-	data, ok := value.(string)
-	if !ok {
-		log.Panic("canal-json encoded message should have type in `string`")
-	}
-
-	var err error
-	if common.IsBinaryMySQLType(mysqlTypeStr) {
-		// when encoding the `JavaSQLTypeBLOB`, use `ISO8859_1` decoder, now reverse it back.
-		encoder := charmap.ISO8859_1.NewEncoder()
-		value, err = encoder.String(data)
-		if err != nil {
-			log.Panic("invalid column value, please report a bug", zap.Any("col", result), zap.Error(err))
-		}
-		result.Value = value
-		return result
-	}
-
-	switch mysqlType {
-	case mysql.TypeBit, mysql.TypeSet:
-		value, err = strconv.ParseUint(data, 10, 64)
-		if err != nil {
-			log.Panic("invalid column value for bit", zap.Any("col", result), zap.Error(err))
-		}
-	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeInt24, mysql.TypeYear:
-		value, err = strconv.ParseInt(data, 10, 64)
-		if err != nil {
-			log.Panic("invalid column value for int", zap.Any("col", result), zap.Error(err))
-		}
-	case mysql.TypeEnum:
-		value, err = strconv.ParseInt(data, 10, 64)
-		if err != nil {
-			log.Panic("invalid column value for enum", zap.Any("col", result), zap.Error(err))
-		}
-	case mysql.TypeLonglong:
-		value, err = strconv.ParseInt(data, 10, 64)
-		if err != nil {
-			value, err = strconv.ParseUint(data, 10, 64)
+		if mysql.HasBinaryFlag(col.FieldType.GetFlag()) {
+			// when encoding the `JavaSQLTypeBLOB`, use `ISO8859_1` decoder, now reverse it back.
+			encoder := charmap.ISO8859_1.NewEncoder()
+			rawValue, err := encoder.String(rawValue)
 			if err != nil {
-				log.Panic("invalid column value for bigint", zap.Any("col", result), zap.Error(err))
+				log.Panic("invalid column value, please report a bug", zap.Any("rawValue", rawValue), zap.Error(err))
 			}
 		}
-	case mysql.TypeFloat:
-		value, err = strconv.ParseFloat(data, 32)
-		if err != nil {
-			log.Panic("invalid column value for float", zap.Any("col", result), zap.Error(err))
-		}
-	case mysql.TypeDouble:
-		value, err = strconv.ParseFloat(data, 64)
-		if err != nil {
-			log.Panic("invalid column value for double", zap.Any("col", result), zap.Error(err))
-		}
-	case mysql.TypeTiDBVectorFloat32:
-	}
-
-	result.Value = value
-	return result
-}
-
-func (b *canalJSONDecoder) canalJSONMessage2RowChange() (*commonEvent.DMLEvent, error) {
-	msg := b.msg
-	tableInfo := b.queryTableInfo(msg)
-
-	result := new(commonEvent.DMLEvent)
-	result.Length++                    // todo: set this field correctly
-	result.StartTs = msg.getCommitTs() // todo: how to set this correctly?
-	result.ApproximateSize = 0
-	result.TableInfo = tableInfo
-	// write pre-columns and columns into the Rows
-	result.Rows = chunk.NewEmptyChunk(result.TableInfo.GetFieldSlice())
-	result.CommitTs = msg.getCommitTs()
-
-	mysqlType := msg.getMySQLType()
-	var err error
-	if msg.eventType() == canal.EventType_DELETE {
-		// for `DELETE` event, `data` contain the old data, set it as the `PreColumns`
-		result.PreColumns, err = canalJSONColumnMap2RowChangeColumns(msg.getData(), mysqlType, result.TableInfo)
-		if err != nil {
-			return nil, err
-		}
-		err = b.setPhysicalTableID(result)
-		if err != nil {
-			return nil, err
-		}
-		return result, nil
-	}
-
-	// for `INSERT` and `UPDATE`, `data` contain fresh data, set it as the `Columns`
-	result.Columns, err = canalJSONColumnMap2RowChangeColumns(msg.getData(), mysqlType, result.TableInfo)
-	if err != nil {
-		return nil, err
-	}
-
-	// for `UPDATE`, `old` contain old data, set it as the `PreColumns`
-	if msg.eventType() == canal.EventType_UPDATE {
-		preCols, err := canalJSONColumnMap2RowChangeColumns(msg.getOld(), mysqlType, result.TableInfo)
-		if err != nil {
-			return nil, err
-		}
-		if len(preCols) < len(result.Columns) {
-			newPreCols := make([]*model.ColumnData, 0, len(preCols))
-			j := 0
-			// Columns are ordered by name
-			for _, col := range result.Columns {
-				if j < len(preCols) && col.ColumnID == preCols[j].ColumnID {
-					newPreCols = append(newPreCols, preCols[j])
-					j += 1
-				} else {
-					newPreCols = append(newPreCols, col)
-				}
+		switch mysqlType {
+		case mysql.TypeBit, mysql.TypeSet:
+			value, err := strconv.ParseUint(rawValue, 10, 64)
+			if err != nil {
+				log.Panic("invalid column value for bit", zap.Any("rawValue", rawValue), zap.Error(err))
 			}
-			preCols = newPreCols
-		}
-		result.PreColumns = preCols
-		if len(preCols) != len(result.Columns) {
-			log.Panic("column count mismatch", zap.Any("preCols", preCols), zap.Any("cols", result.Columns))
+			chk.AppendUint64(idx, value)
+		case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeInt24, mysql.TypeYear:
+			value, err := strconv.ParseInt(rawValue, 10, 64)
+			if err != nil {
+				log.Panic("invalid column value for int", zap.Any("rawValue", rawValue), zap.Error(err))
+			}
+			chk.AppendInt64(idx, value)
+		case mysql.TypeEnum:
+			value, err := strconv.ParseInt(rawValue, 10, 64)
+			if err != nil {
+				log.Panic("invalid column value for enum", zap.Any("rawValue", rawValue), zap.Error(err))
+			}
+			chk.AppendInt64(idx, value)
+		case mysql.TypeLonglong:
+			value, err := strconv.ParseInt(rawValue, 10, 64)
+			if err == nil {
+				chk.AppendInt64(idx, value)
+				continue
+			}
+			uValue, err := strconv.ParseUint(rawValue, 10, 64)
+			if err != nil {
+				log.Panic("invalid column value for bigint", zap.Any("rawValue", rawValue), zap.Error(err))
+			}
+			chk.AppendUint64(idx, uValue)
+		case mysql.TypeFloat:
+			value, err := strconv.ParseFloat(rawValue, 32)
+			if err != nil {
+				log.Panic("invalid column value for float", zap.Any("rawValue", rawValue), zap.Error(err))
+			}
+			chk.AppendFloat32(idx, float32(value))
+		case mysql.TypeDouble:
+			value, err := strconv.ParseFloat(rawValue, 64)
+			if err != nil {
+				log.Panic("invalid column value for double", zap.Any("rawValue", rawValue), zap.Error(err))
+			}
+			chk.AppendFloat64(idx, value)
+		case mysql.TypeTiDBVectorFloat32:
+			value, err := tiTypes.ParseVectorFloat32(rawValue)
+			if err != nil {
+				log.Panic("cannot parse vector32 value from string", zap.Any("rawValue", rawValue), zap.Error(err))
+			}
+			chk.AppendVectorFloat32(idx, value)
+		default:
+			log.Panic("unknown column type", zap.Any("mysqlType", mysqlType), zap.Any("rawValue", rawValue))
 		}
 	}
-	err = b.setPhysicalTableID(result)
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
 }
 
 func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
@@ -678,69 +583,6 @@ func newTiIndices(columns []*timodel.ColumnInfo, keys map[string]struct{}) []*ti
 	}
 	result := []*timodel.IndexInfo{indexInfo}
 	return result
-}
-
-func (b *canalJSONDecoder) setPhysicalTableID(event *commonEvent.DMLEvent) error {
-	event.PhysicalTableID = event.TableInfo.TableName.TableID
-	return nil
-	//if event.TableInfo.Partition == nil {
-	//	event.PhysicalTableID = event.TableInfo.ID
-	//	return nil
-	//}
-	//switch event.TableInfo.Partition.Type {
-	//case pmodel.PartitionTypeRange:
-	//	targetColumnID := event.TableInfo.ForceGetColumnIDByName(strings.ReplaceAll(event.TableInfo.Partition.Expr, "`", ""))
-	//	columns := event.Columns
-	//	if columns == nil {
-	//		columns = event.PreColumns
-	//	}
-	//	var columnValue string
-	//	for _, col := range columns {
-	//		if col.ColumnID == targetColumnID {
-	//			columnValue = model.ColumnValueString(col.Value)
-	//			break
-	//		}
-	//	}
-	//	for _, partition := range event.TableInfo.Partition.Definitions {
-	//		lessThan := partition.LessThan[0]
-	//		if lessThan == "MAXVALUE" {
-	//			event.PhysicalTableID = partition.ID
-	//			return nil
-	//		}
-	//		if len(columnValue) < len(lessThan) {
-	//			event.PhysicalTableID = partition.ID
-	//			return nil
-	//		}
-	//		if strings.Compare(columnValue, lessThan) == -1 {
-	//			event.PhysicalTableID = partition.ID
-	//			return nil
-	//		}
-	//	}
-	//	return fmt.Errorf("cannot found partition for column value %s", columnValue)
-	//// todo: support following rule if meet the corresponding workload
-	//case pmodel.PartitionTypeHash:
-	//	targetColumnID := event.TableInfo.ForceGetColumnIDByName(strings.ReplaceAll(event.TableInfo.Partition.Expr, "`", ""))
-	//	columns := event.Columns
-	//	if columns == nil {
-	//		columns = event.PreColumns
-	//	}
-	//	var columnValue int64
-	//	for _, col := range columns {
-	//		if col.ColumnID == targetColumnID {
-	//			columnValue = col.Value.(int64)
-	//			break
-	//		}
-	//	}
-	//	result := columnValue % int64(len(event.TableInfo.Partition.Definitions))
-	//	partitionID := event.TableInfo.GetPartitionInfo().Definitions[result].ID
-	//	event.PhysicalTableID = partitionID
-	//	return nil
-	//case pmodel.PartitionTypeKey:
-	//case pmodel.PartitionTypeList:
-	//case pmodel.PartitionTypeNone:
-	//default:
-	//}
-	//return fmt.Errorf("manually set partition id for partition type %s not supported yet", event.TableInfo.Partition.Type)
 }
 
 // return DDL ActionType by the prefix

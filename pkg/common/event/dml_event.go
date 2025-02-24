@@ -97,8 +97,8 @@ func NewDMLEvent(
 
 func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	decode func(
-	rawKv *common.RawKVEntry,
-	tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error),
+		rawKv *common.RawKVEntry,
+		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error),
 ) error {
 	RowType := RowTypeInsert
 	if raw.OpType == common.OpTypeDelete {
