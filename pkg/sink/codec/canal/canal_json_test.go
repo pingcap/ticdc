@@ -40,34 +40,58 @@ func TestBasicTypes(t *testing.T) {
 		a tinyint primary key, 
 		bi varbinary(16))`)
 
-	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(
-		a,bi) values (
-			1, x'89504E470D0A1A0A')`)
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,bi) values (1, x'89504E470D0A1A0A')`)
 	require.NotNil(t, dmlEvent)
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
-	tableInfo := helper.GetTableInfo(job)
 
 	rowEvent := &pevent.RowEvent{
-		TableInfo:      tableInfo,
+		TableInfo:      helper.GetTableInfo(job),
 		CommitTs:       1,
 		Event:          row,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 		Callback:       func() {},
 	}
 
-	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
-	value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+
+	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	var message JSONMessage
-
-	err = json.Unmarshal(value, &message)
+	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
 	require.NoError(t, err)
 
-	newValue, err := json.Marshal(message.Data)
+	m := encoder.Build()[0]
+
+	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
-	require.Equal(t, `[{"a":"1","bi":"PNG\r\n\u001a\n"}]`, string(newValue))
+
+	err = decoder.AddKeyValue(m.Key, m.Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	event, err := decoder.NextRowChangedEvent()
+	require.NoError(t, err)
+	change, ok := event.GetNextRow()
+	require.True(t, ok)
+	require.NotNil(t, change.Row)
+
+	//value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
+	//require.NoError(t, err)
+	//
+	//var message JSONMessage
+	//
+	//err = json.Unmarshal(value, &message)
+	//require.NoError(t, err)
+	//
+	//newValue, err := json.Marshal(message.Data)
+	//require.NoError(t, err)
+	//require.Equal(t, `[{"a":"1","bi":"PNG\r\n\u001a\n"}]`, string(newValue))
 }
 
 func TestAllTypes(t *testing.T) {

@@ -55,7 +55,7 @@ func NewEventDecoder(ctx context.Context, codecConfig *common.Config, upstreamTi
 	case config.ProtocolOpen, config.ProtocolDefault:
 		decoder, err = open.NewBatchDecoder(ctx, codecConfig, upstreamTiDB)
 	case config.ProtocolCanalJSON:
-		decoder, err = canal.NewBatchDecoder(ctx, codecConfig, upstreamTiDB)
+		decoder, err = canal.NewCanalJSONDecoder(ctx, codecConfig, upstreamTiDB)
 	// case config.ProtocolAvro:
 	//	schemaM, err := avro.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
 	//	if err != nil {

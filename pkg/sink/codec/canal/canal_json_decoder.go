@@ -104,8 +104,8 @@ type canalJSONDecoder struct {
 	tableIDAllocator *common.FakeTableIDAllocator
 }
 
-// NewBatchDecoder return a decoder for canal-json
-func NewBatchDecoder(
+// NewCanalJSONDecoder return a decoder for canal-json
+func NewCanalJSONDecoder(
 	ctx context.Context, codecConfig *common.Config, db *sql.DB,
 ) (common.RowEventDecoder, error) {
 	var (
