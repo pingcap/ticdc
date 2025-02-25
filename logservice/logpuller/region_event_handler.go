@@ -50,16 +50,18 @@ func (event *regionEvent) getSize() int {
 	if event == nil {
 		return 0
 	}
+	// don't count the size of resolved ts event
+	if event.entries == nil {
+		return 0
+	}
 	size := int(unsafe.Sizeof(*event))
-	if event.entries != nil {
-		size += int(unsafe.Sizeof(*event.entries))
-		size += int(unsafe.Sizeof(*event.entries.Entries))
-		for _, row := range event.entries.Entries.GetEntries() {
-			size += int(unsafe.Sizeof(*row))
-			size += len(row.Key)
-			size += len(row.Value)
-			size += len(row.OldValue)
-		}
+	size += int(unsafe.Sizeof(*event.entries))
+	size += int(unsafe.Sizeof(*event.entries.Entries))
+	for _, row := range event.entries.Entries.GetEntries() {
+		size += int(unsafe.Sizeof(*row))
+		size += len(row.Key)
+		size += len(row.Value)
+		size += len(row.OldValue)
 	}
 	return size
 }

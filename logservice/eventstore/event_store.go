@@ -316,6 +316,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					return
 				default:
 					events, ok := p.dataCh.GetMultipleNoGroup(buffer)
+					log.Info("write task pool get events", zap.Int("event count", len(events)))
 					if !ok {
 						return
 					}
@@ -515,12 +516,12 @@ func (e *eventStore) RegisterDispatcher(
 		}
 		// just do CompareAndSwap once, if failed, it means another goroutine has updated resolvedTs
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
-			subStat.dispatchers.Lock()
-			defer subStat.dispatchers.Unlock()
-			for _, notifier := range subStat.dispatchers.notifiers {
-				notifier(ts, subStat.maxEventCommitTs.Load())
-			}
-			CounterResolved.Inc()
+			// subStat.dispatchers.Lock()
+			// defer subStat.dispatchers.Unlock()
+			// for _, notifier := range subStat.dispatchers.notifiers {
+			// 	notifier(ts, subStat.maxEventCommitTs.Load())
+			// }
+			// CounterResolved.Inc()
 		}
 	}
 	// Note: don't hold any lock when call Subscribe
@@ -743,6 +744,7 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 		}
 	}
 	CounterKv.Add(float64(kvCount))
+	log.Info("write events batch size", zap.Int("kvCount", kvCount), zap.Int("batchSize", batch.Len()))
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
 	metrics.EventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
 	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))

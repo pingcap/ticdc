@@ -97,12 +97,18 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 		}
 	}
 
+	eventSize := s.handler.GetSize(e)
+	// Only count the extra size when the event is not an "zero size" object
+	// to provide more flexibility on memory usage control for the user.
+	if eventSize != 0 {
+		eventSize += s.eventExtraSize
+	}
 	ew := eventWrap[A, P, T, D, H]{
 		event:     e,
 		pathInfo:  pi,
 		paused:    s.handler.IsPaused(e),
 		eventType: s.handler.GetType(e),
-		eventSize: s.eventExtraSize + s.handler.GetSize(e),
+		eventSize: eventSize,
 		timestamp: s.handler.GetTimestamp(e),
 		queueTime: time.Now(),
 	}
