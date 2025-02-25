@@ -232,7 +232,7 @@ func NewSubscriptionClient(
 	option := dynstream.NewOption()
 	option.BatchCount = 1024
 	option.UseBuffer = false
-	option.EnableMemoryControl = true
+	option.EnableMemoryControl = false
 	ds := dynstream.NewParallelDynamicStream(
 		func(subID SubscriptionID) uint64 { return uint64(subID) },
 		&regionEventHandler{subClient: subClient},
