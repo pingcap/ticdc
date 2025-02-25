@@ -25,7 +25,6 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tidb/pkg/kv"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -87,7 +86,7 @@ type csvMessage struct {
 	preColumns []any
 	// newRecord indicates whether we encounter a new record.
 	newRecord bool
-	HandleKey kv.Handle
+	// HandleKey kv.Handle
 }
 
 func newCSVMessage(config *common.Config) *csvMessage {
@@ -138,7 +137,8 @@ func (c *csvMessage) encodeMeta(opType string, b *strings.Builder) {
 		}
 	}
 	if c.config.OutputHandleKey {
-		c.formatValue(c.HandleKey.String(), b)
+		log.Warn("not support output handle key")
+		// c.formatValue(c.HandleKey.String(), b)
 	}
 }
 
@@ -355,32 +355,30 @@ func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMe
 		if err != nil {
 			return nil, err
 		}
+	} else if e.IsInsert() {
+		// This is a insert operation.
+		csvMsg.opType = operationInsert
+		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), e.TableInfo)
+		if err != nil {
+			return nil, err
+		}
 	} else {
-		if e.GetPreRows() == nil {
-			// This is a insert operation.
-			csvMsg.opType = operationInsert
-			csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), e.TableInfo)
+		// This is a update operation.
+		csvMsg.opType = operationUpdate
+		if csvConfig.OutputOldValue {
+			if e.GetPreRows().Len() != e.GetRows().Len() {
+				return nil, cerror.WrapError(cerror.ErrCSVDecodeFailed,
+					fmt.Errorf("the column length of preColumns %d doesn't equal to that of columns %d",
+						e.GetPreRows().Len(), e.GetRows().Len()))
+			}
+			csvMsg.preColumns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), e.TableInfo)
 			if err != nil {
 				return nil, err
 			}
-		} else {
-			// This is a update operation.
-			csvMsg.opType = operationUpdate
-			if csvConfig.OutputOldValue {
-				if e.GetPreRows().Len() != e.GetRows().Len() {
-					return nil, cerror.WrapError(cerror.ErrCSVDecodeFailed,
-						fmt.Errorf("the column length of preColumns %d doesn't equal to that of columns %d",
-							e.GetPreRows().Len(), e.GetRows().Len()))
-				}
-				csvMsg.preColumns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), e.TableInfo)
-				if err != nil {
-					return nil, err
-				}
-			}
-			csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), e.TableInfo)
-			if err != nil {
-				return nil, err
-			}
+		}
+		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), e.TableInfo)
+		if err != nil {
+			return nil, err
 		}
 	}
 	return csvMsg, nil
