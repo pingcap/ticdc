@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
-	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -172,8 +171,8 @@ type eventStore struct {
 		tableToDispatchers map[int64]map[common.DispatcherID]bool
 	}
 
-	encoder *zstd.Encoder
-	decoder *zstd.Decoder
+	// encoder *zstd.Encoder
+	// decoder *zstd.Decoder
 }
 
 const (
@@ -201,16 +200,16 @@ func New(
 	if err != nil {
 		log.Panic("fail to remove path")
 	}
-	// Create the zstd encoder
-	encoder, err := zstd.NewWriter(nil)
-	if err != nil {
-		log.Panic("Failed to create zstd encoder", zap.Error(err))
-	}
+	// // Create the zstd encoder
+	// encoder, err := zstd.NewWriter(nil)
+	// if err != nil {
+	// 	log.Panic("Failed to create zstd encoder", zap.Error(err))
+	// }
 
-	decoder, err := zstd.NewReader(nil)
-	if err != nil {
-		log.Panic("Failed to create zstd decoder", zap.Error(err))
-	}
+	// decoder, err := zstd.NewReader(nil)
+	// if err != nil {
+	// 	log.Panic("Failed to create zstd decoder", zap.Error(err))
+	// }
 	store := &eventStore{
 		pdClock:   pdClock,
 		subClient: subClient,
@@ -220,8 +219,8 @@ func New(
 		writeTaskPools: make([]*writeTaskPool, 0, dbCount),
 
 		gcManager: newGCManager(),
-		encoder:   encoder,
-		decoder:   decoder,
+		// encoder:   encoder,
+		// decoder:   decoder,
 	}
 
 	// TODO: update pebble options
@@ -265,9 +264,9 @@ func newPebbleOptions() *pebble.Options {
 
 	// Configure level strategy
 	opts.Levels[0] = pebble.LevelOptions{ // L0 - Latest data fully in memory
-		BlockSize:      32 << 10,             // 32KB block size
-		IndexBlockSize: 128 << 10,            // 128KB index block
-		Compression:    pebble.NoCompression, // No compression in L0 for better performance
+		BlockSize:      32 << 10,  // 32KB block size
+		IndexBlockSize: 128 << 10, // 128KB index block
+		Compression:    pebble.ZstdCompression,
 	}
 
 	opts.Levels[1] = pebble.LevelOptions{ // L1 - Data that may be in memory or on disk
@@ -680,7 +679,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		startTs:      dataRange.StartTs,
 		endTs:        dataRange.EndTs,
 		rowCount:     0,
-		decoder:      e.decoder,
+		// decoder:      e.decoder,
 	}, nil
 }
 
@@ -735,10 +734,10 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 		for _, kv := range event.kvs {
 			key := EncodeKey(uint64(event.subID), event.tableID, &kv)
 			value := kv.Encode()
-			compressedValue := e.encoder.EncodeAll(value, nil)
-			ratio := float64(len(value)) / float64(len(compressedValue))
-			metrics.EventStoreCompressRatio.Set(ratio)
-			if err := batch.Set(key, compressedValue, pebble.NoSync); err != nil {
+			// compressedValue := e.encoder.EncodeAll(value, nil)
+			// ratio := float64(len(value)) / float64(len(compressedValue))
+			// metrics.EventStoreCompressRatio.Set(ratio)
+			if err := batch.Set(key, value, pebble.NoSync); err != nil {
 				log.Panic("failed to update pebble batch", zap.Error(err))
 			}
 		}
@@ -750,7 +749,6 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))
 	start := time.Now()
 	err := batch.Commit(pebble.NoSync)
-	log.Info("write events batch commit", zap.Int("kvCount", kvCount))
 	metrics.EventStoreWriteDurationHistogram.Observe(float64(time.Since(start).Milliseconds()) / 1000)
 	return err
 }
@@ -774,7 +772,7 @@ type eventStoreIter struct {
 	startTs  uint64
 	endTs    uint64
 	rowCount int64
-	decoder  *zstd.Decoder
+	// decoder  *zstd.Decoder
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
@@ -787,13 +785,13 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	}
 
 	value := iter.innerIter.Value()
-	decompressedValue, err := iter.decoder.DecodeAll(value, nil)
-	if err != nil {
-		log.Panic("failed to decompress value", zap.Error(err))
-	}
-	metrics.EventStoreScanBytes.Add(float64(len(decompressedValue)))
+	// decompressedValue, err := iter.decoder.DecodeAll(value, nil)
+	// if err != nil {
+	// 	log.Panic("failed to decompress value", zap.Error(err))
+	// }
+	metrics.EventStoreScanBytes.Add(float64(len(value)))
 	rawKV := &common.RawKVEntry{}
-	rawKV.Decode(decompressedValue)
+	rawKV.Decode(value)
 	isNewTxn := false
 	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
 		isNewTxn = true
