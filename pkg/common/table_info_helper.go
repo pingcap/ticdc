@@ -348,9 +348,6 @@ type columnSchema struct {
 
 	HasUniqueColumn bool `json:"has_unique_column"`
 
-	// ColumnID -> offset in RowChangedEvents.Columns.
-	RowColumnsOffset map[int64]int `json:"row_columns_offset"`
-
 	ColumnsFlag map[int64]*ColumnFlagType `json:"columns_flag"`
 
 	// the mounter will choose this index to output delete events
@@ -359,7 +356,7 @@ type columnSchema struct {
 	// HandleIndexTableIneligible(-2) : the table is not eligible
 	HandleIndexID int64 `json:"handle_index_id"`
 
-	// IndexColumnsOffset store the offset of the columns in row changed events for
+	// IndexColumns store the offset of the columns in row changed events for
 	// unique index and primary key
 	// The reason why we need this is that the Indexes in TableInfo
 	// will not contain the PK if it is create in statement like:
@@ -371,7 +368,7 @@ type columnSchema struct {
 	// index1: a, b
 	// index2: a, c
 	// indexColumnsOffset: [[0], [0, 1], [0, 2]]
-	IndexColumnsOffset [][]int `json:"index_columns_offset"`
+	IndexColumns [][]int64 `json:"index_columns_offset"`
 
 	// The following 3 fields, should only be used to decode datum from the raw value bytes, do not abuse those field.
 	// RowColInfos extend the model.ColumnInfo with some extra information
@@ -419,24 +416,21 @@ func unmarshalJsonToColumnSchema(data []byte) (*columnSchema, error) {
 // we only want user to get columnSchema by GetOrSetColumnSchema or Clone method.
 func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 	colSchema := &columnSchema{
-		Digest:           digest,
-		Columns:          tableInfo.Columns,
-		Indices:          tableInfo.Indices,
-		PKIsHandle:       tableInfo.PKIsHandle,
-		IsCommonHandle:   tableInfo.IsCommonHandle,
-		UpdateTS:         tableInfo.UpdateTS,
-		HasUniqueColumn:  false,
-		ColumnsOffset:    make(map[int64]int, len(tableInfo.Columns)),
-		NameToColID:      make(map[string]int64, len(tableInfo.Columns)),
-		RowColumnsOffset: make(map[int64]int, len(tableInfo.Columns)),
-		ColumnsFlag:      make(map[int64]*ColumnFlagType, len(tableInfo.Columns)),
-		HandleColID:      []int64{-1},
-		HandleIndexID:    HandleIndexTableIneligible,
-		RowColInfos:      make([]rowcodec.ColInfo, len(tableInfo.Columns)),
-		RowColFieldTps:   make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
+		Digest:          digest,
+		Columns:         tableInfo.Columns,
+		Indices:         tableInfo.Indices,
+		PKIsHandle:      tableInfo.PKIsHandle,
+		IsCommonHandle:  tableInfo.IsCommonHandle,
+		UpdateTS:        tableInfo.UpdateTS,
+		HasUniqueColumn: false,
+		ColumnsOffset:   make(map[int64]int, len(tableInfo.Columns)),
+		NameToColID:     make(map[string]int64, len(tableInfo.Columns)),
+		ColumnsFlag:     make(map[int64]*ColumnFlagType, len(tableInfo.Columns)),
+		HandleColID:     []int64{-1},
+		HandleIndexID:   HandleIndexTableIneligible,
+		RowColInfos:     make([]rowcodec.ColInfo, len(tableInfo.Columns)),
+		RowColFieldTps:  make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
 	}
-
-	rowColumnsCurrentOffset := 0
 
 	colSchema.VirtualColumnCount = 0
 	for i, col := range colSchema.Columns {
@@ -444,15 +438,13 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		pkIsHandle := false
 		if IsColCDCVisible(col) {
 			colSchema.NameToColID[col.Name.O] = col.ID
-			colSchema.RowColumnsOffset[col.ID] = rowColumnsCurrentOffset
-			rowColumnsCurrentOffset++
 			pkIsHandle = (tableInfo.PKIsHandle && mysql.HasPriKeyFlag(col.GetFlag())) || col.ID == model.ExtraHandleID
 			if pkIsHandle {
 				// pk is handle
 				colSchema.HandleColID = []int64{col.ID}
 				colSchema.HandleIndexID = HandleIndexPKIsHandle
 				colSchema.HasUniqueColumn = true
-				colSchema.IndexColumnsOffset = append(colSchema.IndexColumnsOffset, []int{colSchema.RowColumnsOffset[col.ID]})
+				colSchema.IndexColumns = append(colSchema.IndexColumns, []int64{col.ID})
 			} else if tableInfo.IsCommonHandle {
 				colSchema.HandleIndexID = HandleIndexPKIsHandle
 				colSchema.HandleColID = colSchema.HandleColID[:0]
@@ -480,15 +472,15 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 			colSchema.HasUniqueColumn = true
 		}
 		if idx.Primary || idx.Unique {
-			indexColOffset := make([]int, 0, len(idx.Columns))
+			indexColOffset := make([]int64, 0, len(idx.Columns))
 			for _, idxCol := range idx.Columns {
 				colInfo := colSchema.Columns[idxCol.Offset]
 				if IsColCDCVisible(colInfo) {
-					indexColOffset = append(indexColOffset, colSchema.RowColumnsOffset[colInfo.ID])
+					indexColOffset = append(indexColOffset, colInfo.ID)
 				}
 			}
 			if len(indexColOffset) > 0 {
-				colSchema.IndexColumnsOffset = append(colSchema.IndexColumnsOffset, indexColOffset)
+				colSchema.IndexColumns = append(colSchema.IndexColumns, indexColOffset)
 			}
 		}
 	}
@@ -832,10 +824,9 @@ func (s *columnSchema) getColumnSchemaWithoutVirtualColumns() *columnSchema {
 		ColumnsOffset:                 s.ColumnsOffset,
 		NameToColID:                   s.NameToColID,
 		HasUniqueColumn:               s.HasUniqueColumn,
-		RowColumnsOffset:              s.RowColumnsOffset,
 		ColumnsFlag:                   s.ColumnsFlag,
 		HandleIndexID:                 s.HandleIndexID,
-		IndexColumnsOffset:            s.IndexColumnsOffset,
+		IndexColumns:                  s.IndexColumns,
 		RowColInfos:                   s.RowColInfos,
 		RowColFieldTps:                s.RowColFieldTps,
 		HandleColID:                   s.HandleColID,
