@@ -266,13 +266,13 @@ func newPebbleOptions() *pebble.Options {
 	opts.Levels[0] = pebble.LevelOptions{ // L0 - Latest data fully in memory
 		BlockSize:      32 << 10,  // 32KB block size
 		IndexBlockSize: 128 << 10, // 128KB index block
-		Compression:    pebble.ZstdCompression,
+		Compression:    pebble.SnappyCompression,
 	}
 
 	opts.Levels[1] = pebble.LevelOptions{ // L1 - Data that may be in memory or on disk
 		BlockSize:      64 << 10,
 		IndexBlockSize: 256 << 10,
-		Compression:    pebble.SnappyCompression,
+		Compression:    pebble.ZstdCompression,
 		TargetFileSize: 256 << 20, // 256MB
 	}
 
