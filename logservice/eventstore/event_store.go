@@ -316,6 +316,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					return
 				default:
 					events, ok := p.dataCh.GetMultipleNoGroup(buffer)
+					log.Info("write task pool get events", zap.Int("event count", len(events)))
 					if !ok {
 						return
 					}
