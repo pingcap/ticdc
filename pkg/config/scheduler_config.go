@@ -44,7 +44,7 @@ func (c *ChangefeedSchedulerConfig) Validate() error {
 	if c.WriteKeyThreshold < 0 {
 		return errors.New("write-key-threshold must be larger than 0")
 	}
-	if c.SplitNumberPerNode < 0 {
+	if c.SplitNumberPerNode <= 0 {
 		return errors.New("split-number-per-node must be larger than 0")
 	}
 	return nil
