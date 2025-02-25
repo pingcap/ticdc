@@ -744,6 +744,7 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 		}
 	}
 	CounterKv.Add(float64(kvCount))
+	log.Info("write events batch size", zap.Int("kvCount", kvCount), zap.Int("batchSize", batch.Len()))
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
 	metrics.EventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
 	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))
