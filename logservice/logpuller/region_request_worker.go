@@ -272,10 +272,19 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			}
 			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
 		} else {
-			log.Warn("region request worker receives a region event for an untracked region",
-				zap.Uint64("workerID", s.workerID),
-				zap.Uint64("subscriptionID", uint64(subscriptionID)),
-				zap.Uint64("regionID", event.RegionId))
+			switch event.Event.(type) {
+			case *cdcpb.Event_Error:
+				// it is normal to receive region error after deregister a subscription
+				log.Debug("region request worker receives an error for a stale region, ignore it",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Uint64("regionID", event.RegionId))
+			default:
+				log.Warn("region request worker receives a region event for an untracked region",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Uint64("regionID", event.RegionId))
+			}
 		}
 	}
 }
@@ -284,6 +293,14 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	subscriptionID := SubscriptionID(resolvedTsEvent.RequestId)
 	metricsResolvedTsCount.Add(float64(len(resolvedTsEvent.Regions)))
 	s.client.metrics.batchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
+	// TODO: resolvedTsEvent.Ts be 0 is impossible, we need find the root cause.
+	if resolvedTsEvent.Ts == 0 {
+		log.Warn("region request worker receives a resolved ts event with zero value, ignore it",
+			zap.Uint64("workerID", s.workerID),
+			zap.Uint64("subscriptionID", resolvedTsEvent.RequestId),
+			zap.Any("regionIDs", resolvedTsEvent.Regions))
+		return
+	}
 	for _, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
 			s.client.pushRegionEventToDS(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
@@ -357,7 +374,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 				return err
 			}
 			for _, state := range s.takeRegionStates(subID) {
-				state.markStopped(&sendRequestToStoreErr{})
+				state.markStopped(&requestCancelledErr{})
 				regionEvent := regionEvent{
 					state:  state,
 					worker: s,

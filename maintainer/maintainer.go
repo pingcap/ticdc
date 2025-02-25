@@ -498,6 +498,21 @@ func (m *Maintainer) calCheckpointTs() {
 	// 1. node change
 	// 2. ddl
 	// 3. interval scheduling, like balance, split
+
+	// Thus, to ensure the whole process atomic, we first obtain the lock of operator and barrier
+	// then do the basic check.
+	// We ensure only the operator and barrier can generate absent replica, so we don't need to obtain the lock of replicationDB
+	// If all check is successfully, we begin to do the checkpointTs calculation,
+	// otherwise, we just return.
+	// Besides, due to the operator and barrier is indendently, so we can obtain the lock together to avoid deadlock.
+	operatorLock := m.controller.operatorController.GetLock()
+	barrierLock := m.barrier.GetLock()
+
+	defer func() {
+		m.controller.operatorController.ReleaseLock(operatorLock)
+		m.barrier.ReleaseLock(barrierLock)
+	}()
+
 	if !m.controller.ScheduleFinished() {
 		log.Warn("can not advance checkpointTs since schedule is not finished",
 			zap.String("changefeed", m.id.Name()),

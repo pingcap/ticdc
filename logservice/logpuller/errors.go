@@ -48,3 +48,7 @@ func (e *getStoreErr) Error() string { return "get store error" }
 type sendRequestToStoreErr struct{}
 
 func (e *sendRequestToStoreErr) Error() string { return "send request to store error" }
+
+type requestCancelledErr struct{}
+
+func (e *requestCancelledErr) Error() string { return "region request is cancelled" }

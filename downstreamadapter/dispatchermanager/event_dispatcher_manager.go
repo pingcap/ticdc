@@ -15,6 +15,7 @@ package dispatchermanager
 
 import (
 	"context"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -157,7 +158,7 @@ func NewEventDispatcherManager(
 		config:                                 cfConfig,
 		filterConfig:                           filterCfg,
 		schemaIDToDispatchers:                  dispatcher.NewSchemaIDToDispatchers(),
-		latestWatermark:                        NewWatermark(startTs),
+		latestWatermark:                        NewWatermark(0),
 		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricCreateDispatcherDuration:         metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
@@ -474,6 +475,17 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 		)
 	} else {
 		newStartTsList = startTsList
+	}
+
+	if e.latestWatermark.Get().CheckpointTs == 0 {
+		// If the checkpointTs is 0, means there is no dispatchers before. So we need to init it with the smallest startTs of these dispatchers
+		smallestStartTs := int64(math.MaxInt64)
+		for _, startTs := range newStartTsList {
+			if startTs < smallestStartTs {
+				smallestStartTs = startTs
+			}
+		}
+		e.latestWatermark = NewWatermark(uint64(smallestStartTs))
 	}
 
 	for idx, id := range dispatcherIds {
