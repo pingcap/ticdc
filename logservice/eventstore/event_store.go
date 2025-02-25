@@ -252,34 +252,34 @@ func newPebbleOptions() *pebble.Options {
 		// Disable WAL to improve performance
 		DisableWAL: true,
 
-		// Configure large memtable to keep recent data in memory
-		MemTableSize:                memTableSize,
-		MemTableStopWritesThreshold: memTableCount,
+		// // Configure large memtable to keep recent data in memory
+		// MemTableSize:                memTableSize,
+		// MemTableStopWritesThreshold: memTableCount,
 
-		// Configure large block cache to keep frequently accessed data in memory
-		Cache: pebble.NewCache(blockCacheSize),
+		// // Configure large block cache to keep frequently accessed data in memory
+		// Cache: pebble.NewCache(blockCacheSize),
 
-		// Configure options to optimize read/write performance
-		Levels: make([]pebble.LevelOptions, 2),
+		// // Configure options to optimize read/write performance
+		// Levels: make([]pebble.LevelOptions, 2),
 	}
 
-	// Configure level strategy
-	opts.Levels[0] = pebble.LevelOptions{ // L0 - Latest data fully in memory
-		BlockSize:      32 << 10,             // 32KB block size
-		IndexBlockSize: 128 << 10,            // 128KB index block
-		Compression:    pebble.NoCompression, // No compression in L0 for better performance
-	}
+	// // Configure level strategy
+	// opts.Levels[0] = pebble.LevelOptions{ // L0 - Latest data fully in memory
+	// 	BlockSize:      32 << 10,             // 32KB block size
+	// 	IndexBlockSize: 128 << 10,            // 128KB index block
+	// 	Compression:    pebble.NoCompression, // No compression in L0 for better performance
+	// }
 
-	opts.Levels[1] = pebble.LevelOptions{ // L1 - Data that may be in memory or on disk
-		BlockSize:      64 << 10,
-		IndexBlockSize: 256 << 10,
-		Compression:    pebble.SnappyCompression,
-		TargetFileSize: 256 << 20, // 256MB
-	}
+	// opts.Levels[1] = pebble.LevelOptions{ // L1 - Data that may be in memory or on disk
+	// 	BlockSize:      64 << 10,
+	// 	IndexBlockSize: 256 << 10,
+	// 	Compression:    pebble.SnappyCompression,
+	// 	TargetFileSize: 256 << 20, // 256MB
+	// }
 
-	// Adjust L0 thresholds to delay compaction timing
-	opts.L0CompactionThreshold = 20 // Allow more files in L0
-	opts.L0StopWritesThreshold = 40 // Increase stop-writes threshold
+	// // Adjust L0 thresholds to delay compaction timing
+	// opts.L0CompactionThreshold = 20 // Allow more files in L0
+	// opts.L0StopWritesThreshold = 40 // Increase stop-writes threshold
 
 	// Prefetch configuration
 	opts.ReadOnly = false
