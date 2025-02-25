@@ -192,6 +192,13 @@ func (oc *Controller) GetOperator(id common.DispatcherID) operator.Operator[comm
 }
 
 // OperatorSize returns the number of operators in the controller.
+func (oc *Controller) OperatorSize() int {
+	oc.lock.RLock()
+	defer oc.lock.RUnlock()
+	return len(oc.operators)
+}
+
+// OperatorSize returns the number of operators in the controller.
 func (oc *Controller) OperatorSizeWithLock() int {
 	return len(oc.operators)
 }
