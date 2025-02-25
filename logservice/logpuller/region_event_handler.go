@@ -82,18 +82,20 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	}
 
 	for _, event := range events {
+		if event.resolvedTs != 0 {
+			// do some safety check
+			if event.state != nil || event.worker != nil {
+				log.Panic("should not happen: resolvedTs event should not have state or worker")
+			}
+			span.advanceResolvedTs(event.resolvedTs)
+			continue
+		}
 		if event.state.isStale() {
 			h.handleRegionError(event.state, event.worker)
 			continue
 		}
 		if event.entries != nil {
 			handleEventEntries(span, event.state, event.entries)
-		} else if event.resolvedTs != 0 {
-			// do some safety check
-			if event.state != nil || event.worker != nil {
-				log.Panic("should not happen: resolvedTs event should not have state or worker")
-			}
-			span.advanceResolvedTs(event.resolvedTs)
 		} else {
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
 		}
