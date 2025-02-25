@@ -72,7 +72,9 @@ func NewOperatorController(
 func (oc *Controller) Execute() time.Time {
 	executedItem := 0
 	for {
+		log.Info("Controller Execute")
 		r, next := oc.pollQueueingOperator()
+		log.Info("pollQueueingOperator")
 		if !next {
 			return time.Now().Add(time.Millisecond * 200)
 		}
