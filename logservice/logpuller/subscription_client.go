@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/prometheus/client_golang/prometheus"
@@ -98,8 +99,18 @@ type rangeTask struct {
 	subscribedSpan *subscribedSpan
 }
 
+type resolvedTsEvent struct {
+	subID      SubscriptionID
+	state      *regionFeedState
+	resolvedTs uint64
+}
+
+func resolvedTsEventSizer(e resolvedTsEvent) int {
+	return 0
+}
+
 // TODO: dynamically adjust the size of the cache for some particular stream.
-const kvEventsCacheMaxSize = 128
+const kvEventsCacheMaxSize = 32
 
 // subscribedSpan represents a span to subscribe.
 // It contains a sub span of a table(or the total span of a table),
@@ -119,7 +130,7 @@ type subscribedSpan struct {
 
 	advanceResolvedTs func(ts uint64)
 
-	advanceInterval int64
+	lastAdvanceTime atomic.Int64
 
 	kvEventsCache []common.RawKVEntry
 
@@ -129,8 +140,6 @@ type subscribedSpan struct {
 	// To handle stale lock resolvings.
 	tryResolveLock     func(regionID uint64, state *regionlock.LockedRangeState)
 	staleLocksTargetTs atomic.Uint64
-
-	lastAdvanceTime atomic.Int64
 
 	initialized       atomic.Bool
 	resolvedTsUpdated atomic.Int64
@@ -148,6 +157,8 @@ func (span *subscribedSpan) clearKVEventsCache() {
 type SubscriptionClientConfig struct {
 	// The number of region request workers to send region task for every tikv store
 	RegionRequestWorkerPerStore uint
+	// The number of goroutine to handle resolved ts event
+	ResolvedTsWorkerCh int
 }
 
 type sharedClientMetrics struct {
@@ -189,6 +200,8 @@ type SubscriptionClient struct {
 		spanMap map[SubscriptionID]*subscribedSpan
 	}
 
+	resolvedTsCh []*chann.UnlimitedChannel[resolvedTsEvent, uint64]
+
 	// rangeTaskCh is used to receive range tasks.
 	// The tasks will be handled in `handleRangeTask` goroutine.
 	rangeTaskCh chan rangeTask
@@ -212,6 +225,9 @@ func NewSubscriptionClient(
 	lockResolver txnutil.LockResolver,
 	credential *security.Credential,
 ) *SubscriptionClient {
+	if config.ResolvedTsWorkerCh <= 0 {
+		config.ResolvedTsWorkerCh = 4
+	}
 	subClient := &SubscriptionClient{
 		config:     config,
 		filterLoop: false, // FIXME
@@ -229,12 +245,16 @@ func NewSubscriptionClient(
 		errCache:          newErrCache(),
 	}
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
+	for i := 0; i < config.ResolvedTsWorkerCh; i++ {
+		subClient.resolvedTsCh = append(subClient.resolvedTsCh, chann.NewUnlimitedChannel[resolvedTsEvent, uint64](nil, resolvedTsEventSizer))
+	}
 
 	option := dynstream.NewOption()
-	option.BatchCount = 10240
-	// Note: after enable memory control, UseBuffer must be true.
+	// Note: it is upperbound of the batch of the kv sent from tikv(not committed rows)
+	option.BatchCount = 1024
+	// Note: after enable memory control, UseBuffer is better to be true.
 	// otherwise, the "wake event" may be blocked which will block the consumer
-	// and results in performance degradation.
+	// and cause some performance degradation.
 	option.UseBuffer = true
 	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
@@ -360,6 +380,16 @@ func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
 	s.ds.Wake(subID)
 }
 
+func (s *SubscriptionClient) pushResolvedTsEvent(subID SubscriptionID, state *regionFeedState, resolvedTs uint64) {
+	// make sure a subscription is always handled by a single goroutine
+	targetChIndex := int(subID) % s.config.ResolvedTsWorkerCh
+	s.resolvedTsCh[targetChIndex].Push(resolvedTsEvent{
+		subID:      subID,
+		state:      state,
+		resolvedTs: resolvedTs,
+	})
+}
+
 func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
 	// fast path
 	if !s.paused.Load() {
@@ -396,6 +426,69 @@ func (s *SubscriptionClient) handleDSFeedBack(ctx context.Context) error {
 	}
 }
 
+func (s *SubscriptionClient) handleResolvedTsEvent(ctx context.Context, ch *chann.UnlimitedChannel[resolvedTsEvent, uint64]) error {
+	buffer := make([]resolvedTsEvent, 0, 1024)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			events, ok := ch.GetMultipleNoGroup(buffer)
+			if !ok {
+				return nil
+			}
+			for _, event := range events {
+				state := event.state
+				if state.isStale() || !state.isInitialized() {
+					continue
+				}
+				state.matcher.tryCleanUnmatchedValue()
+				regionID := state.getRegionID()
+				lastResolvedTs := state.getLastResolvedTs()
+				if event.resolvedTs < lastResolvedTs {
+					log.Info("The resolvedTs is fallen back in subscription client",
+						zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
+						zap.Uint64("regionID", regionID),
+						zap.Uint64("resolvedTs", event.resolvedTs),
+						zap.Uint64("lastResolvedTs", lastResolvedTs))
+					continue
+				}
+				state.updateResolvedTs(event.resolvedTs)
+
+				s.totalSpans.Lock()
+				subSpan := s.totalSpans.spanMap[event.subID]
+				s.totalSpans.Unlock()
+				if subSpan == nil {
+					log.Warn("unknown subscription", zap.Uint64("subscriptionID", uint64(event.subID)))
+					continue
+				}
+
+				now := time.Now().UnixMilli()
+				lastAdvance := subSpan.lastAdvanceTime.Load()
+				// TODO: use a config instead
+				if now-lastAdvance > 600 && subSpan.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
+					ts := subSpan.rangeLock.ResolvedTs()
+					if ts > 0 && subSpan.initialized.CompareAndSwap(false, true) {
+						log.Info("subscription client is initialized",
+							zap.Uint64("subscriptionID", uint64(subSpan.subID)),
+							zap.Uint64("regionID", regionID),
+							zap.Uint64("resolvedTs", ts))
+					}
+					lastResolvedTs := subSpan.resolvedTs.Load()
+					if ts > lastResolvedTs {
+						subSpan.resolvedTs.Store(ts)
+						subSpan.resolvedTsUpdated.Store(time.Now().Unix())
+						s.pushRegionEventToDS(subSpan.subID, regionEvent{
+							resolvedTs: ts,
+						})
+					}
+				}
+			}
+			buffer = buffer[:0]
+		}
+	}
+}
+
 // RegionCount returns subscribed region count for the span.
 func (s *SubscriptionClient) RegionCount(subID SubscriptionID) uint64 {
 	s.totalSpans.RLock()
@@ -407,7 +500,6 @@ func (s *SubscriptionClient) RegionCount(subID SubscriptionID) uint64 {
 }
 
 func (s *SubscriptionClient) Run(ctx context.Context) error {
-	// s.consume = consume
 	if s.pd == nil {
 		log.Warn("subsription client should be in test mode, skip run")
 		return nil
@@ -417,6 +509,9 @@ func (s *SubscriptionClient) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error { return s.updateMetrics(ctx) })
+	for i := 0; i < s.config.ResolvedTsWorkerCh; i++ {
+		g.Go(func() error { return s.handleResolvedTsEvent(ctx, s.resolvedTsCh[i]) })
+	}
 	g.Go(func() error { return s.handleDSFeedBack(ctx) })
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.handleRegions(ctx, g) })
@@ -946,7 +1041,6 @@ func (s *SubscriptionClient) newSubscribedSpan(
 
 		consumeKVEvents:   consumeKVEvents,
 		advanceResolvedTs: advanceResolvedTs,
-		advanceInterval:   advanceInterval,
 	}
 	rt.initialized.Store(false)
 	rt.resolvedTsUpdated.Store(time.Now().Unix())

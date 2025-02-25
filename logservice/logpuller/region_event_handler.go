@@ -15,7 +15,6 @@ package logpuller
 
 import (
 	"encoding/hex"
-	"time"
 	"unsafe"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
@@ -37,6 +36,7 @@ const (
 	DataGroupError      = 3
 )
 
+// TODO: rename this not a real region event now, because the resolved ts is subscription level now.
 type regionEvent struct {
 	state  *regionFeedState
 	worker *regionRequestWorker // TODO: remove the field
@@ -89,7 +89,11 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		if event.entries != nil {
 			handleEventEntries(span, event.state, event.entries)
 		} else if event.resolvedTs != 0 {
-			handleResolvedTs(span, event.state, event.resolvedTs)
+			// do some safety check
+			if event.state != nil || event.worker != nil {
+				log.Panic("should not happen: resolvedTs event should not have state or worker")
+			}
+			span.advanceResolvedTs(event.resolvedTs)
 		} else {
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
 		}
@@ -141,9 +145,9 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	if event.entries != nil {
 		return dynstream.EventType{DataGroup: DataGroupEntries, Property: dynstream.BatchableData}
 	} else if event.resolvedTs != 0 {
-		// Note: resolved ts may from different region, so there are not periodic signal
-		return dynstream.EventType{DataGroup: DataGroupResolvedTs, Property: dynstream.BatchableData}
-	} else if event.state.isStale() {
+		// resolved ts is subscription level now
+		return dynstream.EventType{DataGroup: DataGroupResolvedTs, Property: dynstream.PeriodicSignal}
+	} else if event.state != nil && event.state.isStale() {
 		return dynstream.EventType{DataGroup: DataGroupError, Property: dynstream.BatchableData}
 	} else {
 		log.Panic("unknown event type",
@@ -271,42 +275,6 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				continue
 			}
 			state.matcher.rollbackRow(entry)
-		}
-	}
-}
-
-func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs uint64) {
-	if state.isStale() || !state.isInitialized() {
-		return
-	}
-	state.matcher.tryCleanUnmatchedValue()
-	regionID := state.getRegionID()
-	lastResolvedTs := state.getLastResolvedTs()
-	if resolvedTs < lastResolvedTs {
-		log.Info("The resolvedTs is fallen back in subscription client",
-			zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
-			zap.Uint64("regionID", regionID),
-			zap.Uint64("resolvedTs", resolvedTs),
-			zap.Uint64("lastResolvedTs", lastResolvedTs))
-		return
-	}
-	state.updateResolvedTs(resolvedTs)
-
-	now := time.Now().UnixMilli()
-	lastAdvance := span.lastAdvanceTime.Load()
-	if now-lastAdvance > span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
-		ts := span.rangeLock.ResolvedTs()
-		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
-			log.Info("subscription client is initialized",
-				zap.Uint64("subscriptionID", uint64(span.subID)),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("resolvedTs", ts))
-		}
-		lastResolvedTs := span.resolvedTs.Load()
-		if ts > lastResolvedTs {
-			span.resolvedTs.Store(ts)
-			span.resolvedTsUpdated.Store(time.Now().Unix())
-			span.advanceResolvedTs(ts)
 		}
 	}
 }

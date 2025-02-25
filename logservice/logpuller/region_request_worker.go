@@ -263,14 +263,15 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					zap.Any("error", eventData.Error))
 				state.markStopped(&eventError{err: eventData.Error})
 			case *cdcpb.Event_ResolvedTs:
-				regionEvent.resolvedTs = eventData.ResolvedTs
+				s.client.pushResolvedTsEvent(subscriptionID, state, eventData.ResolvedTs)
+				continue
 			case *cdcpb.Event_LongTxn_:
 				// ignore
 				continue
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
+			s.client.pushRegionEventToDS(subscriptionID, regionEvent)
 		} else {
 			log.Warn("region request worker receives a region event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
@@ -286,11 +287,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	s.client.metrics.batchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
 	for _, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			s.client.pushRegionEventToDS(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
-				state:      state,
-				worker:     s,
-				resolvedTs: resolvedTsEvent.Ts,
-			})
+			s.client.pushResolvedTsEvent(subscriptionID, state, resolvedTsEvent.Ts)
 		} else {
 			log.Warn("region request worker receives a resolved ts event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
