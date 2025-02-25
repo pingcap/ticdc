@@ -261,6 +261,10 @@ func newPebbleOptions() *pebble.Options {
 
 		// Configure options to optimize read/write performance
 		Levels: make([]pebble.LevelOptions, 2),
+
+		MaxConcurrentCompactions: func() int {
+			return 2
+		},
 	}
 
 	// Configure level strategy
@@ -279,7 +283,7 @@ func newPebbleOptions() *pebble.Options {
 
 	// Adjust L0 thresholds to delay compaction timing
 	opts.L0CompactionThreshold = 20 // Allow more files in L0
-	opts.L0StopWritesThreshold = 40 // Increase stop-writes threshold
+	opts.L0StopWritesThreshold = 80 // Increase stop-writes threshold
 
 	// Prefetch configuration
 	opts.ReadOnly = false
