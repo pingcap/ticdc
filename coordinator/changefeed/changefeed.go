@@ -33,10 +33,11 @@ import (
 
 // Changefeed is a memory present for changefeed info and status
 type Changefeed struct {
-	ID       common.ChangeFeedID
-	info     *atomic.Pointer[config.ChangeFeedInfo]
-	isMQSink bool
-	isNew    bool // only true when the changefeed is newly created or resumed by overwriteCheckpointTs
+	ID            common.ChangeFeedID
+	info          *atomic.Pointer[config.ChangeFeedInfo]
+	isMQSink      bool
+	isStorageSink bool
+	isNew         bool // only true when the changefeed is newly created or resumed by overwriteCheckpointTs
 
 	// nodeIDMu protects nodeID
 	nodeIDMu sync.Mutex
@@ -74,6 +75,7 @@ func NewChangefeed(cfID common.ChangeFeedID,
 		configBytes:           bytes,
 		lastSavedCheckpointTs: atomic.NewUint64(checkpointTs),
 		isMQSink:              sink.IsMQScheme(uri.Scheme),
+		isStorageSink:         sink.IsStorageScheme(uri.Scheme),
 		isNew:                 isNew,
 		// Initialize the status
 		status: atomic.NewPointer(
@@ -169,6 +171,10 @@ func (c *Changefeed) ForceUpdateStatus(newStatus *heartbeatpb.MaintainerStatus) 
 
 func (c *Changefeed) IsMQSink() bool {
 	return c.isMQSink
+}
+
+func (c *Changefeed) IsStorageSink() bool {
+	return c.isStorageSink
 }
 
 func (c *Changefeed) SetIsNew(isNew bool) {
