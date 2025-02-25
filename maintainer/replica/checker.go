@@ -305,7 +305,7 @@ func (s *rebalanceChecker) Check(_ int) replica.GroupCheckResult {
 	phyCkpTs := oracle.ExtractPhysical(minCheckpointTs)
 	lag := float64(oracle.GetPhysical(pdTime)-phyCkpTs) / 1e3
 
-	log.Debug("rebalanceChecker Check", zap.Any("lag is", lag))
+	log.Debug("rebalanceChecker Check", zap.Any("lag", lag))
 
 	// check merge
 	// only when the lag is small(less than 60s), we can merge the spans.
