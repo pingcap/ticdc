@@ -352,7 +352,7 @@ func (s *SubscriptionClient) Subscribe(
 	s.totalSpans.Unlock()
 
 	s.ds.AddPath(rt.subID, rt, dynstream.AreaSettings{
-		MaxPendingSize: 8 * 1024 * 1024 * 1024, // 8GB
+		MaxPendingSize: 4 * 1024 * 1024 * 1024, // 4
 	})
 
 	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt}
