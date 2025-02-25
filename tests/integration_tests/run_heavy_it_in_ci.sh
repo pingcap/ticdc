@@ -192,6 +192,7 @@ if [[ $group_num =~ ^[0-9]+$ ]] && [[ -n ${groups[10#${group_num}]} ]]; then
 	test_names="${groups[10#${group_num}]}"
 	# Run test cases
 	echo "Run cases: ${test_names}"
+	export TICDC_NEWARCH=true
 	"${CUR}"/run.sh "${sink_type}" "${test_names}"
 else
 	echo "Error: invalid group name: ${group}"
