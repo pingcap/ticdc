@@ -178,14 +178,14 @@ type eventStore struct {
 
 const (
 	dataDir             = "event_store"
-	dbCount             = 8
-	writeWorkerNumPerDB = 2
+	dbCount             = 4
+	writeWorkerNumPerDB = 4
 
 	// Pebble options
-	targetMemoryLimit = 2 << 30   // 2GB
+	targetMemoryLimit = 4 << 30   // 2GB
 	memTableSize      = 256 << 20 // 256MB
-	memTableCount     = 4
-	blockCacheSize    = targetMemoryLimit - (memTableSize * memTableCount) // 1GB
+	memTableCount     = 8
+	blockCacheSize    = targetMemoryLimit - (memTableSize * memTableCount) // 2GB
 )
 
 func New(
@@ -261,6 +261,10 @@ func newPebbleOptions() *pebble.Options {
 
 		// Configure options to optimize read/write performance
 		Levels: make([]pebble.LevelOptions, 2),
+
+		MaxConcurrentCompactions: func() int {
+			return 2
+		},
 	}
 
 	// Configure level strategy
@@ -278,8 +282,8 @@ func newPebbleOptions() *pebble.Options {
 	}
 
 	// Adjust L0 thresholds to delay compaction timing
-	opts.L0CompactionThreshold = 20 // Allow more files in L0
-	opts.L0StopWritesThreshold = 40 // Increase stop-writes threshold
+	opts.L0CompactionThreshold = 20  // Allow more files in L0
+	opts.L0StopWritesThreshold = 160 // Increase stop-writes threshold
 
 	// Prefetch configuration
 	opts.ReadOnly = false
@@ -515,12 +519,12 @@ func (e *eventStore) RegisterDispatcher(
 		}
 		// just do CompareAndSwap once, if failed, it means another goroutine has updated resolvedTs
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
-			subStat.dispatchers.Lock()
-			defer subStat.dispatchers.Unlock()
-			for _, notifier := range subStat.dispatchers.notifiers {
-				notifier(ts, subStat.maxEventCommitTs.Load())
-			}
-			CounterResolved.Inc()
+			// subStat.dispatchers.Lock()
+			// defer subStat.dispatchers.Unlock()
+			// for _, notifier := range subStat.dispatchers.notifiers {
+			// 	notifier(ts, subStat.maxEventCommitTs.Load())
+			// }
+			// CounterResolved.Inc()
 		}
 	}
 	// Note: don't hold any lock when call Subscribe
