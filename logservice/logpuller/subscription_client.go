@@ -231,8 +231,11 @@ func NewSubscriptionClient(
 
 	option := dynstream.NewOption()
 	option.BatchCount = 1024
-	option.UseBuffer = false
-	option.EnableMemoryControl = metrics.SlowestTablePullerResolvedTs.DeleteLabelValues()
+	// Note: after enable memory control, UseBuffer must be true.
+	// otherwise, the "wake event" may be blocked which will block the consumer
+	// and results in performance degradation.
+	option.UseBuffer = true
+	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
 		func(subID SubscriptionID) uint64 { return uint64(subID) },
 		&regionEventHandler{subClient: subClient},
