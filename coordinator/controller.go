@@ -320,12 +320,16 @@ func (c *Controller) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Coordin
 // handleMaintainerStatus handle the status report from the maintainers
 func (c *Controller) handleMaintainerStatus(from node.ID, statusList []*heartbeatpb.MaintainerStatus) {
 	changedCfs := make(map[common.ChangeFeedID]*changefeed.Changefeed, len(statusList))
+	cfStateChangeEvents := make([]*ChangefeedStateChangeEvent, 0)
 
 	for _, status := range statusList {
 		cfID := common.NewChangefeedIDFromPB(status.ChangefeedID)
-		cf := c.handleSingleMaintainerStatus(from, status, cfID)
+		cf, cfStateChangeEvent := c.handleSingleMaintainerStatus(from, status, cfID)
 		if cf != nil {
 			changedCfs[cfID] = cf
+		}
+		if cfStateChangeEvent != nil {
+			cfStateChangeEvents = append(cfStateChangeEvents, cfStateChangeEvent)
 		}
 	}
 
@@ -334,28 +338,33 @@ func (c *Controller) handleMaintainerStatus(from node.ID, statusList []*heartbea
 	case c.changefeedProgressReportCh <- changedCfs:
 	default:
 	}
+
+	// Try to update changefeed state finally
+	for _, cfStateChangeEvent := range cfStateChangeEvents {
+		c.changefeedStateChangedCh <- cfStateChangeEvent
+	}
 }
 
 func (c *Controller) handleSingleMaintainerStatus(
 	from node.ID,
 	status *heartbeatpb.MaintainerStatus,
 	cfID common.ChangeFeedID,
-) *changefeed.Changefeed {
+) (*changefeed.Changefeed, *ChangefeedStateChangeEvent) {
 	// Update the operator status first
 	c.operatorController.UpdateOperatorStatus(cfID, from, status)
 
 	cf := c.getChangefeed(cfID)
 	if cf == nil {
 		c.handleNonExistentChangefeed(cfID, from, status)
-		return nil
+		return nil, nil
 	}
 
 	if !c.validateMaintainerNode(cf, from, cfID) {
-		return nil
+		return nil, nil
 	}
 
-	c.updateChangefeedStatus(cf, cfID, status)
-	return cf
+	cfStateChangeEvent := c.updateChangefeedStatus(cf, cfID, status)
+	return cf, cfStateChangeEvent
 }
 
 func (c *Controller) handleNonExistentChangefeed(
@@ -403,10 +412,10 @@ func (c *Controller) updateChangefeedStatus(
 	cf *changefeed.Changefeed,
 	cfID common.ChangeFeedID,
 	status *heartbeatpb.MaintainerStatus,
-) {
+) *ChangefeedStateChangeEvent {
 	changed, state, err := cf.UpdateStatus(status)
 	if !changed {
-		return
+		return nil
 	}
 
 	log.Info("changefeed status changed",
@@ -423,7 +432,7 @@ func (c *Controller) updateChangefeedStatus(
 			Message: err.Message,
 		}
 	}
-	c.changefeedStateChangedCh <- &ChangefeedStateChangeEvent{
+	return &ChangefeedStateChangeEvent{
 		ChangefeedID: cfID,
 		State:        state,
 		err:          mErr,
