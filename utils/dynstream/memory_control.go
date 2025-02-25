@@ -86,7 +86,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		// Update the pending size.
 		path.updatePendingSize(int64(event.eventSize))
 		as.totalPendingSize.Add(int64(event.eventSize))
-		log.Info("increase dynamic stream memory size", zap.Int64("size", int64(event.eventSize)))
 	}
 	return true
 }
@@ -239,7 +238,6 @@ func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, 
 	if size == 0 {
 		return
 	}
-	log.Info("descrease dynamic stream memory size", zap.Int64("size", size))
 	as.totalPendingSize.Add(int64(-size))
 	if as.totalPendingSize.Load() < 0 {
 		log.Warn("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()))
