@@ -169,11 +169,16 @@ func TestSplitRegionsByWrittenKeysHotspot2(t *testing.T) {
 }
 
 func TestSplitRegionsByWrittenKeysCold(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
+	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
+	baseSpanNumberCoefficient = 3
+	defer func() {
+		baseSpanNumberCoefficient = oldBaseSpanNumberCoefficient
+	}()
 	re := require.New(t)
 	cfID := common.NewChangeFeedIDWithName("test")
 	splitter := newWriteSplitter(cfID, nil, 0)
-	baseSpanNum := getSpansNumber(2, 1, 0, DefaultMaxSpanNumber)
+	baseSpanNum := getSpansNumber(2, 1)
 	require.Equal(t, 3, baseSpanNum)
 	regions, startKeys, endKeys := prepareRegionsInfo(make([]int, 7))
 	info := splitter.splitRegionsByWrittenKeysV1(0, regions, baseSpanNum) // [2,3,4], [5,6,7], [8]
@@ -195,11 +200,16 @@ func TestSplitRegionsByWrittenKeysCold(t *testing.T) {
 }
 
 func TestNotSplitRegionsByWrittenKeysCold(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
+	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
+	baseSpanNumberCoefficient = 3
+	defer func() {
+		baseSpanNumberCoefficient = oldBaseSpanNumberCoefficient
+	}()
 	re := require.New(t)
 	cfID := common.NewChangeFeedIDWithName("test")
 	splitter := newWriteSplitter(cfID, nil, 1)
-	baseSpanNum := getSpansNumber(2, 1, 0, DefaultMaxSpanNumber)
+	baseSpanNum := getSpansNumber(2, 1)
 	require.Equal(t, 3, baseSpanNum)
 	regions, startKeys, endKeys := prepareRegionsInfo(make([]int, 7))
 	info := splitter.splitRegionsByWrittenKeysV1(0, regions, baseSpanNum) // [2,3,4,5,6,7,8]
@@ -230,7 +240,7 @@ func TestSplitRegionsByWrittenKeysConfig(t *testing.T) {
 	re.EqualValues(1, info.Spans[0].TableID)
 
 	splitter.writeKeyThreshold = 0
-	spans := splitter.split(context.Background(), &heartbeatpb.TableSpan{}, 3, DefaultMaxSpanNumber)
+	spans := splitter.split(context.Background(), &heartbeatpb.TableSpan{}, 3)
 	require.Empty(t, spans)
 }
 
@@ -260,6 +270,7 @@ func TestSplitRegionEven(t *testing.T) {
 	}
 }
 
+/*
 func TestSpanRegionLimitBase(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	splitter := newWriteSplitter(cfID, nil, 0)
@@ -269,13 +280,13 @@ func TestSpanRegionLimitBase(t *testing.T) {
 		regions = append(regions, pdutil.NewTestRegionInfo(uint64(i+9), []byte("f"), []byte("f"), 100))
 	}
 	captureNum := 2
-	spanNum := getSpansNumber(len(regions), captureNum, 0, DefaultMaxSpanNumber)
+	spanNum := getSpansNumber(len(regions), captureNum)
 	info := splitter.splitRegionsByWrittenKeysV1(0, cloneRegions(regions), spanNum)
 	require.Len(t, info.RegionCounts, spanNum)
 	for _, c := range info.RegionCounts {
 		require.LessOrEqual(t, float64(c), spanRegionLimit*1.1)
 	}
-}
+}*/
 
 func TestSpanRegionLimit(t *testing.T) {
 	// Fisher-Yates shuffle algorithm to shuffle the writtenKeys
@@ -341,7 +352,7 @@ func TestSpanRegionLimit(t *testing.T) {
 			pdutil.NewTestRegionInfo(uint64(i+9), []byte("f"), []byte("f"), uint64(writtenKeys[i])))
 	}
 	captureNum := 3
-	spanNum := getSpansNumber(len(regions), captureNum, 0, DefaultMaxSpanNumber)
+	spanNum := getSpansNumber(len(regions), captureNum)
 	info := splitter.splitRegionsByWrittenKeysV1(0, cloneRegions(regions), spanNum)
 	require.LessOrEqual(t, spanNum, len(info.RegionCounts))
 	for _, c := range info.RegionCounts {

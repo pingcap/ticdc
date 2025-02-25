@@ -69,6 +69,10 @@ func (d *DispatcherID) GetSize() int {
 	return 16
 }
 
+func (d DispatcherID) GetLow() uint64 {
+	return d.Low
+}
+
 func (d *DispatcherID) Unmarshal(b []byte) error {
 	gid := GID{}
 	gid.Unmarshal(b)
@@ -128,6 +132,10 @@ func NewGID() GID {
 		Low:  binary.LittleEndian.Uint64(uuid[0:8]),
 		High: binary.LittleEndian.Uint64(uuid[8:16]),
 	}
+}
+
+func (g *GID) PString() string {
+	return g.String()
 }
 
 func (g GID) String() string {
@@ -260,5 +268,6 @@ type SinkType int
 const (
 	MysqlSinkType SinkType = iota
 	KafkaSinkType
+	CloudStorageSinkType
 	BlackHoleSinkType
 )

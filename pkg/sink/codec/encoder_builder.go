@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
 )
 
@@ -37,5 +38,19 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncod
 	// 	return simple.NewEncoder(ctx, cfg)
 	default:
 		return nil, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(cfg.Protocol)
+	}
+}
+
+// NewTxnEventEncoder returns an TxnEventEncoderBuilder.
+func NewTxnEventEncoder(
+	c *common.Config,
+) (common.TxnEventEncoder, error) {
+	switch c.Protocol {
+	case config.ProtocolCsv:
+		return csv.NewTxnEventEncoder(c), nil
+	case config.ProtocolCanalJSON:
+		return canal.NewJSONTxnEventEncoderBuilder(c), nil
+	default:
+		return nil, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(c.Protocol)
 	}
 }

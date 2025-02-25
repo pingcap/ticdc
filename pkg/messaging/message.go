@@ -191,7 +191,9 @@ func (r RegisterDispatcherRequest) GetChangefeedID() common.ChangeFeedID {
 
 func (r RegisterDispatcherRequest) GetFilter() filter.Filter {
 	changefeedID := r.GetChangefeedID()
-	filter, err := filter.GetSharedFilterStorage().GetOrSetFilter(changefeedID, r.RegisterDispatcherRequest.FilterConfig, "", false)
+	filter, err := filter.
+		GetSharedFilterStorage().
+		GetOrSetFilter(changefeedID, r.RegisterDispatcherRequest.FilterConfig, "", false)
 	if err != nil {
 		log.Panic("create filter failed", zap.Error(err), zap.Any("filterConfig", r.RegisterDispatcherRequest.FilterConfig))
 	}

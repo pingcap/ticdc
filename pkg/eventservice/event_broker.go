@@ -815,9 +815,14 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 	dispatcher := newDispatcherStat(startTs, info, filter, workerIndex, changefeedStatus)
 	if span.Equal(heartbeatpb.DDLSpan) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
-		log.Info("table trigger dispatcher register dispatcher", zap.Uint64("clusterID", c.tidbClusterID),
-			zap.Any("dispatcherID", id), zap.Int64("tableID", span.TableID),
-			zap.Uint64("startTs", startTs), zap.Duration("brokerRegisterDuration", time.Since(start)))
+		log.Info("table trigger dispatcher register dispatcher",
+			zap.Uint64("clusterID", c.tidbClusterID),
+			zap.Stringer("changefeedID", changefeedID),
+			zap.Stringer("dispatcherID", id),
+			zap.String("span", common.FormatTableSpan(span)),
+			zap.Uint64("startTs", startTs),
+			zap.Duration("brokerRegisterDuration", time.Since(start)),
+		)
 		return
 	}
 
@@ -832,7 +837,10 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 		info.IsOnlyReuse(),
 	)
 	if err != nil {
-		log.Panic("register dispatcher to eventStore failed", zap.Error(err), zap.Any("dispatcherInfo", info))
+		log.Panic("register dispatcher to eventStore failed",
+			zap.Error(err),
+			zap.Any("dispatcherInfo", info),
+		)
 	}
 	if !success {
 		if !info.IsOnlyReuse() {
@@ -846,20 +854,33 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 
 	err = c.schemaStore.RegisterTable(span.GetTableID(), info.GetStartTs())
 	if err != nil {
-		log.Panic("register table to schemaStore failed", zap.Error(err), zap.Int64("tableID", span.TableID), zap.Uint64("startTs", info.GetStartTs()))
+		log.Panic("register table to schemaStore failed",
+			zap.Error(err),
+			zap.String("span", common.FormatTableSpan(span)),
+			zap.Uint64("startTs", info.GetStartTs()),
+		)
 	}
 	tableInfo, err := c.schemaStore.GetTableInfo(span.GetTableID(), info.GetStartTs())
 	if err != nil {
-		log.Panic("get table info from schemaStore failed", zap.Error(err), zap.Int64("tableID", span.TableID), zap.Uint64("startTs", info.GetStartTs()))
+		log.Panic("get table info from schemaStore failed",
+			zap.Error(err),
+			zap.Int64("tableID", span.TableID),
+			zap.Uint64("startTs", info.GetStartTs()),
+		)
 	}
 	dispatcher.updateTableInfo(tableInfo)
 	eventStoreRegisterDuration := time.Since(start)
 	c.dispatchers.Store(id, dispatcher)
 
-	log.Info("register dispatcher", zap.Uint64("clusterID", c.tidbClusterID),
-		zap.Any("dispatcherID", id), zap.Int64("tableID", span.TableID),
-		zap.Uint64("startTs", startTs), zap.Duration("brokerRegisterDuration", brokerRegisterDuration),
-		zap.Duration("eventStoreRegisterDuration", eventStoreRegisterDuration))
+	log.Info("register dispatcher",
+		zap.Uint64("clusterID", c.tidbClusterID),
+		zap.Stringer("changefeedID", changefeedID),
+		zap.Stringer("dispatcherID", id),
+		zap.String("span", common.FormatTableSpan(span)),
+		zap.Uint64("startTs", startTs),
+		zap.Duration("brokerRegisterDuration", brokerRegisterDuration),
+		zap.Duration("eventStoreRegisterDuration", eventStoreRegisterDuration),
+	)
 }
 
 func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
@@ -867,18 +888,35 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	id := dispatcherInfo.GetID()
 	stat, ok := c.dispatchers.Load(id)
 	if !ok {
+		stat, ok = c.tableTriggerDispatchers.Load(id)
+		if !ok {
+			return
+		}
 		c.tableTriggerDispatchers.Delete(id)
-		return
 	}
+
 	stat.(*dispatcherStat).changefeedStat.removeDispatcher()
+	// FIXME: this is a workaround to remove the changefeed status when all dispatchers are removed.
+	// But some remove dispatcher events missing during the changefeed pausing process, the changefeed status will not be removed expectedly.
+	// So, we need to find a permanent solution to fix this problem.
+	if stat.(*dispatcherStat).changefeedStat.dispatcherCount.Load() == 0 {
+		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
+			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+		)
+		c.changefeedMap.Delete(dispatcherInfo.GetChangefeedID())
+	}
+
 	stat.(*dispatcherStat).isRemoved.Store(true)
 	c.eventStore.UnregisterDispatcher(id)
 	c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
 	c.dispatchers.Delete(id)
+
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
-		zap.Int64("tableID", dispatcherInfo.GetTableSpan().TableID),
-		zap.Any("dispatcherID", id))
+		zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+		zap.Stringer("dispatcherID", id),
+		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
+	)
 }
 
 func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
@@ -888,8 +926,9 @@ func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 	log.Info("pause dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
-		zap.Int64("tableID", stat.info.GetTableSpan().TableID),
-		zap.Any("dispatcher", stat.id),
+		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", stat.id),
+		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
 		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Uint64("seq", stat.seq.Load()))
 	stat.isRunning.Store(false)
@@ -901,8 +940,9 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 		return
 	}
 	log.Info("resume dispatcher",
-		zap.Int64("tableID", stat.info.GetTableSpan().TableID),
-		zap.Any("dispatcher", stat.id),
+		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", stat.id),
+		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
 		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Uint64("seq", stat.seq.Load()))
 	stat.isRunning.Store(true)
@@ -915,8 +955,9 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 	stat.resetState(dispatcherInfo.GetStartTs())
 	log.Info("reset dispatcher",
-		zap.Int64("tableID", stat.info.GetTableSpan().TableID),
-		zap.Any("dispatcher", stat.id),
+		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", stat.id),
+		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
 		zap.Uint64("startTs", stat.info.GetStartTs()))
 }
 
@@ -925,8 +966,9 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 	if !ok {
 		stat = newChangefeedStatus(changefeedID)
 		log.Info("new changefeed status",
-			zap.Any("changefeedID", changefeedID.String()),
-			zap.Any("stat", stat.(*changefeedStatus).isRunning.Load()))
+			zap.Stringer("changefeedID", changefeedID),
+			zap.Bool("isRunning", stat.(*changefeedStatus).isRunning.Load()),
+		)
 		c.changefeedMap.Store(changefeedID, stat)
 	}
 	return stat.(*changefeedStatus)

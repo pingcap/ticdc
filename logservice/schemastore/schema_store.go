@@ -290,10 +290,6 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(tableFilter filter.Filter, star
 	if limit == 0 {
 		log.Panic("limit cannot be 0")
 	}
-	// TODO: remove the following log
-	log.Debug("FetchTableTriggerDDLEvents",
-		zap.Uint64("start", start),
-		zap.Int("limit", limit))
 	// must get resolved ts first
 	currentResolvedTs := s.resolvedTs.Load()
 	if currentResolvedTs <= start {
@@ -326,8 +322,7 @@ func (s *schemaStore) writeDDLEvent(ddlEvent DDLJobWithCommitTs) {
 		zap.Uint64("finishedTs", ddlEvent.Job.BinlogInfo.FinishedTS),
 		zap.String("query", ddlEvent.Job.Query))
 
-	// TODO: find a better way to filter out system tables
-	if ddlEvent.Job.SchemaID != 1 {
+	if !filter.IsSysSchema(ddlEvent.Job.SchemaName) {
 		s.unsortedCache.addDDLEvent(ddlEvent)
 	}
 }

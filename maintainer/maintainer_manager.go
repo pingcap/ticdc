@@ -33,6 +33,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	reportMaintainerStatusInterval = time.Millisecond * 1000
+)
+
 // Manager is the manager of all changefeed maintainer in a ticdc watcher, each ticdc watcher will
 // start a Manager when the watcher is startup. It responsible for:
 // 1. Handle bootstrap command from coordinator and report all changefeed maintainer status.
@@ -148,7 +152,9 @@ func (m *Manager) Run(ctx context.Context) error {
 				if cf.removed.Load() {
 					cf.Close()
 					log.Info("maintainer removed, remove it from dynamic stream",
-						zap.String("changefeed", cf.id.String()))
+						zap.Stringer("changefeed", cf.id),
+						zap.Uint64("checkpointTs", cf.getWatermark().CheckpointTs),
+					)
 					m.maintainers.Delete(key)
 				}
 				return true
@@ -169,7 +175,10 @@ func (m *Manager) sendMessages(msg *heartbeatpb.MaintainerHeartbeat) {
 	target := m.newCoordinatorTopicMessage(msg)
 	err := m.mc.SendCommand(target)
 	if err != nil {
-		log.Warn("send command failed", zap.Error(err))
+		log.Warn("send command failed",
+			zap.Stringer("from", m.selfNode.ID),
+			zap.Stringer("target", target.To),
+			zap.Error(err))
 	}
 }
 
@@ -193,9 +202,6 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	m.maintainers.Range(func(key, value interface{}) bool {
 		maintainer := value.(*Maintainer)
 		status := maintainer.GetMaintainerStatus()
-		if status.GetErr() != nil {
-			log.Info("fizz changefeed meet error", zap.Any("status", status))
-		}
 		response.Statuses = append(response.Statuses, status)
 		maintainer.statusChanged.Store(false)
 		maintainer.lastReportTime = time.Now()
@@ -211,11 +217,11 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 		zap.Int64("version", m.coordinatorVersion))
 }
 
-func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) {
+func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) *heartbeatpb.MaintainerStatus {
 	cfID := common.NewChangefeedIDFromPB(req.Id)
 	_, ok := m.maintainers.Load(cfID)
 	if ok {
-		return
+		return nil
 	}
 
 	cfConfig := &config.ChangeFeedInfo{}
@@ -229,15 +235,11 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 			zap.Uint64("checkpointTs", req.CheckpointTs),
 			zap.Any("config", cfConfig))
 	}
-	cf := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.taskScheduler,
-		m.pdAPI, m.tsoClient, m.regionCache, req.CheckpointTs, req.IsNewChangfeed)
-	if err != nil {
-		log.Warn("add path to dynstream failed, coordinator will retry later", zap.Error(err))
-		return
-	}
-
-	cf.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
-	m.maintainers.Store(cfID, cf)
+	maintainer := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.taskScheduler,
+		m.pdAPI, m.tsoClient, m.regionCache, req.CheckpointTs, req.IsNewChangefeed)
+	m.maintainers.Store(cfID, maintainer)
+	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
+	return nil
 }
 
 func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heartbeatpb.MaintainerStatus {
@@ -248,7 +250,7 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 		if !req.Cascade {
 			log.Warn("ignore remove maintainer request, "+
 				"since the maintainer not found",
-				zap.String("changefeed", cfID.String()),
+				zap.Stringer("changefeed", cfID),
 				zap.Any("request", req))
 			return &heartbeatpb.MaintainerStatus{
 				ChangefeedID: req.GetId(),
@@ -267,7 +269,7 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 		message:      msg,
 	})
 	log.Info("received remove maintainer request",
-		zap.String("changefeed", cfID.String()))
+		zap.Stringer("changefeed", cfID))
 	return nil
 }
 
@@ -278,16 +280,17 @@ func (m *Manager) onDispatchMaintainerRequest(
 		log.Warn("ignore invalid coordinator id",
 			zap.Any("request", msg),
 			zap.Any("coordinatorID", m.coordinatorID),
-			zap.Any("from", msg.From))
+			zap.Stringer("from", msg.From))
 		return nil
 	}
 	switch msg.Type {
 	case messaging.TypeAddMaintainerRequest:
 		req := msg.Message[0].(*heartbeatpb.AddMaintainerRequest)
-		m.onAddMaintainerRequest(req)
+		return m.onAddMaintainerRequest(req)
 	case messaging.TypeRemoveMaintainerRequest:
 		return m.onRemoveMaintainerRequest(msg)
 	default:
+		log.Warn("unknown message type", zap.Any("message", msg.Message))
 	}
 	return nil
 }
@@ -297,11 +300,9 @@ func (m *Manager) sendHeartbeat() {
 		response := &heartbeatpb.MaintainerHeartbeat{}
 		m.maintainers.Range(func(key, value interface{}) bool {
 			cfMaintainer := value.(*Maintainer)
-			if cfMaintainer.statusChanged.Load() || time.Since(cfMaintainer.lastReportTime) > time.Second*2 {
+			if cfMaintainer.statusChanged.Load() ||
+				time.Since(cfMaintainer.lastReportTime) > reportMaintainerStatusInterval {
 				mStatus := cfMaintainer.GetMaintainerStatus()
-				if mStatus.GetErr() != nil {
-					log.Info("fizz changefeed meet error", zap.Any("status", mStatus))
-				}
 				response.Statuses = append(response.Statuses, mStatus)
 				cfMaintainer.statusChanged.Store(false)
 				cfMaintainer.lastReportTime = time.Now()
@@ -338,22 +339,17 @@ func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 func (m *Manager) dispatcherMaintainerMessage(
 	ctx context.Context, changefeed common.ChangeFeedID, msg *messaging.TargetMessage,
 ) error {
-	_, ok := m.maintainers.Load(changefeed)
+	c, ok := m.maintainers.Load(changefeed)
 	if !ok {
 		log.Warn("maintainer is not found",
-			zap.String("changefeedID", changefeed.Name()), zap.String("message", msg.String()))
+			zap.Stringer("changefeed", changefeed),
+			zap.String("message", msg.String()))
 		return nil
 	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		c, ok := m.maintainers.Load(changefeed)
-		if !ok {
-			log.Warn("maintainer is not found",
-				zap.String("changefeedID", changefeed.Name()), zap.String("message", msg.String()))
-			return nil
-		}
 		maintainer := c.(*Maintainer)
 		maintainer.pushEvent(&Event{
 			changefeedID: changefeed,

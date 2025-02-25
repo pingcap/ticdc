@@ -165,6 +165,10 @@ var (
 		"MySQL txn error",
 		errors.RFCCodeText("CDC:ErrMySQLTxnError"),
 	)
+	ErrMySQLDuplicateEntry = errors.Normalize(
+		"MySQL duplicate entry error",
+		errors.RFCCodeText("CDC:ErrMySQLDuplicateEntry"),
+	)
 	ErrMySQLQueryError = errors.Normalize(
 		"MySQL query error",
 		errors.RFCCodeText("CDC:ErrMySQLQueryError"),
@@ -469,7 +473,10 @@ var (
 		"cdc met unexpected error: %s",
 		errors.RFCCodeText("CDC:ErrUnexpected"),
 	)
-
+	ErrLoadTimezone = errors.Normalize(
+		"load timezone",
+		errors.RFCCodeText("CDC:ErrLoadTimezone"),
+	)
 	// credential related errors
 	ErrCredentialNotFound = errors.Normalize(
 		"credential not found: %s",

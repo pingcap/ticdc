@@ -22,6 +22,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/conflictdetector"
 	"github.com/pingcap/ticdc/downstreamadapter/worker"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -30,12 +31,14 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
+	"github.com/pingcap/tiflow/pkg/causality"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
 const (
-	prime = 31
+	// DefaultConflictDetectorSlots indicates the default slot count of conflict detector. TODO:check this
+	DefaultConflictDetectorSlots uint64 = 16 * 1024
 )
 
 // MysqlSink is responsible for writing data to mysql downstream.
@@ -49,6 +52,8 @@ type MysqlSink struct {
 
 	db         *sql.DB
 	statistics *metrics.Statistics
+
+	conflictDetector *conflictdetector.ConflictDetector
 
 	isNormal uint32 // if sink is normal, isNormal is 1, otherwise is 0
 }
@@ -72,7 +77,6 @@ func verifyMySQLSink(
 func newMySQLSink(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	workerCount int,
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
 ) (*MysqlSink, error) {
@@ -80,7 +84,7 @@ func newMySQLSink(
 	if err != nil {
 		return nil, err
 	}
-	return newMysqlSinkWithDBAndConfig(ctx, changefeedID, workerCount, cfg, db), nil
+	return newMysqlSinkWithDBAndConfig(ctx, changefeedID, cfg.WorkerCount, cfg, db), nil
 }
 
 func newMysqlSinkWithDBAndConfig(
@@ -97,11 +101,16 @@ func newMysqlSinkWithDBAndConfig(
 		dmlWorker:    make([]*worker.MysqlDMLWorker, workerCount),
 		workerCount:  workerCount,
 		statistics:   stat,
-		isNormal:     1,
+		conflictDetector: conflictdetector.NewConflictDetector(DefaultConflictDetectorSlots, conflictdetector.TxnCacheOption{
+			Count:         workerCount,
+			Size:          1024,
+			BlockStrategy: causality.BlockStrategyWaitEmpty,
+		}),
+		isNormal: 1,
 	}
 	formatVectorType := mysql.ShouldFormatVectorType(db, cfg)
 	for i := 0; i < workerCount; i++ {
-		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, changefeedID, stat, formatVectorType)
+		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, changefeedID, stat, formatVectorType, mysqlSink.conflictDetector.GetOutChByCacheID(int64(i)))
 	}
 	mysqlSink.ddlWorker = worker.NewMysqlDDLWorker(ctx, db, cfg, changefeedID, stat, formatVectorType)
 	return mysqlSink
@@ -110,6 +119,7 @@ func newMysqlSinkWithDBAndConfig(
 func (s *MysqlSink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	for i := 0; i < s.workerCount; i++ {
+		i := i // capture loop variable
 		g.Go(func() error {
 			return s.dmlWorker[i].Run(ctx)
 		})
@@ -132,12 +142,13 @@ func (s *MysqlSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore)
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *MysqlSink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	// Considering that the parity of tableID is not necessarily even,
-	// directly dividing by the number of buckets may cause unevenness between buckets.
-	// Therefore, we first take the modulus of the prime number and then take the modulus of the bucket.
-	index := int64(event.PhysicalTableID) % prime % int64(s.workerCount)
-	s.dmlWorker[index].AddDMLEvent(event)
+func (s *MysqlSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
+	return s.conflictDetector.Add(event)
+
+	// // We use low value of dispatcherID to divide different tables into different workers.
+	// // And ensure the same table always goes to the same worker.
+	// index := event.GetDispatcherID().GetLow() % uint64(s.workerCount)
+	// s.dmlWorker[index].AddDMLEvent(event)
 }
 
 func (s *MysqlSink) PassBlockEvent(event commonEvent.BlockEvent) {
@@ -159,23 +170,24 @@ func (s *MysqlSink) GetStartTsList(
 	tableIds []int64,
 	startTsList []int64,
 	removeDDLTs bool,
-) ([]int64, error) {
+) ([]int64, []bool, error) {
 	if removeDDLTs {
 		// means we just need to remove the ddl ts item for this changefeed, and return startTsList directly.
 		err := s.ddlWorker.RemoveDDLTsItem()
 		if err != nil {
 			atomic.StoreUint32(&s.isNormal, 0)
-			return nil, err
+			return nil, nil, err
 		}
-		return startTsList, nil
+		isSyncpointList := make([]bool, len(startTsList))
+		return startTsList, isSyncpointList, nil
 	}
 
-	startTsList, err := s.ddlWorker.GetStartTsList(tableIds, startTsList)
+	startTsList, isSyncpointList, err := s.ddlWorker.GetStartTsList(tableIds, startTsList)
 	if err != nil {
 		atomic.StoreUint32(&s.isNormal, 0)
-		return nil, err
+		return nil, nil, err
 	}
-	return startTsList, nil
+	return startTsList, isSyncpointList, nil
 }
 
 func (s *MysqlSink) Close(removeChangefeed bool) {

@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 
 	"github.com/google/btree"
-	"github.com/pingcap/tiflow/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/spanz"
 )
 
 // TableSpanRangeChecker is used to check if all ranges cover the start and end byte slices.

@@ -102,3 +102,7 @@ func (e *SyncPointEvent) PushFrontFlushFunc(f func()) {
 func (e *SyncPointEvent) ClearPostFlushFunc() {
 	e.PostTxnFlushed = e.PostTxnFlushed[:0]
 }
+
+func (e *SyncPointEvent) Len() int32 {
+	return 0
+}

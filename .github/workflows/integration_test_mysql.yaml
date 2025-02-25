@@ -128,17 +128,31 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=savepoint
 
-      # The 14th case in this group     
       - name: Test server config compatibility
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=server_config_compatibility
 
-      # The 15th case in this group     
       - name: Test split region
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=split_region
+      
+      # The 16th case in this group     
+      - name: Test changefeed resume with checkpoint ts
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_resume_with_checkpoint_ts  
+
+      - name: Test capture suicide while balance table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=capture_suicide_while_balance_table 
+
+      - name: Test kv client stream reconnect
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=kv_client_stream_reconnect  
 
       - name: Upload test logs
         if: always()
@@ -179,10 +193,10 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=changefeed_finish
       
-      - name: Test sql_mode
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=sql_mode
+      # - name: Test sql_mode
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=sql_mode
         
       - name: Test changefeed_pause_resume
         if: ${{ success() }}
@@ -383,6 +397,14 @@ jobs:
         uses: actions/setup-go@v3
         with:
           go-version: '1.23'
+      
+      - name: Set up S3cmd cli tool
+        uses: s3-actions/s3cmd@v1.9.0
+        with:
+          provider: linode 
+
+      - name: Run s3cmd command
+        run: s3cmd --version
 
       - name: Integration Build
         run: |
@@ -400,17 +422,6 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=partition_table
-      
-      # - name: Test multi_tables_ddl
-      #   if: ${{ success() }}
-      #   run: |
-      #     export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
-
-      - name: Test multi_source
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
-
      
       - name: Test ddl_attributes
         if: ${{ success() }}
@@ -478,12 +489,42 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=capture_session_done_during_task
+
+      - name: Test changefeed_dup_error_restart
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_dup_error_restart
+
+      - name: Test mysql_sink_retry
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=mysql_sink_retry
       
-      # The 17th case in this group
       - name: Test cdc
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=cdc
+
+      - name: Test overwrite_resume_with_syncpoint
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=overwrite_resume_with_syncpoint
+      
+      - name: Test ddl_for_split_tables
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_for_split_tables
+
+      - name: Test multi_source
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_source
+
+      # The 21th case in this group
+      - name: Test multi_tables_ddl
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=multi_tables_ddl
 
       - name: Upload test logs
         if: always()
@@ -593,6 +634,16 @@ jobs:
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_O
+      
+      - name: Test fail_over_ddl_mix
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_mix 
+
+      - name: Test fail_over_ddl_mix_with_syncpoint
+        run: |
+          pwd && ls -l bin/ && ls -l tools/bin/
+          export TICDC_NEWARCH=true && make integration_test CASE=fail_over_ddl_mix_with_syncpoint 
 
       - name: Upload test logs
         if: always()

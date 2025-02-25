@@ -20,7 +20,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	replica_mock "github.com/pingcap/ticdc/maintainer/replica/mock"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/tiflow/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/stretchr/testify/require"
 )
 

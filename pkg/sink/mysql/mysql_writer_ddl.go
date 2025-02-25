@@ -44,7 +44,7 @@ func (w *MysqlWriter) asyncExecAddIndexDDLIfTimeout(event *commonEvent.DDLEvent)
 	}
 
 	done := make(chan error, 1)
-	// wait for 2 seconds at most
+
 	tick := time.NewTimer(2 * time.Second)
 	defer tick.Stop()
 	log.Info("async exec add index ddl start",
@@ -117,6 +117,7 @@ func needTimeoutCheck(ddlType timodel.ActionType) bool {
 func (w *MysqlWriter) execDDL(event *commonEvent.DDLEvent) error {
 	if w.cfg.DryRun {
 		log.Info("Dry run DDL", zap.String("sql", event.GetDDLQuery()))
+		time.Sleep(w.cfg.DryRunDelay)
 		return nil
 	}
 
@@ -136,7 +137,7 @@ func (w *MysqlWriter) execDDL(event *commonEvent.DDLEvent) error {
 
 	ctx := w.ctx
 	// We check the most of the ddl event executed with timeout.
-	if !needTimeoutCheck(event.GetDDLType()) {
+	if needTimeoutCheck(event.GetDDLType()) {
 		writeTimeout, _ := time.ParseDuration(w.cfg.WriteTimeout)
 		writeTimeout += networkDriftDuration
 		var cancelFunc func()

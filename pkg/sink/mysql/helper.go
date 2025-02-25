@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/coreos/go-semver/semver"
 	dmysql "github.com/go-sql-driver/mysql"
@@ -101,12 +102,6 @@ func GenBasicDSN(cfg *MysqlConfig) (*dmysql.Config, error) {
 		port = "4000"
 	}
 
-	dryRun := cfg.sinkURI.Query().Get("dry-run")
-	if dryRun == "true" {
-		log.Info("dry-run mode is enabled, will not write data to downstream")
-		cfg.DryRun = true
-	}
-
 	// This will handle the IPv6 address format.
 	var dsn *dmysql.Config
 	var err error
@@ -127,7 +122,43 @@ func GenBasicDSN(cfg *MysqlConfig) (*dmysql.Config, error) {
 	dsn.Params["readTimeout"] = cfg.ReadTimeout
 	dsn.Params["writeTimeout"] = cfg.WriteTimeout
 	dsn.Params["timeout"] = cfg.DialTimeout
+
+	setDryRunConfig(cfg)
+
 	return dsn, nil
+}
+
+func setDryRunConfig(cfg *MysqlConfig) {
+	dryRun := cfg.sinkURI.Query().Get("dry-run")
+	if dryRun == "true" {
+		log.Info("dry-run mode is enabled, will not write data to downstream")
+		cfg.DryRun = true
+	}
+	if !cfg.DryRun {
+		return
+	}
+
+	dryRunDelay := cfg.sinkURI.Query().Get("dry-run-delay")
+	if dryRunDelay != "" {
+		dryRunDelayInt, err := strconv.Atoi(dryRunDelay)
+		if err != nil {
+			log.Error("invalid dry-run-delay", zap.Error(err))
+			return
+		}
+		log.Info("set dry-run-delay", zap.Duration("duration", time.Duration(dryRunDelayInt)*time.Millisecond))
+		cfg.DryRunDelay = time.Duration(dryRunDelayInt) * time.Millisecond
+	}
+
+	dryRunBlockInterval := cfg.sinkURI.Query().Get("dry-run-block-interval")
+	if dryRunBlockInterval != "" {
+		dryRunBlockIntervalInt, err := strconv.Atoi(dryRunBlockInterval)
+		if err != nil {
+			log.Error("invalid dry-run-block-interval", zap.Error(err))
+			return
+		}
+		log.Info("set dry-run-block-interval", zap.Duration("duration", time.Duration(dryRunBlockIntervalInt)*time.Second))
+		cfg.DryRunBlockInterval = time.Duration(dryRunBlockIntervalInt) * time.Second
+	}
 }
 
 // GetTestDB checks and adjusts the password of the given DSN,
@@ -374,4 +405,31 @@ func ShouldFormatVectorType(db *sql.DB, cfg *MysqlConfig) bool {
 		return true
 	}
 	return false
+}
+
+func isRetryableDMLError(err error) bool {
+	if !cerror.IsRetryableError(err) {
+		return false
+	}
+
+	errCode, ok := getSQLErrCode(err)
+	if !ok {
+		return true
+	}
+
+	switch errCode {
+	// when meet dup entry error, we don't retry and report the error directly to owner to restart the changefeed.
+	case mysql.ErrNoSuchTable, mysql.ErrBadDB, mysql.ErrDupEntry:
+		return false
+	}
+	return true
+}
+
+func getSQLErrCode(err error) (errors.ErrCode, bool) {
+	mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError)
+	if !ok {
+		return -1, false
+	}
+
+	return errors.ErrCode(mysqlErr.Number), true
 }

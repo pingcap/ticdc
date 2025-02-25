@@ -114,3 +114,18 @@ func ShouldFailChangefeed(err error) bool {
 	}
 	return false
 }
+
+var cliUnprintableError = []*errors.Error{ErrCliAborted}
+
+// IsCliUnprintableError returns true if the error should not be printed in cli.
+func IsCliUnprintableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	for _, e := range cliUnprintableError {
+		if strings.Contains(err.Error(), string(e.RFCCode())) {
+			return true
+		}
+	}
+	return false
+}

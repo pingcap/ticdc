@@ -41,6 +41,10 @@ func (e *rpcCtxUnavailableErr) Error() string {
 		e.verID.GetID(), e.verID.GetVer(), e.verID.GetConfVer())
 }
 
+type getStoreErr struct{}
+
+func (e *getStoreErr) Error() string { return "get store error" }
+
 type sendRequestToStoreErr struct{}
 
 func (e *sendRequestToStoreErr) Error() string { return "send request to store error" }

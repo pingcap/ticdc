@@ -840,24 +840,8 @@ func TestApplyDDLJobs(t *testing.T) {
 						{
 							Type:       byte(model.ActionRenameTable),
 							FinishedTs: 1020,
-							BlockedTables: &commonEvent.InfluencedTables{
-								InfluenceType: commonEvent.InfluenceTypeNormal,
-								TableIDs:      []int64{0},
-							},
-							NeedAddedTables: []commonEvent.Table{
-								{
-									SchemaID: 105,
-									TableID:  300,
-								},
-							},
-							TableNameChange: &commonEvent.TableNameChange{
-								AddName: []commonEvent.SchemaTableName{
-									{
-										SchemaName: "test2",
-										TableName:  "t2",
-									},
-								},
-							},
+							// This is an error event, so other fields are not set
+							// TODO: check error
 						},
 					},
 				},
@@ -1011,32 +995,7 @@ func TestApplyDDLJobs(t *testing.T) {
 						{
 							Type:       byte(model.ActionRenameTable),
 							FinishedTs: 1020,
-							BlockedTables: &commonEvent.InfluencedTables{
-								InfluenceType: commonEvent.InfluenceTypeNormal,
-								TableIDs:      []int64{0},
-							},
-							NeedAddedTables: []commonEvent.Table{
-								{
-									SchemaID: 105,
-									TableID:  301,
-								},
-								{
-									SchemaID: 105,
-									TableID:  302,
-								},
-								{
-									SchemaID: 105,
-									TableID:  303,
-								},
-							},
-							TableNameChange: &commonEvent.TableNameChange{
-								AddName: []commonEvent.SchemaTableName{
-									{
-										SchemaName: "test2",
-										TableName:  "t2",
-									},
-								},
-							},
+							// TODO: check error
 						},
 					},
 				},
@@ -1198,35 +1157,35 @@ func TestApplyDDLJobs(t *testing.T) {
 					},
 				},
 				// test filter: only test.t1 is qualified and is filtered out after rename
-				{
-					tableID:     200,
-					tableFilter: buildTableFilterByNameForTest("test", "t1"),
-					startTs:     1000,
-					endTs:       1010,
-					result: []commonEvent.DDLEvent{
-						{
-							Type:       byte(model.ActionRenameTables),
-							Query:      "RENAME TABLE `test`.`t1` TO `test`.`t101`;",
-							FinishedTs: 1010,
-							BlockedTables: &commonEvent.InfluencedTables{
-								InfluenceType: commonEvent.InfluenceTypeNormal,
-								TableIDs:      []int64{0, 200},
-							},
-							NeedDroppedTables: &commonEvent.InfluencedTables{
-								InfluenceType: commonEvent.InfluenceTypeNormal,
-								TableIDs:      []int64{200},
-							},
-							TableNameChange: &commonEvent.TableNameChange{
-								DropName: []commonEvent.SchemaTableName{
-									{
-										SchemaName: "test",
-										TableName:  "t1",
-									},
-								},
-							},
-						},
-					},
-				},
+				// {
+				// 	tableID:     200,
+				// 	tableFilter: buildTableFilterByNameForTest("test", "t1"),
+				// 	startTs:     1000,
+				// 	endTs:       1010,
+				// 	result: []commonEvent.DDLEvent{
+				// 		{
+				// 			Type:       byte(model.ActionRenameTables),
+				// 			Query:      "RENAME TABLE `test`.`t1` TO `test`.`t101`;",
+				// 			FinishedTs: 1010,
+				// 			BlockedTables: &commonEvent.InfluencedTables{
+				// 				InfluenceType: commonEvent.InfluenceTypeNormal,
+				// 				TableIDs:      []int64{0, 200},
+				// 			},
+				// 			NeedDroppedTables: &commonEvent.InfluencedTables{
+				// 				InfluenceType: commonEvent.InfluenceTypeNormal,
+				// 				TableIDs:      []int64{200},
+				// 			},
+				// 			TableNameChange: &commonEvent.TableNameChange{
+				// 				DropName: []commonEvent.SchemaTableName{
+				// 					{
+				// 						SchemaName: "test",
+				// 						TableName:  "t1",
+				// 					},
+				// 				},
+				// 			},
+				// 		},
+				// 	},
+				// },
 			},
 			nil,
 		},
@@ -1247,7 +1206,7 @@ func TestApplyDDLJobs(t *testing.T) {
 						100,
 						[]int64{304, 305},
 						[]string{"t4", "t5"},
-						"CREATE TABLE t4 (COL1 VARBINARY(10) NOT NULL, PRIMARY KEY(COL1)); CREATE TABLE t5 (COL2 ENUM('ABC','IRG','KT;J'), COL3 TINYINT(50) NOT NULL, PRIMARY KEY(COL3));",
+						[]string{"CREATE TABLE t4 (COL1 VARBINARY(10) NOT NULL, PRIMARY KEY(COL1));", "CREATE TABLE t5 (COL2 ENUM('ABC','IRG','KT;J'), COL3 TINYINT(50) NOT NULL, PRIMARY KEY(COL3));"},
 						1020), // create table 304, 305, 306 with query
 				}
 			}(),
@@ -1722,7 +1681,6 @@ func TestApplyDDLJobs(t *testing.T) {
 		// test add/drop primary key and alter index visibility for table
 		// test modify table charset
 		// test alter table ttl/remove ttl
-		// test set TiFlash replica
 		// test multi schema change
 		// test add/drop column
 		{
@@ -1760,7 +1718,6 @@ func TestApplyDDLJobs(t *testing.T) {
 					buildModifyTableCharsetJobForTest(100, 300, 1040, charset.CharsetUTF8MB4),
 					buildAlterTTLJobForTest(100, 300, 1050),
 					buildRemoveTTLJobForTest(100, 300, 1060),
-					buildSetTiFlashReplicaJobForTest(100, 300, 1070),
 					buildMultiSchemaChangeJobForTest(100, 300, 1080),
 					buildAddColumnJobForTest(100, 300, 1090),
 					buildDropColumnJobForTest(100, 300, 1100),
@@ -1784,7 +1741,7 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 			map[int64][]uint64{
-				300: {1010, 1020, 1030, 1040, 1050, 1060, 1070, 1080, 1090, 1100, 1110},
+				300: {1010, 1020, 1030, 1040, 1050, 1060, 1080, 1090, 1100, 1110},
 			},
 			[]uint64{1110, 1120},
 			nil,

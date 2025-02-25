@@ -212,7 +212,10 @@ func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 				replications := b.controller.replicationDB.GetTasksByTableID(tableId)
 				for _, replication := range replications {
 					if replication.GetStatus().CheckpointTs >= barrierEvent.commitTs {
-						barrierEvent.rangeChecker.AddSubRange(replication.Span.TableID, replication.Span.StartKey, replication.Span.EndKey)
+						// one related table has forward checkpointTs, means the block event can be advanced
+						barrierEvent.selected.Store(true)
+						barrierEvent.writerDispatcherAdvanced = true
+						return false
 					}
 				}
 			}
@@ -221,14 +224,20 @@ func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			replications := b.controller.replicationDB.GetTasksBySchemaID(schemaID)
 			for _, replication := range replications {
 				if replication.GetStatus().CheckpointTs >= barrierEvent.commitTs {
-					barrierEvent.rangeChecker.AddSubRange(replication.Span.TableID, replication.Span.StartKey, replication.Span.EndKey)
+					// one related table has forward checkpointTs, means the block event can be advanced
+					barrierEvent.selected.Store(true)
+					barrierEvent.writerDispatcherAdvanced = true
+					return false
 				}
 			}
 		case heartbeatpb.InfluenceType_All:
 			replications := b.controller.replicationDB.GetAllTasks()
 			for _, replication := range replications {
 				if replication.GetStatus().CheckpointTs >= barrierEvent.commitTs {
-					barrierEvent.rangeChecker.AddSubRange(replication.Span.TableID, replication.Span.StartKey, replication.Span.EndKey)
+					// one related table has forward checkpointTs, means the block event can be advanced
+					barrierEvent.selected.Store(true)
+					barrierEvent.writerDispatcherAdvanced = true
+					return false
 				}
 			}
 		}

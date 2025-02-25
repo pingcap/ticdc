@@ -28,7 +28,7 @@ import (
 // @Success 200 {object} EmptyResponse
 // @Failure 500,400 {object} model.HTTPError
 // @Router	/api/v2/health [get]
-func (h *OpenAPIV2) serverHealth(c *gin.Context) {
+func (h *OpenAPIV2) ServerHealth(c *gin.Context) {
 	liveness := h.server.Liveness()
 	if liveness != model.LivenessCaptureAlive {
 		err := errors.ErrClusterIsUnhealthy.FastGenByArgs()

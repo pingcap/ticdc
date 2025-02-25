@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -eu
+set -eux
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -9,7 +9,7 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
 # This test mainly verifies CDC can handle the following scenario
-# 1. Two captures, capture-1 is the owner, each capture replicates more than one table.
+# 1. Two captures, capture-1 is the coordinator, each capture replicates more than one table.
 # 2. capture-2 replicates some DMLs but has some delay, such as large amount of
 #    incremental scan data, sink block, etc, we name this slow table as table-slow.
 # 3. Before capture-2 the checkpoint ts of table-slow reaches global resolved ts,
@@ -36,7 +36,7 @@ function run() {
 
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --pd $pd_addr --logsuffix 1 --addr "127.0.0.1:8300"
-	export GO_FAILPOINTS='github.com/pingcap/tiflow/cdc/sink/dmlsink/txn/mysql/MySQLSinkHangLongTime=1*return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/sink/mysql/MySQLSinkHangLongTime=1*return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --pd $pd_addr --logsuffix 2 --addr "127.0.0.1:8301"
 
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1"
@@ -56,11 +56,11 @@ function run() {
 
 	target_capture=$capture1_id
 	# find a table that capture2 is replicating
-	one_table_id=$(curl curl -X GET http://127.0.0.1:8301/api/v2/changefeeds/${changefeed_id}/tables | grep $capture2_id | jq -r '.status.tables|keys[0]')
-	if [[ $one_table_id == "null" ]]; then
+	one_table_id=$(curl -X GET "http://127.0.0.1:8301/api/v2/changefeeds/${changefeed_id}/tables" | jq -r --arg cid "$capture2_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
+	if [[ $one_table_id == "null" || $one_table_id == "0" ]]; then
 		# if not found, find a table that capture1 is replicating
 		target_capture=$capture2_id
-		one_table_id=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/tables | grep $capture1_id | jq -r '.status.tables|keys[0]')
+		one_table_id=$(curl -X GET "http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/tables" | jq -r --arg cid "$capture1_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
 	fi
 	table_query=$(mysql -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -e "select table_name from information_schema.tables where tidb_table_id = ${one_table_id}\G")
 	table_name=$(echo $table_query | tail -n 1 | awk '{print $(NF)}')
@@ -68,8 +68,7 @@ function run() {
 
 	# sleep some time to wait global resolved ts forwarded
 	sleep 2
-	curl -X POST http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/move_table?tableID=${one_table_id} &
-	targetNodeID=${target_capture}
+	curl -X POST "http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/move_table?tableID=${one_table_id}&targetNodeID=${target_capture}"
 	# sleep some time to wait table balance job is written to etcd
 	sleep 2
 
@@ -77,6 +76,12 @@ function run() {
 	lease=$(ETCDCTL_API=3 etcdctl get /tidb/cdc/default/__cdc_meta__/capture/${capture2_id} -w json | grep -o 'lease":[0-9]*' | awk -F: '{print $2}')
 	lease_hex=$(printf '%x\n' $lease)
 	ETCDCTL_API=3 etcdctl lease revoke $lease_hex
+
+	# sleep some time to wait capture2 suicides
+	sleep 10
+
+	# start capture2 again
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix 2 --addr "127.0.0.1:8301"
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	export GO_FAILPOINTS=''

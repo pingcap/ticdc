@@ -38,17 +38,27 @@ const (
 // service GC safepoint and this function will update the service GC to startTs
 func EnsureChangefeedStartTsSafety(
 	ctx context.Context, pdCli pd.Client,
-	gcServiceIDPrefix string,
+	ticdcServiceID string,
+	tag string,
 	changefeedID common.ChangeFeedID,
 	TTL int64, startTs uint64,
 ) error {
+	gcServiceID := ticdcServiceID + tag + changefeedID.Namespace() + "_" + changefeedID.Name()
+
+	// set gc safepoint for the changefeed gc service
 	minServiceGCTs, err := SetServiceGCSafepoint(
 		ctx, pdCli,
-		gcServiceIDPrefix+changefeedID.Namespace()+"_"+changefeedID.Name(),
+		gcServiceID,
 		TTL, startTs)
 	if err != nil {
 		return errors.Trace(err)
 	}
+	log.Info("set gc safepoint for changefeed",
+		zap.String("gcServiceID", gcServiceID),
+		zap.Uint64("expectedGCSafepoint", startTs),
+		zap.Uint64("actualGCSafepoint", minServiceGCTs),
+		zap.Int64("ttl", TTL))
+
 	// startTs should be greater than or equal to minServiceGCTs + 1, otherwise gcManager
 	// would return a ErrSnapshotLostByGC even though the changefeed would appear to be successfully
 	// created/resumed. See issue #6350 for more detail.

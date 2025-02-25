@@ -43,7 +43,6 @@ function run() {
 	sleep 3
 	check_table_exists ddl_attributes.attributes_t1_new ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists ddl_attributes.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	
 
 	ensure 30 "run_sql 'show create table ddl_attributes.placement_t1;' ${UP_TIDB_HOST} ${UP_TIDB_PORT}"
 	ensure 30 "run_sql 'show create table ddl_attributes.placement_t2;' ${UP_TIDB_HOST} ${UP_TIDB_PORT}"

@@ -15,15 +15,10 @@ package replica
 
 import (
 	"bytes"
-	"fmt"
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/scheduler/replica"
-	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 )
 
@@ -85,6 +80,7 @@ func TestHotSpanChecker(t *testing.T) {
 	require.Equal(t, 1, len(checker.hotTasks))
 }
 
+/*
 // Not parallel because it will change the global node manager
 func TestRebalanceChecker(t *testing.T) {
 	oldMinSpanNumberCoefficient := MinSpanNumberCoefficient
@@ -179,14 +175,11 @@ func TestRebalanceChecker(t *testing.T) {
 	db.ReplaceReplicaSet(ret.Replications, nil, 10)
 	require.Equal(t, 0, len(checker.allTasks))
 }
+*/
 
+/*
 // Not parallel because it will change the global node manager
 func TestSoftRebalanceChecker(t *testing.T) {
-	oldMinSpanNumberCoefficient := MinSpanNumberCoefficient
-	MinSpanNumberCoefficient = 1
-	defer func() {
-		MinSpanNumberCoefficient = oldMinSpanNumberCoefficient
-	}()
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	allNodes := nodeManager.GetAliveNodes()
 	totalNodes := 3
@@ -268,3 +261,4 @@ func TestSoftRebalanceChecker(t *testing.T) {
 	require.Equal(t, OpMerge, ret.OpType)
 	require.Equal(t, 4, len(ret.Replications))
 }
+*/

@@ -30,11 +30,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/pingcap/tiflow/pkg/sink"
 	pmysql "github.com/pingcap/tiflow/pkg/sink/mysql"
-	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -114,8 +114,6 @@ type MysqlConfig struct {
 	BatchDMLEnable  bool
 	MultiStmtEnable bool
 	CachePrepStmts  bool
-	// DryRun is used to enable dry-run mode. In dry-run mode, the writer will not write data to the downstream.
-	DryRun bool
 
 	// sync point
 	SyncPointRetention time.Duration
@@ -125,6 +123,13 @@ type MysqlConfig struct {
 	MaxAllowedPacket int64
 
 	HasVectorType bool // HasVectorType is true if the column is vector type
+
+	// DryRun is used to enable dry-run mode. In dry-run mode, the writer will not write data to the downstream.
+	DryRun bool
+	// DryRunDelay is the delay time for dry-run mode, it is used to simulate the delay time of real write.
+	DryRunDelay time.Duration
+	// DryRunBlockInterval is the interval time for blocking in dry-run mode.
+	DryRunBlockInterval time.Duration
 }
 
 // NewConfig returns the default mysql backend config.
@@ -206,6 +211,7 @@ func (c *MysqlConfig) Apply(
 	// c.EnableOldValue = config.EnableOldValue
 	c.ForceReplicate = config.ForceReplicate
 	c.SourceID = config.SinkConfig.TiDBSourceID
+
 	return nil
 }
 

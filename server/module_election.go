@@ -131,10 +131,16 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			zap.String("captureID", string(e.svr.info.ID)),
 			zap.Int64("coordinatorVersion", coordinatorVersion))
 
-		co := coordinator.New(e.svr.info,
-			e.svr.pdClient, e.svr.PDClock, changefeed.NewEtcdBackend(e.svr.EtcdClient),
-			e.svr.EtcdClient.GetClusterID(),
-			coordinatorVersion, 10000, time.Minute)
+		co := coordinator.New(
+			e.svr.info,
+			e.svr.pdClient,
+			e.svr.PDClock,
+			changefeed.NewEtcdBackend(e.svr.EtcdClient),
+			e.svr.EtcdClient.GetGCServiceID(),
+			coordinatorVersion,
+			10000,
+			time.Minute,
+		)
 		e.svr.setCoordinator(co)
 		err = co.Run(ctx)
 		// When coordinator exits, we need to stop it.

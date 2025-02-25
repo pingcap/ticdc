@@ -36,7 +36,7 @@ type Changefeed struct {
 	ID       common.ChangeFeedID
 	info     *atomic.Pointer[config.ChangeFeedInfo]
 	isMQSink bool
-	isNew    bool // only true when the changfeed is newly created or resumed by overwriteCheckpointTs
+	isNew    bool // only true when the changefeed is newly created or resumed by overwriteCheckpointTs
 
 	// nodeIDMu protects nodeID
 	nodeIDMu sync.Mutex
@@ -67,25 +67,34 @@ func NewChangefeed(cfID common.ChangeFeedID,
 		log.Panic("unable to marshal changefeed config",
 			zap.Error(err))
 	}
-	log.Info("changefeed instance created",
-		zap.String("id", cfID.String()),
-		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("state", string(info.State)))
-	return &Changefeed{
+
+	res := &Changefeed{
 		ID:                    cfID,
 		info:                  atomic.NewPointer(info),
 		configBytes:           bytes,
 		lastSavedCheckpointTs: atomic.NewUint64(checkpointTs),
 		isMQSink:              sink.IsMQScheme(uri.Scheme),
 		isNew:                 isNew,
-		// init the first Status
-		status: atomic.NewPointer[heartbeatpb.MaintainerStatus](
+		// Initialize the status
+		status: atomic.NewPointer(
 			&heartbeatpb.MaintainerStatus{
+				ChangefeedID: cfID.ToPB(),
 				CheckpointTs: checkpointTs,
 				FeedState:    string(info.State),
 			}),
 		backoff: NewBackoff(cfID, *info.Config.ChangefeedErrorStuckDuration, checkpointTs),
 	}
+	// Must set retrying to true when the changefeed is in warning state.
+	if info.State == model.StateWarning {
+		res.backoff.retrying.Store(true)
+	}
+
+	log.Info("changefeed instance created",
+		zap.String("id", cfID.String()),
+		zap.Uint64("checkpointTs", checkpointTs),
+		zap.String("state", string(info.State)),
+		zap.String("info", info.String()))
+	return res
 }
 
 func (c *Changefeed) GetInfo() *config.ChangeFeedInfo {
@@ -125,17 +134,31 @@ func (c *Changefeed) ShouldRun() bool {
 	return c.backoff.ShouldRun()
 }
 
+// UpdateStatus updates the changefeed status
+// It returns true if the status is changed
+// It returns false if the status is not changed
+// It returns the new state and error if the status is changed
 func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {
 	old := c.status.Load()
+
 	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
 		c.status.Store(newStatus)
+		if old.BootstrapDone != newStatus.BootstrapDone {
+			log.Info("Received changefeed status with bootstrapDone",
+				zap.Stringer("changefeed", c.ID),
+				zap.Bool("bootstrapDone", newStatus.BootstrapDone))
+			return true, model.StateNormal, nil
+		}
+
 		info := c.GetInfo()
 		// the changefeed reaches the targetTs
 		if info.TargetTs != 0 && newStatus.CheckpointTs >= info.TargetTs {
 			return true, model.StateFinished, nil
 		}
+
 		return c.backoff.CheckStatus(newStatus)
 	}
+
 	return false, model.StateNormal, nil
 }
 
@@ -206,10 +229,10 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.AddMaintainerRequest{
-			Id:             c.ID.ToPB(),
-			CheckpointTs:   c.GetStatus().CheckpointTs,
-			Config:         c.configBytes,
-			IsNewChangfeed: c.isNew,
+			Id:              c.ID.ToPB(),
+			CheckpointTs:    c.GetStatus().CheckpointTs,
+			Config:          c.configBytes,
+			IsNewChangefeed: c.isNew,
 		})
 }
 

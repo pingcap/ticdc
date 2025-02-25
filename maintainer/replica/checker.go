@@ -15,7 +15,6 @@ package replica
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -41,13 +40,14 @@ const (
 const (
 	HotSpanWriteThreshold = 1024 * 1024 // 1MB per second
 	HotSpanScoreThreshold = 3           // TODO: bump to 10 befroe release
-	DefaultScoreThreshold = 3
+	DefaultScoreThreshold = 20
 
-	defaultHardImbalanceThreshold = float64(1.35) // used to trigger the rebalance
-	clearTimeout                  = 300           // seconds
+	// defaultHardImbalanceThreshold = float64(1.35) // used to trigger the rebalance
+	defaultHardImbalanceThreshold = float64(5) // used to trigger the rebalance
+	clearTimeout                  = 300        // seconds
 )
 
-var MinSpanNumberCoefficient = 2
+var MinSpanNumberCoefficient = 0
 
 type CheckResult struct {
 	OpType       OpType
@@ -127,7 +127,9 @@ func (s *hotSpanChecker) UpdateStatus(span *SpanReplication) {
 		return
 	}
 
-	if status.EventSizePerSecond < s.writeThreshold {
+	log.Debug("hotSpanChecker EventSizePerSecond", zap.Any("changefeed", span.ChangefeedID.Name()), zap.Any("span", span.Span), zap.Any("dispatcher", span.ID), zap.Any("EventSizePerSecond", status.EventSizePerSecond), zap.Any("writeThreshold", s.writeThreshold))
+
+	if status.EventSizePerSecond != 0 && status.EventSizePerSecond < s.writeThreshold {
 		if hotSpan, ok := s.hotTasks[span.ID]; ok {
 			hotSpan.score--
 			if hotSpan.score == 0 {
@@ -154,6 +156,7 @@ func (s *hotSpanChecker) Check(batchSize int) replica.GroupCheckResult {
 	cache := make([]CheckResult, 0)
 
 	for _, hotSpan := range s.hotTasks {
+		log.Debug("hot span", zap.String("changefeed", s.changefeedID.Name()), zap.String("span", hotSpan.ID.String()), zap.Int("score", hotSpan.score), zap.Int("scoreThreshold", s.scoreThreshold))
 		if time.Since(hotSpan.lastUpdateTime) > clearTimeout*time.Second {
 			// should not happen
 			log.Panic("remove hot span since it is outdated",
@@ -238,7 +241,7 @@ func newImbalanceChecker(cfID common.ChangeFeedID) *rebalanceChecker {
 		hardImbalanceThreshold: defaultHardImbalanceThreshold,
 
 		softWriteThreshold:          3 * HotSpanWriteThreshold,
-		softImbalanceThreshold:      1.2, // 2 * defaultHardImbalanceThreshold,
+		softImbalanceThreshold:      2 * defaultHardImbalanceThreshold,
 		softRebalanceScoreThreshold: DefaultScoreThreshold,
 		softMergeScoreThreshold:     DefaultScoreThreshold,
 	}
@@ -303,9 +306,12 @@ func (s *rebalanceChecker) Check(_ int) replica.GroupCheckResult {
 	}
 	s.softMergeScore = 0
 
-	return s.checkRebalance(nodeLoads, replications)
+	return nil
+	// disable rebalance for now
+	// return s.checkRebalance(nodeLoads, replications)
 }
 
+/*
 func (s *rebalanceChecker) checkRebalance(
 	nodeLoads map[node.ID]float64, replications []*SpanReplication,
 ) []CheckResult {
@@ -318,6 +324,11 @@ func (s *rebalanceChecker) checkRebalance(
 	// case 1: too much nodes, need split more spans
 	allNodes := s.nodeManager.GetAliveNodes()
 	if len(s.allTasks) < len(allNodes)*MinSpanNumberCoefficient {
+		log.Info("task number is smaller than node number * MinSpanNumberCoefficient",
+			zap.Any("allTasksNumber", len(s.allTasks)),
+			zap.Any("allNodesNumber", len(allNodes)),
+			zap.Any("MinSpanNumberCoefficient", MinSpanNumberCoefficient),
+		)
 		return ret
 	}
 	if len(nodeLoads) != len(allNodes) {
@@ -337,6 +348,12 @@ func (s *rebalanceChecker) checkRebalance(
 	// case 2: check hard rebalance
 	if maxLoad-minLoad >= float64(s.hardWriteThreshold) && maxLoad/minLoad > s.hardImbalanceThreshold {
 		s.softRebalanceScore = 0
+		log.Info("satisfy hard rebalance condition",
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Any("maxLoad", maxLoad),
+			zap.Any("minLoad", minLoad),
+			zap.Any("s.hardWriteThreshold", s.hardWriteThreshold),
+			zap.Any("s.hardImbalanceThreshold", s.hardImbalanceThreshold))
 		return ret
 	}
 
@@ -348,12 +365,19 @@ func (s *rebalanceChecker) checkRebalance(
 	}
 	if s.softRebalanceScore >= s.softRebalanceScoreThreshold {
 		s.softRebalanceScore = 0
+		log.Info("satisfy soft rebalance condition",
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Any("maxLoad", maxLoad),
+			zap.Any("minLoad", minLoad),
+			zap.Any("s.softImbalanceThreshold", s.softImbalanceThreshold),
+			zap.Any("s.softRebalanceScoreThreshold", s.softRebalanceScoreThreshold))
 		return ret
 	}
 
 	// default case: no need to rebalance
 	return nil
 }
+*/
 
 func (s *rebalanceChecker) Stat() string {
 	res := strings.Builder{}

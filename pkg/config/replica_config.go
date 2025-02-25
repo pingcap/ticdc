@@ -24,12 +24,12 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/config/outdated"
 	"github.com/pingcap/tiflow/pkg/integrity"
 	"github.com/pingcap/tiflow/pkg/redo"
 	"github.com/pingcap/tiflow/pkg/sink"
-	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -101,6 +101,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		EnableTableAcrossNodes: false,
 		RegionThreshold:        100_000,
 		WriteKeyThreshold:      0,
+		SplitNumberPerNode:     1,
 	},
 	Integrity: &integrity.Config{
 		IntegrityCheckLevel:   integrity.CheckLevelNone,
@@ -287,10 +288,6 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 		if err != nil {
 			return err
 		}
-	}
-	// TODO: Remove the hack once span replication is compatible with all sinks.
-	if !isSinkCompatibleWithSpanReplication(sinkURI) {
-		c.Scheduler.EnableTableAcrossNodes = false
 	}
 
 	if c.Integrity != nil {

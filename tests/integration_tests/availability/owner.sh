@@ -41,7 +41,7 @@ function test_kill_owner() {
 	run_cdc_cli changefeed create --start-ts=$start_ts \
 		--sink-uri="mysql://normal:123456@127.0.0.1:3306/"
 	# ensure the server become the owner
-	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_coordinator\": true'"
+	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_owner\": true'"
 	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}')
 	echo "owner pid:" $owner_pid
@@ -55,7 +55,7 @@ function test_kill_owner() {
 	# kill the server
 	kill_cdc_pid $owner_pid
 	# check that the new owner is elected
-	ensure $MAX_RETRIES "$CDC_BINARY cli capture list --server 'http://127.0.0.1:8301' 2>&1 |grep $capture_id -A1 | grep '\"is_coordinator\": true'"
+	ensure $MAX_RETRIES "$CDC_BINARY cli capture list --server 'http://127.0.0.1:8301' 2>&1 |grep $capture_id -A1 | grep '\"is_owner\": true'"
 	echo "test_kill_owner: pass"
 	cleanup_process $CDC_BINARY
 }
@@ -66,7 +66,7 @@ function test_hang_up_owner() {
 	echo "run test case test_hang_up_owner"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix test_hang_up_owner.server1
 	# ensure the server become the owner
-	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_coordinator\": true'"
+	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_owner\": true'"
 	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}')
 	echo "owner pid:" $owner_pid
@@ -97,7 +97,7 @@ function test_expire_owner() {
 	echo "run test case test_expire_owner"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix test_expire_owner.server1
 	# ensure the server become the owner
-	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_coordinator\": true'"
+	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_owner\": true'"
 	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}')
 	echo "owner pid:" $owner_pid
@@ -126,7 +126,7 @@ function test_owner_retryable_error() {
 	# start a capture server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix test_owner_retryable_error.server1
 	# ensure the server become the owner
-	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_coordinator\": true'"
+	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_owner\": true'"
 	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/\"id/{print $4}')
 	echo "owner pid:" $owner_pid
@@ -160,7 +160,7 @@ function test_delete_owner_key() {
 	# start a capture server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix test_gap_between_watch_capture.server1
 	# ensure the server become the owner
-	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_coordinator\": true'"
+	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is_owner\": true'"
 	owner_pid=$(ps -C $CDC_BINARY -o pid= | awk '{print $1}')
 	owner_id=$($CDC_BINARY cli capture list 2>&1 | awk -F '"' '/id/{print $4}')
 	owner_key=$(etcdctl get /tidb/cdc/default/__cdc_meta__/owner --prefix | grep -B 1 "$owner_id" | head -n 1)

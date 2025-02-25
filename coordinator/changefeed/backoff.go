@@ -67,7 +67,11 @@ type Backoff struct {
 }
 
 // NewBackoff creates Backoff and initialize the exponential backoff
-func NewBackoff(id common.ChangeFeedID, changefeedErrorStuckDuration time.Duration, checkpointTs uint64) *Backoff {
+func NewBackoff(
+	id common.ChangeFeedID,
+	changefeedErrorStuckDuration time.Duration,
+	checkpointTs uint64,
+) *Backoff {
 	m := &Backoff{
 		id:                           id,
 		errBackoff:                   backoff.NewExponentialBackOff(),
@@ -107,10 +111,22 @@ func (m *Backoff) resetErrRetry() {
 	m.retrying.Store(false)
 }
 
+// CheckStatus checks the current status of a changefeed and determines its state transition.
+// It takes a MaintainerStatus which contains the current checkpoint timestamp and any errors.
+// Returns:
+//   - bool: whether the state has changed and needs to be updated
+//   - model.FeedState: the new state of the changefeed (Normal, Warning, or Failed)
+//   - *heartbeatpb.RunningError: any error that occurred during processing
+//
+// The method handles several cases:
+//  1. If the changefeed is marked as failed, returns Failed state
+//  2. If checkpoint has advanced (making progress), resets any retry attempts and returns Normal state
+//  3. If there are errors and checkpoint hasn't advanced, initiates the retry mechanism
 func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {
 	if m.failed.Load() {
 		return false, model.StateFailed, nil
 	}
+
 	if m.checkpointTs < status.CheckpointTs {
 		m.checkpointTs = status.CheckpointTs
 		if m.retrying.Load() {
@@ -127,7 +143,8 @@ func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, model
 		}
 		return false, model.StateNormal, nil
 	}
-	// if the checkpointTs is not advanced, we should check if we should retry the changefeed
+
+	// If the checkpointTs is not advanced, we should check if we should retry the changefeed
 	if len(status.Err) > 0 {
 		if m.isRestarting.Load() {
 			log.Info("changefeed is already in restarting progress, ignore the error",
@@ -146,6 +163,7 @@ func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, model
 		}
 		return true, model.StateWarning, err
 	}
+
 	return false, model.StateNormal, nil
 }
 
@@ -183,15 +201,16 @@ func (m *Backoff) HandleError(errs []*heartbeatpb.RunningError) (bool, *heartbea
 		log.Error("The changefeed won't be restarted as it has been experiencing failures for "+
 			"an extended duration",
 			zap.Duration("maxElapsedTime", m.errBackoff.MaxElapsedTime),
-			zap.String("namespace", m.id.Namespace()),
-			zap.String("changefeed", m.id.Name()),
+			zap.Stringer("changefeed", m.id),
+			zap.Uint64("checkpointTs", m.checkpointTs),
 			zap.Time("nextRetryTime", m.nextRetryTime.Load()),
 		)
 		return true, lastError
 	}
 	// if any error is occurred , we should set the changefeed state to warning and stop the changefeed
 	log.Warn("changefeed meets an error, will be stopped",
-		zap.String("namespace", m.id.Name()),
+		zap.Stringer("changefeed", m.id),
+		zap.Uint64("checkpointTs", m.checkpointTs),
 		zap.Time("nextRetryTime", m.nextRetryTime.Load()),
 		zap.Any("error", errs))
 	// patch the last error to changefeed info

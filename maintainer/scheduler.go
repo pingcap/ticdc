@@ -25,9 +25,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
-	"github.com/pingcap/tiflow/pkg/spanz"
 	"go.uber.org/zap"
 )
 
@@ -131,12 +131,15 @@ func (s *splitScheduler) doCheck(ret pkgReplica.GroupCheckResult, start time.Tim
 
 		switch ret.OpType {
 		case replica.OpMerge:
+			log.Info("Into OP Merge")
 			s.opController.AddMergeSplitOperator(ret.Replications, []*heartbeatpb.TableSpan{totalSpan})
 		case replica.OpSplit:
+			log.Info("Into OP Split")
 			fallthrough
 		case replica.OpMergeAndSplit:
-			expectedSpanNum := split.NextExpectedSpansNumber(len(ret.Replications))
-			spans := s.splitter.SplitSpans(context.Background(), totalSpan, len(s.nodeManager.GetAliveNodes()), expectedSpanNum)
+			log.Info("Into OP MergeAndSplit")
+			// expectedSpanNum := split.NextExpectedSpansNumber(len(ret.Replications))
+			spans := s.splitter.SplitSpans(context.Background(), totalSpan, len(s.nodeManager.GetAliveNodes()))
 			if len(spans) > 1 {
 				log.Info("split span",
 					zap.String("changefeed", s.changefeedID.Name()),

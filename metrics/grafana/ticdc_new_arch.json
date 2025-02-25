@@ -413,7 +413,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Sink Event Count / s",
+          "title": "Sink Event Row Count / s",
           "tooltip": {
             "shared": true,
             "sort": 2,
@@ -1025,14 +1025,6 @@
           "stack": false,
           "steppedLine": false,
           "targets": [
-            {
-              "exemplar": true,
-              "expr": "ticdc_log_puller_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namesapce=~\"$namespace\", changefeed=~\"$changefeed\"}",
-              "hide": false,
-              "interval": "",
-              "legendFormat": "Log-Puller-{{type}}-resolvedTs-Lag-{{instance}}",
-              "refId": "A"
-            },
             {
               "exemplar": true,
               "expr": "ticdc_event_store_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
@@ -1674,7 +1666,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Puller output events",
+          "title": "Puller output event rows",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1777,7 +1769,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "EventService output events / s",
+          "title": "EventService output event row / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1882,7 +1874,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "EventService output events",
+          "title": "EventService output event rows",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -1986,7 +1978,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event Collector received event / s",
+          "title": "Event Collector received event rows / s",
           "tooltip": {
             "shared": true,
             "sort": 2,
@@ -2089,7 +2081,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Event collector Received events",
+          "title": "Event collector Received event rows",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -11009,7 +11001,7 @@
               "exemplar": true,
               "expr": "ticdc_dynamic_stream_memory_usage{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", component!=\"\", instance=~\"$ticdc_instance\"}",
               "interval": "",
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-memory-{{component}}-{{type}}",
+              "legendFormat": "{{area}}-{{instance}}-memory-{{component}}-{{type}}",
               "refId": "A"
             }
           ],
@@ -16699,7 +16691,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Puller output events / s",
+          "title": "Puller output event rows / s",
           "tooltip": {
             "shared": true,
             "sort": 0,

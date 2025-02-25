@@ -14,10 +14,11 @@
 package cli
 
 import (
+	"context"
+
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
+	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
-	"github.com/pingcap/tiflow/pkg/cmd/context"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/spf13/cobra"
 )
 
@@ -55,7 +56,7 @@ func (o *pauseChangefeedOptions) complete(f factory.Factory) error {
 
 // run the `cli changefeed pause` command.
 func (o *pauseChangefeedOptions) run() error {
-	ctx := context.GetDefaultContext()
+	ctx := context.Background()
 	return o.apiClient.Changefeeds().Pause(ctx, o.namespace, o.changefeedID)
 }
 

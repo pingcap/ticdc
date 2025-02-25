@@ -16,7 +16,7 @@ package heartbeatpb
 import (
 	"bytes"
 
-	"github.com/pingcap/tiflow/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/spanz"
 )
 
 // DDLSpanSchemaID is the special schema id for DDL

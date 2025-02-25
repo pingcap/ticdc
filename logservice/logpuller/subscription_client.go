@@ -30,10 +30,10 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/tiflow/pkg/security"
-	"github.com/pingcap/tiflow/pkg/spanz"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
 	kvclientv2 "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -175,6 +175,10 @@ type SubscriptionClient struct {
 	lockResolver txnutil.LockResolver
 
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
+	// the following three fields are used to manage feedback from ds and notify other goroutines
+	mu     sync.Mutex
+	cond   *sync.Cond
+	paused atomic.Bool
 
 	// the credential to connect tikv
 	credential *security.Credential
@@ -227,7 +231,8 @@ func NewSubscriptionClient(
 
 	option := dynstream.NewOption()
 	option.BatchCount = 1024
-	option.UseBuffer = true
+	option.UseBuffer = false
+	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
 		func(subID SubscriptionID) uint64 { return uint64(subID) },
 		&regionEventHandler{subClient: subClient},
@@ -235,6 +240,7 @@ func NewSubscriptionClient(
 	)
 	ds.Start()
 	subClient.ds = ds
+	subClient.cond = sync.NewCond(&subClient.mu)
 
 	subClient.initMetrics()
 	return subClient
@@ -308,7 +314,8 @@ func (s *SubscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	s.ds.AddPath(rt.subID, rt, dynstream.AreaSettings{})
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(2*1024*1024*1024, dynstream.MemoryControlAlgorithmV1) // 2GB
+	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt}
 }
@@ -324,7 +331,6 @@ func (s *SubscriptionClient) Unsubscribe(subID SubscriptionID) {
 		log.Warn("unknown subscription", zap.Uint64("subscriptionID", uint64(subID)))
 		return
 	}
-	s.ds.RemovePath(rt.subID)
 	s.setTableStopped(rt)
 
 	log.Info("unsubscribe span success",
@@ -334,6 +340,42 @@ func (s *SubscriptionClient) Unsubscribe(subID SubscriptionID) {
 
 func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
 	s.ds.Wake(subID)
+}
+
+func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
+	// fast path
+	if !s.paused.Load() {
+		s.ds.Push(subID, event)
+		return
+	}
+	// slow path: wait until paused is false
+	s.mu.Lock()
+	for s.paused.Load() {
+		s.cond.Wait()
+	}
+	s.mu.Unlock()
+	s.ds.Push(subID, event)
+}
+
+func (s *SubscriptionClient) handleDSFeedBack(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case feedback := <-s.ds.Feedback():
+			switch feedback.FeedbackType {
+			case dynstream.PauseArea:
+				s.paused.Store(true)
+				log.Info("subscription client pause push region event")
+			case dynstream.ResumeArea:
+				s.paused.Store(false)
+				s.cond.Broadcast()
+				log.Info("subscription client resume push region event")
+			case dynstream.PausePath, dynstream.ResumePath:
+				// Ignore it, because it is no need to pause and resume a path in puller.
+			}
+		}
+	}
 }
 
 // RegionCount returns subscribed region count for the span.
@@ -357,6 +399,7 @@ func (s *SubscriptionClient) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error { return s.updateMetrics(ctx) })
+	g.Go(func() error { return s.handleDSFeedBack(ctx) })
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.handleRegions(ctx, g) })
 	g.Go(func() error { return s.handleErrors(ctx) })
@@ -398,6 +441,7 @@ func (s *SubscriptionClient) onTableDrained(rt *subscribedSpan) {
 
 	s.totalSpans.Lock()
 	defer s.totalSpans.Unlock()
+	s.ds.RemovePath(rt.subID)
 	delete(s.totalSpans.spanMap, rt.subID)
 }
 
