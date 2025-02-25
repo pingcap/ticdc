@@ -232,7 +232,7 @@ func NewSubscriptionClient(
 	option := dynstream.NewOption()
 	option.BatchCount = 1024
 	option.UseBuffer = false
-	option.EnableMemoryControl = false
+	option.EnableMemoryControl = metrics.SlowestTablePullerResolvedTs.DeleteLabelValues()
 	ds := dynstream.NewParallelDynamicStream(
 		func(subID SubscriptionID) uint64 { return uint64(subID) },
 		&regionEventHandler{subClient: subClient},
@@ -328,7 +328,7 @@ func (s *SubscriptionClient) Subscribe(
 	s.totalSpans.Unlock()
 
 	s.ds.AddPath(rt.subID, rt, dynstream.AreaSettings{
-		MaxPendingSize: 4 * 1024 * 1024 * 1024, // 4GB
+		MaxPendingSize: 8 * 1024 * 1024 * 1024, // 4GB
 	})
 
 	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt}
