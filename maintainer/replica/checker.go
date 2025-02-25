@@ -43,7 +43,7 @@ const (
 const (
 	HotSpanWriteThreshold = 1024 * 1024 // 1MB per second
 	HotSpanScoreThreshold = 3           // TODO: bump to 10 befroe release
-	DefaultScoreThreshold = 20
+	DefaultScoreThreshold = 10
 
 	// defaultHardImbalanceThreshold = float64(1.35) // used to trigger the rebalance
 	defaultHardImbalanceThreshold = float64(5) // used to trigger the rebalance
@@ -303,6 +303,8 @@ func (s *rebalanceChecker) Check(_ int) replica.GroupCheckResult {
 	pdTime := s.pdClock.CurrentTime()
 	phyCkpTs := oracle.ExtractPhysical(minCheckpointTs)
 	lag := float64(oracle.GetPhysical(pdTime)-phyCkpTs) / 1e3
+
+	log.Info("rebalanceChecker Check", zap.Any("lag is", lag))
 
 	// check merge
 	// only when the lag is small(less than 60s), we can merge the spans.
