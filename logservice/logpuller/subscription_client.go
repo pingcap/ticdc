@@ -98,7 +98,8 @@ type rangeTask struct {
 	subscribedSpan *subscribedSpan
 }
 
-const kvEventsCacheMaxSize = 32
+// TODO: dynamically adjust the size of the cache for some particular stream.
+const kvEventsCacheMaxSize = 128
 
 // subscribedSpan represents a span to subscribe.
 // It contains a sub span of a table(or the total span of a table),
@@ -230,7 +231,7 @@ func NewSubscriptionClient(
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
 	option := dynstream.NewOption()
-	option.BatchCount = 1024
+	option.BatchCount = 10240
 	// Note: after enable memory control, UseBuffer must be true.
 	// otherwise, the "wake event" may be blocked which will block the consumer
 	// and results in performance degradation.

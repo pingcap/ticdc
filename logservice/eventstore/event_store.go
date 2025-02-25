@@ -309,7 +309,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 	for i := 0; i < p.workerNum; i++ {
 		go func() {
 			defer p.store.wg.Done()
-			buffer := make([]eventWithCallback, 0, 128)
+			buffer := make([]eventWithCallback, 0, 32)
 			for {
 				select {
 				case <-ctx.Done():
@@ -321,9 +321,9 @@ func (p *writeTaskPool) run(ctx context.Context) {
 						return
 					}
 					p.store.writeEvents(p.db, events)
-					// for i := range events {
-					// 	events[i].callback()
-					// }
+					for i := range events {
+						events[i].callback()
+					}
 					buffer = buffer[:0]
 				}
 			}
@@ -506,8 +506,7 @@ func (e *eventStore) RegisterDispatcher(
 			kvs:      kvs,
 			callback: finishCallback,
 		})
-		// FIXME
-		return false
+		return true
 	}
 	advanceResolvedTs := func(ts uint64) {
 		// filter out identical resolved ts
