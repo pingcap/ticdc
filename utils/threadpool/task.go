@@ -46,12 +46,16 @@ type Task interface {
 	Execute() time.Time
 }
 
+// FuncTask is a function that can be submitted to the thread pool and will be executed by the thread pool.
 type FuncTask func() time.Time
 
+// TaskHandle represents a handle for a task.
+// A handle can be used to cancel the task.
 type TaskHandle struct {
 	st *scheduledTask
 }
 
+// Cancel the task.
 func (h *TaskHandle) Cancel() { h.st.cancel() }
 
 type ThreadPool interface {

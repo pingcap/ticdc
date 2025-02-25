@@ -62,7 +62,9 @@ type Controller struct {
 	changefeedID common.ChangeFeedID
 
 	taskScheduler threadpool.ThreadPool
-	taskHandlers  []*threadpool.TaskHandle
+
+	// Store the task handles, it's used to stop the task handlers when the controller is stopped.
+	taskHandles []*threadpool.TaskHandle
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -179,8 +181,41 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	c.addNewSpans(table.SchemaID, tableSpans, startTs)
 }
 
-// FinishBootstrap adds working state tasks to this controller directly,
-// it reported by the bootstrap response
+// FinishBootstrap finalizes the Controller initialization process using bootstrap responses from all nodes.
+// This method is the main entry point for Controller initialization and performs several critical steps:
+//
+//  1. Determines the actual start timestamp by finding the maximum checkpoint timestamp
+//     across all node responses and updates the DDL dispatcher status accordingly
+//
+// 2. Loads the table schemas from the schema store using the determined start timestamp
+//
+// 3. Processes existing table assignments:
+//
+//   - Creates a mapping of currently running table spans across nodes
+//
+//   - For each table in the schema store:
+//
+//   - If not currently running: creates new table assignments
+//
+//   - If already running: maintains existing assignments and handles any gaps
+//     in table coverage when table-across-nodes is enabled
+//
+//     4. Handles edge cases such as orphaned table assignments that may occur during
+//     DDL operations (e.g., DROP TABLE) concurrent with node restarts
+//
+// 5. Initializes and starts core components:
+//   - Rebuilds barrier status for consistency tracking
+//   - Starts the scheduler controller for table distribution
+//   - Starts the operator controller for managing table operations
+//
+// Parameters:
+//   - allNodesResp: Bootstrap responses from all nodes containing their current state
+//   - isMysqlCompatibleBackend: Flag indicating if using MySQL-compatible backend
+//
+// Returns:
+//   - *Barrier: Initialized barrier for consistency tracking
+//   - *MaintainerPostBootstrapRequest: Configuration for post-bootstrap setup
+//   - error: Any error encountered during the bootstrap process
 func (c *Controller) FinishBootstrap(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	isMysqlCompatibleBackend bool,
@@ -195,7 +230,41 @@ func (c *Controller) FinishBootstrap(
 		zap.Stringer("changefeed", c.changefeedID),
 		zap.Int("nodeCount", len(allNodesResp)))
 
-	// 1. get the real start ts from the table trigger event dispatcher
+	// Step 1: Determine start timestamp and update DDL dispatcher
+	startTs := c.determineStartTimestamp(allNodesResp)
+
+	// Step 2: Load tables from schema store
+	tables, err := c.loadTables(startTs)
+	if err != nil {
+		log.Error("load table from scheme store failed",
+			zap.String("changefeed", c.changefeedID.Name()),
+			zap.Error(err))
+		return nil, nil, errors.Trace(err)
+	}
+
+	// Step 3: Build working task map from bootstrap responses
+	workingTaskMap := c.buildWorkingTaskMap(allNodesResp)
+
+	// Step 4: Process tables and build schema info
+	schemaInfos := c.processTablesAndBuildSchemaInfo(tables, workingTaskMap, isMysqlCompatibleBackend)
+
+	// Step 5: Handle any remaining working tasks (likely dropped tables)
+	c.handleRemainingWorkingTasks(workingTaskMap)
+
+	// Step 6: Initialize and start components
+	barrier := c.initializeComponents(allNodesResp)
+
+	// Step 7: Prepare response
+	initSchemaInfos := c.prepareSchemaInfoResponse(schemaInfos)
+
+	return barrier, &heartbeatpb.MaintainerPostBootstrapRequest{
+		ChangefeedID:                  c.changefeedID.ToPB(),
+		TableTriggerEventDispatcherId: c.ddlDispatcherID.ToPB(),
+		Schemas:                       initSchemaInfos,
+	}, nil
+}
+
+func (c *Controller) determineStartTimestamp(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) uint64 {
 	startTs := uint64(0)
 	for node, resp := range allNodesResp {
 		log.Info("handle bootstrap response",
@@ -205,130 +274,181 @@ func (c *Controller) FinishBootstrap(
 
 		if resp.CheckpointTs > startTs {
 			startTs = resp.CheckpointTs
-			// update the ddl dispatcher status
 			status := c.replicationDB.GetDDLDispatcher().GetStatus()
 			status.CheckpointTs = startTs
 			c.replicationDB.UpdateStatus(c.replicationDB.GetDDLDispatcher(), status)
 		}
 	}
 	if startTs == 0 {
-		log.Panic("cant not found the start ts from the bootstrap response",
+		log.Panic("cant not found the startTs from the bootstrap response",
 			zap.String("changefeed", c.changefeedID.Name()))
 	}
-	// 2. load tables from schema store using the start ts
-	tables, err := c.loadTables(startTs)
-	if err != nil {
-		log.Error("load table from scheme store failed",
-			zap.String("changefeed", c.changefeedID.Name()),
-			zap.Error(err))
-		return nil, nil, errors.Trace(err)
-	}
+	return startTs
+}
 
-	workingMap := make(map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication])
+func (c *Controller) buildWorkingTaskMap(
+	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+) map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication] {
+	workingTaskMap := make(map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication])
 	for node, resp := range allNodesResp {
-		log.Info("received bootstrap response",
+		log.Info("handle bootstrap response",
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Stringer("nodeID", node),
 			zap.Int("spanCount", len(resp.Spans)))
-		for _, info := range resp.Spans {
-			dispatcherID := common.NewDispatcherIDFromPB(info.ID)
-			if dispatcherID == c.ddlDispatcherID {
-				log.Info(
-					"skip table trigger event dispatcher",
-					zap.Stringer("changefeed", c.changefeedID),
-					zap.Stringer("dispatcher", dispatcherID),
-					zap.Stringer("nodeID", node))
+
+		for _, spanInfo := range resp.Spans {
+			dispatcherID := common.NewDispatcherIDFromPB(spanInfo.ID)
+			if c.isDDLDispatcher(dispatcherID) {
 				continue
 			}
-			status := &heartbeatpb.TableSpanStatus{
-				ComponentStatus: info.ComponentStatus,
-				ID:              info.ID,
-				CheckpointTs:    info.CheckpointTs,
-			}
-			span := info.Span
-
-			// working on remote, the state must be absent or working since it's reported by remote
-			stm := replica.NewWorkingReplicaSet(c.changefeedID, dispatcherID, c.tsoClient, info.SchemaID, span, status, node)
-			tableMap, ok := workingMap[span.TableID]
-			if !ok {
-				tableMap = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](heartbeatpb.LessTableSpan)
-				workingMap[span.TableID] = tableMap
-			}
-			tableMap.ReplaceOrInsert(span, stm)
+			spanReplication := c.createSpanReplication(spanInfo, node)
+			c.addToWorkingTaskMap(workingTaskMap, spanInfo.Span, spanReplication)
 		}
 	}
+	return workingTaskMap
+}
 
-	schemaInfos := map[int64]*heartbeatpb.SchemaInfo{}
+func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableSpan, node node.ID) *replica.SpanReplication {
+	status := &heartbeatpb.TableSpanStatus{
+		ComponentStatus: spanInfo.ComponentStatus,
+		ID:              spanInfo.ID,
+		CheckpointTs:    spanInfo.CheckpointTs,
+	}
+
+	return replica.NewWorkingReplicaSet(
+		c.changefeedID,
+		common.NewDispatcherIDFromPB(spanInfo.ID),
+		c.tsoClient,
+		spanInfo.SchemaID,
+		spanInfo.Span,
+		status,
+		node,
+	)
+}
+
+func (c *Controller) addToWorkingTaskMap(
+	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	span *heartbeatpb.TableSpan,
+	spanReplication *replica.SpanReplication,
+) {
+	tableSpans, ok := workingTaskMap[span.TableID]
+	if !ok {
+		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](heartbeatpb.LessTableSpan)
+		workingTaskMap[span.TableID] = tableSpans
+	}
+	tableSpans.ReplaceOrInsert(span, spanReplication)
+}
+
+func (c *Controller) processTablesAndBuildSchemaInfo(
+	tables []commonEvent.Table,
+	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	isMysqlCompatibleBackend bool,
+) map[int64]*heartbeatpb.SchemaInfo {
+	schemaInfos := make(map[int64]*heartbeatpb.SchemaInfo)
+
 	for _, table := range tables {
-		if _, ok := schemaInfos[table.SchemaID]; !ok {
-			schemaInfos[table.SchemaID] = getSchemaInfo(table, isMysqlCompatibleBackend)
-		}
-		tableInfo := getTableInfo(table, isMysqlCompatibleBackend)
-		schemaInfos[table.SchemaID].Tables = append(schemaInfos[table.SchemaID].Tables, tableInfo)
+		schemaID := table.SchemaID
 
-		tableMap, ok := workingMap[table.TableID]
-		if !ok {
-			c.AddNewTable(table, c.startCheckpointTs)
-		} else {
-			span := spanz.TableIDToComparableSpan(table.TableID)
-			tableSpan := &heartbeatpb.TableSpan{
-				TableID:  table.TableID,
-				StartKey: span.StartKey,
-				EndKey:   span.EndKey,
-			}
-			log.Info("table already working in other node",
-				zap.Stringer("changefeed", c.changefeedID),
-				zap.Int64("tableID", table.TableID))
-			c.addWorkingSpans(tableMap)
-			if c.enableTableAcrossNodes {
-				holes := split.FindHoles(tableMap, tableSpan)
-				// todo: split the hole
-				c.addNewSpans(table.SchemaID, holes, c.startCheckpointTs)
-			}
-			// delete it
-			delete(workingMap, table.TableID)
+		// Add schema info if not exists
+		if _, ok := schemaInfos[schemaID]; !ok {
+			schemaInfos[schemaID] = getSchemaInfo(table, isMysqlCompatibleBackend)
 		}
+
+		// Add table info to schema
+		tableInfo := getTableInfo(table, isMysqlCompatibleBackend)
+		schemaInfos[schemaID].Tables = append(schemaInfos[schemaID].Tables, tableInfo)
+
+		// Process table spans
+		c.processTableSpans(table, workingTaskMap)
 	}
-	// tables that not included in init table map, but we get from different nodes.
-	// that can happen such as:
-	// node1 with table trigger event dispatcher, node2 with table1, and both receive drop table1 ddl
-	// table trigger event dispatcher write the ddl, while node2 not pass it yet
-	// then node1 restarts.
-	// node1 will get the startTs = ddl1.ts, and then the table1 will not be included in the initial table map
-	// so we just ignore the table1 dispatcher.
-	// here tableID is physical table id
-	for tableID := range workingMap {
-		log.Warn("found a tables not in initial table map",
+
+	return schemaInfos
+}
+
+func (c *Controller) processTableSpans(
+	table commonEvent.Table,
+	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+) {
+	tableSpans, isTableWorking := workingTaskMap[table.TableID]
+
+	if !isTableWorking {
+		c.AddNewTable(table, c.startCheckpointTs)
+		return
+	}
+
+	// Handle existing table spans
+	span := spanz.TableIDToComparableSpan(table.TableID)
+	tableSpan := &heartbeatpb.TableSpan{
+		TableID:  table.TableID,
+		StartKey: span.StartKey,
+		EndKey:   span.EndKey,
+	}
+
+	log.Info("table already working in other node",
+		zap.Stringer("changefeed", c.changefeedID),
+		zap.Int64("tableID", table.TableID))
+
+	c.addWorkingSpans(tableSpans)
+
+	if c.enableTableAcrossNodes {
+		c.handleTableHoles(table, tableSpans, tableSpan)
+	}
+
+	// Remove processed table from working task map
+	delete(workingTaskMap, table.TableID)
+}
+
+func (c *Controller) handleTableHoles(
+	table commonEvent.Table,
+	tableSpans utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	tableSpan *heartbeatpb.TableSpan,
+) {
+	holes := split.FindHoles(tableSpans, tableSpan)
+	// Todo: split the hole
+	// Add holes to the replicationDB
+	c.addNewSpans(table.SchemaID, holes, c.startCheckpointTs)
+}
+
+func (c *Controller) handleRemainingWorkingTasks(
+	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+) {
+	for tableID := range workingTaskMap {
+		log.Warn("found a working table that is not in initial table map, just ignore it",
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Int64("id", tableID))
 	}
+}
 
-	// rebuild barrier status
+func (c *Controller) initializeComponents(
+	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+) *Barrier {
+	// Initialize barrier
 	barrier := NewBarrier(c, c.cfConfig.Scheduler.EnableTableAcrossNodes)
 	barrier.HandleBootstrapResponse(allNodesResp)
 
-	// start scheduler
-	c.taskHandlers = append(c.taskHandlers, c.schedulerController.Start(c.taskScheduler)...)
-	// start operator controller
-	c.taskHandlers = append(c.taskHandlers, c.taskScheduler.Submit(c.operatorController, time.Now()))
+	// Start scheduler and operator controller
+	c.startComponents()
 
 	c.bootstrapped = true
+	return barrier
+}
 
+func (c *Controller) startComponents() {
+	// Start scheduler
+	c.taskHandles = append(c.taskHandles, c.schedulerController.Start(c.taskScheduler)...)
+
+	// Start operator controller
+	c.taskHandles = append(c.taskHandles, c.taskScheduler.Submit(c.operatorController, time.Now()))
+}
+
+func (c *Controller) prepareSchemaInfoResponse(
+	schemaInfos map[int64]*heartbeatpb.SchemaInfo,
+) []*heartbeatpb.SchemaInfo {
 	initSchemaInfos := make([]*heartbeatpb.SchemaInfo, 0, len(schemaInfos))
 	for _, info := range schemaInfos {
 		initSchemaInfos = append(initSchemaInfos, info)
 	}
-	return barrier, &heartbeatpb.MaintainerPostBootstrapRequest{
-		ChangefeedID:                  c.changefeedID.ToPB(),
-		TableTriggerEventDispatcherId: c.ddlDispatcherID.ToPB(),
-		Schemas:                       initSchemaInfos,
-	}, nil
-}
-
-func (c *Controller) Stop() {
-	for _, handler := range c.taskHandlers {
-		handler.Cancel()
-	}
+	return initSchemaInfos
 }
 
 // GetTask queries a task by dispatcherID, return nil if not found
@@ -459,6 +579,16 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 	}
 
 	return nil
+}
+
+func (c *Controller) isDDLDispatcher(dispatcherID common.DispatcherID) bool {
+	return dispatcherID == c.ddlDispatcherID
+}
+
+func (c *Controller) Stop() {
+	for _, handler := range c.taskHandles {
+		handler.Cancel()
+	}
 }
 
 func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.SchemaInfo {

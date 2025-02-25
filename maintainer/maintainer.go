@@ -553,7 +553,7 @@ func (m *Maintainer) updateMetrics() {
 	m.changefeedStatusGauge.Set(float64(m.scheduleState.Load()))
 }
 
-// send message to remote
+// send message to other components
 func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 	for _, msg := range msgs {
 		err := m.mc.SendCommand(msg)
@@ -609,8 +609,7 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 	m.sendMessages([]*messaging.TargetMessage{ackMsg})
 }
 
-// onMaintainerBootstrapResponse is called when a maintainer bootstrap response(send by dispatcher manager) is received from a remote node.
-// maintainer bootstrap response is sent by dispatcher manager.
+// onMaintainerBootstrapResponse is called when a maintainer bootstrap response(send by dispatcher manager) is received.
 func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage) {
 	log.Info("received maintainer bootstrap response",
 		zap.String("changefeed", m.id.Name()),
@@ -686,7 +685,11 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 
 func (m *Maintainer) sendPostBootstrapRequest() {
 	if m.postBootstrapMsg != nil {
-		msg := messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.DispatcherManagerManagerTopic, m.postBootstrapMsg)
+		msg := messaging.NewSingleTargetMessage(
+			m.selfNode.ID,
+			messaging.DispatcherManagerManagerTopic,
+			m.postBootstrapMsg,
+		)
 		m.sendMessages([]*messaging.TargetMessage{msg})
 	}
 }
@@ -879,15 +882,6 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 	}
 }
 
-// for test only
-func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
-	return m.controller.moveTable(tableId, targetNode)
-}
-
-func (m *Maintainer) GetTables() []*replica.SpanReplication {
-	return m.controller.replicationDB.GetAllTasks()
-}
-
 // pushEvent is used to push event to maintainer's event channel
 // event will be handled by maintainer's main loop
 func (m *Maintainer) pushEvent(event *Event) {
@@ -915,6 +909,19 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 	}
 }
 
+// ========================== Exported methods for HTTP API ==========================
+
+// GetDispatcherCount returns the number of dispatchers.
 func (m *Maintainer) GetDispatcherCount() int {
 	return len(m.controller.GetAllTasks())
+}
+
+// MoveTable moves a table to a specific node.
+func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
+	return m.controller.moveTable(tableId, targetNode)
+}
+
+// GetTables returns all tables.
+func (m *Maintainer) GetTables() []*replica.SpanReplication {
+	return m.controller.replicationDB.GetAllTasks()
 }

@@ -26,22 +26,29 @@ import (
 
 var _ replica.ReplicationDB[common.DispatcherID, *SpanReplication] = &ReplicationDB{}
 
-// ReplicationDB is an in memory data struct that maintains the replication spans
+// ReplicationDB maintains the state of replication spans in memory. It tracks the mapping
+// between dispatchers and spans, organizing them by schema and table IDs for efficient access.
+// The struct provides thread-safe operations for managing span replication states (absent,
+// scheduling, replicating) and handles DDL span separately.
 type ReplicationDB struct {
-	// for log ID
+	// changefeedID uniquely identifies the changefeed this ReplicationDB belongs to
 	changefeedID common.ChangeFeedID
-	// allTasks maintains all the span tasks, it included the table trigger
-	allTasks map[common.DispatcherID]*SpanReplication
-	// group the tasks by the schema id, and table id for fast access
-	schemaTasks map[int64]map[common.DispatcherID]*SpanReplication
-	tableTasks  map[int64]map[common.DispatcherID]*SpanReplication
-	// ReplicationDB is used for tracking scheduling status, the ddl dispatcher is
-	// not included since it doesn't need to be scheduled
-	replica.ReplicationDB[common.DispatcherID, *SpanReplication]
-
+	// ddlSpan is a special span that handles DDL operations, it is always on the same node as the maintainer
+	// so no need to schedule it
 	ddlSpan *SpanReplication
-	// LOCK protects the above maps
-	lock            sync.RWMutex
+
+	// mu protects concurrent access to [replica.ReplicationDB, ddlSpan, allTasks, schemaTasks, tableTasks]
+	mu sync.RWMutex
+	// ReplicationDB tracks the scheduling status of spans
+	replica.ReplicationDB[common.DispatcherID, *SpanReplication]
+	// allTasks maps dispatcher IDs to their spans, including table trigger dispatchers
+	allTasks map[common.DispatcherID]*SpanReplication
+	// schemaTasks provides quick access to spans by schema ID
+	schemaTasks map[int64]map[common.DispatcherID]*SpanReplication
+	// tableTasks provides quick access to spans by table ID
+	tableTasks map[int64]map[common.DispatcherID]*SpanReplication
+
+	// newGroupChecker creates a GroupChecker for validating span groups
 	newGroupChecker func(groupID replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication]
 }
 
@@ -54,23 +61,24 @@ func NewReplicaSetDB(
 		ddlSpan:         ddlSpan,
 		newGroupChecker: getNewGroupChecker(changefeedID, enableTableAcrossNodes),
 	}
+
 	db.reset()
-	db.putDDLDispatcher(db.ddlSpan)
+	db.putDDLDispatcher(ddlSpan)
 	return db
 }
 
 // GetTaskByID returns the replica set by the id, it will search the replicating, scheduling and absent map
 func (db *ReplicationDB) GetTaskByID(id common.DispatcherID) *SpanReplication {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
 	return db.allTasks[id]
 }
 
 // TaskSize returns the total task size in the db, it includes replicating, scheduling and absent tasks
 func (db *ReplicationDB) TaskSize() int {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
 	// the ddl span is a special span, we don't need to schedule it
 	return len(db.allTasks)
@@ -78,8 +86,8 @@ func (db *ReplicationDB) TaskSize() int {
 
 // TryRemoveAll removes non-scheduled tasks from the db and return the scheduled tasks
 func (db *ReplicationDB) TryRemoveAll() []*SpanReplication {
-	db.lock.Lock()
-	defer db.lock.Unlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
 	tasks := make([]*SpanReplication, 0)
 	// we need to add the replicating and scheduling tasks to the list, and then reset the db
@@ -93,8 +101,8 @@ func (db *ReplicationDB) TryRemoveAll() []*SpanReplication {
 
 // TryRemoveByTableIDs removes non-scheduled tasks from the db and return the scheduled tasks
 func (db *ReplicationDB) TryRemoveByTableIDs(tableIDs ...int64) []*SpanReplication {
-	db.lock.Lock()
-	defer db.lock.Unlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
 	tasks := make([]*SpanReplication, 0)
 	for _, tblID := range tableIDs {
@@ -111,8 +119,8 @@ func (db *ReplicationDB) TryRemoveByTableIDs(tableIDs ...int64) []*SpanReplicati
 
 // TryRemoveBySchemaID removes non-scheduled tasks from the db and return the scheduled tasks
 func (db *ReplicationDB) TryRemoveBySchemaID(schemaID int64) []*SpanReplication {
-	db.lock.Lock()
-	defer db.lock.Unlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
 	tasks := make([]*SpanReplication, 0)
 	for _, task := range db.schemaTasks[schemaID] {
@@ -127,8 +135,8 @@ func (db *ReplicationDB) TryRemoveBySchemaID(schemaID int64) []*SpanReplication 
 
 // GetTasksByTableID returns the spans by the table id
 func (db *ReplicationDB) GetTasksByTableID(tableID int64) []*SpanReplication {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
 	var tasks []*SpanReplication
 	for _, task := range db.tableTasks[tableID] {
@@ -153,8 +161,8 @@ func (db *ReplicationDB) GetTasksByTableID(tableID int64) []*SpanReplication {
 
 // GetAllTasks returns all the spans in the db, it's used when the block event type is all, it will return the ddl span
 func (db *ReplicationDB) GetAllTasks() []*SpanReplication {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
 	tasks := make([]*SpanReplication, 0, len(db.allTasks))
 	for _, task := range db.allTasks {
@@ -165,8 +173,8 @@ func (db *ReplicationDB) GetAllTasks() []*SpanReplication {
 
 // IsTableExists checks if the table exists in the db
 func (db *ReplicationDB) IsTableExists(tableID int64) bool {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
 	tm, ok := db.tableTasks[tableID]
 	return ok && len(tm) > 0
@@ -174,8 +182,8 @@ func (db *ReplicationDB) IsTableExists(tableID int64) bool {
 
 // GetTaskSizeBySchemaID returns the size of the task by the schema id
 func (db *ReplicationDB) GetTaskSizeBySchemaID(schemaID int64) int {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
 	sm, ok := db.schemaTasks[schemaID]
 	if ok {
@@ -186,8 +194,8 @@ func (db *ReplicationDB) GetTaskSizeBySchemaID(schemaID int64) int {
 
 // GetTasksBySchemaID returns the spans by the schema id
 func (db *ReplicationDB) GetTasksBySchemaID(schemaID int64) []*SpanReplication {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
 	sm, ok := db.schemaTasks[schemaID]
 	if !ok {
@@ -202,8 +210,8 @@ func (db *ReplicationDB) GetTasksBySchemaID(schemaID int64) []*SpanReplication {
 
 // ReplaceReplicaSet replaces the old replica set with the new spans
 func (db *ReplicationDB) ReplaceReplicaSet(oldReplications []*SpanReplication, newSpans []*heartbeatpb.TableSpan, checkpointTs uint64) {
-	db.lock.Lock()
-	defer db.lock.Unlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
 	// first check  the old replica set exists, if not, return false
 	for _, old := range oldReplications {
@@ -236,8 +244,8 @@ func (db *ReplicationDB) ReplaceReplicaSet(oldReplications []*SpanReplication, n
 
 // AddReplicatingSpan adds a replicating span to the replicating map, that means the span is already scheduled to a dispatcher
 func (db *ReplicationDB) AddReplicatingSpan(span *SpanReplication) {
-	db.lock.Lock()
-	defer db.lock.Unlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	db.allTasks[span.ID] = span
 	db.addToSchemaAndTableMap(span)
 	db.AddReplicatingWithoutLock(span)
@@ -245,36 +253,36 @@ func (db *ReplicationDB) AddReplicatingSpan(span *SpanReplication) {
 
 // AddAbsentReplicaSet adds spans to the absent map
 func (db *ReplicationDB) AddAbsentReplicaSet(spans ...*SpanReplication) {
-	db.lock.Lock()
-	defer db.lock.Unlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	db.addAbsentReplicaSetUnLock(spans...)
 }
 
 // MarkSpanAbsent move the span to the absent status
 func (db *ReplicationDB) MarkSpanAbsent(span *SpanReplication) {
-	db.lock.Lock()
-	defer db.lock.Unlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	db.MarkAbsentWithoutLock(span)
 }
 
 // MarkSpanScheduling move the span to the scheduling map
 func (db *ReplicationDB) MarkSpanScheduling(span *SpanReplication) {
-	db.lock.Lock()
-	defer db.lock.Unlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	db.MarkSchedulingWithoutLock(span)
 }
 
 // MarkSpanReplicating move the span to the replicating map
 func (db *ReplicationDB) MarkSpanReplicating(span *SpanReplication) {
-	db.lock.Lock()
-	defer db.lock.Unlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	db.MarkReplicatingWithoutLock(span)
 }
 
 // ForceRemove remove the span from the db
 func (db *ReplicationDB) ForceRemove(id common.DispatcherID) {
-	db.lock.Lock()
-	defer db.lock.Unlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	span, ok := db.allTasks[id]
 	if !ok {
 		log.Warn("span not found, ignore remove action",
@@ -283,27 +291,29 @@ func (db *ReplicationDB) ForceRemove(id common.DispatcherID) {
 		return
 	}
 
-	log.Info("remove span",
+	log.Info("remove a span",
 		zap.String("changefeed", db.changefeedID.Name()),
-		zap.String("span", id.String()))
+		zap.String("dispatcher", id.String()),
+		zap.String("span", common.FormatTableSpan(span.Span)))
+
 	db.removeSpanUnLock(span)
 }
 
-// UpdateSchemaID will update the schema id of the table, and move the task to the new schema map
-// it called when rename a table to another schema
+// UpdateSchemaID will update the schema id of the table, and move the task to the new schema map.
+// It is called when a DDL like `ALTER TABLE old_schema.old_tbl RENAME TO new_schema.new_tbl` is executed.
 func (db *ReplicationDB) UpdateSchemaID(tableID, newSchemaID int64) {
-	db.lock.Lock()
-	defer db.lock.Unlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 
-	for _, replicaSet := range db.tableTasks[tableID] {
-		oldSchemaID := replicaSet.GetSchemaID()
+	for _, span := range db.tableTasks[tableID] {
+		oldSchemaID := span.GetSchemaID()
 		// update schemaID
-		replicaSet.SetSchemaID(newSchemaID)
+		span.SetSchemaID(newSchemaID)
 
 		// update schema map
 		schemaMap, ok := db.schemaTasks[oldSchemaID]
 		if ok {
-			delete(schemaMap, replicaSet.ID)
+			delete(schemaMap, span.ID)
 			// clear the map if empty
 			if len(schemaMap) == 0 {
 				delete(db.schemaTasks, oldSchemaID)
@@ -315,24 +325,25 @@ func (db *ReplicationDB) UpdateSchemaID(tableID, newSchemaID int64) {
 			newMap = make(map[common.DispatcherID]*SpanReplication)
 			db.schemaTasks[newSchemaID] = newMap
 		}
-		newMap[replicaSet.ID] = replicaSet
+		newMap[span.ID] = span
 	}
 }
 
 func (db *ReplicationDB) UpdateStatus(span *SpanReplication, status *heartbeatpb.TableSpanStatus) {
 	span.UpdateStatus(status)
-	checker := db.GetGroupChecker(span.GetGroupID()) // Note: need RLock here
+	// Note: a read lock is required inside the `GetGroupChecker` method.
+	checker := db.GetGroupChecker(span.GetGroupID())
 
-	db.lock.Lock()
-	defer db.lock.Unlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	checker.UpdateStatus(span)
 }
 
 // BindSpanToNode binds the span to new node, it will remove the span from the old node and add it to the new node
 // It also marks the span as scheduling.
 func (db *ReplicationDB) BindSpanToNode(old, new node.ID, span *SpanReplication) {
-	db.lock.Lock()
-	defer db.lock.Unlock()
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	db.BindReplicaToNodeWithoutLock(old, new, span)
 }
 
@@ -395,14 +406,14 @@ func (db *ReplicationDB) GetAbsentForTest(_ []*SpanReplication, maxSize int) []*
 func (db *ReplicationDB) CheckByGroup(groupID replica.GroupID, batch int) replica.GroupCheckResult {
 	checker := db.GetGroupChecker(groupID)
 
-	db.lock.RLock()
-	defer db.lock.RUnlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 	return checker.Check(batch)
 }
 
 func (db *ReplicationDB) withRLock(action func()) {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 	action()
 }
 
@@ -411,8 +422,7 @@ func (db *ReplicationDB) reset() {
 	db.schemaTasks = make(map[int64]map[common.DispatcherID]*SpanReplication)
 	db.tableTasks = make(map[int64]map[common.DispatcherID]*SpanReplication)
 	db.allTasks = make(map[common.DispatcherID]*SpanReplication)
-	db.ReplicationDB = replica.NewReplicationDB[common.DispatcherID, *SpanReplication](db.changefeedID.String(),
-		db.withRLock, db.newGroupChecker)
+	db.ReplicationDB = replica.NewReplicationDB(db.changefeedID.String(), db.withRLock, db.newGroupChecker)
 }
 
 func (db *ReplicationDB) putDDLDispatcher(ddlSpan *SpanReplication) {

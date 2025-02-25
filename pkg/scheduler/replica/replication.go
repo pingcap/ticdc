@@ -387,7 +387,7 @@ func (db *replicationDB[T, R]) getOrCreateGroup(task R) *replicationGroup[T, R] 
 		db.taskGroups[groupID] = g
 		log.Info("scheduler: add new task group", zap.String("schedulerID", db.id),
 			zap.String("group", GetGroupName(groupID)),
-			zap.Stringer("groupType", GroupTpye(groupID)))
+			zap.Stringer("groupType", GroupType(groupID)))
 	}
 	return g
 }
@@ -399,7 +399,7 @@ func (db *replicationDB[T, R]) maybeRemoveGroup(g *replicationGroup[T, R]) {
 	delete(db.taskGroups, g.groupID)
 	log.Info("scheduler: remove task group", zap.String("schedulerID", db.id),
 		zap.String("group", GetGroupName(g.groupID)),
-		zap.Stringer("groupType", GroupTpye(g.groupID)))
+		zap.Stringer("groupType", GroupType(g.groupID)))
 }
 
 func (db *replicationDB[T, R]) mustGetGroup(groupID GroupID) *replicationGroup[T, R] {
