@@ -31,7 +31,7 @@ mysql_groups=(
 	# G00
 	'charset_gbk changefeed_finish sql_mode changefeed_reconstruct'
 	# G01
-	'common_1 foreign_key generate_column many_ok_or_uk drop_many_tables'
+	'common_1 foreign_key generate_column many_pk_or_uk drop_many_tables'
 	# G02
 	'new_ci_collation safe_mode savepoint'
 	# G03
@@ -45,11 +45,11 @@ mysql_groups=(
 	# G07
 	'default_value http_proxies ddl_reentrant force_replicate_table'
 	# G08
-	'changefeed_error capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry'
+	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry'
 	# G09
 	'cdc_server_tips ddl_sequence server_config_compatibility'
 	# G10
-	'changefeed_fast_fail gc_safepoint'
+	'changefeed_error gc_safepoint'
 	# G11
 	'multi_tables_ddl ddl_attributes'
 	# G12
