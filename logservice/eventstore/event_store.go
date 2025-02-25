@@ -321,9 +321,9 @@ func (p *writeTaskPool) run(ctx context.Context) {
 						return
 					}
 					p.store.writeEvents(p.db, events)
-					for i := range events {
-						events[i].callback()
-					}
+					// for i := range events {
+					// 	events[i].callback()
+					// }
 					buffer = buffer[:0]
 				}
 			}
@@ -506,7 +506,8 @@ func (e *eventStore) RegisterDispatcher(
 			kvs:      kvs,
 			callback: finishCallback,
 		})
-		return true
+		// FIXME
+		return false
 	}
 	advanceResolvedTs := func(ts uint64) {
 		// filter out identical resolved ts
