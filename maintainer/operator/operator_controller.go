@@ -367,6 +367,7 @@ func (oc *Controller) AddMergeSplitOperator(
 }
 
 func (oc *Controller) GetLock() *sync.RWMutex {
+	oc.lock.Lock()
 	return &oc.lock
 }
 

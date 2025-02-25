@@ -106,6 +106,7 @@ func NewBarrier(controller *Controller, splitTableEnabled bool) *Barrier {
 }
 
 func (b *Barrier) GetLock() *sync.Mutex {
+	b.blockedEvents.mutex.Lock()
 	return &b.blockedEvents.mutex
 }
 
