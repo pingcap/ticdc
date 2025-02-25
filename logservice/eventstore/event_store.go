@@ -309,7 +309,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 	for i := 0; i < p.workerNum; i++ {
 		go func() {
 			defer p.store.wg.Done()
-			buffer := make([]eventWithCallback, 0, 32)
+			buffer := make([]eventWithCallback, 0, 128)
 			for {
 				select {
 				case <-ctx.Done():
