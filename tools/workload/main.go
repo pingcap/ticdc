@@ -418,6 +418,7 @@ func doInsert(db *sql.DB, workload schema.Workload) {
 		} else if workloadType == bank2 {
 			insertSqlList, valuesList := workload.(*schema.Bank2Workload).BuildInsertSqlWithValues(j, batchSize)
 			for i := 0; i < batchSize; i++ {
+				log.Info("sql", zap.Any("sql", insertSqlList[i]))
 				_, err = executeWithValues(db, insertSqlList[i], workload, j, valuesList[i])
 			}
 		} else {
