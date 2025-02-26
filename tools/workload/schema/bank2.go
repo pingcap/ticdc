@@ -282,7 +282,6 @@ func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []i
 
 func generateNonPrimaryValuesForTable() string {
 	var builder strings.Builder
-	builder.WriteString("")
 	builder.WriteString(randomDecimal(13, 2)) // bp_rtl_intr_amt
 	builder.WriteString(",'")
 	builder.WriteString(randomDate()) // late_chg_coll_date
@@ -300,7 +299,7 @@ func generateNonPrimaryValuesForTable() string {
 	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) // stmt_cycle_days
 	builder.WriteString(",")
 	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) // cash_adv_days_with_bal
-	builder.WriteString("',")
+	builder.WriteString(",")
 	builder.WriteString(randomDecimal(13, 2)) //acct_avail_rtl_limit
 	builder.WriteString(",")
 	builder.WriteString(randomDecimal(13, 2)) // avail_cash_adv_limit
@@ -388,7 +387,7 @@ func generateNonPrimaryValuesForTable() string {
 	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) //rtl_cr_trx_count
 	builder.WriteString(",'")
 	builder.WriteString(randomString(10)) // biz_scene_encod
-	builder.WriteString(",")
+	builder.WriteString("',")
 	builder.WriteString(randomDecimal(13, 2)) // rtl_dispute_amt
 	builder.WriteString(",")
 	builder.WriteString(randomDecimal(13, 2)) // last_term_stmt_forbid_instalt_prin_amt
