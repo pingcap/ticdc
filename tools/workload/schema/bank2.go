@@ -18,6 +18,9 @@ import (
 	"math/rand"
 	"strings"
 	"time"
+
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 const createTableSQL = `CREATE TABLE acct_statement_head_info (
@@ -212,6 +215,11 @@ func (c *Bank2Workload) BuildUpdateSql(opts UpdateOption) string {
 }
 
 func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) ([]string, [][]interface{}) {
+	start := time.Now()
+
+	defer func() {
+		log.Info("BuildInsertSqlWithValues cost ", zap.Any("time cost", time.Since(start).Seconds()))
+	}()
 	sqlList := make([]string, 0, batchSize)
 	valueList := make([][]interface{}, 0, batchSize)
 
