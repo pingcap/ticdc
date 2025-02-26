@@ -417,9 +417,7 @@ func doInsert(db *sql.DB, workload schema.Workload) {
 			_, err = executeWithValues(db, insertSql, workload, j, values)
 		} else {
 			insertSql := workload.BuildInsertSql(j, batchSize)
-			start := time.Now()
 			_, err = execute(db, insertSql, workload, j)
-			log.Info("execute sql", zap.Any("time cost", time.Since(start).Seconds()))
 		}
 
 		if err != nil {

@@ -19,9 +19,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/pingcap/log"
-	"go.uber.org/zap"
 )
 
 const createTableSQL = `CREATE TABLE acct_statement_head_info (
@@ -216,11 +213,6 @@ func (c *Bank2Workload) BuildUpdateSql(opts UpdateOption) string {
 }
 
 func (c *Bank2Workload) BuildInsertSql(tableN int, batchSize int) string {
-	start := time.Now()
-	defer func() {
-		log.Info("finish BuildInsertSql", zap.Any("time cost", time.Since(start).Seconds()))
-	}()
-
 	var sql string
 	values := make([]interface{}, 0, 120*200)
 	var builder strings.Builder
