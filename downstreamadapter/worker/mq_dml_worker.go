@@ -34,8 +34,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// PulsarDMLWorker worker will send messages to the DML producer on a batch basis.
-type PulsarDMLWorker struct {
+const (
+	// batchSize is the maximum size of the number of messages in a batch.
+	batchSize = 2048
+	// batchInterval is the interval of the worker to collect a batch of messages.
+	// It shouldn't be too large, otherwise it will lead to a high latency.
+	batchInterval = 15 * time.Millisecond
+)
+
+// MQDMLWorker worker will send messages to the DML producer on a batch basis.
+type MQDMLWorker struct {
 	changeFeedID common.ChangeFeedID
 	protocol     config.Protocol
 
@@ -50,15 +58,15 @@ type PulsarDMLWorker struct {
 	topicManager topicmanager.TopicManager
 	encoderGroup codec.EncoderGroup
 
-	// producer is used to send the messages to the pulsar broker.
+	// producer is used to send the messages to the MQ broker.
 	producer producer.DMLProducer
 
 	// statistics is used to record DML metrics.
 	statistics *metrics.Statistics
 }
 
-// NewPulsarDMLWorker creates a dml flush worker for pulsar
-func NewPulsarDMLWorker(
+// NewMQDMLWorker creates a dml flush worker for MQ
+func NewMQDMLWorker(
 	id common.ChangeFeedID,
 	protocol config.Protocol,
 	producer producer.DMLProducer,
@@ -67,8 +75,8 @@ func NewPulsarDMLWorker(
 	eventRouter *eventrouter.EventRouter,
 	topicManager topicmanager.TopicManager,
 	statistics *metrics.Statistics,
-) *PulsarDMLWorker {
-	return &PulsarDMLWorker{
+) *MQDMLWorker {
+	return &MQDMLWorker{
 		changeFeedID:   id,
 		protocol:       protocol,
 		eventChan:      make(chan *commonEvent.DMLEvent, 32),
@@ -82,7 +90,7 @@ func NewPulsarDMLWorker(
 	}
 }
 
-func (w *PulsarDMLWorker) Run(ctx context.Context) error {
+func (w *MQDMLWorker) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return w.producer.Run(ctx)
@@ -109,7 +117,7 @@ func (w *PulsarDMLWorker) Run(ctx context.Context) error {
 	return g.Wait()
 }
 
-func (w *PulsarDMLWorker) calculateKeyPartitions(ctx context.Context) error {
+func (w *MQDMLWorker) calculateKeyPartitions(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -169,16 +177,16 @@ func (w *PulsarDMLWorker) calculateKeyPartitions(ctx context.Context) error {
 	}
 }
 
-func (w *PulsarDMLWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
+func (w *MQDMLWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
 	w.eventChan <- event
 }
 
-func (w *PulsarDMLWorker) addMQRowEvent(event *commonEvent.MQRowEvent) {
+func (w *MQDMLWorker) addMQRowEvent(event *commonEvent.MQRowEvent) {
 	w.rowChan <- event
 }
 
 // nonBatchEncodeRun add events to the encoder group immediately.
-func (w *PulsarDMLWorker) nonBatchEncodeRun(ctx context.Context) error {
+func (w *MQDMLWorker) nonBatchEncodeRun(ctx context.Context) error {
 	log.Info("MQ sink non batch worker started",
 		zap.String("namespace", w.changeFeedID.Namespace()),
 		zap.String("changefeed", w.changeFeedID.Name()),
@@ -203,7 +211,7 @@ func (w *PulsarDMLWorker) nonBatchEncodeRun(ctx context.Context) error {
 }
 
 // batchEncodeRun collect messages into batch and add them to the encoder group.
-func (w *PulsarDMLWorker) batchEncodeRun(ctx context.Context) error {
+func (w *MQDMLWorker) batchEncodeRun(ctx context.Context) error {
 	log.Info("MQ sink batch worker started",
 		zap.String("namespace", w.changeFeedID.Namespace()),
 		zap.String("changefeed", w.changeFeedID.Name()),
@@ -225,7 +233,7 @@ func (w *PulsarDMLWorker) batchEncodeRun(ctx context.Context) error {
 		start := time.Now()
 		msgCount, err := w.batch(ctx, msgsBuf, ticker)
 		if err != nil {
-			log.Error("pulsar dml worker batch failed",
+			log.Error("MQ dml worker batch failed",
 				zap.String("namespace", w.changeFeedID.Namespace()),
 				zap.String("changefeed", w.changeFeedID.Name()),
 				zap.Error(err))
@@ -252,7 +260,7 @@ func (w *PulsarDMLWorker) batchEncodeRun(ctx context.Context) error {
 // batch collects a batch of messages from w.msgChan into buffer.
 // It returns the number of messages collected.
 // Note: It will block until at least one message is received.
-func (w *PulsarDMLWorker) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) (int, error) {
+func (w *MQDMLWorker) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) (int, error) {
 	msgCount := 0
 	maxBatchSize := len(buffer)
 	// We need to receive at least one message or be interrupted,
@@ -296,7 +304,7 @@ func (w *PulsarDMLWorker) batch(ctx context.Context, buffer []*commonEvent.MQRow
 }
 
 // group groups messages by its key.
-func (w *PulsarDMLWorker) group(msgs []*commonEvent.MQRowEvent) map[model.TopicPartitionKey][]*commonEvent.RowEvent {
+func (w *MQDMLWorker) group(msgs []*commonEvent.MQRowEvent) map[model.TopicPartitionKey][]*commonEvent.RowEvent {
 	groupedMsgs := make(map[model.TopicPartitionKey][]*commonEvent.RowEvent)
 	for _, msg := range msgs {
 		if _, ok := groupedMsgs[msg.Key]; !ok {
@@ -307,7 +315,7 @@ func (w *PulsarDMLWorker) group(msgs []*commonEvent.MQRowEvent) map[model.TopicP
 	return groupedMsgs
 }
 
-func (w *PulsarDMLWorker) sendMessages(ctx context.Context) error {
+func (w *MQDMLWorker) sendMessages(ctx context.Context) error {
 	metricSendMessageDuration := metrics.WorkerSendMessageDuration.WithLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
 	defer metrics.WorkerSendMessageDuration.DeleteLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
 
@@ -330,6 +338,7 @@ func (w *PulsarDMLWorker) sendMessages(ctx context.Context) error {
 			for _, message := range future.Messages {
 				start := time.Now()
 				if err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
+					message.SetPartitionKey(future.Key.PartitionKey)
 					if err = w.producer.AsyncSendMessage(
 						ctx,
 						future.Key.Topic,
@@ -347,6 +356,6 @@ func (w *PulsarDMLWorker) sendMessages(ctx context.Context) error {
 	}
 }
 
-func (w *PulsarDMLWorker) Close() {
+func (w *MQDMLWorker) Close() {
 	w.producer.Close()
 }

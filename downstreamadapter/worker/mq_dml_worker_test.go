@@ -32,7 +32,7 @@ import (
 
 var count int
 
-func kafkaDMLWorkerForTest(t *testing.T) *KafkaDMLWorker {
+func kafkaDMLWorkerForTest(t *testing.T) *MQDMLWorker {
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	openProtocol := "open-protocol"
@@ -50,7 +50,7 @@ func kafkaDMLWorkerForTest(t *testing.T) *KafkaDMLWorker {
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
 	dmlMockProducer := producer.NewMockDMLProducer()
 
-	dmlWorker := NewKafkaDMLWorker(changefeedID, protocol, dmlMockProducer,
+	dmlWorker := NewMQDMLWorker(changefeedID, protocol, dmlMockProducer,
 		kafkaComponent.EncoderGroup, kafkaComponent.ColumnSelector,
 		kafkaComponent.EventRouter, kafkaComponent.TopicManager,
 		statistics)

@@ -35,8 +35,8 @@ import (
 type PulsarSink struct {
 	changefeedID common.ChangeFeedID
 
-	dmlWorker *worker.PulsarDMLWorker
-	ddlWorker *worker.PulsarDDLWorker
+	dmlWorker *worker.MQDMLWorker
+	ddlWorker *worker.MQDDLWorker
 
 	topicManager topicmanager.TopicManager
 	statistics   *metrics.Statistics
@@ -66,11 +66,14 @@ func newPulsarSink(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
+	statistics := metrics.NewStatistics(changefeedID, "PulsarSink")
 
 	failpointCh := make(chan error, 1)
 	dmlProducer, err := producer.NewPulsarDMLProducer(ctx, changefeedID, pulsarComponent.Factory, sinkConfig, failpointCh)
-	dmlWorker := worker.NewPulsarDMLWorker(
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	dmlWorker := worker.NewMQDMLWorker(
 		changefeedID,
 		protocol,
 		dmlProducer,
@@ -82,10 +85,12 @@ func newPulsarSink(
 	)
 
 	ddlProducer, err := producer.NewPulsarDDLProducer(ctx, changefeedID, pulsarComponent.Config, pulsarComponent.Factory, sinkConfig)
-	ddlWorker := worker.NewPulsarDDLWorker(
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	ddlWorker := worker.NewMQDDLWorker(
 		changefeedID,
 		protocol,
-		pulsarComponent.Config,
 		ddlProducer,
 		pulsarComponent.Encoder,
 		pulsarComponent.EventRouter,

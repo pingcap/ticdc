@@ -37,8 +37,8 @@ import (
 type KafkaSink struct {
 	changefeedID common.ChangeFeedID
 
-	dmlWorker *worker.KafkaDMLWorker
-	ddlWorker *worker.KafkaDDLWorker
+	dmlWorker *worker.MQDMLWorker
+	ddlWorker *worker.MQDDLWorker
 
 	// the module used by dmlWorker and ddlWorker
 	// KafkaSink need to close it when Close() is called
@@ -90,7 +90,7 @@ func newKafkaSink(
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 	dmlProducer := producer.NewKafkaDMLProducer(changefeedID, asyncProducer)
-	dmlWorker := worker.NewKafkaDMLWorker(
+	dmlWorker := worker.NewMQDMLWorker(
 		changefeedID,
 		protocol,
 		dmlProducer,
@@ -105,7 +105,7 @@ func newKafkaSink(
 		return nil, errors.Trace(err)
 	}
 	ddlProducer := producer.NewKafkaDDLProducer(ctx, changefeedID, syncProducer)
-	ddlWorker := worker.NewKafkaDDLWorker(
+	ddlWorker := worker.NewMQDDLWorker(
 		changefeedID,
 		protocol,
 		ddlProducer,
@@ -230,7 +230,7 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 
 	dmlMockProducer := producer.NewMockDMLProducer()
 
-	dmlWorker := worker.NewKafkaDMLWorker(
+	dmlWorker := worker.NewMQDMLWorker(
 		changefeedID,
 		protocol,
 		dmlMockProducer,
@@ -241,7 +241,7 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 		statistics)
 
 	ddlMockProducer := producer.NewMockDDLProducer()
-	ddlWorker := worker.NewKafkaDDLWorker(
+	ddlWorker := worker.NewMQDDLWorker(
 		changefeedID,
 		protocol,
 		ddlMockProducer,
