@@ -273,7 +273,7 @@ func handleWorkloadExecution(dbs []*sql.DB, insertConcurrency, updateConcurrency
 
 func executeInsertWorkers(dbs []*sql.DB, insertConcurrency int, workload schema.Workload, wg *sync.WaitGroup) {
 	sqlsChan := make(chan string, 100000)
-	generateInsertSQL(sqlsChan, workload)
+	go generateInsertSQL(sqlsChan, workload)
 
 	wg.Add(insertConcurrency)
 	for i := 0; i < insertConcurrency; i++ {
