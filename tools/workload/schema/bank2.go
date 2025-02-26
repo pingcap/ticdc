@@ -270,6 +270,10 @@ func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []i
 }
 
 func generateValuesForTable() []interface{} {
+	start := time.Now()
+	defer func() {
+		log.Info("generateValuesForTable cost", zap.Any("time", time.Since(start).Seconds()))
+	}()
 	// crcd_acct_no , stmt_date , acct_seq_no , stmt_head_id  these are primary key
 	values := make([]interface{}, 0, 108)
 	values = append(values, randomString(16))     // crcd_acct_no
