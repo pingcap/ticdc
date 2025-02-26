@@ -87,7 +87,10 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		if event.entries != nil {
 			handleEventEntries(span, event.state, event.entries)
 		} else if event.resolvedTs != 0 {
-			newResolvedTs = handleResolvedTs(span, event.state, event.resolvedTs)
+			resolvedTs := handleResolvedTs(span, event.state, event.resolvedTs)
+			if resolvedTs > newResolvedTs {
+				newResolvedTs = resolvedTs
+			}
 		} else {
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
 		}
