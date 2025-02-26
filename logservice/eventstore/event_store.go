@@ -263,7 +263,7 @@ func newPebbleOptions() *pebble.Options {
 		Levels: make([]pebble.LevelOptions, 2),
 
 		MaxConcurrentCompactions: func() int {
-			return 2
+			return 4
 		},
 	}
 
