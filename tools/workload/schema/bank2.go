@@ -215,6 +215,7 @@ func (c *Bank2Workload) BuildUpdateSql(opts UpdateOption) string {
 }
 
 func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) ([]string, [][]interface{}) {
+	log.Info("BuildInsertSqlWithValues", zap.Any("batchSize", batchSize))
 	start := time.Now()
 
 	defer func() {
