@@ -1,0 +1,195 @@
+// Copyright 2023 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package worker
+
+import (
+	"context"
+	"time"
+
+	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
+	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/util"
+	"github.com/pingcap/tiflow/pkg/errors"
+	"go.uber.org/zap"
+)
+
+// PulsarDDLWorker handle DDL and checkpoint event
+type PulsarDDLWorker struct {
+	// changeFeedID indicates this sink belongs to which processor(changefeed).
+	changeFeedID commonType.ChangeFeedID
+
+	checkpointTsChan chan uint64
+	encoder          common.EventEncoder
+	// eventRouter used to route events to the right topic and partition.
+	eventRouter *eventrouter.EventRouter
+	// topicManager used to manage topics.
+	// It is also responsible for creating topics.
+	topicManager topicmanager.TopicManager
+
+	// producer is used to send the messages to the pulsar broker.
+	producer producer.DDLProducer
+
+	tableSchemaStore *util.TableSchemaStore
+
+	statistics    *metrics.Statistics
+	partitionRule DDLDispatchRule
+}
+
+// NewPulsarDDLSink will verify the config and create a Pulsar DDL Sink.
+func NewPulsarDDLWorker(
+	id commonType.ChangeFeedID,
+	protocol config.Protocol,
+	pConfig *config.PulsarConfig,
+	producer producer.DDLProducer,
+	encoder common.EventEncoder,
+	eventRouter *eventrouter.EventRouter,
+	topicManager topicmanager.TopicManager,
+	statistics *metrics.Statistics,
+) *PulsarDDLWorker {
+	return &PulsarDDLWorker{
+		changeFeedID:     id,
+		encoder:          encoder,
+		producer:         producer,
+		eventRouter:      eventRouter,
+		topicManager:     topicManager,
+		statistics:       statistics,
+		partitionRule:    getDDLDispatchRule(protocol),
+		checkpointTsChan: make(chan uint64, 16),
+	}
+}
+
+func (w *PulsarDDLWorker) Run(ctx context.Context) error {
+	return w.encodeAndSendCheckpointEvents(ctx)
+}
+
+func (w *PulsarDDLWorker) AddCheckpoint(ts uint64) {
+	w.checkpointTsChan <- ts
+}
+
+func (w *PulsarDDLWorker) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+	w.tableSchemaStore = tableSchemaStore
+}
+
+func (w *PulsarDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent) error {
+	for _, e := range event.GetEvents() {
+		message, err := w.encoder.EncodeDDLEvent(e)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		topic := w.eventRouter.GetTopicForDDL(e)
+
+		if w.partitionRule == PartitionAll {
+			partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			err = w.statistics.RecordDDLExecution(func() error {
+				return w.producer.SyncBroadcastMessage(ctx, topic, partitionNum, message)
+			})
+		} else {
+			err = w.statistics.RecordDDLExecution(func() error {
+				return w.producer.SyncSendMessage(ctx, topic, 0, message)
+			})
+		}
+		if err != nil {
+			return errors.Trace(err)
+		}
+	}
+	log.Info("pulsar ddl worker send block event", zap.Any("event", event))
+	// after flush all the ddl event, we call the callback function.
+	event.PostFlush()
+	return nil
+}
+
+func (w *PulsarDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) error {
+	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
+	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
+
+	defer func() {
+		metrics.CheckpointTsMessageDuration.DeleteLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
+		metrics.CheckpointTsMessageCount.DeleteLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
+	}()
+
+	var (
+		msg          *common.Message
+		partitionNum int32
+		err          error
+	)
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case ts, ok := <-w.checkpointTsChan:
+			if !ok {
+				log.Warn("MQ sink flush worker channel closed",
+					zap.String("namespace", w.changeFeedID.Namespace()),
+					zap.String("changefeed", w.changeFeedID.Name()))
+				return nil
+			}
+			start := time.Now()
+
+			msg, err = w.encoder.EncodeCheckpointEvent(ts)
+			if err != nil {
+				return errors.Trace(err)
+			}
+
+			if msg == nil {
+				continue
+			}
+			tableNames := w.tableSchemaStore.GetAllTableNames(ts)
+			// NOTICE: When there are no tables to replicate,
+			// we need to send checkpoint ts to the default topic.
+			// This will be compatible with the old behavior.
+			if len(tableNames) == 0 {
+				topic := w.eventRouter.GetDefaultTopic()
+				partitionNum, err = w.topicManager.GetPartitionNum(ctx, topic)
+				if err != nil {
+					return errors.Trace(err)
+				}
+				log.Debug("Emit checkpointTs to default topic",
+					zap.String("topic", topic), zap.Uint64("checkpointTs", ts), zap.Any("partitionNum", partitionNum))
+				err = w.producer.SyncBroadcastMessage(ctx, topic, partitionNum, msg)
+				if err != nil {
+					return errors.Trace(err)
+				}
+			} else {
+				topics := w.eventRouter.GetActiveTopics(tableNames)
+				for _, topic := range topics {
+					partitionNum, err = w.topicManager.GetPartitionNum(ctx, topic)
+					if err != nil {
+						return errors.Trace(err)
+					}
+					err = w.producer.SyncBroadcastMessage(ctx, topic, partitionNum, msg)
+					if err != nil {
+						return errors.Trace(err)
+					}
+				}
+			}
+
+			checkpointTsMessageCount.Inc()
+			checkpointTsMessageDuration.Observe(time.Since(start).Seconds())
+		}
+	}
+}
+
+func (w *PulsarDDLWorker) Close() {
+	w.producer.Close()
+}
