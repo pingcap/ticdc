@@ -16,6 +16,7 @@ package schema
 import (
 	"fmt"
 	"math/rand"
+	"strconv"
 	"strings"
 	"time"
 
@@ -206,15 +207,15 @@ func (c *Bank2Workload) BuildCreateTableStatement(n int) string {
 	}
 }
 
-func (c *Bank2Workload) BuildInsertSql(tableN int, batchSize int) string {
-	panic("unimplemented")
-}
+// func (c *Bank2Workload) BuildInsertSql(tableN int, batchSize int) string {
+// 	panic("unimplemented")
+// }
 
 func (c *Bank2Workload) BuildUpdateSql(opts UpdateOption) string {
 	panic("unimplemented")
 }
 
-func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int) (string, []interface{}) {
+func (c *Bank2Workload) BuildInsertSql(tableN int, batchSize int) string {
 	start := time.Now()
 
 	defer func() {
@@ -226,16 +227,23 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int) (string, []interfac
 
 	switch tableN {
 	case 0: // acct_statement_head_info
-		builder.WriteString("insert into acct_statement_head_info (crcd_acct_no , stmt_date , acct_seq_no , stmt_head_id ,bp_rtl_intr_amt , late_chg_coll_date , delq_total_amt , prev_dir_to_cust_rtl_prin , acct_branch_no , create_ts , agent_bank_no , stmt_cycle_days , cash_adv_days_with_bal , acct_avail_rtl_limit , avail_cash_adv_limit , dispute_trx_count , rtl_intr_rate , only_stmt_head_record_flag , total_amt_due , upd_tlr_org_no , cash_adv_pymt_amt , acct_cur_block_code , stmt_mail_flag , local_id , debit_cr_out_of_bal_flag , binlog_insert_ts , acct_prev_block_code , src_cnsmr_sys_id , part_no , dd_flag , migr_flag , acct_ccy , rtl_debit_trx_count , intr_amt , stmt_cash_bal , write_off_sts_flag , prev_stmt_rmn_intr , create_tlr_org_no , upd_ts , debit_trx_amt , cash_adv_intr_amt , acc_rtl_bal , acct_rtl_limit , cash_adv_begin_bal , biz_date , late_chg , rtl_serv_chg , stmt_type , cash_bal_1_cur_intr_rate , begin_bal , cur_stmt_bal , rtl_days_with_bal , cash_adv_debit_trx_amt , cash_adv_amt , repay_expire_date , rtl_cr_trx_count , biz_scene_encod , rtl_dispute_amt , last_term_stmt_forbid_instalt_prin_amt , cash_adv_limit , monthly_pymt , rtl_trx_fee_amt , data_version , rtl_mis_fee , dispute_bal , ctd_cash_adv_pymt_rvsl , data_pos , rtl_debit_trx_amt , stmt_rtl_bal , last_term_spec_whls_csm_prin , del_flag , acct_chg_off_sts , cash_adv_debit_trx_count , bp_cash_adv_intr_amt , rtl_pymt_amt , trx_date , cur_pymt_amt , local_sys_jrn_no , prev_stmt_head_id , cash_adv_dispute_amt , rtl_pymt_rvsl_amt , cash_adv_cr_trx_amt , crcd_stmt_no , trx_count , global_trx_jrn_no , cash_adv_trx_fee_amt , cash_adv_serv_chg , overlimit_acctt_amt , crcd_cardholder_no ,  begin_rtl_bal , prev_rtl_prin , rtl_annual_fee , acct_bank_no , acct_sts , cr_trx_amt , crcd_org_no , rtl_intr_amt , rtl_cr_trx_amt , cycle_due , biz_upd_ts , prev_stmt_date , grace_date , trx_time , ctd_stmt_stat_cycle , cash_adv_cr_trx_count , upd_tlr_no , ver_no , create_tlr_no , acc_cash_bal ) values")
+		builder.WriteString("insert into acct_statement_head_info (crcd_acct_no , stmt_date , acct_seq_no , stmt_head_id ,bp_rtl_intr_amt , late_chg_coll_date , delq_total_amt , prev_dir_to_cust_rtl_prin , acct_branch_no , create_ts , agent_bank_no , stmt_cycle_days , cash_adv_days_with_bal , acct_avail_rtl_limit , avail_cash_adv_limit , dispute_trx_count , rtl_intr_rate , only_stmt_head_record_flag , total_amt_due , upd_tlr_org_no , cash_adv_pymt_amt , acct_cur_block_code , stmt_mail_flag , local_id , debit_cr_out_of_bal_flag , binlog_insert_ts , acct_prev_block_code , src_cnsmr_sys_id , part_no , dd_flag , migr_flag , acct_ccy , rtl_debit_trx_count , intr_amt , stmt_cash_bal , write_off_sts_flag , prev_stmt_rmn_intr , create_tlr_org_no , upd_ts , debit_trx_amt , cash_adv_intr_amt , acc_rtl_bal , acct_rtl_limit , cash_adv_begin_bal , biz_date , late_chg , rtl_serv_chg , stmt_type , cash_bal_1_cur_intr_rate , begin_bal , cur_stmt_bal , rtl_days_with_bal , cash_adv_debit_trx_amt , cash_adv_amt , repay_expire_date , rtl_cr_trx_count , biz_scene_encod , rtl_dispute_amt , last_term_stmt_forbid_instalt_prin_amt , cash_adv_limit , monthly_pymt , rtl_trx_fee_amt , data_version , rtl_mis_fee , dispute_bal , ctd_cash_adv_pymt_rvsl , data_pos , rtl_debit_trx_amt , stmt_rtl_bal , last_term_spec_whls_csm_prin , del_flag , acct_chg_off_sts , cash_adv_debit_trx_count , bp_cash_adv_intr_amt , rtl_pymt_amt , trx_date , cur_pymt_amt , local_sys_jrn_no , prev_stmt_head_id , cash_adv_dispute_amt , rtl_pymt_rvsl_amt , cash_adv_cr_trx_amt , crcd_stmt_no , trx_count , global_trx_jrn_no , cash_adv_trx_fee_amt , cash_adv_serv_chg , overlimit_acctt_amt , crcd_cardholder_no ,  begin_rtl_bal , prev_rtl_prin , rtl_annual_fee , acct_bank_no , acct_sts , cr_trx_amt , crcd_org_no , rtl_intr_amt , rtl_cr_trx_amt , cycle_due , biz_upd_ts , prev_stmt_date , grace_date , trx_time , ctd_stmt_stat_cycle , cash_adv_cr_trx_count , upd_tlr_no , ver_no , create_tlr_no , acc_cash_bal ) values (")
 		// 200 insert for a txn
 		nonPrimaryKeyValues := generateNonPrimaryValuesForTable() // to reduce time, these field we keep same for 200 rows
 		for r := 0; r < 200; r++ {
-			values = append(values, generatePrimaryValuesForTable()...)
-			values = append(values, nonPrimaryKeyValues...)
-			if r != 0 {
-				builder.WriteString(",")
+			builder.WriteString(generatePrimaryValuesForTable())
+			builder.WriteString(nonPrimaryKeyValues)
+			if r+1 < 200 {
+				builder.WriteString("),(")
+			} else {
+				builder.WriteString(")")
 			}
-			builder.WriteString("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+
+			// values = append(values, nonPrimaryKeyValues...)
+			// if r != 0 {
+			// 	builder.WriteString(",")
+			// }
+			// builder.WriteString("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
 		}
 		sql += builder.String()
 	case 1: // acct_interest_log_hist
@@ -252,7 +260,7 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int) (string, []interfac
 	default:
 		panic("unknown table")
 	}
-	return sql, values
+	return sql
 }
 
 func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []interface{}) {
@@ -271,127 +279,347 @@ func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []i
 	return sql, values
 }
 
-func generateNonPrimaryValuesForTable() []interface{} {
-	values := make([]interface{}, 0, 104)
+func generateNonPrimaryValuesForTable() string {
+	var builder strings.Builder
+	builder.WriteString("")
+	builder.WriteString(randomDecimal(13, 2)) // bp_rtl_intr_amt
+	builder.WriteString(",'")
+	builder.WriteString(randomDate()) // late_chg_coll_date
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) // delq_total_amt
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // prev_dir_to_cust_rtl_prin
+	builder.WriteString(",'")
+	builder.WriteString(randomString(5)) // acct_branch_no
+	builder.WriteString("','")
+	builder.WriteString(randomDatetime(6)) // create_ts
+	builder.WriteString("',")
+	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) // agent_bank_no
+	builder.WriteString(",")
+	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) // stmt_cycle_days
+	builder.WriteString(",")
+	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) // cash_adv_days_with_bal
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) //acct_avail_rtl_limit
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // avail_cash_adv_limit
+	builder.WriteString(",")
+	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) // dispute_trx_count
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(8, 7)) // rtl_intr_rate
+	builder.WriteString(",'")
+	builder.WriteString(randomString(1)) // only_stmt_head_record_flag
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) // total_amt_due
+	builder.WriteString(",'")
+	builder.WriteString(randomString(10)) // upd_tlr_org_no
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) // cash_adv_pymt_amt
+	builder.WriteString(",'")
+	builder.WriteString(randomString(3)) // acct_cur_block_code
+	builder.WriteString("','")
+	builder.WriteString(randomString(1)) // stmt_mail_flag
+	builder.WriteString("',")
+	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) // local_id
+	builder.WriteString(",'")
+	builder.WriteString(randomString(1)) // debit_cr_out_of_bal_flag
+	builder.WriteString("','")
+	builder.WriteString(randomDatetime(6)) // binlog_insert_ts
+	builder.WriteString("','")
+	builder.WriteString(randomString(3)) // acct_prev_block_code
+	builder.WriteString("','")
+	builder.WriteString(randomString(4)) // src_cnsmr_sys_id
+	builder.WriteString("',")
+	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) // part_no
+	builder.WriteString(",'")
+	builder.WriteString(randomString(1)) // dd_flag
+	builder.WriteString("','")
+	builder.WriteString(randomString(1)) // migr_flag
+	builder.WriteString("','")
+	builder.WriteString(randomString(3)) // acct_ccy
+	builder.WriteString("',")
+	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) // rtl_debit_trx_count
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // intr_amt
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // stmt_cash_bal
+	builder.WriteString(",'")
+	builder.WriteString(randomString(1)) // write_off_sts_flag
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) // prev_stmt_rmn_intr
+	builder.WriteString(",'")
+	builder.WriteString(randomString(10)) // create_tlr_org_no
+	builder.WriteString("','")
+	builder.WriteString(randomDatetime(6)) // upd_ts
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) // debit_trx_amt
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // cash_adv_intr_amt
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // acc_rtl_bal
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 0)) // acct_rtl_limit
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // cash_adv_begin_bal
+	builder.WriteString(",'")
+	builder.WriteString(randomDate()) // biz_date
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) // late_chg
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // rtl_serv_chg
+	builder.WriteString(",'")
+	builder.WriteString(randomString(1)) // stmt_type
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(8, 7)) // cash_bal_1_cur_intr_rate
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // begin_bal
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // cur_stmt_bal
+	builder.WriteString(",")
+	builder.WriteString(strconv.FormatInt(int64(randomSmallInt()), 10)) //rtl_days_with_bal
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // cash_adv_debit_trx_amt
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // cash_adv_amt
+	builder.WriteString(",'")
+	builder.WriteString(randomDate()) // repay_expire_date
+	builder.WriteString("',")
+	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) //rtl_cr_trx_count
+	builder.WriteString(",'")
+	builder.WriteString(randomString(10)) // biz_scene_encod
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // rtl_dispute_amt
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // last_term_stmt_forbid_instalt_prin_amt
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // cash_adv_limit
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // monthly_pymt
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // rtl_trx_fee_amt
+	builder.WriteString(",'")
+	builder.WriteString(randomString(256)) // data_version
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) // rtl_mis_fee
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // dispute_bal
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // ctd_cash_adv_pymt_rvsl
+	builder.WriteString(",'")
+	builder.WriteString(randomString(10)) // data_pos
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) // rtl_debit_trx_amt
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // stmt_rtl_bal
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // last_term_spec_whls_csm_prin
+	builder.WriteString(",'")
+	builder.WriteString(randomString(1)) // del_flag
+	builder.WriteString("','")
+	builder.WriteString(randomString(1)) // acct_chg_off_sts
+	builder.WriteString("',")
+	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) //cash_adv_debit_trx_count
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // bp_cash_adv_intr_amt
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // rtl_pymt_amt
+	builder.WriteString(",'")
+	builder.WriteString(randomDate()) // trx_date
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) // cur_pymt_amt
+	builder.WriteString(",'")
+	builder.WriteString(randomString(32)) // local_sys_jrn_no
+	builder.WriteString("',")
+	builder.WriteString(strconv.FormatInt(randomBigInt(), 10)) //cash_adv_debit_trx_count
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // cash_adv_dispute_amt
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // rtl_pymt_rvsl_amt
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // cash_adv_cr_trx_amt
+	builder.WriteString(",")
+	builder.WriteString(strconv.FormatInt(int64(randomSmallInt()), 10)) //crcd_stmt_no
+	builder.WriteString(",")
+	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) //trx_count
+	builder.WriteString(",'")
+	builder.WriteString(randomString(37)) // global_trx_jrn_no
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) // cash_adv_trx_fee_amt
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // cash_adv_serv_chg
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // overlimit_acctt_amt
+	builder.WriteString(",'")
+	builder.WriteString(randomString(16)) // crcd_cardholder_no
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) // begin_rtl_bal
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // prev_rtl_prin
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // rtl_annual_fee
+	builder.WriteString(",'")
+	builder.WriteString(randomString(4)) // acct_bank_no
+	builder.WriteString("','")
+	builder.WriteString(randomString(1)) // acct_sts
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) // cr_trx_amt
+	builder.WriteString(",'")
+	builder.WriteString(randomString(3)) // crcd_org_no
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) // rtl_intr_amt
+	builder.WriteString(",")
+	builder.WriteString(randomDecimal(13, 2)) // rtl_cr_trx_amt
+	builder.WriteString(",")
+	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) //cycle_due
+	builder.WriteString(",'")
+	builder.WriteString(randomDatetime(6)) // biz_upd_ts
+	builder.WriteString("','")
+	builder.WriteString(randomDate()) // prev_stmt_date
+	builder.WriteString("','")
+	builder.WriteString(randomDate()) // grace_date
+	builder.WriteString("','")
+	builder.WriteString(randomTime()) // trx_time
+	builder.WriteString("',")
+	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) //ctd_stmt_stat_cycle
+	builder.WriteString(",")
+	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) //cash_adv_cr_trx_count
+	builder.WriteString(",'")
+	builder.WriteString(randomString(32)) // upd_tlr_no
+	builder.WriteString("',")
+	builder.WriteString(strconv.FormatInt(int64(randomInt()), 10)) //ver_no
+	builder.WriteString(",'")
+	builder.WriteString(randomString(32)) // create_tlr_no
+	builder.WriteString("',")
+	builder.WriteString(randomDecimal(13, 2)) // acc_cash_bal
 
-	values = append(values, randomDecimal(13, 2)) // bp_rtl_intr_amt
-	values = append(values, randomDate())         // late_chg_coll_date
-	values = append(values, randomDecimal(13, 2)) // delq_total_amt
-	values = append(values, randomDecimal(13, 2)) // prev_dir_to_cust_rtl_prin
-	values = append(values, randomString(5))      // acct_branch_no
-	values = append(values, randomDatetime(6))    // create_ts
-	values = append(values, randomInt())          // agent_bank_no
-	values = append(values, randomInt())          // stmt_cycle_days
-	values = append(values, randomInt())          // cash_adv_days_with_bal
-	values = append(values, randomDecimal(13, 2)) //acct_avail_rtl_limit
-	values = append(values, randomDecimal(13, 2)) // avail_cash_adv_limit
-	values = append(values, randomInt())          // dispute_trx_count
-	values = append(values, randomDecimal(8, 7))  // rtl_intr_rate
-	values = append(values, randomString(1))      // only_stmt_head_record_flag
-	values = append(values, randomDecimal(13, 2)) // total_amt_due
-	values = append(values, randomString(10))     // upd_tlr_org_no
-	values = append(values, randomDecimal(13, 2)) // cash_adv_pymt_amt
-	values = append(values, randomString(3))      // acct_cur_block_code
-	values = append(values, randomString(1))      // stmt_mail_flag
-	values = append(values, randomBigInt())       // local_id
-	values = append(values, randomString(1))      // debit_cr_out_of_bal_flag
-	values = append(values, randomDatetime(6))    // binlog_insert_ts
-	values = append(values, randomString(3))      // acct_prev_block_code
-	values = append(values, randomString(4))      // src_cnsmr_sys_id
-	values = append(values, randomInt())          // part_no)
-	values = append(values, randomString(1))      // dd_flag
-	values = append(values, randomString(1))      // migr_flag
-	values = append(values, randomString(3))      // acct_ccy
-	values = append(values, randomInt())          // rtl_debit_trx_count
-	values = append(values, randomDecimal(13, 2)) // intr_amt
-	values = append(values, randomDecimal(13, 2)) // stmt_cash_bal
-	values = append(values, randomString(1))      // write_off_sts_flag
-	values = append(values, randomDecimal(13, 2)) // prev_stmt_rmn_intr
-	values = append(values, randomString(10))     // create_tlr_org_no
-	values = append(values, randomDatetime(6))    // upd_ts
-	values = append(values, randomDecimal(13, 2)) // debit_trx_amt
-	values = append(values, randomDecimal(13, 2)) // cash_adv_intr_amt
-	values = append(values, randomDecimal(13, 2)) // acc_rtl_bal
-	values = append(values, randomDecimal(13, 0)) // acct_rtl_limit
-	values = append(values, randomDecimal(13, 2)) // cash_adv_begin_bal
-	values = append(values, randomDate())         // biz_date
-	values = append(values, randomDecimal(13, 2)) // late_chg
-	values = append(values, randomDecimal(13, 2)) // rtl_serv_chg
-	values = append(values, randomString(1))      // stmt_type
-	values = append(values, randomDecimal(8, 7))  // cash_bal_1_cur_intr_rate
-	values = append(values, randomDecimal(13, 2)) // begin_bal
-	values = append(values, randomDecimal(13, 2)) // cur_stmt_bal
-	values = append(values, randomSmallInt())     // rtl_days_with_bal
-	values = append(values, randomDecimal(13, 2)) // cash_adv_debit_trx_amt
-	values = append(values, randomDecimal(13, 2)) // cash_adv_amt
-	values = append(values, randomDate())         // repay_expire_date
-	values = append(values, randomInt())          // rtl_cr_trx_count
-	values = append(values, randomString(10))     // biz_scene_encod
-	values = append(values, randomDecimal(13, 2)) // rtl_dispute_amt
-	values = append(values, randomDecimal(13, 2)) // last_term_stmt_forbid_instalt_prin_amt
-	values = append(values, randomDecimal(13, 2)) // cash_adv_limit
-	values = append(values, randomDecimal(13, 2)) // monthly_pymt
-	values = append(values, randomDecimal(13, 2)) // rtl_trx_fee_amt
-	values = append(values, randomString(256))    // data_version
-	values = append(values, randomDecimal(13, 2)) // rtl_mis_fee
-	values = append(values, randomDecimal(13, 2)) // dispute_bal
-	values = append(values, randomDecimal(13, 2)) // ctd_cash_adv_pymt_rvsl
-	values = append(values, randomString(10))     // data_pos
-	values = append(values, randomDecimal(13, 2)) // rtl_debit_trx_amt
-	values = append(values, randomDecimal(13, 2)) // stmt_rtl_bal
-	values = append(values, randomDecimal(13, 2)) // last_term_spec_whls_csm_prin
-	values = append(values, randomString(1))      // del_flag
-	values = append(values, randomString(1))      // acct_chg_off_sts
-	values = append(values, randomInt())          // cash_adv_debit_trx_count
-	values = append(values, randomDecimal(13, 2)) // bp_cash_adv_intr_amt
-	values = append(values, randomDecimal(13, 2)) // rtl_pymt_amt
-	values = append(values, randomDate())         // trx_date
-	values = append(values, randomDecimal(13, 2)) // cur_pymt_amt
-	values = append(values, randomString(32))     // local_sys_jrn_no
-	values = append(values, randomBigInt())       // prev_stmt_head_id
-	values = append(values, randomDecimal(13, 2)) // cash_adv_dispute_amt
-	values = append(values, randomDecimal(13, 2)) // rtl_pymt_rvsl_amt
-	values = append(values, randomDecimal(13, 2)) // cash_adv_cr_trx_amt
-	values = append(values, randomSmallInt())     // crcd_stmt_no
-	values = append(values, randomInt())          // trx_count
-	values = append(values, randomString(37))     // global_trx_jrn_no
-	values = append(values, randomDecimal(13, 2)) // cash_adv_trx_fee_amt
-	values = append(values, randomDecimal(13, 2)) // cash_adv_serv_chg
-	values = append(values, randomDecimal(13, 2)) // overlimit_acctt_amt
-	values = append(values, randomString(16))     // crcd_cardholder_no
-	values = append(values, randomDecimal(13, 2)) // begin_rtl_bal
-	values = append(values, randomDecimal(13, 2)) // prev_rtl_prin
-	values = append(values, randomDecimal(13, 2)) // rtl_annual_fee
-	values = append(values, randomString(4))      // acct_bank_no
-	values = append(values, randomString(1))      // acct_sts
-	values = append(values, randomDecimal(13, 2)) // cr_trx_amt
-	values = append(values, randomString(3))      // crcd_org_no
-	values = append(values, randomDecimal(13, 2)) // rtl_intr_amt
-	values = append(values, randomDecimal(13, 2)) // rtl_cr_trx_amt
-	values = append(values, randomInt())          // cycle_due
-	values = append(values, randomDatetime(6))    // biz_upd_ts
-	values = append(values, randomDate())         // prev_stmt_date
-	values = append(values, randomDate())         // grace_date
-	values = append(values, randomTime())         // trx_time
-	values = append(values, randomInt())          // ctd_stmt_stat_cycle
-	values = append(values, randomInt())          // cash_adv_cr_trx_count
-	values = append(values, randomString(32))     // upd_tlr_no
-	values = append(values, randomInt())          // ver_no
-	values = append(values, randomString(32))     // create_tlr_no
-	values = append(values, randomDecimal(13, 2)) // acc_cash_bal
+	return builder.String()
+	// values = append(values, randomDecimal(13, 2)) // delq_total_amt
+	// values = append(values, randomDecimal(13, 2)) // prev_dir_to_cust_rtl_prin
+	// values = append(values, randomString(5))      // acct_branch_no
+	// values = append(values, randomDatetime(6))    // create_ts
+	// values = append(values, randomInt())          // agent_bank_no
+	// values = append(values, randomInt())          // stmt_cycle_days
+	// values = append(values, randomInt())          // cash_adv_days_with_bal
+	// values = append(values, randomDecimal(13, 2)) //acct_avail_rtl_limit
+	// values = append(values, randomDecimal(13, 2)) // avail_cash_adv_limit
+	// values = append(values, randomInt())          // dispute_trx_count
+	// values = append(values, randomDecimal(8, 7))  // rtl_intr_rate
+	// values = append(values, randomString(1))      // only_stmt_head_record_flag
+	// values = append(values, randomDecimal(13, 2)) // total_amt_due
+	// values = append(values, randomString(10))     // upd_tlr_org_no
+	// values = append(values, randomDecimal(13, 2)) // cash_adv_pymt_amt
+	// values = append(values, randomString(3))      // acct_cur_block_code
+	// values = append(values, randomString(1))      // stmt_mail_flag
+	// values = append(values, randomBigInt())       // local_id
+	// values = append(values, randomString(1))      // debit_cr_out_of_bal_flag
+	// values = append(values, randomDatetime(6))    // binlog_insert_ts
+	// values = append(values, randomString(3))      // acct_prev_block_code
+	// values = append(values, randomString(4))      // src_cnsmr_sys_id
+	// values = append(values, randomInt())          // part_no)
+	// values = append(values, randomString(1))      // dd_flag
+	// values = append(values, randomString(1))      // migr_flag
+	// values = append(values, randomString(3))      // acct_ccy
+	// values = append(values, randomInt())          // rtl_debit_trx_count
+	// values = append(values, randomDecimal(13, 2)) // intr_amt
+	// values = append(values, randomDecimal(13, 2)) // stmt_cash_bal
+	// values = append(values, randomString(1))      // write_off_sts_flag
+	// values = append(values, randomDecimal(13, 2)) // prev_stmt_rmn_intr
+	// values = append(values, randomString(10))     // create_tlr_org_no
+	// values = append(values, randomDatetime(6))    // upd_ts
+	// values = append(values, randomDecimal(13, 2)) // debit_trx_amt
+	// values = append(values, randomDecimal(13, 2)) // cash_adv_intr_amt
+	// values = append(values, randomDecimal(13, 2)) // acc_rtl_bal
+	// values = append(values, randomDecimal(13, 0)) // acct_rtl_limit
+	// values = append(values, randomDecimal(13, 2)) // cash_adv_begin_bal
+	// values = append(values, randomDate())         // biz_date
+	// values = append(values, randomDecimal(13, 2)) // late_chg
+	// values = append(values, randomDecimal(13, 2)) // rtl_serv_chg
+	// values = append(values, randomString(1))      // stmt_type
+	// values = append(values, randomDecimal(8, 7))  // cash_bal_1_cur_intr_rate
+	// values = append(values, randomDecimal(13, 2)) // begin_bal
+	// values = append(values, randomDecimal(13, 2)) // cur_stmt_bal
+	// values = append(values, randomSmallInt())     // rtl_days_with_bal
+	// values = append(values, randomDecimal(13, 2)) // cash_adv_debit_trx_amt
+	// values = append(values, randomDecimal(13, 2)) // cash_adv_amt
+	// values = append(values, randomDate())         // repay_expire_date
+	// values = append(values, randomInt())          // rtl_cr_trx_count
+	// values = append(values, randomString(10))     // biz_scene_encod
+	// values = append(values, randomDecimal(13, 2)) // rtl_dispute_amt
+	// values = append(values, randomDecimal(13, 2)) // last_term_stmt_forbid_instalt_prin_amt
+	// values = append(values, randomDecimal(13, 2)) // cash_adv_limit
+	// values = append(values, randomDecimal(13, 2)) // monthly_pymt
+	// values = append(values, randomDecimal(13, 2)) // rtl_trx_fee_amt
+	// values = append(values, randomString(256))    // data_version
+	// values = append(values, randomDecimal(13, 2)) // rtl_mis_fee
+	// values = append(values, randomDecimal(13, 2)) // dispute_bal
+	// values = append(values, randomDecimal(13, 2)) // ctd_cash_adv_pymt_rvsl
+	// values = append(values, randomString(10))     // data_pos
+	// values = append(values, randomDecimal(13, 2)) // rtl_debit_trx_amt
+	// values = append(values, randomDecimal(13, 2)) // stmt_rtl_bal
+	// values = append(values, randomDecimal(13, 2)) // last_term_spec_whls_csm_prin
+	// values = append(values, randomString(1))      // del_flag
+	// values = append(values, randomString(1))      // acct_chg_off_sts
+	// values = append(values, randomInt())          // cash_adv_debit_trx_count
+	// values = append(values, randomDecimal(13, 2)) // bp_cash_adv_intr_amt
+	// values = append(values, randomDecimal(13, 2)) // rtl_pymt_amt
+	// values = append(values, randomDate())         // trx_date
+	// values = append(values, randomDecimal(13, 2)) // cur_pymt_amt
+	// values = append(values, randomString(32))     // local_sys_jrn_no
+	// values = append(values, randomBigInt())       // prev_stmt_head_id
+	// values = append(values, randomDecimal(13, 2)) // cash_adv_dispute_amt
+	// values = append(values, randomDecimal(13, 2)) // rtl_pymt_rvsl_amt
+	// values = append(values, randomDecimal(13, 2)) // cash_adv_cr_trx_amt
+	// values = append(values, randomSmallInt())     // crcd_stmt_no
+	// values = append(values, randomInt())          // trx_count
+	// values = append(values, randomString(37))     // global_trx_jrn_no
+	// values = append(values, randomDecimal(13, 2)) // cash_adv_trx_fee_amt
+	// values = append(values, randomDecimal(13, 2)) // cash_adv_serv_chg
+	// values = append(values, randomDecimal(13, 2)) // overlimit_acctt_amt
+	// values = append(values, randomString(16))     // crcd_cardholder_no
+	// values = append(values, randomDecimal(13, 2)) // begin_rtl_bal
+	// values = append(values, randomDecimal(13, 2)) // prev_rtl_prin
+	// values = append(values, randomDecimal(13, 2)) // rtl_annual_fee
+	// values = append(values, randomString(4))      // acct_bank_no
+	// values = append(values, randomString(1))      // acct_sts
+	// values = append(values, randomDecimal(13, 2)) // cr_trx_amt
+	// values = append(values, randomString(3))      // crcd_org_no
+	// values = append(values, randomDecimal(13, 2)) // rtl_intr_amt
+	// values = append(values, randomDecimal(13, 2)) // rtl_cr_trx_amt
+	// values = append(values, randomInt())          // cycle_due
+	// values = append(values, randomDatetime(6))    // biz_upd_ts
+	// values = append(values, randomDate())         // prev_stmt_date
+	// values = append(values, randomDate())         // grace_date
+	// values = append(values, randomTime())         // trx_time
+	// values = append(values, randomInt())          // ctd_stmt_stat_cycle
+	// values = append(values, randomInt())          // cash_adv_cr_trx_count
+	// values = append(values, randomString(32))     // upd_tlr_no
+	// values = append(values, randomInt())          // ver_no
+	// values = append(values, randomString(32))     // create_tlr_no
+	// values = append(values, randomDecimal(13, 2)) // acc_cash_bal
 
-	return values
+	//return values
 }
 
-func generatePrimaryValuesForTable() []interface{} {
-	// crcd_acct_no , stmt_date , acct_seq_no , stmt_head_id  these are primary key
-	values := make([]interface{}, 0, 4)
-	values = append(values, randomString(16)) // crcd_acct_no
-	values = append(values, randomDate())     // stmt_date
-	values = append(values, randomString(3))  // acct_seq_no
-	values = append(values, randomBigInt())   // stmt_head_id
+func generatePrimaryValuesForTable() string {
+	var builder strings.Builder
+	builder.WriteString("'")
+	builder.WriteString(randomString(16)) // crcd_acct_no
+	builder.WriteString("','")
+	builder.WriteString(randomDate()) // grace_date
+	builder.WriteString("','")
+	builder.WriteString(randomString(3)) // acct_seq_no
+	builder.WriteString("',")
+	builder.WriteString(strconv.FormatInt(randomBigInt(), 10)) //stmt_head_id
+	builder.WriteString(",")
 
-	return values
+	// // crcd_acct_no , stmt_date , acct_seq_no , stmt_head_id  these are primary key
+	// values := make([]interface{}, 0, 4)
+	// values = append(values, randomString(16)) // crcd_acct_no
+	// values = append(values, randomDate())     // stmt_date
+	// values = append(values, randomString(3))  // acct_seq_no
+	// values = append(values, randomBigInt())   // stmt_head_id
+
+	return builder.String()
 }
 
 func generateValuesForLogTable() []interface{} {
