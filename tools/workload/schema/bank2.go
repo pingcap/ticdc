@@ -246,6 +246,7 @@ func (c *Bank2Workload) BuildInsertSql(tableN int, batchSize int) string {
 			// builder.WriteString("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
 		}
 		sql += builder.String()
+		log.Info("sql is", zap.Any("sql", sql))
 	case 1: // acct_interest_log_hist
 		builder.WriteString("insert into acct_interest_log_hist ( global_trx_jrn_no , perdiem , trx_sub_acct_no , carry_intr_day , fund_type , data_version , bal_sts , create_ts , this_times_acc_bal , acc_intr_acr_days , intr_acc_cut_off_date , crcd_cardholder_no , create_tlr_org_no , upd_ts , pt_id , upd_tlr_org_no , data_pos , trx_type , id , create_date , biz_date , del_flag , upd_prev_acc_fin_chg , local_id , binlog_insert_ts , crcd_org_no , stmt_date , trx_date , biz_upd_ts , cur_intr_rate , crcd_acct_no , local_sys_jrn_no , src_cnsmr_sys_id , part_no , acct_seq_no , once_waive_intr_flag , migr_flag , trx_time , acct_ccy , upd_after_acc_fin_chg , upd_tlr_no , biz_scene_encod , ver_no , create_tlr_no , trx_sub_acct_type ) values ")
 
