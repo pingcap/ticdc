@@ -232,7 +232,7 @@ func TestReplaceStoppedChangefeed(t *testing.T) {
 	require.Contains(t, db.stopped, cf.ID)
 
 	cf3 := db.GetByID(cf.ID)
-	require.Equal(t, true, cf3.IsStorageSink())
+	require.Equal(t, true, cf3.IsMQSink())
 
 	cf4ID := common.NewChangeFeedIDWithName("test4")
 	cf4 := &config.ChangeFeedInfo{
