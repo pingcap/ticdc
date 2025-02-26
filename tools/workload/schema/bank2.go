@@ -228,8 +228,10 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int) (string, []interfac
 	case 0: // acct_statement_head_info
 		builder.WriteString("insert into acct_statement_head_info (crcd_acct_no , stmt_date , acct_seq_no , stmt_head_id ,bp_rtl_intr_amt , late_chg_coll_date , delq_total_amt , prev_dir_to_cust_rtl_prin , acct_branch_no , create_ts , agent_bank_no , stmt_cycle_days , cash_adv_days_with_bal , acct_avail_rtl_limit , avail_cash_adv_limit , dispute_trx_count , rtl_intr_rate , only_stmt_head_record_flag , total_amt_due , upd_tlr_org_no , cash_adv_pymt_amt , acct_cur_block_code , stmt_mail_flag , local_id , debit_cr_out_of_bal_flag , binlog_insert_ts , acct_prev_block_code , src_cnsmr_sys_id , part_no , dd_flag , migr_flag , acct_ccy , rtl_debit_trx_count , intr_amt , stmt_cash_bal , write_off_sts_flag , prev_stmt_rmn_intr , create_tlr_org_no , upd_ts , debit_trx_amt , cash_adv_intr_amt , acc_rtl_bal , acct_rtl_limit , cash_adv_begin_bal , biz_date , late_chg , rtl_serv_chg , stmt_type , cash_bal_1_cur_intr_rate , begin_bal , cur_stmt_bal , rtl_days_with_bal , cash_adv_debit_trx_amt , cash_adv_amt , repay_expire_date , rtl_cr_trx_count , biz_scene_encod , rtl_dispute_amt , last_term_stmt_forbid_instalt_prin_amt , cash_adv_limit , monthly_pymt , rtl_trx_fee_amt , data_version , rtl_mis_fee , dispute_bal , ctd_cash_adv_pymt_rvsl , data_pos , rtl_debit_trx_amt , stmt_rtl_bal , last_term_spec_whls_csm_prin , del_flag , acct_chg_off_sts , cash_adv_debit_trx_count , bp_cash_adv_intr_amt , rtl_pymt_amt , trx_date , cur_pymt_amt , local_sys_jrn_no , prev_stmt_head_id , cash_adv_dispute_amt , rtl_pymt_rvsl_amt , cash_adv_cr_trx_amt , crcd_stmt_no , trx_count , global_trx_jrn_no , cash_adv_trx_fee_amt , cash_adv_serv_chg , overlimit_acctt_amt , crcd_cardholder_no ,  begin_rtl_bal , prev_rtl_prin , rtl_annual_fee , acct_bank_no , acct_sts , cr_trx_amt , crcd_org_no , rtl_intr_amt , rtl_cr_trx_amt , cycle_due , biz_upd_ts , prev_stmt_date , grace_date , trx_time , ctd_stmt_stat_cycle , cash_adv_cr_trx_count , upd_tlr_no , ver_no , create_tlr_no , acc_cash_bal ) values")
 		// 200 insert for a txn
+		nonPrimaryKeyValues := generateNonPrimaryValuesForTable() // to reduce time, these field we keep same for 200 rows
 		for r := 0; r < 200; r++ {
-			values = append(values, generateValuesForTable()...)
+			values = append(values, generatePrimaryValuesForTable()...)
+			values = append(values, nonPrimaryKeyValues...)
 			if r != 0 {
 				builder.WriteString(",")
 			}
@@ -256,7 +258,7 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int) (string, []interfac
 func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []interface{}) {
 	var sql string
 	values := make([]interface{}, 0, 120)
-	switch opts.Table {
+	/*switch opts.Table {
 	case 0: // acct_statement_head_info
 		sql = fmt.Sprintf("insert into acct_statement_head_info (crcd_acct_no , stmt_date , acct_seq_no , stmt_head_id ,bp_rtl_intr_amt , late_chg_coll_date , delq_total_amt , prev_dir_to_cust_rtl_prin , acct_branch_no , create_ts , agent_bank_no , stmt_cycle_days , cash_adv_days_with_bal , acct_avail_rtl_limit , avail_cash_adv_limit , dispute_trx_count , rtl_intr_rate , only_stmt_head_record_flag , total_amt_due , upd_tlr_org_no , cash_adv_pymt_amt , acct_cur_block_code , stmt_mail_flag , local_id , debit_cr_out_of_bal_flag , binlog_insert_ts , acct_prev_block_code , src_cnsmr_sys_id , part_no , dd_flag , migr_flag , acct_ccy , rtl_debit_trx_count , intr_amt , stmt_cash_bal , write_off_sts_flag , prev_stmt_rmn_intr , create_tlr_org_no , upd_ts , debit_trx_amt , cash_adv_intr_amt , acc_rtl_bal , acct_rtl_limit , cash_adv_begin_bal , biz_date , late_chg , rtl_serv_chg , stmt_type , cash_bal_1_cur_intr_rate , begin_bal , cur_stmt_bal , rtl_days_with_bal , cash_adv_debit_trx_amt , cash_adv_amt , repay_expire_date , rtl_cr_trx_count , biz_scene_encod , rtl_dispute_amt , last_term_stmt_forbid_instalt_prin_amt , cash_adv_limit , monthly_pymt , rtl_trx_fee_amt , data_version , rtl_mis_fee , dispute_bal , ctd_cash_adv_pymt_rvsl , data_pos , rtl_debit_trx_amt , stmt_rtl_bal , last_term_spec_whls_csm_prin , del_flag , acct_chg_off_sts , cash_adv_debit_trx_count , bp_cash_adv_intr_amt , rtl_pymt_amt , trx_date , cur_pymt_amt , local_sys_jrn_no , prev_stmt_head_id , cash_adv_dispute_amt , rtl_pymt_rvsl_amt , cash_adv_cr_trx_amt , crcd_stmt_no , trx_count , global_trx_jrn_no , cash_adv_trx_fee_amt , cash_adv_serv_chg , overlimit_acctt_amt , crcd_cardholder_no ,  begin_rtl_bal , prev_rtl_prin , rtl_annual_fee , acct_bank_no , acct_sts , cr_trx_amt , crcd_org_no , rtl_intr_amt , rtl_cr_trx_amt , cycle_due , biz_upd_ts , prev_stmt_date , grace_date , trx_time , ctd_stmt_stat_cycle , cash_adv_cr_trx_count , upd_tlr_no , ver_no , create_tlr_no , acc_cash_bal ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE crcd_acct_no=VALUES(crcd_acct_no), stmt_date=VALUES(stmt_date), acct_seq_no=VALUES(acct_seq_no), stmt_head_id=VALUES(stmt_head_id)")
 		values = append(values, generateValuesForTable()...)
@@ -265,21 +267,17 @@ func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []i
 		values = append(values, generateValuesForLogTable()...)
 	default:
 		panic("unknown table")
-	}
+	}*/
 	return sql, values
 }
 
-func generateValuesForTable() []interface{} {
+func generateNonPrimaryValuesForTable() []interface{} {
 	start := time.Now()
 	defer func() {
-		log.Info("generateValuesForTable cost", zap.Any("time", time.Since(start).Seconds()))
+		log.Info("generateNonPrimaryValuesForTable cost", zap.Any("time", time.Since(start).Seconds()))
 	}()
-	// crcd_acct_no , stmt_date , acct_seq_no , stmt_head_id  these are primary key
-	values := make([]interface{}, 0, 108)
-	values = append(values, randomString(16))     // crcd_acct_no
-	values = append(values, randomDate())         // stmt_date
-	values = append(values, randomString(3))      // acct_seq_no
-	values = append(values, randomBigInt())       // stmt_head_id
+	values := make([]interface{}, 0, 104)
+
 	values = append(values, randomDecimal(13, 2)) // bp_rtl_intr_amt
 	values = append(values, randomDate())         // late_chg_coll_date
 	values = append(values, randomDecimal(13, 2)) // delq_total_amt
@@ -385,6 +383,21 @@ func generateValuesForTable() []interface{} {
 	values = append(values, randomInt())          // ver_no
 	values = append(values, randomString(32))     // create_tlr_no
 	values = append(values, randomDecimal(13, 2)) // acc_cash_bal
+
+	return values
+}
+
+func generatePrimaryValuesForTable() []interface{} {
+	start := time.Now()
+	defer func() {
+		log.Info("generatePrimaryValuesForTable cost", zap.Any("time", time.Since(start).Seconds()))
+	}()
+	// crcd_acct_no , stmt_date , acct_seq_no , stmt_head_id  these are primary key
+	values := make([]interface{}, 0, 4)
+	values = append(values, randomString(16)) // crcd_acct_no
+	values = append(values, randomDate())     // stmt_date
+	values = append(values, randomString(3))  // acct_seq_no
+	values = append(values, randomBigInt())   // stmt_head_id
 
 	return values
 }
