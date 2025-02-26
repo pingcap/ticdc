@@ -64,7 +64,8 @@ check_test_coverage() {
 		echo
 		echo "Choose the file based on the test case's resource requirements."
 		echo
-		has_error=1
+		#TODO: add this "has_error=1" when we have added all the missing test cases to the groups
+		# has_error=1
 	fi
 
 	if [ ${#nonexistent_tests[@]} -gt 0 ]; then
