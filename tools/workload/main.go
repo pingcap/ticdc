@@ -272,17 +272,50 @@ func handleWorkloadExecution(dbs []*sql.DB, insertConcurrency, updateConcurrency
 }
 
 func executeInsertWorkers(dbs []*sql.DB, insertConcurrency int, workload schema.Workload, wg *sync.WaitGroup) {
+	sqlsChan := make(chan string, 100000)
+	generateInsertSQL(sqlsChan, workload)
+
 	wg.Add(insertConcurrency)
 	for i := 0; i < insertConcurrency; i++ {
 		db := dbs[i%len(dbs)]
+		// go func(workerID int) {
+		// 	defer func() {
+		// 		log.Info("insert worker exited", zap.Int("worker", workerID))
+		// 		wg.Done()
+		// 	}()
+		// 	log.Info("start insert worker", zap.Int("worker", workerID))
+		// 	doInsert(db, workload)
+		// }(i)
 		go func(workerID int) {
 			defer func() {
 				log.Info("insert worker exited", zap.Int("worker", workerID))
 				wg.Done()
 			}()
 			log.Info("start insert worker", zap.Int("worker", workerID))
-			doInsert(db, workload)
+			doExecInsert(db, sqlsChan, workload)
 		}(i)
+	}
+}
+
+func generateInsertSQL(channal chan string, workload schema.Workload) {
+	for {
+		j := rand.Intn(tableCount) + tableStartIndex
+		insertSql := workload.BuildInsertSql(j, batchSize)
+		channal <- insertSql
+	}
+}
+
+func doExecInsert(db *sql.DB, channal chan string, workload schema.Workload) {
+	for {
+		sql := <-channal
+		_, err := execute(db, sql, workload, 0)
+
+		if err != nil {
+			log.Info("insert error", zap.Error(err))
+			errCount.Add(1)
+			continue
+		}
+		flushedRowCount.Add(uint64(batchSize))
 	}
 }
 
