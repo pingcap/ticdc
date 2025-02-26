@@ -415,10 +415,6 @@ func doInsert(db *sql.DB, workload schema.Workload) {
 		if workloadType == uuu {
 			insertSql, values := workload.(*schema.UUUWorkload).BuildInsertSqlWithValues(j, batchSize)
 			_, err = executeWithValues(db, insertSql, workload, j, values)
-		} else if workloadType == bank2 {
-			insertSql, values := workload.(*schema.Bank2Workload).BuildInsertSqlWithValues(j)
-			_, err = executeWithValues(db, insertSql, workload, j, values)
-
 		} else {
 			insertSql := workload.BuildInsertSql(j, batchSize)
 			_, err = execute(db, insertSql, workload, j)
