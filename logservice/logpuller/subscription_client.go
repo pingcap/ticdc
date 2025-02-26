@@ -327,9 +327,8 @@ func (s *SubscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	s.ds.AddPath(rt.subID, rt, dynstream.AreaSettings{
-		MaxPendingSize: 4 * 1024 * 1024 * 1024, // 4GB
-	})
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(4*1024*1024*1024, dynstream.MemoryControlAlgorithmV1) // 4GB
+	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt}
 }
@@ -770,6 +769,9 @@ func (s *SubscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo)
+		return nil
+	case *requestCancelledErr:
+		// the corresponding subscription has been unsubscribed, just ignore.
 		return nil
 	default:
 		// TODO(qupeng): for some errors it's better to just deregister the region from TiKVs.

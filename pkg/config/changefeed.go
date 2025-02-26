@@ -49,6 +49,8 @@ type ChangefeedConfig struct {
 	SyncPointInterval  time.Duration `json:"sync_point_interval" default:"1m"`
 	SyncPointRetention time.Duration `json:"sync_point_retention" default:"24h"`
 	SinkConfig         *SinkConfig   `json:"sink_config"`
+	// Epoch is the epoch of a changefeed, changes on every restart.
+	Epoch uint64 `json:"epoch"`
 }
 
 // String implements fmt.Stringer interface, but hide some sensitive information
@@ -116,7 +118,8 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		SyncPointInterval:  util.GetOrZero(info.Config.SyncPointInterval),
 		SyncPointRetention: util.GetOrZero(info.Config.SyncPointRetention),
 		MemoryQuota:        info.Config.MemoryQuota,
-		// other fields are not necessary for maintainer
+		Epoch:              info.Epoch,
+		// other fields are not necessary for dispatcherManager
 	}
 }
 

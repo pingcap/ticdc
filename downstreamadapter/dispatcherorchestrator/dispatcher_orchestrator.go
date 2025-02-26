@@ -73,17 +73,18 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	req *heartbeatpb.MaintainerBootstrapRequest,
 ) error {
 	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
+
+	cfConfig := &config.ChangefeedConfig{}
+	if err := json.Unmarshal(req.Config, cfConfig); err != nil {
+		log.Panic("failed to unmarshal changefeed config",
+			zap.String("changefeedID", cfId.Name()), zap.Error(err))
+		return err
+	}
+
 	manager, exists := m.dispatcherManagers[cfId]
 	var err error
 	var startTs uint64
 	if !exists {
-		cfConfig := &config.ChangefeedConfig{}
-		if err = json.Unmarshal(req.Config, cfConfig); err != nil {
-			log.Panic("failed to unmarshal changefeed config",
-				zap.String("changefeedID", cfId.Name()), zap.Error(err))
-			return err
-		}
-
 		manager, startTs, err = dispatchermanager.
 			NewEventDispatcherManager(
 				cfId,
@@ -129,7 +130,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				if err != nil {
 					log.Error("failed to create new table trigger event dispatcher",
 						zap.Stringer("changefeedID", cfId), zap.Error(err))
-					return m.handleDispatcherError(from, cfId, req.ChangefeedID, err)
+					return m.handleDispatcherError(from, req.ChangefeedID, err)
 				}
 			} else {
 				startTs = tableTriggerDispatcher.GetStartTs()
@@ -141,6 +142,13 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		manager.SetMaintainerID(from)
 		log.Info("maintainer changed",
 			zap.String("changefeed", cfId.Name()), zap.String("maintainer", from.String()))
+	}
+
+	// FIXME(fizz): This is a temporary check to ensure the maintainer epoch is consistent.
+	// I will remove this after fully testing the new maintainer epoch mechanism.
+	if manager.GetMaintainerEpoch() != cfConfig.Epoch {
+		log.Error("maintainer epoch changed, this should not happen, please report this issue",
+			zap.String("changefeed", cfId.Name()), zap.Uint64("epoch", cfConfig.Epoch))
 	}
 
 	response := createBootstrapResponse(req.ChangefeedID, manager, startTs)
@@ -192,7 +200,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	if err != nil {
 		log.Error("failed to initialize table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
-		return m.handleDispatcherError(from, cfId, req.ChangefeedID, err)
+		return m.handleDispatcherError(from, req.ChangefeedID, err)
 	}
 
 	response := &heartbeatpb.MaintainerPostBootstrapResponse{
@@ -271,7 +279,6 @@ func (m *DispatcherOrchestrator) Close() {
 // handleDispatcherError creates and sends an error response for create dispatcher-related failures
 func (m *DispatcherOrchestrator) handleDispatcherError(
 	from node.ID,
-	cfId common.ChangeFeedID,
 	changefeedID *heartbeatpb.ChangefeedID,
 	err error,
 ) error {

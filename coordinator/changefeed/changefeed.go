@@ -36,7 +36,7 @@ type Changefeed struct {
 	ID       common.ChangeFeedID
 	info     *atomic.Pointer[config.ChangeFeedInfo]
 	isMQSink bool
-	isNew    bool // only true when the changfeed is newly created or resumed by overwriteCheckpointTs
+	isNew    bool // only true when the changefeed is newly created or resumed by overwriteCheckpointTs
 
 	// nodeIDMu protects nodeID
 	nodeIDMu sync.Mutex
@@ -134,6 +134,10 @@ func (c *Changefeed) ShouldRun() bool {
 	return c.backoff.ShouldRun()
 }
 
+// UpdateStatus updates the changefeed status
+// It returns true if the status is changed
+// It returns false if the status is not changed
+// It returns the new state and error if the status is changed
 func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {
 	old := c.status.Load()
 
@@ -151,6 +155,7 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 		if info.TargetTs != 0 && newStatus.CheckpointTs >= info.TargetTs {
 			return true, model.StateFinished, nil
 		}
+
 		return c.backoff.CheckStatus(newStatus)
 	}
 

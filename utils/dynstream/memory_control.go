@@ -23,6 +23,16 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// MemoryControlAlgorithmV1 is the algorithm of the memory control.
+	// It sill send pause and resume [area, path] feedback.
+	MemoryControlAlgorithmV1 = "v1"
+	// MemoryControlAlgorithmV2 is the algorithm of the memory control.
+	// It will only send pause and resume [path] feedback.
+	// For now, we only use it in event collector.
+	MemoryControlAlgorithmV2 = "v2"
+)
+
 // areaMemStat is used to store the memory statistics of an area.
 // It is a global level struct, not stream level.
 type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
@@ -33,7 +43,7 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	settings     atomic.Pointer[AreaSettings]
 	feedbackChan chan<- Feedback[A, P, D]
 
-	pathCount            int
+	pathCount            atomic.Int64
 	totalPendingSize     atomic.Int64
 	paused               atomic.Bool
 	lastSendFeedbackTime atomic.Value
@@ -92,14 +102,32 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 // It needs to be called after a event is appended.
 // Note: Our gaol is to fast pause, and lazy resume.
 func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, T, D, H]) {
-	pause, resume, memoryUsageRatio := as.shouldPausePath(path)
+	algorithm := as.settings.Load().algorithm
+	var pause, resume bool
+	var memoryUsageRatio float64
+	switch algorithm {
+	case "v2":
+		pause, resume, memoryUsageRatio = shouldPausePathV2(
+			path.paused.Load(),
+			path.pendingSize.Load(),
+			as.totalPendingSize.Load(),
+			as.settings.Load().maxPendingSize,
+			as.pathCount.Load(),
+		)
+	default:
+		pause, resume, memoryUsageRatio = shouldPausePath(
+			path.paused.Load(),
+			path.pendingSize.Load(),
+			as.settings.Load().maxPendingSize,
+		)
+	}
 
 	sendFeedback := func(pause bool) {
 		now := time.Now()
 		lastTime := path.lastSendFeedbackTime.Load().(time.Time)
 
 		// Fast pause, lazy resume.
-		if !pause && time.Since(lastTime) < as.settings.Load().FeedbackInterval {
+		if !pause && time.Since(lastTime) < as.settings.Load().feedbackInterval {
 			return
 		}
 
@@ -139,14 +167,30 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 }
 
 func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, T, D, H]) {
-	pause, resume, memoryUsageRatio := as.shouldPauseArea()
+	algorithm := as.settings.Load().algorithm
+	var pause, resume bool
+	var memoryUsageRatio float64
+	switch algorithm {
+	case "v2":
+		pause, resume, memoryUsageRatio = shouldPauseAreaV2(
+			as.paused.Load(),
+			as.totalPendingSize.Load(),
+			as.settings.Load().maxPendingSize,
+		)
+	default:
+		pause, resume, memoryUsageRatio = shouldPauseArea(
+			as.paused.Load(),
+			as.totalPendingSize.Load(),
+			as.settings.Load().maxPendingSize,
+		)
+	}
 
 	sendFeedback := func(pause bool) {
 		now := time.Now()
 		lastTime := as.lastSendFeedbackTime.Load().(time.Time)
 
 		// Fast pause, lazy resume.
-		if !pause && time.Since(lastTime) < as.settings.Load().FeedbackInterval {
+		if !pause && time.Since(lastTime) < as.settings.Load().feedbackInterval {
 			return
 		}
 
@@ -177,10 +221,12 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 		)
 	}
 
-	failpoint.Inject("PauseArea", func() {
-		log.Warn("inject PauseArea")
-		sendFeedback(true)
-	})
+	if algorithm != "v2" {
+		failpoint.Inject("PauseArea", func() {
+			log.Warn("inject PauseArea")
+			sendFeedback(true)
+		})
+	}
 
 	switch {
 	case pause:
@@ -188,48 +234,10 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 	case resume:
 		sendFeedback(false)
 	}
-}
 
-// shouldPausePath determines if a path should be paused based on memory usage.
-// If the memory usage is greater than the 20% of max pending size, the path should be paused.
-func (as *areaMemStat[A, P, T, D, H]) shouldPausePath(path *pathInfo[A, P, T, D, H]) (pause bool, resume bool, memoryUsageRatio float64) {
-	memoryUsageRatio = float64(path.pendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
-
-	switch {
-	case path.paused.Load():
-		// If the path is paused, we only need to resume it when the memory usage is less than 10%.
-		if memoryUsageRatio < 0.1 {
-			resume = true
-		}
-	default:
-		// If the path is not paused, we need to pause it when the memory usage is greater than 30% of max pending size.
-		if memoryUsageRatio >= 0.2 {
-			pause = true
-		}
+	if algorithm == "v2" && as.paused.Load() {
+		log.Panic("area is paused, but the algorithm is v2, this should not happen")
 	}
-
-	return pause, resume, memoryUsageRatio
-}
-
-// shouldPauseArea determines if the area should be paused based on memory usage.
-// If the memory usage is greater than the 80% of max pending size, the area should be paused.
-func (as *areaMemStat[A, P, T, D, H]) shouldPauseArea() (pause bool, resume bool, memoryUsageRatio float64) {
-	memoryUsageRatio = float64(as.totalPendingSize.Load()) / float64(as.settings.Load().MaxPendingSize)
-
-	switch {
-	case as.paused.Load():
-		// If the area is already paused, we need to resume it when the memory usage is less than 50%.
-		if memoryUsageRatio < 0.5 {
-			resume = true
-		}
-	default:
-		// If the area is not paused, we need to pause it when the memory usage is greater than 80% of max pending size.
-		if memoryUsageRatio >= 0.8 {
-			pause = true
-		}
-	}
-
-	return
 }
 
 func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, H], size int64) {
@@ -278,7 +286,7 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 	}
 
 	path.areaMemStat = area
-	area.pathCount++
+	area.pathCount.Add(1)
 	// Update the settings
 	area.settings.Store(&settings)
 }
@@ -291,8 +299,8 @@ func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	area.pathCount--
-	if area.pathCount == 0 {
+	area.pathCount.Add(-1)
+	if area.pathCount.Load() == 0 {
 		delete(m.areaStatMap, area.area)
 	}
 }
@@ -306,7 +314,7 @@ func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A] {
 		areaMetric := AreaMemoryMetric[A]{
 			area:       area.area,
 			usedMemory: area.totalPendingSize.Load(),
-			maxMemory:  int64(area.settings.Load().MaxPendingSize),
+			maxMemory:  int64(area.settings.Load().maxPendingSize),
 		}
 		metrics.AreaMemoryMetrics = append(metrics.AreaMemoryMetrics, areaMetric)
 	}
@@ -337,4 +345,149 @@ func (a *AreaMemoryMetric[A]) MaxMemory() int64 {
 
 func (a *AreaMemoryMetric[A]) Area() A {
 	return a.area
+}
+
+// shouldPausePath determines if a path should be paused based on memory usage.
+// If the memory usage is greater than the 20% of max pending size, the path should be paused.
+func shouldPausePath(
+	paused bool,
+	pendingSize int64,
+	maxPendingSize uint64,
+) (pause bool, resume bool, memoryUsageRatio float64) {
+	memoryUsageRatio = float64(pendingSize) / float64(maxPendingSize)
+
+	switch {
+	case paused:
+		// If the path is paused, we only need to resume it when the memory usage is less than 10%.
+		if memoryUsageRatio < 0.1 {
+			resume = true
+		}
+	default:
+		// If the path is not paused, we need to pause it when the memory usage is greater than 30% of max pending size.
+		if memoryUsageRatio >= 0.2 {
+			pause = true
+		}
+	}
+
+	return pause, resume, memoryUsageRatio
+}
+
+// shouldPauseArea determines if the area should be paused based on memory usage.
+// If the memory usage is greater than the 80% of max pending size, the area should be paused.
+func shouldPauseArea(
+	paused bool,
+	pendingSize int64,
+	maxPendingSize uint64,
+) (pause bool, resume bool, memoryUsageRatio float64) {
+	memoryUsageRatio = float64(pendingSize) / float64(maxPendingSize)
+
+	switch {
+	case paused:
+		// If the area is already paused, we need to resume it when the memory usage is less than 50%.
+		if memoryUsageRatio < 0.5 {
+			resume = true
+		}
+	default:
+		// If the area is not paused, we need to pause it when the memory usage is greater than 80% of max pending size.
+		if memoryUsageRatio >= 0.8 {
+			pause = true
+		}
+	}
+
+	return
+}
+
+func shouldPausePathV2(
+	paused bool,
+	pathPendingSize int64,
+	areaPendingSize int64,
+	maxPendingSize uint64,
+	pathCount int64,
+) (pause bool, resume bool, memoryUsageRatio float64) {
+	if pathCount == 0 {
+		log.Warn("pathCount is 0, this should not happen, adjust it to 1")
+		pathCount = 1
+	}
+
+	pathMemoryUsageRatio := float64(pathPendingSize) / float64(maxPendingSize)
+	areaMemoryUsageRatio := float64(areaPendingSize) / float64(maxPendingSize)
+
+	pauseLimit, resumeLimit := calculateThresholds(pathCount, areaMemoryUsageRatio)
+
+	if paused {
+		resume = pathMemoryUsageRatio < resumeLimit
+	} else {
+		pause = pathMemoryUsageRatio > pauseLimit
+	}
+
+	return pause, resume, pathMemoryUsageRatio
+}
+
+// shouldPauseAreaV2 determines never pause a area.
+func shouldPauseAreaV2(
+	paused bool,
+	pendingSize int64,
+	maxPendingSize uint64,
+) (pause bool, resume bool, memoryUsageRatio float64) {
+	memoryUsageRatio = float64(pendingSize) / float64(maxPendingSize)
+	return false, false, memoryUsageRatio
+}
+
+// calculateThresholds calculates dynamic pause and resume memory thresholds for path-level flow control.
+// It takes into account both the number of paths and current area memory usage to determine appropriate limits.
+// The function implements an adaptive threshold strategy:
+// - For 1-2 paths, it uses fixed thresholds
+// - For >2 paths, it:
+//  1. Applies a penalty factor that increases with path count
+//  2. Uses a tiered threshold system based on area memory usage
+//  3. Ensures minimum thresholds based on path count
+//
+// Parameters:
+//   - pathCount: number of active paths in the area
+//   - areaMemoryUsageRatio: current memory usage ratio of the area (used/max)
+//
+// Returns:
+//   - pauseLimit: memory ratio threshold to trigger path pausing
+//   - resumeLimit: memory ratio threshold to trigger path resuming
+func calculateThresholds(pathCount int64, areaMemoryUsageRatio float64) (pauseLimit, resumeLimit float64) {
+	if pathCount == 0 {
+		pathCount = 1
+	}
+
+	// Special case for path count 1 and 2
+	switch pathCount {
+	case 1:
+		return 0.8, 0.4
+	case 2:
+		return 0.5, 0.25
+	}
+
+	// calculate penalty factor based on path count
+	penaltyFactor := 1.0 - 0.5/float64(pathCount)
+
+	type threshold struct {
+		areaUsage   float64
+		pauseLimit  float64
+		resumeLimit float64
+	}
+
+	baseThresholds := []threshold{
+		//
+		{0.5, 0.2, 0.1},   // area usage <= 50%
+		{0.8, 0.1, 0.05},  // area usage <= 80%
+		{1.0, 0.05, 0.01}, // area usage <= 100%
+		// Default maxPendingSize is 1024MB, so the default lowest pause limit is 10 MB.
+		{1.2, 0.01, 0.005}, // area usage > 100%
+	}
+
+	// find applicable threshold
+	var t threshold
+	for _, th := range baseThresholds {
+		if areaMemoryUsageRatio <= th.areaUsage {
+			t = th
+			break
+		}
+	}
+
+	return t.pauseLimit / penaltyFactor, t.resumeLimit / penaltyFactor
 }

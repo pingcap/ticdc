@@ -347,11 +347,7 @@ func TestMaintainerSchedule(t *testing.T) {
 	maintainer.sendMessages(maintainer.bootstrapper.HandleNewNodes(
 		[]*node.Info{n},
 	))
-	// setup period event
-	maintainer.submitScheduledEvent(maintainer.taskScheduler, &Event{
-		changefeedID: maintainer.id,
-		eventType:    EventPeriod,
-	}, time.Now().Add(time.Millisecond*500))
+
 	time.Sleep(time.Second * time.Duration(sleepTime))
 
 	require.Eventually(t, func() bool {

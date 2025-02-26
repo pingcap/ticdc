@@ -80,10 +80,7 @@ func (oc *Controller) Execute() time.Time {
 			continue
 		}
 
-		// is the lock necessary?
-		oc.lock.RLock()
 		msg := r.Schedule()
-		oc.lock.RUnlock()
 
 		if msg != nil {
 			_ = oc.messageCenter.SendCommand(msg)
@@ -198,6 +195,11 @@ func (oc *Controller) GetOperator(id common.DispatcherID) operator.Operator[comm
 func (oc *Controller) OperatorSize() int {
 	oc.lock.RLock()
 	defer oc.lock.RUnlock()
+	return len(oc.operators)
+}
+
+// OperatorSize returns the number of operators in the controller.
+func (oc *Controller) OperatorSizeWithLock() int {
 	return len(oc.operators)
 }
 
@@ -362,4 +364,13 @@ func (oc *Controller) AddMergeSplitOperator(
 		zap.Int("newSpans", len(splitSpans)),
 	)
 	return true
+}
+
+func (oc *Controller) GetLock() *sync.RWMutex {
+	oc.lock.Lock()
+	return &oc.lock
+}
+
+func (oc *Controller) ReleaseLock(mutex *sync.RWMutex) {
+	mutex.Unlock()
 }

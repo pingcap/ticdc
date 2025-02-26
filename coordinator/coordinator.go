@@ -138,6 +138,7 @@ func New(node *node.Info,
 		c.taskScheduler,
 		batchSize,
 		balanceCheckInterval,
+		c.pdClient,
 	)
 
 	c.controller = controller
@@ -262,11 +263,12 @@ func (c *coordinator) handleStateChangedEvent(
 	switch event.State {
 	case model.StateWarning:
 		c.controller.operatorController.StopChangefeed(ctx, event.ChangefeedID, false)
-		c.controller.changefeedDB.Resume(event.ChangefeedID, false, false)
+		c.controller.updateChangefeedEpoch(ctx, event.ChangefeedID)
+		c.controller.moveChangefeedToSchedulingQueue(event.ChangefeedID, false, false)
 	case model.StateFailed, model.StateFinished:
 		c.controller.operatorController.StopChangefeed(ctx, event.ChangefeedID, false)
 	case model.StateNormal:
-		log.Info("changefeed is resumed or created successfully, try to delete its gc safepoint",
+		log.Info("changefeed is resumed or created successfully, try to delete its safeguard gc safepoint",
 			zap.String("changefeed", event.ChangefeedID.String()))
 		// We need to clean its gc safepoint when changefeed is resumed or created
 		gcServiceID := c.getEnsureGCServiceID(gc.EnsureGCServiceCreating)
@@ -402,7 +404,7 @@ func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
 func (c *coordinator) updateGCSafepoint(
 	ctx context.Context,
 ) error {
-	minCheckpointTs := c.controller.changefeedDB.CalculateGCSafepoint()
+	minCheckpointTs := c.controller.calculateGCSafepoint()
 	// check if the upstream has a changefeed, if not we should update the gc safepoint
 	if minCheckpointTs == math.MaxUint64 {
 		ts := c.pdClock.CurrentTime()

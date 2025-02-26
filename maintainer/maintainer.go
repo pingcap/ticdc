@@ -71,8 +71,7 @@ type Maintainer struct {
 
 	eventCh *chann.DrainableChann[*Event]
 
-	taskScheduler threadpool.ThreadPool
-	mc            messaging.MessageCenter
+	mc messaging.MessageCenter
 
 	watermark struct {
 		mu sync.RWMutex
@@ -180,7 +179,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		pdClock:           pdClock,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
-		taskScheduler:     taskScheduler,
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, pdAPI, tsoClient, regionCache, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
@@ -222,6 +220,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	metrics.MaintainerGauge.WithLabelValues(cfID.Namespace(), cfID.Name()).Inc()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelUpdateMetrics = cancel
+
 	go m.runUpdateMetrics(ctx)
 	go m.runHandleEvents(ctx)
 
@@ -251,11 +250,6 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI,
 		tsoClient, regionCache, 1, false)
 	m.cascadeRemoving = true
-	// setup period event
-	m.submitScheduledEvent(m.taskScheduler, &Event{
-		changefeedID: m.id,
-		eventType:    EventPeriod,
-	}, time.Now().Add(periodEventInterval))
 	return m
 }
 
@@ -369,12 +363,6 @@ func (m *Maintainer) initialize() error {
 		newNodes = append(newNodes, n)
 	}
 	m.sendMessages(m.bootstrapper.HandleNewNodes(newNodes))
-
-	// setup period event
-	m.submitScheduledEvent(m.taskScheduler, &Event{
-		changefeedID: m.id,
-		eventType:    EventPeriod,
-	}, time.Now().Add(periodEventInterval))
 
 	log.Info("changefeed maintainer initialized",
 		zap.String("info", m.config.String()),
@@ -510,6 +498,21 @@ func (m *Maintainer) calCheckpointTs() {
 	// 1. node change
 	// 2. ddl
 	// 3. interval scheduling, like balance, split
+
+	// Thus, to ensure the whole process atomic, we first obtain the lock of operator and barrier
+	// then do the basic check.
+	// We ensure only the operator and barrier can generate absent replica, so we don't need to obtain the lock of replicationDB
+	// If all check is successfully, we begin to do the checkpointTs calculation,
+	// otherwise, we just return.
+	// Besides, due to the operator and barrier is indendently, so we can obtain the lock together to avoid deadlock.
+	operatorLock := m.controller.operatorController.GetLock()
+	barrierLock := m.barrier.GetLock()
+
+	defer func() {
+		m.controller.operatorController.ReleaseLock(operatorLock)
+		m.barrier.ReleaseLock(barrierLock)
+	}()
+
 	if !m.controller.ScheduleFinished() {
 		log.Warn("can not advance checkpointTs since schedule is not finished",
 			zap.String("changefeed", m.id.Name()),
@@ -837,10 +840,6 @@ func (m *Maintainer) onPeriodTask() {
 	m.handleResendMessage()
 	m.collectMetrics()
 	m.calCheckpointTs()
-	m.submitScheduledEvent(m.taskScheduler, &Event{
-		changefeedID: m.id,
-		eventType:    EventPeriod,
-	}, time.Now().Add(periodEventInterval))
 }
 
 func (m *Maintainer) collectMetrics() {
@@ -877,12 +876,20 @@ func (m *Maintainer) runUpdateMetrics(ctx context.Context) {
 }
 
 func (m *Maintainer) runHandleEvents(ctx context.Context) {
+	ticker := time.NewTicker(periodEventInterval)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case event := <-m.eventCh.Out():
 			m.HandleEvent(event)
+		case <-ticker.C:
+			m.HandleEvent(&Event{
+				changefeedID: m.id,
+				eventType:    EventPeriod,
+			})
 		}
 	}
 }
@@ -894,19 +901,6 @@ func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
 
 func (m *Maintainer) GetTables() []*replica.SpanReplication {
 	return m.controller.replicationDB.GetAllTasks()
-}
-
-// SubmitScheduledEvent submits a task to controller pool to send a future event
-func (m *Maintainer) submitScheduledEvent(
-	scheduler threadpool.ThreadPool,
-	event *Event,
-	scheduleTime time.Time,
-) {
-	task := func() time.Time {
-		m.pushEvent(event)
-		return time.Time{}
-	}
-	scheduler.SubmitFunc(task, scheduleTime)
 }
 
 // pushEvent is used to push event to maintainer's event channel
