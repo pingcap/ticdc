@@ -185,42 +185,121 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 			}
 		}
 
-		newRowLists := make([]RowChangeWithKeys, 0, len(rowLists))
-		for i := 0; i < len(rowLists); i++ {
-			for j := i + 1; j < len(rowLists); j++ {
-				firstRowExist := true
-				secondRowExist := true
-
-				rowType := rowLists[i].RowChange.RowType
-				nextRowType := rowLists[j].RowChange.RowType
-				switch rowType {
-				case commonEvent.RowTypeDelete:
-					rowKey := rowLists[i].PreRowKeys
-					if nextRowType == commonEvent.RowTypeDelete {
-						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+		for {
+			newRowLists := make([]RowChangeWithKeys, 0, len(rowLists))
+			hasUpdate := false
+			// flagList used to store the exists or not for this row. True means exists.
+			flagList := make([]bool, len(rowLists))
+			for i := 0; i < len(rowLists); i++ {
+				flagList[i] = true
+			}
+			for i := 0; i < len(rowLists); i++ {
+				if !flagList[i] {
+					continue
+				}
+				for j := i + 1; j < len(rowLists); j++ {
+					if !flagList[j] {
+						continue
+					}
+					rowType := rowLists[i].RowChange.RowType
+					nextRowType := rowLists[j].RowChange.RowType
+					switch rowType {
+					case commonEvent.RowTypeDelete:
+						rowKey := rowLists[i].PreRowKeys
+						if nextRowType == commonEvent.RowTypeDelete {
+							if compareKeys(rowKey, rowLists[j].PreRowKeys) {
+								log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							}
+						} else if nextRowType == commonEvent.RowTypeUpdate {
+							if compareKeys(rowKey, rowLists[j].PreRowKeys) {
+								log.Panic("Here are two invalid rows, one is Delete A, the other is Update A to B", zap.Any("Events", events))
+							}
 						}
-					} else if nextRowType == commonEvent.RowTypeUpdate {
-						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
-							log.Panic("Here are two invalid rows, one is Delete A, the other is Update A to B", zap.Any("Events", events))
+					case commonEvent.RowTypeInsert:
+						rowKey := rowLists[i].RowKeys
+						if nextRowType == commonEvent.RowTypeInsert {
+							if compareKeys(rowKey, rowLists[j].RowKeys) {
+								log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							}
+						} else if nextRowType == commonEvent.RowTypeDelete {
+							if compareKeys(rowKey, rowLists[j].PreRowKeys) {
+								// remove the insert one, and break the inner loop for row i
+								flagList[i] = false
+								hasUpdate = true
+								break
+							}
+						} else if nextRowType == commonEvent.RowTypeUpdate {
+							if compareKeys(rowKey, rowLists[j].PreRowKeys) {
+								// remove insert one, and break the inner loop for row i
+								flagList[i] = false
+								// change update one to insert
+								preRowChange := rowLists[j].RowChange
+								newRowChange := commonEvent.RowChange{
+									Row:     preRowChange.Row,
+									RowType: commonEvent.RowTypeInsert,
+								}
+								rowLists[j] = RowChangeWithKeys{
+									RowChange: &newRowChange,
+									RowKeys:   rowLists[j].RowKeys,
+								}
+								hasUpdate = true
+								break
+							}
+						}
+					case commonEvent.RowTypeUpdate:
+						rowKey := rowLists[i].RowKeys
+						if nextRowType == commonEvent.RowTypeInsert {
+							if compareKeys(rowKey, rowLists[j].RowKeys) {
+								log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							}
+						} else if nextRowType == commonEvent.RowTypeDelete {
+							if compareKeys(rowKey, rowLists[j].PreRowKeys) {
+								// remove the update one, and break the inner loop
+								flagList[j] = false
+								// change the update to delete
+								preRowChange := rowLists[i].RowChange
+								newRowChange := commonEvent.RowChange{
+									PreRow:  preRowChange.PreRow,
+									RowType: commonEvent.RowTypeDelete,
+								}
+								rowLists[i] = RowChangeWithKeys{
+									RowChange:  &newRowChange,
+									PreRowKeys: rowLists[i].PreRowKeys,
+								}
+								hasUpdate = true
+								break
+							}
+						} else if nextRowType == commonEvent.RowTypeUpdate {
+							if compareKeys(rowKey, rowLists[j].RowKeys) {
+								log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							}
 						}
 					}
-				case commonEvent.RowTypeInsert:
-					rowKey := rowLists[i].RowKeys
-					if nextRowType == commonEvent.RowTypeInsert {
-						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
-						}
-					} else if nextRowType == commonEvent.RowTypeDelete {
-						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
-							// remove the insert one
-						}
-					}
-				case commonEvent.RowTypeUpdate:
 				}
 			}
+
+			if !hasUpdate {
+				// means no more changes for the rows, break and generate sqls.
+				break
+			} else {
+				for i := 0; i < len(rowLists); i++ {
+					if flagList[i] {
+						newRowLists = append(newRowLists, rowLists[i])
+					}
+				}
+			}
+			rowLists = newRowLists
 		}
 
+		finalRowLists := make([]*commonEvent.RowChange, len(rowLists))
+
+		for i := 0; i <= len(rowLists); i++ {
+			finalRowLists = append(finalRowLists, rowLists[i].RowChange)
+		}
+
+		// step 2. generate sqls
+		sql, value, err := w.batchSingleTxnDmls(finalRowLists, tableInfo, inSafeMode)
+		return sql, value, errors.Trace(err)
 	} else {
 		// unsafe mode
 		// step 1. divide update row to delete row and insert row, and set into map based on the key hash
@@ -379,7 +458,7 @@ func (w *MysqlWriter) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, 
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
-			return queryList, argsList, nil
+			break
 		}
 
 		var err error
@@ -416,6 +495,7 @@ func (w *MysqlWriter) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, 
 	return queryList, argsList, nil
 }
 
+/*
 func (w *MysqlWriter) prepareDMLsBackup(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
@@ -509,6 +589,7 @@ func (w *MysqlWriter) prepareDMLsBackup(events []*commonEvent.DMLEvent) (*prepar
 
 	return dmls, nil
 }
+*/
 
 func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	if len(dmls.sqls) != len(dmls.values) {
