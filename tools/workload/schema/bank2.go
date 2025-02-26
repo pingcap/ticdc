@@ -272,10 +272,6 @@ func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []i
 }
 
 func generateNonPrimaryValuesForTable() []interface{} {
-	start := time.Now()
-	defer func() {
-		log.Info("generateNonPrimaryValuesForTable cost", zap.Any("time", time.Since(start).Seconds()))
-	}()
 	values := make([]interface{}, 0, 104)
 
 	values = append(values, randomDecimal(13, 2)) // bp_rtl_intr_amt
@@ -388,10 +384,6 @@ func generateNonPrimaryValuesForTable() []interface{} {
 }
 
 func generatePrimaryValuesForTable() []interface{} {
-	start := time.Now()
-	defer func() {
-		log.Info("generatePrimaryValuesForTable cost", zap.Any("time", time.Since(start).Seconds()))
-	}()
 	// crcd_acct_no , stmt_date , acct_seq_no , stmt_head_id  these are primary key
 	values := make([]interface{}, 0, 4)
 	values = append(values, randomString(16)) // crcd_acct_no
