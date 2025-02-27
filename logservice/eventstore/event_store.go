@@ -627,6 +627,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		startTs:      dataRange.StartTs,
 		endTs:        dataRange.EndTs,
 		rowCount:     0,
+		decoder:      e.decoder,
 	}, nil
 }
 
@@ -716,8 +717,7 @@ type eventStoreIter struct {
 	startTs  uint64
 	endTs    uint64
 	rowCount int64
-
-	decoder *zstd.Decoder
+	decoder  *zstd.Decoder
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
@@ -735,6 +735,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	}
 	rawKV := &common.RawKVEntry{}
 	rawKV.Decode(decompressedValue)
+	metrics.EventStoreScanBytes.Add(float64(len(decompressedValue)))
 	isNewTxn := false
 	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
 		isNewTxn = true
