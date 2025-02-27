@@ -233,15 +233,22 @@ type SqlValue struct {
 	Values []interface{}
 }
 
+var largeValuesPool = sync.Pool{
+	New: func() interface{} {
+		return make([]interface{}, 0, 120*200)
+	},
+}
+
 func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int, channel chan SqlValue) {
 	nonPrimaryKeyValues := generateNonPrimaryValuesForTable() // to reduce time, these field we keep same for
 	sql := c.infoTableInsertSQL
 
-	values := make([]interface{}, 0, 120*200)
 	switch tableN {
 	case 0: // acct_statement_head_info
 
 		for {
+			values := valuesPool.Get().([]interface{})
+			defer valuesPool.Put(values[:0]) // 使用后重置并放回池中
 			// 200 rows one txn
 			for r := 0; r < 200; r++ {
 				values = append(values, generatePrimaryValuesForTable()...)
@@ -249,9 +256,6 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int, chan
 			}
 
 			channel <- SqlValue{Sql: sql, Values: values}
-
-			//clean values
-			values = values[:0]
 		}
 		// for i < batchSize {
 		// 	i += 1
