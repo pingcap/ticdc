@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
-	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -775,7 +774,7 @@ type eventStoreIter struct {
 	startTs  uint64
 	endTs    uint64
 	rowCount int64
-	decoder  *zstd.Decoder
+	// decoder  *zstd.Decoder
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
@@ -788,13 +787,13 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	}
 
 	value := iter.innerIter.Value()
-	decompressedValue, err := iter.decoder.DecodeAll(value, nil)
-	if err != nil {
-		log.Panic("failed to decompress value", zap.Error(err))
-	}
-	metrics.EventStoreScanBytes.Add(float64(len(decompressedValue)))
+	// decompressedValue, err := iter.decoder.DecodeAll(value, nil)
+	// if err != nil {
+	// 	log.Panic("failed to decompress value", zap.Error(err))
+	// }
+	// metrics.EventStoreScanBytes.Add(float64(len(decompressedValue)))
 	rawKV := &common.RawKVEntry{}
-	rawKV.Decode(decompressedValue)
+	rawKV.Decode(value)
 	isNewTxn := false
 	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
 		isNewTxn = true
