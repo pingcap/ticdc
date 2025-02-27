@@ -179,12 +179,6 @@ const (
 	dataDir             = "event_store"
 	dbCount             = 4
 	writeWorkerNumPerDB = 4
-
-	// Pebble options
-	targetMemoryLimit = 4 << 30   // 2GB
-	memTableSize      = 256 << 20 // 256MB
-	memTableCount     = 8
-	blockCacheSize    = targetMemoryLimit - (memTableSize * memTableCount) // 2GB
 )
 
 func New(
@@ -200,37 +194,20 @@ func New(
 	if err != nil {
 		log.Panic("fail to remove path")
 	}
-	// Create the zstd encoder
-	// encoder, err := zstd.NewWriter(nil)
-	// if err != nil {
-	// 	log.Panic("Failed to create zstd encoder", zap.Error(err))
-	// }
 
-	// decoder, err := zstd.NewReader(nil)
-	// if err != nil {
-	// 	log.Panic("Failed to create zstd decoder", zap.Error(err))
-	// }
 	store := &eventStore{
 		pdClock:   pdClock,
 		subClient: subClient,
 
-		dbs:            make([]*pebble.DB, 0, dbCount),
+		dbs:            createPebbleDBs(dbPath, dbCount),
 		chs:            make([]*chann.UnlimitedChannel[eventWithCallback, uint64], 0, dbCount),
 		writeTaskPools: make([]*writeTaskPool, 0, dbCount),
 
 		gcManager: newGCManager(),
-		// encoder:   encoder,
-		// decoder:   decoder,
 	}
 
-	// TODO: update pebble options
+	// create a write task pool per db instance
 	for i := 0; i < dbCount; i++ {
-		opts := newPebbleOptions()
-		db, err := pebble.Open(fmt.Sprintf("%s/%d", dbPath, i), opts)
-		if err != nil {
-			log.Fatal("open db failed", zap.Error(err))
-		}
-		store.dbs = append(store.dbs, db)
 		store.chs = append(store.chs, chann.NewUnlimitedChannel[eventWithCallback, uint64](nil, eventWithCallbackSizer))
 		store.writeTaskPools = append(store.writeTaskPools, newWriteTaskPool(store, store.dbs[i], store.chs[i], writeWorkerNumPerDB))
 	}
@@ -244,51 +221,6 @@ func New(
 	messageCenter.RegisterHandler(messaging.EventStoreTopic, store.handleMessage)
 
 	return store
-}
-
-func newPebbleOptions() *pebble.Options {
-	opts := &pebble.Options{
-		// Disable WAL to improve performance
-		DisableWAL: true,
-
-		// Configure large memtable to keep recent data in memory
-		MemTableSize:                memTableSize,
-		MemTableStopWritesThreshold: memTableCount,
-
-		// Configure large block cache to keep frequently accessed data in memory
-		Cache: pebble.NewCache(blockCacheSize),
-
-		// Configure options to optimize read/write performance
-		Levels: make([]pebble.LevelOptions, 2),
-
-		MaxConcurrentCompactions: func() int {
-			return 4
-		},
-	}
-
-	// Configure level strategy
-	opts.Levels[0] = pebble.LevelOptions{ // L0 - Latest data fully in memory
-		BlockSize:      32 << 10,                 // 32KB block size
-		IndexBlockSize: 128 << 10,                // 128KB index block
-		Compression:    pebble.SnappyCompression, // No compression in L0 for better performance
-	}
-
-	opts.Levels[1] = pebble.LevelOptions{ // L1 - Data that may be in memory or on disk
-		BlockSize:      64 << 10,
-		IndexBlockSize: 256 << 10,
-		Compression:    pebble.SnappyCompression,
-		TargetFileSize: 256 << 20, // 256MB
-	}
-
-	// Adjust L0 thresholds to delay compaction timing
-	opts.L0CompactionThreshold = 20  // Allow more files in L0
-	opts.L0StopWritesThreshold = 160 // Increase stop-writes threshold
-
-	// Prefetch configuration
-	opts.ReadOnly = false
-	opts.MaxOpenFiles = 10000
-
-	return opts
 }
 
 type writeTaskPool struct {
