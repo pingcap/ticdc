@@ -10,6 +10,8 @@ import (
 	"github.com/cockroachdb/pebble/bloom"
 	"github.com/pierrec/lz4"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
 )
 
@@ -92,11 +94,10 @@ var bufferPool = sync.Pool{
 	},
 }
 
-func compressData(data []byte) ([]byte, error) {
-	buf := bufferPool.Get().(*bytes.Buffer)
-	defer bufferPool.Put(buf)
-	buf.Reset()
-
+func compressData(data []byte, buf *bytes.Buffer) ([]byte, error) {
+	if buf == nil {
+		buf = new(bytes.Buffer)
+	}
 	zw := lz4.NewWriter(buf)
 	_, err := zw.Write(data)
 	if err != nil {
@@ -110,11 +111,10 @@ func compressData(data []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func decompressData(compressed []byte) ([]byte, error) {
-	buf := bufferPool.Get().(*bytes.Buffer)
-	defer bufferPool.Put(buf)
-	buf.Reset()
-
+func decompressData(compressed []byte, buf *bytes.Buffer) ([]byte, error) {
+	if buf == nil {
+		buf = new(bytes.Buffer)
+	}
 	zr := lz4.NewReader(bytes.NewReader(compressed))
 	_, err := buf.ReadFrom(zr)
 	if err != nil {
@@ -122,4 +122,37 @@ func decompressData(compressed []byte) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+func writeRawKVEntryIntoBatch(key []byte, entry *common.RawKVEntry, batch *pebble.Batch) {
+	buf := bufferPool.Get().(*bytes.Buffer)
+	defer bufferPool.Put(buf)
+	buf.Reset()
+
+	value := entry.Encode()
+	compressedValue, err := compressData(value, buf)
+	if err != nil {
+		log.Panic("failed to compress data", zap.Error(err))
+	}
+	ratio := float64(len(value)) / float64(len(compressedValue))
+	metrics.EventStoreCompressRatio.Set(ratio)
+	if err := batch.Set(key, compressedValue, pebble.NoSync); err != nil {
+		log.Panic("failed to update pebble batch", zap.Error(err))
+	}
+}
+
+func readRawKVEntryFromIter(iter *pebble.Iterator) *common.RawKVEntry {
+	buf := bufferPool.Get().(*bytes.Buffer)
+	defer bufferPool.Put(buf)
+	buf.Reset()
+
+	value := iter.Value()
+	decompressedValue, err := decompressData(value, buf)
+	if err != nil {
+		log.Panic("failed to decompress value", zap.Error(err))
+	}
+	metrics.EventStoreScanBytes.Add(float64(len(decompressedValue)))
+	rawKV := &common.RawKVEntry{}
+	rawKV.Decode(decompressedValue)
+	return rawKV
 }
