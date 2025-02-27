@@ -682,8 +682,8 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 		for _, kv := range event.kvs {
 			key := EncodeKey(uint64(event.subID), event.tableID, &kv)
 			value := kv.Encode()
-			compressedValue := e.encoder.EncodeAll(value, nil)
-			if err := batch.Set(key, compressedValue, pebble.NoSync); err != nil {
+			// compressedValue := e.encoder.EncodeAll(value, nil)
+			if err := batch.Set(key, value, pebble.NoSync); err != nil {
 				log.Panic("failed to update pebble batch", zap.Error(err))
 			}
 		}
@@ -729,13 +729,13 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	}
 
 	value := iter.innerIter.Value()
-	decompressedValue, err := iter.decoder.DecodeAll(value, nil)
-	if err != nil {
-		log.Panic("failed to decompress value", zap.Error(err))
-	}
+	// decompressedValue, err := iter.decoder.DecodeAll(value, nil)
+	// if err != nil {
+	// 	log.Panic("failed to decompress value", zap.Error(err))
+	// }
 	rawKV := &common.RawKVEntry{}
-	rawKV.Decode(decompressedValue)
-	metrics.EventStoreScanBytes.Add(float64(len(decompressedValue)))
+	rawKV.Decode(value)
+	metrics.EventStoreScanBytes.Add(float64(len(value)))
 	isNewTxn := false
 	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
 		isNewTxn = true
