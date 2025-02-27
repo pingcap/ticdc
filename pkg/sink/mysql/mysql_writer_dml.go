@@ -186,6 +186,10 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 			}
 		}
 
+		for i := 0; i < len(rowLists); i++ {
+			log.Info("before combine row i type is", zap.Any("type", rowLists[i].RowChange.RowType))
+		}
+
 		for {
 			newRowLists := make([]RowChangeWithKeys, 0, len(rowLists))
 			hasUpdate := false
@@ -296,6 +300,7 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 
 		for i := 0; i < len(rowLists); i++ {
 			finalRowLists = append(finalRowLists, rowLists[i].RowChange)
+			log.Info("row i type is", zap.Any("type", rowLists[i].RowChange.RowType))
 		}
 
 		// step 2. generate sqls
