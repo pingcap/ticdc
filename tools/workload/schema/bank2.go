@@ -495,6 +495,8 @@ func generateNonPrimaryValuesForTable() []interface{} {
 
 	return builder.String()*/
 	values := make([]interface{}, 0, 104)
+	values = append(values, randomDecimal(13, 2)) // bp_rtl_intr_amt
+	values = append(values, randomDate())         // late_chg_coll_date
 	values = append(values, randomDecimal(13, 2)) // delq_total_amt
 	values = append(values, randomDecimal(13, 2)) // prev_dir_to_cust_rtl_prin
 	values = append(values, randomString(5))      // acct_branch_no
