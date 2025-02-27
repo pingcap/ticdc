@@ -247,6 +247,8 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int, chan
 	case 0: // acct_statement_head_info
 
 		for {
+			rand.Seed(time.Now().UnixNano())
+
 			values := valuesPool.Get().([]interface{})
 			defer valuesPool.Put(values[:0]) // 使用后重置并放回池中
 			// 200 rows one txn
@@ -708,10 +710,10 @@ func generateValuesForLogTable() []interface{} {
 
 func randomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	seededRand := rand.New(rand.NewSource(time.Now().UnixNano()))
+	// seededRand := rand.New(rand.NewSource(time.Now().UnixNano()))
 	b := make([]byte, length)
 	for i := range b {
-		b[i] = charset[seededRand.Intn(len(charset))]
+		b[i] = charset[rand.Intn(len(charset))]
 	}
 	return string(b)
 }
@@ -725,28 +727,27 @@ func randomDate() string {
 }
 
 func randomBigInt() int64 {
-	rand.Seed(time.Now().UnixNano())
 	min := int64(0)
 	max := int64(1<<63 - 1)
 	return rand.Int63n(max-min) + min
 }
 
 func randomInt() int32 {
-	rand.Seed(time.Now().UnixNano())
+	// rand.Seed(time.Now().UnixNano())
 	min := int32(0)
 	max := int32(1<<31 - 1)
 	return rand.Int31n(max-min) + min
 }
 
 func randomSmallInt() int16 {
-	rand.Seed(time.Now().UnixNano())
+	// rand.Seed(time.Now().UnixNano())
 	raw := rand.Int31n(65536)
 	smallintValue := int16(raw - 32768)
 	return int16(smallintValue)
 }
 
 func randomDecimal(precision, scale int) string {
-	rand.Seed(time.Now().UnixNano())
+	// rand.Seed(time.Now().UnixNano())
 
 	integerDigits := precision - scale
 	maxInteger := int64(1)
@@ -794,7 +795,7 @@ func randomDatetime(precision int) string {
 }
 
 func randomTime() string {
-	rand.Seed(time.Now().UnixNano())
+	// rand.Seed(time.Now().UnixNano())
 	start := time.Now().AddDate(-40, 0, 0)
 	end := time.Now()
 	delta := end.Sub(start)
