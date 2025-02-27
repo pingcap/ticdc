@@ -48,7 +48,7 @@ func newPebbleOptions(dbNum int) *pebble.Options {
 		l.FilterPolicy = bloom.FilterPolicy(10)
 		l.FilterType = pebble.TableFilter
 		l.TargetFileSize = 32 << 20 // 32 MB
-		l.Compression = pebble.ZstdCompression
+		l.Compression = pebble.SnappyCompression
 		l.EnsureDefaults()
 	}
 	opts.Levels[6].FilterPolicy = nil
