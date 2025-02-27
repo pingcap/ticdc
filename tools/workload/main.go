@@ -492,8 +492,11 @@ func executeWithValues(db *sql.DB, sqlStr string, workload schema.Workload, n in
 
 	// Try to get prepared statement from cache
 	if stmt, ok := stmtCache.Load(sqlStr); ok {
+		log.Info("into stmtCache")
 		return stmt.(*sql.Stmt).Exec(values...)
 	}
+
+	log.Info("not into stmt")
 
 	// Prepare the statement
 	stmt, err := db.Prepare(sqlStr)
