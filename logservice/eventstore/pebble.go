@@ -17,9 +17,9 @@ import (
 
 // TODO: add config for pebble options
 const (
-	cacheSize         = 2 << 30  // 2GB
-	memTableTotalSize = 2 << 30  // 2GB
-	memTableSize      = 16 << 20 // 16MB
+	cacheSize         = 2 << 30   // 2GB
+	memTableTotalSize = 8 << 30   // 8GB
+	memTableSize      = 128 << 20 // 128MB
 )
 
 func newPebbleOptions(dbNum int) *pebble.Options {
@@ -32,15 +32,11 @@ func newPebbleOptions(dbNum int) *pebble.Options {
 		MaxConcurrentCompactions: func() int { return 6 },
 
 		// Decrease compaction frequency
-		L0CompactionThreshold:     10,
-		L0CompactionFileThreshold: 10,
+		L0CompactionThreshold:     20,
+		L0CompactionFileThreshold: 20,
 
 		// It's meaningless to stop writes in L0
 		L0StopWritesThreshold: math.MaxInt32,
-
-		// TODO: not sure whether this is good config(old arch is 64MB)
-		// just set a value larger than old arch because the mem table size is larger.
-		LBaseMaxBytes: 256 << 20, // 256 MB
 
 		// Configure large memtable to keep recent data in memory
 		MemTableSize:                memTableSize,

@@ -170,9 +170,6 @@ type eventStore struct {
 		// use table id as the key is to share data between spans not completely the same in the future.
 		tableToDispatchers map[int64]map[common.DispatcherID]bool
 	}
-
-	// encoder *zstd.Encoder
-	// decoder *zstd.Decoder
 }
 
 const (
