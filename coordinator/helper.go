@@ -17,6 +17,17 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 )
 
+type ChangeType int
+
+const (
+	// ChangeStateAndTs indicate changefeed state and checkpointTs need update
+	ChangeStateAndTs ChangeType = iota
+	// ChangeTs indicate changefeed checkpointTs needs update
+	ChangeTs
+	// ChangeState indicate changefeed state needs update
+	ChangeState
+)
+
 const (
 	// EventMessage is triggered when a grpc message received
 	EventMessage = iota

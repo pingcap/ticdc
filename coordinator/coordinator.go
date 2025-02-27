@@ -89,8 +89,8 @@ type coordinator struct {
 	// eventCh is used to receive the event from message center, basically these messages
 	// are from maintainer.
 	eventCh *chann.DrainableChann[*Event]
-	// changefeedChangeEventCh is used to receive the changefeed progress report from the controller
-	changefeedChangeEventCh chan []*ChangefeedStateChangeEvent
+	// changefeedChangeCh is used to receive the changefeed progress report from the controller
+	changefeedChangeCh chan []*ChangefeedStateChange
 
 	cancel func()
 	closed atomic.Bool
@@ -107,17 +107,17 @@ func New(node *node.Info,
 ) server.Coordinator {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	c := &coordinator{
-		version:                 version,
-		nodeInfo:                node,
-		gcServiceID:             gcServiceID,
-		lastTickTime:            time.Now(),
-		gcManager:               gc.NewManager(gcServiceID, pdClient, pdClock),
-		eventCh:                 chann.NewAutoDrainChann[*Event](),
-		pdClient:                pdClient,
-		pdClock:                 pdClock,
-		mc:                      mc,
-		changefeedChangeEventCh: make(chan []*ChangefeedStateChangeEvent, 1024),
-		backend:                 backend,
+		version:            version,
+		nodeInfo:           node,
+		gcServiceID:        gcServiceID,
+		lastTickTime:       time.Now(),
+		gcManager:          gc.NewManager(gcServiceID, pdClient, pdClock),
+		eventCh:            chann.NewAutoDrainChann[*Event](),
+		pdClient:           pdClient,
+		pdClock:            pdClock,
+		mc:                 mc,
+		changefeedChangeCh: make(chan []*ChangefeedStateChange, 1024),
+		backend:            backend,
 	}
 	// handle messages from message center
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
@@ -128,7 +128,7 @@ func New(node *node.Info,
 	controller := NewController(
 		c.version,
 		c.nodeInfo,
-		c.changefeedChangeEventCh,
+		c.changefeedChangeCh,
 		c.backend,
 		c.eventCh,
 		c.taskScheduler,
@@ -206,13 +206,13 @@ func (c *coordinator) run(ctx context.Context) error {
 			now := time.Now()
 			metrics.CoordinatorCounter.Add(float64(now.Sub(c.lastTickTime)) / float64(time.Second))
 			c.lastTickTime = now
-		case events := <-c.changefeedChangeEventCh:
-			if err := c.saveCheckpointTs(ctx, events); err != nil {
+		case changes := <-c.changefeedChangeCh:
+			if err := c.saveCheckpointTs(ctx, changes); err != nil {
 				return errors.Trace(err)
 			}
-			for _, event := range events {
-				if event.changeType == ChangeState || event.changeType == ChangeStateAndTs {
-					if err := c.handleStateChangedEvent(ctx, event); err != nil {
+			for _, change := range changes {
+				if change.changeType == ChangeState || change.changeType == ChangeStateAndTs {
+					if err := c.handleStateChange(ctx, change); err != nil {
 						return errors.Trace(err)
 					}
 				}
@@ -233,9 +233,9 @@ func (c *coordinator) runHandleEvent(ctx context.Context) error {
 	}
 }
 
-func (c *coordinator) handleStateChangedEvent(
+func (c *coordinator) handleStateChange(
 	ctx context.Context,
-	event *ChangefeedStateChangeEvent,
+	event *ChangefeedStateChange,
 ) error {
 	cf := c.controller.getChangefeed(event.changefeedID)
 	if cf == nil {
@@ -246,10 +246,10 @@ func (c *coordinator) handleStateChangedEvent(
 	if err != nil {
 		return errors.Trace(err)
 	}
-	cfInfo.State = event.State
+	cfInfo.State = event.state
 	cfInfo.Error = event.err
 	progress := config.ProgressNone
-	if event.State == model.StateFailed || event.State == model.StateFinished {
+	if event.state == model.StateFailed || event.state == model.StateFinished {
 		progress = config.ProgressStopping
 	}
 	if err := c.backend.UpdateChangefeed(context.Background(), cfInfo, cf.GetStatus().CheckpointTs, progress); err != nil {
@@ -259,7 +259,7 @@ func (c *coordinator) handleStateChangedEvent(
 	}
 	cf.SetInfo(cfInfo)
 
-	switch event.State {
+	switch event.state {
 	case model.StateWarning:
 		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
 		c.controller.updateChangefeedEpoch(ctx, event.changefeedID)
@@ -296,9 +296,9 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.Chan
 		if !errors.IsChangefeedGCFastFailErrorCode(errCode) {
 			state = model.StateWarning
 		}
-		event := &ChangefeedStateChangeEvent{
+		change := &ChangefeedStateChange{
 			changefeedID: id,
-			State:        state,
+			state:        state,
 			err: &model.RunningError{
 				Code:    string(errCode),
 				Message: err.Error(),
@@ -312,19 +312,19 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.Chan
 				zap.String("changefeed", id.String()),
 				zap.Error(ctx.Err()))
 			return
-		case c.changefeedChangeEventCh <- []*ChangefeedStateChangeEvent{event}:
+		case c.changefeedChangeCh <- []*ChangefeedStateChange{change}:
 		}
 	}
 }
 
-func (c *coordinator) saveCheckpointTs(ctx context.Context, events []*ChangefeedStateChangeEvent) error {
+func (c *coordinator) saveCheckpointTs(ctx context.Context, changes []*ChangefeedStateChange) error {
 	statusMap := make(map[common.ChangeFeedID]uint64)
 	cfsMap := make(map[common.ChangeFeedID]*changefeed.Changefeed)
-	for _, event := range events {
-		if event.changeType == ChangeState {
+	for _, change := range changes {
+		if change.changeType == ChangeState {
 			continue
 		}
-		upCf := event.changefeed
+		upCf := change.changefeed
 		reportedCheckpointTs := upCf.GetStatus().CheckpointTs
 		if upCf.GetLastSavedCheckPointTs() < reportedCheckpointTs {
 			statusMap[upCf.ID] = reportedCheckpointTs
