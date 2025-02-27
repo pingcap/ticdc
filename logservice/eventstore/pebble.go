@@ -1,11 +1,14 @@
 package eventstore
 
 import (
+	"bytes"
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/bloom"
+	"github.com/pierrec/lz4"
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
 )
@@ -52,7 +55,12 @@ func newPebbleOptions(dbNum int) *pebble.Options {
 		l.FilterPolicy = bloom.FilterPolicy(10)
 		l.FilterType = pebble.TableFilter
 		l.TargetFileSize = 32 << 20 // 32 MB
-		l.Compression = pebble.SnappyCompression
+		if i == 0 {
+			// level 0 with no compression for better write performance
+			l.Compression = pebble.NoCompression
+		} else {
+			l.Compression = pebble.SnappyCompression
+		}
 		l.EnsureDefaults()
 	}
 	opts.Levels[6].FilterPolicy = nil
@@ -76,4 +84,42 @@ func createPebbleDBs(rootDir string, dbNum int) []*pebble.DB {
 		dbs[i] = db
 	}
 	return dbs
+}
+
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
+}
+
+func compressData(data []byte) ([]byte, error) {
+	buf := bufferPool.Get().(*bytes.Buffer)
+	defer bufferPool.Put(buf)
+	buf.Reset()
+
+	zw := lz4.NewWriter(buf)
+	_, err := zw.Write(data)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+func decompressData(compressed []byte) ([]byte, error) {
+	buf := bufferPool.Get().(*bytes.Buffer)
+	defer bufferPool.Put(buf)
+	buf.Reset()
+
+	zr := lz4.NewReader(bytes.NewReader(compressed))
+	_, err := buf.ReadFrom(zr)
+	if err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
 }

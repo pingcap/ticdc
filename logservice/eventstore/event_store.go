@@ -669,7 +669,13 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 		for _, kv := range event.kvs {
 			key := EncodeKey(uint64(event.subID), event.tableID, &kv)
 			value := kv.Encode()
-			if err := batch.Set(key, value, pebble.NoSync); err != nil {
+			compressedValue, err := compressData(value)
+			if err != nil {
+				log.Panic("failed to compress data", zap.Error(err))
+			}
+			ratio := float64(len(value)) / float64(len(compressedValue))
+			metrics.EventStoreCompressRatio.Set(ratio)
+			if err := batch.Set(key, compressedValue, pebble.NoSync); err != nil {
 				log.Panic("failed to update pebble batch", zap.Error(err))
 			}
 		}
@@ -715,8 +721,13 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	}
 
 	value := iter.innerIter.Value()
+	decompressedValue, err := decompressData(value)
+	if err != nil {
+		log.Panic("failed to decompress value", zap.Error(err))
+	}
+	metrics.EventStoreScanBytes.Add(float64(len(decompressedValue)))
 	rawKV := &common.RawKVEntry{}
-	rawKV.Decode(value)
+	rawKV.Decode(decompressedValue)
 	isNewTxn := false
 	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
 		isNewTxn = true
