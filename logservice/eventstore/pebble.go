@@ -76,11 +76,11 @@ func createPebbleDBs(rootDir string, dbNum int) []*pebble.DB {
 	// defer tableCache.Unref()
 	dbs := make([]*pebble.DB, dbNum)
 	for i := 0; i < dbNum; i++ {
-		opts := newPebbleOptions(dbNum)
+		// opts := newPebbleOptions(dbNum)
 		// opts.Cache = cache
 		// opts.TableCache = tableCache
-		opts.Cache = pebble.NewCache(cacheSize)
-		db, err := pebble.Open(fmt.Sprintf("%s/%04d", rootDir, i), opts)
+		// opts.Cache = pebble.NewCache(cacheSize)
+		db, err := pebble.Open(fmt.Sprintf("%s/%04d", rootDir, i), &pebble.Options{})
 		if err != nil {
 			log.Fatal("open db failed", zap.Error(err))
 		}
