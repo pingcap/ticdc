@@ -19,6 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,7 +29,8 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
-	"github.com/pingcap/log"
+	plog "github.com/pingcap/log"
+	"github.com/siddontang/go-log/log"
 	"go.uber.org/zap"
 )
 
@@ -112,7 +114,12 @@ func init() {
 }
 
 func main() {
-	log.Info("start to run workload")
+
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+
+	plog.Info("start to run workload")
 	validateFlags()
 
 	dbs := setupDatabases()
@@ -132,14 +139,14 @@ func main() {
 
 func validateFlags() {
 	if flags := flag.Args(); len(flags) > 0 {
-		log.Panic(fmt.Sprintf("unparsed flags: %v", flags))
+		plog.Panic(fmt.Sprintf("unparsed flags: %v", flags))
 	}
 }
 
 func setupDatabases() []*sql.DB {
-	log.Info("start to setup databases")
+	plog.Info("start to setup databases")
 	defer func() {
-		log.Info("setup databases finished")
+		plog.Info("setup databases finished")
 	}()
 
 	dbs := make([]*sql.DB, dbNum)
@@ -151,7 +158,7 @@ func setupDatabases() []*sql.DB {
 	}
 
 	if len(dbs) == 0 {
-		log.Panic("no mysql client was created successfully")
+		plog.Panic("no mysql client was created successfully")
 	}
 
 	return dbs
@@ -163,7 +170,7 @@ func setupMultipleDatabases() []*sql.DB {
 		dbName := fmt.Sprintf("%s%d", dbPrefix, i+1)
 		db, err := createDBConnection(dbName)
 		if err != nil {
-			log.Info("create the sql client failed", zap.Error(err))
+			plog.Info("create the sql client failed", zap.Error(err))
 			continue
 		}
 		configureDBConnection(db)
@@ -176,7 +183,7 @@ func setupSingleDatabase() []*sql.DB {
 	dbs := make([]*sql.DB, 1)
 	db, err := createDBConnection(dbName)
 	if err != nil {
-		log.Panic("create the sql client failed", zap.Error(err))
+		plog.Panic("create the sql client failed", zap.Error(err))
 	}
 	configureDBConnection(db)
 	dbs[0] = db
@@ -185,7 +192,7 @@ func setupSingleDatabase() []*sql.DB {
 }
 
 func createDBConnection(dbName string) (*sql.DB, error) {
-	log.Info("create db connection", zap.String("dbName", dbName))
+	plog.Info("create db connection", zap.String("dbName", dbName))
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local&maxAllowedPacket=1073741824&multiStatements=true",
 		dbUser, dbPassword, dbHost, dbPort, dbName)
 	return sql.Open("mysql", dsn)
@@ -198,9 +205,9 @@ func configureDBConnection(db *sql.DB) {
 }
 
 func createWorkload() schema.Workload {
-	log.Info("start to create workload")
+	plog.Info("start to create workload")
 	defer func() {
-		log.Info("create workload finished")
+		plog.Info("create workload finished")
 	}()
 
 	var workload schema.Workload
@@ -218,7 +225,7 @@ func createWorkload() schema.Workload {
 	case bank2:
 		workload = schema.NewBank2Workload()
 	default:
-		log.Panic("unsupported workload type", zap.String("workload", workloadType))
+		plog.Panic("unsupported workload type", zap.String("workload", workloadType))
 	}
 	return workload
 }
@@ -227,7 +234,7 @@ func executeWorkload(dbs []*sql.DB, workload schema.Workload, wg *sync.WaitGroup
 	updateConcurrency := int(float64(thread) * percentageForUpdate)
 	insertConcurrency := thread - updateConcurrency
 
-	log.Info("database info", zap.Int("dbCount", dbNum), zap.Int("tableCount", tableCount))
+	plog.Info("database info", zap.Int("dbCount", dbNum), zap.Int("tableCount", tableCount))
 
 	if !skipCreateTable && action == "prepare" {
 		handlePrepareAction(dbs, insertConcurrency, workload, wg)
@@ -242,7 +249,7 @@ func executeWorkload(dbs []*sql.DB, workload schema.Workload, wg *sync.WaitGroup
 }
 
 func handlePrepareAction(dbs []*sql.DB, insertConcurrency int, workload schema.Workload, wg *sync.WaitGroup) {
-	log.Info("start to create tables", zap.Int("tableCount", tableCount))
+	plog.Info("start to create tables", zap.Int("tableCount", tableCount))
 	for _, db := range dbs {
 		if err := initTables(db, workload); err != nil {
 			panic(err)
@@ -255,7 +262,7 @@ func handlePrepareAction(dbs []*sql.DB, insertConcurrency int, workload schema.W
 }
 
 func handleWorkloadExecution(dbs []*sql.DB, insertConcurrency, updateConcurrency int, workload schema.Workload, wg *sync.WaitGroup) {
-	log.Info("start running workload",
+	plog.Info("start running workload",
 		zap.String("workloadType", workloadType),
 		zap.Float64("largeRatio", largeRowRatio),
 		zap.Int("totalThread", thread),
@@ -285,23 +292,23 @@ func executeInsertWorkers(dbs []*sql.DB, insertConcurrency int, workload schema.
 		conn, err := db.Conn(context.Background())
 		// TODO: support recreate connection when the worker failed.
 		if err != nil {
-			log.Info("get connection failed", zap.Error(err))
+			plog.Info("get connection failed", zap.Error(err))
 			return
 		}
 		// go func(workerID int) {
 		// 	defer func() {
-		// 		log.Info("insert worker exited", zap.Int("worker", workerID))
+		// 		plog.Info("insert worker exited", zap.Int("worker", workerID))
 		// 		wg.Done()
 		// 	}()
-		// 	log.Info("start insert worker", zap.Int("worker", workerID))
+		// 	plog.Info("start insert worker", zap.Int("worker", workerID))
 		// 	doInsert(conn, workload)
 		// }(i)
 		go func(workerID int) {
 			defer func() {
-				log.Info("insert worker exited", zap.Int("worker", workerID))
+				plog.Info("insert worker exited", zap.Int("worker", workerID))
 				wg.Done()
 			}()
-			log.Info("start insert worker", zap.Int("worker", workerID))
+			plog.Info("start insert worker", zap.Int("worker", workerID))
 			doExecInsert(conn, channel, workload)
 		}(i)
 	}
@@ -317,13 +324,13 @@ func generateInsertSQL(channel chan schema.SqlValue, workload schema.Workload) {
 
 func doExecInsert(conn *sql.Conn, channel chan schema.SqlValue, workload schema.Workload) {
 	for {
-		start := time.Now()
+		//start := time.Now()
 		sqlValue := <-channel
-		log.Info("get sqlValue", zap.Any("cost", time.Since(start)))
+		//plog.Info("get sqlValue", zap.Any("cost", time.Since(start)))
 		_, err := executeWithValues(conn, sqlValue.Sql, workload, 0, sqlValue.Values)
 
 		if err != nil {
-			log.Info("insert error", zap.Error(err))
+			plog.Info("insert error", zap.Error(err))
 			errCount.Add(1)
 			continue
 		}
@@ -333,7 +340,7 @@ func doExecInsert(conn *sql.Conn, channel chan schema.SqlValue, workload schema.
 
 func executeUpdateWorkers(dbs []*sql.DB, updateConcurrency int, workload schema.Workload, wg *sync.WaitGroup) {
 	if updateConcurrency == 0 {
-		log.Info("skip update workload",
+		plog.Info("skip update workload",
 			zap.String("action", action),
 			zap.Int("totalThread", thread),
 			zap.Float64("percentageForUpdate", percentageForUpdate))
@@ -349,15 +356,15 @@ func executeUpdateWorkers(dbs []*sql.DB, updateConcurrency int, workload schema.
 		conn, err := db.Conn(context.Background())
 		// TODO: support recreate connection when the worker failed.
 		if err != nil {
-			log.Info("get connection failed", zap.Error(err))
+			plog.Info("get connection failed", zap.Error(err))
 			return
 		}
 		go func(workerID int) {
 			defer func() {
-				log.Info("update worker exited", zap.Int("worker", workerID))
+				plog.Info("update worker exited", zap.Int("worker", workerID))
 				wg.Done()
 			}()
-			log.Info("start update worker", zap.Int("worker", workerID))
+			plog.Info("start update worker", zap.Int("worker", workerID))
 			doUpdate(conn, workload, updateTaskCh)
 		}(i)
 	}
@@ -371,7 +378,7 @@ func executeUpdateWorkers(dbs []*sql.DB, updateConcurrency int, workload schema.
 func closeDatabases(dbs []*sql.DB) {
 	for _, db := range dbs {
 		if err := db.Close(); err != nil {
-			log.Error("failed to close database connection", zap.Error(err))
+			plog.Error("failed to close database connection", zap.Error(err))
 		}
 	}
 }
@@ -390,16 +397,16 @@ func initTables(db *sql.DB, workload schema.Workload) error {
 					return
 				}
 				tableNum.Add(1)
-				log.Info("try to create table", zap.Int("index", tableIndex+tableStartIndex))
+				plog.Info("try to create table", zap.Int("index", tableIndex+tableStartIndex))
 				if _, err := db.Exec(workload.BuildCreateTableStatement(tableIndex + tableStartIndex)); err != nil {
 					err := errors.Annotate(err, "create table failed")
-					log.Error("create table failed", zap.Error(err))
+					plog.Error("create table failed", zap.Error(err))
 				}
 			}
 		}()
 	}
 	wg.Wait()
-	log.Info("create tables finished")
+	plog.Info("create tables finished")
 	return nil
 }
 
@@ -437,21 +444,21 @@ func doUpdate(conn *sql.Conn, workload schema.Workload, input chan updateTask) {
 		}
 
 		if err != nil {
-			log.Info("update error", zap.Error(err), zap.String("sql", updateSql[:20]))
+			plog.Info("update error", zap.Error(err), zap.String("sql", updateSql[:20]))
 			errCount.Add(1)
 		}
 		if res != nil {
 			cnt, err := res.RowsAffected()
 			if err != nil || cnt < int64(task.Batch) {
-				log.Info("get rows affected error", zap.Error(err), zap.Int64("affectedRows", cnt), zap.Int("rowCount", task.Batch), zap.String("sql", updateSql))
+				plog.Info("get rows affected error", zap.Error(err), zap.Int64("affectedRows", cnt), zap.Int("rowCount", task.Batch), zap.String("sql", updateSql))
 				errCount.Add(1)
 			}
 			flushedRowCount.Add(uint64(cnt))
 			if task.IsSpecialUpdate {
-				log.Info("update full table succeed, row count %d\n", zap.Int("table", task.Table), zap.Int64("affectedRows", cnt))
+				plog.Info("update full table succeed, row count %d\n", zap.Int("table", task.Table), zap.Int64("affectedRows", cnt))
 			}
 		} else {
-			log.Info("update result is nil")
+			plog.Info("update result is nil")
 		}
 		if task.cb != nil {
 			task.cb()
@@ -476,7 +483,7 @@ func doInsert(conn *sql.Conn, workload schema.Workload) {
 		}
 
 		if err != nil {
-			log.Info("insert error", zap.Error(err))
+			plog.Info("insert error", zap.Error(err))
 			errCount.Add(1)
 			continue
 		}
@@ -489,13 +496,13 @@ func execute(conn *sql.Conn, sql string, workload schema.Workload, n int) (sql.R
 	res, err := conn.ExecContext(context.Background(), sql)
 	if err != nil {
 		if !strings.Contains(err.Error(), "Error 1146") {
-			log.Info("insert error", zap.Error(err))
+			plog.Info("insert error", zap.Error(err))
 			return res, err
 		}
 		// if table not exists, we create it
 		_, err := conn.ExecContext(context.Background(), workload.BuildCreateTableStatement(n))
 		if err != nil {
-			log.Info("create table error: ", zap.Error(err))
+			plog.Info("create table error: ", zap.Error(err))
 			return res, err
 		}
 		_, err = conn.ExecContext(context.Background(), sql)
@@ -525,13 +532,13 @@ func executeWithValues(conn *sql.Conn, sqlStr string, workload schema.Workload, 
 	stmt, err := conn.PrepareContext(context.Background(), sqlStr)
 	if err != nil {
 		if !strings.Contains(err.Error(), "Error 1146") {
-			log.Info("prepare error", zap.Error(err))
+			plog.Info("prepare error", zap.Error(err))
 			return nil, err
 		}
 		// Create table if not exists
 		_, err := conn.ExecContext(context.Background(), workload.BuildCreateTableStatement(n))
 		if err != nil {
-			log.Info("create table error: ", zap.Error(err))
+			plog.Info("create table error: ", zap.Error(err))
 			return nil, err
 		}
 		// Try prepare again
@@ -553,7 +560,7 @@ func executeWithValues(conn *sql.Conn, sqlStr string, workload schema.Workload, 
 
 // reportMetrics prints throughput statistics every 5 seconds
 func reportMetrics() {
-	log.Info("start to report metrics")
+	plog.Info("start to report metrics")
 	const (
 		reportInterval = 5 * time.Second
 	)
@@ -620,5 +627,5 @@ func printStats(stats statistics) {
 		stats.rps,
 		stats.eps,
 	)
-	log.Info(status)
+	plog.Info(status)
 }
