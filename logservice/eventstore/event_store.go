@@ -669,9 +669,6 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 		for _, kv := range event.kvs {
 			key := EncodeKey(uint64(event.subID), event.tableID, &kv)
 			value := kv.Encode()
-			// compressedValue := e.encoder.EncodeAll(value, nil)
-			// ratio := float64(len(value)) / float64(len(compressedValue))
-			// metrics.EventStoreCompressRatio.Set(ratio)
 			if err := batch.Set(key, value, pebble.NoSync); err != nil {
 				log.Panic("failed to update pebble batch", zap.Error(err))
 			}
@@ -706,7 +703,6 @@ type eventStoreIter struct {
 	startTs  uint64
 	endTs    uint64
 	rowCount int64
-	// decoder  *zstd.Decoder
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
@@ -719,11 +715,6 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	}
 
 	value := iter.innerIter.Value()
-	// decompressedValue, err := iter.decoder.DecodeAll(value, nil)
-	// if err != nil {
-	// 	log.Panic("failed to decompress value", zap.Error(err))
-	// }
-	// metrics.EventStoreScanBytes.Add(float64(len(decompressedValue)))
 	rawKV := &common.RawKVEntry{}
 	rawKV.Decode(value)
 	isNewTxn := false
