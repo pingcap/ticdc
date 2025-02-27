@@ -54,6 +54,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 	// Step 1: group the events by dispatcher id
 	eventsGroup := make(map[common.DispatcherID][]*commonEvent.DMLEvent) // dispatcherID--> events
 	for _, event := range events {
+		dmls.rowCount += int(event.Len())
 		dispatcherID := event.DispatcherID
 		if _, ok := eventsGroup[dispatcherID]; !ok {
 			eventsGroup[dispatcherID] = make([]*commonEvent.DMLEvent, 0)
