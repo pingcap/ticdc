@@ -89,8 +89,8 @@ type coordinator struct {
 	// eventCh is used to receive the event from message center, basically these messages
 	// are from maintainer.
 	eventCh *chann.DrainableChann[*Event]
-	// changefeedChangeCh is used to receive the changefeed progress report from the controller
-	changefeedChangeCh chan []*ChangefeedStateChange
+	// changefeedChangeCh is used to receive the changefeed change from the controller
+	changefeedChangeCh chan []*ChangefeedChange
 
 	cancel func()
 	closed atomic.Bool
@@ -116,7 +116,7 @@ func New(node *node.Info,
 		pdClient:           pdClient,
 		pdClock:            pdClock,
 		mc:                 mc,
-		changefeedChangeCh: make(chan []*ChangefeedStateChange, 1024),
+		changefeedChangeCh: make(chan []*ChangefeedChange, 1024),
 		backend:            backend,
 	}
 	// handle messages from message center
@@ -235,7 +235,7 @@ func (c *coordinator) runHandleEvent(ctx context.Context) error {
 
 func (c *coordinator) handleStateChange(
 	ctx context.Context,
-	event *ChangefeedStateChange,
+	event *ChangefeedChange,
 ) error {
 	cf := c.controller.getChangefeed(event.changefeedID)
 	if cf == nil {
@@ -296,7 +296,7 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.Chan
 		if !errors.IsChangefeedGCFastFailErrorCode(errCode) {
 			state = model.StateWarning
 		}
-		change := &ChangefeedStateChange{
+		change := &ChangefeedChange{
 			changefeedID: id,
 			state:        state,
 			err: &model.RunningError{
@@ -312,12 +312,12 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.Chan
 				zap.String("changefeed", id.String()),
 				zap.Error(ctx.Err()))
 			return
-		case c.changefeedChangeCh <- []*ChangefeedStateChange{change}:
+		case c.changefeedChangeCh <- []*ChangefeedChange{change}:
 		}
 	}
 }
 
-func (c *coordinator) saveCheckpointTs(ctx context.Context, changes []*ChangefeedStateChange) error {
+func (c *coordinator) saveCheckpointTs(ctx context.Context, changes []*ChangefeedChange) error {
 	statusMap := make(map[common.ChangeFeedID]uint64)
 	cfsMap := make(map[common.ChangeFeedID]*changefeed.Changefeed)
 	for _, change := range changes {

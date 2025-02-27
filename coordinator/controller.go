@@ -75,14 +75,14 @@ type Controller struct {
 	taskHandlers     []*threadpool.TaskHandle
 	messageCenter    messaging.MessageCenter
 
-	changefeedChangeCh chan []*ChangefeedStateChange
+	changefeedChangeCh chan []*ChangefeedChange
 
 	lastPrintStatusTime time.Time
 
 	apiLock sync.RWMutex
 }
 
-type ChangefeedStateChange struct {
+type ChangefeedChange struct {
 	changefeedID common.ChangeFeedID
 	changefeed   *changefeed.Changefeed
 	state        model.FeedState
@@ -93,7 +93,7 @@ type ChangefeedStateChange struct {
 func NewController(
 	version int64,
 	selfNode *node.Info,
-	changefeedChangeCh chan []*ChangefeedStateChange,
+	changefeedChangeCh chan []*ChangefeedChange,
 	backend changefeed.Backend,
 	eventCh *chann.DrainableChann[*Event],
 	taskScheduler threadpool.ThreadPool,
@@ -318,7 +318,7 @@ func (c *Controller) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Coordin
 
 // handleMaintainerStatus handle the status report from the maintainers
 func (c *Controller) handleMaintainerStatus(from node.ID, statusList []*heartbeatpb.MaintainerStatus) {
-	changes := make([]*ChangefeedStateChange, 0, len(statusList))
+	changes := make([]*ChangefeedChange, 0, len(statusList))
 	for _, status := range statusList {
 		cfID := common.NewChangefeedIDFromPB(status.ChangefeedID)
 		change := c.handleSingleMaintainerStatus(from, status, cfID)
@@ -338,7 +338,7 @@ func (c *Controller) handleSingleMaintainerStatus(
 	from node.ID,
 	status *heartbeatpb.MaintainerStatus,
 	cfID common.ChangeFeedID,
-) *ChangefeedStateChange {
+) *ChangefeedChange {
 	// Update the operator status first
 	c.operatorController.UpdateOperatorStatus(cfID, from, status)
 
@@ -401,9 +401,9 @@ func (c *Controller) updateChangefeedStatus(
 	cf *changefeed.Changefeed,
 	cfID common.ChangeFeedID,
 	status *heartbeatpb.MaintainerStatus,
-) *ChangefeedStateChange {
+) *ChangefeedChange {
 	changed, state, err := cf.UpdateStatus(status)
-	change := &ChangefeedStateChange{
+	change := &ChangefeedChange{
 		changefeedID: cfID,
 		changefeed:   cf,
 		state:        state,
