@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/klauspost/compress/zstd"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -170,6 +171,9 @@ type eventStore struct {
 		// use table id as the key is to share data between spans not completely the same in the future.
 		tableToDispatchers map[int64]map[common.DispatcherID]bool
 	}
+
+	encoder *zstd.Encoder
+	decoder *zstd.Decoder
 }
 
 const (
@@ -192,6 +196,16 @@ func New(
 		log.Panic("fail to remove path")
 	}
 
+	// Create the zstd encoder
+	encoder, err := zstd.NewWriter(nil)
+	if err != nil {
+		log.Panic("Failed to create zstd encoder", zap.Error(err))
+	}
+
+	decoder, err := zstd.NewReader(nil)
+	if err != nil {
+		log.Panic("Failed to create zstd decoder", zap.Error(err))
+	}
 	store := &eventStore{
 		pdClock:   pdClock,
 		subClient: subClient,
@@ -201,6 +215,8 @@ func New(
 		writeTaskPools: make([]*writeTaskPool, 0, dbCount),
 
 		gcManager: newGCManager(),
+		encoder:   encoder,
+		decoder:   decoder,
 	}
 
 	// create a write task pool per db instance
@@ -665,7 +681,8 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 		for _, kv := range event.kvs {
 			key := EncodeKey(uint64(event.subID), event.tableID, &kv)
 			value := kv.Encode()
-			if err := batch.Set(key, value, pebble.NoSync); err != nil {
+			compressedValue := e.encoder.EncodeAll(value, nil)
+			if err := batch.Set(key, compressedValue, pebble.NoSync); err != nil {
 				log.Panic("failed to update pebble batch", zap.Error(err))
 			}
 		}
@@ -699,6 +716,8 @@ type eventStoreIter struct {
 	startTs  uint64
 	endTs    uint64
 	rowCount int64
+
+	decoder *zstd.Decoder
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
@@ -710,8 +729,12 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	}
 
 	value := iter.innerIter.Value()
+	decompressedValue, err := iter.decoder.DecodeAll(value, nil)
+	if err != nil {
+		log.Panic("failed to decompress value", zap.Error(err))
+	}
 	rawKV := &common.RawKVEntry{}
-	rawKV.Decode(value)
+	rawKV.Decode(decompressedValue)
 	isNewTxn := false
 	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
 		isNewTxn = true
