@@ -52,6 +52,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		result      []commonEvent.DDLEvent // Note: not all fields in DDLEvent are compared
 	}
 	testCases := []struct {
+		testName                    string
 		initailDBInfos              []mockDBInfo
 		ddlJobs                     []*model.Job
 		tableMap                    map[int64]*BasicTableInfo
@@ -65,6 +66,7 @@ func TestApplyDDLJobs(t *testing.T) {
 	}{
 		// test drop schema can clear table info and partition info
 		{
+			"dropSchema",
 			nil,
 			func() []*model.Job {
 				return []*model.Job{
@@ -90,6 +92,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test create table/drop table/truncate table
 		{
+			"createDropTable",
 			nil,
 			func() []*model.Job {
 				return []*model.Job{
@@ -271,6 +274,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test partition table related ddl
 		{
+			"partitionTable",
 			nil,
 			func() []*model.Job {
 				return []*model.Job{
@@ -538,6 +542,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test exchange partition
 		{
+			"exchangePartition",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -685,6 +690,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test rename table
 		{
+			"renameTable",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -856,6 +862,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test rename partition table
 		{
+			"renamePartitionTable",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1003,6 +1010,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test rename tables
 		{
+			"renameTables",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1191,6 +1199,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test create tables
 		{
+			"createTables",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1366,6 +1375,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test create tables for partition table
 		{
+			"createPartitionTables",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1549,6 +1559,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 		// test alter/remove partitioning
 		{
+			"alterRemovePartitioning",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1684,6 +1695,7 @@ func TestApplyDDLJobs(t *testing.T) {
 		// test multi schema change
 		// test add/drop column
 		{
+			"trivialDDLs",
 			[]mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
@@ -1750,208 +1762,207 @@ func TestApplyDDLJobs(t *testing.T) {
 		},
 	}
 
-	for index, tt := range testCases {
-		dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
-		pStorage := newPersistentStorageForTest(dbPath, tt.initailDBInfos)
-		checkState := func(fromDisk bool) {
-			if (tt.tableMap != nil && !reflect.DeepEqual(tt.tableMap, pStorage.tableMap)) ||
-				(tt.tableMap == nil && len(pStorage.tableMap) != 0) {
-				log.Warn("tableMap not equal", zap.Int("testIndex", index),
-					zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap), zap.Bool("fromDisk", fromDisk))
-				t.Fatalf("tableMap not equal")
-			}
-			if (tt.partitionMap != nil && !reflect.DeepEqual(tt.partitionMap, pStorage.partitionMap)) ||
-				(tt.partitionMap == nil && len(pStorage.partitionMap) != 0) {
-				log.Warn("partitionMap not equal", zap.Int("testIndex", index), zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.partitionMap), zap.Any("actual", pStorage.partitionMap), zap.Bool("fromDisk", fromDisk))
-				t.Fatalf("partitionMap not equal")
-			}
-			if (tt.databaseMap != nil && !reflect.DeepEqual(tt.databaseMap, pStorage.databaseMap)) ||
-				(tt.databaseMap == nil && len(pStorage.databaseMap) != 0) {
-				log.Warn("databaseMap not equal", zap.Int("testIndex", index), zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.databaseMap), zap.Any("actual", pStorage.databaseMap), zap.Bool("fromDisk", fromDisk))
-				t.Fatalf("databaseMap not equal")
-			}
-			if (tt.tablesDDLHistory != nil && !reflect.DeepEqual(tt.tablesDDLHistory, pStorage.tablesDDLHistory)) ||
-				(tt.tablesDDLHistory == nil && len(pStorage.tablesDDLHistory) != 0) {
-				log.Warn("tablesDDLHistory not equal", zap.Int("testIndex", index), zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tablesDDLHistory), zap.Any("actual", pStorage.tablesDDLHistory), zap.Bool("fromDisk", fromDisk))
-				t.Fatalf("tablesDDLHistory not equal")
-			}
-			if (tt.tableTriggerDDLHistory != nil && !reflect.DeepEqual(tt.tableTriggerDDLHistory, pStorage.tableTriggerDDLHistory)) ||
-				(tt.tableTriggerDDLHistory == nil && len(pStorage.tableTriggerDDLHistory) != 0) {
-				log.Warn("tableTriggerDDLHistory not equal", zap.Int("testIndex", index), zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tableTriggerDDLHistory), zap.Any("actual", pStorage.tableTriggerDDLHistory), zap.Bool("fromDisk", fromDisk))
-				t.Fatalf("tableTriggerDDLHistory not equal")
-			}
-			for _, testCase := range tt.physicalTableQueryTestCases {
-				allPhysicalTables, err := pStorage.getAllPhysicalTables(testCase.snapTs, testCase.tableFilter)
-				require.Nil(t, err)
-				sort.Slice(allPhysicalTables, func(i, j int) bool {
-					// SchemaID and TableID should be enough?
-					if allPhysicalTables[i].SchemaID != allPhysicalTables[j].SchemaID {
-						return allPhysicalTables[i].SchemaID < allPhysicalTables[j].SchemaID
-					} else {
-						return allPhysicalTables[i].TableID < allPhysicalTables[j].TableID
-					}
-				})
-				sort.Slice(testCase.result, func(i, j int) bool {
-					// SchemaID and TableID should be enough?
-					if testCase.result[i].SchemaID != testCase.result[j].SchemaID {
-						return testCase.result[i].SchemaID < testCase.result[j].SchemaID
-					} else {
-						return testCase.result[i].TableID < testCase.result[j].TableID
-					}
-				})
-				if !reflect.DeepEqual(testCase.result, allPhysicalTables) {
-					log.Warn("getAllPhysicalTables result wrong",
-						zap.Int("testIndex", index),
-						zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)),
-						zap.Uint64("snapTs", testCase.snapTs),
-						zap.Any("tableFilter", testCase.tableFilter),
-						zap.Any("expected", testCase.result),
-						zap.Any("actual", allPhysicalTables),
-						zap.Bool("fromDisk", fromDisk))
-					t.Fatalf("getAllPhysicalTables result wrong")
+	for _, tt := range testCases {
+		t.Run(tt.testName, func(t *testing.T) {
+			dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
+			pStorage := newPersistentStorageForTest(dbPath, tt.initailDBInfos)
+			checkState := func(fromDisk bool) {
+				if (tt.tableMap != nil && !reflect.DeepEqual(tt.tableMap, pStorage.tableMap)) ||
+					(tt.tableMap == nil && len(pStorage.tableMap) != 0) {
+					log.Warn("tableMap not equal",
+						zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tableMap), zap.Any("actual", pStorage.tableMap), zap.Bool("fromDisk", fromDisk))
+					t.Fatalf("tableMap not equal")
 				}
-			}
-			checkDDLEvents := func(expected []commonEvent.DDLEvent, actual []commonEvent.DDLEvent) bool {
-				if len(expected) != len(actual) {
-					return false
+				if (tt.partitionMap != nil && !reflect.DeepEqual(tt.partitionMap, pStorage.partitionMap)) ||
+					(tt.partitionMap == nil && len(pStorage.partitionMap) != 0) {
+					log.Warn("partitionMap not equal", zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.partitionMap), zap.Any("actual", pStorage.partitionMap), zap.Bool("fromDisk", fromDisk))
+					t.Fatalf("partitionMap not equal")
 				}
-				for i := range expected {
-					expectedDDLEvent := expected[i]
-					actualDDLEvent := actual[i]
-					if expectedDDLEvent.Type != actualDDLEvent.Type || expectedDDLEvent.FinishedTs != actualDDLEvent.FinishedTs {
-						return false
-					}
-					// check query
-					if expectedDDLEvent.Query != "" && expectedDDLEvent.Query != actualDDLEvent.Query {
-						return false
-					}
-					// check BlockedTables
-					if expectedDDLEvent.BlockedTables == nil && actualDDLEvent.BlockedTables != nil {
-						return false
-					}
-					if expectedDDLEvent.BlockedTables != nil {
-						if actualDDLEvent.BlockedTables == nil {
-							return false
+				if (tt.databaseMap != nil && !reflect.DeepEqual(tt.databaseMap, pStorage.databaseMap)) ||
+					(tt.databaseMap == nil && len(pStorage.databaseMap) != 0) {
+					log.Warn("databaseMap not equal", zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.databaseMap), zap.Any("actual", pStorage.databaseMap), zap.Bool("fromDisk", fromDisk))
+					t.Fatalf("databaseMap not equal")
+				}
+				if (tt.tablesDDLHistory != nil && !reflect.DeepEqual(tt.tablesDDLHistory, pStorage.tablesDDLHistory)) ||
+					(tt.tablesDDLHistory == nil && len(pStorage.tablesDDLHistory) != 0) {
+					log.Warn("tablesDDLHistory not equal", zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tablesDDLHistory), zap.Any("actual", pStorage.tablesDDLHistory), zap.Bool("fromDisk", fromDisk))
+					t.Fatalf("tablesDDLHistory not equal")
+				}
+				if (tt.tableTriggerDDLHistory != nil && !reflect.DeepEqual(tt.tableTriggerDDLHistory, pStorage.tableTriggerDDLHistory)) ||
+					(tt.tableTriggerDDLHistory == nil && len(pStorage.tableTriggerDDLHistory) != 0) {
+					log.Warn("tableTriggerDDLHistory not equal", zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)), zap.Any("expected", tt.tableTriggerDDLHistory), zap.Any("actual", pStorage.tableTriggerDDLHistory), zap.Bool("fromDisk", fromDisk))
+					t.Fatalf("tableTriggerDDLHistory not equal")
+				}
+				for _, testCase := range tt.physicalTableQueryTestCases {
+					allPhysicalTables, err := pStorage.getAllPhysicalTables(testCase.snapTs, testCase.tableFilter)
+					require.Nil(t, err)
+					sort.Slice(allPhysicalTables, func(i, j int) bool {
+						// SchemaID and TableID should be enough?
+						if allPhysicalTables[i].SchemaID != allPhysicalTables[j].SchemaID {
+							return allPhysicalTables[i].SchemaID < allPhysicalTables[j].SchemaID
+						} else {
+							return allPhysicalTables[i].TableID < allPhysicalTables[j].TableID
 						}
-						sort.Slice(expectedDDLEvent.BlockedTables.TableIDs, func(i, j int) bool {
-							return expectedDDLEvent.BlockedTables.TableIDs[i] < expectedDDLEvent.BlockedTables.TableIDs[j]
-						})
-						sort.Slice(actualDDLEvent.BlockedTables.TableIDs, func(i, j int) bool {
-							return actualDDLEvent.BlockedTables.TableIDs[i] < actualDDLEvent.BlockedTables.TableIDs[j]
-						})
-						if !reflect.DeepEqual(expectedDDLEvent.BlockedTables, actualDDLEvent.BlockedTables) {
-							return false
-						}
-					}
-					// check UpdatedSchemas
-					sort.Slice(expectedDDLEvent.UpdatedSchemas, func(i, j int) bool {
-						// TableID should be unique, so it is enough
-						return expectedDDLEvent.UpdatedSchemas[i].TableID < expectedDDLEvent.UpdatedSchemas[j].TableID
 					})
-					if !reflect.DeepEqual(expectedDDLEvent.UpdatedSchemas, actualDDLEvent.UpdatedSchemas) {
-						return false
-					}
-					// check NeedDroppedTables
-					if expectedDDLEvent.NeedDroppedTables == nil && actualDDLEvent.NeedDroppedTables != nil {
-						return false
-					}
-					if expectedDDLEvent.NeedDroppedTables != nil {
-						if actualDDLEvent.NeedDroppedTables == nil {
-							return false
+					sort.Slice(testCase.result, func(i, j int) bool {
+						// SchemaID and TableID should be enough?
+						if testCase.result[i].SchemaID != testCase.result[j].SchemaID {
+							return testCase.result[i].SchemaID < testCase.result[j].SchemaID
+						} else {
+							return testCase.result[i].TableID < testCase.result[j].TableID
 						}
-						sort.Slice(expectedDDLEvent.NeedDroppedTables.TableIDs, func(i, j int) bool {
-							return expectedDDLEvent.NeedDroppedTables.TableIDs[i] < expectedDDLEvent.NeedDroppedTables.TableIDs[j]
-						})
-						sort.Slice(actualDDLEvent.NeedDroppedTables.TableIDs, func(i, j int) bool {
-							return actualDDLEvent.NeedDroppedTables.TableIDs[i] < actualDDLEvent.NeedDroppedTables.TableIDs[j]
-						})
-						if !reflect.DeepEqual(expectedDDLEvent.NeedDroppedTables, actualDDLEvent.NeedDroppedTables) {
-							return false
-						}
-					}
-					// check NeedAddedTables
-					sort.Slice(expectedDDLEvent.NeedAddedTables, func(i, j int) bool {
-						// TableID should be unique, so it is enough
-						return expectedDDLEvent.NeedAddedTables[i].TableID < expectedDDLEvent.NeedAddedTables[j].TableID
 					})
-					if !reflect.DeepEqual(expectedDDLEvent.NeedAddedTables, actualDDLEvent.NeedAddedTables) {
+					if !reflect.DeepEqual(testCase.result, allPhysicalTables) {
+						log.Warn("getAllPhysicalTables result wrong",
+							zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)),
+							zap.Uint64("snapTs", testCase.snapTs),
+							zap.Any("tableFilter", testCase.tableFilter),
+							zap.Any("expected", testCase.result),
+							zap.Any("actual", allPhysicalTables),
+							zap.Bool("fromDisk", fromDisk))
+						t.Fatalf("getAllPhysicalTables result wrong")
+					}
+				}
+				checkDDLEvents := func(expected []commonEvent.DDLEvent, actual []commonEvent.DDLEvent) bool {
+					if len(expected) != len(actual) {
 						return false
 					}
-					// check TableNameChange
-					if expectedDDLEvent.TableNameChange == nil && actualDDLEvent.TableNameChange != nil {
-						return false
-					}
-					if expectedDDLEvent.TableNameChange != nil {
-						if actualDDLEvent.TableNameChange == nil {
+					for i := range expected {
+						expectedDDLEvent := expected[i]
+						actualDDLEvent := actual[i]
+						if expectedDDLEvent.Type != actualDDLEvent.Type || expectedDDLEvent.FinishedTs != actualDDLEvent.FinishedTs {
 							return false
 						}
-						sort.Slice(expectedDDLEvent.TableNameChange.AddName, func(i, j int) bool {
-							if expectedDDLEvent.TableNameChange.AddName[i].TableName < expectedDDLEvent.TableNameChange.AddName[j].TableName {
-								return true
-							} else if expectedDDLEvent.TableNameChange.AddName[i].TableName > expectedDDLEvent.TableNameChange.AddName[j].TableName {
-								return false
-							} else {
-								return expectedDDLEvent.TableNameChange.AddName[i].SchemaName < expectedDDLEvent.TableNameChange.AddName[j].SchemaName
-							}
-						})
-						sort.Slice(expectedDDLEvent.TableNameChange.DropName, func(i, j int) bool {
-							if expectedDDLEvent.TableNameChange.DropName[i].TableName < expectedDDLEvent.TableNameChange.DropName[j].TableName {
-								return true
-							} else if expectedDDLEvent.TableNameChange.DropName[i].TableName > expectedDDLEvent.TableNameChange.DropName[j].TableName {
-								return false
-							} else {
-								return expectedDDLEvent.TableNameChange.DropName[i].SchemaName < expectedDDLEvent.TableNameChange.DropName[j].SchemaName
-							}
-						})
-						if !reflect.DeepEqual(expectedDDLEvent.TableNameChange, actualDDLEvent.TableNameChange) {
+						// check query
+						if expectedDDLEvent.Query != "" && expectedDDLEvent.Query != actualDDLEvent.Query {
 							return false
 						}
+						// check BlockedTables
+						if expectedDDLEvent.BlockedTables == nil && actualDDLEvent.BlockedTables != nil {
+							return false
+						}
+						if expectedDDLEvent.BlockedTables != nil {
+							if actualDDLEvent.BlockedTables == nil {
+								return false
+							}
+							sort.Slice(expectedDDLEvent.BlockedTables.TableIDs, func(i, j int) bool {
+								return expectedDDLEvent.BlockedTables.TableIDs[i] < expectedDDLEvent.BlockedTables.TableIDs[j]
+							})
+							sort.Slice(actualDDLEvent.BlockedTables.TableIDs, func(i, j int) bool {
+								return actualDDLEvent.BlockedTables.TableIDs[i] < actualDDLEvent.BlockedTables.TableIDs[j]
+							})
+							if !reflect.DeepEqual(expectedDDLEvent.BlockedTables, actualDDLEvent.BlockedTables) {
+								return false
+							}
+						}
+						// check UpdatedSchemas
+						sort.Slice(expectedDDLEvent.UpdatedSchemas, func(i, j int) bool {
+							// TableID should be unique, so it is enough
+							return expectedDDLEvent.UpdatedSchemas[i].TableID < expectedDDLEvent.UpdatedSchemas[j].TableID
+						})
+						if !reflect.DeepEqual(expectedDDLEvent.UpdatedSchemas, actualDDLEvent.UpdatedSchemas) {
+							return false
+						}
+						// check NeedDroppedTables
+						if expectedDDLEvent.NeedDroppedTables == nil && actualDDLEvent.NeedDroppedTables != nil {
+							return false
+						}
+						if expectedDDLEvent.NeedDroppedTables != nil {
+							if actualDDLEvent.NeedDroppedTables == nil {
+								return false
+							}
+							sort.Slice(expectedDDLEvent.NeedDroppedTables.TableIDs, func(i, j int) bool {
+								return expectedDDLEvent.NeedDroppedTables.TableIDs[i] < expectedDDLEvent.NeedDroppedTables.TableIDs[j]
+							})
+							sort.Slice(actualDDLEvent.NeedDroppedTables.TableIDs, func(i, j int) bool {
+								return actualDDLEvent.NeedDroppedTables.TableIDs[i] < actualDDLEvent.NeedDroppedTables.TableIDs[j]
+							})
+							if !reflect.DeepEqual(expectedDDLEvent.NeedDroppedTables, actualDDLEvent.NeedDroppedTables) {
+								return false
+							}
+						}
+						// check NeedAddedTables
+						sort.Slice(expectedDDLEvent.NeedAddedTables, func(i, j int) bool {
+							// TableID should be unique, so it is enough
+							return expectedDDLEvent.NeedAddedTables[i].TableID < expectedDDLEvent.NeedAddedTables[j].TableID
+						})
+						if !reflect.DeepEqual(expectedDDLEvent.NeedAddedTables, actualDDLEvent.NeedAddedTables) {
+							return false
+						}
+						// check TableNameChange
+						if expectedDDLEvent.TableNameChange == nil && actualDDLEvent.TableNameChange != nil {
+							return false
+						}
+						if expectedDDLEvent.TableNameChange != nil {
+							if actualDDLEvent.TableNameChange == nil {
+								return false
+							}
+							sort.Slice(expectedDDLEvent.TableNameChange.AddName, func(i, j int) bool {
+								if expectedDDLEvent.TableNameChange.AddName[i].TableName < expectedDDLEvent.TableNameChange.AddName[j].TableName {
+									return true
+								} else if expectedDDLEvent.TableNameChange.AddName[i].TableName > expectedDDLEvent.TableNameChange.AddName[j].TableName {
+									return false
+								} else {
+									return expectedDDLEvent.TableNameChange.AddName[i].SchemaName < expectedDDLEvent.TableNameChange.AddName[j].SchemaName
+								}
+							})
+							sort.Slice(expectedDDLEvent.TableNameChange.DropName, func(i, j int) bool {
+								if expectedDDLEvent.TableNameChange.DropName[i].TableName < expectedDDLEvent.TableNameChange.DropName[j].TableName {
+									return true
+								} else if expectedDDLEvent.TableNameChange.DropName[i].TableName > expectedDDLEvent.TableNameChange.DropName[j].TableName {
+									return false
+								} else {
+									return expectedDDLEvent.TableNameChange.DropName[i].SchemaName < expectedDDLEvent.TableNameChange.DropName[j].SchemaName
+								}
+							})
+							if !reflect.DeepEqual(expectedDDLEvent.TableNameChange, actualDDLEvent.TableNameChange) {
+								return false
+							}
+						}
+					}
+					return true
+				}
+				for _, testCase := range tt.fetchTableDDLEventsTestCase {
+					events, err := pStorage.fetchTableDDLEvents(testCase.tableID, testCase.tableFilter, testCase.startTs, testCase.endTs)
+					require.Nil(t, err)
+					if !checkDDLEvents(testCase.result, events) {
+						log.Warn("fetchTableDDLEvents result wrong",
+							zap.Int64("tableID", testCase.tableID),
+							zap.Any("tableFilter", testCase.tableFilter),
+							zap.Uint64("startTs", testCase.startTs),
+							zap.Uint64("endTs", testCase.endTs),
+							zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)),
+							zap.String("expectedEvents", formatDDLEventsForTest(testCase.result)),
+							zap.String("actualEvents", formatDDLEventsForTest(events)))
+						t.Fatalf("fetchTableDDLEvents result wrong")
 					}
 				}
-				return true
-			}
-			for _, testCase := range tt.fetchTableDDLEventsTestCase {
-				events, err := pStorage.fetchTableDDLEvents(testCase.tableID, testCase.tableFilter, testCase.startTs, testCase.endTs)
-				require.Nil(t, err)
-				if !checkDDLEvents(testCase.result, events) {
-					log.Warn("fetchTableDDLEvents result wrong",
-						zap.Int("testIndex", index),
-						zap.Int64("tableID", testCase.tableID),
-						zap.Any("tableFilter", testCase.tableFilter),
-						zap.Uint64("startTs", testCase.startTs),
-						zap.Uint64("endTs", testCase.endTs),
-						zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)),
-						zap.String("expectedEvents", formatDDLEventsForTest(testCase.result)),
-						zap.String("actualEvents", formatDDLEventsForTest(events)))
-					t.Fatalf("fetchTableDDLEvents result wrong")
+				for _, testCase := range tt.fetchTableTriggerDDLEvents {
+					events, err := pStorage.fetchTableTriggerDDLEvents(testCase.tableFilter, testCase.startTs, testCase.limit)
+					require.Nil(t, err)
+					if !checkDDLEvents(testCase.result, events) {
+						log.Warn("fetchTableTriggerDDLEvents result wrong",
+							zap.Any("tableFilter", testCase.tableFilter),
+							zap.Uint64("startTs", testCase.startTs),
+							zap.Int("limit", testCase.limit),
+							zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)),
+							zap.String("expectedEvents", formatDDLEventsForTest(testCase.result)),
+							zap.String("actualEvents", formatDDLEventsForTest(events)))
+						t.Fatalf("fetchTableTriggerDDLEvents result wrong")
+					}
 				}
 			}
-			for _, testCase := range tt.fetchTableTriggerDDLEvents {
-				events, err := pStorage.fetchTableTriggerDDLEvents(testCase.tableFilter, testCase.startTs, testCase.limit)
+			for _, job := range tt.ddlJobs {
+				err := pStorage.handleDDLJob(job)
 				require.Nil(t, err)
-				if !checkDDLEvents(testCase.result, events) {
-					log.Warn("fetchTableTriggerDDLEvents result wrong",
-						zap.Int("testIndex", index),
-						zap.Any("tableFilter", testCase.tableFilter),
-						zap.Uint64("startTs", testCase.startTs),
-						zap.Int("limit", testCase.limit),
-						zap.String("ddlJobs", formatDDLJobsForTest(tt.ddlJobs)),
-						zap.String("expectedEvents", formatDDLEventsForTest(testCase.result)),
-						zap.String("actualEvents", formatDDLEventsForTest(events)))
-					t.Fatalf("fetchTableTriggerDDLEvents result wrong")
-				}
 			}
-		}
-		for _, job := range tt.ddlJobs {
-			err := pStorage.handleDDLJob(job)
-			require.Nil(t, err)
-		}
-		checkState(false)
-		pStorage.close()
-		// load from disk and check again
-		pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
-		checkState(true)
-		pStorage.close()
+			checkState(false)
+			pStorage.close()
+			// load from disk and check again
+			pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
+			checkState(true)
+			pStorage.close()
+		})
 	}
 }
 
