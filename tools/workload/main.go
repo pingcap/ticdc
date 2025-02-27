@@ -279,7 +279,7 @@ type sqlValue struct {
 
 func executeInsertWorkers(dbs []*sql.DB, insertConcurrency int, workload schema.Workload, wg *sync.WaitGroup) {
 	channel := make(chan sqlValue, 100000)
-	for i := 0; i < insertConcurrency; i++ {
+	for i := 0; i < 100; i++ {
 		go generateInsertSQL(channel, workload)
 	}
 
@@ -322,8 +322,9 @@ func generateInsertSQL(channel chan sqlValue, workload schema.Workload) {
 
 func doExecInsert(conn *sql.Conn, channel chan sqlValue, workload schema.Workload) {
 	for {
-
+		start := time.Now()
 		sqlValue := <-channel
+		log.Info("get sqlValue", zap.Any("cost", time.Since(start)))
 		_, err := executeWithValues(conn, sqlValue.sql, workload, 0, sqlValue.values)
 
 		if err != nil {
