@@ -303,6 +303,8 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 			log.Info("row i type is", zap.Any("type", rowLists[i].RowChange.RowType))
 		}
 
+		log.Info("finalRowList", zap.Any("len", len(finalRowLists)))
+
 		// step 2. generate sqls
 		sql, value, err := w.batchSingleTxnDmls(finalRowLists, tableInfo, inSafeMode)
 		return sql, value, errors.Trace(err)
@@ -851,6 +853,7 @@ func (w *MysqlWriter) groupRowsByType(
 		eventTableInfo = common.BuildTiDBTableInfoWithoutVirtualColumns(eventTableInfo)
 	}
 	for _, row := range rows {
+		log.Info("row type in groupRowsByType", zap.Any("type", row.RowType))
 		switch row.RowType {
 		case commonEvent.RowTypeInsert:
 			args, err := getArgs(&row.Row, tableInfo, true)
