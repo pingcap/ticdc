@@ -21,9 +21,8 @@ import (
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/cdc/sink/util"
 	"go.uber.org/zap"
 )

@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-
 	"github.com/stretchr/testify/require"
 )
 

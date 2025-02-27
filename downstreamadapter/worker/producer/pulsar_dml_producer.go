@@ -173,7 +173,6 @@ func (p *pulsarDMLProducer) AsyncSendMessage(
 					return
 				default:
 					if e != nil {
-
 					}
 					log.Warn("Error channel is full in pulsar DML producer",
 						zap.Stringer("changefeed", p.id), zap.Error(e))

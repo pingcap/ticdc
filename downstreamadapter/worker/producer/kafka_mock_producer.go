@@ -21,8 +21,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
-var _ DDLProducer = (*KafkaMockProducer)(nil)
-var _ DMLProducer = (*KafkaMockProducer)(nil)
+var (
+	_ DDLProducer = (*KafkaMockProducer)(nil)
+	_ DMLProducer = (*KafkaMockProducer)(nil)
+)
 
 func NewMockKafkaDMLProducer() DMLProducer {
 	return &KafkaMockProducer{

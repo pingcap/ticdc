@@ -26,8 +26,6 @@ import (
 	"go.uber.org/zap"
 )
 
-
-
 // Assert DDLEventSink implementation
 var _ DDLProducer = (*kafkaDDLProducer)(nil)
 

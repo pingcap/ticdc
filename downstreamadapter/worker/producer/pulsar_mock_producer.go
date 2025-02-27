@@ -21,8 +21,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
-var _ DDLProducer = (*PulsarMockProducer)(nil)
-var _ DMLProducer = (*PulsarMockProducer)(nil)
+var (
+	_ DDLProducer = (*PulsarMockProducer)(nil)
+	_ DMLProducer = (*PulsarMockProducer)(nil)
+)
 
 // PulsarMockProducer is a mock pulsar producer
 type PulsarMockProducer struct {
