@@ -82,7 +82,6 @@ func (m mockOperator) String() string {
 }
 
 func TestOperatorQueue(t *testing.T) {
-
 	queue := make(OperatorQueue[mockReplicationID, mockReplicationStatus], 0)
 
 	// Create test operators with different execution times
@@ -127,5 +126,4 @@ func TestOperatorQueue(t *testing.T) {
 
 	popped = heap.Pop(&queue).(*OperatorWithTime[mockReplicationID, mockReplicationStatus])
 	require.Equal(t, "op3", popped.OP.(mockOperator).id.String())
-
 }
