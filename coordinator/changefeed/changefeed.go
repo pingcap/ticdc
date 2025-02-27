@@ -167,12 +167,8 @@ func (c *Changefeed) ForceUpdateStatus(newStatus *heartbeatpb.MaintainerStatus) 
 	return c.backoff.CheckStatus(newStatus)
 }
 
-func (c *Changefeed) IsMQSink() bool {
-	return c.sinkType == common.KafkaSinkType
-}
-
-func (c *Changefeed) IsStorageSink() bool {
-	return c.sinkType == common.CloudStorageSinkType
+func (c *Changefeed) NeedCheckpointTsMessage() bool {
+	return c.sinkType == common.KafkaSinkType || c.sinkType == common.CloudStorageSinkType
 }
 
 func (c *Changefeed) SetIsNew(isNew bool) {
