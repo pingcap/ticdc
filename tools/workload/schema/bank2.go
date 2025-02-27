@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -224,6 +225,12 @@ func (c *Bank2Workload) BuildUpdateSql(opts UpdateOption) string {
 	panic("unimplemented")
 }
 
+var valuesPool = sync.Pool{
+	New: func() interface{} {
+		return make([]interface{}, 0, 120*200)
+	},
+}
+
 func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (string, []interface{}) {
 	start := time.Now()
 	defer func() {
@@ -231,7 +238,9 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (str
 	}()
 
 	var sql string
-	values := make([]interface{}, 0, 120*200)
+
+	values := valuesPool.Get().([]interface{})
+	defer valuesPool.Put(values[:0]) // 使用后重置并放回池中
 
 	switch tableN {
 	case 0: // acct_statement_head_info
