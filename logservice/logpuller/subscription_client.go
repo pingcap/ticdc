@@ -230,6 +230,7 @@ func NewSubscriptionClient(
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
 	option := dynstream.NewOption()
+	// Note: it is max batch size of the kv sent from tikv(not committed rows)
 	option.BatchCount = 1024
 	option.UseBuffer = false
 	option.EnableMemoryControl = true
@@ -261,24 +262,36 @@ func (s *SubscriptionClient) initMetrics() {
 }
 
 func (s *SubscriptionClient) updateMetrics(ctx context.Context) error {
-	ticker1 := time.NewTicker(10 * time.Second)
-	ticker2 := time.NewTicker(5 * time.Millisecond)
-	defer ticker1.Stop()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker1.C:
+		case <-ticker.C:
 			resolvedTsLag := s.GetResolvedTsLag()
 			if resolvedTsLag > 0 {
 				metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
 			}
-		case <-ticker2.C:
 			dsMetrics := s.ds.GetMetrics()
 			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
-			metricEventStoreDSAddPathNum.Set(float64(dsMetrics.AddPath))
-			metricEventStoreDSRemovePathNum.Set(float64(dsMetrics.RemovePath))
+			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 1 {
+				log.Panic("subscription client should have only one area")
+			}
+			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 0 {
+				areaMetric := dsMetrics.MemoryControl.AreaMemoryMetrics[0]
+				metrics.DynamicStreamMemoryUsage.WithLabelValues(
+					"log-puller",
+					"max",
+					"default",
+				).Set(float64(areaMetric.MaxMemory()))
+				metrics.DynamicStreamMemoryUsage.WithLabelValues(
+					"log-puller",
+					"used",
+					"default",
+				).Set(float64(areaMetric.MemoryUsage()))
+			}
 		}
 	}
 }
@@ -314,7 +327,7 @@ func (s *SubscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(2*1024*1024*1024, dynstream.MemoryControlAlgorithmV1) // 2GB
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(4*1024*1024*1024, dynstream.MemoryControlAlgorithmV1) // 4GB
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt}
