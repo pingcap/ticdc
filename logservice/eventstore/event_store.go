@@ -664,7 +664,10 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 		kvCount += len(event.kvs)
 		for _, kv := range event.kvs {
 			key := EncodeKey(uint64(event.subID), event.tableID, &kv)
-			writeRawKVEntryIntoBatch(key, &kv, batch)
+			value := kv.Encode()
+			if err := batch.Set(key, value, pebble.NoSync); err != nil {
+				log.Panic("failed to update pebble batch", zap.Error(err))
+			}
 		}
 	}
 	CounterKv.Add(float64(kvCount))
@@ -706,7 +709,9 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 		return nil, false, nil
 	}
 
-	rawKV := readRawKVEntryFromIter(iter.innerIter)
+	value := iter.innerIter.Value()
+	rawKV := &common.RawKVEntry{}
+	rawKV.Decode(value)
 	isNewTxn := false
 	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
 		isNewTxn = true
