@@ -614,7 +614,6 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		startTs:      dataRange.StartTs,
 		endTs:        dataRange.EndTs,
 		rowCount:     0,
-		// decoder:      e.decoder,
 	}, nil
 }
 
