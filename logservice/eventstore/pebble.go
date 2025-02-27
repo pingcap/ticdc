@@ -18,8 +18,8 @@ import (
 // TODO: add config for pebble options
 const (
 	cacheSize         = 2 << 30   // 2GB
-	memTableTotalSize = 8 << 30   // 8GB
-	memTableSize      = 128 << 20 // 128MB
+	memTableTotalSize = 16 << 30  // 16GB
+	memTableSize      = 256 << 20 // 256MB
 )
 
 func newPebbleOptions(dbNum int) *pebble.Options {
@@ -53,12 +53,7 @@ func newPebbleOptions(dbNum int) *pebble.Options {
 		l.FilterPolicy = bloom.FilterPolicy(10)
 		l.FilterType = pebble.TableFilter
 		l.TargetFileSize = 32 << 20 // 32 MB
-		if i == 0 {
-			// level 0 with no compression for better write performance
-			l.Compression = pebble.NoCompression
-		} else {
-			l.Compression = pebble.SnappyCompression
-		}
+		l.Compression = pebble.SnappyCompression
 		l.EnsureDefaults()
 	}
 	opts.Levels[6].FilterPolicy = nil
