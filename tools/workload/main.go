@@ -278,10 +278,10 @@ type sqlValue struct {
 }
 
 func executeInsertWorkers(dbs []*sql.DB, insertConcurrency int, workload schema.Workload, wg *sync.WaitGroup) {
-	channel := make(chan sqlValue, 100000)
-	for i := 0; i < 100; i++ {
-		go generateInsertSQL(channel, workload)
-	}
+	//channel := make(chan sqlValue, 100000)
+	// for i := 0; i < 100; i++ {
+	// 	go generateInsertSQL(channel, workload)
+	// }
 
 	wg.Add(insertConcurrency)
 	for i := 0; i < insertConcurrency; i++ {
@@ -293,22 +293,22 @@ func executeInsertWorkers(dbs []*sql.DB, insertConcurrency int, workload schema.
 			log.Info("get connection failed", zap.Error(err))
 			return
 		}
-		// go func(workerID int) {
-		// 	defer func() {
-		// 		log.Info("insert worker exited", zap.Int("worker", workerID))
-		// 		wg.Done()
-		// 	}()
-		// 	log.Info("start insert worker", zap.Int("worker", workerID))
-		// 	doInsert(db, workload)
-		// }(i)
 		go func(workerID int) {
 			defer func() {
 				log.Info("insert worker exited", zap.Int("worker", workerID))
 				wg.Done()
 			}()
 			log.Info("start insert worker", zap.Int("worker", workerID))
-			doExecInsert(conn, channel, workload)
+			doInsert(conn, workload)
 		}(i)
+		// go func(workerID int) {
+		// 	defer func() {
+		// 		log.Info("insert worker exited", zap.Int("worker", workerID))
+		// 		wg.Done()
+		// 	}()
+		// 	log.Info("start insert worker", zap.Int("worker", workerID))
+		// 	doExecInsert(conn, channel, workload)
+		// }(i)
 	}
 }
 
@@ -471,6 +471,9 @@ func doInsert(conn *sql.Conn, workload schema.Workload) {
 
 		if workloadType == uuu {
 			insertSql, values := workload.(*schema.UUUWorkload).BuildInsertSqlWithValues(j, batchSize)
+			_, err = executeWithValues(conn, insertSql, workload, j, values)
+		} else if workloadType == bank2 {
+			insertSql, values := workload.(*schema.Bank2Workload).BuildInsertSqlWithValues(j, batchSize)
 			_, err = executeWithValues(conn, insertSql, workload, j, values)
 		} else {
 			insertSql := workload.BuildInsertSql(j, batchSize)
