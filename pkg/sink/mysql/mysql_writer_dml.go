@@ -191,7 +191,6 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 		}
 
 		for {
-			newRowLists := make([]RowChangeWithKeys, 0, len(rowLists))
 			hasUpdate := false
 			// flagList used to store the exists or not for this row. True means exists.
 			flagList := make([]bool, len(rowLists))
@@ -287,16 +286,18 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 				// means no more changes for the rows, break and generate sqls.
 				break
 			} else {
+				newRowLists := make([]RowChangeWithKeys, 0, len(rowLists))
 				for i := 0; i < len(rowLists); i++ {
 					if flagList[i] {
 						newRowLists = append(newRowLists, rowLists[i])
 					}
 				}
+				rowLists = newRowLists
 			}
-			rowLists = newRowLists
+
 		}
 
-		finalRowLists := make([]*commonEvent.RowChange, len(rowLists))
+		finalRowLists := make([]*commonEvent.RowChange, 0, len(rowLists))
 
 		for i := 0; i < len(rowLists); i++ {
 			finalRowLists = append(finalRowLists, rowLists[i].RowChange)
