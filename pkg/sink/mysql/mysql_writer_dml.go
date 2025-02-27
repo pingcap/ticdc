@@ -72,9 +72,9 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
-			for _, query := range queryList {
-				dmls.sqls = append(dmls.sqls, query)
-				dmls.values = append(dmls.values, argsList...)
+			for i := 0; i < len(queryList); i++ {
+				dmls.sqls = append(dmls.sqls, queryList[i])
+				dmls.values = append(dmls.values, argsList[i])
 			}
 			continue
 		}
@@ -86,9 +86,9 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
-			for _, query := range queryList {
-				dmls.sqls = append(dmls.sqls, query)
-				dmls.values = append(dmls.values, argsList...)
+			for i := 0; i < len(queryList); i++ {
+				dmls.sqls = append(dmls.sqls, queryList[i])
+				dmls.values = append(dmls.values, argsList[i])
 			}
 			continue
 		}
@@ -103,9 +103,9 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 				if err != nil {
 					return nil, errors.Trace(err)
 				}
-				for _, query := range queryList {
-					dmls.sqls = append(dmls.sqls, query)
-					dmls.values = append(dmls.values, argsList...)
+				for i := 0; i < len(queryList); i++ {
+					dmls.sqls = append(dmls.sqls, queryList[i])
+					dmls.values = append(dmls.values, argsList[i])
 				}
 				continue
 			}
@@ -153,6 +153,7 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 	tableInfo := events[0].TableInfo
 
 	if inSafeMode {
+		log.Info("into safe mode batch")
 		type RowChangeWithKeys struct {
 			RowChange  *commonEvent.RowChange
 			RowKeys    [][]byte
@@ -310,6 +311,7 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 		sql, value, err := w.batchSingleTxnDmls(finalRowLists, tableInfo, inSafeMode)
 		return sql, value, errors.Trace(err)
 	} else {
+		log.Info("into unsafe mode batch")
 		// unsafe mode
 		// step 1. divide update row to delete row and insert row, and set into map based on the key hash
 		rowsMap := make(map[uint64][]*commonEvent.RowChange)
@@ -442,9 +444,9 @@ func (w *MysqlWriter) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]stri
 			return nil, nil, errors.Trace(err)
 		}
 
-		for _, query := range queryList {
-			querys = append(querys, query)
-			args = append(args, argsList...)
+		for i := 0; i < len(queryList); i++ {
+			querys = append(querys, queryList[i])
+			args = append(args, argsList[i])
 		}
 	}
 	return querys, args, nil
