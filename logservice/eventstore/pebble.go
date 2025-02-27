@@ -126,6 +126,7 @@ func writeRawKVEntryIntoBatch(key []byte, entry *common.RawKVEntry, batch *pebbl
 		log.Panic("failed to compress data", zap.Error(err))
 	}
 	ratio := float64(len(value)) / float64(len(compressedValue))
+	log.Info("compression ratio", zap.Float64("ratio", ratio))
 	metrics.EventStoreCompressRatio.Set(ratio)
 	if err := batch.Set(key, compressedValue, pebble.NoSync); err != nil {
 		log.Panic("failed to update pebble batch", zap.Error(err))
