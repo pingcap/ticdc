@@ -33,6 +33,8 @@ import (
 	"github.com/pingcap/errors"
 	plog "github.com/pingcap/log"
 	"go.uber.org/zap"
+
+	_ "net/http/pprof"
 )
 
 var (
