@@ -262,7 +262,7 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (str
 	default:
 		panic("unknown table")
 	}
-	return sql, values
+	return builder.String(), values
 }
 
 func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []interface{}) {
