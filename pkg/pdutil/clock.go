@@ -44,7 +44,8 @@ type clock struct {
 	pdClient pd.Client
 	mu       struct {
 		sync.RWMutex
-		ts uint64
+		physicalTs int64
+		logicTs    int64
 		// The time encoded in PD ts.
 		tsEventTime time.Time
 		// The time we receive PD ts.
@@ -67,7 +68,8 @@ func NewClock(ctx context.Context, pdClient pd.Client) (*clock, error) {
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	ret.mu.ts = oracle.ComposeTS(physical, logic)
+	ret.mu.physicalTs = physical
+	ret.mu.logicTs = logic
 	ret.mu.tsEventTime = oracle.GetTimeFromTS(oracle.ComposeTS(physical, 0))
 	ret.mu.tsProcessingTime = time.Now()
 	return ret, nil
@@ -96,7 +98,8 @@ func (c *clock) Run(ctx context.Context) {
 						return err
 					}
 					c.mu.Lock()
-					c.mu.ts = oracle.ComposeTS(physical, logic)
+					c.mu.physicalTs = physical
+					c.mu.logicTs = logic
 					c.mu.tsEventTime = oracle.GetTimeFromTS(oracle.ComposeTS(physical, 0))
 					c.mu.tsProcessingTime = time.Now()
 					c.mu.Unlock()
@@ -125,7 +128,9 @@ func (c *clock) CurrentTime() time.Time {
 func (c *clock) CurrentTS() uint64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.mu.ts
+	elapsed := time.Since(c.mu.tsProcessingTime).Milliseconds()
+	physical := c.mu.physicalTs + elapsed
+	return oracle.ComposeTS(physical, c.mu.logicTs)
 }
 
 // Stop clock.
