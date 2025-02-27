@@ -32,6 +32,13 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// emptyPollInterval is the interval to poll the operator from the queue when the queue is empty.
+	emptyPollInterval = time.Millisecond * 200
+	// nextPollInterval is the interval to poll the operator from the queue when the queue is not empty.
+	nextPollInterval = time.Millisecond * 50
+)
+
 var _ operator.Controller[common.DispatcherID, *heartbeatpb.TableSpanStatus] = &Controller{}
 
 // Controller is the operator controller, it manages all operators.
@@ -69,14 +76,14 @@ func NewOperatorController(
 	return oc
 }
 
-// Execute periodically execute the operator
-// It will be called in the thread pool
+// Execute poll the operator from the queue and execute it
+// It will be called in the thread pool.
 func (oc *Controller) Execute() time.Time {
-	executedItem := 0
+	executedCounter := 0
 	for {
 		op, next := oc.pollQueueingOperator()
 		if !next {
-			return time.Now().Add(time.Millisecond * 200)
+			return time.Now().Add(emptyPollInterval)
 		}
 		if op == nil {
 			continue
@@ -91,9 +98,9 @@ func (oc *Controller) Execute() time.Time {
 				zap.String("changefeed", oc.changefeedID.Name()),
 				zap.String("operator", op.String()))
 		}
-		executedItem++
-		if executedItem >= oc.batchSize {
-			return time.Now().Add(time.Millisecond * 50)
+		executedCounter++
+		if executedCounter >= oc.batchSize {
+			return time.Now().Add(nextPollInterval)
 		}
 	}
 }
@@ -104,7 +111,7 @@ func (oc *Controller) RemoveAllTasks() {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
-	for _, replicaSet := range oc.replicationDB.TryRemoveAll() {
+	for _, replicaSet := range oc.replicationDB.RemoveAll() {
 		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet))
 	}
 }
@@ -114,7 +121,7 @@ func (oc *Controller) RemoveAllTasks() {
 func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
-	for _, replicaSet := range oc.replicationDB.TryRemoveBySchemaID(schemaID) {
+	for _, replicaSet := range oc.replicationDB.RemoveBySchemaID(schemaID) {
 		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet))
 	}
 }
@@ -124,7 +131,7 @@ func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
-	for _, replicaSet := range oc.replicationDB.TryRemoveByTableIDs(tables...) {
+	for _, replicaSet := range oc.replicationDB.RemoveByTableIDs(tables...) {
 		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet))
 	}
 }
@@ -218,7 +225,7 @@ func (oc *Controller) pollQueueingOperator() (
 		return nil, false
 	}
 	item := heap.Pop(&oc.runningQueue).(*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus])
-	if item.Removed {
+	if item.IsRemoved {
 		return nil, true
 	}
 	op := item.OP
@@ -226,10 +233,10 @@ func (oc *Controller) pollQueueingOperator() (
 	// always call the PostFinish method to ensure the operator is cleaned up by itself.
 	if op.IsFinished() {
 		op.PostFinish()
-		item.Removed = true
+		item.IsRemoved = true
 		delete(oc.operators, opID)
 		metrics.FinishedOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
-		metrics.OperatorDuration.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Observe(time.Since(item.EnqueueTime).Seconds())
+		metrics.OperatorDuration.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
@@ -238,12 +245,12 @@ func (oc *Controller) pollQueueingOperator() (
 		return nil, true
 	}
 	now := time.Now()
-	if now.Before(item.Time) {
+	if now.Before(item.EnqueuedAt) {
 		heap.Push(&oc.runningQueue, item)
 		return nil, false
 	}
 	// pushes with new notify time.
-	item.Time = time.Now().Add(time.Millisecond * 500)
+	item.EnqueuedAt = time.Now().Add(time.Millisecond * 500)
 	heap.Push(&oc.runningQueue, item)
 	return op, true
 }
@@ -257,7 +264,7 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
 		old.OP.PostFinish()
-		old.Removed = true
+		old.IsRemoved = true
 		delete(oc.operators, op.ID())
 	}
 	oc.pushOperator(op)

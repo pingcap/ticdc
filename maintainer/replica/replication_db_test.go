@@ -85,7 +85,7 @@ func TestBasicFunction(t *testing.T) {
 	require.Len(t, db.GetTasksBySchemaID(1), 1)
 	require.Len(t, db.GetTasksBySchemaID(2), 1)
 
-	require.Len(t, db.TryRemoveByTableIDs(3), 1)
+	require.Len(t, db.RemoveByTableIDs(3), 1)
 	require.Len(t, db.GetTasksBySchemaID(1), 1)
 	require.Len(t, db.GetTasksBySchemaID(2), 0)
 	require.Len(t, db.GetReplicating(), 1)
@@ -94,7 +94,7 @@ func TestBasicFunction(t *testing.T) {
 
 	db.UpdateSchemaID(4, 5)
 	require.Equal(t, 1, db.GetTaskSizeBySchemaID(5))
-	require.Len(t, db.TryRemoveBySchemaID(5), 1)
+	require.Len(t, db.RemoveBySchemaID(5), 1)
 
 	require.Len(t, db.GetReplicating(), 0)
 	require.Equal(t, 1, db.TaskSize())
@@ -190,7 +190,7 @@ func TestRemoveAllTables(t *testing.T) {
 
 	db := newDBWithCheckerForTest(t)
 	// ddl span will not be removed
-	removed := db.TryRemoveAll()
+	removed := db.RemoveAll()
 	require.Len(t, removed, 0)
 	require.Len(t, db.GetAllTasks(), 1)
 	// replicating and scheduling will be returned
@@ -216,7 +216,7 @@ func TestRemoveAllTables(t *testing.T) {
 	require.Len(t, db.GetAbsent(), 1)
 	require.Len(t, db.GetScheduling(), 1)
 
-	removed = db.TryRemoveAll()
+	removed = db.RemoveAll()
 	require.Len(t, removed, 2)
 	require.Len(t, db.GetAllTasks(), 1)
 }

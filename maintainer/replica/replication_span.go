@@ -209,6 +209,11 @@ func (r *SpanReplication) GetNodeID() node.ID {
 	return r.nodeID
 }
 
+// IsScheduled returns true if the span is scheduled to a node
+func (r *SpanReplication) IsScheduled() bool {
+	return r.nodeID != ""
+}
+
 func (r *SpanReplication) GetGroupID() replica.GroupID {
 	return r.groupID
 }

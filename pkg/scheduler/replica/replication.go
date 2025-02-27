@@ -29,15 +29,18 @@ type ReplicationID interface {
 	String() string
 }
 
-// Replication is the interface for the replication task, it should implement the GetNodeID method
+// Replication is the interface for the replication task
 type Replication[T ReplicationID] interface {
 	comparable
+	// GetID returns the id of the replication task
 	GetID() T
+	// GetGroupID returns the group id of the replication task
 	GetGroupID() GroupID
-
+	// GetNodeID returns the node id this task is scheduled to
 	GetNodeID() node.ID
+	// SetNodeID sets the node id this task is scheduled to
 	SetNodeID(node.ID)
-
+	// ShouldRun returns true if the task should run
 	ShouldRun() bool
 }
 
