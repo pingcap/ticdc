@@ -313,6 +313,7 @@ func generateInsertSQL(channel chan sqlValue, workload schema.Workload) {
 func doExecInsert(db *sql.DB, channel chan sqlValue, workload schema.Workload) {
 	for {
 		sqlValue := <-channel
+		log.Info("sql is ", zap.Any("sql", sqlValue.sql))
 		_, err := executeWithValues(db, sqlValue.sql, workload, 0, sqlValue.values)
 
 		if err != nil {
