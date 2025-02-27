@@ -19,9 +19,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/pingcap/log"
-	"go.uber.org/zap"
 )
 
 const createTableSQL = `CREATE TABLE acct_statement_head_info (
@@ -227,33 +224,29 @@ func (c *Bank2Workload) BuildUpdateSql(opts UpdateOption) string {
 
 var valuesPool = sync.Pool{
 	New: func() interface{} {
-		return make([]interface{}, 0, 120*200)
+		return make([]interface{}, 0, 4)
 	},
 }
 
-func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (string, []interface{}) {
-	start := time.Now()
-	defer func() {
-		log.Info("BuildInsertSqlWithValues cost", zap.Any("time", time.Since(start)))
-	}()
+type SqlValue struct {
+	Sql    string
+	Values []interface{}
+}
 
-	var sql string
+func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int, channel chan SqlValue) {
+	nonPrimaryKeyValues := generateNonPrimaryValuesForTable() // to reduce time, these field we keep same for
+	sql := c.infoTableInsertSQL
 
-	values := valuesPool.Get().([]interface{})
-	defer valuesPool.Put(values[:0]) // 使用后重置并放回池中
-
+	values := make([]interface{}, 0, 120*200)
 	switch tableN {
 	case 0: // acct_statement_head_info
-		//i := 0
-		sql = c.infoTableInsertSQL
-		nonPrimaryKeyValues := generateNonPrimaryValuesForTable() // to reduce time, these field we keep same for
-
 		// 200 rows one txn
 		for r := 0; r < 200; r++ {
 			values = append(values, generatePrimaryValuesForTable()...)
 			values = append(values, nonPrimaryKeyValues...)
 		}
 
+		channel <- SqlValue{Sql: sql, Values: values}
 		// for i < batchSize {
 		// 	i += 1
 		// builder.WriteString("insert into acct_statement_head_info (crcd_acct_no , stmt_date , acct_seq_no , stmt_head_id ,bp_rtl_intr_amt , late_chg_coll_date , delq_total_amt , prev_dir_to_cust_rtl_prin , acct_branch_no , create_ts , agent_bank_no , stmt_cycle_days , cash_adv_days_with_bal , acct_avail_rtl_limit , avail_cash_adv_limit , dispute_trx_count , rtl_intr_rate , only_stmt_head_record_flag , total_amt_due , upd_tlr_org_no , cash_adv_pymt_amt , acct_cur_block_code , stmt_mail_flag , local_id , debit_cr_out_of_bal_flag , binlog_insert_ts , acct_prev_block_code , src_cnsmr_sys_id , part_no , dd_flag , migr_flag , acct_ccy , rtl_debit_trx_count , intr_amt , stmt_cash_bal , write_off_sts_flag , prev_stmt_rmn_intr , create_tlr_org_no , upd_ts , debit_trx_amt , cash_adv_intr_amt , acc_rtl_bal , acct_rtl_limit , cash_adv_begin_bal , biz_date , late_chg , rtl_serv_chg , stmt_type , cash_bal_1_cur_intr_rate , begin_bal , cur_stmt_bal , rtl_days_with_bal , cash_adv_debit_trx_amt , cash_adv_amt , repay_expire_date , rtl_cr_trx_count , biz_scene_encod , rtl_dispute_amt , last_term_stmt_forbid_instalt_prin_amt , cash_adv_limit , monthly_pymt , rtl_trx_fee_amt , data_version , rtl_mis_fee , dispute_bal , ctd_cash_adv_pymt_rvsl , data_pos , rtl_debit_trx_amt , stmt_rtl_bal , last_term_spec_whls_csm_prin , del_flag , acct_chg_off_sts , cash_adv_debit_trx_count , bp_cash_adv_intr_amt , rtl_pymt_amt , trx_date , cur_pymt_amt , local_sys_jrn_no , prev_stmt_head_id , cash_adv_dispute_amt , rtl_pymt_rvsl_amt , cash_adv_cr_trx_amt , crcd_stmt_no , trx_count , global_trx_jrn_no , cash_adv_trx_fee_amt , cash_adv_serv_chg , overlimit_acctt_amt , crcd_cardholder_no ,  begin_rtl_bal , prev_rtl_prin , rtl_annual_fee , acct_bank_no , acct_sts , cr_trx_amt , crcd_org_no , rtl_intr_amt , rtl_cr_trx_amt , cycle_due , biz_upd_ts , prev_stmt_date , grace_date , trx_time , ctd_stmt_stat_cycle , cash_adv_cr_trx_count , upd_tlr_no , ver_no , create_tlr_no , acc_cash_bal ) values (")
@@ -285,7 +278,7 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (str
 	default:
 		panic("unknown table")
 	}
-	return sql, values
+	//return sql, values
 }
 
 func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []interface{}) {
@@ -305,10 +298,6 @@ func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []i
 }
 
 func generateNonPrimaryValuesForTable() []interface{} {
-	start := time.Now()
-	defer func() {
-		log.Info("generateNonPrimaryValuesForTable", zap.Any("time", time.Since(start)))
-	}()
 	/*var builder strings.Builder
 	builder.WriteString(randomDecimal(13, 2)) // bp_rtl_intr_amt
 	builder.WriteString(",'")
@@ -632,10 +621,6 @@ func generateNonPrimaryValuesForTable() []interface{} {
 }
 
 func generatePrimaryValuesForTable() []interface{} {
-	start := time.Now()
-	defer func() {
-		log.Info("generatePrimaryValuesForTable", zap.Any("time", time.Since(start)))
-	}()
 	// var builder strings.Builder
 	// builder.WriteString("'")
 	// builder.WriteString(randomString(16)) // crcd_acct_no
@@ -648,7 +633,9 @@ func generatePrimaryValuesForTable() []interface{} {
 	// builder.WriteString(",")
 
 	// crcd_acct_no , stmt_date , acct_seq_no , stmt_head_id  these are primary key
-	values := make([]interface{}, 0, 4)
+	values := valuesPool.Get().([]interface{})
+	defer valuesPool.Put(values[:0]) // 使用后重置并放回池中
+
 	values = append(values, randomString(16)) // crcd_acct_no
 	values = append(values, randomDate())     // stmt_date
 	values = append(values, randomString(3))  // acct_seq_no

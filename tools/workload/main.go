@@ -272,16 +272,11 @@ func handleWorkloadExecution(dbs []*sql.DB, insertConcurrency, updateConcurrency
 	}
 }
 
-type sqlValue struct {
-	sql    string
-	values []interface{}
-}
-
 func executeInsertWorkers(dbs []*sql.DB, insertConcurrency int, workload schema.Workload, wg *sync.WaitGroup) {
-	//channel := make(chan sqlValue, 100000)
-	// for i := 0; i < 100; i++ {
-	// 	go generateInsertSQL(channel, workload)
-	// }
+	channel := make(chan schema.SqlValue, 100000)
+	for i := 0; i < 20; i++ {
+		go generateInsertSQL(channel, workload)
+	}
 
 	wg.Add(insertConcurrency)
 	for i := 0; i < insertConcurrency; i++ {
@@ -293,39 +288,39 @@ func executeInsertWorkers(dbs []*sql.DB, insertConcurrency int, workload schema.
 			log.Info("get connection failed", zap.Error(err))
 			return
 		}
-		go func(workerID int) {
-			defer func() {
-				log.Info("insert worker exited", zap.Int("worker", workerID))
-				wg.Done()
-			}()
-			log.Info("start insert worker", zap.Int("worker", workerID))
-			doInsert(conn, workload)
-		}(i)
 		// go func(workerID int) {
 		// 	defer func() {
 		// 		log.Info("insert worker exited", zap.Int("worker", workerID))
 		// 		wg.Done()
 		// 	}()
 		// 	log.Info("start insert worker", zap.Int("worker", workerID))
-		// 	doExecInsert(conn, channel, workload)
+		// 	doInsert(conn, workload)
 		// }(i)
+		go func(workerID int) {
+			defer func() {
+				log.Info("insert worker exited", zap.Int("worker", workerID))
+				wg.Done()
+			}()
+			log.Info("start insert worker", zap.Int("worker", workerID))
+			doExecInsert(conn, channel, workload)
+		}(i)
 	}
 }
 
-func generateInsertSQL(channel chan sqlValue, workload schema.Workload) {
-	for {
-		j := rand.Intn(tableCount) + tableStartIndex
-		insertSql, values := workload.(*schema.Bank2Workload).BuildInsertSqlWithValues(j, batchSize)
-		channel <- sqlValue{sql: insertSql, values: values}
-	}
+func generateInsertSQL(channel chan schema.SqlValue, workload schema.Workload) {
+	// for {
+	j := rand.Intn(tableCount) + tableStartIndex
+	workload.(*schema.Bank2Workload).BuildInsertSqlWithValues(j, batchSize, channel)
+	// channel <- sqlValue{sql: insertSql, values: values}
+	// }
 }
 
-func doExecInsert(conn *sql.Conn, channel chan sqlValue, workload schema.Workload) {
+func doExecInsert(conn *sql.Conn, channel chan schema.SqlValue, workload schema.Workload) {
 	for {
 		start := time.Now()
 		sqlValue := <-channel
 		log.Info("get sqlValue", zap.Any("cost", time.Since(start)))
-		_, err := executeWithValues(conn, sqlValue.sql, workload, 0, sqlValue.values)
+		_, err := executeWithValues(conn, sqlValue.Sql, workload, 0, sqlValue.Values)
 
 		if err != nil {
 			log.Info("insert error", zap.Error(err))
