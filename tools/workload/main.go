@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -283,6 +284,13 @@ func executeInsertWorkers(dbs []*sql.DB, insertConcurrency int, workload schema.
 	wg.Add(insertConcurrency)
 	for i := 0; i < insertConcurrency; i++ {
 		db := dbs[i%len(dbs)]
+
+		conn, err := db.Conn(context.Background())
+		// TODO: support recreate connection when the worker failed.
+		if err != nil {
+			log.Info("get connection failed", zap.Error(err))
+			return
+		}
 		// go func(workerID int) {
 		// 	defer func() {
 		// 		log.Info("insert worker exited", zap.Int("worker", workerID))
@@ -297,7 +305,7 @@ func executeInsertWorkers(dbs []*sql.DB, insertConcurrency int, workload schema.
 				wg.Done()
 			}()
 			log.Info("start insert worker", zap.Int("worker", workerID))
-			doExecInsert(db, channel, workload)
+			doExecInsert(conn, channel, workload)
 		}(i)
 	}
 }
@@ -310,10 +318,11 @@ func generateInsertSQL(channel chan sqlValue, workload schema.Workload) {
 	}
 }
 
-func doExecInsert(db *sql.DB, channel chan sqlValue, workload schema.Workload) {
+func doExecInsert(conn *sql.Conn, channel chan sqlValue, workload schema.Workload) {
 	for {
+
 		sqlValue := <-channel
-		_, err := executeWithValues(db, sqlValue.sql, workload, 0, sqlValue.values)
+		_, err := executeWithValues(conn, sqlValue.sql, workload, 0, sqlValue.values)
 
 		if err != nil {
 			log.Info("insert error", zap.Error(err))
@@ -338,13 +347,20 @@ func executeUpdateWorkers(dbs []*sql.DB, updateConcurrency int, workload schema.
 
 	for i := 0; i < updateConcurrency; i++ {
 		db := dbs[i%len(dbs)]
+
+		conn, err := db.Conn(context.Background())
+		// TODO: support recreate connection when the worker failed.
+		if err != nil {
+			log.Info("get connection failed", zap.Error(err))
+			return
+		}
 		go func(workerID int) {
 			defer func() {
 				log.Info("update worker exited", zap.Int("worker", workerID))
 				wg.Done()
 			}()
 			log.Info("start update worker", zap.Int("worker", workerID))
-			doUpdate(db, workload, updateTaskCh)
+			doUpdate(conn, workload, updateTaskCh)
 		}(i)
 	}
 
@@ -409,17 +425,17 @@ func genUpdateTask(output chan updateTask) {
 	}
 }
 
-func doUpdate(db *sql.DB, workload schema.Workload, input chan updateTask) {
+func doUpdate(conn *sql.Conn, workload schema.Workload, input chan updateTask) {
 	var err error
 	var res sql.Result
 	var updateSql string
 	for task := range input {
 		if workloadType == bank2 {
 			updateSql, values := workload.(*schema.Bank2Workload).BuildUpdateSqlWithValues(task.UpdateOption)
-			res, err = executeWithValues(db, updateSql, workload, task.UpdateOption.Table, values)
+			res, err = executeWithValues(conn, updateSql, workload, task.UpdateOption.Table, values)
 		} else {
 			updateSql := workload.BuildUpdateSql(task.UpdateOption)
-			res, err = execute(db, updateSql, workload, task.Table)
+			res, err = execute(conn, updateSql, workload, task.Table)
 		}
 
 		if err != nil {
@@ -445,17 +461,17 @@ func doUpdate(db *sql.DB, workload schema.Workload, input chan updateTask) {
 	}
 }
 
-func doInsert(db *sql.DB, workload schema.Workload) {
+func doInsert(conn *sql.Conn, workload schema.Workload) {
 	for {
 		j := rand.Intn(tableCount) + tableStartIndex
 		var err error
 
 		if workloadType == uuu {
 			insertSql, values := workload.(*schema.UUUWorkload).BuildInsertSqlWithValues(j, batchSize)
-			_, err = executeWithValues(db, insertSql, workload, j, values)
+			_, err = executeWithValues(conn, insertSql, workload, j, values)
 		} else {
 			insertSql := workload.BuildInsertSql(j, batchSize)
-			_, err = execute(db, insertSql, workload, j)
+			_, err = execute(conn, insertSql, workload, j)
 		}
 
 		if err != nil {
@@ -467,56 +483,68 @@ func doInsert(db *sql.DB, workload schema.Workload) {
 	}
 }
 
-func execute(db *sql.DB, sql string, workload schema.Workload, n int) (sql.Result, error) {
+func execute(conn *sql.Conn, sql string, workload schema.Workload, n int) (sql.Result, error) {
 	queryCount.Add(1)
-	res, err := db.Exec(sql)
+	res, err := conn.ExecContext(context.Background(), sql)
 	if err != nil {
 		if !strings.Contains(err.Error(), "Error 1146") {
 			log.Info("insert error", zap.Error(err))
 			return res, err
 		}
 		// if table not exists, we create it
-		_, err := db.Exec(workload.BuildCreateTableStatement(n))
+		_, err := conn.ExecContext(context.Background(), workload.BuildCreateTableStatement(n))
 		if err != nil {
 			log.Info("create table error: ", zap.Error(err))
 			return res, err
 		}
-		_, err = db.Exec(sql)
+		_, err = conn.ExecContext(context.Background(), sql)
 		return res, err
 	}
 	return res, nil
 }
 
-func executeWithValues(db *sql.DB, sqlStr string, workload schema.Workload, n int, values []interface{}) (sql.Result, error) {
+// TODO: redesign a better stmtCacheKey
+type stmtCacheKey struct {
+	conn *sql.Conn
+	sql  string
+}
+
+func executeWithValues(conn *sql.Conn, sqlStr string, workload schema.Workload, n int, values []interface{}) (sql.Result, error) {
 	queryCount.Add(1)
 
 	// Try to get prepared statement from cache
-	if stmt, ok := stmtCache.Load(sqlStr); ok {
+	if stmt, ok := stmtCache.Load(stmtCacheKey{
+		conn: conn,
+		sql:  sqlStr,
+	}); ok {
 		return stmt.(*sql.Stmt).Exec(values...)
 	}
 
 	// Prepare the statement
-	stmt, err := db.Prepare(sqlStr)
+	stmt, err := conn.PrepareContext(context.Background(), sqlStr)
 	if err != nil {
 		if !strings.Contains(err.Error(), "Error 1146") {
 			log.Info("prepare error", zap.Error(err))
 			return nil, err
 		}
 		// Create table if not exists
-		_, err := db.Exec(workload.BuildCreateTableStatement(n))
+		_, err := conn.ExecContext(context.Background(), workload.BuildCreateTableStatement(n))
 		if err != nil {
 			log.Info("create table error: ", zap.Error(err))
 			return nil, err
 		}
 		// Try prepare again
-		stmt, err = db.Prepare(sqlStr)
+		stmt, err = conn.PrepareContext(context.Background(), sqlStr)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	// Cache the prepared statement
-	stmtCache.Store(sqlStr, stmt)
+	stmtCache.Store(stmtCacheKey{
+		conn: conn,
+		sql:  sqlStr,
+	}, stmt)
 
 	// Execute the prepared statement
 	return stmt.Exec(values...)
