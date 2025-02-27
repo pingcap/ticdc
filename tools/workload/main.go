@@ -27,10 +27,11 @@ import (
 
 	"workload/schema"
 
+	"log"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	plog "github.com/pingcap/log"
-	"github.com/siddontang/go-log/log"
 	"go.uber.org/zap"
 )
 
