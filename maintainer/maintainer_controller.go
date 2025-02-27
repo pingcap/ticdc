@@ -61,7 +61,7 @@ type Controller struct {
 	cfConfig     *config.ReplicaConfig
 	changefeedID common.ChangeFeedID
 
-	taskScheduler threadpool.ThreadPool
+	taskPool threadpool.ThreadPool
 
 	// Store the task handles, it's used to stop the task handlers when the controller is stopped.
 	taskHandles []*threadpool.TaskHandle
@@ -72,38 +72,44 @@ func NewController(changefeedID common.ChangeFeedID,
 	pdAPIClient pdutil.PDAPIClient,
 	tsoClient replica.TSOClient,
 	regionCache split.RegionCache,
-	taskScheduler threadpool.ThreadPool,
+	taskPool threadpool.ThreadPool,
 	cfConfig *config.ReplicaConfig,
 	ddlSpan *replica.SpanReplication,
 	batchSize int, balanceInterval time.Duration,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+
 	enableTableAcrossNodes := false
 	var splitter *split.Splitter
 	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
 		enableTableAcrossNodes = true
 		splitter = split.NewSplitter(changefeedID, pdAPIClient, regionCache, cfConfig.Scheduler)
 	}
+
 	replicaSetDB := replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+
 	oc := operator.NewOperatorController(changefeedID, mc, replicaSetDB, nodeManager, batchSize)
-	s := &Controller{
+	sc := NewScheduleController(
+		changefeedID, batchSize, oc, replicaSetDB, nodeManager, balanceInterval, splitter,
+	)
+
+	return &Controller{
 		startCheckpointTs:      checkpointTs,
 		changefeedID:           changefeedID,
 		bootstrapped:           false,
 		ddlDispatcherID:        ddlSpan.ID,
+		schedulerController:    sc,
 		operatorController:     oc,
 		messageCenter:          mc,
 		replicationDB:          replicaSetDB,
 		nodeManager:            nodeManager,
-		taskScheduler:          taskScheduler,
+		taskPool:               taskPool,
 		cfConfig:               cfConfig,
 		tsoClient:              tsoClient,
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 	}
-	s.schedulerController = NewScheduleController(changefeedID, batchSize, oc, replicaSetDB, nodeManager, balanceInterval, s.splitter)
-	return s
 }
 
 // HandleStatus handle the status report from the node
@@ -184,7 +190,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 // FinishBootstrap finalizes the Controller initialization process using bootstrap responses from all nodes.
 // This method is the main entry point for Controller initialization and performs several critical steps:
 //
-//  1. Determines the actual start timestamp by finding the maximum checkpoint timestamp
+//  1. Determines the actual startTs by finding the maximum checkpoint timestamp
 //     across all node responses and updates the DDL dispatcher status accordingly
 //
 // 2. Loads the table schemas from the schema store using the determined start timestamp
@@ -231,7 +237,7 @@ func (c *Controller) FinishBootstrap(
 		zap.Int("nodeCount", len(allNodesResp)))
 
 	// Step 1: Determine start timestamp and update DDL dispatcher
-	startTs := c.determineStartTimestamp(allNodesResp)
+	startTs := c.determineStartTs(allNodesResp)
 
 	// Step 2: Load tables from schema store
 	tables, err := c.loadTables(startTs)
@@ -251,11 +257,14 @@ func (c *Controller) FinishBootstrap(
 	// Step 5: Handle any remaining working tasks (likely dropped tables)
 	c.handleRemainingWorkingTasks(workingTaskMap)
 
-	// Step 6: Initialize and start components
+	// Step 6: Initialize and start sub components
 	barrier := c.initializeComponents(allNodesResp)
 
 	// Step 7: Prepare response
 	initSchemaInfos := c.prepareSchemaInfoResponse(schemaInfos)
+
+	// Step 8: Mark the controller as bootstrapped
+	c.bootstrapped = true
 
 	return barrier, &heartbeatpb.MaintainerPostBootstrapRequest{
 		ChangefeedID:                  c.changefeedID.ToPB(),
@@ -264,14 +273,14 @@ func (c *Controller) FinishBootstrap(
 	}, nil
 }
 
-func (c *Controller) determineStartTimestamp(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) uint64 {
+func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) uint64 {
 	startTs := uint64(0)
 	for node, resp := range allNodesResp {
 		log.Info("handle bootstrap response",
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Stringer("nodeID", node),
-			zap.Uint64("checkpointTs", resp.CheckpointTs))
-
+			zap.Uint64("checkpointTs", resp.CheckpointTs),
+			zap.Int("spanCount", len(resp.Spans)))
 		if resp.CheckpointTs > startTs {
 			startTs = resp.CheckpointTs
 			status := c.replicationDB.GetDDLDispatcher().GetStatus()
@@ -291,11 +300,6 @@ func (c *Controller) buildWorkingTaskMap(
 ) map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication] {
 	workingTaskMap := make(map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication])
 	for node, resp := range allNodesResp {
-		log.Info("handle bootstrap response",
-			zap.Stringer("changefeed", c.changefeedID),
-			zap.Stringer("nodeID", node),
-			zap.Int("spanCount", len(resp.Spans)))
-
 		for _, spanInfo := range resp.Spans {
 			dispatcherID := common.NewDispatcherIDFromPB(spanInfo.ID)
 			if c.isDDLDispatcher(dispatcherID) {
@@ -371,6 +375,7 @@ func (c *Controller) processTableSpans(
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
 
+	// Add new table if not working
 	if !isTableWorking {
 		c.AddNewTable(table, c.startCheckpointTs)
 		return
@@ -426,19 +431,13 @@ func (c *Controller) initializeComponents(
 	barrier := NewBarrier(c, c.cfConfig.Scheduler.EnableTableAcrossNodes)
 	barrier.HandleBootstrapResponse(allNodesResp)
 
-	// Start scheduler and operator controller
-	c.startComponents()
-
-	c.bootstrapped = true
-	return barrier
-}
-
-func (c *Controller) startComponents() {
 	// Start scheduler
-	c.taskHandles = append(c.taskHandles, c.schedulerController.Start(c.taskScheduler)...)
+	c.taskHandles = append(c.taskHandles, c.schedulerController.Start(c.taskPool)...)
 
 	// Start operator controller
-	c.taskHandles = append(c.taskHandles, c.taskScheduler.Submit(c.operatorController, time.Now()))
+	c.taskHandles = append(c.taskHandles, c.taskPool.Submit(c.operatorController, time.Now()))
+
+	return barrier
 }
 
 func (c *Controller) prepareSchemaInfoResponse(

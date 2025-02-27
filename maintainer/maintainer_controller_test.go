@@ -708,7 +708,7 @@ func TestDynamicMergeAndSplitTable(t *testing.T) {
 				WriteKeyThreshold:      1,
 			},
 		}, ddlSpan, 1000, 0)
-	s.taskScheduler = &mockThreadPool{}
+	s.taskPool = &mockThreadPool{}
 
 	totalTables := 10
 	victim := rand.Intn(totalTables) + 1
@@ -801,7 +801,7 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 				WriteKeyThreshold:      1,
 			},
 		}, ddlSpan, 1000, 0)
-	s.taskScheduler = &mockThreadPool{}
+	s.taskPool = &mockThreadPool{}
 
 	mockPDClock := pdutil.NewClockWithValue4Test(time.Unix(0, 0))
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)

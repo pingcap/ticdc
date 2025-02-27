@@ -23,12 +23,12 @@ type TaskId uint64
 
 // Task is the interface for the task to be executed by the thread pool.
 //
-// The return value of the methods is time.Time, which means the next disired execution time. It can be smaller than the current time.
+// The return value of the methods is time.Time, which means the next desired execution time. It can be smaller than the current time.
 //   - If a task is not going to be executed again, the return value of Task.Execute should be time.Time{}.
 //   - If a task wants to be executed as soon as possible, the return value of Task.Execute should be time.Now().
 //
 // Note that:
-//   - It is not guaranteed that a task will be executed at the exact disired time. The task scheduler will try to execute the task as soon as possible.
+//   - It is not guaranteed that a task will be executed at the exact desired time. The task scheduler will try to execute the task as soon as possible.
 //   - It is not guaranteed that a task will be executed by the same goroutine.
 //   - It is guaranteed that a task can only be executed by one goroutine at a time. I.e. a task will not be executed concurrently.
 //   - The thread pool guarantees the call of Task.Execute is thread-safe. I.e. you don't need to add any locks in the Execute method to guarantee the thread safety,
