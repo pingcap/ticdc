@@ -294,7 +294,7 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 
 		finalRowLists := make([]*commonEvent.RowChange, len(rowLists))
 
-		for i := 0; i <= len(rowLists); i++ {
+		for i := 0; i < len(rowLists); i++ {
 			finalRowLists = append(finalRowLists, rowLists[i].RowChange)
 		}
 
