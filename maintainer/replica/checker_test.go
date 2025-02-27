@@ -31,12 +31,12 @@ func TestHotSpanChecker(t *testing.T) {
 	t.Parallel()
 
 	db := newDBWithCheckerForTest(t)
-	absent := NewReplicaSet(db.changefeedID, common.NewDispatcherID(), db.ddlSpan.tsoClient, 1, getTableSpanByID(4), 1)
+	absent := NewSpanReplication(db.changefeedID, common.NewDispatcherID(), db.ddlSpan.pdClock, 1, getTableSpanByID(4), 1)
 	db.AddAbsentReplicaSet(absent)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
-	replicaSpan := NewWorkingReplicaSet(db.changefeedID, replicaSpanID,
-		db.ddlSpan.tsoClient, 1,
+	replicaSpan := NewWorkingSpanReplication(db.changefeedID, replicaSpanID,
+		db.ddlSpan.pdClock, 1,
 		getTableSpanByID(3), &heartbeatpb.TableSpanStatus{
 			ID:              replicaSpanID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
@@ -105,7 +105,7 @@ func TestRebalanceChecker(t *testing.T) {
 	}
 	allReplicas := make([]*SpanReplication, 0, len(partialSpans))
 	for _, span := range partialSpans {
-		absent := NewReplicaSet(db.changefeedID, common.NewDispatcherID(), db.ddlSpan.tsoClient, 1, span, 1)
+		absent := NewReplicaSet(db.changefeedID, common.NewDispatcherID(), db.ddlSpan.pdClock, 1, span, 1)
 		allReplicas = append(allReplicas, absent)
 		db.AddAbsentReplicaSet(absent)
 	}
@@ -113,7 +113,7 @@ func TestRebalanceChecker(t *testing.T) {
 		StartKey: appendNew(totalSpan.StartKey, 'c'),
 		EndKey:   totalSpan.EndKey,
 	}
-	replica := NewWorkingReplicaSet(db.changefeedID, common.NewDispatcherID(), db.ddlSpan.tsoClient, 1, replicaSpan,
+	replica := NewWorkingReplicaSet(db.changefeedID, common.NewDispatcherID(), db.ddlSpan.pdClock, 1, replicaSpan,
 		&heartbeatpb.TableSpanStatus{CheckpointTs: 9, ComponentStatus: heartbeatpb.ComponentState_Working}, "node0")
 	allReplicas = append(allReplicas, replica)
 	db.AddReplicatingSpan(replica)
@@ -131,7 +131,7 @@ func TestRebalanceChecker(t *testing.T) {
 	// test update replica status
 	require.Nil(t, checker.Check(20))
 	require.Panics(t, func() {
-		invalidReplica := NewReplicaSet(db.changefeedID, common.NewDispatcherID(), db.ddlSpan.tsoClient, 1, replicaSpan, 1)
+		invalidReplica := NewReplicaSet(db.changefeedID, common.NewDispatcherID(), db.ddlSpan.pdClock, 1, replicaSpan, 1)
 		db.UpdateStatus(invalidReplica, &heartbeatpb.TableSpanStatus{
 			CheckpointTs:       9,
 			EventSizePerSecond: checker.softWriteThreshold,
@@ -202,7 +202,7 @@ func TestSoftRebalanceChecker(t *testing.T) {
 	allReplicas := make([]*SpanReplication, 0, len(partialSpans))
 	for i, span := range partialSpans {
 		idx := node.ID(fmt.Sprintf("node%d", i%totalNodes))
-		replicating := NewWorkingReplicaSet(db.changefeedID, common.NewDispatcherID(), db.ddlSpan.tsoClient, 1, span,
+		replicating := NewWorkingReplicaSet(db.changefeedID, common.NewDispatcherID(), db.ddlSpan.pdClock, 1, span,
 			&heartbeatpb.TableSpanStatus{
 				CheckpointTs:       9,
 				ComponentStatus:    heartbeatpb.ComponentState_Working,

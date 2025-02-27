@@ -220,10 +220,10 @@ func (db *ReplicationDB) ReplaceReplicaSet(
 	var news []*SpanReplication
 	old := oldReplications[0]
 	for _, span := range newSpans {
-		new := NewReplicaSet(
+		new := NewSpanReplication(
 			old.ChangefeedID,
 			common.NewDispatcherID(),
-			old.GetTsoClient(),
+			old.GetPDClock(),
 			old.GetSchemaID(),
 			span, checkpointTs)
 		news = append(news, new)

@@ -33,6 +33,8 @@ const pdTimeUpdateInterval = 10 * time.Millisecond
 type Clock interface {
 	// CurrentTime returns approximate current time from pd.
 	CurrentTime() time.Time
+	// CurrentTS returns the current timestamp from pd.
+	CurrentTS() uint64
 	Run(ctx context.Context)
 	Close()
 }
@@ -42,6 +44,7 @@ type clock struct {
 	pdClient pd.Client
 	mu       struct {
 		sync.RWMutex
+		ts uint64
 		// The time encoded in PD ts.
 		tsEventTime time.Time
 		// The time we receive PD ts.
@@ -60,10 +63,11 @@ func NewClock(ctx context.Context, pdClient pd.Client) (*clock, error) {
 		stopCh:         make(chan struct{}, 1),
 		updateInterval: pdTimeUpdateInterval,
 	}
-	physical, _, err := pdClient.GetTS(ctx)
+	physical, logic, err := pdClient.GetTS(ctx)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	ret.mu.ts = oracle.ComposeTS(physical, logic)
 	ret.mu.tsEventTime = oracle.GetTimeFromTS(oracle.ComposeTS(physical, 0))
 	ret.mu.tsProcessingTime = time.Now()
 	return ret, nil
@@ -86,12 +90,13 @@ func (c *clock) Run(ctx context.Context) {
 				return
 			case <-ticker.C:
 				err := retry.Do(ctx, func() error {
-					physical, _, err := c.pdClient.GetTS(ctx)
+					physical, logic, err := c.pdClient.GetTS(ctx)
 					if err != nil {
 						log.Info("get time from pd failed, retry later", zap.Error(err))
 						return err
 					}
 					c.mu.Lock()
+					c.mu.ts = oracle.ComposeTS(physical, logic)
 					c.mu.tsEventTime = oracle.GetTimeFromTS(oracle.ComposeTS(physical, 0))
 					c.mu.tsProcessingTime = time.Now()
 					c.mu.Unlock()
@@ -117,6 +122,12 @@ func (c *clock) CurrentTime() time.Time {
 	return current
 }
 
+func (c *clock) CurrentTS() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.mu.ts
+}
+
 // Stop clock.
 func (c *clock) Close() {
 	c.mu.Lock()
@@ -126,21 +137,31 @@ func (c *clock) Close() {
 	log.Info("clock is closed")
 }
 
-type clock4Test struct{}
+type Clock4Test struct {
+	ts uint64
+}
 
 // NewClock4Test return a new clock for test.
 func NewClock4Test() Clock {
-	return &clock4Test{}
+	return &Clock4Test{}
 }
 
-func (c *clock4Test) CurrentTime() time.Time {
+func (c *Clock4Test) CurrentTime() time.Time {
 	return time.Now()
 }
 
-func (c *clock4Test) Run(ctx context.Context) {
+func (c *Clock4Test) CurrentTS() uint64 {
+	return oracle.ComposeTS(int64(time.Now().UnixNano()), 0)
 }
 
-func (c *clock4Test) Close() {
+func (c *Clock4Test) SetTS(ts uint64) {
+	c.ts = ts
+}
+
+func (c *Clock4Test) Run(ctx context.Context) {
+}
+
+func (c *Clock4Test) Close() {
 }
 
 type clockWithValue4Test struct {
@@ -154,6 +175,10 @@ func NewClockWithValue4Test(value time.Time) *clockWithValue4Test {
 
 func (c *clockWithValue4Test) CurrentTime() time.Time {
 	return c.value
+}
+
+func (c *clockWithValue4Test) CurrentTS() uint64 {
+	return oracle.ComposeTS(int64(c.value.UnixNano()), 0)
 }
 
 func (c *clockWithValue4Test) Run(ctx context.Context) {
@@ -175,6 +200,10 @@ func NewMonotonicClock(pClock pclock.Clock) Clock {
 
 func (c *monotonicClock) CurrentTime() time.Time {
 	return c.clock.Now()
+}
+
+func (c *monotonicClock) CurrentTS() uint64 {
+	return oracle.ComposeTS(c.clock.Now().UnixNano(), 0)
 }
 
 func (c *monotonicClock) Run(ctx context.Context) {

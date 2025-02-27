@@ -153,7 +153,7 @@ func (c *server) initialize(ctx context.Context) error {
 		NewHttpServer(c, c.tcpServer.HTTP1Listener()),
 		NewGrpcServer(c.tcpServer.GrpcListener()),
 		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler,
-			c.pdAPIClient, c.pdClient, c.RegionCache),
+			c.pdAPIClient, c.PDClock, c.RegionCache),
 		eventStore,
 		eventService,
 	}

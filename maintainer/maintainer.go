@@ -155,7 +155,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	pdAPI pdutil.PDAPIClient,
-	tsoClient replica.TSOClient,
+	pdClock pdutil.Clock,
 	regionCache split.RegionCache,
 	checkpointTs uint64,
 	newChangefeed bool,
@@ -163,7 +163,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID, tsoClient,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID, pdClock,
 		heartbeatpb.DDLSpanSchemaID,
 		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
@@ -171,16 +171,13 @@ func NewMaintainer(cfID common.ChangeFeedID,
 			CheckpointTs:    checkpointTs,
 		}, selfNode.ID)
 
-	// TODO: Retrieve the correct pdClock from the context once multiple upstreams are supported.
-	// For now, since there is only one upstream, using the default pdClock is enough.
-	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	m := &Maintainer{
 		id:                cfID,
 		pdClock:           pdClock,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
-		controller: NewController(cfID, checkpointTs, pdAPI, tsoClient, regionCache, taskScheduler,
+		controller: NewController(cfID, checkpointTs, pdAPI, pdClock, regionCache, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
 		removed:         atomic.NewBool(false),
@@ -239,7 +236,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	pdAPI pdutil.PDAPIClient,
-	tsoClient replica.TSOClient,
+	pdClock pdutil.Clock,
 	regionCache split.RegionCache,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
@@ -248,7 +245,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 		Config:       config.GetDefaultReplicaConfig(),
 	}
 	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI,
-		tsoClient, regionCache, 1, false)
+		pdClock, regionCache, 1, false)
 	m.cascadeRemoving = true
 	return m
 }
