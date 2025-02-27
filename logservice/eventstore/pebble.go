@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package eventstore
 
 import (
@@ -47,7 +60,7 @@ func newPebbleOptions(dbNum int) *pebble.Options {
 		l.IndexBlockSize = 256 << 10 // 256KB index block
 		l.FilterPolicy = bloom.FilterPolicy(10)
 		l.FilterType = pebble.TableFilter
-		l.TargetFileSize = 32 << 20 // 32 MB
+		l.TargetFileSize = 64 << 20 // 64 MB
 		l.Compression = pebble.SnappyCompression
 		l.EnsureDefaults()
 	}
@@ -60,8 +73,9 @@ func newPebbleOptions(dbNum int) *pebble.Options {
 func createPebbleDBs(rootDir string, dbNum int) []*pebble.DB {
 	cache := pebble.NewCache(cacheSize)
 	tableCache := pebble.NewTableCache(cache, dbNum, int(cache.MaxSize()))
+	defer tableCache.Unref()
 	dbs := make([]*pebble.DB, dbNum)
-	for i := 0; i < dbCount; i++ {
+	for i := 0; i < dbNum; i++ {
 		opts := newPebbleOptions(dbNum)
 		opts.Cache = cache
 		opts.TableCache = tableCache
