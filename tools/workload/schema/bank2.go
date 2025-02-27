@@ -296,6 +296,10 @@ func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []i
 }
 
 func generateNonPrimaryValuesForTable() []interface{} {
+	start := time.Now()
+	defer func() {
+		log.Info("generateNonPrimaryValuesForTable", zap.Any("time", time.Since(start)))
+	}()
 	/*var builder strings.Builder
 	builder.WriteString(randomDecimal(13, 2)) // bp_rtl_intr_amt
 	builder.WriteString(",'")
@@ -619,6 +623,10 @@ func generateNonPrimaryValuesForTable() []interface{} {
 }
 
 func generatePrimaryValuesForTable() []interface{} {
+	start := time.Now()
+	defer func() {
+		log.Info("generatePrimaryValuesForTable", zap.Any("time", time.Since(start)))
+	}()
 	// var builder strings.Builder
 	// builder.WriteString("'")
 	// builder.WriteString(randomString(16)) // crcd_acct_no
