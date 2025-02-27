@@ -116,9 +116,9 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		for _, query := range queryList {
-			dmls.sqls = append(dmls.sqls, query)
-			dmls.values = append(dmls.values, argsList...)
+		for i := 0; i < len(queryList); i++ {
+			dmls.sqls = append(dmls.sqls, queryList[i])
+			dmls.values = append(dmls.values, argsList[i])
 		}
 	}
 	// Pre-check log level to avoid dmls.String() being called unnecessarily
