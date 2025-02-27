@@ -200,20 +200,20 @@ func getPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	// encoderConfig, err := util.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, pConfig)
-	// if err != nil {
-	// 	return pulsarComponent, protocol, errors.Trace(err)
-	// }
+	encoderConfig, err := util.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, config.DefaultMaxMessageBytes)
+	if err != nil {
+		return pulsarComponent, protocol, errors.Trace(err)
+	}
 
-	// pulsarComponent.EncoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
-	// if err != nil {
-	// 	return pulsarComponent, protocol, errors.Trace(err)
-	// }
+	pulsarComponent.EncoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
+	if err != nil {
+		return pulsarComponent, protocol, errors.Trace(err)
+	}
 
-	// pulsarComponent.Encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
-	// if err != nil {
-	// 	return pulsarComponent, protocol, errors.Trace(err)
-	// }
+	pulsarComponent.Encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
+	if err != nil {
+		return pulsarComponent, protocol, errors.Trace(err)
+	}
 	return pulsarComponent, protocol, nil
 }
 

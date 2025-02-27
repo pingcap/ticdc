@@ -15,7 +15,6 @@ package sink
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"sync/atomic"
 
@@ -198,67 +197,4 @@ func (s *KafkaSink) Close(_ bool) {
 	s.adminClient.Close()
 	s.topicManager.Close()
 	s.statistics.Close()
-}
-
-func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProducer, error) {
-	ctx := context.Background()
-	changefeedID := common.NewChangefeedID4Test("test", "test")
-	openProtocol := "open-protocol"
-	sinkConfig := &config.SinkConfig{Protocol: &openProtocol}
-	uriTemplate := "kafka://%s/%s?kafka-version=0.9.0.0&max-batch-size=1" +
-		"&max-message-bytes=1048576&partition-num=1" +
-		"&kafka-client-id=unit-test&auto-create-topic=false&compression=gzip&protocol=open-protocol"
-	uri := fmt.Sprintf(uriTemplate, "127.0.0.1:9092", kafka.DefaultMockTopicName)
-
-	sinkURI, err := url.Parse(uri)
-	if err != nil {
-		return nil, nil, nil, errors.Trace(err)
-	}
-	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	kafkaComponent, protocol, err := worker.GetKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig)
-	if err != nil {
-		return nil, nil, nil, errors.Trace(err)
-	}
-
-	// We must close adminClient when this func return cause by an error
-	// otherwise the adminClient will never be closed and lead to a goroutine leak.
-	defer func() {
-		if err != nil && kafkaComponent.AdminClient != nil {
-			kafkaComponent.AdminClient.Close()
-		}
-	}()
-
-	dmlMockProducer := producer.NewMockDMLProducer()
-
-	dmlWorker := worker.NewMQDMLWorker(
-		changefeedID,
-		protocol,
-		dmlMockProducer,
-		kafkaComponent.EncoderGroup,
-		kafkaComponent.ColumnSelector,
-		kafkaComponent.EventRouter,
-		kafkaComponent.TopicManager,
-		statistics)
-
-	ddlMockProducer := producer.NewMockDDLProducer()
-	ddlWorker := worker.NewMQDDLWorker(
-		changefeedID,
-		protocol,
-		ddlMockProducer,
-		kafkaComponent.Encoder,
-		kafkaComponent.EventRouter,
-		kafkaComponent.TopicManager,
-		statistics)
-
-	sink := &KafkaSink{
-		changefeedID:     changefeedID,
-		dmlWorker:        dmlWorker,
-		ddlWorker:        ddlWorker,
-		adminClient:      kafkaComponent.AdminClient,
-		topicManager:     kafkaComponent.TopicManager,
-		statistics:       statistics,
-		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
-	}
-	go sink.Run(ctx)
-	return sink, dmlMockProducer, ddlMockProducer, nil
 }

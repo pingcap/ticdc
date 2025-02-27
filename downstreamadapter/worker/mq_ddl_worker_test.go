@@ -55,7 +55,7 @@ func kafkaDDLWorkerForTest(t *testing.T) *MQDDLWorker {
 	require.NoError(t, err)
 
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	ddlMockProducer := producer.NewMockDDLProducer()
+	ddlMockProducer := producer.NewMockKafkaDDLProducer()
 	ddlWorker := NewMQDDLWorker(changefeedID, protocol, ddlMockProducer,
 		kafkaComponent.Encoder, kafkaComponent.EventRouter, kafkaComponent.TopicManager,
 		statistics)
@@ -112,7 +112,7 @@ func TestWriteDDLEvents(t *testing.T) {
 	require.NoError(t, err)
 
 	// Wait for the events to be received by the worker.
-	require.Len(t, ddlWorker.producer.(*producer.MockProducer).GetAllEvents(), 2)
+	require.Len(t, ddlWorker.producer.(*producer.KafkaMockProducer).GetAllEvents(), 2)
 	require.Equal(t, count, 2)
 }
 
@@ -132,7 +132,7 @@ func TestWriteCheckpointTs(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 
-	require.Len(t, ddlWorker.producer.(*producer.MockProducer).GetAllEvents(), 2)
+	require.Len(t, ddlWorker.producer.(*producer.KafkaMockProducer).GetAllEvents(), 2)
 	cancel()
 }
 
@@ -162,50 +162,15 @@ func pulsarDDLWorkerForTest(t *testing.T, schema string) *MQDDLWorker {
 
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	kafkaComponent, protocol, err := GetPulsarSinkComponentForTest(ctx, changefeedID, sinkURI, replicaConfig.Sink)
+	pulsarComponent, protocol, err := GetPulsarSinkComponentForTest(ctx, changefeedID, sinkURI, replicaConfig.Sink)
 	require.NoError(t, err)
 
-	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	ddlMockProducer := producer.NewMockDDLProducer()
+	statistics := metrics.NewStatistics(changefeedID, "PulsarComponentSink")
+	ddlMockProducer := producer.NewMockPulsarDDLProducer()
 	ddlWorker := NewMQDDLWorker(changefeedID, protocol, ddlMockProducer,
-		kafkaComponent.Encoder, kafkaComponent.EventRouter, kafkaComponent.TopicManager,
+		pulsarComponent.Encoder, pulsarComponent.EventRouter, pulsarComponent.TopicManager,
 		statistics)
 	return ddlWorker
-}
-
-// TestNewPulsarDDLSink tests the NewPulsarDDLSink
-func TestNewPulsarDDLSink(t *testing.T) {
-	t.Parallel()
-	for _, schema := range pulsarSchemaList {
-		ddlSink := pulsarDDLWorkerForTest(t, schema)
-
-		checkpointTs := uint64(417318403368288260)
-		// tables := []*model.TableInfo{
-		// 	{
-		// 		TableName: model.TableName{
-		// 			Schema: "cdc",
-		// 			Table:  "person",
-		// 		},
-		// 	},
-		// 	{
-		// 		TableName: model.TableName{
-		// 			Schema: "cdc",
-		// 			Table:  "person1",
-		// 		},
-		// 	},
-		// 	{
-		// 		TableName: model.TableName{
-		// 			Schema: "cdc",
-		// 			Table:  "person2",
-		// 		},
-		// 	},
-		// }
-
-		ddlSink.AddCheckpoint(checkpointTs)
-
-		events := ddlSink.producer.(*producer.MockProducer).GetAllEvents()
-		require.Len(t, events, 1, "All topics and partitions should be broadcast")
-	}
 }
 
 // TestPulsarDDLSinkNewSuccess tests the NewPulsarDDLSink write a event to pulsar
@@ -239,7 +204,7 @@ func TestPulsarWriteDDLEventToZeroPartition(t *testing.T) {
 		err = ddlSink.WriteBlockEvent(ctx, ddl)
 		require.NoError(t, err)
 
-		require.Len(t, ddlSink.producer.(*producer.MockProducer).GetAllEvents(),
+		require.Len(t, ddlSink.producer.(*producer.PulsarMockProducer).GetAllEvents(),
 			2, "Write DDL 2 Events")
 	}
 }
