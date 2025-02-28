@@ -38,7 +38,6 @@ function run() {
 
 	run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/workload?protocol=canal-json&enable-tidb-extension=true"
 
-
 	# sync_diff can't check non-exist table, so we check expected tables are created in downstream first
 	for i in $(seq 1 3); do
 		check_table_exists test.table${i} ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
@@ -52,7 +51,7 @@ function run() {
 
 	run_sql_file $CUR/data/step2.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	sleep 30
-	run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/test_table10?protocol=canal-json&version=${KAFKA_VERSION}&enable-tidb-extension=true" ""  "" 10
+	run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/test_table10?protocol=canal-json&version=${KAFKA_VERSION}&enable-tidb-extension=true" "" "" 10
 	run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/test_table20?protocol=canal-json&version=${KAFKA_VERSION}&enable-tidb-extension=true" "" "" 20
 	run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/test_finish?protocol=canal-json&version=${KAFKA_VERSION}&enable-tidb-extension=true" "" "" "finish"
 
