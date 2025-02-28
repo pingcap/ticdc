@@ -34,7 +34,6 @@ require (
 	github.com/imdario/mergo v0.3.16
 	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/json-iterator/go v1.1.12
-	github.com/klauspost/compress v1.17.9
 	github.com/linkedin/goavro/v2 v2.11.1
 	github.com/mailru/easyjson v0.7.7
 	github.com/phayes/freeport v0.0.0-20180830031419-95f893ade6f2
@@ -215,6 +214,7 @@ require (
 	github.com/joomcode/errorx v1.0.1 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/klauspost/asmfmt v1.3.2 // indirect
+	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/klauspost/cpuid v1.3.1 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.4 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
