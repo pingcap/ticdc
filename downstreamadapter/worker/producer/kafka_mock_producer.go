@@ -21,26 +21,31 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
-func NewMockDMLProducer() DMLProducer {
-	return &MockProducer{
+var (
+	_ DDLProducer = (*KafkaMockProducer)(nil)
+	_ DMLProducer = (*KafkaMockProducer)(nil)
+)
+
+func NewMockKafkaDMLProducer() DMLProducer {
+	return &KafkaMockProducer{
 		events: make(map[string][]*common.Message),
 	}
 }
 
-func NewMockDDLProducer() DDLProducer {
-	return &MockProducer{
+func NewMockKafkaDDLProducer() DDLProducer {
+	return &KafkaMockProducer{
 		events: make(map[string][]*common.Message),
 	}
 }
 
-// MockProducer is a mock producer for test.
-type MockProducer struct {
+// KafkaMockProducer is a mock producer for test.
+type KafkaMockProducer struct {
 	mu     sync.Mutex
 	events map[string][]*common.Message
 }
 
 // AsyncSendMessage appends a message to the mock producer.
-func (m *MockProducer) AsyncSendMessage(_ context.Context, topic string,
+func (m *KafkaMockProducer) AsyncSendMessage(_ context.Context, topic string,
 	partition int32, message *common.Message,
 ) error {
 	m.mu.Lock()
@@ -57,17 +62,17 @@ func (m *MockProducer) AsyncSendMessage(_ context.Context, topic string,
 	return nil
 }
 
-func (m *MockProducer) Run(_ context.Context) error {
+func (m *KafkaMockProducer) Run(_ context.Context) error {
 	// do nothing
 	return nil
 }
 
 // Close do nothing.
-func (m *MockProducer) Close() {
+func (m *KafkaMockProducer) Close() {
 }
 
 // GetAllEvents returns the events received by the mock producer.
-func (m *MockProducer) GetAllEvents() []*common.Message {
+func (m *KafkaMockProducer) GetAllEvents() []*common.Message {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var events []*common.Message
@@ -78,7 +83,7 @@ func (m *MockProducer) GetAllEvents() []*common.Message {
 }
 
 // GetEvents returns the event filtered by the key.
-func (m *MockProducer) GetEvents(topic string, partition int32) []*common.Message {
+func (m *KafkaMockProducer) GetEvents(topic string, partition int32) []*common.Message {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	key := fmt.Sprintf("%s-%d", topic, partition)
@@ -86,7 +91,7 @@ func (m *MockProducer) GetEvents(topic string, partition int32) []*common.Messag
 }
 
 // SyncBroadcastMessage stores a message to all partitions of the topic.
-func (m *MockProducer) SyncBroadcastMessage(_ context.Context, topic string,
+func (m *KafkaMockProducer) SyncBroadcastMessage(_ context.Context, topic string,
 	totalPartitionsNum int32, message *common.Message,
 ) error {
 	m.mu.Lock()
@@ -103,7 +108,7 @@ func (m *MockProducer) SyncBroadcastMessage(_ context.Context, topic string,
 }
 
 // SyncSendMessage stores a message to a partition of the topic.
-func (m *MockProducer) SyncSendMessage(_ context.Context, topic string,
+func (m *KafkaMockProducer) SyncSendMessage(_ context.Context, topic string,
 	partitionNum int32, message *common.Message,
 ) error {
 	m.mu.Lock()

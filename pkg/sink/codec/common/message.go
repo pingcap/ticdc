@@ -45,6 +45,9 @@ type Message struct {
 	Value     []byte
 	rowsCount int    // rows in one Message
 	Callback  func() // Callback function will be called when the message is sent to the sink.
+
+	// PartitionKey for pulsar, route messages to one or different partitions
+	PartitionKey *string
 }
 
 // Length returns the expected size of the Kafka message
@@ -67,6 +70,20 @@ func (m *Message) SetRowsCount(cnt int) {
 // IncRowsCount increase the number of rows
 func (m *Message) IncRowsCount() {
 	m.rowsCount++
+}
+
+// SetPartitionKey sets the PartitionKey for a message
+// PartitionKey is used for pulsar producer, route messages to one or different partitions
+func (m *Message) SetPartitionKey(key string) {
+	m.PartitionKey = &key
+}
+
+// GetPartitionKey returns the GetPartitionKey
+func (m *Message) GetPartitionKey() string {
+	if m.PartitionKey == nil {
+		return ""
+	}
+	return *m.PartitionKey
 }
 
 // NewMsg should be used when creating a Message struct.

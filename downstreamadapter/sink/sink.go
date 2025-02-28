@@ -50,6 +50,8 @@ func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID 
 		return newMySQLSink(ctx, changefeedID, config, sinkURI)
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
 		return newKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+	case sink.PulsarScheme, sink.PulsarSSLScheme, sink.PulsarHTTPScheme, sink.PulsarHTTPSScheme:
+		return newPulsarSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.S3Scheme, sink.FileScheme, sink.GCSScheme, sink.GSScheme, sink.AzblobScheme, sink.AzureScheme, sink.CloudStorageNoopScheme:
 		return newCloudStorageSink(ctx, changefeedID, sinkURI, config.SinkConfig, nil)
 	case sink.BlackHoleScheme:
@@ -69,6 +71,8 @@ func VerifySink(ctx context.Context, config *config.ChangefeedConfig, changefeed
 		return verifyMySQLSink(ctx, sinkURI, config)
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
 		return verifyKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+	case sink.PulsarScheme, sink.PulsarSSLScheme, sink.PulsarHTTPScheme, sink.PulsarHTTPSScheme:
+		return verifyPulsarSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.S3Scheme, sink.FileScheme, sink.GCSScheme, sink.GSScheme, sink.AzblobScheme, sink.AzureScheme, sink.CloudStorageNoopScheme:
 		return verifyCloudStorageSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.BlackHoleScheme:

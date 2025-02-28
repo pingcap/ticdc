@@ -27,24 +27,19 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
-type KafkaSink struct {
+type PulsarSink struct {
 	changefeedID common.ChangeFeedID
 
 	dmlWorker *worker.MQDMLWorker
 	ddlWorker *worker.MQDDLWorker
 
-	// the module used by dmlWorker and ddlWorker
-	// KafkaSink need to close it when Close() is called
-	adminClient      kafka.ClusterAdminClient
-	topicManager     topicmanager.TopicManager
-	statistics       *metrics.Statistics
-	metricsCollector kafka.MetricsCollector
+	topicManager topicmanager.TopicManager
+	statistics   *metrics.Statistics
 
 	// isNormal means the sink does not meet error.
 	// if sink is normal, isNormal is 1, otherwise is 0
@@ -52,81 +47,68 @@ type KafkaSink struct {
 	ctx      context.Context
 }
 
-func (s *KafkaSink) SinkType() common.SinkType {
-	return common.KafkaSinkType
+func (s *PulsarSink) SinkType() common.SinkType {
+	return common.PulsarSinkType
 }
 
-func verifyKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
-	components, _, err := worker.GetKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
-	if components.AdminClient != nil {
-		components.AdminClient.Close()
-	}
+func verifyPulsarSink(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
+	components, _, err := worker.GetPulsarSinkComponent(ctx, changefeedID, uri, sinkConfig)
 	if components.TopicManager != nil {
 		components.TopicManager.Close()
 	}
 	return err
 }
 
-func newKafkaSink(
+func newPulsarSink(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
-) (*KafkaSink, error) {
-	kafkaComponent, protocol, err := worker.GetKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
+) (*PulsarSink, error) {
+	pulsarComponent, protocol, err := worker.GetPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	statistics := metrics.NewStatistics(changefeedID, "PulsarSink")
 
-	// We must close adminClient when this func return cause by an error
-	// otherwise the adminClient will never be closed and lead to a goroutine leak.
-	defer func() {
-		if err != nil && kafkaComponent.AdminClient != nil {
-			kafkaComponent.AdminClient.Close()
-		}
-	}()
-
-	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	asyncProducer, err := kafkaComponent.Factory.AsyncProducer(ctx)
+	failpointCh := make(chan error, 1)
+	dmlProducer, err := producer.NewPulsarDMLProducer(ctx, changefeedID, pulsarComponent.Factory, sinkConfig, failpointCh)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		return nil, errors.Trace(err)
 	}
-	dmlProducer := producer.NewKafkaDMLProducer(changefeedID, asyncProducer)
 	dmlWorker := worker.NewMQDMLWorker(
 		changefeedID,
 		protocol,
 		dmlProducer,
-		kafkaComponent.EncoderGroup,
-		kafkaComponent.ColumnSelector,
-		kafkaComponent.EventRouter,
-		kafkaComponent.TopicManager,
-		statistics)
+		pulsarComponent.EncoderGroup,
+		pulsarComponent.ColumnSelector,
+		pulsarComponent.EventRouter,
+		pulsarComponent.TopicManager,
+		statistics,
+	)
 
-	syncProducer, err := kafkaComponent.Factory.SyncProducer()
+	ddlProducer, err := producer.NewPulsarDDLProducer(ctx, changefeedID, pulsarComponent.Config, pulsarComponent.Factory, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	ddlProducer := producer.NewKafkaDDLProducer(ctx, changefeedID, syncProducer)
 	ddlWorker := worker.NewMQDDLWorker(
 		changefeedID,
 		protocol,
 		ddlProducer,
-		kafkaComponent.Encoder,
-		kafkaComponent.EventRouter,
-		kafkaComponent.TopicManager,
-		statistics)
+		pulsarComponent.Encoder,
+		pulsarComponent.EventRouter,
+		pulsarComponent.TopicManager,
+		statistics,
+	)
 
-	sink := &KafkaSink{
-		changefeedID:     changefeedID,
-		dmlWorker:        dmlWorker,
-		ddlWorker:        ddlWorker,
-		adminClient:      kafkaComponent.AdminClient,
-		topicManager:     kafkaComponent.TopicManager,
-		statistics:       statistics,
-		ctx:              ctx,
-		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
+	sink := &PulsarSink{
+		changefeedID: changefeedID,
+		dmlWorker:    dmlWorker,
+		ddlWorker:    ddlWorker,
+		topicManager: pulsarComponent.TopicManager,
+		ctx:          ctx,
 	}
 	return sink, nil
 }
 
-func (s *KafkaSink) Run(ctx context.Context) error {
+func (s *PulsarSink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return s.dmlWorker.Run(ctx)
@@ -134,29 +116,25 @@ func (s *KafkaSink) Run(ctx context.Context) error {
 	g.Go(func() error {
 		return s.ddlWorker.Run(ctx)
 	})
-	g.Go(func() error {
-		s.metricsCollector.Run(ctx)
-		return nil
-	})
 	err := g.Wait()
 	atomic.StoreUint32(&s.isNormal, 0)
 	return errors.Trace(err)
 }
 
-func (s *KafkaSink) IsNormal() bool {
+func (s *PulsarSink) IsNormal() bool {
 	return atomic.LoadUint32(&s.isNormal) == 1
 }
 
-func (s *KafkaSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
+func (s *PulsarSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
 	s.dmlWorker.AddDMLEvent(event)
 	return nil
 }
 
-func (s *KafkaSink) PassBlockEvent(event commonEvent.BlockEvent) {
+func (s *PulsarSink) PassBlockEvent(event commonEvent.BlockEvent) {
 	event.PostFlush()
 }
 
-func (s *KafkaSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
+func (s *PulsarSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch v := event.(type) {
 	case *commonEvent.DDLEvent:
 		if v.TiDBOnly {
@@ -170,12 +148,12 @@ func (s *KafkaSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 			return errors.Trace(err)
 		}
 	case *commonEvent.SyncPointEvent:
-		log.Error("KafkaSink doesn't support Sync Point Event",
+		log.Error("PulsarSink doesn't support Sync Point Event",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("event", event))
 	default:
-		log.Error("KafkaSink doesn't support this type of block event",
+		log.Error("PulsarSink doesn't support this type of block event",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("eventType", event.GetType()))
@@ -183,18 +161,17 @@ func (s *KafkaSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *KafkaSink) AddCheckpointTs(ts uint64) {
+func (s *PulsarSink) AddCheckpointTs(ts uint64) {
 	s.ddlWorker.AddCheckpoint(ts)
 }
 
-func (s *KafkaSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *PulsarSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *KafkaSink) Close(_ bool) {
+func (s *PulsarSink) Close(_ bool) {
 	s.ddlWorker.Close()
 	s.dmlWorker.Close()
-	s.adminClient.Close()
 	s.topicManager.Close()
 	s.statistics.Close()
 }

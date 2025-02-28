@@ -32,7 +32,7 @@ import (
 
 var count int
 
-func kafkaDMLWorkerForTest(t *testing.T) *KafkaDMLWorker {
+func kafkaDMLWorkerForTest(t *testing.T) *MQDMLWorker {
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	openProtocol := "open-protocol"
@@ -48,9 +48,9 @@ func kafkaDMLWorkerForTest(t *testing.T) *KafkaDMLWorker {
 	require.NoError(t, err)
 
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	dmlMockProducer := producer.NewMockDMLProducer()
+	dmlMockProducer := producer.NewMockKafkaDMLProducer()
 
-	dmlWorker := NewKafkaDMLWorker(changefeedID, protocol, dmlMockProducer,
+	dmlWorker := NewMQDMLWorker(changefeedID, protocol, dmlMockProducer,
 		kafkaComponent.EncoderGroup, kafkaComponent.ColumnSelector,
 		kafkaComponent.EventRouter, kafkaComponent.TopicManager,
 		statistics)
@@ -85,7 +85,7 @@ func TestWriteEvents(t *testing.T) {
 
 	// Wait for the events to be received by the worker.
 	time.Sleep(time.Second)
-	require.Len(t, dmlWorker.producer.(*producer.MockProducer).GetAllEvents(), 2)
+	require.Len(t, dmlWorker.producer.(*producer.KafkaMockProducer).GetAllEvents(), 2)
 	require.Equal(t, count, 1)
 	cancel()
 }
