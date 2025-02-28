@@ -269,6 +269,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					}
 					log.Info("get write task", zap.Int("eventCount", len(events)))
 					p.store.writeEvents(p.db, events)
+					time.Sleep(100 * time.Millisecond)
 					for i := range events {
 						events[i].callback()
 					}
