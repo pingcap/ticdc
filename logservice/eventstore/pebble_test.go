@@ -71,6 +71,18 @@ func TestWriteAndReadRawKVEntry(t *testing.T) {
 			Value:       bytes.Repeat([]byte("value3"), 10000),
 			OldValue:    []byte{},
 		},
+		{
+			OpType:      2,
+			CRTs:        987654321,
+			StartTs:     123456789,
+			RegionID:    2,
+			KeyLen:      4,
+			ValueLen:    6,
+			OldValueLen: 0,
+			Key:         []byte("key4"),
+			Value:       []byte("value4"),
+			OldValue:    []byte{},
+		},
 	}
 
 	batch := db.NewBatch()
