@@ -41,7 +41,8 @@ type basicScheduler[T replica.ReplicationID, S replica.ReplicationStatus, R repl
 
 func NewBasicScheduler[T replica.ReplicationID, S replica.ReplicationStatus, R replica.Replication[T]](
 	id string, batchSize int,
-	oc operator.Controller[T, S], db replica.ScheduleGroup[T, R],
+	oc operator.Controller[T, S],
+	db replica.ScheduleGroup[T, R],
 	nodeManager *watcher.NodeManager,
 	newAddOperator func(R, node.ID) operator.Operator[T, S],
 ) *basicScheduler[T, S, R] {

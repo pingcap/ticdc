@@ -16,19 +16,16 @@ package replica
 import (
 	"testing"
 
-	"github.com/golang/mock/gomock"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	replica_mock "github.com/pingcap/ticdc/maintainer/replica/mock"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/oracle"
 )
 
 func TestUpdateStatus(t *testing.T) {
 	t.Parallel()
 
-	replicaSet := NewReplicaSet(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), nil, 1, getTableSpanByID(4), 10)
+	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), nil, 1, getTableSpanByID(4), 10)
 	replicaSet.UpdateStatus(&heartbeatpb.TableSpanStatus{CheckpointTs: 9})
 	require.Equal(t, uint64(10), replicaSet.status.Load().CheckpointTs)
 	replicaSet.UpdateStatus(&heartbeatpb.TableSpanStatus{CheckpointTs: 11})
@@ -38,7 +35,7 @@ func TestUpdateStatus(t *testing.T) {
 func TestNewRemoveDispatcherMessage(t *testing.T) {
 	t.Parallel()
 
-	replicaSet := NewReplicaSet(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), nil, 1, getTableSpanByID(4), 10)
+	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), nil, 1, getTableSpanByID(4), 10)
 	msg := replicaSet.NewRemoveDispatcherMessage("node1")
 	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	require.Equal(t, heartbeatpb.ScheduleAction_Remove, req.ScheduleAction)
@@ -49,21 +46,17 @@ func TestNewRemoveDispatcherMessage(t *testing.T) {
 func TestSpanReplication_NewAddDispatcherMessage(t *testing.T) {
 	t.Parallel()
 
-	ctrl := gomock.NewController(t)
-	tsoClient := replica_mock.NewMockTSOClient(ctrl)
-	replicaSet := NewReplicaSet(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), tsoClient, 1, getTableSpanByID(4), 10)
+	pdClock := pdutil.NewClock4Test()
+	innerClock := pdClock.(*pdutil.Clock4Test)
+	innerClock.SetTS(10)
+	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), pdClock, 1, getTableSpanByID(4), 10)
 
-	tsoClient.EXPECT().GetTS(gomock.Any()).Return(int64(10), int64(1), nil).Times(1)
 	msg, err := replicaSet.NewAddDispatcherMessage("node1")
 	require.Nil(t, err)
 	require.Equal(t, "node1", msg.To.String())
 	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	require.Equal(t, heartbeatpb.ScheduleAction_Create, req.ScheduleAction)
-	require.Equal(t, oracle.ComposeTS(10, 1), req.Config.CurrentPdTs)
+	require.Equal(t, uint64(10), req.Config.CurrentPdTs)
 	require.Equal(t, replicaSet.ID.ToPB(), req.Config.DispatcherID)
 	require.Equal(t, replicaSet.schemaID, req.Config.SchemaID)
-
-	tsoClient.EXPECT().GetTS(gomock.Any()).Return(int64(1), int64(1), errors.New("error")).AnyTimes()
-	_, err = replicaSet.NewAddDispatcherMessage("node1")
-	require.NotNil(t, err)
 }

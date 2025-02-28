@@ -97,7 +97,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 			// TODO:clean code
 			// create range checker if dispatcher is ddl dispatcher
 			// otherwise store dispatcherID in reportedDispatchers, and not create rangeChecker
-			if dispatcherID == controller.ddlDispatcherID {
+			if controller.isDDLDispatcher(dispatcherID) {
 				event.createRangeCheckerForTypeDB()
 			} else {
 				event.reportedDispatchers[dispatcherID] = struct{}{}
@@ -105,7 +105,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		case heartbeatpb.InfluenceType_All:
 			// create range checker if dispatcher is ddl dispatcher
 			// otherwise store dispatcherID in reportedDispatchers, and not create rangeChecker
-			if dispatcherID == controller.ddlDispatcherID {
+			if controller.isDDLDispatcher(dispatcherID) {
 				event.createRangeCheckerForTypeAll()
 			} else {
 				event.reportedDispatchers[dispatcherID] = struct{}{}
@@ -266,7 +266,7 @@ func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID
 	}
 	if be.rangeChecker == nil {
 		// rangeChecker is not created
-		if dispatcherID == be.controller.ddlDispatcherID {
+		if be.controller.isDDLDispatcher(dispatcherID) {
 			// create rangeChecker
 			switch be.blockedDispatchers.InfluenceType {
 			case heartbeatpb.InfluenceType_Normal:

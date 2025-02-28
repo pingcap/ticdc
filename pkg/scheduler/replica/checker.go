@@ -17,7 +17,7 @@ import "fmt"
 
 type (
 	GroupID           = int64
-	GroupTpye         int8
+	GroupType         int8
 	GroupCheckResult  any
 	ReplicationStatus any
 )
@@ -25,7 +25,7 @@ type (
 const DefaultGroupID GroupID = 0
 
 const (
-	GroupDefault GroupTpye = iota
+	GroupDefault GroupType = iota
 	GroupTable
 	// add more group strategy later
 	// groupHotLevel1
@@ -68,18 +68,18 @@ func (c *EmptyStatusChecker[T, R]) Stat() string {
 }
 
 func GetGroupName(id GroupID) string {
-	gt := GroupTpye(id >> 56)
+	gt := GroupType(id >> 56)
 	if gt == GroupTable {
 		return fmt.Sprintf("%s-%d", gt.String(), id&0x00FFFFFFFFFFFFFF)
 	}
 	return gt.String()
 }
 
-func (gt GroupTpye) Less(other GroupTpye) bool {
+func (gt GroupType) Less(other GroupType) bool {
 	return gt < other
 }
 
-func (gt GroupTpye) String() string {
+func (gt GroupType) String() string {
 	switch gt {
 	case GroupDefault:
 		return "default"
@@ -91,7 +91,7 @@ func (gt GroupTpye) String() string {
 	}
 }
 
-func GenGroupID(gt GroupTpye, tableID int64) GroupID {
+func GenGroupID(gt GroupType, tableID int64) GroupID {
 	// use high 8 bits to store the group type
 	id := int64(gt) << 56
 	if gt == GroupTable {
@@ -100,6 +100,6 @@ func GenGroupID(gt GroupTpye, tableID int64) GroupID {
 	return id
 }
 
-func GetGroupType(id GroupID) GroupTpye {
-	return GroupTpye(id >> 56)
+func GetGroupType(id GroupID) GroupType {
+	return GroupType(id >> 56)
 }

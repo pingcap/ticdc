@@ -32,9 +32,11 @@ type Scheduler interface {
 	Name() string
 }
 
-// Scheduler generates operators for the spans, and push them to the operator controller
-// it generates add operator for the absent spans, and move operator for the unbalanced replicating spans
-// currently, it only supports balance the spans by size
+// Controller manages a set of schedulers that generate operators for scheduling tasks.
+// These operators handle two main tasks:
+// 1. Creating add operators for scheduled tasks
+// 2. Creating move operators for rebalancing scheduled tasks
+// Currently, balancing is based solely on how many tasks are scheduled in each node.
 type Controller struct {
 	schedulers map[string]Scheduler
 }
@@ -48,9 +50,9 @@ func NewController(schedulers map[string]Scheduler) *Controller {
 	}
 }
 
-func (sm *Controller) Start(taskScheduler threadpool.ThreadPool) (handles []*threadpool.TaskHandle) {
+func (sm *Controller) Start(taskPool threadpool.ThreadPool) (handles []*threadpool.TaskHandle) {
 	basicScheduler := sm.schedulers[BasicScheduler]
-	handles = append(handles, taskScheduler.Submit(basicScheduler, time.Now()))
+	handles = append(handles, taskPool.Submit(basicScheduler, time.Now()))
 
 	checkerSchedulers := []Scheduler{}
 	for _, scheduler := range sm.schedulers {
@@ -58,7 +60,8 @@ func (sm *Controller) Start(taskScheduler threadpool.ThreadPool) (handles []*thr
 			checkerSchedulers = append(checkerSchedulers, scheduler)
 		}
 	}
-	handles = append(handles, taskScheduler.SubmitFunc(
+
+	handles = append(handles, taskPool.SubmitFunc(
 		// Run all checker schedulers in a single goroutine since these schedulers are
 		// not critical and a slight delay in their execution is acceptable.
 		func() time.Time {

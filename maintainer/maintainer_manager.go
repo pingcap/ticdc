@@ -21,7 +21,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -54,7 +53,7 @@ type Manager struct {
 
 	selfNode    *node.Info
 	pdAPI       pdutil.PDAPIClient
-	tsoClient   replica.TSOClient
+	pdClock     pdutil.Clock
 	regionCache *tikv.RegionCache
 
 	// msgCh is used to cache messages from coordinator
@@ -68,7 +67,7 @@ type Manager struct {
 func NewMaintainerManager(selfNode *node.Info,
 	conf *config.SchedulerConfig,
 	pdAPI pdutil.PDAPIClient,
-	pdClient replica.TSOClient,
+	pdClock pdutil.Clock,
 	regionCache *tikv.RegionCache,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
@@ -80,7 +79,7 @@ func NewMaintainerManager(selfNode *node.Info,
 		msgCh:         make(chan *messaging.TargetMessage, 1024),
 		taskScheduler: threadpool.NewThreadPoolDefault(),
 		pdAPI:         pdAPI,
-		tsoClient:     pdClient,
+		pdClock:       pdClock,
 		regionCache:   regionCache,
 	}
 
@@ -236,7 +235,7 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 			zap.Any("config", cfConfig))
 	}
 	maintainer := NewMaintainer(cfID, m.conf, cfConfig, m.selfNode, m.taskScheduler,
-		m.pdAPI, m.tsoClient, m.regionCache, req.CheckpointTs, req.IsNewChangefeed)
+		m.pdAPI, m.pdClock, m.regionCache, req.CheckpointTs, req.IsNewChangefeed)
 	m.maintainers.Store(cfID, maintainer)
 	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 	return nil
@@ -260,7 +259,7 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 		// it's cascade remove, we should remove the dispatcher from all node
 		// here we create a maintainer to run the remove the dispatcher logic
 		cf = NewMaintainerForRemove(cfID, m.conf, m.selfNode, m.taskScheduler, m.pdAPI,
-			m.tsoClient, m.regionCache)
+			m.pdClock, m.regionCache)
 		m.maintainers.Store(cfID, cf)
 	}
 	cf.(*Maintainer).pushEvent(&Event{
