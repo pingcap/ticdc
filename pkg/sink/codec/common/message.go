@@ -18,11 +18,9 @@ import (
 	"encoding/json"
 )
 
-// MaxRecordOverhead is used to calculate message size by sarama kafka client.
-// reference: https://github.com/IBM/sarama/blob/
-// 66521126c71c522c15a36663ae9cddc2b024c799/async_producer.go#L233
+// MaxRecordOverhead is used to calculate message size.
 // For TiCDC, minimum supported kafka version is `0.11.0.2`,
-// which will be treated as `version = 2` by sarama producer.
+// which will be treated as `version = 2` by producer.
 const MaxRecordOverhead = 5*binary.MaxVarintLen32 + binary.MaxVarintLen64 + 1
 
 // MessageType is the type of message, which is used by MqSink and RedoLog.
