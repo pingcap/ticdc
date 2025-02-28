@@ -209,6 +209,12 @@ func (s *TableNameStore) AddEvent(event *commonEvent.DDLEvent) {
 // GetAllTableNames only will be called when maintainer send message to ask dispatcher to write checkpointTs to downstream.
 // So the ts must be <= the latest received event ts of table trigger event dispatcher.
 func (s *TableNameStore) GetAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
+	tableNames := make([]*commonEvent.SchemaTableName, 0)
+	for _, tables := range s.existingTables {
+		for _, tableName := range tables {
+			tableNames = append(tableNames, tableName)
+		}
+	}
 	s.latestTableNameChanges.mutex.Lock()
 	if len(s.latestTableNameChanges.m) > 0 {
 		// update the existingTables with the latest table changes <= ts
@@ -236,13 +242,6 @@ func (s *TableNameStore) GetAllTableNames(ts uint64) []*commonEvent.SchemaTableN
 	}
 
 	s.latestTableNameChanges.mutex.Unlock()
-
-	tableNames := make([]*commonEvent.SchemaTableName, 0)
-	for _, tables := range s.existingTables {
-		for _, tableName := range tables {
-			tableNames = append(tableNames, tableName)
-		}
-	}
 
 	return tableNames
 }
