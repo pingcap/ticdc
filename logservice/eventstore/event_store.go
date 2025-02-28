@@ -267,6 +267,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					if !ok {
 						return
 					}
+					log.Info("get write task", zap.Int("eventCount", len(events)))
 					p.store.writeEvents(p.db, events)
 					for i := range events {
 						events[i].callback()
@@ -695,6 +696,7 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))
 	start := time.Now()
 	err := batch.Commit(pebble.NoSync)
+	log.Info("write events", zap.Int("kvCount", kvCount), zap.Duration("duration", time.Since(start)))
 	metrics.EventStoreWriteDurationHistogram.Observe(float64(time.Since(start).Milliseconds()) / 1000)
 	return err
 }
