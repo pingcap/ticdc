@@ -34,7 +34,7 @@ func TestWriteAndReadRawKVEntry(t *testing.T) {
 	}
 	defer db.Close()
 
-	entries := []*common.RawKVEntry{
+	sourceEntries := []*common.RawKVEntry{
 		{
 			OpType:      1,
 			CRTs:        123456789,
@@ -75,7 +75,7 @@ func TestWriteAndReadRawKVEntry(t *testing.T) {
 
 	batch := db.NewBatch()
 	defer batch.Close()
-	for index, entry := range entries {
+	for index, entry := range sourceEntries {
 		// mock key
 		buf := make([]byte, 8)
 		binary.BigEndian.PutUint64(buf, uint64(index))
@@ -91,12 +91,15 @@ func TestWriteAndReadRawKVEntry(t *testing.T) {
 	require.Nil(t, err)
 	defer iter.Close()
 
-	index := 0
+	// check after read all entries
+	readEntries := make([]*common.RawKVEntry, 0, len(sourceEntries))
 	for iter.First(); iter.Valid(); iter.Next() {
 		value := iter.Value()
 		entry := &common.RawKVEntry{}
 		entry.Decode(value)
-		require.Equal(t, entries[index], entry)
-		index++
+		readEntries = append(readEntries, entry)
+	}
+	for i, entry := range sourceEntries {
+		require.Equal(t, entry, readEntries[i])
 	}
 }
