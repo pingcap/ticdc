@@ -89,10 +89,8 @@ type coordinator struct {
 	// eventCh is used to receive the event from message center, basically these messages
 	// are from maintainer.
 	eventCh *chann.DrainableChann[*Event]
-	// changefeedProgressReportCh is used to receive the changefeed progress report from the controller
-	changefeedProgressReportCh chan map[common.ChangeFeedID]*changefeed.Changefeed
-	// changefeedStateChangedCh is used to receive the changefeed state changed event from the controller
-	changefeedStateChangedCh chan *ChangefeedStateChangeEvent
+	// changefeedChangeCh is used to receive the changefeed change from the controller
+	changefeedChangeCh chan []*ChangefeedChange
 
 	cancel func()
 	closed atomic.Bool
@@ -109,18 +107,17 @@ func New(node *node.Info,
 ) server.Coordinator {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	c := &coordinator{
-		version:                    version,
-		nodeInfo:                   node,
-		gcServiceID:                gcServiceID,
-		lastTickTime:               time.Now(),
-		gcManager:                  gc.NewManager(gcServiceID, pdClient, pdClock),
-		eventCh:                    chann.NewAutoDrainChann[*Event](),
-		pdClient:                   pdClient,
-		pdClock:                    pdClock,
-		mc:                         mc,
-		changefeedProgressReportCh: make(chan map[common.ChangeFeedID]*changefeed.Changefeed, 1024),
-		changefeedStateChangedCh:   make(chan *ChangefeedStateChangeEvent, 1024),
-		backend:                    backend,
+		version:            version,
+		nodeInfo:           node,
+		gcServiceID:        gcServiceID,
+		lastTickTime:       time.Now(),
+		gcManager:          gc.NewManager(gcServiceID, pdClient, pdClock),
+		eventCh:            chann.NewAutoDrainChann[*Event](),
+		pdClient:           pdClient,
+		pdClock:            pdClock,
+		mc:                 mc,
+		changefeedChangeCh: make(chan []*ChangefeedChange, 1024),
+		backend:            backend,
 	}
 	// handle messages from message center
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
@@ -131,8 +128,7 @@ func New(node *node.Info,
 	controller := NewController(
 		c.version,
 		c.nodeInfo,
-		c.changefeedProgressReportCh,
-		c.changefeedStateChangedCh,
+		c.changefeedChangeCh,
 		c.backend,
 		c.eventCh,
 		c.taskScheduler,
@@ -210,13 +206,16 @@ func (c *coordinator) run(ctx context.Context) error {
 			now := time.Now()
 			metrics.CoordinatorCounter.Add(float64(now.Sub(c.lastTickTime)) / float64(time.Second))
 			c.lastTickTime = now
-		case cfs := <-c.changefeedProgressReportCh:
-			if err := c.saveCheckpointTs(ctx, cfs); err != nil {
+		case changes := <-c.changefeedChangeCh:
+			if err := c.saveCheckpointTs(ctx, changes); err != nil {
 				return errors.Trace(err)
 			}
-		case event := <-c.changefeedStateChangedCh:
-			if err := c.handleStateChangedEvent(ctx, event); err != nil {
-				return errors.Trace(err)
+			for _, change := range changes {
+				if change.changeType == ChangeState || change.changeType == ChangeStateAndTs {
+					if err := c.handleStateChange(ctx, change); err != nil {
+						return errors.Trace(err)
+					}
+				}
 			}
 		}
 	}
@@ -234,23 +233,23 @@ func (c *coordinator) runHandleEvent(ctx context.Context) error {
 	}
 }
 
-func (c *coordinator) handleStateChangedEvent(
+func (c *coordinator) handleStateChange(
 	ctx context.Context,
-	event *ChangefeedStateChangeEvent,
+	event *ChangefeedChange,
 ) error {
-	cf := c.controller.getChangefeed(event.ChangefeedID)
+	cf := c.controller.getChangefeed(event.changefeedID)
 	if cf == nil {
-		log.Warn("changefeed not found", zap.String("changefeed", event.ChangefeedID.String()))
+		log.Warn("changefeed not found", zap.String("changefeed", event.changefeedID.String()))
 		return nil
 	}
 	cfInfo, err := cf.GetInfo().Clone()
 	if err != nil {
 		return errors.Trace(err)
 	}
-	cfInfo.State = event.State
+	cfInfo.State = event.state
 	cfInfo.Error = event.err
 	progress := config.ProgressNone
-	if event.State == model.StateFailed || event.State == model.StateFinished {
+	if event.state == model.StateFailed || event.state == model.StateFinished {
 		progress = config.ProgressStopping
 	}
 	if err := c.backend.UpdateChangefeed(context.Background(), cfInfo, cf.GetStatus().CheckpointTs, progress); err != nil {
@@ -260,24 +259,24 @@ func (c *coordinator) handleStateChangedEvent(
 	}
 	cf.SetInfo(cfInfo)
 
-	switch event.State {
+	switch event.state {
 	case model.StateWarning:
-		c.controller.operatorController.StopChangefeed(ctx, event.ChangefeedID, false)
-		c.controller.updateChangefeedEpoch(ctx, event.ChangefeedID)
-		c.controller.moveChangefeedToSchedulingQueue(event.ChangefeedID, false, false)
+		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
+		c.controller.updateChangefeedEpoch(ctx, event.changefeedID)
+		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
 	case model.StateFailed, model.StateFinished:
-		c.controller.operatorController.StopChangefeed(ctx, event.ChangefeedID, false)
+		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
 	case model.StateNormal:
 		log.Info("changefeed is resumed or created successfully, try to delete its safeguard gc safepoint",
-			zap.String("changefeed", event.ChangefeedID.String()))
+			zap.String("changefeed", event.changefeedID.String()))
 		// We need to clean its gc safepoint when changefeed is resumed or created
 		gcServiceID := c.getEnsureGCServiceID(gc.EnsureGCServiceCreating)
-		err := gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, gcServiceID, event.ChangefeedID)
+		err := gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, gcServiceID, event.changefeedID)
 		if err != nil {
 			log.Warn("failed to delete create changefeed gc safepoint", zap.Error(err))
 		}
 		gcServiceID = c.getEnsureGCServiceID(gc.EnsureGCServiceResuming)
-		err = gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, gcServiceID, event.ChangefeedID)
+		err = gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, gcServiceID, event.changefeedID)
 		if err != nil {
 			log.Warn("failed to delete resume changefeed gc safepoint", zap.Error(err))
 		}
@@ -297,6 +296,15 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.Chan
 		if !errors.IsChangefeedGCFastFailErrorCode(errCode) {
 			state = model.StateWarning
 		}
+		change := &ChangefeedChange{
+			changefeedID: id,
+			state:        state,
+			err: &model.RunningError{
+				Code:    string(errCode),
+				Message: err.Error(),
+			},
+			changeType: ChangeState,
+		}
 		select {
 		case <-ctx.Done():
 			log.Warn("Failed to send state change event to stateChangedCh since context timeout, "+
@@ -304,24 +312,23 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.Chan
 				zap.String("changefeed", id.String()),
 				zap.Error(ctx.Err()))
 			return
-		case c.changefeedStateChangedCh <- &ChangefeedStateChangeEvent{
-			ChangefeedID: id,
-			State:        state,
-			err: &model.RunningError{
-				Code:    string(errCode),
-				Message: err.Error(),
-			},
-		}:
+		case c.changefeedChangeCh <- []*ChangefeedChange{change}:
 		}
 	}
 }
 
-func (c *coordinator) saveCheckpointTs(ctx context.Context, cfs map[common.ChangeFeedID]*changefeed.Changefeed) error {
+func (c *coordinator) saveCheckpointTs(ctx context.Context, changes []*ChangefeedChange) error {
 	statusMap := make(map[common.ChangeFeedID]uint64)
-	for _, upCf := range cfs {
+	cfsMap := make(map[common.ChangeFeedID]*changefeed.Changefeed)
+	for _, change := range changes {
+		if change.changeType == ChangeState {
+			continue
+		}
+		upCf := change.changefeed
 		reportedCheckpointTs := upCf.GetStatus().CheckpointTs
 		if upCf.GetLastSavedCheckPointTs() < reportedCheckpointTs {
 			statusMap[upCf.ID] = reportedCheckpointTs
+			cfsMap[upCf.ID] = upCf
 			c.checkStaleCheckpointTs(ctx, upCf.ID, reportedCheckpointTs)
 		}
 	}
@@ -335,10 +342,7 @@ func (c *coordinator) saveCheckpointTs(ctx context.Context, cfs map[common.Chang
 	}
 	// update the last saved checkpoint ts and send checkpointTs to maintainer
 	for id, cp := range statusMap {
-		cf, ok := cfs[id]
-		if !ok {
-			continue
-		}
+		cf := cfsMap[id]
 		cf.SetLastSavedCheckPointTs(cp)
 		if cf.NeedCheckpointTsMessage() {
 			msg := cf.NewCheckpointTsMessage(cf.GetLastSavedCheckPointTs())
