@@ -447,12 +447,12 @@ func (e *eventStore) RegisterDispatcher(
 		}
 		// just do CompareAndSwap once, if failed, it means another goroutine has updated resolvedTs
 		if subStat.resolvedTs.CompareAndSwap(currentResolvedTs, ts) {
-			subStat.dispatchers.Lock()
-			defer subStat.dispatchers.Unlock()
-			for _, notifier := range subStat.dispatchers.notifiers {
-				notifier(ts, subStat.maxEventCommitTs.Load())
-			}
-			CounterResolved.Inc()
+			// subStat.dispatchers.Lock()
+			// defer subStat.dispatchers.Unlock()
+			// for _, notifier := range subStat.dispatchers.notifiers {
+			// 	notifier(ts, subStat.maxEventCommitTs.Load())
+			// }
+			// CounterResolved.Inc()
 		}
 	}
 	// Note: don't hold any lock when call Subscribe
