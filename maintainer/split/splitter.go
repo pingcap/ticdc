@@ -70,6 +70,9 @@ func NewSplitter(
 	config *config.ChangefeedSchedulerConfig,
 ) *Splitter {
 	baseSpanNumberCoefficient = config.SplitNumberPerNode
+	if baseSpanNumberCoefficient <= 0 {
+		log.Panic("invalid SplitNumberPerNode, please set SplitNumberPerNode larger than 0", zap.Any("SplitNumberPerNode", baseSpanNumberCoefficient))
+	}
 	log.Info("baseSpanNumberCoefficient", zap.Any("ChangefeedID", changefeedID.Name()), zap.Any("baseSpanNumberCoefficient", baseSpanNumberCoefficient))
 	return &Splitter{
 		changefeedID: changefeedID,
@@ -150,10 +153,11 @@ func NextExpectedSpansNumber(oldNum int) int {
 // }
 
 func getSpansNumber(regionNum, captureNum int) int {
-	spanNum := 1
+	basicSpanNumber := 1
+	var spanNum int
 	if regionNum > 1 {
 		// spanNum = max(expectedNum, captureNum*baseSpanNumberCoefficient, regionNum/spanRegionLimit)
 		spanNum = captureNum * baseSpanNumberCoefficient
 	}
-	return spanNum
+	return max(spanNum, basicSpanNumber)
 }
