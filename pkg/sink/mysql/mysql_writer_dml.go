@@ -71,6 +71,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 	for _, eventsInGroup := range eventsGroup {
 		// check if the table has a handle key
 		tableInfo := eventsInGroup[0].TableInfo
+		log.Info("tableInfo has HandleKey", zap.Any("tableInfo name", tableInfo.TableName), zap.Any("handle key", tableInfo.HasHandleKey()))
 		if !tableInfo.HasHandleKey() {
 			// use the normal sql generate
 			queryList, argsList, err := w.generateNormalSQLs(eventsInGroup)
@@ -324,7 +325,6 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 
 		// TODO: extract a function here to clean code
 		for _, event := range events {
-
 			for {
 				row, ok := event.GetNextRow()
 				if !ok {
@@ -334,7 +334,7 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 				switch row.RowType {
 				case commonEvent.RowTypeUpdate:
 					{
-						deleteRow := commonEvent.RowChange{RowType: commonEvent.RowTypeDelete, Row: row.PreRow}
+						deleteRow := commonEvent.RowChange{RowType: commonEvent.RowTypeDelete, PreRow: row.PreRow}
 						hashValue, keyValue, err := genKeyAndHash(&row.PreRow, tableInfo)
 						if err != nil {
 							return nil, nil, errors.Trace(err)
