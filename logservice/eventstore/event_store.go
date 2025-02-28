@@ -715,7 +715,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	copiedValue := make([]byte, len(value))
 	copy(copiedValue, value)
 	rawKV := &common.RawKVEntry{}
-	rawKV.Decode(value)
+	rawKV.Decode(copiedValue)
 	metrics.EventStoreScanBytes.Add(float64(len(value)))
 	isNewTxn := false
 	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
