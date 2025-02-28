@@ -69,10 +69,10 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 
 	// Step 2: prepare the dmls for each group
 	for _, eventsInGroup := range eventsGroup {
-		// check if the table has a handle key
+		// check if the table has a handle key or has a virtual column
 		tableInfo := eventsInGroup[0].TableInfo
-		log.Info("tableInfo has HandleKey", zap.Any("tableInfo name", tableInfo.TableName), zap.Any("handle key", tableInfo.HasHandleKey()))
-		if !tableInfo.HasHandleKey() {
+		log.Info("tableInfo has HandleKey", zap.Any("tableInfo name", tableInfo.TableName), zap.Any("handle key", tableInfo.HasHandleKey()), zap.Any("tableInfo.HasVirtualColumns()", tableInfo.HasVirtualColumns()), zap.Any("tableInfo", tableInfo), zap.Any("columnSchema", tableInfo.GetColumnSchema()))
+		if !tableInfo.HasHandleKey() || tableInfo.HasVirtualColumns() {
 			// use the normal sql generate
 			queryList, argsList, err := w.generateNormalSQLs(eventsInGroup)
 			if err != nil {
@@ -259,6 +259,7 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 						}
 					case commonEvent.RowTypeUpdate:
 						rowKey := rowLists[i].RowKeys
+						//preRowKey := rowLists[i].PreRowKeys
 						if nextRowType == commonEvent.RowTypeInsert {
 							if compareKeys(rowKey, rowLists[j].RowKeys) {
 								log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
@@ -280,10 +281,10 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 								hasUpdate = true
 								break
 							}
-						} else if nextRowType == commonEvent.RowTypeUpdate {
-							if compareKeys(rowKey, rowLists[j].RowKeys) {
-								log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
-							}
+							// } else if nextRowType == commonEvent.RowTypeUpdate {
+							// 	if compareKeys(preRowKey, rowLists[j].PreRowKeys) {
+							// 		log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							// 	}
 						}
 					}
 				}

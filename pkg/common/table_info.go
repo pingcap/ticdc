@@ -309,6 +309,10 @@ type TableInfo struct {
 	} `json:"-"`
 }
 
+func (ti *TableInfo) GetColumnSchema() *columnSchema {
+	return ti.columnSchema
+}
+
 var count atomic.Int64
 
 func (ti *TableInfo) InitPrivateFields() {

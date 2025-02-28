@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tiflow/cdc/model"
+	"go.uber.org/zap"
 )
 
 func compareKeys(firstKey, secondKey [][]byte) bool {
@@ -47,6 +48,7 @@ func compareKeys(firstKey, secondKey [][]byte) bool {
 func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, [][]byte, error) {
 	var keys [][]byte
 	for iIdx, idxCol := range tableInfo.GetIndexColumnsOffset() {
+		log.Info("genKeyAndHash", zap.Any("idxCol", idxCol), zap.Any("iIdx", iIdx))
 		key, err := genKeyList(row, iIdx, idxCol, tableInfo)
 		if err != nil {
 			return 0, nil, errors.Trace(err)
@@ -71,8 +73,7 @@ func genKeyList(row *chunk.Row, iIdx int, colIdx []int, tableInfo *common.TableI
 	var key []byte
 	columnInfos := tableInfo.GetColumns()
 	for _, i := range colIdx {
-		// If the index contain generated column, we can't use this key to detect conflict with other DML,
-		if columnInfos[i] == nil || tableInfo.GetColumnFlags()[columnInfos[i].ID].IsGeneratedColumn() {
+		if columnInfos[i] == nil {
 			return nil, nil
 		}
 
