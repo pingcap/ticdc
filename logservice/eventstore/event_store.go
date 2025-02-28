@@ -450,7 +450,6 @@ func (e *eventStore) RegisterDispatcher(
 			subStat.dispatchers.Lock()
 			defer subStat.dispatchers.Unlock()
 			for _, notifier := range subStat.dispatchers.notifiers {
-				log.Info("advance resolved ts", zap.Uint64("ts", ts))
 				notifier(ts, subStat.maxEventCommitTs.Load())
 			}
 			CounterResolved.Inc()
@@ -711,12 +710,12 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	}
 
 	value := iter.innerIter.Value()
-	// rawKV need reference in the byte slice, so we need copy it here
+	// rawKV need reference the byte slice, so we need copy it here
 	copiedValue := make([]byte, len(value))
 	copy(copiedValue, value)
 	rawKV := &common.RawKVEntry{}
 	rawKV.Decode(copiedValue)
-	metrics.EventStoreScanBytes.Add(float64(len(value)))
+	metrics.EventStoreScanBytes.Add(float64(len(copiedValue)))
 	isNewTxn := false
 	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
 		isNewTxn = true

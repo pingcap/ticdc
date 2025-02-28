@@ -73,7 +73,6 @@ func newPebbleOptions(dbNum int) *pebble.Options {
 func createPebbleDBs(rootDir string, dbNum int) []*pebble.DB {
 	cache := pebble.NewCache(cacheSize)
 	tableCache := pebble.NewTableCache(cache, dbNum, int(cache.MaxSize()))
-	defer tableCache.Unref()
 	dbs := make([]*pebble.DB, dbNum)
 	for i := 0; i < dbNum; i++ {
 		opts := newPebbleOptions(dbNum)
