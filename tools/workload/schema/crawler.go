@@ -21,6 +21,9 @@ import (
 	"math/rand"
 	"sync"
 	"time"
+
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 const createContentTable = `
@@ -108,7 +111,10 @@ func (c *CrawlerWorkload) BuildInsertSql(tableN int, batchSize int) string {
 		buf.WriteString(fmt.Sprintf(", ('%s', NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, '%s', NULL, NULL, NULL, 200, 1, NULL, NULL, NULL)",
 			key, key, randomString(10)))
 	}
-	return buf.String()
+	insertSQL := buf.String()
+	log.Info("workload, insert the table",
+		zap.Int("table", tableN), zap.Int("batchSize", batchSize), zap.Int("length", len(insertSQL)))
+	return insertSQL
 }
 
 func (c *CrawlerWorkload) BuildUpdateSql(opts UpdateOption) string {
