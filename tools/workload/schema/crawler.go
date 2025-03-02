@@ -101,12 +101,12 @@ func (c *CrawlerWorkload) BuildInsertSql(tableN int, batchSize int) string {
 		"country, "+
 		"currency) VALUES ( "+
 		"'%s', NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, '%s', NULL, NULL, NULL, 200, 1, NULL, NULL, NULL)",
-		tableN, key, key, randomString(10240)))
+		tableN, key, key, randomString(10)))
 
 	for r := 1; r < batchSize; r++ {
 		key = c.getNewRowKey()
 		buf.WriteString(fmt.Sprintf(", ('%s', NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, '%s', NULL, NULL, NULL, 200, 1, NULL, NULL, NULL))",
-			key, key, randomString(10240)))
+			key, key, randomString(10)))
 	}
 	return buf.String()
 }
@@ -119,7 +119,7 @@ func (c *CrawlerWorkload) BuildUpdateSql(opts UpdateOption) string {
 			break
 		}
 		buf.WriteString(fmt.Sprintf("UPDATE web_content_prod.content_crawled_%d SET html = %s WHERE content_id = %s;",
-			opts.Table, randomString(10240), key))
+			opts.Table, randomString(10), key))
 	}
 	return buf.String()
 }
