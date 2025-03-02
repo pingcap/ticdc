@@ -89,7 +89,7 @@ func (c *CrawlerWorkload) BuildCreateTableStatement(n int) string {
 func (c *CrawlerWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	var buf bytes.Buffer
 	key := c.getNewRowKey()
-	buf.WriteString(fmt.Sprintf("INSERT INTO web_content_prod.content_crawled_%d ( "+
+	buf.WriteString(fmt.Sprintf("INSERT INTO content_crawled_%d ( "+
 		"content_id, "+
 		"html, "+
 		"html_s3_path, "+
@@ -124,7 +124,7 @@ func (c *CrawlerWorkload) BuildUpdateSql(opts UpdateOption) string {
 		if !ok {
 			break
 		}
-		buf.WriteString(fmt.Sprintf("UPDATE web_content_prod.content_crawled_%d SET html = %s WHERE content_id = %s;",
+		buf.WriteString(fmt.Sprintf("UPDATE content_crawled_%d SET html = %s WHERE content_id = %s;",
 			opts.Table, randomString(10), key))
 	}
 	return buf.String()
