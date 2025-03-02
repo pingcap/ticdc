@@ -130,7 +130,7 @@ func randomKeyForCrawler() string {
 }
 
 func randomContentForCrawler() string {
-	buffer := make([]byte, 20480)
+	buffer := make([]byte, 1024)
 	randomBytes(nil, buffer)
 	randomString := hex.EncodeToString(buffer)
 	return randomString
