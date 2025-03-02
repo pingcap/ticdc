@@ -23,11 +23,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"workload/schema"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
-	"workload/schema"
 )
 
 var (
@@ -370,6 +371,9 @@ func genUpdateTask(output chan updateTask) {
 func doUpdate(db *sql.DB, workload schema.Workload, input chan updateTask) {
 	for task := range input {
 		updateSql := workload.BuildUpdateSql(task.UpdateOption)
+		if updateSql == "" {
+			continue
+		}
 		res, err := execute(db, updateSql, workload, task.Table)
 		if err != nil {
 			log.Info("update error", zap.Error(err), zap.String("sql", updateSql[:20]))
