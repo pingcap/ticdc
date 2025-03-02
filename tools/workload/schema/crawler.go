@@ -98,12 +98,12 @@ func (c *CrawlerWorkload) BuildInsertSql(tableN int, batchSize int) string {
 		"language, "+
 		"country, "+
 		"currency) VALUES ( "+
-		"%s, NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, %s, NULL, NULL, NULL, 200, 1, NULL, NULL, NULL)",
+		"'%s', NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, '%s', NULL, NULL, NULL, 200, 1, NULL, NULL, NULL)",
 		tableN, key, key, randomContentForCrawler()))
 
 	for r := 1; r < batchSize; r++ {
 		key = c.getNewRowKey()
-		buf.WriteString(fmt.Sprintf(", (%s, NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, %s, NULL, NULL, NULL, 200, 1, NULL, NULL, NULL))",
+		buf.WriteString(fmt.Sprintf(", ('%s', NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, '%s', NULL, NULL, NULL, 200, 1, NULL, NULL, NULL))",
 			key, key, randomContentForCrawler()))
 	}
 	return buf.String()
