@@ -309,6 +309,10 @@ type TableInfo struct {
 	} `json:"-"`
 }
 
+func (ti *TableInfo) GetColumnSchema() *columnSchema {
+	return ti.columnSchema
+}
+
 var count atomic.Int64
 
 func (ti *TableInfo) InitPrivateFields() {
@@ -398,6 +402,10 @@ func (ti *TableInfo) GetIndexColumnsOffset() [][]int {
 
 func (ti *TableInfo) PKIsHandle() bool {
 	return ti.columnSchema.PKIsHandle
+}
+
+func (ti *TableInfo) GetPKIndexOffset() []int {
+	return ti.columnSchema.PKIndexOffset
 }
 
 func (ti *TableInfo) UpdateTS() uint64 {
