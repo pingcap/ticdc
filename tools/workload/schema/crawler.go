@@ -134,9 +134,18 @@ func randomKeyForCrawler() string {
 
 const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()"
 
-var seededRand *rand.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
+var (
+	seededRand *rand.Rand
+	randMutex  sync.Mutex
+)
+
+func init() {
+	seededRand = rand.New(rand.NewSource(time.Now().UnixNano()))
+}
 
 func randomString(length int) string {
+	randMutex.Lock()
+	defer randMutex.Unlock()
 	b := make([]byte, length)
 	for i := range b {
 		b[i] = charset[seededRand.Intn(len(charset))]
