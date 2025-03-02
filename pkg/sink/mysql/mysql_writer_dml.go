@@ -152,6 +152,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 // 4. the previous row is Insert A, the next row is Update A to C --  remove the row of `Insert A`, change the row `Update A to C` to `Insert C`
 // 5. the previous row is Update A to B, the next row is Delete B. --- remove the row `Delete B`, change the row `Update A to B` to `Delete A`
 // 6. the previous row is Update A to B, the next row is Update B to C. --- we don't need to combine the rows.
+// 7. the previous row is Update A to B, the next row is Update A to C. --- remove the row `Update A to B`
 //
 // For these all changes to row, we will continue to compare from the beginnning to the end, until there is no change.
 // Then we can generate the final sql of delete/update/insert.
@@ -163,8 +164,8 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 		log.Info("into safe mode batch")
 		type RowChangeWithKeys struct {
 			RowChange  *commonEvent.RowChange
-			RowKeys    [][]byte
-			PreRowKeys [][]byte
+			RowKeys    []byte
+			PreRowKeys []byte
 		}
 		// step 1. loop to combine the rows until there is no change
 		rowLists := make([]RowChangeWithKeys, 0)
@@ -195,7 +196,7 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 		}
 
 		for i := 0; i < len(rowLists); i++ {
-			log.Info("before combine row i type is", zap.Any("type", rowLists[i].RowChange.RowType))
+			log.Info("before combine row i type is", zap.Any("type", rowLists[i].RowChange.RowType), zap.Any("key", rowLists[i].RowKeys), zap.Any("pre key", rowLists[i].PreRowKeys))
 		}
 
 		for {
@@ -209,20 +210,18 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 				if !flagList[i] {
 					continue
 				}
+			innerLoop:
 				for j := i + 1; j < len(rowLists); j++ {
 					if !flagList[j] {
 						continue
 					}
 					rowType := rowLists[i].RowChange.RowType
 					nextRowType := rowLists[j].RowChange.RowType
+					log.Info("line i j", zap.Any("i", i), zap.Any("j", j))
 					switch rowType {
 					case commonEvent.RowTypeDelete:
 						rowKey := rowLists[i].PreRowKeys
-						if nextRowType == commonEvent.RowTypeDelete {
-							if compareKeys(rowKey, rowLists[j].PreRowKeys) {
-								log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
-							}
-						} else if nextRowType == commonEvent.RowTypeUpdate {
+						if nextRowType == commonEvent.RowTypeUpdate {
 							if compareKeys(rowKey, rowLists[j].PreRowKeys) {
 								log.Panic("Here are two invalid rows, one is Delete A, the other is Update A to B", zap.Any("Events", events))
 							}
@@ -238,10 +237,11 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 							}
 						} else if nextRowType == commonEvent.RowTypeDelete {
 							if compareKeys(rowKey, rowLists[j].PreRowKeys) {
+								log.Info("insert meets delete with the same row, remove and break", zap.Any("i", i), zap.Any("j", j))
 								// remove the insert one, and break the inner loop for row i
 								flagList[i] = false
 								hasUpdate = true
-								break
+								break innerLoop
 							}
 						} else if nextRowType == commonEvent.RowTypeUpdate {
 							if compareKeys(rowKey, rowLists[j].PreRowKeys) {
@@ -258,12 +258,12 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 									RowKeys:   rowLists[j].RowKeys,
 								}
 								hasUpdate = true
-								break
+								break innerLoop
 							}
 						}
 					case commonEvent.RowTypeUpdate:
 						rowKey := rowLists[i].RowKeys
-						//preRowKey := rowLists[i].PreRowKeys
+						preRowKey := rowLists[i].PreRowKeys
 						if nextRowType == commonEvent.RowTypeInsert {
 							if compareKeys(rowKey, rowLists[j].RowKeys) {
 								log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
@@ -283,12 +283,15 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 									PreRowKeys: rowLists[i].PreRowKeys,
 								}
 								hasUpdate = true
-								break
+								break innerLoop
 							}
-							// } else if nextRowType == commonEvent.RowTypeUpdate {
-							// 	if compareKeys(preRowKey, rowLists[j].PreRowKeys) {
-							// 		log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
-							// 	}
+						} else if nextRowType == commonEvent.RowTypeUpdate {
+							if compareKeys(preRowKey, rowLists[j].PreRowKeys) {
+								// remove the first one, and break the loop
+								flagList[i] = false
+								hasUpdate = true
+								break innerLoop
+							}
 						}
 					}
 				}
@@ -326,7 +329,7 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 		// unsafe mode
 		// step 1. divide update row to delete row and insert row, and set into map based on the key hash
 		rowsMap := make(map[uint64][]*commonEvent.RowChange)
-		hashToKeyMap := make(map[uint64][][]byte)
+		hashToKeyMap := make(map[uint64][]byte)
 
 		// TODO: extract a function here to clean code
 		for _, event := range events {

@@ -15,7 +15,6 @@ package mysql
 
 import (
 	"bytes"
-	"encoding/binary"
 	"hash/fnv"
 	"strings"
 
@@ -25,50 +24,33 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tiflow/cdc/model"
+	"go.uber.org/zap"
 )
 
-func compareKeys(firstKey, secondKey [][]byte) bool {
-	if len(firstKey) != len(secondKey) {
-		return false
-	}
-
-	for i := range firstKey {
-		if len(firstKey[i]) != len(secondKey[i]) {
-			return false
-		}
-		if !bytes.Equal(firstKey[i], secondKey[i]) {
-			return false
-		}
-	}
-
-	return true
+func compareKeys(firstKey, secondKey []byte) bool {
+	return bytes.Equal(firstKey, secondKey)
 }
 
-func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, [][]byte, error) {
-	var keys [][]byte
-	for iIdx, idxCol := range tableInfo.GetIndexColumnsOffset() {
-		//log.Info("genKeyAndHash", zap.Any("idxCol", idxCol), zap.Any("iIdx", iIdx))
-		key, err := genKeyList(row, iIdx, idxCol, tableInfo)
-		if err != nil {
-			return 0, nil, errors.Trace(err)
-		}
-		if len(key) == 0 {
-			continue
-		}
-		keys = append(keys, key)
+func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte, error) {
+	idxCol := tableInfo.GetPKIndexOffset()
+	//log.Info("genKeyAndHash", zap.Any("idxCol", idxCol), zap.Any("iIdx", iIdx))
+	key, err := genKeyList(row, idxCol, tableInfo)
+	if err != nil {
+		return 0, nil, errors.Trace(err)
+	}
+	if len(key) == 0 {
+		log.Panic("the table has no primary key", zap.Any("tableinfo", tableInfo))
 	}
 
 	hasher := fnv.New32a()
-	for _, key := range keys {
-		if n, err := hasher.Write(key); n != len(key) || err != nil {
-			log.Panic("transaction key hash fail")
-		}
+	if n, err := hasher.Write(key); n != len(key) || err != nil {
+		log.Panic("transaction key hash fail")
 	}
 
-	return uint64(hasher.Sum32()), keys, nil
+	return uint64(hasher.Sum32()), key, nil
 }
 
-func genKeyList(row *chunk.Row, iIdx int, colIdx []int, tableInfo *common.TableInfo) ([]byte, error) {
+func genKeyList(row *chunk.Row, colIdx []int, tableInfo *common.TableInfo) ([]byte, error) {
 	var key []byte
 	columnInfos := tableInfo.GetColumns()
 	for _, i := range colIdx {
@@ -96,9 +78,6 @@ func genKeyList(row *chunk.Row, iIdx int, colIdx []int, tableInfo *common.TableI
 	if len(key) == 0 {
 		return nil, nil
 	}
-	tableKey := make([]byte, 8)
-	binary.BigEndian.PutUint64(tableKey, uint64(iIdx))
-	key = append(key, tableKey...)
 	return key, nil
 }
 
