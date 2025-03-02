@@ -18,7 +18,9 @@ import (
 	"container/list"
 	"encoding/hex"
 	"fmt"
+	"math/rand"
 	"sync"
+	"time"
 )
 
 const createContentTable = `
@@ -99,12 +101,12 @@ func (c *CrawlerWorkload) BuildInsertSql(tableN int, batchSize int) string {
 		"country, "+
 		"currency) VALUES ( "+
 		"'%s', NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, '%s', NULL, NULL, NULL, 200, 1, NULL, NULL, NULL)",
-		tableN, key, key, randomContentForCrawler()))
+		tableN, key, key, randomString(10240)))
 
 	for r := 1; r < batchSize; r++ {
 		key = c.getNewRowKey()
 		buf.WriteString(fmt.Sprintf(", ('%s', NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, '%s', NULL, NULL, NULL, 200, 1, NULL, NULL, NULL))",
-			key, key, randomContentForCrawler()))
+			key, key, randomString(10240)))
 	}
 	return buf.String()
 }
@@ -117,7 +119,7 @@ func (c *CrawlerWorkload) BuildUpdateSql(opts UpdateOption) string {
 			break
 		}
 		buf.WriteString(fmt.Sprintf("UPDATE web_content_prod.content_crawled_%d SET html = %s WHERE content_id = %s;",
-			opts.Table, randomContentForCrawler(), key))
+			opts.Table, randomString(10240), key))
 	}
 	return buf.String()
 }
@@ -129,9 +131,14 @@ func randomKeyForCrawler() string {
 	return randomString
 }
 
-func randomContentForCrawler() string {
-	buffer := make([]byte, 1024)
-	randomBytes(nil, buffer)
-	randomString := hex.EncodeToString(buffer)
-	return randomString
+const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()"
+
+var seededRand *rand.Rand = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+func randomString(length int) string {
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[seededRand.Intn(len(charset))]
+	}
+	return string(b)
 }
