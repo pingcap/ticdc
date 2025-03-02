@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tiflow/cdc/model"
-	"go.uber.org/zap"
 )
 
 func compareKeys(firstKey, secondKey [][]byte) bool {
@@ -48,7 +47,7 @@ func compareKeys(firstKey, secondKey [][]byte) bool {
 func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, [][]byte, error) {
 	var keys [][]byte
 	for iIdx, idxCol := range tableInfo.GetIndexColumnsOffset() {
-		log.Info("genKeyAndHash", zap.Any("idxCol", idxCol), zap.Any("iIdx", iIdx))
+		//log.Info("genKeyAndHash", zap.Any("idxCol", idxCol), zap.Any("iIdx", iIdx))
 		key, err := genKeyList(row, iIdx, idxCol, tableInfo)
 		if err != nil {
 			return 0, nil, errors.Trace(err)

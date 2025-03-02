@@ -52,6 +52,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 	for _, event := range events {
 		log.Info("PrepareDML event lens", zap.Any("len", event.Len()))
 	}
+	w.prepareDMLsBackup(events)
 	log.Info("Finish Begin PrepareDML")
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
@@ -230,6 +231,9 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 						rowKey := rowLists[i].RowKeys
 						if nextRowType == commonEvent.RowTypeInsert {
 							if compareKeys(rowKey, rowLists[j].RowKeys) {
+								// use normal sql instead
+								normalSql, normalValues, _ := w.generateNormalSQLs(events)
+								log.Info("before panic", zap.Any("normalSql", normalSql), zap.Any("normalValues", normalValues))
 								log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
 							}
 						} else if nextRowType == commonEvent.RowTypeDelete {
@@ -419,6 +423,7 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 			}
 			if len(rowChanges) == 1 {
 				rowsList = append(rowsList, rowChanges[0])
+				continue
 			}
 			// should only happen the rows like 'insert / delete / insert / delete ...' or 'delete / insert /delete ...' ,
 			// should not happen 'insert / insert' or 'delete / delete'
@@ -505,7 +510,7 @@ func (w *MysqlWriter) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, 
 		case commonEvent.RowTypeDelete:
 			query, args, err = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
 		case commonEvent.RowTypeInsert:
-			query, args, err = buildInsert(event.TableInfo, row, !w.cfg.SafeMode)
+			query, args, err = buildInsert(event.TableInfo, row, inSafeMode)
 		}
 
 		if err != nil {
@@ -520,10 +525,8 @@ func (w *MysqlWriter) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, 
 	return queryList, argsList, nil
 }
 
-/*
 func (w *MysqlWriter) prepareDMLsBackup(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
-	dmls := dmlsPool.Get().(*preparedDMLs)
-	dmls.reset()
+	dmls := &preparedDMLs{}
 
 	for _, event := range events {
 		if event.Len() == 0 {
@@ -545,26 +548,10 @@ func (w *MysqlWriter) prepareDMLsBackup(events []*commonEvent.DMLEvent) (*prepar
 			zap.Uint64("firstRowReplicatingTs", event.ReplicatingTs),
 			zap.Bool("safeMode", w.cfg.SafeMode))
 
-		enableBatchModeThreshold := 1
-		// Determine whether to use batch dml feature here.
-		if w.cfg.BatchDMLEnable && int(event.Len()) > enableBatchModeThreshold {
-			log.Debug("use batch dml", zap.Int32("rowCount", event.Len()))
-			// only use batch dml when the table has a handle key
-			if event.TableInfo.HasHandleKey() {
-				sql, value, err := w.batchSingleTxnDmls(event, event.TableInfo, inSafeMode)
-				if err != nil {
-					dmlsPool.Put(dmls) // Return to pool on error
-					return nil, errors.Trace(err)
-				}
-				dmls.sqls = append(dmls.sqls, sql...)
-				dmls.values = append(dmls.values, value...)
-				continue
-			}
-		}
-
 		for {
 			row, ok := event.GetNextRow()
 			if !ok {
+				event.FinishGetRow()
 				break
 			}
 
@@ -609,12 +596,11 @@ func (w *MysqlWriter) prepareDMLsBackup(events []*commonEvent.DMLEvent) (*prepar
 	// Pre-check log level to avoid dmls.String() being called unnecessarily
 	// This method is expensive, so we only log it when the log level is debug.
 	if log.GetLevel() == zapcore.DebugLevel {
-		log.Debug("prepareDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
+		log.Debug("prepareBackupDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
 	}
 
 	return dmls, nil
 }
-*/
 
 func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	if len(dmls.sqls) != len(dmls.values) {
