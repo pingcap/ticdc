@@ -113,7 +113,7 @@ func (c *CrawlerWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	}
 	insertSQL := buf.String()
 	log.Info("workload, insert the table",
-		zap.Int("table", tableN), zap.Int("batchSize", batchSize), zap.Int("length", len(insertSQL)))
+		zap.Int("table", tableN), zap.Int("batchSize", batchSize), zap.String("sql", insertSQL))
 	return insertSQL
 }
 
