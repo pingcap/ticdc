@@ -62,7 +62,7 @@ func NewReplicaSetDB(
 		newGroupChecker: getNewGroupChecker(changefeedID, enableTableAcrossNodes),
 	}
 
-	db.reset(ddlSpan)
+	db.reset(db.ddlSpan)
 	return db
 }
 

@@ -245,12 +245,12 @@ func (oc *Controller) pollQueueingOperator() (
 		return nil, true
 	}
 	now := time.Now()
-	if now.Before(item.EnqueuedAt) {
+	if now.Before(item.NotifyAt) {
 		heap.Push(&oc.runningQueue, item)
 		return nil, false
 	}
 	// pushes with new notify time.
-	item.EnqueuedAt = time.Now().Add(time.Millisecond * 500)
+	item.NotifyAt = time.Now().Add(time.Millisecond * 500)
 	heap.Push(&oc.runningQueue, item)
 	return op, true
 }

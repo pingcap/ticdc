@@ -23,8 +23,8 @@ import (
 type OperatorWithTime[T replica.ReplicationID, S replica.ReplicationStatus] struct {
 	// OP is the underlying operator to be executed
 	OP Operator[T, S]
-	// EnqueuedAt records when this operator was added to the queue
-	EnqueuedAt time.Time
+	// NotifyAt records when this operator should be notified
+	NotifyAt time.Time
 	// CreatedAt records when this operator was created
 	CreatedAt time.Time
 	// IsRemoved indicates whether this operator has been marked for removal
@@ -32,7 +32,7 @@ type OperatorWithTime[T replica.ReplicationID, S replica.ReplicationStatus] stru
 }
 
 func NewOperatorWithTime[T replica.ReplicationID, S replica.ReplicationStatus](op Operator[T, S], time time.Time) *OperatorWithTime[T, S] {
-	return &OperatorWithTime[T, S]{OP: op, EnqueuedAt: time, CreatedAt: time}
+	return &OperatorWithTime[T, S]{OP: op, NotifyAt: time, CreatedAt: time}
 }
 
 // OperatorQueue is a priority queue of operators that implements heap.Interface.
@@ -45,7 +45,7 @@ type OperatorQueue[T replica.ReplicationID, S replica.ReplicationStatus] []*Oper
 func (o OperatorQueue[T, S]) Len() int { return len(o) }
 
 func (o OperatorQueue[T, S]) Less(i, j int) bool {
-	return o[i].EnqueuedAt.Before(o[j].EnqueuedAt)
+	return o[i].NotifyAt.Before(o[j].NotifyAt)
 }
 
 func (o OperatorQueue[T, S]) Swap(i, j int) {

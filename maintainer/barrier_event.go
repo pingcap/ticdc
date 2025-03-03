@@ -423,11 +423,19 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 		if stm == nil || stm.GetNodeID() == "" {
 			log.Warn("writer dispatcher not found",
 				zap.String("changefeed", be.cfID.Name()),
+				zap.String("dispatcher", be.writerDispatcher.String()),
+				zap.Stringer("node", stm.GetNodeID()),
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Bool("isSyncPoint", be.isSyncPoint))
 			// todo: select a new writer
+
+			allDispatchers := be.controller.GetAllTasks()
+			for i, stm := range allDispatchers {
+				log.Warn("fizz all dispatcher", zap.Any("dispatcher", stm.ID.String()), zap.Int("index", i))
+			}
 			return nil
 		}
+
 		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID())}
 	} else {
 		// the writer dispatcher is advanced, resend pass action
