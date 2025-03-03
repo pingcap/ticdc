@@ -48,12 +48,12 @@ import (
 //     if there is only one rows of the whole group, we generate the sqls for the row.
 //     Otherwise, we batch all the event rows for the same dispatcherID to a single delete / update/ insert query(in order),
 func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
-	log.Info("Begin PrepareDML", zap.Any("events len", len(events)))
-	for _, event := range events {
-		log.Info("PrepareDML event lens", zap.Any("len", event.Len()))
-	}
-	w.prepareDMLsBackup(events)
-	log.Info("Finish Begin PrepareDML")
+	// log.Info("Begin PrepareDML", zap.Any("events len", len(events)))
+	// for _, event := range events {
+	// 	log.Info("PrepareDML event lens", zap.Any("len", event.Len()))
+	// }
+	// w.prepareDMLsBackup(events)
+	// log.Info("Finish Begin PrepareDML")
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 
