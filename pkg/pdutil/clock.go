@@ -143,6 +143,25 @@ func (c *clock4Test) Run(ctx context.Context) {
 func (c *clock4Test) Close() {
 }
 
+type clockWithValue4Test struct {
+	value time.Time
+}
+
+// NewClockWithValue4Test return a new clock for test.
+func NewClockWithValue4Test(value time.Time) *clockWithValue4Test {
+	return &clockWithValue4Test{value: value}
+}
+
+func (c *clockWithValue4Test) CurrentTime() time.Time {
+	return c.value
+}
+
+func (c *clockWithValue4Test) Run(ctx context.Context) {
+}
+
+func (c *clockWithValue4Test) Close() {
+}
+
 type monotonicClock struct {
 	clock pclock.Clock
 }

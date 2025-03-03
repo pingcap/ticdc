@@ -35,8 +35,8 @@ import (
 type Changefeed struct {
 	ID       common.ChangeFeedID
 	info     *atomic.Pointer[config.ChangeFeedInfo]
-	isMQSink bool
-	isNew    bool // only true when the changfeed is newly created or resumed by overwriteCheckpointTs
+	sinkType common.SinkType
+	isNew    bool // only true when the changefeed is newly created or resumed by overwriteCheckpointTs
 
 	// nodeIDMu protects nodeID
 	nodeIDMu sync.Mutex
@@ -73,7 +73,7 @@ func NewChangefeed(cfID common.ChangeFeedID,
 		info:                  atomic.NewPointer(info),
 		configBytes:           bytes,
 		lastSavedCheckpointTs: atomic.NewUint64(checkpointTs),
-		isMQSink:              sink.IsMQScheme(uri.Scheme),
+		sinkType:              getSinkType(uri.Scheme),
 		isNew:                 isNew,
 		// Initialize the status
 		status: atomic.NewPointer(
@@ -134,6 +134,10 @@ func (c *Changefeed) ShouldRun() bool {
 	return c.backoff.ShouldRun()
 }
 
+// UpdateStatus updates the changefeed status
+// It returns true if the status is changed
+// It returns false if the status is not changed
+// It returns the new state and error if the status is changed
 func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {
 	old := c.status.Load()
 
@@ -151,6 +155,7 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 		if info.TargetTs != 0 && newStatus.CheckpointTs >= info.TargetTs {
 			return true, model.StateFinished, nil
 		}
+
 		return c.backoff.CheckStatus(newStatus)
 	}
 
@@ -162,8 +167,8 @@ func (c *Changefeed) ForceUpdateStatus(newStatus *heartbeatpb.MaintainerStatus) 
 	return c.backoff.CheckStatus(newStatus)
 }
 
-func (c *Changefeed) IsMQSink() bool {
-	return c.isMQSink
+func (c *Changefeed) NeedCheckpointTsMessage() bool {
+	return c.sinkType == common.KafkaSinkType || c.sinkType == common.CloudStorageSinkType
 }
 
 func (c *Changefeed) SetIsNew(isNew bool) {
@@ -253,4 +258,18 @@ func RemoveMaintainerMessage(id common.ChangeFeedID, server node.ID, caseCade bo
 			Cascade: caseCade,
 			Removed: removed,
 		})
+}
+
+// getSinkType returns the sink type of the url.
+func getSinkType(scheme string) common.SinkType {
+	if sink.IsMySQLCompatibleScheme(scheme) {
+		return common.MysqlSinkType
+	}
+	if sink.IsMQScheme(scheme) {
+		return common.KafkaSinkType
+	}
+	if sink.IsStorageScheme(scheme) {
+		return common.CloudStorageSinkType
+	}
+	return common.BlackHoleSinkType
 }

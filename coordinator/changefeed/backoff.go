@@ -111,6 +111,17 @@ func (m *Backoff) resetErrRetry() {
 	m.retrying.Store(false)
 }
 
+// CheckStatus checks the current status of a changefeed and determines its state transition.
+// It takes a MaintainerStatus which contains the current checkpoint timestamp and any errors.
+// Returns:
+//   - bool: whether the state has changed and needs to be updated
+//   - model.FeedState: the new state of the changefeed (Normal, Warning, or Failed)
+//   - *heartbeatpb.RunningError: any error that occurred during processing
+//
+// The method handles several cases:
+//  1. If the changefeed is marked as failed, returns Failed state
+//  2. If checkpoint has advanced (making progress), resets any retry attempts and returns Normal state
+//  3. If there are errors and checkpoint hasn't advanced, initiates the retry mechanism
 func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {
 	if m.failed.Load() {
 		return false, model.StateFailed, nil
@@ -132,7 +143,8 @@ func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, model
 		}
 		return false, model.StateNormal, nil
 	}
-	// if the checkpointTs is not advanced, we should check if we should retry the changefeed
+
+	// If the checkpointTs is not advanced, we should check if we should retry the changefeed
 	if len(status.Err) > 0 {
 		if m.isRestarting.Load() {
 			log.Info("changefeed is already in restarting progress, ignore the error",
@@ -151,6 +163,7 @@ func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, model
 		}
 		return true, model.StateWarning, err
 	}
+
 	return false, model.StateNormal, nil
 }
 

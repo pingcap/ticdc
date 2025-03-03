@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# This file is used to run integration tests for developers(self-test).
+
 set -eu
 
 OUT_DIR=/tmp/tidb_cdc_test

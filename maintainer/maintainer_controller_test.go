@@ -779,6 +779,7 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 	pdAPI := &mockPdAPI{
 		regions: make(map[int64][]pdutil.RegionInfo),
 	}
+
 	nodeManager := setNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -801,6 +802,9 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 			},
 		}, ddlSpan, 1000, 0)
 	s.taskScheduler = &mockThreadPool{}
+
+	mockPDClock := pdutil.NewClockWithValue4Test(time.Unix(0, 0))
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 
 	totalTables := 10
 	victim := rand.Intn(totalTables) + 1

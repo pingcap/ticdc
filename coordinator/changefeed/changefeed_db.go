@@ -209,25 +209,31 @@ func (db *ChangefeedDB) GetByChangefeedDisplayName(displayName common.ChangeFeed
 	return db.changefeeds[db.changefeedDisplayNames[displayName]]
 }
 
-// Resume moves a changefeed to the absent map, and waiting for scheduling
-func (db *ChangefeedDB) Resume(id common.ChangeFeedID, resetBackoff bool, overwriteCheckpointTs bool) {
+// MoveToSchedulingQueue moves a changefeed to the absent map, and waiting for scheduling
+func (db *ChangefeedDB) MoveToSchedulingQueue(
+	id common.ChangeFeedID,
+	resetBackoff bool,
+	overwriteCheckpointTs bool,
+) {
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
 	cf := db.changefeeds[id]
 	if cf != nil {
-		// force retry the changefeed,
-		// it reset the backoff and set the state to normal, it's called when we resume a changefeed using cli
+		// Reset the backoff if resetBackoff is true.
+		// It means the changefeed is resumed by cli or API.
 		if resetBackoff {
 			cf.backoff.resetErrRetry()
 		}
 		delete(db.stopped, id)
 		cf.isNew = overwriteCheckpointTs
 		db.AddAbsentWithoutLock(cf)
-		log.Info("resume changefeed",
+		log.Info("move a changefeed to scheduling queue, it will be scheduled later",
 			zap.Stringer("changefeed", id),
 			zap.Uint64("checkpointTs", cf.GetStatus().CheckpointTs),
-			zap.Bool("overwriteCheckpointTs", overwriteCheckpointTs))
+			zap.Bool("overwriteCheckpointTs", overwriteCheckpointTs),
+			zap.Time("nextScheduleTime", cf.backoff.nextRetryTime.Load()),
+		)
 	}
 }
 

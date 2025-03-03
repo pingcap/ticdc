@@ -21,7 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pingcap/errors"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/version"
+	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/tiflow/cdc/model"
 )
 

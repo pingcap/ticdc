@@ -18,7 +18,7 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
-	"github.com/pingcap/ticdc/version"
+	"github.com/pingcap/ticdc/pkg/version"
 )
 
 // ServerStatus Get the status information of a TiCDC node
