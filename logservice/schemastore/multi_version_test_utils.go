@@ -34,6 +34,32 @@ func buildCreateTableEventForTest(schemaID, tableID int64, schemaName, tableName
 	}
 }
 
+func buildDropTableEventForTest(schemaID, tableID int64, schemaName, tableName string, finishedTs uint64) *PersistedDDLEvent {
+	return &PersistedDDLEvent{
+		Type:       byte(model.ActionDropTable),
+		SchemaID:   schemaID,
+		TableID:    tableID,
+		SchemaName: schemaName,
+		TableName:  tableName,
+		FinishedTs: finishedTs,
+	}
+}
+
+func buildRecoverTableEventForTest(schemaID, tableID int64, schemaName, tableName string, finishedTs uint64) *PersistedDDLEvent {
+	return &PersistedDDLEvent{
+		Type:       byte(model.ActionRecoverTable),
+		SchemaID:   schemaID,
+		TableID:    tableID,
+		SchemaName: schemaName,
+		TableName:  tableName,
+		TableInfo: &model.TableInfo{
+			ID:   tableID,
+			Name: pmodel.NewCIStr(tableName),
+		},
+		FinishedTs: finishedTs,
+	}
+}
+
 func buildCreatePartitionTableEventForTest(schemaID, tableID int64, schemaName, tableName string, partitionIDs []int64, finishedTs uint64) *PersistedDDLEvent {
 	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
 	for _, partitionID := range partitionIDs {

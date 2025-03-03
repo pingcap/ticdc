@@ -322,8 +322,7 @@ func (s *schemaStore) writeDDLEvent(ddlEvent DDLJobWithCommitTs) {
 		zap.Uint64("finishedTs", ddlEvent.Job.BinlogInfo.FinishedTS),
 		zap.String("query", ddlEvent.Job.Query))
 
-	// TODO: find a better way to filter out system tables
-	if ddlEvent.Job.SchemaID != 1 {
+	if !filter.IsSysSchema(ddlEvent.Job.SchemaName) {
 		s.unsortedCache.addDDLEvent(ddlEvent)
 	}
 }

@@ -32,14 +32,15 @@ import (
 	"github.com/apache/pulsar-client-go/pulsar/auth"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/cdc/sink/ddlsink"
 	ddlsinkfactory "github.com/pingcap/tiflow/cdc/sink/ddlsink/factory"
 	eventsinkfactory "github.com/pingcap/tiflow/cdc/sink/dmlsink/factory"
 	"github.com/pingcap/tiflow/cdc/sink/tablesink"
 	sutil "github.com/pingcap/tiflow/cdc/sink/util"
-	cmdUtil "github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/logutil"
 	"github.com/pingcap/tiflow/pkg/sink"
@@ -47,8 +48,6 @@ import (
 	"github.com/pingcap/tiflow/pkg/sink/codec/canal"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 	tpulsar "github.com/pingcap/tiflow/pkg/sink/pulsar"
-	"github.com/pingcap/tiflow/pkg/util"
-	"github.com/pingcap/tiflow/pkg/version"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
@@ -99,7 +98,7 @@ func (o *ConsumerOption) Adjust(upstreamURI *url.URL, configFile string) {
 
 	replicaConfig := config.GetDefaultReplicaConfig()
 	if configFile != "" {
-		err := cmdUtil.StrictDecodeFile(configFile, "pulsar consumer", replicaConfig)
+		err := util.StrictDecodeFile(configFile, "pulsar consumer", replicaConfig)
 		if err != nil {
 			log.Panic("decode config file failed", zap.Error(err))
 		}

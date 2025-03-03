@@ -17,9 +17,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/pingcap/ticdc/cmd/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/filter"
 	"github.com/spf13/cobra"

@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,17 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package server
+package sink
 
-import "context"
+import (
+	"context"
 
-var defaultContext context.Context
+	"github.com/pingcap/ticdc/pkg/common"
+)
 
-func setDefaultContext(ctx context.Context) {
-	defaultContext = ctx
-}
+func newCloudStorageSinkForTest() (*CloudStorageSink, error) {
+	ctx := context.Background()
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	// csvProtocol := "csv-protocol"
+	// sinkConfig := &config.SinkConfig{Protocol: &csvProtocol}
 
-// GetDefaultContext returns the default context for command line usage.
-func GetDefaultContext() context.Context {
-	return defaultContext
+	sink := &CloudStorageSink{
+		changefeedID: changefeedID,
+	}
+	go sink.Run(ctx)
+	return sink, nil
 }

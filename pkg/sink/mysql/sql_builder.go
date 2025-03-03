@@ -72,7 +72,7 @@ func buildInsert(
 	row commonEvent.RowChange,
 	translateToInsert bool,
 ) (string, []interface{}, error) {
-	args, err := getArgs(&row.Row, tableInfo)
+	args, err := getArgs(&row.Row, tableInfo, false)
 	if err != nil {
 		return "", nil, errors.Trace(err)
 	}
@@ -136,7 +136,7 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceRe
 	}
 	builder.WriteString(tableInfo.GetPreUpdateSQL())
 
-	args, err := getArgs(&row.Row, tableInfo)
+	args, err := getArgs(&row.Row, tableInfo, false)
 	if err != nil {
 		return "", nil, errors.Trace(err)
 	}
@@ -172,10 +172,10 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceRe
 	return sql, args, nil
 }
 
-func getArgs(row *chunk.Row, tableInfo *common.TableInfo) ([]interface{}, error) {
+func getArgs(row *chunk.Row, tableInfo *common.TableInfo, enableGeneratedColumn bool) ([]interface{}, error) {
 	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
 	for i, col := range tableInfo.GetColumns() {
-		if col == nil || tableInfo.GetColumnFlags()[col.ID].IsGeneratedColumn() {
+		if col == nil || (tableInfo.GetColumnFlags()[col.ID].IsGeneratedColumn() && !enableGeneratedColumn) {
 			continue
 		}
 		v, err := common.FormatColVal(row, col, i)

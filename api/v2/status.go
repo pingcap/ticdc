@@ -18,10 +18,10 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
-	"github.com/pingcap/ticdc/version"
+	"github.com/pingcap/ticdc/pkg/version"
 )
 
-// serverStatus Get the status information of a TiCDC node
+// ServerStatus Get the status information of a TiCDC node
 // @Summary Get the status information of a TiCDC node
 // @Description This API is a synchronous interface. If the request is successful,
 // the status information of the corresponding node is returned.
@@ -32,7 +32,7 @@ import (
 // @Success 200 {object} ServerStatus
 // @Failure 500,400 {object} model.HTTPError
 // @Router	/api/v2/status [get]
-func (h *OpenAPIV2) serverStatus(c *gin.Context) {
+func (h *OpenAPIV2) ServerStatus(c *gin.Context) {
 	info, err := h.server.SelfInfo()
 	if err != nil {
 		_ = c.Error(err)

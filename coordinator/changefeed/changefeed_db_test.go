@@ -74,7 +74,7 @@ func TestStopByChangefeedID(t *testing.T) {
 	require.Equal(t, "", db.StopByChangefeedID(common.NewChangeFeedIDWithName("a"), false).String())
 }
 
-func TestResume(t *testing.T) {
+func TestMoveToSchedulingQueue(t *testing.T) {
 	db := NewChangefeedDB(1216)
 	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test")}
 	db.AddStoppedChangefeed(cf)
@@ -83,7 +83,7 @@ func TestResume(t *testing.T) {
 		CheckpointTs: 100,
 	})
 
-	db.Resume(cf.ID, true, false)
+	db.MoveToSchedulingQueue(cf.ID, true, false)
 
 	require.Contains(t, db.GetAbsent(), cf)
 	require.NotContains(t, db.stopped, cf.ID)
@@ -232,7 +232,7 @@ func TestReplaceStoppedChangefeed(t *testing.T) {
 	require.Contains(t, db.stopped, cf.ID)
 
 	cf3 := db.GetByID(cf.ID)
-	require.Equal(t, true, cf3.isMQSink)
+	require.Equal(t, true, cf3.NeedCheckpointTsMessage())
 
 	cf4ID := common.NewChangeFeedIDWithName("test4")
 	cf4 := &config.ChangeFeedInfo{

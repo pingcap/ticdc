@@ -1,0 +1,14 @@
+threadcount=2
+recordcount=100000
+operationcount=1000
+maxexecutiontime=120
+workload=core
+
+readallfields=true
+
+readproportion=0
+updateproportion=0
+scanproportion=0
+insertproportion=0
+
+requestdistribution=uniform

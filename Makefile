@@ -72,11 +72,11 @@ ifeq ($(RELEASE_VERSION),)
 endif
 
 # Version LDFLAGS.
-LDFLAGS += -X "$(CDC_PKG)/version.ReleaseVersion=$(RELEASE_VERSION)"
-LDFLAGS += -X "$(CDC_PKG)/version.BuildTS=$(BUILDTS)"
-LDFLAGS += -X "$(CDC_PKG)/version.GitHash=$(GITHASH)"
-LDFLAGS += -X "$(CDC_PKG)/version.GitBranch=$(GITBRANCH)"
-LDFLAGS += -X "$(CDC_PKG)/version.GoVersion=$(GOVERSION)"
+LDFLAGS += -X "$(CDC_PKG)/pkg/version.ReleaseVersion=$(RELEASE_VERSION)"
+LDFLAGS += -X "$(CDC_PKG)/pkg/version.BuildTS=$(BUILDTS)"
+LDFLAGS += -X "$(CDC_PKG)/pkg/version.GitHash=$(GITHASH)"
+LDFLAGS += -X "$(CDC_PKG)/pkg/version.GitBranch=$(GITBRANCH)"
+LDFLAGS += -X "$(CDC_PKG)/pkg/version.GoVersion=$(GOVERSION)"
 LDFLAGS += -X "github.com/pingcap/tidb/pkg/parser/mysql.TiDBReleaseVersion=$(RELEASE_VERSION)"
 
 # For Tiflow CDC
@@ -116,7 +116,7 @@ UT_PACKAGES_DISPATCHER := ./pkg/sink/mysql/... ./pkg/sink/util/... ./downstreama
 UT_PACKAGES_MAINTAINER := ./maintainer/...
 UT_PACKAGES_COORDINATOR := ./coordinator/...
 UT_PACKAGES_LOGSERVICE := ./logservice/...
-UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./utils/dynstream/...
+UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream/...
 
 include tools/Makefile
 

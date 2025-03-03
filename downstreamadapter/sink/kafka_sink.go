@@ -148,8 +148,9 @@ func (s *KafkaSink) IsNormal() bool {
 	return atomic.LoadUint32(&s.isNormal) == 1
 }
 
-func (s *KafkaSink) AddDMLEvent(event *commonEvent.DMLEvent) {
+func (s *KafkaSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
 	s.dmlWorker.AddDMLEvent(event)
+	return nil
 }
 
 func (s *KafkaSink) PassBlockEvent(event commonEvent.BlockEvent) {

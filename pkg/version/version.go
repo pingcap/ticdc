@@ -15,8 +15,6 @@ package version
 
 import (
 	"fmt"
-	"regexp"
-	"strings"
 
 	"github.com/coreos/go-semver/semver"
 	"github.com/pingcap/log"
@@ -25,7 +23,7 @@ import (
 
 // Version information.
 var (
-	ReleaseVersion = "v8.3.0"
+	ReleaseVersion = "None"
 	BuildTS        = "None"
 	GitHash        = "None"
 	GitBranch      = "None"
@@ -65,17 +63,4 @@ func GetRawInfo() string {
 	info += fmt.Sprintf("Go Version: %s\n", GoVersion)
 	info += fmt.Sprintf("Failpoint Build: %t\n", false)
 	return info
-}
-
-var versionHash = regexp.MustCompile("-[0-9]+-g[0-9a-f]{7,}(-dev)?")
-
-// SanitizeVersion remove the prefix "v" and suffix git hash.
-func SanitizeVersion(v string) string {
-	if v == "" {
-		return v
-	}
-	v = versionHash.ReplaceAllLiteralString(v, "")
-	v = strings.TrimSuffix(v, "-fips")
-	v = strings.TrimSuffix(v, "-dirty")
-	return strings.TrimPrefix(v, "v")
 }

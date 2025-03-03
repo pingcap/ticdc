@@ -111,7 +111,7 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 	// case 1: memory control enabled
 	require.NotNil(t, stream.memControl)
 	require.NotNil(t, stream.feedbackChan)
-	settings := AreaSettings{MaxPendingSize: 1024, FeedbackInterval: 10 * time.Millisecond}
+	settings := AreaSettings{maxPendingSize: 1024, feedbackInterval: 10 * time.Millisecond}
 	// The path is belong to area 0
 	stream.AddPath("path1", "dest1", settings)
 	stream.mutex.Lock()
@@ -119,8 +119,8 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 	pi := stream.pathMap["path1"]
 	stream.mutex.Unlock()
 	require.Equal(t, 0, pi.area)
-	require.Equal(t, 1024, pi.areaMemStat.settings.Load().MaxPendingSize)
-	require.Equal(t, 10*time.Millisecond, pi.areaMemStat.settings.Load().FeedbackInterval)
+	require.Equal(t, uint64(1024), pi.areaMemStat.settings.Load().maxPendingSize)
+	require.Equal(t, 10*time.Millisecond, pi.areaMemStat.settings.Load().feedbackInterval)
 
 	// case 2: add event to the path
 	startNotify := &sync.WaitGroup{}
@@ -135,13 +135,12 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 }
 
 func TestFeedBack(t *testing.T) {
+	t.Parallel()
 	fb1 := Feedback[int, string, any]{
-		FeedbackType: 0,
+		FeedbackType: PauseArea,
 	}
-	require.False(t, fb1.IsAreaFeedback())
-	require.False(t, fb1.PauseArea)
-	require.False(t, fb1.PausePath)
+	require.Equal(t, PauseArea, fb1.FeedbackType)
 
-	fb1.PauseArea = true
-	require.True(t, fb1.PauseArea)
+	fb1.FeedbackType = ResumeArea
+	require.Equal(t, ResumeArea, fb1.FeedbackType)
 }

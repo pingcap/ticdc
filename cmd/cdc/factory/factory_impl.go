@@ -14,16 +14,16 @@
 package factory
 
 import (
+	"context"
 	"strings"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	cmdconetxt "github.com/pingcap/tiflow/pkg/cmd/context"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
-	"github.com/pingcap/tiflow/pkg/version"
+	"github.com/pingcap/ticdc/pkg/version"
 	pd "github.com/tikv/pd/client"
 	etcdlogutil "go.etcd.io/etcd/client/pkg/v3/logutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -55,7 +55,7 @@ func NewFactory(clientGetter ClientGetter) Factory {
 
 // EtcdClient creates new cdc etcd client.
 func (f *factoryImpl) EtcdClient() (*etcd.CDCEtcdClientImpl, error) {
-	ctx := cmdconetxt.GetDefaultContext()
+	ctx := context.Background()
 	tlsConfig, err := f.ToTLSConfig()
 	if err != nil {
 		return nil, err
@@ -115,7 +115,7 @@ func (f *factoryImpl) EtcdClient() (*etcd.CDCEtcdClientImpl, error) {
 
 // PdClient creates new pd client.
 func (f *factoryImpl) PdClient() (pd.Client, error) {
-	ctx := cmdconetxt.GetDefaultContext()
+	ctx := context.Background()
 
 	credential := f.GetCredential()
 	grpcTLSOption, err := f.ToGRPCDialOption()
@@ -224,7 +224,7 @@ func (f *factoryImpl) findServerAddr() (string, error) {
 	}
 	defer etcdClient.Close()
 
-	ctx := cmdconetxt.GetDefaultContext()
+	ctx := context.Background()
 	err = etcdClient.CheckMultipleCDCClusterExist(ctx)
 	if err != nil {
 		if errors.ErrMultipleCDCClustersExist.Equal(err) {
@@ -252,7 +252,7 @@ func (f *factoryImpl) findServerAddr() (string, error) {
 }
 
 func checkCDCVersion(client apiv2client.APIV2Interface) error {
-	serverStatus, err := client.Status().Get(cmdconetxt.GetDefaultContext())
+	serverStatus, err := client.Status().Get(context.Background())
 	if err != nil {
 		return errors.Trace(err)
 	}

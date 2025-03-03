@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/tiflow/pkg/httputil"
@@ -78,4 +79,26 @@ func getChangeFeed(host, cfName string) (ChangeFeedInfo, error) {
 	}
 
 	return cfInfo, nil
+}
+
+// isFromV1API checks if the request comes from TiCDC API v1
+func isFromV1API(c *gin.Context) bool {
+	return c.GetHeader("from-ticdc-api-v1") == "true"
+}
+
+func getStatus(c *gin.Context) int {
+	if isFromV1API(c) {
+		return http.StatusAccepted
+	}
+	return http.StatusOK
+}
+
+func toListResponse[T any](c *gin.Context, data []T) interface{} {
+	if isFromV1API(c) {
+		return data
+	}
+	return &ListResponse[T]{
+		Items: data,
+		Total: len(data),
+	}
 }

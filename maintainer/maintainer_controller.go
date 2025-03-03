@@ -174,7 +174,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
 	if c.enableTableAcrossNodes {
 		// split the whole table span base on the configuration, todo: background split table
-		tableSpans = c.splitter.SplitSpans(context.Background(), tableSpan, len(c.nodeManager.GetAliveNodes()), 0)
+		tableSpans = c.splitter.SplitSpans(context.Background(), tableSpan, len(c.nodeManager.GetAliveNodes()))
 	}
 	c.addNewSpans(table.SchemaID, tableSpans, startTs)
 }
@@ -374,7 +374,7 @@ func (c *Controller) RemoveNode(id node.ID) {
 
 // ScheduleFinished return false if not all task are running in working state
 func (c *Controller) ScheduleFinished() bool {
-	return c.replicationDB.GetAbsentSize() == 0 && c.operatorController.OperatorSize() == 0
+	return c.operatorController.OperatorSizeWithLock() == 0 && c.replicationDB.GetAbsentSize() == 0
 }
 
 func (c *Controller) TaskSize() int {

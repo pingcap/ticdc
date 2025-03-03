@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
-	"github.com/pingcap/tiflow/pkg/version"
+	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/stretchr/testify/require"
 	pdClient "github.com/tikv/pd/client"
 	"go.uber.org/zap"

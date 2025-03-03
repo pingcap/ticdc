@@ -21,14 +21,13 @@ import (
 	"github.com/fatih/color"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
+	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/ticdc/server"
-	"github.com/pingcap/ticdc/version"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/pingcap/tiflow/pkg/security"
-	cdcversion "github.com/pingcap/tiflow/pkg/version"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
@@ -89,18 +88,16 @@ func (o *options) run(cmd *cobra.Command) error {
 	}
 	err := logger.InitLogger(loggerConfig)
 	if err != nil {
-		cmd.Printf("init logger error %v\n", errors.ErrorStack(err))
+		cmd.Printf("init logger error %v\n", errors.Trace(err))
 		os.Exit(1)
 	}
 	log.Info("init log", zap.String("file", loggerConfig.File), zap.String("level", loggerConfig.Level))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	setDefaultContext(ctx)
 	defer cancel()
 
-	cdcversion.ReleaseVersion = version.ReleaseVersion
 	version.LogVersionInfo("Change Data Capture (CDC)")
-	log.Info("The TiCDC release version is", zap.String("ReleaseVersion", cdcversion.ReleaseVersion))
+	log.Info("The TiCDC release version is", zap.String("ReleaseVersion", version.ReleaseVersion))
 
 	util.LogHTTPProxies()
 	svr, err := server.New(o.serverConfig, o.pdEndpoints)
@@ -123,7 +120,7 @@ func (o *options) run(cmd *cobra.Command) error {
 }
 
 // complete adapts from the command line args and config file to the data required.
-func (o *options) complete(cmd *cobra.Command) error {
+func (o *options) complete(command *cobra.Command) error {
 	cfg := config.GetDefaultServerConfig()
 	if len(o.serverConfigFilePath) > 0 {
 		// strict decode config file, but ignore debug item
@@ -133,7 +130,7 @@ func (o *options) complete(cmd *cobra.Command) error {
 	}
 
 	o.serverConfig.Security = o.getCredential()
-	cmd.Flags().Visit(func(flag *pflag.Flag) {
+	command.Flags().Visit(func(flag *pflag.Flag) {
 		switch flag.Name {
 		case "addr":
 			cfg.Addr = o.serverConfig.Addr
@@ -171,7 +168,7 @@ func (o *options) complete(cmd *cobra.Command) error {
 	}
 
 	if cfg.DataDir == "" {
-		cmd.Printf(color.HiYellowString("[WARN] TiCDC server data-dir is not set. " +
+		command.Printf(color.HiYellowString("[WARN] TiCDC server data-dir is not set. " +
 			"Please use `cdc server --data-dir` to start the cdc server if possible.\n"))
 	}
 

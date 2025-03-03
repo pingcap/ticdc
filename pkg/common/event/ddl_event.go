@@ -130,6 +130,9 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 	// Such as rename table test.table1 to test.table10, test.table2 to test.table20
 	switch model.ActionType(d.Type) {
 	case model.ActionExchangeTablePartition:
+		if len(d.MultipleTableInfos) != 2 {
+			log.Panic("multipleTableInfos length should be equal to 2", zap.Any("multipleTableInfos", d.MultipleTableInfos))
+		}
 		return []*DDLEvent{
 			// partition table before exchange
 			{
@@ -139,6 +142,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 				// TableID:    d.TableID,
 				SchemaName: d.SchemaName,
 				TableName:  d.TableName,
+				TableInfo:  d.MultipleTableInfos[0],
 				Query:      d.Query,
 				FinishedTs: d.FinishedTs,
 			},
@@ -148,6 +152,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 				Type:    d.Type,
 				// SchemaID:   d.TableInfo.SchemaID,
 				// TableID:    d.TableInfo.TableName.TableID,
+				TableInfo:  d.MultipleTableInfos[1],
 				SchemaName: d.ExtraSchemaName,
 				TableName:  d.ExtraTableName,
 				Query:      d.Query,
@@ -163,15 +168,20 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 		if len(queries) != len(d.MultipleTableInfos) {
 			log.Panic("queries length should be equal to multipleTableInfos length", zap.String("query", d.Query), zap.Any("multipleTableInfos", d.MultipleTableInfos))
 		}
+		if len(d.TableNameChange.DropName) != len(d.MultipleTableInfos) {
+			log.Panic("drop name length should be equal to multipleTableInfos length", zap.Any("query", d.TableNameChange.DropName), zap.Any("multipleTableInfos", d.MultipleTableInfos))
+		}
 		for i, info := range d.MultipleTableInfos {
 			events = append(events, &DDLEvent{
-				Version:    d.Version,
-				Type:       d.Type,
-				SchemaName: info.GetSchemaName(),
-				TableName:  info.GetTableName(),
-				TableInfo:  info,
-				Query:      queries[i],
-				FinishedTs: d.FinishedTs,
+				Version:         d.Version,
+				Type:            d.Type,
+				SchemaName:      info.GetSchemaName(),
+				TableName:       info.GetTableName(),
+				ExtraSchemaName: d.TableNameChange.DropName[i].SchemaName,
+				ExtraTableName:  d.TableNameChange.DropName[i].TableName,
+				TableInfo:       info,
+				Query:           queries[i],
+				FinishedTs:      d.FinishedTs,
 			})
 		}
 		return events
@@ -337,6 +347,10 @@ func (t *DDLEvent) GetSize() int64 {
 
 func (t *DDLEvent) IsPaused() bool {
 	return t.State.IsPaused()
+}
+
+func (t *DDLEvent) Len() int32 {
+	return 1
 }
 
 type SchemaTableName struct {

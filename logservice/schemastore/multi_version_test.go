@@ -23,17 +23,20 @@ import (
 func TestBuildVersionedTableInfoStore(t *testing.T) {
 	type QueryTableInfoTestCase struct {
 		snapTs     uint64
+		deleted    bool
 		schemaName string
 		tableName  string
 	}
 	testCases := []struct {
+		testName      string
 		tableID       int64
 		ddlEvents     []*PersistedDDLEvent
 		queryCases    []QueryTableInfoTestCase
 		deleteVersion uint64
 	}{
 		{
-			tableID: 100,
+			testName: "truncate table",
+			tableID:  100,
 			ddlEvents: func() []*PersistedDDLEvent {
 				return []*PersistedDDLEvent{
 					buildCreateTableEventForTest(10, 100, "test", "t", 1000),        // create table 100
@@ -50,7 +53,8 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 			deleteVersion: 1010,
 		},
 		{
-			tableID: 101,
+			testName: "rename table",
+			tableID:  101,
 			ddlEvents: func() []*PersistedDDLEvent {
 				return []*PersistedDDLEvent{
 					buildTruncateTableEventForTest(10, 100, 101, "test", "t", 1010),            // truncate table 100 to 101
@@ -72,7 +76,8 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 		},
 		// test exchange partition for partition table
 		{
-			tableID: 101,
+			testName: "exchange partition for partition table",
+			tableID:  101,
 			ddlEvents: func() []*PersistedDDLEvent {
 				return []*PersistedDDLEvent{
 					buildCreatePartitionTableEventForTest(10, 100, "test", "partition_table", []int64{101, 102, 103}, 1010),                                                             // create partition table 100 with partitions 101, 102, 103
@@ -94,7 +99,8 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 		},
 		// test exchange partition for normal table
 		{
-			tableID: 200,
+			testName: "exchange partition for normal table",
+			tableID:  200,
 			ddlEvents: func() []*PersistedDDLEvent {
 				return []*PersistedDDLEvent{
 					buildCreateTableEventForTest(10, 200, "test", "normal_table", 1010),                                                                                                 // create table 200
@@ -114,25 +120,65 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 				},
 			},
 		},
+		// test recover table
+		{
+			testName: "recover table",
+			tableID:  200,
+			ddlEvents: func() []*PersistedDDLEvent {
+				return []*PersistedDDLEvent{
+					buildCreateTableEventForTest(10, 200, "test", "normal_table", 1010),  // create table 200
+					buildDropTableEventForTest(10, 200, "test", "normal_table", 1020),    // drop table 200
+					buildRecoverTableEventForTest(10, 200, "test", "normal_table", 1030), // recover table 200
+					buildDropTableEventForTest(10, 200, "test", "normal_table", 1040),    // drop table 200
+				}
+			}(),
+			queryCases: []QueryTableInfoTestCase{
+				{
+					snapTs:     1010,
+					schemaName: "test",
+					tableName:  "normal_table",
+				},
+				// Note: In 1020, the table is dropped, but this information is overridden by a subsequent table recovery.
+				// Since storing this information is meaningless, we retain the current behavior.
+				{
+					snapTs:     1030,
+					schemaName: "test",
+					tableName:  "normal_table",
+				},
+				{
+					snapTs:  1040,
+					deleted: true,
+				},
+			},
+		},
 	}
 	for _, tt := range testCases {
-		store := newEmptyVersionedTableInfoStore(tt.tableID)
-		store.setTableInfoInitialized()
-		for _, event := range tt.ddlEvents {
-			store.applyDDL(event)
-		}
-		for _, c := range tt.queryCases {
-			tableInfo, err := store.getTableInfo(c.snapTs)
-			require.Nil(t, err)
-			require.Equal(t, c.schemaName, tableInfo.TableName.Schema)
-			require.Equal(t, c.tableName, tableInfo.TableName.Table)
-			if !tableInfo.TableName.IsPartition {
-				require.Equal(t, tt.tableID, tableInfo.TableName.TableID)
+		t.Run(tt.testName, func(t *testing.T) {
+			store := newEmptyVersionedTableInfoStore(tt.tableID)
+			store.setTableInfoInitialized()
+			for _, event := range tt.ddlEvents {
+				store.applyDDL(event)
 			}
-		}
-		if tt.deleteVersion != 0 {
-			require.Equal(t, tt.deleteVersion, store.deleteVersion)
-		}
+			for _, c := range tt.queryCases {
+				tableInfo, err := store.getTableInfo(c.snapTs)
+				if !c.deleted {
+					require.Nil(t, err)
+					require.Equal(t, c.schemaName, tableInfo.TableName.Schema)
+					require.Equal(t, c.tableName, tableInfo.TableName.Table)
+					if !tableInfo.TableName.IsPartition {
+						require.Equal(t, tt.tableID, tableInfo.TableName.TableID)
+					}
+				} else {
+					require.Nil(t, tableInfo)
+					if _, ok := err.(*TableDeletedError); !ok {
+						t.Error("expect TableDeletedError, but got", err)
+					}
+				}
+			}
+			if tt.deleteVersion != 0 {
+				require.Equal(t, tt.deleteVersion, store.deleteVersion)
+			}
+		})
 	}
 }
 

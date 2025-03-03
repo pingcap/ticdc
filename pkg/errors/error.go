@@ -473,7 +473,10 @@ var (
 		"cdc met unexpected error: %s",
 		errors.RFCCodeText("CDC:ErrUnexpected"),
 	)
-
+	ErrLoadTimezone = errors.Normalize(
+		"load timezone",
+		errors.RFCCodeText("CDC:ErrLoadTimezone"),
+	)
 	// credential related errors
 	ErrCredentialNotFound = errors.Normalize(
 		"credential not found: %s",

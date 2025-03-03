@@ -37,8 +37,9 @@ type mockSink struct {
 	sinkType common.SinkType
 }
 
-func (s *mockSink) AddDMLEvent(event *commonEvent.DMLEvent) {
+func (s *mockSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
 	s.dmls = append(s.dmls, event)
+	return nil
 }
 
 func (s *mockSink) WriteBlockEvent(event commonEvent.BlockEvent) error {

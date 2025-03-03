@@ -14,7 +14,7 @@ function check_ts_forward() {
 	changefeedid=$1
 	rts1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.resolved_ts')
 	checkpoint1=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
-	sleep 1
+	sleep 5
 	rts2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.resolved_ts')
 	checkpoint2=$(cdc cli changefeed query --changefeed-id=${changefeedid} 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
 	if [[ "$rts1" != "null" ]] && [[ "$rts1" != "0" ]]; then
