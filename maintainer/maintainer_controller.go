@@ -398,7 +398,6 @@ func (c *Controller) processTableSpans(
 	} else {
 		c.AddNewTable(table, c.startCheckpointTs)
 	}
-
 }
 
 func (c *Controller) handleTableHoles(
