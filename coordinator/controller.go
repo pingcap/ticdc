@@ -75,25 +75,25 @@ type Controller struct {
 	taskHandlers     []*threadpool.TaskHandle
 	messageCenter    messaging.MessageCenter
 
-	changefeedProgressReportCh chan map[common.ChangeFeedID]*changefeed.Changefeed
-	changefeedStateChangedCh   chan *ChangefeedStateChangeEvent
+	changefeedChangeCh chan []*ChangefeedChange
 
 	lastPrintStatusTime time.Time
 
 	apiLock sync.RWMutex
 }
 
-type ChangefeedStateChangeEvent struct {
-	ChangefeedID common.ChangeFeedID
-	State        model.FeedState
+type ChangefeedChange struct {
+	changefeedID common.ChangeFeedID
+	changefeed   *changefeed.Changefeed
+	state        model.FeedState
+	changeType   ChangeType
 	err          *model.RunningError
 }
 
 func NewController(
 	version int64,
 	selfNode *node.Info,
-	updatedChangefeedCh chan map[common.ChangeFeedID]*changefeed.Changefeed,
-	stateChangedCh chan *ChangefeedStateChangeEvent,
+	changefeedChangeCh chan []*ChangefeedChange,
 	backend changefeed.Backend,
 	eventCh *chann.DrainableChann[*Event],
 	taskScheduler threadpool.ThreadPool,
@@ -128,17 +128,16 @@ func NewController(
 				oc.NewMoveMaintainerOperator,
 			),
 		}),
-		eventCh:                    eventCh,
-		operatorController:         oc,
-		messageCenter:              mc,
-		changefeedDB:               changefeedDB,
-		nodeManager:                nodeManager,
-		taskScheduler:              taskScheduler,
-		backend:                    backend,
-		changefeedProgressReportCh: updatedChangefeedCh,
-		changefeedStateChangedCh:   stateChangedCh,
-		lastPrintStatusTime:        time.Now(),
-		pdClient:                   pdClient,
+		eventCh:             eventCh,
+		operatorController:  oc,
+		messageCenter:       mc,
+		changefeedDB:        changefeedDB,
+		nodeManager:         nodeManager,
+		taskScheduler:       taskScheduler,
+		backend:             backend,
+		changefeedChangeCh:  changefeedChangeCh,
+		lastPrintStatusTime: time.Now(),
+		pdClient:            pdClient,
 	}
 	c.nodeChanged.changed = false
 
@@ -319,19 +318,18 @@ func (c *Controller) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Coordin
 
 // handleMaintainerStatus handle the status report from the maintainers
 func (c *Controller) handleMaintainerStatus(from node.ID, statusList []*heartbeatpb.MaintainerStatus) {
-	changedCfs := make(map[common.ChangeFeedID]*changefeed.Changefeed, len(statusList))
-
+	changes := make([]*ChangefeedChange, 0, len(statusList))
 	for _, status := range statusList {
 		cfID := common.NewChangefeedIDFromPB(status.ChangefeedID)
-		cf := c.handleSingleMaintainerStatus(from, status, cfID)
-		if cf != nil {
-			changedCfs[cfID] = cf
+		change := c.handleSingleMaintainerStatus(from, status, cfID)
+		if change != nil {
+			changes = append(changes, change)
 		}
 	}
 
 	// Try to send updated changefeeds without blocking
 	select {
-	case c.changefeedProgressReportCh <- changedCfs:
+	case c.changefeedChangeCh <- changes:
 	default:
 	}
 }
@@ -340,7 +338,7 @@ func (c *Controller) handleSingleMaintainerStatus(
 	from node.ID,
 	status *heartbeatpb.MaintainerStatus,
 	cfID common.ChangeFeedID,
-) *changefeed.Changefeed {
+) *ChangefeedChange {
 	// Update the operator status first
 	c.operatorController.UpdateOperatorStatus(cfID, from, status)
 
@@ -354,8 +352,8 @@ func (c *Controller) handleSingleMaintainerStatus(
 		return nil
 	}
 
-	c.updateChangefeedStatus(cf, cfID, status)
-	return cf
+	change := c.updateChangefeedStatus(cf, cfID, status)
+	return change
 }
 
 func (c *Controller) handleNonExistentChangefeed(
@@ -403,31 +401,31 @@ func (c *Controller) updateChangefeedStatus(
 	cf *changefeed.Changefeed,
 	cfID common.ChangeFeedID,
 	status *heartbeatpb.MaintainerStatus,
-) {
+) *ChangefeedChange {
 	changed, state, err := cf.UpdateStatus(status)
-	if !changed {
-		return
+	change := &ChangefeedChange{
+		changefeedID: cfID,
+		changefeed:   cf,
+		state:        state,
+		changeType:   ChangeStateAndTs,
 	}
-
-	log.Info("changefeed status changed",
-		zap.Stringer("changefeed", cfID),
-		zap.String("state", string(state)),
-		zap.Stringer("error", err))
-
-	var mErr *model.RunningError
+	if !changed {
+		change.changeType = ChangeTs
+		return change
+	}
 	if err != nil {
-		mErr = &model.RunningError{
+		change.err = &model.RunningError{
 			Time:    time.Now(),
 			Addr:    err.Node,
 			Code:    err.Code,
 			Message: err.Message,
 		}
 	}
-	c.changefeedStateChangedCh <- &ChangefeedStateChangeEvent{
-		ChangefeedID: cfID,
-		State:        state,
-		err:          mErr,
-	}
+	log.Info("changefeed status changed",
+		zap.Stringer("changefeed", cfID),
+		zap.String("state", string(change.state)),
+		zap.Stringer("error", err))
+	return change
 }
 
 // FinishBootstrap is called when all nodes have sent bootstrap response
