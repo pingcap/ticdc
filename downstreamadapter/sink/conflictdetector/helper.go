@@ -68,8 +68,8 @@ func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatch
 	var keys [][]byte
 
 	if !row.Row.IsEmpty() {
-		for iIdx, idxCol := range tableInfo.GetIndexColumnsOffset() {
-			key, err := genKeyList(&row.Row, iIdx, idxCol, dispatcherID, tableInfo)
+		for iIdx, idxColID := range tableInfo.GetIndexColumns() {
+			key, err := genKeyList(&row.Row, iIdx, idxColID, dispatcherID, tableInfo)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
@@ -80,8 +80,8 @@ func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatch
 		}
 	}
 	if !row.PreRow.IsEmpty() {
-		for iIdx, idxCol := range tableInfo.GetIndexColumnsOffset() {
-			key, err := genKeyList(&row.PreRow, iIdx, idxCol, dispatcherID, tableInfo)
+		for iIdx, idxColID := range tableInfo.GetIndexColumns() {
+			key, err := genKeyList(&row.PreRow, iIdx, idxColID, dispatcherID, tableInfo)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
@@ -103,17 +103,17 @@ func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatch
 }
 
 func genKeyList(
-	row *chunk.Row, iIdx int, colIdx []int, dispatcherID common.DispatcherID, tableInfo *common.TableInfo,
+	row *chunk.Row, iIdx int, idxColID []int64, dispatcherID common.DispatcherID, tableInfo *common.TableInfo,
 ) ([]byte, error) {
 	var key []byte
-	columnInfos := tableInfo.GetColumns()
-	for _, i := range colIdx {
+	for _, colId := range idxColID {
 		// If the index contain generated column, we can't use this key to detect conflict with other DML,
-		if columnInfos[i] == nil || tableInfo.GetColumnFlags()[columnInfos[i].ID].IsGeneratedColumn() {
+		columnInfo, exist := tableInfo.GetColumnInfo(colId)
+		if !exist || tableInfo.GetColumnFlags()[colId].IsGeneratedColumn() {
 			return nil, nil
 		}
-
-		value, err := common.FormatColVal(row, columnInfos[i], i)
+		offset := tableInfo.GetColumnsOffset()[colId]
+		value, err := common.FormatColVal(row, columnInfo, offset)
 		if err != nil {
 			return nil, err
 		}
@@ -123,7 +123,7 @@ func genKeyList(
 		}
 
 		val := model.ColumnValueString(value)
-		if columnNeeds2LowerCase(columnInfos[i].GetType(), columnInfos[i].GetCollate()) {
+		if columnNeeds2LowerCase(columnInfo.GetType(), columnInfo.GetCollate()) {
 			val = strings.ToLower(val)
 		}
 
