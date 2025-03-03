@@ -15,21 +15,17 @@ package replica
 
 import (
 	"bytes"
-	"context"
 	"encoding/hex"
-	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/retry"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tiflow/cdc/processor/tablepb"
-	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -49,31 +45,22 @@ type SpanReplication struct {
 	status     *atomic.Pointer[heartbeatpb.TableSpanStatus]
 	blockState *atomic.Pointer[heartbeatpb.State]
 
-	tsoClient TSOClient
+	pdClock pdutil.Clock
 }
 
-func NewReplicaSet(cfID common.ChangeFeedID,
+func NewSpanReplication(cfID common.ChangeFeedID,
 	id common.DispatcherID,
-	tsoClient TSOClient,
+	pdClock pdutil.Clock,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
 	checkpointTs uint64,
 ) *SpanReplication {
-	r := &SpanReplication{
-		ID:           id,
-		tsoClient:    tsoClient,
-		schemaID:     SchemaID,
-		Span:         span,
-		ChangefeedID: cfID,
-		status:       atomic.NewPointer[heartbeatpb.TableSpanStatus](nil),
-		blockState:   atomic.NewPointer[heartbeatpb.State](nil),
-	}
-	r.initGroupID()
+	r := newSpanReplication(cfID, id, pdClock, SchemaID, span, checkpointTs)
 	r.initStatus(&heartbeatpb.TableSpanStatus{
 		ID:           id.ToPB(),
 		CheckpointTs: checkpointTs,
 	})
-	log.Info("new replica set created",
+	log.Info("new span replication created",
 		zap.String("changefeedID", cfID.Name()),
 		zap.String("id", id.String()),
 		zap.Int64("schemaID", SchemaID),
@@ -84,28 +71,20 @@ func NewReplicaSet(cfID common.ChangeFeedID,
 	return r
 }
 
-func NewWorkingReplicaSet(
+func NewWorkingSpanReplication(
 	cfID common.ChangeFeedID,
 	id common.DispatcherID,
-	tsoClient TSOClient,
+	pdClock pdutil.Clock,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
 	status *heartbeatpb.TableSpanStatus,
 	nodeID node.ID,
 ) *SpanReplication {
-	r := &SpanReplication{
-		ID:           id,
-		schemaID:     SchemaID,
-		Span:         span,
-		ChangefeedID: cfID,
-		nodeID:       nodeID,
-		status:       atomic.NewPointer[heartbeatpb.TableSpanStatus](nil),
-		blockState:   atomic.NewPointer[heartbeatpb.State](nil),
-		tsoClient:    tsoClient,
-	}
-	r.initGroupID()
+	r := newSpanReplication(cfID, id, pdClock, SchemaID, span, status.CheckpointTs)
+	// Must set Node ID when creating a working span replication
+	r.SetNodeID(nodeID)
 	r.initStatus(status)
-	log.Info("new working replica set created",
+	log.Info("new working span replication created",
 		zap.String("changefeedID", cfID.Name()),
 		zap.String("id", id.String()),
 		zap.String("nodeID", nodeID.String()),
@@ -116,6 +95,20 @@ func NewWorkingReplicaSet(
 		zap.String("groupID", replica.GetGroupName(r.groupID)),
 		zap.String("start", hex.EncodeToString(span.StartKey)),
 		zap.String("end", hex.EncodeToString(span.EndKey)))
+	return r
+}
+
+func newSpanReplication(cfID common.ChangeFeedID, id common.DispatcherID, pdClock pdutil.Clock, SchemaID int64, span *heartbeatpb.TableSpan, checkpointTs uint64) *SpanReplication {
+	r := &SpanReplication{
+		ID:           id,
+		pdClock:      pdClock,
+		schemaID:     SchemaID,
+		Span:         span,
+		ChangefeedID: cfID,
+		status:       atomic.NewPointer[heartbeatpb.TableSpanStatus](nil),
+		blockState:   atomic.NewPointer[heartbeatpb.State](nil),
+	}
+	r.initGroupID()
 	return r
 }
 
@@ -151,16 +144,14 @@ func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
 	return r.status.Load()
 }
 
+// UpdateStatus updates the replication status with the following rules:
+//  1. If there is a block state in WAITING stage and its blockTs is less than or equal to
+//     the new status's checkpointTs, the update is **skipped** to prevent checkpoint advancement
+//     during an ongoing block event.
+//  2. The new status is only stored if its checkpointTs is greater than or equal to
+//     the current status's checkpointTs.
 func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) {
 	if newStatus != nil {
-		// we don't update the status when there exist block status and block status's checkpointTs is less than newStatus's checkpointTs
-		// It's ensure the checkpointTs can be forward until the block event is finished;
-		// It can avoid the corner case that:
-		// When node 1 with table trigger and node 2 with table1 meet the drop table 1 ddl
-		// and table trigger finish write the ddl, node2 just pass the ddl but not report the block status yet
-		// while the node 2 report the latest table span
-		// (because the ddl is passed, the table1's checkpointTs is updated, so the replication's checkpoint is updaetd)
-		// Then the node2 is crashed. So the maintainer will add new dispatcher based on the latest checkpointTs, which is unexcpeted.
 		blockState := r.blockState.Load()
 		if blockState != nil && blockState.Stage == heartbeatpb.BlockStage_WAITING && blockState.BlockTs <= newStatus.CheckpointTs {
 			return
@@ -172,6 +163,7 @@ func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) {
 	}
 }
 
+// ShouldRun always returns true.
 func (r *SpanReplication) ShouldRun() bool {
 	return true
 }
@@ -189,8 +181,8 @@ func (r *SpanReplication) GetSchemaID() int64 {
 	return r.schemaID
 }
 
-func (r *SpanReplication) GetTsoClient() TSOClient {
-	return r.tsoClient
+func (r *SpanReplication) GetPDClock() pdutil.Clock {
+	return r.pdClock
 }
 
 func (r *SpanReplication) SetSchemaID(schemaID int64) {
@@ -209,15 +201,17 @@ func (r *SpanReplication) GetNodeID() node.ID {
 	return r.nodeID
 }
 
+// IsScheduled returns true if the span is scheduled to a node
+func (r *SpanReplication) IsScheduled() bool {
+	return r.nodeID != ""
+}
+
 func (r *SpanReplication) GetGroupID() replica.GroupID {
 	return r.groupID
 }
 
 func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.TargetMessage, error) {
-	ts, err := getTs(r.tsoClient)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
+	ts := r.pdClock.CurrentTS()
 
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
@@ -248,20 +242,4 @@ func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispat
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Remove,
 		})
-}
-
-func getTs(client TSOClient) (uint64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	var ts uint64
-	err := retry.Do(ctx, func() error {
-		phy, logic, err := client.GetTS(ctx)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		ts = oracle.ComposeTS(phy, logic)
-		return nil
-	}, retry.WithTotalRetryDuration(300*time.Millisecond),
-		retry.WithBackoffBaseDelay(100))
-	return ts, errors.Trace(err)
 }
