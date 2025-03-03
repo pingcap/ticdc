@@ -427,7 +427,7 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 				zap.Stringer("node", stm.GetNodeID()),
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Bool("isSyncPoint", be.isSyncPoint))
-			// todo: select a new writer
+			// TODO: select a new writer
 			return nil
 		}
 
