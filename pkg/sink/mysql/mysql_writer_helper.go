@@ -33,7 +33,7 @@ func compareKeys(firstKey, secondKey []byte) bool {
 
 func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte, error) {
 	idxCol := tableInfo.GetPKIndexOffset()
-	//log.Info("genKeyAndHash", zap.Any("idxCol", idxCol), zap.Any("iIdx", iIdx))
+	// log.Info("genKeyAndHash", zap.Any("idxCol", idxCol), zap.Any("iIdx", iIdx))
 	key, err := genKeyList(row, idxCol, tableInfo)
 	if err != nil {
 		return 0, nil, errors.Trace(err)
