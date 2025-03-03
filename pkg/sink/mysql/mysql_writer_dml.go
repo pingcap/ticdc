@@ -53,11 +53,13 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 	// Step 1: group the events by dispatcher id
 	eventsGroup := make(map[common.DispatcherID][]*commonEvent.DMLEvent) // dispatcherID--> events
 	for _, event := range events {
+		// calculate for metrics
 		dmls.rowCount += int(event.Len())
 		if len(dmls.startTs) == 0 || dmls.startTs[len(dmls.startTs)-1] != event.StartTs {
 			dmls.startTs = append(dmls.startTs, event.StartTs)
 		}
-
+		dmls.approximateSize += event.GetRowsSize()
+		// group by dispatcherID
 		dispatcherID := event.DispatcherID
 		if _, ok := eventsGroup[dispatcherID]; !ok {
 			eventsGroup[dispatcherID] = make([]*commonEvent.DMLEvent, 0)
@@ -70,25 +72,20 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 	var argsList [][]interface{}
 	var err error
 	for _, eventsInGroup := range eventsGroup {
-		log.Info("into 73")
 		tableInfo := eventsInGroup[0].TableInfo
 		if !tableInfo.HasHandleKey() || tableInfo.HasVirtualColumns() {
-			log.Info("into 76")
 			// check if the table has a handle key or has a virtual column
 			queryList, argsList, err = w.generateNormalSQLs(eventsInGroup)
 		} else if len(eventsInGroup) == 1 && eventsInGroup[0].Len() == 1 {
-			log.Info("into 80")
 			// if there only one row in the group, we can use the normal sql generate
 			queryList, argsList, err = w.generateNormalSQLs(eventsInGroup)
 		} else if len(eventsInGroup) > 0 {
-			log.Info("into 84")
 			// if the events are in different safe mode, we can't use the batch dml generate
 			firstEventSafeMode := !w.cfg.SafeMode && eventsInGroup[0].CommitTs > eventsInGroup[0].ReplicatingTs
 			finalEventSafeMode := !w.cfg.SafeMode && eventsInGroup[len(eventsInGroup)-1].CommitTs > eventsInGroup[len(eventsInGroup)-1].ReplicatingTs
 			if firstEventSafeMode != finalEventSafeMode {
 				queryList, argsList, err = w.generateNormalSQLs(eventsInGroup)
 			} else {
-				log.Info("into 91")
 				// use the batch dml generate
 				queryList, argsList, err = w.generateBatchSQL(eventsInGroup)
 			}
