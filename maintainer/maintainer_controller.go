@@ -376,31 +376,29 @@ func (c *Controller) processTableSpans(
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
 
 	// Add new table if not working
-	if !isTableWorking {
+	if isTableWorking {
+		// Handle existing table spans
+		span := spanz.TableIDToComparableSpan(table.TableID)
+		tableSpan := &heartbeatpb.TableSpan{
+			TableID:  table.TableID,
+			StartKey: span.StartKey,
+			EndKey:   span.EndKey,
+		}
+		log.Info("table already working in other node",
+			zap.Stringer("changefeed", c.changefeedID),
+			zap.Int64("tableID", table.TableID))
+
+		c.addWorkingSpans(tableSpans)
+
+		if c.enableTableAcrossNodes {
+			c.handleTableHoles(table, tableSpans, tableSpan)
+		}
+		// Remove processed table from working task map
+		delete(workingTaskMap, table.TableID)
+	} else {
 		c.AddNewTable(table, c.startCheckpointTs)
-		return
 	}
 
-	// Handle existing table spans
-	span := spanz.TableIDToComparableSpan(table.TableID)
-	tableSpan := &heartbeatpb.TableSpan{
-		TableID:  table.TableID,
-		StartKey: span.StartKey,
-		EndKey:   span.EndKey,
-	}
-
-	log.Info("table already working in other node",
-		zap.Stringer("changefeed", c.changefeedID),
-		zap.Int64("tableID", table.TableID))
-
-	c.addWorkingSpans(tableSpans)
-
-	if c.enableTableAcrossNodes {
-		c.handleTableHoles(table, tableSpans, tableSpan)
-	}
-
-	// Remove processed table from working task map
-	delete(workingTaskMap, table.TableID)
 }
 
 func (c *Controller) handleTableHoles(

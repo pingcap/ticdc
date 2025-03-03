@@ -81,6 +81,8 @@ func NewWorkingSpanReplication(
 	nodeID node.ID,
 ) *SpanReplication {
 	r := newSpanReplication(cfID, id, pdClock, SchemaID, span, status.CheckpointTs)
+	// Must set Node ID when creating a working span replication
+	r.SetNodeID(nodeID)
 	r.initStatus(status)
 	log.Info("new working span replication created",
 		zap.String("changefeedID", cfID.Name()),

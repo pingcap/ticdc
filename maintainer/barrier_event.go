@@ -428,11 +428,6 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Bool("isSyncPoint", be.isSyncPoint))
 			// todo: select a new writer
-
-			allDispatchers := be.controller.GetAllTasks()
-			for i, stm := range allDispatchers {
-				log.Warn("fizz all dispatcher", zap.Any("dispatcher", stm.ID.String()), zap.Int("index", i))
-			}
 			return nil
 		}
 
