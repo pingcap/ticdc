@@ -72,7 +72,9 @@ func NewOperatorController(
 func (oc *Controller) Execute() time.Time {
 	executedItem := 0
 	for {
+		log.Info("Controller Execute")
 		r, next := oc.pollQueueingOperator()
+		log.Info("pollQueueingOperator")
 		if !next {
 			return time.Now().Add(time.Millisecond * 200)
 		}
@@ -207,8 +209,10 @@ func (oc *Controller) OperatorSizeWithLock() int {
 // "next" is true to indicate that it may exist in next attempt,
 // and false is the end for the poll.
 func (oc *Controller) pollQueueingOperator() (operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], bool) {
+	log.Info("into pollQueueingOperator before get oc.lock")
 	oc.lock.Lock()
 	defer oc.lock.Unlock()
+	log.Info("into pollQueueingOperator get oc.lock")
 	if oc.runningQueue.Len() == 0 {
 		return nil, false
 	}
@@ -372,5 +376,6 @@ func (oc *Controller) GetLock() *sync.RWMutex {
 }
 
 func (oc *Controller) ReleaseLock(mutex *sync.RWMutex) {
+	log.Info("release oc lock")
 	mutex.Unlock()
 }
