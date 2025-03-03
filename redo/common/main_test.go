@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2022 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,16 +13,12 @@
 
 package common
 
-// Column represents a column value and its schema info
-type Column struct {
-	Name      string         `msg:"name"`
-	Type      byte           `msg:"type"`
-	Charset   string         `msg:"charset"`
-	Collation string         `msg:"collation"`
-	Flag      ColumnFlagType `msg:"-"`
-	Value     interface{}    `msg:"-"`
-	Default   interface{}    `msg:"-"`
+import (
+	"testing"
 
-	// ApproximateBytes is approximate bytes consumed by the column.
-	ApproximateBytes int `msg:"-"`
+	"github.com/pingcap/tiflow/pkg/leakutil"
+)
+
+func TestMain(m *testing.M) {
+	leakutil.SetUpLeakTest(m)
 }
