@@ -213,20 +213,6 @@ func (b *ColumnFlagType) UnsetIsUnsigned() {
 	(*Flag)(b).Remove(Flag(UnsignedFlag))
 }
 
-// TableName represents name of a table, includes table name and schema name.
-type TableName struct {
-	Schema      string `toml:"db-name" msg:"db-name"`
-	Table       string `toml:"tbl-name" msg:"tbl-name"`
-	TableID     int64  `toml:"tbl-id" msg:"tbl-id"`
-	IsPartition bool   `toml:"is-partition" msg:"is-partition"`
-	quotedName  string `json:"-"`
-}
-
-// String implements fmt.Stringer interface.
-func (t TableName) String() string {
-	return fmt.Sprintf("%s.%s", t.Schema, t.Table)
-}
-
 // QuoteSchema quotes a full table name
 func QuoteSchema(schema string, table string) string {
 	var builder strings.Builder
@@ -246,29 +232,6 @@ func QuoteName(name string) string {
 // EscapeName replaces all "`" in name with double "`"
 func EscapeName(name string) string {
 	return strings.Replace(name, "`", "``", -1)
-}
-
-// QuoteString returns quoted full table name
-func (t TableName) QuoteString() string {
-	if t.quotedName == "" {
-		log.Panic("quotedName is not initialized")
-	}
-	return t.quotedName
-}
-
-// GetSchema returns schema name.
-func (t *TableName) GetSchema() string {
-	return t.Schema
-}
-
-// GetTable returns table name.
-func (t *TableName) GetTable() string {
-	return t.Table
-}
-
-// GetTableID returns table ID.
-func (t *TableName) GetTableID() int64 {
-	return t.TableID
 }
 
 const (
