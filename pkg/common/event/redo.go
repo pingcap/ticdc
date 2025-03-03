@@ -17,6 +17,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 )
 
+//go:generate msgp
+
 // RedoLogType is the type of log
 type RedoLogType int
 
@@ -33,15 +35,15 @@ type RedoLog struct {
 // RedoRowChangedEvent represents the DML event used in RedoLog
 type RedoRowChangedEvent struct {
 	Row        *RowChangedEventInRedoLog `msg:"row"`
-	Columns    []RedoColumnValue              `msg:"columns"`
-	PreColumns []RedoColumnValue              `msg:"pre-columns"`
+	Columns    []RedoColumnValue         `msg:"columns"`
+	PreColumns []RedoColumnValue         `msg:"pre-columns"`
 }
 
 // RedoDDLEvent represents DDL event used in redo log persistent
 type RedoDDLEvent struct {
 	DDL       *DDLEventInRedoLog `msg:"ddl"`
-	Type      byte      `msg:"type"`
-	TableName *common.TableName `msg:"table-name"`
+	Type      byte               `msg:"type"`
+	TableName common.TableName  `msg:"table-name"`
 }
 
 // RowChangedEventInRedoLog is used to store RowChangedEvent in redo log v2 format
@@ -53,18 +55,18 @@ type RowChangedEventInRedoLog struct {
 	// NOTICE: We store the physical table ID here, not the logical table ID.
 	Table *common.TableName `msg:"table"`
 
-	Columns      []*common.Column `msg:"columns"`
-	PreColumns   []*common.Column `msg:"pre-columns"`
+	Columns    []*common.Column `msg:"columns"`
+	PreColumns []*common.Column `msg:"pre-columns"`
 
 	// TODO: seems it's unused. Maybe we can remove it?
-	IndexColumns [][]int   `msg:"index-columns"`
+	IndexColumns [][]int `msg:"index-columns"`
 }
 
 // DDLEventInRedoLog is used to store DDLEvent in redo log v2 format
 type DDLEventInRedoLog struct {
-	StartTs      uint64           `msg:"start-ts"`
-	CommitTs     uint64           `msg:"commit-ts"`
-	Query        string           `msg:"query"`
+	StartTs  uint64 `msg:"start-ts"`
+	CommitTs uint64 `msg:"commit-ts"`
+	Query    string `msg:"query"`
 }
 
 // RedoColumnValue stores Column change
@@ -78,9 +80,9 @@ type RedoColumnValue struct {
 
 const (
 	// RedoLogTypeRow is row type of log
-	RedoLogTypeRow RedoLogType = iota
+	RedoLogTypeRow RedoLogType = 1
 	// RedoLogTypeDDL is ddl type of log
-	RedoLogTypeDDL
+	RedoLogTypeDDL RedoLogType = 2
 )
 
 // ToRedoLog converts row changed event to redo log
@@ -107,9 +109,9 @@ func (r *RowChangedEvent) ToRedoLog() *RedoLog {
 // ToRedoLog converts ddl event to redo log
 func (d *DDLEvent) ToRedoLog() *RedoLog {
 	ddlInRedoLog := &DDLEventInRedoLog{
-		StartTs: d.GetStartTs(),
+		StartTs:  d.GetStartTs(),
 		CommitTs: d.GetCommitTs(),
-		Query: d.Query,
+		Query:    d.Query,
 	}
 	return &RedoLog{
 		RedoDDL: RedoDDLEvent{DDL: ddlInRedoLog},

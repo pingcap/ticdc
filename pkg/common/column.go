@@ -13,6 +13,8 @@
 
 package common
 
+//go:generate msgp
+
 // Column represents a column value and its schema info
 type Column struct {
 	Name      string         `msg:"name"`
