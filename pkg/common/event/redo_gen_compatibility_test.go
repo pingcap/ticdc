@@ -17,52 +17,51 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/tiflow/cdc/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/types"
+	parserModel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/util/chunk"
+	oldArchModel "github.com/pingcap/tiflow/cdc/model"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDMLCompatibility(t *testing.T) {
-	rowEvent := &RowChangedEvent {
-		StartTs: 100,
-		CommitTs: 200,
-		TableInfo: &common.TableInfo{
-			SchemaID: 1,
-			TableName: common.TableName {
-				Schema: "test",
-				Table: "sbtest",
-				TableID: 2,
-				IsPartition: true,
+	tableInfo := &model.TableInfo{
+		Columns: []*model.ColumnInfo{
+			&model.ColumnInfo{
+				Name: parserModel.NewCIStr("c1"),
+				Offset: 0,
+				GeneratedExprString: "xxx",
+				FieldType: *types.NewFieldType(mysql.TypeString),
 			},
-		},
-		Columns: []*common.Column{
-			&common.Column{
-				Name: "column",
-				Type: mysql.TypeEnum,
-				Charset: mysql.UTF8Charset,
-				Collation: mysql.DefaultCollationName,
-				Flag: common.ColumnFlagType(mysql.GeneratedColumnFlag),
-				Value: "hahaha",
-				Default: "waaaaagh",
-			},
-		},
-		PreColumns: []*common.Column{
-			&common.Column{
-				Name: "column",
-				Type: mysql.TypeEnum,
-				Charset: mysql.UTF8Charset,
-				Collation: mysql.DefaultCollationName,
-				Flag: common.ColumnFlagType(mysql.GeneratedColumnFlag),
-				Value: "waaaaagh",
-				Default: "waaaaagh",
+			&model.ColumnInfo{
+				Name: parserModel.NewCIStr("c2"),
+				Offset: 1,
+				GeneratedExprString: "",
+				FieldType: *types.NewFieldType(mysql.TypeString),
 			},
 		},
 	}
+
+	rowEvent := &DMLEvent {
+		StartTs: 100,
+		CommitTs: 200,
+		TableInfo: common.WrapTableInfo(1, "test", tableInfo),
+		Rows: chunk.NewEmptyChunk([]*types.FieldType{
+			&tableInfo.Columns[0].FieldType, 
+			&tableInfo.Columns[0].FieldType,
+		}),
+		RowTypes: []RowType{RowTypeUpdate},
+	}
+	rowEvent.Rows.AppendString(0, "")
+	rowEvent.Rows.AppendString(1, "hahaha")
+
 	redoLog := rowEvent.ToRedoLog()
 	marshaled, err := redoLog.MarshalMsg(nil)
 	require.Nil(t, err)
 
-	redoLogOld := new(model.RedoLog)
+	redoLogOld := new(oldArchModel.RedoLog)
 	_, err = redoLogOld.UnmarshalMsg(marshaled)
 	require.Nil(t, err)
 

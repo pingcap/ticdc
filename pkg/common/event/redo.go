@@ -14,7 +14,11 @@
 package event
 
 import (
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/util/chunk"
+	"go.uber.org/zap"
 )
 
 //go:generate msgp
@@ -27,27 +31,27 @@ type RedoLogType int
 // more info https://github.com/tinylib/msgp/issues/158, https://github.com/tinylib/msgp/issues/149
 // so define a RedoColumnValue, RedoDDLEvent instead of using the Column, DDLEvent
 type RedoLog struct {
-	RedoRow RedoRowChangedEvent `msg:"row"`
-	RedoDDL RedoDDLEvent        `msg:"ddl"`
-	Type    RedoLogType         `msg:"type"`
+	RedoRow RedoDMLEvent `msg:"row"`
+	RedoDDL RedoDDLEvent `msg:"ddl"`
+	Type    RedoLogType  `msg:"type"`
 }
 
-// RedoRowChangedEvent represents the DML event used in RedoLog
-type RedoRowChangedEvent struct {
-	Row        *RowChangedEventInRedoLog `msg:"row"`
-	Columns    []RedoColumnValue         `msg:"columns"`
-	PreColumns []RedoColumnValue         `msg:"pre-columns"`
+// RedoDMLEvent represents the DML event used in RedoLog
+type RedoDMLEvent struct {
+	Row        *DMLEventInRedoLog `msg:"row"`
+	Columns    []RedoColumnValue  `msg:"columns"`
+	PreColumns []RedoColumnValue  `msg:"pre-columns"`
 }
 
 // RedoDDLEvent represents DDL event used in redo log persistent
 type RedoDDLEvent struct {
 	DDL       *DDLEventInRedoLog `msg:"ddl"`
 	Type      byte               `msg:"type"`
-	TableName common.TableName  `msg:"table-name"`
+	TableName common.TableName   `msg:"table-name"`
 }
 
-// RowChangedEventInRedoLog is used to store RowChangedEvent in redo log v2 format
-type RowChangedEventInRedoLog struct {
+// DMLEventInRedoLog is used to store DMLEvent in redo log v2 format
+type DMLEventInRedoLog struct {
 	StartTs  uint64 `msg:"start-ts"`
 	CommitTs uint64 `msg:"commit-ts"`
 
@@ -55,8 +59,8 @@ type RowChangedEventInRedoLog struct {
 	// NOTICE: We store the physical table ID here, not the logical table ID.
 	Table *common.TableName `msg:"table"`
 
-	Columns    []*common.Column `msg:"columns"`
-	PreColumns []*common.Column `msg:"pre-columns"`
+	Columns    []*RedoColumn `msg:"columns"`
+	PreColumns []*RedoColumn `msg:"pre-columns"`
 
 	// TODO: seems it's unused. Maybe we can remove it?
 	IndexColumns [][]int `msg:"index-columns"`
@@ -67,6 +71,14 @@ type DDLEventInRedoLog struct {
 	StartTs  uint64 `msg:"start-ts"`
 	CommitTs uint64 `msg:"commit-ts"`
 	Query    string `msg:"query"`
+}
+
+// RedoColumn is for column meta
+type RedoColumn struct {
+	Name      string `msg:"name"`
+	Type      byte   `msg:"type"`
+	Charset   string `msg:"charset"`
+	Collation string `msg:"collation"`
 }
 
 // RedoColumnValue stores Column change
@@ -86,24 +98,76 @@ const (
 )
 
 // ToRedoLog converts row changed event to redo log
-func (r *RowChangedEvent) ToRedoLog() *RedoLog {
-	rowInRedoLog := &RowChangedEventInRedoLog{
-		StartTs:  r.StartTs,
-		CommitTs: r.CommitTs,
-		Table: &common.TableName{
-			Schema:      r.TableInfo.GetSchemaName(),
-			Table:       r.TableInfo.GetTableName(),
-			TableID:     r.GetTableID(),
-			IsPartition: r.TableInfo.IsPartitionTable(),
+func (r *DMLEvent) ToRedoLog() *RedoLog {
+	r.FinishGetRow()
+	row, valid := r.GetNextRow()
+	if !valid {
+		log.Panic("DMLEvent.ToRedoLog must be called with a valid row")
+	}
+	r.FinishGetRow()
+
+	redoLog := &RedoLog{
+		RedoRow: RedoDMLEvent{
+			Row: &DMLEventInRedoLog{
+				StartTs:  r.StartTs,
+				CommitTs: r.CommitTs,
+				Table: &common.TableName{
+					Schema:      r.TableInfo.GetSchemaName(),
+					Table:       r.TableInfo.GetTableName(),
+					TableID:     r.PhysicalTableID,
+					IsPartition: r.TableInfo.IsPartitionTable(),
+				},
+				Columns:      nil,
+				PreColumns:   nil,
+				IndexColumns: nil,
+			},
+			PreColumns: nil,
+			Columns:    nil,
 		},
-		Columns:      r.GetColumns(),
-		PreColumns:   r.GetPreColumns(),
-		IndexColumns: nil,
+		Type: RedoLogTypeRow,
 	}
-	return &RedoLog{
-		RedoRow: RedoRowChangedEvent{Row: rowInRedoLog},
-		Type:    RedoLogTypeRow,
+
+	columnCount := len(r.TableInfo.GetColumns())
+	columns := make([]*RedoColumn, 0, columnCount)
+	switch row.RowType {
+	case RowTypeInsert:
+		redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
+	case RowTypeDelete:
+		redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
+	case RowTypeUpdate:
+		redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
+		redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
+	default:
 	}
+
+	for i, column := range r.TableInfo.GetColumns() {
+		if common.IsColCDCVisible(column) {
+			columns = append(columns, &RedoColumn{
+				Name:      column.Name.String(),
+				Type:      column.GetType(),
+				Charset:   column.GetCharset(),
+				Collation: column.GetCollate(),
+			})
+			switch row.RowType {
+			case RowTypeInsert:
+				v := parseColumnValue(&row.Row, column, i)
+				redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
+			case RowTypeDelete:
+				v := parseColumnValue(&row.PreRow, column, i)
+				redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
+			case RowTypeUpdate:
+				v := parseColumnValue(&row.Row, column, i)
+				redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
+				v = parseColumnValue(&row.PreRow, column, i)
+				redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
+			default:
+			}
+		}
+	}
+	redoLog.RedoRow.Row.Columns = columns
+	redoLog.RedoRow.Row.PreColumns = columns
+
+	return redoLog
 }
 
 // ToRedoLog converts ddl event to redo log
@@ -117,4 +181,18 @@ func (d *DDLEvent) ToRedoLog() *RedoLog {
 		RedoDDL: RedoDDLEvent{DDL: ddlInRedoLog},
 		Type:    RedoLogTypeDDL,
 	}
+}
+
+func parseColumnValue(row *chunk.Row, column *model.ColumnInfo, i int) RedoColumnValue {
+	v, err := common.FormatColVal(row, column, i)
+	if err != nil {
+		log.Panic("FormatColVal fail", zap.Error(err))
+	}
+	rrv := RedoColumnValue{Value: v}
+	switch t := rrv.Value.(type) {
+	case []byte:
+		rrv.ValueIsEmptyBytes = len(t) == 0
+	}
+	rrv.Flag = uint64(column.GetFlag())
+	return rrv
 }
