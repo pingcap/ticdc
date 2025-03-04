@@ -104,7 +104,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 	if log.GetLevel() == zapcore.DebugLevel {
 		log.Debug("prepareDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
 	}
-	log.Info("prepareDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
+	//log.Info("prepareDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
 
 	return dmls, nil
 }
