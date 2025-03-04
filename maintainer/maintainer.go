@@ -155,7 +155,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	pdAPI pdutil.PDAPIClient,
-	tsoClient replica.TSOClient,
+	pdClock pdutil.Clock,
 	regionCache split.RegionCache,
 	checkpointTs uint64,
 	newChangefeed bool,
@@ -163,7 +163,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID, tsoClient,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID, pdClock,
 		heartbeatpb.DDLSpanSchemaID,
 		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
@@ -171,16 +171,13 @@ func NewMaintainer(cfID common.ChangeFeedID,
 			CheckpointTs:    checkpointTs,
 		}, selfNode.ID)
 
-	// TODO: Retrieve the correct pdClock from the context once multiple upstreams are supported.
-	// For now, since there is only one upstream, using the default pdClock is enough.
-	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	m := &Maintainer{
 		id:                cfID,
 		pdClock:           pdClock,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
-		controller: NewController(cfID, checkpointTs, pdAPI, tsoClient, regionCache, taskScheduler,
+		controller: NewController(cfID, checkpointTs, pdAPI, pdClock, regionCache, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
 		removed:         atomic.NewBool(false),
@@ -239,7 +236,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	pdAPI pdutil.PDAPIClient,
-	tsoClient replica.TSOClient,
+	pdClock pdutil.Clock,
 	regionCache split.RegionCache,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
@@ -248,7 +245,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 		Config:       config.GetDefaultReplicaConfig(),
 	}
 	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI,
-		tsoClient, regionCache, 1, false)
+		pdClock, regionCache, 1, false)
 	m.cascadeRemoving = true
 	return m
 }
@@ -568,7 +565,7 @@ func (m *Maintainer) updateMetrics() {
 	m.changefeedStatusGauge.Set(float64(m.scheduleState.Load()))
 }
 
-// send message to remote
+// send message to other components
 func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 	for _, msg := range msgs {
 		err := m.mc.SendCommand(msg)
@@ -624,8 +621,7 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 	m.sendMessages([]*messaging.TargetMessage{ackMsg})
 }
 
-// onMaintainerBootstrapResponse is called when a maintainer bootstrap response(send by dispatcher manager) is received from a remote node.
-// maintainer bootstrap response is sent by dispatcher manager.
+// onMaintainerBootstrapResponse is called when a maintainer bootstrap response(send by dispatcher manager) is received.
 func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage) {
 	log.Info("received maintainer bootstrap response",
 		zap.String("changefeed", m.id.Name()),
@@ -701,7 +697,11 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 
 func (m *Maintainer) sendPostBootstrapRequest() {
 	if m.postBootstrapMsg != nil {
-		msg := messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.DispatcherManagerManagerTopic, m.postBootstrapMsg)
+		msg := messaging.NewSingleTargetMessage(
+			m.selfNode.ID,
+			messaging.DispatcherManagerManagerTopic,
+			m.postBootstrapMsg,
+		)
 		m.sendMessages([]*messaging.TargetMessage{msg})
 	}
 }
@@ -894,15 +894,6 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 	}
 }
 
-// for test only
-func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
-	return m.controller.moveTable(tableId, targetNode)
-}
-
-func (m *Maintainer) GetTables() []*replica.SpanReplication {
-	return m.controller.replicationDB.GetAllTasks()
-}
-
 // pushEvent is used to push event to maintainer's event channel
 // event will be handled by maintainer's main loop
 func (m *Maintainer) pushEvent(event *Event) {
@@ -930,6 +921,19 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 	}
 }
 
+// ========================== Exported methods for HTTP API ==========================
+
+// GetDispatcherCount returns the number of dispatchers.
 func (m *Maintainer) GetDispatcherCount() int {
 	return len(m.controller.GetAllTasks())
+}
+
+// MoveTable moves a table to a specific node.
+func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
+	return m.controller.moveTable(tableId, targetNode)
+}
+
+// GetTables returns all tables.
+func (m *Maintainer) GetTables() []*replica.SpanReplication {
+	return m.controller.replicationDB.GetAllTasks()
 }
