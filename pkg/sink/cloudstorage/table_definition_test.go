@@ -66,14 +66,12 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 	}
 	columns = append(columns, col)
 
-	tableInfo := &common.TableInfo{
-		TableName: common.TableName{
-			Schema:  "schema1",
-			Table:   "table1",
-			TableID: 20,
-		},
-	}
-
+	tableInfo := common.WrapTableInfo(100, "schema1", &timodel.TableInfo{
+		ID:       20,
+		Name:     pmodel.NewCIStr("table1"),
+		Columns:  columns,
+		UpdateTS: 100,
+	})
 	var def TableDefinition
 	def.FromTableInfo(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo, tableInfo.UpdateTS(), false)
 	return def, tableInfo
@@ -428,6 +426,8 @@ func TestTableDefinition(t *testing.T) {
 		Type:       byte(timodel.ActionAddColumn),
 		Query:      "alter table schema1.table1 add Birthday date",
 		TableInfo:  tableInfo,
+		SchemaName: "schema1",
+		TableName:  "table1",
 	}
 	def.FromDDLEvent(event, false)
 	encodedDef, err = json.MarshalIndent(def, "", "    ")
@@ -476,7 +476,7 @@ func TestTableDefinition(t *testing.T) {
 
 	event, err = def.ToDDLEvent()
 	require.NoError(t, err)
-	require.Equal(t, timodel.ActionAddColumn, event.Type)
+	require.Equal(t, byte(timodel.ActionAddColumn), event.Type)
 	require.Equal(t, uint64(100), event.FinishedTs)
 }
 
