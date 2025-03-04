@@ -184,9 +184,6 @@ func (d *Writer) flushMessages(ctx context.Context) error {
 					zap.String("table", table.TableNameWithPhysicTableID.Table),
 					zap.String("path", dataFilePath),
 				)
-				for _, msg := range task.msgs {
-					msg.Callback()
-				}
 			}
 			flushTimeSlice += time.Since(start)
 		}

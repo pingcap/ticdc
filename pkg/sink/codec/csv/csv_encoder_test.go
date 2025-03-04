@@ -16,55 +16,41 @@ package csv
 import (
 	"testing"
 
-	"github.com/pingcap/tiflow/cdc/entry"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/sink/codec/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCSVBatchCodec(t *testing.T) {
-	helper := entry.NewSchemaTestHelper(t)
-	defer helper.Close()
-
-	ddl := helper.DDL2Event("create table test.table1(col1 int primary key)")
-	event1 := helper.DML2Event("insert into test.table1 values (1)", "test", "table1")
-	event2 := helper.DML2Event("insert into test.table1 values (2)", "test", "table1")
-
-	testCases := []*model.SingleTableTxn{
-		{
-			Rows: []*model.RowChangedEvent{
-				event1,
-				event2,
-			},
-		},
-		{
-			TableInfo: ddl.TableInfo,
-			Rows:      nil,
-		},
-	}
+	s := commonEvent.NewEventTestHelper(t)
+	s.DDL2Job("create table test.table1(col1 int primary key)")
+	event1 := s.DML2Event("test", "table1", "insert into test.table1 values (1)")
+	event2 := s.DML2Event("test", "table1", "insert into test.table1 values (2)")
+	testCases := []*commonEvent.DMLEvent{event1, event2}
 
 	for _, cs := range testCases {
-		encoder := newBatchEncoder(&common.Config{
+		encoder := NewTxnEventEncoder(&common.Config{
 			Delimiter:       ",",
 			Quote:           "\"",
 			Terminator:      "\n",
 			NullString:      "\\N",
 			IncludeCommitTs: true,
 		})
-		err := encoder.AppendTxnEvent(cs, nil)
+		err := encoder.AppendTxnEvent(cs)
 		require.Nil(t, err)
 		messages := encoder.Build()
-		if len(cs.Rows) == 0 {
+		if cs.Len() == 0 {
 			require.Nil(t, messages)
 			continue
 		}
 		require.Len(t, messages, 1)
-		require.Equal(t, len(cs.Rows), messages[0].GetRowsCount())
+		require.Equal(t, int(cs.Len()), messages[0].GetRowsCount())
 	}
 }
 
 func TestCSVAppendRowChangedEventWithCallback(t *testing.T) {
-	encoder := newBatchEncoder(&common.Config{
+	encoder := NewTxnEventEncoder(&common.Config{
 		Delimiter:       ",",
 		Quote:           "\"",
 		Terminator:      "\n",
@@ -75,25 +61,20 @@ func TestCSVAppendRowChangedEventWithCallback(t *testing.T) {
 
 	count := 0
 
-	helper := entry.NewSchemaTestHelper(t)
-	defer helper.Close()
-
-	_ = helper.DDL2Event("create table test.table1(col1 int primary key)")
-	row := helper.DML2Event("insert into test.table1 values (1)", "test", "table1")
-	txn := &model.SingleTableTxn{
-		TableInfo: row.TableInfo,
-		Rows:      []*model.RowChangedEvent{row},
-	}
+	s := commonEvent.NewEventTestHelper(t)
+	s.DDL2Job("create table test.table1(col1 int primary key)")
+	txn := s.DML2Event("test", "table1", "insert into test.table1 values (1)")
 	callback := func() {
 		count += 1
 	}
+	txn.AddPostFlushFunc(callback)
 
 	// Empty build makes sure that the callback build logic not broken.
 	msgs := encoder.Build()
 	require.Len(t, msgs, 0, "no message should be built and no panic")
 
 	// Append the event.
-	err := encoder.AppendTxnEvent(txn, callback)
+	err := encoder.AppendTxnEvent(txn)
 	require.Nil(t, err)
 	require.Equal(t, 0, count, "nothing should be called")
 
