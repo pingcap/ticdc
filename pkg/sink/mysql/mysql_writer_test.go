@@ -38,6 +38,7 @@ func newTestMysqlWriter(t *testing.T) (*MysqlWriter, *sql.DB, sqlmock.Sqlmock) {
 	cfg := &MysqlConfig{
 		MaxAllowedPacket:   int64(variable.DefMaxAllowedPacket),
 		SyncPointRetention: 100 * time.Second,
+		MaxTxnRow:          256,
 	}
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
@@ -97,6 +98,49 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent, dmlEvent2})
 	require.NoError(t, err)
 
+	err = mock.ExpectationsWereMet()
+	require.NoError(t, err)
+}
+
+func TestMysqlWriter_FlushMultiDML(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t (id int primary key, name varchar(32));"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	// case	1: insert + insert
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')")
+	dmlEvent.CommitTs = 2
+	dmlEvent.DispatcherID = common.NewDispatcherID()
+	dmlEvent2 := helper.DML2Event("test", "t", "insert into t values (2, 'test2');")
+	dmlEvent2.CommitTs = 3
+	dmlEvent2.DispatcherID = dmlEvent.DispatcherID
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)").
+		WithArgs(1, "test", 2, "test2").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent, dmlEvent2})
+	require.NoError(t, err)
+
+	/* TODO(hyy): complete all types, including
+	insert + update
+	insert + delete
+	update + insert
+	update + delete
+	update + update
+	delete + insert
+	delete + delete
+	delete + update
+	*/
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
 }
