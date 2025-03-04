@@ -50,7 +50,7 @@ func TestDMLCompatibility(t *testing.T) {
 		TableInfo: common.WrapTableInfo(1, "test", tableInfo),
 		Rows: chunk.NewEmptyChunk([]*types.FieldType{
 			&tableInfo.Columns[0].FieldType, 
-			&tableInfo.Columns[0].FieldType,
+			&tableInfo.Columns[1].FieldType,
 		}),
 		RowTypes: []RowType{RowTypeUpdate},
 	}
