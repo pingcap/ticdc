@@ -90,7 +90,7 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 	dmlEvent2.ReplicatingTs = 4
 
 	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)").
+	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)").
 		WithArgs(1, "test", 2, "test2", 3, "test3").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
