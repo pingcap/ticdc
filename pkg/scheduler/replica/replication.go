@@ -120,6 +120,14 @@ func (db *replicationDB[T, R]) GetGroups() []GroupID {
 	return groups
 }
 
+func (db *replicationDB[T, R]) GetGroupsWithoutLock() []GroupID {
+	groups := make([]GroupID, 0, len(db.taskGroups))
+	for id := range db.taskGroups {
+		groups = append(groups, id)
+	}
+	return groups
+}
+
 func (db *replicationDB[T, R]) GetGroupChecker(groupID GroupID) (ret GroupChecker[T, R]) {
 	db.withRLock(func() {
 		ret = db.mustGetGroup(groupID).checker
@@ -340,7 +348,7 @@ func (db *replicationDB[T, R]) GetGroupStat() string {
 	distribute := strings.Builder{}
 	db.withRLock(func() {
 		total := 0
-		for _, group := range db.GetGroups() {
+		for _, group := range db.GetGroupsWithoutLock() {
 			if total > 0 {
 				distribute.WriteString(" ")
 			}
