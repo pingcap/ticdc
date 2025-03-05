@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -100,6 +101,11 @@ func (d *Writer) Run(ctx context.Context) error {
 	})
 
 	return eg.Wait()
+}
+
+// SetClock is used for unit test
+func (d *Writer) SetClock(pdClock pdutil.Clock) {
+	d.filePathGenerator.SetClock(pdClock)
 }
 
 // flushMessages flushed messages of active tables to cloud storage.
@@ -184,9 +190,6 @@ func (d *Writer) flushMessages(ctx context.Context) error {
 					zap.String("table", table.TableNameWithPhysicTableID.Table),
 					zap.String("path", dataFilePath),
 				)
-				for _, msg := range task.msgs {
-					msg.Callback()
-				}
 			}
 			flushTimeSlice += time.Since(start)
 		}
@@ -267,7 +270,6 @@ func (d *Writer) genAndDispatchTask(ctx context.Context,
 ) error {
 	batchedTask := newBatchedTask()
 	ticker := time.NewTicker(d.config.FlushInterval)
-
 	for {
 		// this failpoint is use to pass this ticker once
 		// to make writeEvent in the test case can write into the same file

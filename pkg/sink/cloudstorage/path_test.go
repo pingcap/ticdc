@@ -308,7 +308,13 @@ func TestCheckOrWriteSchema(t *testing.T) {
 		DefaultValue: 10,
 	}
 	columns = append(columns, col)
-	tableInfo := commonType.WrapTableInfo(101, "test", &timodel.TableInfo{Columns: columns})
+	tidbInfo := &timodel.TableInfo{
+		ID:      20,
+		Name:    pmodel.NewCIStr("table1"),
+		Columns: columns,
+		Version: 100,
+	}
+	tableInfo := commonType.WrapTableInfo(100, "test", tidbInfo)
 
 	table := VersionedTableName{
 		TableNameWithPhysicTableID: tableInfo.TableName,
@@ -323,7 +329,8 @@ func TestCheckOrWriteSchema(t *testing.T) {
 	table.TableInfoVersion = 101
 	err = f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
-	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
+	fmt.Println(f.versionMap, table)
+	require.Equal(t, uint64(tidbInfo.Version), f.versionMap[table])
 
 	dir = filepath.Join(dir, "test/table1/meta")
 	files, err := os.ReadDir(dir)

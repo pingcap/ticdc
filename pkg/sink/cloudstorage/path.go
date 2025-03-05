@@ -32,7 +32,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/engine/pkg/clock"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/hash"
@@ -155,12 +154,6 @@ func NewFilePathGenerator(
 	extension string,
 ) *FilePathGenerator {
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
-	if pdClock == nil {
-		pdClock = pdutil.NewMonotonicClock(clock.New())
-		log.Warn("pd clock is not set in storage sink, use local clock instead",
-			zap.String("namespace", changefeedID.Namespace()),
-			zap.Stringer("changefeedID", changefeedID.ID()))
-	}
 	return &FilePathGenerator{
 		changefeedID: changefeedID,
 		config:       config,
