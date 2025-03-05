@@ -111,7 +111,6 @@ func newCloudStorageDMLWorkerForTest(parentDir string, flushInterval int, sinkCo
 }
 
 func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
-	t.Parallel()
 
 	parentDir := t.TempDir()
 	csvProtocol := "csv"
@@ -186,8 +185,6 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 }
 
 func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
-	t.Parallel()
-
 	parentDir := t.TempDir()
 	csvProtocol := "csv"
 	sinkConfig := &config.SinkConfig{Protocol: &csvProtocol, DateSeparator: putil.AddressOf(config.DateSeparatorDay.String()), FileIndexWidth: putil.AddressOf(6)}
