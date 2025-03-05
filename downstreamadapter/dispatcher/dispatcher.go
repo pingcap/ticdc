@@ -29,7 +29,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/spanz"
-	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
@@ -145,9 +144,6 @@ type Dispatcher struct {
 	// such as error of flush ddl events
 	// errCh is shared in the eventDispatcherManager
 	errCh chan error
-
-	metricDispatcherReceivedDMLEventCount prometheus.Counter
-	metricDispatcherCostDuration          prometheus.Observer
 }
 
 func NewDispatcher(
@@ -332,7 +328,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			atomic.StoreUint64(&d.resolvedTs, event.(commonEvent.ResolvedEvent).ResolvedTs)
 		case commonEvent.TypeDMLEvent:
 			dml := event.(*commonEvent.DMLEvent)
-			d.metricDispatcherReceivedDMLEventCount.Add(float64(event.Len()))
 			if dml.Len() == 0 {
 				return block
 			}
