@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/prometheus/client_golang/prometheus"
@@ -167,27 +166,25 @@ func NewDispatcher(
 	errCh chan error,
 ) *Dispatcher {
 	dispatcher := &Dispatcher{
-		changefeedID:                          changefeedID,
-		id:                                    id,
-		tableSpan:                             tableSpan,
-		sink:                                  sink,
-		startTs:                               startTs,
-		startTsIsSyncpoint:                    startTsIsSyncpoint,
-		blockStatusesChan:                     blockStatusesChan,
-		syncPointConfig:                       syncPointConfig,
-		componentStatus:                       newComponentStateWithMutex(heartbeatpb.ComponentState_Working),
-		resolvedTs:                            startTs,
-		filterConfig:                          filterConfig,
-		isRemoving:                            atomic.Bool{},
-		blockEventStatus:                      BlockEventStatus{blockPendingEvent: nil},
-		tableProgress:                         NewTableProgress(),
-		schemaID:                              schemaID,
-		schemaIDToDispatchers:                 schemaIDToDispatchers,
-		resendTaskMap:                         newResendTaskMap(),
-		creationPDTs:                          currentPdTs,
-		errCh:                                 errCh,
-		metricDispatcherReceivedDMLEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues(id.String()),
-		metricDispatcherCostDuration:          metrics.DispatcherCostDuration.WithLabelValues(id.String()),
+		changefeedID:          changefeedID,
+		id:                    id,
+		tableSpan:             tableSpan,
+		sink:                  sink,
+		startTs:               startTs,
+		startTsIsSyncpoint:    startTsIsSyncpoint,
+		blockStatusesChan:     blockStatusesChan,
+		syncPointConfig:       syncPointConfig,
+		componentStatus:       newComponentStateWithMutex(heartbeatpb.ComponentState_Working),
+		resolvedTs:            startTs,
+		filterConfig:          filterConfig,
+		isRemoving:            atomic.Bool{},
+		blockEventStatus:      BlockEventStatus{blockPendingEvent: nil},
+		tableProgress:         NewTableProgress(),
+		schemaID:              schemaID,
+		schemaIDToDispatchers: schemaIDToDispatchers,
+		resendTaskMap:         newResendTaskMap(),
+		creationPDTs:          currentPdTs,
+		errCh:                 errCh,
 	}
 
 	dispatcher.addToStatusDynamicStream()
@@ -339,7 +336,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			if dml.Len() == 0 {
 				return block
 			}
-			dml.ReceiveTime = time.Now()
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
 			dml.AssembleRows(d.tableInfo)
@@ -349,7 +345,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				// and wake dynamic stream to handle the next events.
 				if d.tableProgress.Empty() {
 					wakeCallback()
-					d.metricDispatcherCostDuration.Observe(float64(time.Since(dml.ReceiveTime).Milliseconds()))
 				}
 			})
 			err := d.AddDMLEventToSink(dml)
