@@ -500,9 +500,11 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 	},
 	{
 		{
-			commonType.Column{Name: "date",
+			commonType.Column{
+				Name:  "date",
 				Value: util.Must(types.ParseDate(types.DefaultStmtNoWarningContext, "2000-01-01")),
-				Type:  mysql.TypeDate},
+				Type:  mysql.TypeDate,
+			},
 			model.ColumnInfo{
 				ID:        32,
 				FieldType: *types.NewFieldType(mysql.TypeDate),
@@ -511,9 +513,11 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 			config.BinaryEncodingBase64,
 		},
 		{
-			commonType.Column{Name: "datetime",
+			commonType.Column{
+				Name:  "datetime",
 				Value: util.Must(types.ParseDatetime(types.DefaultStmtNoWarningContext, "2015-12-20 23:58:58")),
-				Type:  mysql.TypeDatetime},
+				Type:  mysql.TypeDatetime,
+			},
 			model.ColumnInfo{
 				ID:        33,
 				FieldType: *types.NewFieldType(mysql.TypeDatetime),
@@ -522,9 +526,11 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 			config.BinaryEncodingBase64,
 		},
 		{
-			commonType.Column{Name: "timestamp",
+			commonType.Column{
+				Name:  "timestamp",
 				Value: util.Must(types.ParseTimestamp(types.DefaultStmtNoWarningContext, "1973-12-30 15:30:00")),
-				Type:  mysql.TypeTimestamp},
+				Type:  mysql.TypeTimestamp,
+			},
 			model.ColumnInfo{
 				ID:        34,
 				FieldType: *types.NewFieldType(mysql.TypeTimestamp),
@@ -533,9 +539,11 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 			config.BinaryEncodingBase64,
 		},
 		{
-			commonType.Column{Name: "time",
+			commonType.Column{
+				Name:  "time",
 				Value: types.NewDuration(23, 59, 59, 0, 0),
-				Type:  mysql.TypeDuration},
+				Type:  mysql.TypeDuration,
+			},
 			model.ColumnInfo{
 				ID:        35,
 				FieldType: *types.NewFieldType(mysql.TypeDuration),
