@@ -63,7 +63,7 @@ func TestCloudStorageSinkBasicFunctionality(t *testing.T) {
 	require.NotNil(t, job)
 	helper.ApplyJob(job)
 
-	TableInfo := helper.GetTableInfo(job)
+	tableInfo := helper.GetTableInfo(job)
 
 	ddlEvent := &commonEvent.DDLEvent{
 		Query:      job.Query,
@@ -74,7 +74,7 @@ func TestCloudStorageSinkBasicFunctionality(t *testing.T) {
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{0},
 		},
-		TableInfo:       TableInfo,
+		TableInfo:       tableInfo,
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
 			func() { count.Add(1) },
@@ -90,7 +90,7 @@ func TestCloudStorageSinkBasicFunctionality(t *testing.T) {
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{0},
 		},
-		TableInfo:       TableInfo,
+		TableInfo:       tableInfo,
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
 			func() { count.Add(1) },
@@ -103,7 +103,7 @@ func TestCloudStorageSinkBasicFunctionality(t *testing.T) {
 			count.Add(1)
 		},
 	}
-	dmlEvent.CommitTs = 2
+	dmlEvent.TableInfoVersion = 1
 
 	err = sink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)

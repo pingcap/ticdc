@@ -17,7 +17,6 @@ import (
 	"testing"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )

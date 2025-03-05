@@ -15,6 +15,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path"
@@ -23,23 +24,24 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/parser/types"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/cdc/sink/dmlsink"
-	"github.com/pingcap/tiflow/cdc/sink/tablesink/state"
-	"github.com/pingcap/tiflow/engine/pkg/clock"
-	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/pdutil"
-	"github.com/pingcap/tiflow/pkg/util"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/sink/util"
+	putil "github.com/pingcap/ticdc/pkg/util"
+	pclock "github.com/pingcap/tiflow/engine/pkg/clock"
+	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
-func setClock(s *DMLSink, clock clock.Clock) {
-	for _, w := range s.workers {
-		w.filePathGenerator.SetClock(pdutil.NewMonotonicClock(clock))
+func setClock(s *CloudStorageDMLWorker, clock pclock.Clock) {
+	for _, w := range s.writers {
+		w.SetClock(pdutil.NewMonotonicClock(clock))
 	}
 }
 
@@ -61,97 +63,91 @@ func getTableFiles(t *testing.T, tableDir string) []string {
 	return fileNames
 }
 
-func generateTxnEvents(
-	cnt *uint64,
-	batch int,
-	tableStatus *state.TableSinkState,
-) []*dmlsink.TxnCallbackableEvent {
-	// assume we have a large transaction and it is splitted into 10 small transactions
-	txns := make([]*dmlsink.TxnCallbackableEvent, 0, 10)
-
-	for i := 0; i < 10; i++ {
-		txn := &dmlsink.TxnCallbackableEvent{
-			Event: &model.SingleTableTxn{
-				CommitTs:         100,
-				TableInfoVersion: 33,
-				TableInfo: &model.TableInfo{
-					TableName: model.TableName{
-						Schema: "test", Table: "table1",
-					},
-					Version: 33,
-					TableInfo: &timodel.TableInfo{
-						Columns: []*timodel.ColumnInfo{
-							{ID: 1, Name: pmodel.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
-							{ID: 2, Name: pmodel.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
-						},
-					},
-				},
-			},
-			Callback: func() {
-				atomic.AddUint64(cnt, uint64(batch))
-			},
-			SinkState: tableStatus,
-		}
-		tidbTableInfo := &timodel.TableInfo{
-			Name: pmodel.NewCIStr("table1"),
-			Columns: []*timodel.ColumnInfo{
-				{ID: 1, Name: pmodel.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
-				{ID: 2, Name: pmodel.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
-			},
-		}
-		tableInfo := model.WrapTableInfo(100, "test", 33, tidbTableInfo)
-		for j := 0; j < batch; j++ {
-			row := &model.RowChangedEvent{
-				CommitTs:  100,
-				TableInfo: tableInfo,
-				Columns: []*model.ColumnData{
-					{ColumnID: 1, Value: i*batch + j},
-					{ColumnID: 2, Value: "hello world"},
-				},
-			}
-			txn.Event.Rows = append(txn.Event.Rows, row)
-		}
-		txns = append(txns, txn)
+func newCloudStorageDMLWorkerForTest(parentDir string, flushInterval int, sinkConfig *config.SinkConfig) (*CloudStorageDMLWorker, error) {
+	ctx := context.Background()
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=%ds", parentDir, flushInterval)
+	sinkURI, err := url.Parse(uri)
+	if err != nil {
+		return nil, err
 	}
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	if err != nil {
+		return nil, err
+	}
+	changefeedID := common.NewChangefeedID4Test("test", "test")
 
-	return txns
+	cfg := cloudstorage.NewConfig()
+	err = cfg.Apply(ctx, sinkURI, sinkConfig)
+	if err != nil {
+		return nil, err
+	}
+	protocol, err := helper.GetProtocol(
+		putil.GetOrZero(sinkConfig.Protocol),
+	)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	// get cloud storage file extension according to the specific protocol.
+	ext := helper.GetFileExtension(protocol)
+	// the last param maxMsgBytes is mainly to limit the size of a single message for
+	// batch protocols in mq scenario. In cloud storage sink, we just set it to max int.
+	encoderConfig, err := util.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	storage, err := helper.GetExternalStorageFromURI(ctx, sinkURI.String())
+	if err != nil {
+		return nil, err
+	}
+	sink, err := NewCloudStorageDMLWorker(changefeedID, storage, cfg, encoderConfig, ext, metrics.NewStatistics(changefeedID, "CloudStorageSink"))
+	if err != nil {
+		return nil, err
+	}
+	go sink.Run(ctx)
+	return sink, nil
 }
 
 func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
 	parentDir := t.TempDir()
-	uri := fmt.Sprintf("file:///%s?flush-interval=2s", parentDir)
-	sinkURI, err := url.Parse(uri)
-	require.Nil(t, err)
-
-	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
-	replicaConfig.Sink.Protocol = util.AddressOf(config.ProtocolCsv.String())
-	replicaConfig.Sink.FileIndexWidth = util.AddressOf(6)
-	errCh := make(chan error, 5)
-	s, err := NewDMLSink(ctx,
-		model.DefaultChangeFeedID("test"),
-		pdutil.NewMonotonicClock(clock.New()),
-		sinkURI, replicaConfig, errCh)
-	require.Nil(t, err)
+	csvProtocol := "csv"
+	sinkConfig := &config.SinkConfig{Protocol: &csvProtocol, DateSeparator: putil.AddressOf(config.DateSeparatorNone.String()), FileIndexWidth: putil.AddressOf(6)}
+	s, err := newCloudStorageDMLWorkerForTest(parentDir, 2, sinkConfig)
+	require.NoError(t, err)
 	var cnt uint64 = 0
 	batch := 100
-	tableStatus := state.TableSinkSinking
+	var tableInfoVersion uint64 = 33
 
-	// generating one dml file.
-	txns := generateTxnEvents(&cnt, batch, &tableStatus)
-	err = s.WriteEvents(txns...)
-	require.Nil(t, err)
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table table1(c1 int, c2 varchar(255))")
+	require.NotNil(t, job)
+	helper.ApplyJob(job)
+	dmls := make([]string, 0, batch*10)
+	for i := 0; i < 10; i++ {
+		for j := 0; j < batch; j++ {
+			dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", i*batch+j))
+		}
+	}
+	event := helper.DML2Event(job.SchemaName, job.TableName, dmls...)
+	event.AddPostFlushFunc(func() {
+		atomic.AddUint64(&cnt, uint64(len(dmls)))
+	})
+	event.TableInfoVersion = tableInfoVersion
+	s.AddDMLEvent(event)
 	time.Sleep(3 * time.Second)
-
 	metaDir := path.Join(parentDir, "test/table1/meta")
 	files, err := os.ReadDir(metaDir)
 	require.Nil(t, err)
 	require.Len(t, files, 1)
 
-	tableDir := path.Join(parentDir, "test/table1/33")
+	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d", job.SchemaName, job.TableName, tableInfoVersion))
 	fileNames := getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{"CDC000001.csv", "CDC.index"}, fileNames)
@@ -165,8 +161,11 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	require.Equal(t, uint64(1000), atomic.LoadUint64(&cnt))
 
 	// generating another dml file.
-	err = s.WriteEvents(txns...)
-	require.Nil(t, err)
+	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
+	event.AddPostFlushFunc(func() {
+		atomic.AddUint64(&cnt, uint64(len(dmls)))
+	})
+	s.AddDMLEvent(event)
 	time.Sleep(3 * time.Second)
 
 	fileNames = getTableFiles(t, tableDir)
@@ -183,43 +182,48 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	require.Equal(t, "CDC000002.csv\n", string(content))
 	require.Equal(t, uint64(2000), atomic.LoadUint64(&cnt))
 
-	cancel()
 	s.Close()
 }
 
 func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
 	parentDir := t.TempDir()
-	uri := fmt.Sprintf("file:///%s?flush-interval=4s", parentDir)
-	sinkURI, err := url.Parse(uri)
-	require.Nil(t, err)
-
-	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink.Protocol = util.AddressOf(config.ProtocolCsv.String())
-	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorDay.String())
-	replicaConfig.Sink.FileIndexWidth = util.AddressOf(6)
-
-	errCh := make(chan error, 5)
-	mockClock := clock.NewMock()
-	s, err := NewDMLSink(ctx,
-		model.DefaultChangeFeedID("test"),
-		pdutil.NewMonotonicClock(mockClock),
-		sinkURI, replicaConfig, errCh)
+	csvProtocol := "csv"
+	sinkConfig := &config.SinkConfig{Protocol: &csvProtocol, DateSeparator: putil.AddressOf(config.DateSeparatorDay.String()), FileIndexWidth: putil.AddressOf(6)}
+	s, err := newCloudStorageDMLWorkerForTest(parentDir, 4, sinkConfig)
 	require.Nil(t, err)
 
 	var cnt uint64 = 0
 	batch := 100
-	tableStatus := state.TableSinkSinking
+	var tableInfoVersion uint64 = 33
 
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table table1(c1 int, c2 varchar(255))")
+	require.NotNil(t, job)
+	helper.ApplyJob(job)
+	dmls := make([]string, 0, batch*10)
+	for i := 0; i < 10; i++ {
+		for j := 0; j < batch; j++ {
+			dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", i*batch+j))
+		}
+	}
+
+	mockClock := pclock.NewMock()
 	mockClock.Set(time.Date(2023, 3, 8, 23, 59, 58, 0, time.UTC))
-	txns := generateTxnEvents(&cnt, batch, &tableStatus)
-	tableDir := path.Join(parentDir, "test/table1/33/2023-03-08")
-	err = s.WriteEvents(txns...)
-	require.Nil(t, err)
+	setClock(s, mockClock)
+	event := helper.DML2Event(job.SchemaName, job.TableName, dmls...)
+	event.AddPostFlushFunc(func() {
+		atomic.AddUint64(&cnt, uint64(len(dmls)))
+	})
+	event.TableInfoVersion = tableInfoVersion
+	s.AddDMLEvent(event)
 	time.Sleep(5 * time.Second)
 
+	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d/2023-03-08", job.SchemaName, job.TableName, tableInfoVersion))
 	fileNames := getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{"CDC000001.csv", "CDC.index"}, fileNames)
@@ -235,9 +239,12 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	// test date (day) is NOT changed.
 	mockClock.Set(time.Date(2023, 3, 8, 23, 59, 59, 0, time.UTC))
 	setClock(s, mockClock)
-
-	err = s.WriteEvents(txns...)
-	require.Nil(t, err)
+	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
+	event.AddPostFlushFunc(func() {
+		atomic.AddUint64(&cnt, uint64(len(dmls)))
+	})
+	event.TableInfoVersion = tableInfoVersion
+	s.AddDMLEvent(event)
 	time.Sleep(5 * time.Second)
 
 	fileNames = getTableFiles(t, tableDir)
@@ -261,8 +268,12 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 		_ = failpoint.Disable("github.com/pingcap/tiflow/cdc/sink/dmlsink/cloudstorage/passTickerOnce")
 	}()
 
-	err = s.WriteEvents(txns...)
-	require.Nil(t, err)
+	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
+	event.AddPostFlushFunc(func() {
+		atomic.AddUint64(&cnt, uint64(len(dmls)))
+	})
+	event.TableInfoVersion = tableInfoVersion
+	s.AddDMLEvent(event)
 	time.Sleep(10 * time.Second)
 
 	tableDir = path.Join(parentDir, "test/table1/33/2023-03-09")
@@ -277,23 +288,23 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, "CDC000001.csv\n", string(content))
 	require.Equal(t, uint64(3000), atomic.LoadUint64(&cnt))
-	cancel()
 	s.Close()
 
 	// test table is scheduled from one node to another
 	cnt = 0
-	ctx, cancel = context.WithCancel(context.Background())
+	s, err = newCloudStorageDMLWorkerForTest(parentDir, 4, sinkConfig)
+	require.NoError(t, err)
 
-	mockClock = clock.NewMock()
+	mockClock = pclock.NewMock()
 	mockClock.Set(time.Date(2023, 3, 9, 0, 1, 10, 0, time.UTC))
-	s, err = NewDMLSink(ctx,
-		model.DefaultChangeFeedID("test"),
-		pdutil.NewMonotonicClock(mockClock),
-		sinkURI, replicaConfig, errCh)
-	require.Nil(t, err)
+	setClock(s, mockClock)
 
-	err = s.WriteEvents(txns...)
-	require.Nil(t, err)
+	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
+	event.AddPostFlushFunc(func() {
+		atomic.AddUint64(&cnt, uint64(len(dmls)))
+	})
+	event.TableInfoVersion = tableInfoVersion
+	s.AddDMLEvent(event)
 	time.Sleep(5 * time.Second)
 
 	fileNames = getTableFiles(t, tableDir)
@@ -308,6 +319,5 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	require.Equal(t, "CDC000002.csv\n", string(content))
 	require.Equal(t, uint64(1000), atomic.LoadUint64(&cnt))
 
-	cancel()
 	s.Close()
 }

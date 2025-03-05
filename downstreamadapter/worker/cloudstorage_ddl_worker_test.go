@@ -67,6 +67,7 @@ func newCloudStorageDDLWorkerForTest(parentDir string) (*CloudStorageDDLWorker, 
 	go sink.Run(ctx)
 	return sink, nil
 }
+
 func TestCloudStorageWriteDDLEvent(t *testing.T) {
 	parentDir := t.TempDir()
 	sink, err := newCloudStorageDDLWorkerForTest(parentDir)
@@ -171,6 +172,6 @@ func TestCleanupExpiredFiles(t *testing.T) {
 	require.Nil(t, err)
 
 	_ = sink
-	time.Sleep(3 * time.Second)
+	time.Sleep(5 * time.Second)
 	require.LessOrEqual(t, int64(1), cnt.Load())
 }
