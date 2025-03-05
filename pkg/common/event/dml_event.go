@@ -15,6 +15,7 @@ package event
 
 import (
 	"encoding/binary"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -71,6 +72,8 @@ type DMLEvent struct {
 	// offset is the offset of the current row in the transaction.
 	// It is internal field, not exported. So it doesn't need to be marshalled.
 	offset int `json:"-"`
+
+	ReceiveTime time.Time
 }
 
 func NewDMLEvent(

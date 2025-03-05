@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
@@ -37,7 +38,8 @@ type MysqlDMLWorker struct {
 	mysqlWriter *mysql.MysqlWriter
 	id          int
 
-	maxRows int
+	maxRows                                  int
+	metricDispatcherCostBeforeWorkerDuration prometheus.Observer
 }
 
 func NewMysqlDMLWorker(
@@ -51,11 +53,12 @@ func NewMysqlDMLWorker(
 	eventChan <-chan *commonEvent.DMLEvent,
 ) *MysqlDMLWorker {
 	return &MysqlDMLWorker{
-		mysqlWriter:  mysql.NewMysqlWriter(ctx, db, config, changefeedID, statistics, formatVectorType),
-		id:           id,
-		maxRows:      config.MaxTxnRow,
-		eventChan:    eventChan,
-		changefeedID: changefeedID,
+		mysqlWriter:                              mysql.NewMysqlWriter(ctx, db, config, changefeedID, statistics, formatVectorType),
+		id:                                       id,
+		maxRows:                                  config.MaxTxnRow,
+		eventChan:                                eventChan,
+		changefeedID:                             changefeedID,
+		metricDispatcherCostBeforeWorkerDuration: metrics.DispatcherCostBeforeSinkDuration.WithLabelValues(changefeedID.String() + "_" + strconv.Itoa(id)),
 	}
 }
 
@@ -86,6 +89,7 @@ func (w *MysqlDMLWorker) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case txnEvent := <-w.eventChan:
+			w.metricDispatcherCostBeforeWorkerDuration.Observe(float64(time.Since(txnEvent.ReceiveTime).Milliseconds()))
 			events = append(events, txnEvent)
 			rows += int(txnEvent.Len())
 			if rows > w.maxRows {

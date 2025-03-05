@@ -119,6 +119,15 @@ var (
 			Name:      "handle_event_duration",
 			Help:      "The duration of handling events",
 		})
+
+	DispatcherCostDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatcher",
+			Name:      "cost_duration",
+			Help:      "The duration of lag between the event collector received event and the event's ts",
+			Buckets:   LagBucket(),
+		}, []string{"type"})
 )
 
 func InitDispatcherMetrics(registry *prometheus.Registry) {
@@ -135,4 +144,5 @@ func InitDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventCollectorRegisteredDispatcherCount)
 	registry.MustRegister(EventCollectorReceivedEventLagDuration)
 	registry.MustRegister(EventCollectorHandleEventDuration)
+	registry.MustRegister(DispatcherCostDuration)
 }

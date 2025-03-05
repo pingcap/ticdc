@@ -149,6 +149,15 @@ var (
 			Name:      "txn_prepare_statement_errors",
 			Help:      "Prepare statement errors",
 		}, []string{"namespace", "changefeed"})
+
+	DispatcherCostBeforeSinkDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatcher",
+			Name:      "cost_before_sink_duration",
+			Help:      "The duration of lag between the event collector received event and the event's ts",
+			Buckets:   LagBucket(),
+		}, []string{"type"})
 )
 
 // ---------- Metrics for kafka sink and backends. ---------- //
@@ -225,4 +234,6 @@ func InitSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(WorkerBatchDuration)
 	registry.MustRegister(CheckpointTsMessageDuration)
 	registry.MustRegister(CheckpointTsMessageCount)
+
+	registry.MustRegister(DispatcherCostBeforeSinkDuration)
 }
