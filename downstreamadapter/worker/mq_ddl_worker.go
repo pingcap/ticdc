@@ -114,9 +114,15 @@ func (w *MQDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent
 			return errors.Trace(err)
 		}
 		topic := w.eventRouter.GetTopicForDDL(e)
-
+		// Notice: We must call GetPartitionNum here,
+		// which will be responsible for automatically creating topics when they don't exist.
+		// If it is not called here and kafka has `auto.create.topics.enable` turned on,
+		// then the auto-created topic will not be created as configured by ticdc.
+		partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
+		if err != nil {
+			return errors.Trace(err)
+		}
 		if w.partitionRule == PartitionAll {
-			partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
 			if err != nil {
 				return errors.Trace(err)
 			}
