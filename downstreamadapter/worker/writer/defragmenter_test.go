@@ -14,7 +14,6 @@ package writer
 
 import (
 	"context"
-	"fmt"
 	"math/rand"
 	"net/url"
 	"strconv"
@@ -28,11 +27,18 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/utils/chann"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
 
 func TestDeframenter(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	eg, egCtx := errgroup.WithContext(ctx)
 
@@ -53,8 +59,6 @@ func TestDeframenter(t *testing.T) {
 	encoderConfig, err := util.GetEncoderConfig(changefeedID, sinkURI, config.ProtocolCsv,
 		replicaConfig.Sink, config.DefaultMaxMessageBytes)
 	require.Nil(t, err)
-	encoder, err := codec.NewTxnEventEncoder(encoderConfig)
-	require.Nil(t, err)
 
 	var seqNumbers []uint64
 	for i := 0; i < txnCnt; i++ {
@@ -65,6 +69,15 @@ func TestDeframenter(t *testing.T) {
 		seqNumbers[i], seqNumbers[j] = seqNumbers[j], seqNumbers[i]
 	})
 
+	tidbTableInfo := &timodel.TableInfo{
+		ID:   100,
+		Name: pmodel.NewCIStr("table1"),
+		Columns: []*timodel.ColumnInfo{
+			{ID: 1, Name: pmodel.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+			{ID: 2, Name: pmodel.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
+		},
+	}
+	tableInfo := common.WrapTableInfo(100, "test", tidbTableInfo)
 	for i := 0; i < txnCnt; i++ {
 		go func(seq uint64) {
 			frag := EventFragment{
@@ -76,24 +89,21 @@ func TestDeframenter(t *testing.T) {
 					},
 				},
 				seqNumber: seq,
-				event:     &commonEvent.DMLEvent{},
 			}
-			helper := commonEvent.NewEventTestHelper(t)
-			defer helper.Close()
-
-			helper.Tk().MustExec("use test")
-			job := helper.DDL2Job("create table table1(c1 int, c2 varchar(255))")
-			require.NotNil(t, job)
-			helper.ApplyJob(job)
 			rand.New(rand.NewSource(time.Now().UnixNano()))
 			n := 1 + rand.Intn(1000)
-			dmls := make([]string, 0, n)
+			vals := make([]interface{}, 0, n)
 			for j := 0; j < n; j++ {
-				dmls = append(dmls, fmt.Sprintf("insert into table1 values(%d, 'hello world')", j+1))
+				vals = append(vals, j+1, "hello world")
 			}
-			frag.event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
-
-			err := encoder.AppendTxnEvent(frag.event)
+			frag.event = &commonEvent.DMLEvent{
+				PhysicalTableID: 100,
+				TableInfo:       tableInfo,
+				Rows:            chunk.MutRowFromValues(vals...).ToRow().Chunk(),
+			}
+			encoder, err := codec.NewTxnEventEncoder(encoderConfig)
+			require.Nil(t, err)
+			err = encoder.AppendTxnEvent(frag.event)
 			require.NoError(t, err)
 			frag.encodedMsgs = encoder.Build()
 

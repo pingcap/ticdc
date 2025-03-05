@@ -741,7 +741,7 @@ func TestCSVMessageEncode(t *testing.T) {
 		// 			NullString:      "\\N",
 		// 			IncludeCommitTs: true,
 		// 			OutputOldValue:  true,
-		// 			OutputHandleKey: true,
+		// 			OutputHandleKey: true, // not supported
 		// 		},
 		// 		opType:     operationUpdate,
 		// 		tableName:  "table2",

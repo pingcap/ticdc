@@ -33,6 +33,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	pclock "github.com/pingcap/tiflow/engine/pkg/clock"
 	"github.com/stretchr/testify/require"
 )
@@ -80,19 +85,23 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *Writer {
 }
 
 func TestWriterRun(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
 	fragCh := d.inputCh
 	table1Dir := path.Join(parentDir, "test/table1/99")
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
 
-	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job("create table table1(c1 int, c2 varchar(255))")
-	require.NotNil(t, job)
-	helper.ApplyJob(job)
-	dmlEvent := helper.DML2Event(job.SchemaName, job.TableName, "insert into table1 values(100, 'hello world')")
+	tidbTableInfo := &timodel.TableInfo{
+		ID:   100,
+		Name: pmodel.NewCIStr("table1"),
+		Columns: []*timodel.ColumnInfo{
+			{ID: 1, Name: pmodel.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+			{ID: 2, Name: pmodel.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
+		},
+	}
+	tableInfo := commonType.WrapTableInfo(100, "test", tidbTableInfo)
 
 	for i := 0; i < 5; i++ {
 		frag := EventFragment{
@@ -105,7 +114,11 @@ func TestWriterRun(t *testing.T) {
 				},
 				TableInfoVersion: 99,
 			},
-			event: dmlEvent,
+			event: &commonEvent.DMLEvent{
+				PhysicalTableID: 100,
+				TableInfo:       tableInfo,
+				Rows:            chunk.MutRowFromValues(100, "hello world").ToRow().Chunk(),
+			},
 			encodedMsgs: []*common.Message{
 				{
 					Value: []byte(fmt.Sprintf(`{"id":%d,"database":"test","table":"table1","pkNames":[],"isDdl":false,`+
