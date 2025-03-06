@@ -138,12 +138,14 @@ func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp
 			cdcpb.Event_COMMIT,
 			cdcpb.Event_ROLLBACK:
 			return dynstream.Timestamp(entries[0].CommitTs)
+		default:
+			log.Warn("unknown event entries", zap.Any("event", event.entries))
+			return 0
 		}
 	} else {
 		return dynstream.Timestamp(event.resolvedTs)
 	}
-	log.Panic("unknown event type", zap.Any("event", event))
-	return 0
+
 }
 func (h *regionEventHandler) IsPaused(event regionEvent) bool { return false }
 
