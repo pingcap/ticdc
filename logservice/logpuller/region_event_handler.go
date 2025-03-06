@@ -145,7 +145,6 @@ func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp
 	} else {
 		return dynstream.Timestamp(event.resolvedTs)
 	}
-
 }
 func (h *regionEventHandler) IsPaused(event regionEvent) bool { return false }
 
