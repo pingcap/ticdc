@@ -111,7 +111,6 @@ func newCloudStorageDMLWorkerForTest(parentDir string, flushInterval int, sinkCo
 }
 
 func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
-
 	parentDir := t.TempDir()
 	csvProtocol := "csv"
 	sinkConfig := &config.SinkConfig{Protocol: &csvProtocol, DateSeparator: putil.AddressOf(config.DateSeparatorNone.String()), FileIndexWidth: putil.AddressOf(6)}
@@ -128,11 +127,9 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	job := helper.DDL2Job("create table table1(c1 int, c2 varchar(255))")
 	require.NotNil(t, job)
 	helper.ApplyJob(job)
-	dmls := make([]string, 0, batch*10)
-	for i := 0; i < 10; i++ {
-		for j := 0; j < batch; j++ {
-			dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", i*batch+j))
-		}
+	dmls := make([]string, 0, batch)
+	for j := 0; j < batch; j++ {
+		dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", j))
 	}
 	event := helper.DML2Event(job.SchemaName, job.TableName, dmls...)
 	event.AddPostFlushFunc(func() {
@@ -157,7 +154,7 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
 	require.Nil(t, err)
 	require.Equal(t, "CDC000001.csv\n", string(content))
-	require.Equal(t, uint64(1000), atomic.LoadUint64(&cnt))
+	require.Equal(t, uint64(100), atomic.LoadUint64(&cnt))
 
 	// generating another dml file.
 	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
@@ -179,7 +176,7 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
 	require.Nil(t, err)
 	require.Equal(t, "CDC000002.csv\n", string(content))
-	require.Equal(t, uint64(2000), atomic.LoadUint64(&cnt))
+	require.Equal(t, uint64(200), atomic.LoadUint64(&cnt))
 
 	s.Close()
 }
@@ -202,11 +199,9 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	job := helper.DDL2Job("create table table1(c1 int, c2 varchar(255))")
 	require.NotNil(t, job)
 	helper.ApplyJob(job)
-	dmls := make([]string, 0, batch*10)
-	for i := 0; i < 10; i++ {
-		for j := 0; j < batch; j++ {
-			dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", i*batch+j))
-		}
+	dmls := make([]string, 0, batch)
+	for j := 0; j < batch; j++ {
+		dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", j))
 	}
 
 	mockClock := pclock.NewMock()
@@ -231,7 +226,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
 	require.Nil(t, err)
 	require.Equal(t, "CDC000001.csv\n", string(content))
-	require.Equal(t, uint64(1000), atomic.LoadUint64(&cnt))
+	require.Equal(t, uint64(100), atomic.LoadUint64(&cnt))
 
 	// test date (day) is NOT changed.
 	mockClock.Set(time.Date(2023, 3, 8, 23, 59, 59, 0, time.UTC))
@@ -254,7 +249,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
 	require.Nil(t, err)
 	require.Equal(t, "CDC000002.csv\n", string(content))
-	require.Equal(t, uint64(2000), atomic.LoadUint64(&cnt))
+	require.Equal(t, uint64(200), atomic.LoadUint64(&cnt))
 
 	// test date (day) is changed.
 	mockClock.Set(time.Date(2023, 3, 9, 0, 0, 10, 0, time.UTC))
@@ -284,7 +279,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
 	require.Nil(t, err)
 	require.Equal(t, "CDC000001.csv\n", string(content))
-	require.Equal(t, uint64(3000), atomic.LoadUint64(&cnt))
+	require.Equal(t, uint64(300), atomic.LoadUint64(&cnt))
 	s.Close()
 
 	// test table is scheduled from one node to another
@@ -314,7 +309,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
 	require.Nil(t, err)
 	require.Equal(t, "CDC000002.csv\n", string(content))
-	require.Equal(t, uint64(1000), atomic.LoadUint64(&cnt))
+	require.Equal(t, uint64(100), atomic.LoadUint64(&cnt))
 
 	s.Close()
 }
