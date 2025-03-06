@@ -138,8 +138,6 @@ func TestCloudStorageWriteCheckpointTs(t *testing.T) {
 }
 
 func TestCleanupExpiredFiles(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	parentDir := t.TempDir()
