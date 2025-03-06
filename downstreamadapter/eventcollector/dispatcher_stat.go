@@ -110,6 +110,7 @@ func (d *dispatcherStat) shouldIgnoreDataEvent(event dispatcher.DispatcherEvent,
 		return true
 	}
 	d.sentCommitTs.Store(event.GetCommitTs())
+	log.Info("update send commitTs", zap.Any("commitTs", d.sentCommitTs), zap.Any("dispatcher", d.target.GetId()))
 	return false
 }
 
