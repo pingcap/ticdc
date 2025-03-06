@@ -23,11 +23,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"workload/schema"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
-	"workload/schema"
 )
 
 var (
@@ -76,6 +77,7 @@ const (
 	largeRow = "large_row"
 	shopItem = "shop_item"
 	uuu      = "uuu"
+	crawler  = "crawler"
 )
 
 // Add a prepared statement cache
@@ -92,7 +94,7 @@ func init() {
 	flag.Float64Var(&percentageForUpdate, "percentage-for-update", 0, "percentage for update: [0, 1.0]")
 	flag.BoolVar(&skipCreateTable, "skip-create-table", false, "do not create tables")
 	flag.StringVar(&action, "action", "prepare", "action of the workload: [prepare, insert, update, delete, write, cleanup]")
-	flag.StringVar(&workloadType, "workload-type", "sysbench", "workload type: [bank, sysbench, large_row, shop_item, uuu]")
+	flag.StringVar(&workloadType, "workload-type", "sysbench", "workload type: [bank, sysbench, large_row, shop_item, uuu, crawler]")
 	flag.StringVar(&dbHost, "database-host", "127.0.0.1", "database host")
 	flag.StringVar(&dbUser, "database-user", "root", "database user")
 	flag.StringVar(&dbPassword, "database-password", "", "database password")
@@ -212,6 +214,8 @@ func createWorkload() schema.Workload {
 		workload = schema.NewShopItemWorkload(totalRowCount, rowSize)
 	case uuu:
 		workload = schema.NewUUUWorkload()
+	case crawler:
+		workload = schema.NewCrawlerWorkload()
 	default:
 		log.Panic("unsupported workload type", zap.String("workload", workloadType))
 	}
@@ -370,6 +374,9 @@ func genUpdateTask(output chan updateTask) {
 func doUpdate(db *sql.DB, workload schema.Workload, input chan updateTask) {
 	for task := range input {
 		updateSql := workload.BuildUpdateSql(task.UpdateOption)
+		if updateSql == "" {
+			continue
+		}
 		res, err := execute(db, updateSql, workload, task.Table)
 		if err != nil {
 			log.Info("update error", zap.Error(err), zap.String("sql", updateSql[:20]))
