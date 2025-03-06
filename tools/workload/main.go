@@ -18,23 +18,20 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
+	_ "net/http/pprof"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"workload/schema"
-
-	"log"
-
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	plog "github.com/pingcap/log"
 	"go.uber.org/zap"
-
-	_ "net/http/pprof"
+	"workload/schema"
 )
 
 var (
@@ -119,7 +116,6 @@ func init() {
 }
 
 func main() {
-
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()

@@ -218,6 +218,7 @@ func NewBank2Workload() Workload {
 	workload := &Bank2Workload{infoTableInsertSQL: infoTableInsertSQL, logTableInsertSQL: logTableInsertSQL}
 	return workload
 }
+
 func (c *Bank2Workload) BuildCreateTableStatement(n int) string {
 	switch n {
 	case 0: // info
@@ -287,7 +288,7 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (str
 	default:
 		panic("unknown table")
 	}
-	//return sql, values
+	// return sql, values
 }
 
 func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []interface{}) {
@@ -320,7 +321,7 @@ func generateNonPrimaryValuesForTable() []interface{} {
 	values = append(values, randomInt())          // col73
 	values = append(values, randomInt())          // col27
 	values = append(values, randomInt())          // col59
-	values = append(values, randomDecimal(13, 2)) //col26
+	values = append(values, randomDecimal(13, 2)) // col26
 	values = append(values, randomDecimal(13, 2)) // col72
 	values = append(values, randomInt())          // col23
 	values = append(values, randomDecimal(8, 7))  // col81
