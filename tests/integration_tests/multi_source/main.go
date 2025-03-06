@@ -225,6 +225,7 @@ func ignoreableError(err error) bool {
 	knownErrorList := []string{
 		"Error 1146", // table doesn't exist
 		"Error 1049", // database doesn't exist
+		"Error 1062", // Duplicate entr
 	}
 	for _, e := range knownErrorList {
 		if strings.HasPrefix(err.Error(), e) {
