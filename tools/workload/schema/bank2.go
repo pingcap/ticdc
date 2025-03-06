@@ -21,171 +21,171 @@ import (
 	"time"
 )
 
-const createTableSQL = `CREATE TABLE acct_statement_head_info (
-	local_id bigint(20) NOT NULL,
-	stmt_head_id bigint(20) NOT NULL,
-	stmt_date date NOT NULL,
-	part_no int(11) NOT NULL DEFAULT '0',
-	crcd_acct_no varchar(16) NOT NULL DEFAULT '',
-	acct_seq_no varchar(3) NOT NULL DEFAULT '',
-	acct_ccy varchar(3) NOT NULL DEFAULT '',
-	crcd_org_no varchar(3) NOT NULL DEFAULT '',
-	crcd_cardholder_no varchar(16) NOT NULL DEFAULT '',
-	prev_stmt_head_id bigint(20) NOT NULL DEFAULT '0',
-	repay_expire_date date DEFAULT NULL,
-	late_chg_coll_date date DEFAULT NULL,
-	grace_date date DEFAULT NULL,
-	total_amt_due decimal(13,2) NOT NULL DEFAULT '0.00',
-	monthly_pymt decimal(13,2) NOT NULL DEFAULT '0.00',
-	delq_total_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	overlimit_acctt_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	cur_pymt_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	begin_bal decimal(13,2) NOT NULL DEFAULT '0.00',
-	debit_trx_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	cr_trx_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	dispute_bal decimal(13,2) NOT NULL DEFAULT '0.00',
-	dispute_trx_count int(11) NOT NULL DEFAULT '0',
-	crcd_stmt_no smallint(6) NOT NULL,
-	acct_rtl_limit decimal(13,0) NOT NULL DEFAULT '0',
-	acct_avail_rtl_limit decimal(13,2) NOT NULL DEFAULT '0.00',
-	stmt_cycle_days int(11) NOT NULL DEFAULT '0',
-	cash_adv_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	intr_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	stmt_type varchar(1) NOT NULL DEFAULT '',
-	debit_cr_out_of_bal_flag varchar(1) NOT NULL DEFAULT '',
-	acct_prev_block_code varchar(3) NOT NULL DEFAULT '',
-	stmt_mail_flag varchar(1) NOT NULL DEFAULT '',
-	only_stmt_head_record_flag varchar(1) NOT NULL DEFAULT '',
-	bp_rtl_intr_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	bp_cash_adv_intr_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	acct_sts varchar(1) NOT NULL DEFAULT '',
-	acct_cur_block_code varchar(3) NOT NULL DEFAULT '',
-	cycle_due int(11) NOT NULL DEFAULT '0',
-	trx_count int(11) NOT NULL DEFAULT '0',
-	begin_rtl_bal decimal(13,2) NOT NULL DEFAULT '0.00',
-	acc_rtl_bal decimal(13,2) NOT NULL DEFAULT '0.00',
-	rtl_days_with_bal smallint(6) NOT NULL DEFAULT '0',
-	rtl_pymt_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	rtl_pymt_rvsl_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	rtl_debit_trx_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	rtl_debit_trx_count int(11) NOT NULL DEFAULT '0',
-	rtl_cr_trx_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	rtl_cr_trx_count int(11) NOT NULL DEFAULT '0',
-	rtl_serv_chg decimal(13,2) NOT NULL DEFAULT '0.00',
-	rtl_trx_fee_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	rtl_intr_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	rtl_mis_fee decimal(13,2) NOT NULL DEFAULT '0.00',
-	rtl_annual_fee decimal(13,2) NOT NULL DEFAULT '0.00',
-	stmt_rtl_bal decimal(13,2) NOT NULL DEFAULT '0.00',
-	rtl_dispute_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	cash_adv_begin_bal decimal(13,2) NOT NULL DEFAULT '0.00',
-	acc_cash_bal decimal(13,2) NOT NULL DEFAULT '0.00',
-	cash_adv_days_with_bal int(11) NOT NULL DEFAULT '0',
-	cash_adv_pymt_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	ctd_cash_adv_pymt_rvsl decimal(13,2) NOT NULL DEFAULT '0.00',
-	cash_adv_debit_trx_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	cash_adv_debit_trx_count int(11) NOT NULL DEFAULT '0',
-	cash_adv_cr_trx_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	cash_adv_cr_trx_count int(11) NOT NULL DEFAULT '0',
-	cash_adv_serv_chg decimal(13,2) NOT NULL DEFAULT '0.00',
-	cash_adv_trx_fee_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	cash_adv_intr_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	stmt_cash_bal decimal(13,2) NOT NULL DEFAULT '0.00',
-	cash_adv_dispute_amt decimal(13,2) NOT NULL DEFAULT '0.00',
-	cash_adv_limit decimal(13,2) NOT NULL DEFAULT '0.00',
-	avail_cash_adv_limit decimal(13,2) NOT NULL DEFAULT '0.00',
-	agent_bank_no int(11) NOT NULL DEFAULT '0',
-	dd_flag varchar(1) NOT NULL DEFAULT '',
-	prev_stmt_rmn_intr decimal(13,2) NOT NULL DEFAULT '0.00',
-	write_off_sts_flag varchar(1) NOT NULL DEFAULT '',
-	prev_rtl_prin decimal(13,2) NOT NULL DEFAULT '0.00',
-	cur_stmt_bal decimal(13,2) NOT NULL DEFAULT '0.00',
-	ctd_stmt_stat_cycle int(11) NOT NULL DEFAULT '0',
-	prev_stmt_date date DEFAULT NULL,
-	rtl_intr_rate decimal(8,7) NOT NULL DEFAULT '0.0000000',
-	late_chg decimal(13,2) NOT NULL DEFAULT '0.00',
-	cash_bal_1_cur_intr_rate decimal(8,7) NOT NULL DEFAULT '0.0000000',
-	global_trx_jrn_no varchar(37) DEFAULT NULL,
-	src_cnsmr_sys_id varchar(4) DEFAULT NULL,
-	local_sys_jrn_no varchar(32) DEFAULT NULL,
-	biz_date date DEFAULT NULL,
-	trx_date date DEFAULT NULL,
-	trx_time time DEFAULT NULL,
-	biz_scene_encod varchar(10) DEFAULT NULL,
-	data_pos varchar(10) NOT NULL DEFAULT '',
-	create_tlr_no varchar(32) NOT NULL DEFAULT '',
-	upd_tlr_no varchar(32) NOT NULL DEFAULT '',
-	create_tlr_org_no varchar(10) NOT NULL DEFAULT '',
-	upd_tlr_org_no varchar(10) NOT NULL DEFAULT '',
-	biz_upd_ts datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-	ver_no int(11) NOT NULL DEFAULT '0',
-	create_ts datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-	upd_ts datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-	acct_bank_no varchar(4) NOT NULL DEFAULT '',
-	acct_branch_no varchar(5) NOT NULL DEFAULT '',
-	migr_flag varchar(1) NOT NULL DEFAULT '0',
-	acct_chg_off_sts varchar(1) NOT NULL DEFAULT '',
-	binlog_insert_ts datetime(6) NOT NULL DEFAULT '1900-01-01 00:00:00.000000',
-	del_flag varchar(1) NOT NULL DEFAULT 'N',
-	data_version varchar(256) DEFAULT NULL,
-	prev_dir_to_cust_rtl_prin decimal(13,2) DEFAULT NULL,
-	last_term_spec_whls_csm_prin decimal(13,2) DEFAULT NULL,
-	last_term_stmt_forbid_instalt_prin_amt decimal(13,2) DEFAULT NULL,
-	PRIMARY KEY (crcd_acct_no,stmt_date,acct_seq_no,stmt_head_id) /*T![clustered_index] CLUSTERED */,
-	KEY upd_ts_del_flag_idx (upd_ts,data_pos,del_flag),
-	KEY acct_statement_head_info_idx_1 (crcd_cardholder_no,stmt_date),
-	KEY acct_statement_head_info_idx_2 (stmt_head_id,stmt_date)
+const createTableSQL = `CREATE TABLE info (
+	col_1 bigint(20) NOT NULL,
+	col2 bigint(20) NOT NULL,
+	col3 date NOT NULL,
+	col4 int(11) NOT NULL DEFAULT '0',
+	col5 varchar(16) NOT NULL DEFAULT '',
+	col6 varchar(3) NOT NULL DEFAULT '',
+	col7 varchar(3) NOT NULL DEFAULT '',
+	col8 varchar(3) NOT NULL DEFAULT '',
+	col9 varchar(16) NOT NULL DEFAULT '',
+	col10 bigint(20) NOT NULL DEFAULT '0',
+	col11 date DEFAULT NULL,
+	col12 date DEFAULT NULL,
+	col13 date DEFAULT NULL,
+	col14 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col15 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col16 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col17 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col18 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col19 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col20 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col21 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col22 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col23 int(11) NOT NULL DEFAULT '0',
+	col24 smallint(6) NOT NULL,
+	col25 decimal(13,0) NOT NULL DEFAULT '0',
+	col26 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col27 int(11) NOT NULL DEFAULT '0',
+	col28 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col29 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col30 varchar(1) NOT NULL DEFAULT '',
+	col31 varchar(1) NOT NULL DEFAULT '',
+	col32 varchar(3) NOT NULL DEFAULT '',
+	col33 varchar(1) NOT NULL DEFAULT '',
+	col34 varchar(1) NOT NULL DEFAULT '',
+	col35 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col36 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col37 varchar(1) NOT NULL DEFAULT '',
+	col38 varchar(3) NOT NULL DEFAULT '',
+	col39 int(11) NOT NULL DEFAULT '0',
+	col40 int(11) NOT NULL DEFAULT '0',
+	col41 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col42 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col43 smallint(6) NOT NULL DEFAULT '0',
+	col44 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col45 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col46 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col47 int(11) NOT NULL DEFAULT '0',
+	col48 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col49 int(11) NOT NULL DEFAULT '0',
+	col50 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col51 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col52 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col53 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col54 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col55 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col56 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col57 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col58 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col59 int(11) NOT NULL DEFAULT '0',
+	col60 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col61 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col62 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col63 int(11) NOT NULL DEFAULT '0',
+	col64 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col65 int(11) NOT NULL DEFAULT '0',
+	col66 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col67 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col68 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col69 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col70 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col71 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col72 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col73 int(11) NOT NULL DEFAULT '0',
+	col74 varchar(1) NOT NULL DEFAULT '',
+	col75 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col76 varchar(1) NOT NULL DEFAULT '',
+	col77 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col78 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col79 int(11) NOT NULL DEFAULT '0',
+	col80 date DEFAULT NULL,
+	col81 decimal(8,7) NOT NULL DEFAULT '0.0000000',
+	col82 decimal(13,2) NOT NULL DEFAULT '0.00',
+	col83 decimal(8,7) NOT NULL DEFAULT '0.0000000',
+	col84 varchar(37) DEFAULT NULL,
+	col85 varchar(4) DEFAULT NULL,
+	col86 varchar(32) DEFAULT NULL,
+	col87 date DEFAULT NULL,
+	col88 date DEFAULT NULL,
+	col89 time DEFAULT NULL,
+	col90 varchar(10) DEFAULT NULL,
+	col91 varchar(10) NOT NULL DEFAULT '',
+	col92 varchar(32) NOT NULL DEFAULT '',
+	col93 varchar(32) NOT NULL DEFAULT '',
+	col94 varchar(10) NOT NULL DEFAULT '',
+	col95 varchar(10) NOT NULL DEFAULT '',
+	col96 datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+	col97 int(11) NOT NULL DEFAULT '0',
+	col98 datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+	col99 datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+	col100 varchar(4) NOT NULL DEFAULT '',
+	col101 varchar(5) NOT NULL DEFAULT '',
+	col102 varchar(1) NOT NULL DEFAULT '0',
+	col103 varchar(1) NOT NULL DEFAULT '',
+	col104 datetime(6) NOT NULL DEFAULT '1900-01-01 00:00:00.000000',
+	col105 varchar(1) NOT NULL DEFAULT 'N',
+	col106 varchar(256) DEFAULT NULL,
+	col107 decimal(13,2) DEFAULT NULL,
+	col108 decimal(13,2) DEFAULT NULL,
+	col109 decimal(13,2) DEFAULT NULL,
+	PRIMARY KEY (col5,col3,col6,col2) /*T![clustered_index] CLUSTERED */,
+	KEY col99_col105_idx (col99,col91,col105),
+	KEY idx_1 (col9,col3),
+	KEY idx_2 (col2,col3)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`
 
-const createLogTableSQL = `CREATE TABLE acct_interest_log_hist (
-  id bigint(20) NOT NULL,
-  local_id bigint(20) NOT NULL,
-  create_date date NOT NULL,
-  part_no int(11) NOT NULL DEFAULT '0',
-  crcd_acct_no varchar(16) NOT NULL DEFAULT '',
-  acct_seq_no varchar(3) NOT NULL DEFAULT '',
-  acct_ccy varchar(3) NOT NULL DEFAULT '',
-  crcd_org_no varchar(3) NOT NULL DEFAULT '',
-  crcd_cardholder_no varchar(16) NOT NULL DEFAULT '',
-  trx_sub_acct_no bigint(20) NOT NULL DEFAULT '0',
-  trx_type varchar(4) NOT NULL DEFAULT '',
-  intr_acc_cut_off_date date DEFAULT NULL,
-  this_times_acc_bal decimal(13,2) NOT NULL DEFAULT '0.00',
-  acc_intr_acr_days int(11) NOT NULL DEFAULT '0',
-  cur_intr_rate decimal(8,7) NOT NULL DEFAULT '0.0000000',
-  pt_id varchar(6) NOT NULL DEFAULT '',
-  upd_prev_acc_fin_chg decimal(13,6) NOT NULL DEFAULT '0.000000',
-  upd_after_acc_fin_chg decimal(13,6) NOT NULL DEFAULT '0.000000',
-  carry_intr_day date DEFAULT NULL,
-  perdiem decimal(13,6) NOT NULL DEFAULT '0.000000',
-  trx_sub_acct_type varchar(6) NOT NULL DEFAULT '',
-  stmt_date date DEFAULT NULL,
-  global_trx_jrn_no varchar(37) DEFAULT NULL,
-  src_cnsmr_sys_id varchar(4) DEFAULT NULL,
-  local_sys_jrn_no varchar(32) DEFAULT NULL,
-  biz_date date NOT NULL,
-  trx_date date DEFAULT NULL,
-  trx_time time DEFAULT NULL,
-  biz_scene_encod varchar(10) NOT NULL DEFAULT '',
-  data_pos varchar(10) NOT NULL DEFAULT '',
-  create_tlr_no varchar(32) NOT NULL DEFAULT '',
-  upd_tlr_no varchar(32) NOT NULL DEFAULT '',
-  create_tlr_org_no varchar(10) NOT NULL DEFAULT '',
-  upd_tlr_org_no varchar(10) NOT NULL DEFAULT '',
-  biz_upd_ts datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-  ver_no int(11) NOT NULL DEFAULT '0',
-  create_ts datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-  upd_ts datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-  fund_type varchar(4) NOT NULL DEFAULT '',
-  migr_flag varchar(1) NOT NULL DEFAULT '0',
-  bal_sts varchar(1) NOT NULL DEFAULT '',
-  once_waive_intr_flag varchar(1) NOT NULL DEFAULT '',
-  binlog_insert_ts datetime(6) NOT NULL DEFAULT '1900-01-01 00:00:00.000000',
-  del_flag varchar(1) NOT NULL DEFAULT 'N',
-  data_version varchar(256) DEFAULT NULL,
-  PRIMARY KEY (crcd_acct_no,create_date,id) /*T![clustered_index] NONCLUSTERED */,
-  KEY acct_interest_log_hist_idx_1 (crcd_acct_no,stmt_date,id),
-  KEY upd_ts_del_flag_idx (upd_ts,data_pos,del_flag)
+const createLogTableSQL = `CREATE TABLE log (
+  col110 bigint(20) NOT NULL,
+  col_1 bigint(20) NOT NULL,
+  col111 date NOT NULL,
+  col4 int(11) NOT NULL DEFAULT '0',
+  col5 varchar(16) NOT NULL DEFAULT '',
+  col6 varchar(3) NOT NULL DEFAULT '',
+  col7 varchar(3) NOT NULL DEFAULT '',
+  col8 varchar(3) NOT NULL DEFAULT '',
+  col9 varchar(16) NOT NULL DEFAULT '',
+  col112 bigint(20) NOT NULL DEFAULT '0',
+  col113 varchar(4) NOT NULL DEFAULT '',
+  col114 date DEFAULT NULL,
+  col115 decimal(13,2) NOT NULL DEFAULT '0.00',
+  col116 int(11) NOT NULL DEFAULT '0',
+  col117 decimal(8,7) NOT NULL DEFAULT '0.0000000',
+  col118 varchar(6) NOT NULL DEFAULT '',
+  col119 decimal(13,6) NOT NULL DEFAULT '0.000000',
+  col120 decimal(13,6) NOT NULL DEFAULT '0.000000',
+  col121 date DEFAULT NULL,
+  col122 decimal(13,6) NOT NULL DEFAULT '0.000000',
+  col123 varchar(6) NOT NULL DEFAULT '',
+  col3 date DEFAULT NULL,
+  col84 varchar(37) DEFAULT NULL,
+  col85 varchar(4) DEFAULT NULL,
+  col86 varchar(32) DEFAULT NULL,
+  col87 date NOT NULL,
+  col88 date DEFAULT NULL,
+  col89 time DEFAULT NULL,
+  col90 varchar(10) NOT NULL DEFAULT '',
+  col91 varchar(10) NOT NULL DEFAULT '',
+  col92 varchar(32) NOT NULL DEFAULT '',
+  col93 varchar(32) NOT NULL DEFAULT '',
+  col94 varchar(10) NOT NULL DEFAULT '',
+  col95 varchar(10) NOT NULL DEFAULT '',
+  col96 datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  col97 int(11) NOT NULL DEFAULT '0',
+  col98 datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  col99 datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  col124 varchar(4) NOT NULL DEFAULT '',
+  col102 varchar(1) NOT NULL DEFAULT '0',
+  col125 varchar(1) NOT NULL DEFAULT '',
+  col126 varchar(1) NOT NULL DEFAULT '',
+  col104 datetime(6) NOT NULL DEFAULT '1900-01-01 00:00:00.000000',
+  col105 varchar(1) NOT NULL DEFAULT 'N',
+  col106 varchar(256) DEFAULT NULL,
+  PRIMARY KEY (col5,col111,col110) /*T![clustered_index] NONCLUSTERED */,
+  KEY idx_1 (col5,col3,id),
+  KEY idx_2 (col99,col91,col105)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin /*T! SHARD_ROW_ID_BITS=9 PRE_SPLIT_REGIONS=9 */`
 
 type Bank2Workload struct {
@@ -195,7 +195,7 @@ type Bank2Workload struct {
 
 func NewBank2Workload() Workload {
 	var builder strings.Builder
-	builder.WriteString("insert into acct_statement_head_info (crcd_acct_no , stmt_date , acct_seq_no , stmt_head_id ,bp_rtl_intr_amt , late_chg_coll_date , delq_total_amt , prev_dir_to_cust_rtl_prin , acct_branch_no , create_ts , agent_bank_no , stmt_cycle_days , cash_adv_days_with_bal , acct_avail_rtl_limit , avail_cash_adv_limit , dispute_trx_count , rtl_intr_rate , only_stmt_head_record_flag , total_amt_due , upd_tlr_org_no , cash_adv_pymt_amt , acct_cur_block_code , stmt_mail_flag , local_id , debit_cr_out_of_bal_flag , binlog_insert_ts , acct_prev_block_code , src_cnsmr_sys_id , part_no , dd_flag , migr_flag , acct_ccy , rtl_debit_trx_count , intr_amt , stmt_cash_bal , write_off_sts_flag , prev_stmt_rmn_intr , create_tlr_org_no , upd_ts , debit_trx_amt , cash_adv_intr_amt , acc_rtl_bal , acct_rtl_limit , cash_adv_begin_bal , biz_date , late_chg , rtl_serv_chg , stmt_type , cash_bal_1_cur_intr_rate , begin_bal , cur_stmt_bal , rtl_days_with_bal , cash_adv_debit_trx_amt , cash_adv_amt , repay_expire_date , rtl_cr_trx_count , biz_scene_encod , rtl_dispute_amt , last_term_stmt_forbid_instalt_prin_amt , cash_adv_limit , monthly_pymt , rtl_trx_fee_amt , data_version , rtl_mis_fee , dispute_bal , ctd_cash_adv_pymt_rvsl , data_pos , rtl_debit_trx_amt , stmt_rtl_bal , last_term_spec_whls_csm_prin , del_flag , acct_chg_off_sts , cash_adv_debit_trx_count , bp_cash_adv_intr_amt , rtl_pymt_amt , trx_date , cur_pymt_amt , local_sys_jrn_no , prev_stmt_head_id , cash_adv_dispute_amt , rtl_pymt_rvsl_amt , cash_adv_cr_trx_amt , crcd_stmt_no , trx_count , global_trx_jrn_no , cash_adv_trx_fee_amt , cash_adv_serv_chg , overlimit_acctt_amt , crcd_cardholder_no ,  begin_rtl_bal , prev_rtl_prin , rtl_annual_fee , acct_bank_no , acct_sts , cr_trx_amt , crcd_org_no , rtl_intr_amt , rtl_cr_trx_amt , cycle_due , biz_upd_ts , prev_stmt_date , grace_date , trx_time , ctd_stmt_stat_cycle , cash_adv_cr_trx_count , upd_tlr_no , ver_no , create_tlr_no , acc_cash_bal ) values ")
+	builder.WriteString("insert into info (col5 , col3 , col6 , col2 ,col35 , col12 , col16 , col107 , col101 , col98 , col73 , col27 , col59 , col26 , col72 , col23 , col81 , col34 , col14 , col95 , col60 , col38 , col33 , col_1 , col31 , col104 , col32 , col85 , col4 , col74 , col102 , col7 , col47 , col29 , col69 , col76 , col75 , col94 , col99 , col20 , col68 , col42 , col25 , col57 , col87 , col82 , col50 , col30 , col83 , col19 , col78 , col43 , col62 , col28 , col11 , col49 , col90 , col56 , col109 , col71 , col15 , col51 , col106 , col53 , col22 , col61 , col91 , col46 , col55 , col108 , col105 , col103 , col63 , col36 , col44 , col88 , col18 , col86 , col10 , col70 , col45 , col64 , col24 , col40 , col84 , col67 , col66 , col17 , col9 ,  col41 , col77 , col54 , col100 , col37 , col21 , col8 , col52 , col48 , col39 , col96 , col80 , col13 , col89 , col79 , col65 , col93 , col97 , col92 , col58 ) values ")
 	for r := 0; r < 200; r++ {
 		if r != 0 {
 			builder.WriteString(",")
@@ -206,7 +206,7 @@ func NewBank2Workload() Workload {
 
 	builder.Reset()
 
-	builder.WriteString("insert into acct_interest_log_hist (crcd_acct_no , create_date , id , global_trx_jrn_no , perdiem , trx_sub_acct_no , carry_intr_day , fund_type , data_version , bal_sts , create_ts , this_times_acc_bal , acc_intr_acr_days , intr_acc_cut_off_date , crcd_cardholder_no , create_tlr_org_no , upd_ts , pt_id , upd_tlr_org_no , data_pos , trx_type , biz_date , del_flag , upd_prev_acc_fin_chg , local_id , binlog_insert_ts , crcd_org_no , stmt_date , trx_date , biz_upd_ts , cur_intr_rate ,  local_sys_jrn_no , src_cnsmr_sys_id , part_no , acct_seq_no , once_waive_intr_flag , migr_flag , trx_time , acct_ccy , upd_after_acc_fin_chg , upd_tlr_no , biz_scene_encod , ver_no , create_tlr_no , trx_sub_acct_type ) values ")
+	builder.WriteString("insert into log (col5 , col111 , id , col84 , col122 , col112 , col121 , col124 , col106 , col125 , col98 , col115 , col116 , col114 , col9 , col94 , col99 , col118 , col95 , col91 , col113 , col87 , col105 , col119 , col_1 , col104 , col8 , col3 , col88 , col96 , col117 ,  col86 , col85 , col4 , col6 , col126 , col102 , col89 , col7 , col120 , col93 , col90 , col97 , col92 , col123 ) values ")
 	for r := 0; r < 200; r++ {
 		if r != 0 {
 			builder.WriteString(",")
@@ -220,9 +220,9 @@ func NewBank2Workload() Workload {
 }
 func (c *Bank2Workload) BuildCreateTableStatement(n int) string {
 	switch n {
-	case 0: // acct_statement_head_info
+	case 0: // info
 		return createTableSQL
-	case 1: // acct_interest_log_hist
+	case 1: // log
 		return createLogTableSQL
 	default:
 		panic("unknown table")
@@ -256,7 +256,7 @@ var largeValuesPool = sync.Pool{
 
 func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (string, []interface{}) {
 	switch tableN {
-	case 0: // acct_statement_head_info
+	case 0: // info
 		nonPrimaryKeyValues := generateNonPrimaryValuesForTable() // to reduce time, these field we keep same for
 		sql := c.infoTableInsertSQL
 		rand.Seed(time.Now().UnixNano())
@@ -270,7 +270,7 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (str
 		}
 
 		return sql, values
-	case 1: // acct_interest_log_hist
+	case 1: // log
 		sql := c.logTableInsertSQL
 		nonPrimaryKeyValues := generateNonPrimaryValuesForLogTable()
 		rand.Seed(time.Now().UnixNano())
@@ -295,13 +295,12 @@ func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []i
 	var sql string
 	values := make([]interface{}, 0, 120)
 	switch opts.Table {
-	case 0: // acct_statement_head_info
-		sql = "insert into acct_statement_head_info (crcd_acct_no , stmt_date , acct_seq_no , stmt_head_id ,bp_rtl_intr_amt , late_chg_coll_date , delq_total_amt , prev_dir_to_cust_rtl_prin , acct_branch_no , create_ts , agent_bank_no , stmt_cycle_days , cash_adv_days_with_bal , acct_avail_rtl_limit , avail_cash_adv_limit , dispute_trx_count , rtl_intr_rate , only_stmt_head_record_flag , total_amt_due , upd_tlr_org_no , cash_adv_pymt_amt , acct_cur_block_code , stmt_mail_flag , local_id , debit_cr_out_of_bal_flag , binlog_insert_ts , acct_prev_block_code , src_cnsmr_sys_id , part_no , dd_flag , migr_flag , acct_ccy , rtl_debit_trx_count , intr_amt , stmt_cash_bal , write_off_sts_flag , prev_stmt_rmn_intr , create_tlr_org_no , upd_ts , debit_trx_amt , cash_adv_intr_amt , acc_rtl_bal , acct_rtl_limit , cash_adv_begin_bal , biz_date , late_chg , rtl_serv_chg , stmt_type , cash_bal_1_cur_intr_rate , begin_bal , cur_stmt_bal , rtl_days_with_bal , cash_adv_debit_trx_amt , cash_adv_amt , repay_expire_date , rtl_cr_trx_count , biz_scene_encod , rtl_dispute_amt , last_term_stmt_forbid_instalt_prin_amt , cash_adv_limit , monthly_pymt , rtl_trx_fee_amt , data_version , rtl_mis_fee , dispute_bal , ctd_cash_adv_pymt_rvsl , data_pos , rtl_debit_trx_amt , stmt_rtl_bal , last_term_spec_whls_csm_prin , del_flag , acct_chg_off_sts , cash_adv_debit_trx_count , bp_cash_adv_intr_amt , rtl_pymt_amt , trx_date , cur_pymt_amt , local_sys_jrn_no , prev_stmt_head_id , cash_adv_dispute_amt , rtl_pymt_rvsl_amt , cash_adv_cr_trx_amt , crcd_stmt_no , trx_count , global_trx_jrn_no , cash_adv_trx_fee_amt , cash_adv_serv_chg , overlimit_acctt_amt , crcd_cardholder_no ,  begin_rtl_bal , prev_rtl_prin , rtl_annual_fee , acct_bank_no , acct_sts , cr_trx_amt , crcd_org_no , rtl_intr_amt , rtl_cr_trx_amt , cycle_due , biz_upd_ts , prev_stmt_date , grace_date , trx_time , ctd_stmt_stat_cycle , cash_adv_cr_trx_count , upd_tlr_no , ver_no , create_tlr_no , acc_cash_bal ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE crcd_acct_no=VALUES(crcd_acct_no), stmt_date=VALUES(stmt_date), acct_seq_no=VALUES(acct_seq_no), stmt_head_id=VALUES(stmt_head_id)"
-		// values = append(values, generateValuesForTable()...)
+	case 0: // info
+		sql = "insert into info (col5 , col3 , col6 , col2 ,col35 , col12 , col16 , col107 , col101 , col98 , col73 , col27 , col59 , col26 , col72 , col23 , col81 , col34 , col14 , col95 , col60 , col38 , col33 , col_1 , col31 , col104 , col32 , col85 , col4 , col74 , col102 , col7 , col47 , col29 , col69 , col76 , col75 , col94 , col99 , col20 , col68 , col42 , col25 , col57 , col87 , col82 , col50 , col30 , col83 , col19 , col78 , col43 , col62 , col28 , col11 , col49 , col90 , col56 , col109 , col71 , col15 , col51 , col106 , col53 , col22 , col61 , col91 , col46 , col55 , col108 , col105 , col103 , col63 , col36 , col44 , col88 , col18 , col86 , col10 , col70 , col45 , col64 , col24 , col40 , col84 , col67 , col66 , col17 , col9 ,  col41 , col77 , col54 , col100 , col37 , col21 , col8 , col52 , col48 , col39 , col96 , col80 , col13 , col89 , col79 , col65 , col93 , col97 , col92 , col58 ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE col5=VALUES(col5), col3=VALUES(col3), col6=VALUES(col6), col2=VALUES(col2)"
 		values = append(values, generatePrimaryValuesForTable()...)
 		values = append(values, generateNonPrimaryValuesForTable()...)
-	case 1: // acct_interest_log_hist
-		sql = "insert into acct_interest_log_hist (crcd_acct_no , create_date , id , global_trx_jrn_no , perdiem , trx_sub_acct_no , carry_intr_day , fund_type , data_version , bal_sts , create_ts , this_times_acc_bal , acc_intr_acr_days , intr_acc_cut_off_date , crcd_cardholder_no , create_tlr_org_no , upd_ts , pt_id , upd_tlr_org_no , data_pos , trx_type , biz_date , del_flag , upd_prev_acc_fin_chg , local_id , binlog_insert_ts , crcd_org_no , stmt_date , trx_date , biz_upd_ts , cur_intr_rate , local_sys_jrn_no , src_cnsmr_sys_id , part_no , acct_seq_no , once_waive_intr_flag , migr_flag , trx_time , acct_ccy , upd_after_acc_fin_chg , upd_tlr_no , biz_scene_encod , ver_no , create_tlr_no , trx_sub_acct_type ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE crcd_acct_no=VALUES(crcd_acct_no), create_date=VALUES(create_date), id=VALUES(id)"
+	case 1: // log
+		sql = "insert into log (col5 , col111 , id , col84 , col122 , col112 , col121 , col124 , col106 , col125 , col98 , col115 , col116 , col114 , col9 , col94 , col99 , col118 , col95 , col91 , col113 , col87 , col105 , col119 , col_1 , col104 , col8 , col3 , col88 , col96 , col117 , col86 , col85 , col4 , col6 , col126 , col102 , col89 , col7 , col120 , col93 , col90 , col97 , col92 , col123 ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE col5=VALUES(col5), col111=VALUES(col111), id=VALUES(id)"
 		values = append(values, generatePrimaryValuesForLogTable()...)
 		values = append(values, generateNonPrimaryValuesForLogTable()...)
 	default:
@@ -312,111 +311,111 @@ func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []i
 
 func generateNonPrimaryValuesForTable() []interface{} {
 	values := make([]interface{}, 0, 104)
-	values = append(values, randomDecimal(13, 2)) // bp_rtl_intr_amt
-	values = append(values, randomDate())         // late_chg_coll_date
-	values = append(values, randomDecimal(13, 2)) // delq_total_amt
-	values = append(values, randomDecimal(13, 2)) // prev_dir_to_cust_rtl_prin
-	values = append(values, randomString(5))      // acct_branch_no
-	values = append(values, randomDatetime(6))    // create_ts
-	values = append(values, randomInt())          // agent_bank_no
-	values = append(values, randomInt())          // stmt_cycle_days
-	values = append(values, randomInt())          // cash_adv_days_with_bal
-	values = append(values, randomDecimal(13, 2)) //acct_avail_rtl_limit
-	values = append(values, randomDecimal(13, 2)) // avail_cash_adv_limit
-	values = append(values, randomInt())          // dispute_trx_count
-	values = append(values, randomDecimal(8, 7))  // rtl_intr_rate
-	values = append(values, randomString(1))      // only_stmt_head_record_flag
-	values = append(values, randomDecimal(13, 2)) // total_amt_due
-	values = append(values, randomString(10))     // upd_tlr_org_no
-	values = append(values, randomDecimal(13, 2)) // cash_adv_pymt_amt
-	values = append(values, randomString(3))      // acct_cur_block_code
-	values = append(values, randomString(1))      // stmt_mail_flag
-	values = append(values, randomBigInt())       // local_id
-	values = append(values, randomString(1))      // debit_cr_out_of_bal_flag
-	values = append(values, randomDatetime(6))    // binlog_insert_ts
-	values = append(values, randomString(3))      // acct_prev_block_code
-	values = append(values, randomString(4))      // src_cnsmr_sys_id
-	values = append(values, randomInt())          // part_no)
-	values = append(values, randomString(1))      // dd_flag
-	values = append(values, randomString(1))      // migr_flag
-	values = append(values, randomString(3))      // acct_ccy
-	values = append(values, randomInt())          // rtl_debit_trx_count
-	values = append(values, randomDecimal(13, 2)) // intr_amt
-	values = append(values, randomDecimal(13, 2)) // stmt_cash_bal
-	values = append(values, randomString(1))      // write_off_sts_flag
-	values = append(values, randomDecimal(13, 2)) // prev_stmt_rmn_intr
-	values = append(values, randomString(10))     // create_tlr_org_no
-	values = append(values, randomDatetime(6))    // upd_ts
-	values = append(values, randomDecimal(13, 2)) // debit_trx_amt
-	values = append(values, randomDecimal(13, 2)) // cash_adv_intr_amt
-	values = append(values, randomDecimal(13, 2)) // acc_rtl_bal
-	values = append(values, randomDecimal(13, 0)) // acct_rtl_limit
-	values = append(values, randomDecimal(13, 2)) // cash_adv_begin_bal
-	values = append(values, randomDate())         // biz_date
-	values = append(values, randomDecimal(13, 2)) // late_chg
-	values = append(values, randomDecimal(13, 2)) // rtl_serv_chg
-	values = append(values, randomString(1))      // stmt_type
-	values = append(values, randomDecimal(8, 7))  // cash_bal_1_cur_intr_rate
-	values = append(values, randomDecimal(13, 2)) // begin_bal
-	values = append(values, randomDecimal(13, 2)) // cur_stmt_bal
-	values = append(values, randomSmallInt())     // rtl_days_with_bal
-	values = append(values, randomDecimal(13, 2)) // cash_adv_debit_trx_amt
-	values = append(values, randomDecimal(13, 2)) // cash_adv_amt
-	values = append(values, randomDate())         // repay_expire_date
-	values = append(values, randomInt())          // rtl_cr_trx_count
-	values = append(values, randomString(10))     // biz_scene_encod
-	values = append(values, randomDecimal(13, 2)) // rtl_dispute_amt
-	values = append(values, randomDecimal(13, 2)) // last_term_stmt_forbid_instalt_prin_amt
-	values = append(values, randomDecimal(13, 2)) // cash_adv_limit
-	values = append(values, randomDecimal(13, 2)) // monthly_pymt
-	values = append(values, randomDecimal(13, 2)) // rtl_trx_fee_amt
-	values = append(values, randomString(256))    // data_version
-	values = append(values, randomDecimal(13, 2)) // rtl_mis_fee
-	values = append(values, randomDecimal(13, 2)) // dispute_bal
-	values = append(values, randomDecimal(13, 2)) // ctd_cash_adv_pymt_rvsl
-	values = append(values, randomString(10))     // data_pos
-	values = append(values, randomDecimal(13, 2)) // rtl_debit_trx_amt
-	values = append(values, randomDecimal(13, 2)) // stmt_rtl_bal
-	values = append(values, randomDecimal(13, 2)) // last_term_spec_whls_csm_prin
-	values = append(values, randomString(1))      // del_flag
-	values = append(values, randomString(1))      // acct_chg_off_sts
-	values = append(values, randomInt())          // cash_adv_debit_trx_count
-	values = append(values, randomDecimal(13, 2)) // bp_cash_adv_intr_amt
-	values = append(values, randomDecimal(13, 2)) // rtl_pymt_amt
-	values = append(values, randomDate())         // trx_date
-	values = append(values, randomDecimal(13, 2)) // cur_pymt_amt
-	values = append(values, randomString(32))     // local_sys_jrn_no
-	values = append(values, randomBigInt())       // prev_stmt_head_id
-	values = append(values, randomDecimal(13, 2)) // cash_adv_dispute_amt
-	values = append(values, randomDecimal(13, 2)) // rtl_pymt_rvsl_amt
-	values = append(values, randomDecimal(13, 2)) // cash_adv_cr_trx_amt
-	values = append(values, randomSmallInt())     // crcd_stmt_no
-	values = append(values, randomInt())          // trx_count
-	values = append(values, randomString(37))     // global_trx_jrn_no
-	values = append(values, randomDecimal(13, 2)) // cash_adv_trx_fee_amt
-	values = append(values, randomDecimal(13, 2)) // cash_adv_serv_chg
-	values = append(values, randomDecimal(13, 2)) // overlimit_acctt_amt
-	values = append(values, randomString(16))     // crcd_cardholder_no
-	values = append(values, randomDecimal(13, 2)) // begin_rtl_bal
-	values = append(values, randomDecimal(13, 2)) // prev_rtl_prin
-	values = append(values, randomDecimal(13, 2)) // rtl_annual_fee
-	values = append(values, randomString(4))      // acct_bank_no
-	values = append(values, randomString(1))      // acct_sts
-	values = append(values, randomDecimal(13, 2)) // cr_trx_amt
-	values = append(values, randomString(3))      // crcd_org_no
-	values = append(values, randomDecimal(13, 2)) // rtl_intr_amt
-	values = append(values, randomDecimal(13, 2)) // rtl_cr_trx_amt
-	values = append(values, randomInt())          // cycle_due
-	values = append(values, randomDatetime(6))    // biz_upd_ts
-	values = append(values, randomDate())         // prev_stmt_date
-	values = append(values, randomDate())         // grace_date
-	values = append(values, randomTime())         // trx_time
-	values = append(values, randomInt())          // ctd_stmt_stat_cycle
-	values = append(values, randomInt())          // cash_adv_cr_trx_count
-	values = append(values, randomString(32))     // upd_tlr_no
-	values = append(values, randomInt())          // ver_no
-	values = append(values, randomString(32))     // create_tlr_no
-	values = append(values, randomDecimal(13, 2)) // acc_cash_bal
+	values = append(values, randomDecimal(13, 2)) // col35
+	values = append(values, randomDate())         // col12
+	values = append(values, randomDecimal(13, 2)) // col16
+	values = append(values, randomDecimal(13, 2)) // col107
+	values = append(values, randomString(5))      // col101
+	values = append(values, randomDatetime(6))    // col98
+	values = append(values, randomInt())          // col73
+	values = append(values, randomInt())          // col27
+	values = append(values, randomInt())          // col59
+	values = append(values, randomDecimal(13, 2)) //col26
+	values = append(values, randomDecimal(13, 2)) // col72
+	values = append(values, randomInt())          // col23
+	values = append(values, randomDecimal(8, 7))  // col81
+	values = append(values, randomString(1))      // col34
+	values = append(values, randomDecimal(13, 2)) // col14
+	values = append(values, randomString(10))     // col95
+	values = append(values, randomDecimal(13, 2)) // col60
+	values = append(values, randomString(3))      // col38
+	values = append(values, randomString(1))      // col33
+	values = append(values, randomBigInt())       // col_1
+	values = append(values, randomString(1))      // col31
+	values = append(values, randomDatetime(6))    // col104
+	values = append(values, randomString(3))      // col32
+	values = append(values, randomString(4))      // col85
+	values = append(values, randomInt())          // col4)
+	values = append(values, randomString(1))      // col74
+	values = append(values, randomString(1))      // col102
+	values = append(values, randomString(3))      // col7
+	values = append(values, randomInt())          // col47
+	values = append(values, randomDecimal(13, 2)) // col29
+	values = append(values, randomDecimal(13, 2)) // col69
+	values = append(values, randomString(1))      // col76
+	values = append(values, randomDecimal(13, 2)) // col75
+	values = append(values, randomString(10))     // col94
+	values = append(values, randomDatetime(6))    // col99
+	values = append(values, randomDecimal(13, 2)) // col20
+	values = append(values, randomDecimal(13, 2)) // col68
+	values = append(values, randomDecimal(13, 2)) // col42
+	values = append(values, randomDecimal(13, 0)) // col25
+	values = append(values, randomDecimal(13, 2)) // col57
+	values = append(values, randomDate())         // col87
+	values = append(values, randomDecimal(13, 2)) // col82
+	values = append(values, randomDecimal(13, 2)) // col50
+	values = append(values, randomString(1))      // col30
+	values = append(values, randomDecimal(8, 7))  // col83
+	values = append(values, randomDecimal(13, 2)) // col19
+	values = append(values, randomDecimal(13, 2)) // col78
+	values = append(values, randomSmallInt())     // col43
+	values = append(values, randomDecimal(13, 2)) // col62
+	values = append(values, randomDecimal(13, 2)) // col28
+	values = append(values, randomDate())         // col11
+	values = append(values, randomInt())          // col49
+	values = append(values, randomString(10))     // col90
+	values = append(values, randomDecimal(13, 2)) // col56
+	values = append(values, randomDecimal(13, 2)) // col109
+	values = append(values, randomDecimal(13, 2)) // col71
+	values = append(values, randomDecimal(13, 2)) // col15
+	values = append(values, randomDecimal(13, 2)) // col51
+	values = append(values, randomString(256))    // col106
+	values = append(values, randomDecimal(13, 2)) // col53
+	values = append(values, randomDecimal(13, 2)) // col22
+	values = append(values, randomDecimal(13, 2)) // col61
+	values = append(values, randomString(10))     // col91
+	values = append(values, randomDecimal(13, 2)) // col46
+	values = append(values, randomDecimal(13, 2)) // col55
+	values = append(values, randomDecimal(13, 2)) // col108
+	values = append(values, randomString(1))      // col105
+	values = append(values, randomString(1))      // col103
+	values = append(values, randomInt())          // col63
+	values = append(values, randomDecimal(13, 2)) // col36
+	values = append(values, randomDecimal(13, 2)) // col44
+	values = append(values, randomDate())         // col88
+	values = append(values, randomDecimal(13, 2)) // col18
+	values = append(values, randomString(32))     // col86
+	values = append(values, randomBigInt())       // col10
+	values = append(values, randomDecimal(13, 2)) // col70
+	values = append(values, randomDecimal(13, 2)) // col45
+	values = append(values, randomDecimal(13, 2)) // col64
+	values = append(values, randomSmallInt())     // col24
+	values = append(values, randomInt())          // col40
+	values = append(values, randomString(37))     // col84
+	values = append(values, randomDecimal(13, 2)) // col67
+	values = append(values, randomDecimal(13, 2)) // col66
+	values = append(values, randomDecimal(13, 2)) // col17
+	values = append(values, randomString(16))     // col9
+	values = append(values, randomDecimal(13, 2)) // col41
+	values = append(values, randomDecimal(13, 2)) // col77
+	values = append(values, randomDecimal(13, 2)) // col54
+	values = append(values, randomString(4))      // col100
+	values = append(values, randomString(1))      // col37
+	values = append(values, randomDecimal(13, 2)) // col21
+	values = append(values, randomString(3))      // col8
+	values = append(values, randomDecimal(13, 2)) // col52
+	values = append(values, randomDecimal(13, 2)) // col48
+	values = append(values, randomInt())          // col39
+	values = append(values, randomDatetime(6))    // col96
+	values = append(values, randomDate())         // col80
+	values = append(values, randomDate())         // col13
+	values = append(values, randomTime())         // col89
+	values = append(values, randomInt())          // col79
+	values = append(values, randomInt())          // col65
+	values = append(values, randomString(32))     // col93
+	values = append(values, randomInt())          // col97
+	values = append(values, randomString(32))     // col92
+	values = append(values, randomDecimal(13, 2)) // col58
 
 	return values
 }
@@ -425,66 +424,65 @@ func generatePrimaryValuesForTable() []interface{} {
 	values := valuesPool.Get().([]interface{})
 	defer valuesPool.Put(values[:0])
 
-	values = append(values, randomString(16)) // crcd_acct_no
-	values = append(values, randomDate())     // stmt_date
-	values = append(values, randomString(3))  // acct_seq_no
-	values = append(values, randomBigInt())   // stmt_head_id
+	values = append(values, randomString(16)) // col5
+	values = append(values, randomDate())     // col3
+	values = append(values, randomString(3))  // col6
+	values = append(values, randomBigInt())   // col2
 	return values
 }
 
 func generatePrimaryValuesForLogTable() []interface{} {
 	values := make([]interface{}, 0, 3)
-	values = append(values, randomString(16)) // crcd_acct_no
-	values = append(values, randomDate())     // create_date
+	values = append(values, randomString(16)) // col5
+	values = append(values, randomDate())     // col111
 	values = append(values, randomBigInt())   // id
 	return values
 }
 
 func generateNonPrimaryValuesForLogTable() []interface{} {
-	// `crcd_acct_no`,`create_date`,`id` is primary key
 	values := make([]interface{}, 0, 42)
-	values = append(values, randomString(37))     // global_trx_jrn_no
-	values = append(values, randomDecimal(13, 6)) // perdiem
-	values = append(values, randomBigInt())       // trx_sub_acct_no
-	values = append(values, randomDate())         // carry_intr_day
-	values = append(values, randomString(4))      // fund_type
-	values = append(values, randomString(256))    // data_version
-	values = append(values, randomString(1))      // bal_sts
-	values = append(values, randomDatetime(6))    // create_ts
-	values = append(values, randomDecimal(13, 2)) // this_times_acc_bal
-	values = append(values, randomInt())          // acc_intr_acr_days
-	values = append(values, randomDate())         // intr_acc_cut_off_date
-	values = append(values, randomString(16))     // crcd_cardholder_no
-	values = append(values, randomString(10))     // create_tlr_org_no
-	values = append(values, randomDatetime(6))    // upd_ts
-	values = append(values, randomString(6))      // pt_id
-	values = append(values, randomString(10))     // upd_tlr_org_no
-	values = append(values, randomString(10))     // data_pos
-	values = append(values, randomString(4))      // trx_type
-	values = append(values, randomDate())         // biz_date
-	values = append(values, randomString(1))      // del_flag
-	values = append(values, randomDecimal(13, 6)) // upd_prev_acc_fin_chg
-	values = append(values, randomBigInt())       // local_id
-	values = append(values, randomDatetime(6))    // binlog_insert_ts
-	values = append(values, randomString(3))      // crcd_org_no
-	values = append(values, randomDate())         // stmt_date
-	values = append(values, randomDate())         // trx_date
-	values = append(values, randomDatetime(6))    // biz_upd_ts
-	values = append(values, randomDecimal(8, 7))  // cur_intr_rate
-	values = append(values, randomString(32))     // local_sys_jrn_no
-	values = append(values, randomString(4))      // src_cnsmr_sys_id
-	values = append(values, randomInt())          // part_no
-	values = append(values, randomString(3))      // acct_seq_no
-	values = append(values, randomString(1))      // once_waive_intr_flag
-	values = append(values, randomString(1))      // migr_flag
-	values = append(values, randomTime())         // trx_time
-	values = append(values, randomString(3))      // acct_ccy
-	values = append(values, randomDecimal(13, 6)) // upd_after_acc_fin_chg
-	values = append(values, randomString(32))     // upd_tlr_no
-	values = append(values, randomString(10))     // biz_scene_encod
-	values = append(values, randomInt())          // ver_no
-	values = append(values, randomString(32))     // create_tlr_no
-	values = append(values, randomString(6))      // trx_sub_acct_type
+	values = append(values, randomString(37))     // col84
+	values = append(values, randomDecimal(13, 6)) // col122
+	values = append(values, randomBigInt())       // col112
+	values = append(values, randomDate())         // col121
+	values = append(values, randomString(4))      // col124
+	values = append(values, randomString(256))    // col106
+	values = append(values, randomString(1))      // col125
+	values = append(values, randomDatetime(6))    // col98
+	values = append(values, randomDecimal(13, 2)) // col115
+	values = append(values, randomInt())          // col116
+	values = append(values, randomDate())         // col114
+	values = append(values, randomString(16))     // col9
+	values = append(values, randomString(10))     // col94
+	values = append(values, randomDatetime(6))    // col99
+	values = append(values, randomString(6))      // col118
+	values = append(values, randomString(10))     // col95
+	values = append(values, randomString(10))     // col91
+	values = append(values, randomString(4))      // col113
+	values = append(values, randomDate())         // col87
+	values = append(values, randomString(1))      // col105
+	values = append(values, randomDecimal(13, 6)) // col119
+	values = append(values, randomBigInt())       // col_1
+	values = append(values, randomDatetime(6))    // col104
+	values = append(values, randomString(3))      // col8
+	values = append(values, randomDate())         // col3
+	values = append(values, randomDate())         // col88
+	values = append(values, randomDatetime(6))    // col96
+	values = append(values, randomDecimal(8, 7))  // col117
+	values = append(values, randomString(32))     // col86
+	values = append(values, randomString(4))      // col85
+	values = append(values, randomInt())          // col4
+	values = append(values, randomString(3))      // col6
+	values = append(values, randomString(1))      // col126
+	values = append(values, randomString(1))      // col102
+	values = append(values, randomTime())         // col89
+	values = append(values, randomString(3))      // col7
+	values = append(values, randomDecimal(13, 6)) // col120
+	values = append(values, randomString(32))     // col93
+	values = append(values, randomString(10))     // col90
+	values = append(values, randomInt())          // col97
+	values = append(values, randomString(32))     // col92
+	values = append(values, randomString(6))      // col123
 
 	return values
 }
