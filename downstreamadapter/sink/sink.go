@@ -29,7 +29,7 @@ type Sink interface {
 	SinkType() common.SinkType
 	IsNormal() bool
 
-	AddDMLEvent(event *commonEvent.DMLEvent)
+	AddDMLEvent(event *commonEvent.DMLEvent) error
 	WriteBlockEvent(event commonEvent.BlockEvent) error
 	PassBlockEvent(event commonEvent.BlockEvent)
 	AddCheckpointTs(ts uint64)
@@ -47,9 +47,13 @@ func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID 
 	scheme := sink.GetScheme(sinkURI)
 	switch scheme {
 	case sink.MySQLScheme, sink.MySQLSSLScheme, sink.TiDBScheme, sink.TiDBSSLScheme:
-		return newMySQLSink(ctx, changefeedID, 16, config, sinkURI)
+		return newMySQLSink(ctx, changefeedID, config, sinkURI)
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
 		return newKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+	case sink.PulsarScheme, sink.PulsarSSLScheme, sink.PulsarHTTPScheme, sink.PulsarHTTPSScheme:
+		return newPulsarSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+	case sink.S3Scheme, sink.FileScheme, sink.GCSScheme, sink.GSScheme, sink.AzblobScheme, sink.AzureScheme, sink.CloudStorageNoopScheme:
+		return newCloudStorageSink(ctx, changefeedID, sinkURI, config.SinkConfig, nil)
 	case sink.BlackHoleScheme:
 		return newBlackHoleSink()
 	}
@@ -67,6 +71,10 @@ func VerifySink(ctx context.Context, config *config.ChangefeedConfig, changefeed
 		return verifyMySQLSink(ctx, sinkURI, config)
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
 		return verifyKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+	case sink.PulsarScheme, sink.PulsarSSLScheme, sink.PulsarHTTPScheme, sink.PulsarHTTPSScheme:
+		return verifyPulsarSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+	case sink.S3Scheme, sink.FileScheme, sink.GCSScheme, sink.GSScheme, sink.AzblobScheme, sink.AzureScheme, sink.CloudStorageNoopScheme:
+		return verifyCloudStorageSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.BlackHoleScheme:
 		return nil
 	}

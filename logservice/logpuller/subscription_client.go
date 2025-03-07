@@ -175,6 +175,10 @@ type SubscriptionClient struct {
 	lockResolver txnutil.LockResolver
 
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
+	// the following three fields are used to manage feedback from ds and notify other goroutines
+	mu     sync.Mutex
+	cond   *sync.Cond
+	paused atomic.Bool
 
 	// the credential to connect tikv
 	credential *security.Credential
@@ -226,8 +230,10 @@ func NewSubscriptionClient(
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
 	option := dynstream.NewOption()
+	// Note: it is max batch size of the kv sent from tikv(not committed rows)
 	option.BatchCount = 1024
-	option.UseBuffer = true
+	option.UseBuffer = false
+	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
 		func(subID SubscriptionID) uint64 { return uint64(subID) },
 		&regionEventHandler{subClient: subClient},
@@ -235,6 +241,7 @@ func NewSubscriptionClient(
 	)
 	ds.Start()
 	subClient.ds = ds
+	subClient.cond = sync.NewCond(&subClient.mu)
 
 	subClient.initMetrics()
 	return subClient
@@ -255,24 +262,36 @@ func (s *SubscriptionClient) initMetrics() {
 }
 
 func (s *SubscriptionClient) updateMetrics(ctx context.Context) error {
-	ticker1 := time.NewTicker(10 * time.Second)
-	ticker2 := time.NewTicker(5 * time.Millisecond)
-	defer ticker1.Stop()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker1.C:
+		case <-ticker.C:
 			resolvedTsLag := s.GetResolvedTsLag()
 			if resolvedTsLag > 0 {
 				metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
 			}
-		case <-ticker2.C:
 			dsMetrics := s.ds.GetMetrics()
 			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
-			metricEventStoreDSAddPathNum.Set(float64(dsMetrics.AddPath))
-			metricEventStoreDSRemovePathNum.Set(float64(dsMetrics.RemovePath))
+			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 1 {
+				log.Panic("subscription client should have only one area")
+			}
+			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 0 {
+				areaMetric := dsMetrics.MemoryControl.AreaMemoryMetrics[0]
+				metrics.DynamicStreamMemoryUsage.WithLabelValues(
+					"log-puller",
+					"max",
+					"default",
+				).Set(float64(areaMetric.MaxMemory()))
+				metrics.DynamicStreamMemoryUsage.WithLabelValues(
+					"log-puller",
+					"used",
+					"default",
+				).Set(float64(areaMetric.MemoryUsage()))
+			}
 		}
 	}
 }
@@ -308,7 +327,8 @@ func (s *SubscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	s.ds.AddPath(rt.subID, rt, dynstream.AreaSettings{})
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(4*1024*1024*1024, dynstream.MemoryControlAlgorithmV1) // 4GB
+	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt}
 }
@@ -335,6 +355,42 @@ func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
 	s.ds.Wake(subID)
 }
 
+func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
+	// fast path
+	if !s.paused.Load() {
+		s.ds.Push(subID, event)
+		return
+	}
+	// slow path: wait until paused is false
+	s.mu.Lock()
+	for s.paused.Load() {
+		s.cond.Wait()
+	}
+	s.mu.Unlock()
+	s.ds.Push(subID, event)
+}
+
+func (s *SubscriptionClient) handleDSFeedBack(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case feedback := <-s.ds.Feedback():
+			switch feedback.FeedbackType {
+			case dynstream.PauseArea:
+				s.paused.Store(true)
+				log.Info("subscription client pause push region event")
+			case dynstream.ResumeArea:
+				s.paused.Store(false)
+				s.cond.Broadcast()
+				log.Info("subscription client resume push region event")
+			case dynstream.PausePath, dynstream.ResumePath:
+				// Ignore it, because it is no need to pause and resume a path in puller.
+			}
+		}
+	}
+}
+
 // RegionCount returns subscribed region count for the span.
 func (s *SubscriptionClient) RegionCount(subID SubscriptionID) uint64 {
 	s.totalSpans.RLock()
@@ -356,6 +412,7 @@ func (s *SubscriptionClient) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error { return s.updateMetrics(ctx) })
+	g.Go(func() error { return s.handleDSFeedBack(ctx) })
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.handleRegions(ctx, g) })
 	g.Go(func() error { return s.handleErrors(ctx) })
@@ -712,6 +769,9 @@ func (s *SubscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo)
+		return nil
+	case *requestCancelledErr:
+		// the corresponding subscription has been unsubscribed, just ignore.
 		return nil
 	default:
 		// TODO(qupeng): for some errors it's better to just deregister the region from TiKVs.

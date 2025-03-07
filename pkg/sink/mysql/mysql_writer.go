@@ -21,10 +21,12 @@ import (
 
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	"go.uber.org/zap"
 )
 
 const (
@@ -61,6 +63,9 @@ type MysqlWriter struct {
 
 	statistics *metrics.Statistics
 	needFormat bool
+
+	// for dry-run mode
+	blockerTicker *time.Ticker
 }
 
 func NewMysqlWriter(
@@ -71,7 +76,7 @@ func NewMysqlWriter(
 	statistics *metrics.Statistics,
 	needFormatVectorType bool,
 ) *MysqlWriter {
-	return &MysqlWriter{
+	res := &MysqlWriter{
 		ctx:                    ctx,
 		db:                     db,
 		cfg:                    cfg,
@@ -86,6 +91,12 @@ func NewMysqlWriter(
 		statistics:             statistics,
 		needFormat:             needFormatVectorType,
 	}
+
+	if cfg.DryRun && cfg.DryRunBlockInterval > 0 {
+		res.blockerTicker = time.NewTicker(cfg.DryRunBlockInterval)
+	}
+
+	return res
 }
 
 func (w *MysqlWriter) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
@@ -93,6 +104,13 @@ func (w *MysqlWriter) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStor
 }
 
 func (w *MysqlWriter) FlushDDLEvent(event *commonEvent.DDLEvent) error {
+	if w.cfg.DryRun {
+		for _, callback := range event.PostTxnFlushed {
+			callback()
+		}
+		return nil
+	}
+
 	if w.cfg.IsTiDB {
 		// first we check whether there is some async ddl executed now.
 		w.waitAsyncDDLDone(event)
@@ -137,6 +155,13 @@ func (w *MysqlWriter) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 }
 
 func (w *MysqlWriter) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
+	if w.cfg.DryRun {
+		for _, callback := range event.PostTxnFlushed {
+			callback()
+		}
+		return nil
+	}
+
 	if !w.syncPointTableInit {
 		// create sync point table if not exist
 		err := w.createSyncTable()
@@ -190,19 +215,32 @@ func (w *MysqlWriter) Flush(events []*commonEvent.DMLEvent) error {
 			return errors.Trace(err)
 		}
 	} else {
+		w.tryDryRunBlock()
 		if err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
 			return dmls.rowCount, dmls.approximateSize, nil
 		}); err != nil {
 			return errors.Trace(err)
 		}
 	}
-
 	for _, event := range events {
 		for _, callback := range event.PostTxnFlushed {
 			callback()
 		}
 	}
 	return nil
+}
+
+func (w *MysqlWriter) tryDryRunBlock() {
+	time.Sleep(w.cfg.DryRunDelay)
+	if w.blockerTicker != nil {
+		select {
+		case <-w.blockerTicker.C:
+			log.Info("dry-run mode, blocker ticker triggered, block for a while",
+				zap.Duration("duration", w.cfg.DryRunBlockInterval))
+			time.Sleep(w.cfg.DryRunBlockInterval)
+		default:
+		}
+	}
 }
 
 func (w *MysqlWriter) Close() {

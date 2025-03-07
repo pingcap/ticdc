@@ -23,10 +23,10 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/sink"
 	"github.com/pingcap/tiflow/pkg/util"
-	"github.com/pingcap/tiflow/pkg/version"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
@@ -49,6 +49,30 @@ type ChangefeedConfig struct {
 	SyncPointInterval  time.Duration `json:"sync_point_interval" default:"1m"`
 	SyncPointRetention time.Duration `json:"sync_point_retention" default:"24h"`
 	SinkConfig         *SinkConfig   `json:"sink_config"`
+	// Epoch is the epoch of a changefeed, changes on every restart.
+	Epoch uint64 `json:"epoch"`
+}
+
+// String implements fmt.Stringer interface, but hide some sensitive information
+func (cfg *ChangefeedConfig) String() string {
+	cloned := new(ChangefeedConfig)
+	str, err := json.Marshal(cfg)
+	if err != nil {
+		log.Error("failed to marshal changefeed config", zap.Error(err))
+		return ""
+	}
+	err = json.Unmarshal(str, cloned)
+	if err != nil {
+		log.Error("failed to unmarshal changefeed config", zap.Error(err))
+		return ""
+	}
+	cloned.SinkConfig.MaskSensitiveData()
+	res, err := json.Marshal(cloned)
+	if err != nil {
+		log.Error("failed to marshal changefeed config", zap.Error(err))
+		return ""
+	}
+	return string(res)
 }
 
 // ChangeFeedInfo describes the detail of a ChangeFeed
@@ -94,7 +118,8 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		SyncPointInterval:  util.GetOrZero(info.Config.SyncPointInterval),
 		SyncPointRetention: util.GetOrZero(info.Config.SyncPointRetention),
 		MemoryQuota:        info.Config.MemoryQuota,
-		// other fields are not necessary for maintainer
+		Epoch:              info.Epoch,
+		// other fields are not necessary for dispatcherManager
 	}
 }
 

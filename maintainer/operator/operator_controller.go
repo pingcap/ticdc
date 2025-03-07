@@ -32,6 +32,13 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// emptyPollInterval is the interval to poll the operator from the queue when the queue is empty.
+	emptyPollInterval = time.Millisecond * 200
+	// nextPollInterval is the interval to poll the operator from the queue when the queue is not empty.
+	nextPollInterval = time.Millisecond * 50
+)
+
 var _ operator.Controller[common.DispatcherID, *heartbeatpb.TableSpanStatus] = &Controller{}
 
 // Controller is the operator controller, it manages all operators.
@@ -44,14 +51,16 @@ type Controller struct {
 	replicationDB *replica.ReplicationDB
 	nodeManager   *watcher.NodeManager
 
-	lock         sync.RWMutex // protect the following fields
+	mu           sync.RWMutex // protect the following fields
 	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 	runningQueue operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 }
 
 func NewOperatorController(
-	changefeedID common.ChangeFeedID, mc messaging.MessageCenter,
-	db *replica.ReplicationDB, nodeManager *watcher.NodeManager,
+	changefeedID common.ChangeFeedID,
+	mc messaging.MessageCenter,
+	db *replica.ReplicationDB,
+	nodeManager *watcher.NodeManager,
 	batchSize int,
 ) *Controller {
 	oc := &Controller{
@@ -67,34 +76,31 @@ func NewOperatorController(
 	return oc
 }
 
-// Execute periodically execute the operator
-// todo: use a better way to control the execution frequency
+// Execute poll the operator from the queue and execute it
+// It will be called in the thread pool.
 func (oc *Controller) Execute() time.Time {
-	executedItem := 0
+	executedCounter := 0
 	for {
-		r, next := oc.pollQueueingOperator()
+		op, next := oc.pollQueueingOperator()
 		if !next {
-			return time.Now().Add(time.Millisecond * 200)
+			return time.Now().Add(emptyPollInterval)
 		}
-		if r == nil {
+		if op == nil {
 			continue
 		}
 
-		// is the lock necessary?
-		oc.lock.RLock()
-		msg := r.Schedule()
-		oc.lock.RUnlock()
+		msg := op.Schedule()
 
 		if msg != nil {
 			_ = oc.messageCenter.SendCommand(msg)
 			log.Info("send command to dispatcher",
 				zap.String("role", oc.role),
 				zap.String("changefeed", oc.changefeedID.Name()),
-				zap.String("operator", r.String()))
+				zap.String("operator", op.String()))
 		}
-		executedItem++
-		if executedItem >= oc.batchSize {
-			return time.Now().Add(time.Millisecond * 50)
+		executedCounter++
+		if executedCounter >= oc.batchSize {
+			return time.Now().Add(nextPollInterval)
 		}
 	}
 }
@@ -102,38 +108,38 @@ func (oc *Controller) Execute() time.Time {
 // RemoveAllTasks remove all tasks, and notify all operators to stop.
 // it is only called by the barrier when the changefeed is stopped.
 func (oc *Controller) RemoveAllTasks() {
-	oc.lock.Lock()
-	defer oc.lock.Unlock()
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
 
-	for _, replicaSet := range oc.replicationDB.TryRemoveAll() {
-		oc.removeReplicaSet(NewRemoveDispatcherOperator(oc.replicationDB, replicaSet))
+	for _, replicaSet := range oc.replicationDB.RemoveAll() {
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet))
 	}
 }
 
 // RemoveTasksBySchemaID remove all tasks by schema id.
 // it is only by the barrier when the schema is dropped by ddl
 func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
-	oc.lock.Lock()
-	defer oc.lock.Unlock()
-	for _, replicaSet := range oc.replicationDB.TryRemoveBySchemaID(schemaID) {
-		oc.removeReplicaSet(NewRemoveDispatcherOperator(oc.replicationDB, replicaSet))
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	for _, replicaSet := range oc.replicationDB.RemoveBySchemaID(schemaID) {
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet))
 	}
 }
 
 // RemoveTasksByTableIDs remove all tasks by table ids.
 // it is only called by the barrier when the table is dropped by ddl
 func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
-	oc.lock.Lock()
-	defer oc.lock.Unlock()
-	for _, replicaSet := range oc.replicationDB.TryRemoveByTableIDs(tables...) {
-		oc.removeReplicaSet(NewRemoveDispatcherOperator(oc.replicationDB, replicaSet))
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	for _, replicaSet := range oc.replicationDB.RemoveByTableIDs(tables...) {
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.replicationDB, replicaSet))
 	}
 }
 
 // AddOperator adds an operator to the controller, if the operator already exists, return false.
 func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
-	oc.lock.Lock()
-	defer oc.lock.Unlock()
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
 
 	if _, ok := oc.operators[op.ID()]; ok {
 		log.Info("add operator failed, operator already exists",
@@ -155,8 +161,8 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 }
 
 func (oc *Controller) UpdateOperatorStatus(id common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus) {
-	oc.lock.RLock()
-	defer oc.lock.RUnlock()
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
 
 	op, ok := oc.operators[id]
 	if ok {
@@ -168,8 +174,8 @@ func (oc *Controller) UpdateOperatorStatus(id common.DispatcherID, from node.ID,
 // the controller will mark all spans on the node as absent if no operator is handling it,
 // then the controller will notify all operators.
 func (oc *Controller) OnNodeRemoved(n node.ID) {
-	oc.lock.RLock()
-	defer oc.lock.RUnlock()
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
 
 	for _, span := range oc.replicationDB.GetTaskByNodeID(n) {
 		_, ok := oc.operators[span.ID]
@@ -184,8 +190,8 @@ func (oc *Controller) OnNodeRemoved(n node.ID) {
 
 // GetOperator returns the operator by id.
 func (oc *Controller) GetOperator(id common.DispatcherID) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	oc.lock.RLock()
-	defer oc.lock.RUnlock()
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
 
 	if op, ok := oc.operators[id]; !ok {
 		return nil
@@ -196,22 +202,30 @@ func (oc *Controller) GetOperator(id common.DispatcherID) operator.Operator[comm
 
 // OperatorSize returns the number of operators in the controller.
 func (oc *Controller) OperatorSize() int {
-	oc.lock.RLock()
-	defer oc.lock.RUnlock()
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+	return len(oc.operators)
+}
+
+// OperatorSize returns the number of operators in the controller.
+func (oc *Controller) OperatorSizeWithLock() int {
 	return len(oc.operators)
 }
 
 // pollQueueingOperator returns the operator need to be executed,
 // "next" is true to indicate that it may exist in next attempt,
 // and false is the end for the poll.
-func (oc *Controller) pollQueueingOperator() (operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], bool) {
-	oc.lock.Lock()
-	defer oc.lock.Unlock()
+func (oc *Controller) pollQueueingOperator() (
+	operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+	bool,
+) {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
 	if oc.runningQueue.Len() == 0 {
 		return nil, false
 	}
 	item := heap.Pop(&oc.runningQueue).(*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus])
-	if item.Removed {
+	if item.IsRemoved {
 		return nil, true
 	}
 	op := item.OP
@@ -219,10 +233,10 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.Dispatche
 	// always call the PostFinish method to ensure the operator is cleaned up by itself.
 	if op.IsFinished() {
 		op.PostFinish()
-		item.Removed = true
+		item.IsRemoved = true
 		delete(oc.operators, opID)
 		metrics.FinishedOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Inc()
-		metrics.OperatorDuration.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Observe(time.Since(item.EnqueueTime).Seconds())
+		metrics.OperatorDuration.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
@@ -231,28 +245,26 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.Dispatche
 		return nil, true
 	}
 	now := time.Now()
-	if now.Before(item.Time) {
+	if now.Before(item.NotifyAt) {
 		heap.Push(&oc.runningQueue, item)
 		return nil, false
 	}
 	// pushes with new notify time.
-	item.Time = time.Now().Add(time.Millisecond * 500)
+	item.NotifyAt = time.Now().Add(time.Millisecond * 500)
 	heap.Push(&oc.runningQueue, item)
 	return op, true
 }
 
-// ReplicaSetRemoved if the replica set is removed,
-// the controller will remove the operator. add a new operator to the controller.
-func (oc *Controller) removeReplicaSet(op *RemoveDispatcherOperator) {
+func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 	if old, ok := oc.operators[op.ID()]; ok {
 		log.Info("replica set is removed , replace the old one",
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
-			zap.String("replicaset", old.OP.ID().String()),
+			zap.String("replicaSet", old.OP.ID().String()),
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
 		old.OP.PostFinish()
-		old.Removed = true
+		old.IsRemoved = true
 		delete(oc.operators, op.ID())
 	}
 	oc.pushOperator(op)
@@ -299,7 +311,7 @@ func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origi
 }
 
 func (oc *Controller) NewRemoveOperator(replicaSet *replica.SpanReplication) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return &RemoveDispatcherOperator{
+	return &removeDispatcherOperator{
 		replicaSet: replicaSet,
 		db:         oc.replicationDB,
 	}
@@ -319,8 +331,8 @@ func (oc *Controller) AddMergeSplitOperator(
 	affectedReplicaSets []*replica.SpanReplication,
 	splitSpans []*heartbeatpb.TableSpan,
 ) bool {
-	oc.lock.Lock()
-	defer oc.lock.Unlock()
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
 	// TODO: check if there are some intersection between `ret.Replications` and `spans`.
 	// Ignore the intersection spans to prevent meaningless split operation.
 	for _, replicaSet := range affectedReplicaSets {
@@ -362,4 +374,13 @@ func (oc *Controller) AddMergeSplitOperator(
 		zap.Int("newSpans", len(splitSpans)),
 	)
 	return true
+}
+
+func (oc *Controller) GetLock() *sync.RWMutex {
+	oc.mu.Lock()
+	return &oc.mu
+}
+
+func (oc *Controller) ReleaseLock(mutex *sync.RWMutex) {
+	mutex.Unlock()
 }

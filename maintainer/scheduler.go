@@ -40,11 +40,34 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 	splitter *split.Splitter,
 ) *scheduler.Controller {
 	schedulers := map[string]scheduler.Scheduler{
-		scheduler.BasicScheduler:   scheduler.NewBasicScheduler(changefeedID.String(), batchSize, oc, db, nodeM, oc.NewAddOperator),
-		scheduler.BalanceScheduler: scheduler.NewBalanceScheduler(changefeedID.String(), batchSize, oc, db, nodeM, balanceInterval, oc.NewMoveOperator),
+		scheduler.BasicScheduler: scheduler.NewBasicScheduler(
+			changefeedID.String(),
+			batchSize,
+			oc,
+			db,
+			nodeM,
+			oc.NewAddOperator,
+		),
+		scheduler.BalanceScheduler: scheduler.NewBalanceScheduler(
+			changefeedID.String(),
+			batchSize,
+			oc,
+			db,
+			nodeM,
+			balanceInterval,
+			oc.NewMoveOperator,
+		),
 	}
 	if splitter != nil {
-		schedulers[scheduler.SplitScheduler] = newSplitScheduler(changefeedID, batchSize, splitter, oc, db, nodeM, balanceInterval)
+		schedulers[scheduler.SplitScheduler] = newSplitScheduler(
+			changefeedID,
+			batchSize,
+			splitter,
+			oc,
+			db,
+			nodeM,
+			balanceInterval,
+		)
 	}
 	return scheduler.NewController(schedulers)
 }
@@ -131,12 +154,15 @@ func (s *splitScheduler) doCheck(ret pkgReplica.GroupCheckResult, start time.Tim
 
 		switch ret.OpType {
 		case replica.OpMerge:
+			log.Info("Into OP Merge")
 			s.opController.AddMergeSplitOperator(ret.Replications, []*heartbeatpb.TableSpan{totalSpan})
 		case replica.OpSplit:
+			log.Info("Into OP Split")
 			fallthrough
 		case replica.OpMergeAndSplit:
-			expectedSpanNum := split.NextExpectedSpansNumber(len(ret.Replications))
-			spans := s.splitter.SplitSpans(context.Background(), totalSpan, len(s.nodeManager.GetAliveNodes()), expectedSpanNum)
+			log.Info("Into OP MergeAndSplit")
+			// expectedSpanNum := split.NextExpectedSpansNumber(len(ret.Replications))
+			spans := s.splitter.SplitSpans(context.Background(), totalSpan, len(s.nodeManager.GetAliveNodes()))
 			if len(spans) > 1 {
 				log.Info("split span",
 					zap.String("changefeed", s.changefeedID.Name()),

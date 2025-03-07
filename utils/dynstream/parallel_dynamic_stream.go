@@ -175,8 +175,8 @@ func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings 
 	}
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics {
-	metrics := Metrics{}
+func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A] {
+	metrics := Metrics[A]{}
 	for _, ds := range s.streams {
 		size := ds.getPendingSize()
 		metrics.PendingQueueLen += size
@@ -185,9 +185,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics {
 	metrics.RemovePath = int(s._statRemovePathCount.Load())
 
 	if s.memControl != nil {
-		usedMemory, maxMemory := s.memControl.getMetrics()
-		metrics.MemoryControl.UsedMemory = usedMemory
-		metrics.MemoryControl.MaxMemory = maxMemory
+		metrics.MemoryControl = s.memControl.getMetrics()
 	}
 
 	return metrics

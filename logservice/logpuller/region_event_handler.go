@@ -16,6 +16,7 @@ package logpuller
 import (
 	"encoding/hex"
 	"time"
+	"unsafe"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
@@ -31,9 +32,8 @@ var (
 )
 
 const (
-	DataGroupResolvedTs = 1
-	DataGroupEntries    = 2
-	DataGroupError      = 3
+	DataGroupEntriesOrResolvedTs = 1
+	DataGroupError               = 2
 )
 
 type regionEvent struct {
@@ -43,13 +43,24 @@ type regionEvent struct {
 	// only one of the following fields will be set
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
-	err        *cdcpb.Event_Error
 }
 
-type pathHasher struct{}
-
-func (h pathHasher) HashPath(subID SubscriptionID) uint64 {
-	return uint64(subID)
+func (event *regionEvent) getSize() int {
+	if event == nil {
+		return 0
+	}
+	size := int(unsafe.Sizeof(*event))
+	if event.entries != nil {
+		size += int(unsafe.Sizeof(*event.entries))
+		size += int(unsafe.Sizeof(*event.entries.Entries))
+		for _, row := range event.entries.Entries.GetEntries() {
+			size += int(unsafe.Sizeof(*row))
+			size += len(row.Key)
+			size += len(row.Value)
+			size += len(row.OldValue)
+		}
+	}
+	return size
 }
 
 type regionEventHandler struct {
@@ -67,6 +78,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			zap.Uint64("subID", uint64(span.subID)))
 	}
 
+	newResolvedTs := uint64(0)
 	for _, event := range events {
 		if event.state.isStale() {
 			h.handleRegionError(event.state, event.worker)
@@ -75,30 +87,42 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		if event.entries != nil {
 			handleEventEntries(span, event.state, event.entries)
 		} else if event.resolvedTs != 0 {
-			handleResolvedTs(span, event.state, event.resolvedTs)
-		} else if event.err != nil {
-			event.state.markStopped(&eventError{err: event.err.Error})
-			h.handleRegionError(event.state, event.worker)
+			resolvedTs := handleResolvedTs(span, event.state, event.resolvedTs)
+			if resolvedTs > newResolvedTs {
+				newResolvedTs = resolvedTs
+			}
 		} else {
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
+		}
+	}
+	tryAdvanceResolvedTs := func() {
+		if newResolvedTs != 0 {
+			span.advanceResolvedTs(newResolvedTs)
 		}
 	}
 	if len(span.kvEventsCache) > 0 {
 		metricsEventCount.Add(float64(len(span.kvEventsCache)))
 		await := span.consumeKVEvents(span.kvEventsCache, func() {
 			span.clearKVEventsCache()
+			tryAdvanceResolvedTs()
 			h.subClient.wakeSubscription(span.subID)
 		})
 		// if not await, the wake callback will not be called, we need clear the cache manually.
 		if !await {
 			span.clearKVEventsCache()
+			tryAdvanceResolvedTs()
 		}
 		return await
+	} else {
+		tryAdvanceResolvedTs()
 	}
 	return false
 }
 
-func (h *regionEventHandler) GetSize(event regionEvent) int { return 0 }
+func (h *regionEventHandler) GetSize(event regionEvent) int {
+	return event.getSize()
+}
+
 func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) int {
 	return 0
 }
@@ -114,22 +138,21 @@ func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp
 			cdcpb.Event_COMMIT,
 			cdcpb.Event_ROLLBACK:
 			return dynstream.Timestamp(entries[0].CommitTs)
+		default:
+			log.Warn("unknown event entries", zap.Any("event", event.entries))
+			return 0
 		}
 	} else {
 		return dynstream.Timestamp(event.resolvedTs)
 	}
-	log.Panic("unknown event type", zap.Any("event", event))
-	return 0
 }
 func (h *regionEventHandler) IsPaused(event regionEvent) bool { return false }
 
 func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
-	if event.entries != nil {
-		return dynstream.EventType{DataGroup: DataGroupEntries, Property: dynstream.BatchableData}
-	} else if event.resolvedTs != 0 {
-		// Note: resolved ts may from different region, so there are not periodic signal
-		return dynstream.EventType{DataGroup: DataGroupResolvedTs, Property: dynstream.BatchableData}
-	} else if event.err != nil || event.state.isStale() {
+	if event.entries != nil || event.resolvedTs != 0 {
+		// Note: resolved ts may be from different regions, so they are not periodic signal
+		return dynstream.EventType{DataGroup: DataGroupEntriesOrResolvedTs, Property: dynstream.BatchableData}
+	} else if event.state.isStale() {
 		return dynstream.EventType{DataGroup: DataGroupError, Property: dynstream.BatchableData}
 	} else {
 		log.Panic("unknown event type",
@@ -140,7 +163,14 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
 
-func (h *regionEventHandler) OnDrop(event regionEvent) {}
+func (h *regionEventHandler) OnDrop(event regionEvent) {
+	log.Warn("drop region event",
+		zap.Uint64("regionID", event.state.getRegionID()),
+		zap.Uint64("requestID", event.state.requestID),
+		zap.Uint64("workerID", event.worker.workerID),
+		zap.Bool("hasEntries", event.entries != nil),
+		zap.Bool("stateIsStale", event.state.isStale()))
+}
 
 func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *regionRequestWorker) {
 	stepsToRemoved := state.markRemoved()
@@ -254,9 +284,9 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 	}
 }
 
-func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs uint64) {
+func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs uint64) uint64 {
 	if state.isStale() || !state.isInitialized() {
-		return
+		return 0
 	}
 	state.matcher.tryCleanUnmatchedValue()
 	regionID := state.getRegionID()
@@ -267,7 +297,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 			zap.Uint64("regionID", regionID),
 			zap.Uint64("resolvedTs", resolvedTs),
 			zap.Uint64("lastResolvedTs", lastResolvedTs))
-		return
+		return 0
 	}
 	state.updateResolvedTs(resolvedTs)
 
@@ -285,7 +315,8 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		if ts > lastResolvedTs {
 			span.resolvedTs.Store(ts)
 			span.resolvedTsUpdated.Store(time.Now().Unix())
-			span.advanceResolvedTs(ts)
+			return ts
 		}
 	}
+	return 0
 }

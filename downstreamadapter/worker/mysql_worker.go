@@ -33,7 +33,7 @@ import (
 type MysqlDMLWorker struct {
 	changefeedID common.ChangeFeedID
 
-	eventChan   chan *commonEvent.DMLEvent
+	eventChan   <-chan *commonEvent.DMLEvent
 	mysqlWriter *mysql.MysqlWriter
 	id          int
 
@@ -48,19 +48,20 @@ func NewMysqlDMLWorker(
 	changefeedID common.ChangeFeedID,
 	statistics *metrics.Statistics,
 	formatVectorType bool,
+	eventChan <-chan *commonEvent.DMLEvent,
 ) *MysqlDMLWorker {
 	return &MysqlDMLWorker{
 		mysqlWriter:  mysql.NewMysqlWriter(ctx, db, config, changefeedID, statistics, formatVectorType),
 		id:           id,
 		maxRows:      config.MaxTxnRow,
-		eventChan:    make(chan *commonEvent.DMLEvent, 16),
+		eventChan:    eventChan,
 		changefeedID: changefeedID,
 	}
 }
 
-func (w *MysqlDMLWorker) GetEventChan() chan *commonEvent.DMLEvent {
-	return w.eventChan
-}
+// func (w *MysqlDMLWorker) GetEventChan() <-chan *commonEvent.DMLEvent {
+// 	return w.eventChan
+// }
 
 func (w *MysqlDMLWorker) Run(ctx context.Context) error {
 	namespace := w.changefeedID.Namespace()
@@ -134,9 +135,9 @@ func (w *MysqlDMLWorker) Close() {
 	w.mysqlWriter.Close()
 }
 
-func (w *MysqlDMLWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
-	w.eventChan <- event
-}
+// func (w *MysqlDMLWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
+// 	w.eventChan <- event
+// }
 
 // MysqlDDLWorker is use to flush the ddl event and sync point eventdownstream
 type MysqlDDLWorker struct {

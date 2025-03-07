@@ -30,7 +30,11 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/util"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/spanz"
+	putil "github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/cdc/sink/ddlsink"
@@ -38,7 +42,6 @@ import (
 	dmlfactory "github.com/pingcap/tiflow/cdc/sink/dmlsink/factory"
 	"github.com/pingcap/tiflow/cdc/sink/tablesink"
 	sinkutil "github.com/pingcap/tiflow/cdc/sink/util"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/logutil"
 	"github.com/pingcap/tiflow/pkg/quotes"
@@ -48,8 +51,6 @@ import (
 	"github.com/pingcap/tiflow/pkg/sink/codec/canal"
 	"github.com/pingcap/tiflow/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/pkg/sink/codec/csv"
-	putil "github.com/pingcap/tiflow/pkg/util"
-	"github.com/pingcap/tiflow/pkg/version"
 	"go.uber.org/zap"
 )
 
@@ -143,7 +144,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	config.StoreGlobalServerConfig(serverCfg)
 	replicaConfig := config.GetDefaultReplicaConfig()
 	if len(configFile) > 0 {
-		err := util.StrictDecodeFile(configFile, "storage consumer", replicaConfig)
+		err = util.StrictDecodeFile(configFile, "storage consumer", replicaConfig)
 		if err != nil {
 			log.Error("failed to decode config file", zap.Error(err))
 			return nil, err
@@ -179,7 +180,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 
 	extension := sinkutil.GetFileExtension(protocol)
 
-	storage, err := putil.GetExternalStorageFromURI(ctx, upstreamURIStr)
+	storage, err := helper.GetExternalStorageFromURI(ctx, upstreamURIStr)
 	if err != nil {
 		log.Error("failed to create external storage", zap.Error(err))
 		return nil, err

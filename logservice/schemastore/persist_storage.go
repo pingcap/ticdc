@@ -649,7 +649,8 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	handler, ok := allDDLHandlers[job.Type]
 	if !ok {
-		log.Panic("unknown ddl type", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
+		log.Error("unknown ddl type, ignore it", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
+		return nil
 	}
 	ddlEvent := handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
 		job:          job,
@@ -721,7 +722,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	case model.ActionCreateTable:
 		// Note: partition table's logical table id is also in tableMap
 		if _, ok := tableMap[job.BinlogInfo.TableInfo.ID]; ok {
-			log.Warn("table already exists. ignore DDL",
+			log.Info("table already exists. ignore DDL",
 				zap.String("DDL", job.Query),
 				zap.Int64("jobID", job.ID),
 				zap.Int64("schemaID", job.SchemaID),
@@ -733,7 +734,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	case model.ActionCreateTables:
 		// For duplicate create tables ddl job, the tables in the job should be same, check the first table is enough
 		if _, ok := tableMap[job.BinlogInfo.MultipleTableInfos[0].ID]; ok {
-			log.Warn("table already exists. ignore DDL",
+			log.Info("table already exists. ignore DDL",
 				zap.String("DDL", job.Query),
 				zap.Int64("jobID", job.ID),
 				zap.Int64("schemaID", job.SchemaID),

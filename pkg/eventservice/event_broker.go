@@ -888,14 +888,29 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	id := dispatcherInfo.GetID()
 	stat, ok := c.dispatchers.Load(id)
 	if !ok {
+		stat, ok = c.tableTriggerDispatchers.Load(id)
+		if !ok {
+			return
+		}
 		c.tableTriggerDispatchers.Delete(id)
-		return
 	}
+
 	stat.(*dispatcherStat).changefeedStat.removeDispatcher()
+	// FIXME: this is a workaround to remove the changefeed status when all dispatchers are removed.
+	// But some remove dispatcher events missing during the changefeed pausing process, the changefeed status will not be removed expectedly.
+	// So, we need to find a permanent solution to fix this problem.
+	if stat.(*dispatcherStat).changefeedStat.dispatcherCount.Load() == 0 {
+		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
+			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+		)
+		c.changefeedMap.Delete(dispatcherInfo.GetChangefeedID())
+	}
+
 	stat.(*dispatcherStat).isRemoved.Store(true)
 	c.eventStore.UnregisterDispatcher(id)
 	c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
 	c.dispatchers.Delete(id)
+
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),

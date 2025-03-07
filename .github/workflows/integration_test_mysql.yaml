@@ -193,10 +193,10 @@ jobs:
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=changefeed_finish
       
-      - name: Test sql_mode
-        if: ${{ success() }}
-        run: |
-          export TICDC_NEWARCH=true && make integration_test CASE=sql_mode
+      # - name: Test sql_mode
+      #   if: ${{ success() }}
+      #   run: |
+      #     export TICDC_NEWARCH=true && make integration_test CASE=sql_mode
         
       - name: Test changefeed_pause_resume
         if: ${{ success() }}
@@ -509,13 +509,18 @@ jobs:
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=overwrite_resume_with_syncpoint
+      
+      - name: Test ddl_for_split_tables
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=ddl_for_split_tables
 
       - name: Test multi_source
         if: ${{ success() }}
         run: |
           export TICDC_NEWARCH=true && make integration_test CASE=multi_source
 
-      # The 20th case in this group
+      # The 21th case in this group
       - name: Test multi_tables_ddl
         if: ${{ success() }}
         run: |

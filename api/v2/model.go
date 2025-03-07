@@ -20,11 +20,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tiflow/cdc/model"
 	bf "github.com/pingcap/tiflow/pkg/binlog-filter"
 	"github.com/pingcap/tiflow/pkg/integrity"
 	"github.com/pingcap/tiflow/pkg/security"
-	"github.com/pingcap/tiflow/pkg/util"
 )
 
 // EmptyResponse return empty {} to http client
@@ -513,6 +513,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			EnableTableAcrossNodes: c.Scheduler.EnableTableAcrossNodes,
 			RegionThreshold:        c.Scheduler.RegionThreshold,
 			WriteKeyThreshold:      c.Scheduler.WriteKeyThreshold,
+			SplitNumberPerNode:     c.Scheduler.SplitNumberPerNode,
 		}
 	}
 	if c.Integrity != nil {
@@ -836,6 +837,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			EnableTableAcrossNodes: cloned.Scheduler.EnableTableAcrossNodes,
 			RegionThreshold:        cloned.Scheduler.RegionThreshold,
 			WriteKeyThreshold:      cloned.Scheduler.WriteKeyThreshold,
+			SplitNumberPerNode:     cloned.Scheduler.SplitNumberPerNode,
 		}
 	}
 
@@ -1043,6 +1045,8 @@ type ChangefeedSchedulerConfig struct {
 	RegionThreshold int `toml:"region_threshold" json:"region_threshold"`
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
 	WriteKeyThreshold int `toml:"write_key_threshold" json:"write_key_threshold"`
+	// SplitNumberPerNode is the number of splits per node.
+	SplitNumberPerNode int `toml:"split_number_per_node" json:"split_number_per_node"`
 }
 
 // IntegrityConfig is the config for integrity check
@@ -1179,8 +1183,10 @@ type ServerStatus struct {
 
 // Capture holds common information of a capture in cdc
 type Capture struct {
-	ID            string `json:"id"`
-	IsCoordinator bool   `json:"is_coordinator"`
+	ID string `json:"id"`
+	// IsCoordinator is true if the capture is the coordinator of the TiCDC cluster
+	// We make its json key as `is_owner` to keep the compatibility with old TiCDC.
+	IsCoordinator bool   `json:"is_owner"`
 	AdvertiseAddr string `json:"address"`
 	ClusterID     string `json:"cluster_id"`
 }

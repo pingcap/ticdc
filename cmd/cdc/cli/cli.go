@@ -14,9 +14,13 @@
 package cli
 
 import (
+	"context"
+	"os"
+
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
-	"github.com/pingcap/tiflow/pkg/cmd/util"
-	"github.com/pingcap/tiflow/pkg/logutil"
+	"github.com/pingcap/ticdc/cmd/util"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +39,13 @@ func NewCmdCli() *cobra.Command {
 	cf.AddFlags(cmds)
 	cmds.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		// Here we will initialize the logging configuration and set the current default context.
-		cancel := util.InitCmd(cmd, &logutil.Config{Level: cf.GetLogLevel()})
+		err := logger.InitLogger(&logger.Config{Level: cf.GetLogLevel()})
+		if err != nil {
+			cmd.Printf("init logger error %v\n", errors.Trace(err))
+			os.Exit(1)
+		}
+		_, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		util.LogHTTPProxies()
 		// A notify that complete immediately, it skips the second signal essentially.
 		doneNotify := func() <-chan struct{} {

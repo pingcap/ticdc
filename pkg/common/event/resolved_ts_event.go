@@ -52,6 +52,11 @@ func (b *BatchResolvedEvent) GetSeq() uint64 {
 	return 0
 }
 
+func (b *BatchResolvedEvent) Len() int32 {
+	// Return the length of events.
+	return int32(len(b.Events))
+}
+
 func (b *BatchResolvedEvent) Marshal() ([]byte, error) {
 	if len(b.Events) == 0 {
 		return nil, nil
@@ -134,6 +139,10 @@ func (e ResolvedEvent) GetStartTs() common.Ts {
 
 func (e ResolvedEvent) GetSeq() uint64 {
 	return 0
+}
+
+func (e ResolvedEvent) Len() int32 {
+	return 1
 }
 
 func (e ResolvedEvent) Marshal() ([]byte, error) {

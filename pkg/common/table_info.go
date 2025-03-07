@@ -392,8 +392,16 @@ func (ti *TableInfo) GetColumnsOffset() map[int64]int {
 	return ti.columnSchema.ColumnsOffset
 }
 
+func (ti *TableInfo) GetIndexColumnsOffset() [][]int {
+	return ti.columnSchema.IndexColumnsOffset
+}
+
 func (ti *TableInfo) PKIsHandle() bool {
 	return ti.columnSchema.PKIsHandle
+}
+
+func (ti *TableInfo) GetPKIndexOffset() []int {
+	return ti.columnSchema.PKIndexOffset
 }
 
 func (ti *TableInfo) UpdateTS() uint64 {
@@ -577,6 +585,14 @@ func (ti *TableInfo) OffsetsByNames(names []string) ([]int, bool) {
 	return result, true
 }
 
+func (ti *TableInfo) HasHandleKey() bool {
+	return ti.columnSchema.GetPkColInfo() != nil
+}
+
+func (ti *TableInfo) GetPkColInfo() *model.ColumnInfo {
+	return ti.columnSchema.GetPkColInfo()
+}
+
 // GetPrimaryKeyColumnNames returns the primary key column names
 func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 	var result []string
@@ -633,4 +649,17 @@ func GetColumnDefaultValue(col *model.ColumnInfo) interface{} {
 	}
 	defaultDatum := datumTypes.NewDatum(defaultValue)
 	return defaultDatum.GetValue()
+}
+
+// BuildTiDBTableInfoWithoutVirtualColumns build a TableInfo without virual columns from the source table info
+func BuildTiDBTableInfoWithoutVirtualColumns(source *TableInfo) *TableInfo {
+	newColumnSchema := source.columnSchema.getColumnSchemaWithoutVirtualColumns()
+	tableInfo := &TableInfo{
+		SchemaID:     source.SchemaID,
+		TableName:    source.TableName,
+		columnSchema: newColumnSchema,
+	}
+
+	tableInfo.InitPrivateFields()
+	return tableInfo
 }

@@ -373,6 +373,8 @@ type columnSchema struct {
 	// indexColumnsOffset: [[0], [0, 1], [0, 2]]
 	IndexColumnsOffset [][]int `json:"index_columns_offset"`
 
+	PKIndexOffset []int `json:"pk_index_offset"`
+
 	// The following 3 fields, should only be used to decode datum from the raw value bytes, do not abuse those field.
 	// RowColInfos extend the model.ColumnInfo with some extra information
 	// it's the same length and order with the model.TableInfo.Columns
@@ -434,6 +436,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		HandleIndexID:    HandleIndexTableIneligible,
 		RowColInfos:      make([]rowcodec.ColInfo, len(tableInfo.Columns)),
 		RowColFieldTps:   make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
+		PKIndexOffset:    make([]int, 0),
 	}
 
 	rowColumnsCurrentOffset := 0
@@ -453,6 +456,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 				colSchema.HandleIndexID = HandleIndexPKIsHandle
 				colSchema.HasUniqueColumn = true
 				colSchema.IndexColumnsOffset = append(colSchema.IndexColumnsOffset, []int{colSchema.RowColumnsOffset[col.ID]})
+				colSchema.PKIndexOffset = []int{colSchema.RowColumnsOffset[col.ID]}
 			} else if tableInfo.IsCommonHandle {
 				colSchema.HandleIndexID = HandleIndexPKIsHandle
 				colSchema.HandleColID = colSchema.HandleColID[:0]
@@ -489,6 +493,9 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 			}
 			if len(indexColOffset) > 0 {
 				colSchema.IndexColumnsOffset = append(colSchema.IndexColumnsOffset, indexColOffset)
+				if idx.Primary {
+					colSchema.PKIndexOffset = indexColOffset
+				}
 			}
 		}
 	}
@@ -819,4 +826,49 @@ func (s *columnSchema) getColumnList(isUpdate bool) (int, string) {
 		}
 	}
 	return nonGeneratedColumnCount, b.String()
+}
+
+func (s *columnSchema) getColumnSchemaWithoutVirtualColumns() *columnSchema {
+	newColumnSchema := &columnSchema{
+		Digest:                        s.Digest,
+		Columns:                       s.Columns,
+		Indices:                       s.Indices,
+		PKIsHandle:                    s.PKIsHandle,
+		IsCommonHandle:                s.IsCommonHandle,
+		UpdateTS:                      s.UpdateTS,
+		ColumnsOffset:                 s.ColumnsOffset,
+		NameToColID:                   s.NameToColID,
+		HasUniqueColumn:               s.HasUniqueColumn,
+		RowColumnsOffset:              s.RowColumnsOffset,
+		ColumnsFlag:                   s.ColumnsFlag,
+		HandleIndexID:                 s.HandleIndexID,
+		IndexColumnsOffset:            s.IndexColumnsOffset,
+		RowColInfos:                   s.RowColInfos,
+		RowColFieldTps:                s.RowColFieldTps,
+		HandleColID:                   s.HandleColID,
+		RowColFieldTpsSlice:           s.RowColFieldTpsSlice,
+		VirtualColumnCount:            s.VirtualColumnCount,
+		RowColInfosWithoutVirtualCols: s.RowColInfosWithoutVirtualCols,
+		PreSQLs:                       s.PreSQLs,
+	}
+	newColumnSchema.Columns = make([]*model.ColumnInfo, 0, len(s.Columns))
+	rowColumnsCurrentOffset := 0
+	columnsOffset := make(map[string]int, len(newColumnSchema.Columns))
+	for _, srcCol := range newColumnSchema.Columns {
+		if !IsColCDCVisible(srcCol) {
+			continue
+		}
+		colInfo := srcCol.Clone()
+		colInfo.Offset = rowColumnsCurrentOffset
+		newColumnSchema.Columns = append(newColumnSchema.Columns, colInfo)
+		columnsOffset[colInfo.Name.O] = rowColumnsCurrentOffset
+		rowColumnsCurrentOffset += 1
+	}
+	// Keep all the index info even if it contains virtual columns for simplicity
+	for _, indexInfo := range newColumnSchema.Indices {
+		for _, col := range indexInfo.Columns {
+			col.Offset = columnsOffset[col.Name.O]
+		}
+	}
+	return newColumnSchema
 }

@@ -74,8 +74,12 @@ func (d *DynamicTopicGenerator) TopicGeneratorType() TopicGeneratorType {
 func GetTopicGenerator(
 	rule string, defaultTopic string, protocol config.Protocol, scheme string,
 ) (TopicGenerator, error) {
-	if rule == "" || isHardCode(rule) {
+	if rule == "" {
 		return newStaticTopic(defaultTopic), nil
+	}
+
+	if isHardCode(rule) {
+		return newStaticTopic(rule), nil
 	}
 
 	// check if this rule is a valid topic expression

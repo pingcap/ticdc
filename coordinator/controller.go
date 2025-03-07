@@ -30,11 +30,13 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/pingcap/tiflow/cdc/model"
+	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -52,6 +54,7 @@ const (
 type Controller struct {
 	version int64
 
+	pdClient           pd.Client
 	scheduler          *scheduler.Controller
 	operatorController *operator.Controller
 	changefeedDB       *changefeed.ChangefeedDB
@@ -72,29 +75,31 @@ type Controller struct {
 	taskHandlers     []*threadpool.TaskHandle
 	messageCenter    messaging.MessageCenter
 
-	updatedChangefeedCh chan map[common.ChangeFeedID]*changefeed.Changefeed
-	stateChangedCh      chan *ChangefeedStateChangeEvent
+	changefeedChangeCh chan []*ChangefeedChange
 
 	lastPrintStatusTime time.Time
 
 	apiLock sync.RWMutex
 }
 
-type ChangefeedStateChangeEvent struct {
-	ChangefeedID common.ChangeFeedID
-	State        model.FeedState
+type ChangefeedChange struct {
+	changefeedID common.ChangeFeedID
+	changefeed   *changefeed.Changefeed
+	state        model.FeedState
+	changeType   ChangeType
 	err          *model.RunningError
 }
 
 func NewController(
 	version int64,
 	selfNode *node.Info,
-	updatedChangefeedCh chan map[common.ChangeFeedID]*changefeed.Changefeed,
-	stateChangedCh chan *ChangefeedStateChangeEvent,
+	changefeedChangeCh chan []*ChangefeedChange,
 	backend changefeed.Backend,
 	eventCh *chann.DrainableChann[*Event],
 	taskScheduler threadpool.ThreadPool,
-	batchSize int, balanceInterval time.Duration,
+	batchSize int,
+	balanceInterval time.Duration,
+	pdClient pd.Client,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	changefeedDB := changefeed.NewChangefeedDB(version)
@@ -130,9 +135,9 @@ func NewController(
 		nodeManager:         nodeManager,
 		taskScheduler:       taskScheduler,
 		backend:             backend,
-		updatedChangefeedCh: updatedChangefeedCh,
-		stateChangedCh:      stateChangedCh,
+		changefeedChangeCh:  changefeedChangeCh,
 		lastPrintStatusTime: time.Now(),
+		pdClient:            pdClient,
 	}
 	c.nodeChanged.changed = false
 
@@ -313,19 +318,18 @@ func (c *Controller) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Coordin
 
 // handleMaintainerStatus handle the status report from the maintainers
 func (c *Controller) handleMaintainerStatus(from node.ID, statusList []*heartbeatpb.MaintainerStatus) {
-	changedCfs := make(map[common.ChangeFeedID]*changefeed.Changefeed, len(statusList))
-
+	changes := make([]*ChangefeedChange, 0, len(statusList))
 	for _, status := range statusList {
 		cfID := common.NewChangefeedIDFromPB(status.ChangefeedID)
-		cf := c.handleSingleMaintainerStatus(from, status, cfID)
-		if cf != nil {
-			changedCfs[cfID] = cf
+		change := c.handleSingleMaintainerStatus(from, status, cfID)
+		if change != nil {
+			changes = append(changes, change)
 		}
 	}
 
 	// Try to send updated changefeeds without blocking
 	select {
-	case c.updatedChangefeedCh <- changedCfs:
+	case c.changefeedChangeCh <- changes:
 	default:
 	}
 }
@@ -334,7 +338,7 @@ func (c *Controller) handleSingleMaintainerStatus(
 	from node.ID,
 	status *heartbeatpb.MaintainerStatus,
 	cfID common.ChangeFeedID,
-) *changefeed.Changefeed {
+) *ChangefeedChange {
 	// Update the operator status first
 	c.operatorController.UpdateOperatorStatus(cfID, from, status)
 
@@ -348,8 +352,8 @@ func (c *Controller) handleSingleMaintainerStatus(
 		return nil
 	}
 
-	c.updateChangefeedStatus(cf, cfID, status)
-	return cf
+	change := c.updateChangefeedStatus(cf, cfID, status)
+	return change
 }
 
 func (c *Controller) handleNonExistentChangefeed(
@@ -397,31 +401,31 @@ func (c *Controller) updateChangefeedStatus(
 	cf *changefeed.Changefeed,
 	cfID common.ChangeFeedID,
 	status *heartbeatpb.MaintainerStatus,
-) {
+) *ChangefeedChange {
 	changed, state, err := cf.UpdateStatus(status)
-	if !changed {
-		return
+	change := &ChangefeedChange{
+		changefeedID: cfID,
+		changefeed:   cf,
+		state:        state,
+		changeType:   ChangeStateAndTs,
 	}
-
-	log.Info("changefeed status changed",
-		zap.Stringer("changefeed", cfID),
-		zap.String("state", string(state)),
-		zap.Stringer("error", err))
-
-	var mErr *model.RunningError
+	if !changed {
+		change.changeType = ChangeTs
+		return change
+	}
 	if err != nil {
-		mErr = &model.RunningError{
+		change.err = &model.RunningError{
 			Time:    time.Now(),
 			Addr:    err.Node,
 			Code:    err.Code,
 			Message: err.Message,
 		}
 	}
-	c.stateChangedCh <- &ChangefeedStateChangeEvent{
-		ChangefeedID: cfID,
-		State:        state,
-		err:          mErr,
-	}
+	log.Info("changefeed status changed",
+		zap.Stringer("changefeed", cfID),
+		zap.String("state", string(change.state)),
+		zap.Stringer("error", err))
+	return change
 }
 
 // FinishBootstrap is called when all nodes have sent bootstrap response
@@ -510,6 +514,9 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	if ok := c.operatorController.HasOperator(info.ChangefeedID.DisplayName); ok {
 		return errors.New("changefeed is in scheduling")
 	}
+
+	// generate a unique changefeed epoch
+	info.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
 	err := c.backend.CreateChangefeed(ctx, info)
 	if err != nil {
 		return errors.Trace(err)
@@ -555,7 +562,13 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	return nil
 }
 
-func (c *Controller) ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64, overwriteCheckpointTs bool) error {
+// ResumeChangefeed resumes a changefeed, it will be call by HTTP API
+func (c *Controller) ResumeChangefeed(
+	ctx context.Context,
+	id common.ChangeFeedID,
+	newCheckpointTs uint64,
+	overwriteCheckpointTs bool,
+) error {
 	c.apiLock.Lock()
 	defer c.apiLock.Unlock()
 
@@ -570,6 +583,7 @@ func (c *Controller) ResumeChangefeed(ctx context.Context, id common.ChangeFeedI
 		return errors.Trace(err)
 	} else {
 		clone.State = model.StateNormal
+		clone.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
 		cf.SetInfo(clone)
 	}
 
@@ -579,8 +593,7 @@ func (c *Controller) ResumeChangefeed(ctx context.Context, id common.ChangeFeedI
 	if err != nil {
 		return errors.New(err.Message)
 	}
-
-	c.changefeedDB.Resume(id, true, overwriteCheckpointTs)
+	c.moveChangefeedToSchedulingQueue(id, true, overwriteCheckpointTs)
 	return nil
 }
 
@@ -676,6 +689,34 @@ func (c *Controller) collectMetrics() {
 		metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
 		c.lastPrintStatusTime = time.Now()
 	}
+}
+
+func (c *Controller) updateChangefeedEpoch(ctx context.Context, id common.ChangeFeedID) {
+	cf := c.changefeedDB.GetByID(id)
+	if cf == nil {
+		log.Warn("changefeed not found, skip updating epoch", zap.String("changefeed", id.String()))
+		return
+	}
+	clonedInfo, err := cf.GetInfo().Clone()
+	if err != nil {
+		log.Panic("clone changefeed info failed", zap.String("changefeed", id.String()), zap.Error(err))
+	}
+	clonedInfo.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
+	cf.SetInfo(clonedInfo)
+}
+
+// moveChangefeedToSchedulingQueue moves a changefeed to scheduling queue
+// It will set a new epoch for the changefeed before moving it to scheduling queue
+func (c *Controller) moveChangefeedToSchedulingQueue(
+	id common.ChangeFeedID,
+	resetBackoff bool,
+	overwriteCheckpointTs bool,
+) {
+	c.changefeedDB.MoveToSchedulingQueue(id, resetBackoff, overwriteCheckpointTs)
+}
+
+func (c *Controller) calculateGCSafepoint() uint64 {
+	return c.changefeedDB.CalculateGCSafepoint()
 }
 
 func shouldRunChangefeed(state model.FeedState) bool {

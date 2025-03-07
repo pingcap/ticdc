@@ -24,9 +24,10 @@ import (
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/version"
+	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/security"
-	"github.com/pingcap/tiflow/pkg/util"
-	"github.com/pingcap/tiflow/pkg/version"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	grpcstatus "google.golang.org/grpc/status"
@@ -101,17 +102,35 @@ func newRegionRequestWorker(
 			if err := waitForPreFetching(); err != nil {
 				return err
 			}
-			if canceled := worker.run(ctx, credential); canceled {
-				return nil
+			var regionErr error
+			if err := version.CheckStoreVersion(ctx, worker.client.pd, worker.store.storeID); err != nil {
+				if errors.Cause(err) == context.Canceled {
+					return nil
+				}
+				log.Error("event feed check store version fails",
+					zap.Uint64("workerID", worker.workerID),
+					zap.Uint64("storeID", worker.store.storeID),
+					zap.String("addr", worker.store.storeAddr),
+					zap.Error(err))
+				if cerror.Is(err, cerror.ErrGetAllStoresFailed) {
+					regionErr = &getStoreErr{}
+				} else {
+					regionErr = &sendRequestToStoreErr{}
+				}
+			} else {
+				if canceled := worker.run(ctx, credential); canceled {
+					return nil
+				}
+				regionErr = &sendRequestToStoreErr{}
 			}
 			for subID, m := range worker.clearRegionStates() {
 				for _, state := range m {
-					state.markStopped(&sendRequestToStoreErr{})
+					state.markStopped(regionErr)
 					regionEvent := regionEvent{
 						state:  state,
 						worker: worker,
 					}
-					worker.client.ds.Push(subID, regionEvent)
+					worker.client.pushRegionEventToDS(subID, regionEvent)
 				}
 			}
 			// The store may fail forever, so we need try to re-schedule all pending regions.
@@ -120,7 +139,7 @@ func newRegionRequestWorker(
 					// It means it's a special task for stopping the table.
 					continue
 				}
-				client.onRegionFail(newRegionErrorInfo(region, &sendRequestToStoreErr{}))
+				client.onRegionFail(newRegionErrorInfo(region, regionErr))
 			}
 			if err := util.Hang(ctx, time.Second); err != nil {
 				return err
@@ -140,8 +159,6 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 			return false
 		}
 	}
-
-	// FIXME: check tikv store version
 
 	log.Info("region request worker going to create grpc stream",
 		zap.Uint64("workerID", s.workerID),
@@ -226,6 +243,13 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			}
 			switch eventData := event.Event.(type) {
 			case *cdcpb.Event_Entries_:
+				if eventData == nil {
+					log.Warn("region request worker receives a region event with nil entries, ignore it",
+						zap.Uint64("workerID", s.workerID),
+						zap.Uint64("subscriptionID", uint64(subscriptionID)),
+						zap.Uint64("regionID", regionID))
+					continue
+				}
 				regionEvent.entries = eventData
 			case *cdcpb.Event_Admin_:
 				// ignore
@@ -237,7 +261,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					zap.Uint64("regionID", event.RegionId),
 					zap.Bool("stateIsNil", state == nil),
 					zap.Any("error", eventData.Error))
-				regionEvent.err = eventData
+				state.markStopped(&eventError{err: eventData.Error})
 			case *cdcpb.Event_ResolvedTs:
 				regionEvent.resolvedTs = eventData.ResolvedTs
 			case *cdcpb.Event_LongTxn_:
@@ -246,12 +270,21 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.ds.Push(SubscriptionID(event.RequestId), regionEvent)
+			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
 		} else {
-			log.Warn("region request worker receives a region event for an untracked region",
-				zap.Uint64("workerID", s.workerID),
-				zap.Uint64("subscriptionID", uint64(subscriptionID)),
-				zap.Uint64("regionID", event.RegionId))
+			switch event.Event.(type) {
+			case *cdcpb.Event_Error:
+				// it is normal to receive region error after deregister a subscription
+				log.Debug("region request worker receives an error for a stale region, ignore it",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Uint64("regionID", event.RegionId))
+			default:
+				log.Warn("region request worker receives a region event for an untracked region",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Uint64("regionID", event.RegionId))
+			}
 		}
 	}
 }
@@ -260,9 +293,17 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	subscriptionID := SubscriptionID(resolvedTsEvent.RequestId)
 	metricsResolvedTsCount.Add(float64(len(resolvedTsEvent.Regions)))
 	s.client.metrics.batchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
+	// TODO: resolvedTsEvent.Ts be 0 is impossible, we need find the root cause.
+	if resolvedTsEvent.Ts == 0 {
+		log.Warn("region request worker receives a resolved ts event with zero value, ignore it",
+			zap.Uint64("workerID", s.workerID),
+			zap.Uint64("subscriptionID", resolvedTsEvent.RequestId),
+			zap.Any("regionIDs", resolvedTsEvent.Regions))
+		return
+	}
 	for _, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			s.client.ds.Push(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
+			s.client.pushRegionEventToDS(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
 				state:      state,
 				worker:     s,
 				resolvedTs: resolvedTsEvent.Ts,
@@ -324,6 +365,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 		// It means it's a special task for stopping the table.
 		if region.isStopped() {
 			req := &cdcpb.ChangeDataRequest{
+				Header:    &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
 				RequestId: uint64(subID),
 				Request: &cdcpb.ChangeDataRequest_Deregister_{
 					Deregister: &cdcpb.ChangeDataRequest_Deregister{},
@@ -333,12 +375,12 @@ func (s *regionRequestWorker) processRegionSendTask(
 				return err
 			}
 			for _, state := range s.takeRegionStates(subID) {
-				state.markStopped(&sendRequestToStoreErr{})
+				state.markStopped(&requestCancelledErr{})
 				regionEvent := regionEvent{
 					state:  state,
 					worker: s,
 				}
-				s.client.ds.Push(subID, regionEvent)
+				s.client.pushRegionEventToDS(subID, regionEvent)
 			}
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from
@@ -438,16 +480,4 @@ func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
 		regions = append(regions, <-s.requestsCh)
 	}
 	return regions
-}
-
-func (s *regionRequestWorker) getAllRegionStates() regionFeedStates {
-	s.requestedRegions.RLock()
-	defer s.requestedRegions.RUnlock()
-	states := make(regionFeedStates)
-	for _, statesMap := range s.requestedRegions.subscriptions {
-		for regionID, state := range statesMap {
-			states[regionID] = state
-		}
-	}
-	return states
 }
