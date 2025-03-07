@@ -16,6 +16,9 @@ package range_checker
 import (
 	"fmt"
 	"sync/atomic"
+
+	"github.com/ngaut/log"
+	"go.uber.org/zap"
 )
 
 // TableIDRangeChecker is used to check if all table IDs are covered.
@@ -37,6 +40,7 @@ func NewTableCountChecker(tables int) *TableIDRangeChecker {
 
 // AddSubRange adds table id to the range checker.
 func (rc *TableIDRangeChecker) AddSubRange(tableID int64, _, _ []byte) {
+	log.Info("add sub range", zap.Int64("tableID", tableID), zap.Any("needCount", rc.needCount))
 	rc.reportedMap[tableID] = struct{}{}
 }
 
