@@ -131,6 +131,10 @@ func (be *BarrierEvent) createRangeCheckerForTypeAll() {
 		be.rangeChecker = range_checker.NewTableSpanRangeChecker(tbls)
 	} else {
 		be.rangeChecker = range_checker.NewTableCountChecker(be.controller.TaskSize())
+		spans := be.controller.GetAllTasks()
+		for _, span := range spans {
+			log.Info("createRangeCheckerForTypeAll task", zap.Any("span dispatcherID", span.ID))
+		}
 	}
 	log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs))
 }
@@ -279,10 +283,10 @@ func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID
 				for dispatcher := range be.reportedDispatchers {
 					replicaSpan := be.controller.GetTask(dispatcher)
 					if replicaSpan == nil {
-						log.Warn("dispatcher not found, ignore",
+						log.Info("dispatcher not found, ignore",
 							zap.String("changefeed", be.cfID.Name()),
 							zap.String("dispatcher", dispatcherID.String()))
-						return
+						continue
 					}
 					be.rangeChecker.AddSubRange(replicaSpan.Span.TableID, replicaSpan.Span.StartKey, replicaSpan.Span.EndKey)
 				}
@@ -294,10 +298,10 @@ func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID
 				for dispatcher := range be.reportedDispatchers {
 					replicaSpan := be.controller.GetTask(dispatcher)
 					if replicaSpan == nil {
-						log.Warn("dispatcher not found, ignore",
+						log.Info("dispatcher not found, ignore",
 							zap.String("changefeed", be.cfID.Name()),
 							zap.String("dispatcher", dispatcherID.String()))
-						return
+						continue
 					}
 					be.rangeChecker.AddSubRange(replicaSpan.Span.TableID, replicaSpan.Span.StartKey, replicaSpan.Span.EndKey)
 				}
