@@ -14,6 +14,7 @@
 package schemastore
 
 import (
+	"context"
 	"math"
 	"sync"
 
@@ -38,6 +39,7 @@ var (
 )
 
 type ddlJobFetcher struct {
+	ctx               context.Context
 	resolvedTsTracker struct {
 		sync.Mutex
 		resolvedTsItemMap map[logpuller.SubscriptionID]*resolvedTsItem
@@ -53,6 +55,7 @@ type ddlJobFetcher struct {
 }
 
 func newDDLJobFetcher(
+	ctx context.Context,
 	subClient *logpuller.SubscriptionClient,
 	kvStorage kv.Storage,
 	startTs uint64,
@@ -60,6 +63,7 @@ func newDDLJobFetcher(
 	advanceResolvedTs func(resolvedTS uint64),
 ) *ddlJobFetcher {
 	ddlJobFetcher := &ddlJobFetcher{
+		ctx:               ctx,
 		cacheDDLEvent:     cacheDDLEvent,
 		advanceResolvedTs: advanceResolvedTs,
 		kvStorage:         kvStorage,
@@ -135,7 +139,7 @@ func (p *ddlJobFetcher) unmarshalDDL(rawKV *common.RawKVEntry) (*model.Job, erro
 	}
 	if !event.IsLegacyFormatJob(rawKV) {
 		once.Do(func() {
-			if err := initDDLTableInfo(p.kvStorage); err != nil {
+			if err := initDDLTableInfo(p.ctx, p.kvStorage); err != nil {
 				log.Fatal("init ddl table info failed", zap.Error(err))
 			}
 		})
@@ -144,7 +148,7 @@ func (p *ddlJobFetcher) unmarshalDDL(rawKV *common.RawKVEntry) (*model.Job, erro
 	return event.ParseDDLJob(rawKV, ddlTableInfo)
 }
 
-func initDDLTableInfo(kvStorage kv.Storage) error {
+func initDDLTableInfo(ctx context.Context, kvStorage kv.Storage) error {
 	version, err := kvStorage.CurrentVersion(kv.GlobalTxnScope)
 	if err != nil {
 		return errors.Trace(err)
@@ -161,7 +165,7 @@ func initDDLTableInfo(kvStorage kv.Storage) error {
 		return errors.Trace(err)
 	}
 
-	tbls, err := snap.ListTables(db.ID)
+	tbls, err := snap.ListTables(ctx, db.ID)
 	if err != nil {
 		return errors.Trace(err)
 	}

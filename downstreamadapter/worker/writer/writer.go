@@ -82,7 +82,7 @@ func NewWriter(
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String()),
 		metricFlushDuration: mcloudstorage.CloudStorageFlushDurationHistogram.
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String()),
-		metricsWorkerBusyRatio: mcloudstorage.CloudStorageWorkerBusyRatioCounter.
+		metricsWorkerBusyRatio: mcloudstorage.CloudStorageWorkerBusyRatio.
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String(), strconv.Itoa(id)),
 	}
 
