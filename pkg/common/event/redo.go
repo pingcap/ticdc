@@ -101,9 +101,6 @@ const (
 func (r *DMLEvent) ToRedoLog() *RedoLog {
 	r.FinishGetRow()
 	row, valid := r.GetNextRow()
-	if !valid {
-		log.Panic("DMLEvent.ToRedoLog must be called with a valid row")
-	}
 	r.FinishGetRow()
 
 	redoLog := &RedoLog{
@@ -127,59 +124,77 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 		Type: RedoLogTypeRow,
 	}
 
-	columnCount := len(r.TableInfo.GetColumns())
-	columns := make([]*RedoColumn, 0, columnCount)
-	switch row.RowType {
-	case RowTypeInsert:
-		redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
-	case RowTypeDelete:
-		redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
-	case RowTypeUpdate:
-		redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
-		redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
-	default:
-	}
+	if valid {
+		columnCount := len(r.TableInfo.GetColumns())
+		columns := make([]*RedoColumn, 0, columnCount)
+		switch row.RowType {
+		case RowTypeInsert:
+			redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
+		case RowTypeDelete:
+			redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
+		case RowTypeUpdate:
+			redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
+			redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
+		default:
+		}
 
-	for i, column := range r.TableInfo.GetColumns() {
-		if common.IsColCDCVisible(column) {
-			columns = append(columns, &RedoColumn{
-				Name:      column.Name.String(),
-				Type:      column.GetType(),
-				Charset:   column.GetCharset(),
-				Collation: column.GetCollate(),
-			})
-			switch row.RowType {
-			case RowTypeInsert:
-				v := parseColumnValue(&row.Row, column, i)
-				redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
-			case RowTypeDelete:
-				v := parseColumnValue(&row.PreRow, column, i)
-				redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
-			case RowTypeUpdate:
-				v := parseColumnValue(&row.Row, column, i)
-				redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
-				v = parseColumnValue(&row.PreRow, column, i)
-				redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
-			default:
+		for i, column := range r.TableInfo.GetColumns() {
+			if common.IsColCDCVisible(column) {
+				columns = append(columns, &RedoColumn{
+					Name:      column.Name.String(),
+					Type:      column.GetType(),
+					Charset:   column.GetCharset(),
+					Collation: column.GetCollate(),
+				})
+				switch row.RowType {
+				case RowTypeInsert:
+					v := parseColumnValue(&row.Row, column, i)
+					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
+				case RowTypeDelete:
+					v := parseColumnValue(&row.PreRow, column, i)
+					redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
+				case RowTypeUpdate:
+					v := parseColumnValue(&row.Row, column, i)
+					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
+					v = parseColumnValue(&row.PreRow, column, i)
+					redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
+				default:
+				}
 			}
 		}
+		redoLog.RedoRow.Row.Columns = columns
+		redoLog.RedoRow.Row.PreColumns = columns
 	}
-	redoLog.RedoRow.Row.Columns = columns
-	redoLog.RedoRow.Row.PreColumns = columns
 
 	return redoLog
 }
 
 // ToRedoLog converts ddl event to redo log
 func (d *DDLEvent) ToRedoLog() *RedoLog {
-	ddlInRedoLog := &DDLEventInRedoLog{
-		StartTs:  d.GetStartTs(),
-		CommitTs: d.GetCommitTs(),
-		Query:    d.Query,
-	}
 	return &RedoLog{
-		RedoDDL: RedoDDLEvent{DDL: ddlInRedoLog},
-		Type:    RedoLogTypeDDL,
+		RedoDDL: RedoDDLEvent{
+			DDL: &DDLEventInRedoLog{
+				StartTs:  d.GetStartTs(),
+				CommitTs: d.GetCommitTs(),
+				Query:    d.Query,
+			},
+			Type:      d.Type,
+			TableName: d.TableInfo.TableName,
+		},
+		Type: RedoLogTypeDDL,
+	}
+}
+
+// GetCommitTs returns commit timestamp of the log event.
+func (r *RedoLog) GetCommitTs() common.Ts {
+	switch r.Type {
+	case RedoLogTypeRow:
+		return r.RedoRow.Row.CommitTs
+	case RedoLogTypeDDL:
+		return r.RedoDDL.DDL.CommitTs
+	default:
+		log.Panic("Unexpected redo log type")
+		return 0
 	}
 }
 

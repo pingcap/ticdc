@@ -18,7 +18,7 @@ import (
 	"path/filepath"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/tiflow/cdc/model/codec"
+	"github.com/pingcap/ticdc/redo/codec"
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/errors"
@@ -48,7 +48,7 @@ func NewLogWriter(
 		changeFeedID := cfg.ChangeFeedID
 		dataDir := config.GetGlobalServerConfig().DataDir
 		cfg.Dir = filepath.Join(dataDir, config.DefaultRedoDir,
-			changeFeedID.Namespace, changeFeedID.ID)
+			changeFeedID.Namespace(), changeFeedID.Name())
 	} else {
 		// When local storage or NFS is used, we use redoDir as the final storage path.
 		cfg.Dir = cfg.URI.Path

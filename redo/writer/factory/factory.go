@@ -17,13 +17,13 @@ import (
 	"context"
 	"strings"
 
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/ticdc/redo/writer/blackhole"
 	"github.com/pingcap/ticdc/redo/writer/file"
 	"github.com/pingcap/ticdc/redo/writer/memory"
-	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/tidb/br/pkg/storage"
 )
 
 // NewRedoLogWriter creates a new RedoLogWriter.

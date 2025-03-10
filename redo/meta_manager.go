@@ -21,9 +21,9 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/redo/common"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/ticdc/redo/common"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/redo"
@@ -565,7 +565,7 @@ func getChangefeedMatcher(changeFeedID common.ChangeFeedID) string {
 }
 
 func getDeletedChangefeedMarker(changeFeedID common.ChangeFeedID) string {
-	if changeFeedID.Namespace == model.DefaultNamespace {
+	if changeFeedID.Namespace == common.DefaultNamespace {
 		return fmt.Sprintf("delete_%s", changeFeedID.ID)
 	}
 	return fmt.Sprintf("delete_%s_%s", changeFeedID.Namespace, changeFeedID.ID)

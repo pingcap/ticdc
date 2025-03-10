@@ -18,8 +18,10 @@ import (
 	"fmt"
 	"net/url"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/uuid"
 )
 
 var (
@@ -59,7 +61,7 @@ type LogWriterConfig struct {
 
 func (cfg LogWriterConfig) String() string {
 	return fmt.Sprintf("%s:%s:%s:%s:%d:%s:%t",
-		cfg.ChangeFeedID.Namespace, cfg.ChangeFeedID.ID, cfg.CaptureID,
+		cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.CaptureID,
 		cfg.Dir, cfg.MaxLogSize, cfg.URI.String(), cfg.UseExternalStorage)
 }
 
@@ -69,6 +71,7 @@ type Option func(writer *LogWriterOptions)
 // LogWriterOptions is the options for writer
 type LogWriterOptions struct {
 	GetLogFileName   func() string
+	GetUUIDGenerator func() uuid.Generator
 }
 
 // WithLogFileName provide the Option for fileName
@@ -76,6 +79,15 @@ func WithLogFileName(f func() string) Option {
 	return func(o *LogWriterOptions) {
 		if f != nil {
 			o.GetLogFileName = f
+		}
+	}
+}
+
+// WithUUIDGenerator provides the Option for uuid generator
+func WithUUIDGenerator(f func() uuid.Generator) Option {
+	return func(o *LogWriterOptions) {
+		if f != nil {
+			o.GetUUIDGenerator = f
 		}
 	}
 }

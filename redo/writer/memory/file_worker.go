@@ -23,10 +23,10 @@ import (
 
 	"github.com/pierrec/lz4/v4"
 	"github.com/pingcap/log"
-	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/ticdc/redo/common"
 	"github.com/pingcap/ticdc/redo/writer"
+	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/compression"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/redo"
@@ -351,7 +351,7 @@ func (f *fileWorkerGroup) getLogFileName(maxCommitTS common.Ts) string {
 		return f.op.GetLogFileName()
 	}
 	uid := f.uuidGenerator.NewString()
-	if model.DefaultNamespace == f.cfg.ChangeFeedID.Namespace {
+	if common.DefaultNamespace == f.cfg.ChangeFeedID.Namespace {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
 			f.cfg.CaptureID, f.cfg.ChangeFeedID.ID, f.cfg.LogType,
 			maxCommitTS, uid, redo.LogEXT)

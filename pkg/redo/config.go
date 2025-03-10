@@ -22,9 +22,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/br/pkg/storage"
 )
 
 var (

@@ -24,14 +24,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/ticdc/redo/common"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/fsutil"
+	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/uuid"
+	misc "github.com/pingcap/ticdc/redo/common"
 	"github.com/pingcap/ticdc/redo/writer"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/fsutil"
-	"github.com/pingcap/tiflow/pkg/redo"
-	"github.com/pingcap/tiflow/pkg/uuid"
+	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/uber-go/atomic"
 	pioutil "go.etcd.io/etcd/pkg/v3/ioutil"
@@ -103,12 +103,12 @@ func NewFileWriter(
 		uint64buf: make([]byte, 8),
 		storage:   extStorage,
 
-		metricFsyncDuration: common.RedoFsyncDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Namespace, cfg.ChangeFeedID.ID, cfg.LogType),
-		metricFlushAllDuration: common.RedoFlushAllDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Namespace, cfg.ChangeFeedID.ID, cfg.LogType),
-		metricWriteBytes: common.RedoWriteBytesGauge.
-			WithLabelValues(cfg.ChangeFeedID.Namespace, cfg.ChangeFeedID.ID, cfg.LogType),
+		metricFsyncDuration: misc.RedoFsyncDurationHistogram.
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
+		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
+		metricWriteBytes: misc.RedoWriteBytesGauge.
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
 	}
 	if w.op.GetUUIDGenerator != nil {
 		w.uuidGenerator = w.op.GetUUIDGenerator()
@@ -145,7 +145,7 @@ func (w *Writer) Write(rawData []byte) (int, error) {
 
 	writeLen := int64(len(rawData))
 	if writeLen > w.cfg.MaxLogSizeInBytes {
-		return 0, errors.ErrFileSizeExceed.GenWithStackByArgs(writeLen, w.cfg.MaxLogSizeInBytes)
+		return 0, errors.ErrRedoFileSizeExceed.GenWithStackByArgs(writeLen, w.cfg.MaxLogSizeInBytes)
 	}
 
 	if w.file == nil {
@@ -212,12 +212,12 @@ func (w *Writer) Close() error {
 		return nil
 	}
 
-	common.RedoFlushAllDurationHistogram.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace, w.cfg.ChangeFeedID.ID, w.cfg.LogType)
-	common.RedoFsyncDurationHistogram.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace, w.cfg.ChangeFeedID.ID, w.cfg.LogType)
-	common.RedoWriteBytesGauge.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace, w.cfg.ChangeFeedID.ID, w.cfg.LogType)
+	misc.RedoFlushAllDurationHistogram.
+		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.cfg.LogType)
+	misc.RedoFsyncDurationHistogram.
+		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.cfg.LogType)
+	misc.RedoWriteBytesGauge.
+		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.cfg.LogType)
 
 	ctx, cancel := context.WithTimeout(context.Background(), redo.CloseTimeout)
 	defer cancel()
@@ -295,13 +295,13 @@ func (w *Writer) getLogFileName() string {
 		return w.op.GetLogFileName()
 	}
 	uid := w.uuidGenerator.NewString()
-	if model.DefaultNamespace == w.cfg.ChangeFeedID.Namespace {
+	if common.DefaultNamespace == w.cfg.ChangeFeedID.Namespace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
-			w.cfg.CaptureID, w.cfg.ChangeFeedID.ID, w.cfg.LogType,
+			w.cfg.CaptureID, w.cfg.ChangeFeedID.Name(), w.cfg.LogType,
 			w.commitTS.Load(), uid, redo.LogEXT)
 	}
 	return fmt.Sprintf(redo.RedoLogFileFormatV2,
-		w.cfg.CaptureID, w.cfg.ChangeFeedID.Namespace, w.cfg.ChangeFeedID.ID,
+		w.cfg.CaptureID, w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(),
 		w.cfg.LogType, w.commitTS.Load(), uid, redo.LogEXT)
 }
 

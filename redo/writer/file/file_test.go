@@ -21,14 +21,14 @@ import (
 	"testing"
 
 	backuppb "github.com/pingcap/kvproto/pkg/brpb"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/fsutil"
+	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/uuid"
+	misc "github.com/pingcap/ticdc/redo/common"
+	"github.com/pingcap/ticdc/redo/writer"
 	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/ticdc/redo/common"
-	"github.com/pingcap/ticdc/redo/writer"
-	"github.com/pingcap/tiflow/pkg/fsutil"
-	"github.com/pingcap/tiflow/pkg/redo"
-	"github.com/pingcap/tiflow/pkg/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/uber-go/atomic"
 	"go.uber.org/mock/gomock"
@@ -39,19 +39,19 @@ func TestWriterWrite(t *testing.T) {
 
 	dir := t.TempDir()
 	cfs := []common.ChangeFeedID{
-		model.DefaultChangeFeedID("test-cf"),
-		{
+		common.NewChangeFeedIDWithName("test-cf"),
+		common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			Namespace: "abcd",
-			ID:        "test-cf",
-		},
+			Name:      "test-cf",
+		}),
 	}
 
 	cf11s := []common.ChangeFeedID{
-		model.DefaultChangeFeedID("test-cf11"),
-		{
+		common.NewChangeFeedIDWithName("test-cf11"),
+		common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			Namespace: "abcd",
-			ID:        "test-cf11",
-		},
+			Name:      "test-cf11",
+		}),
 	}
 
 	for idx, cf := range cfs {
@@ -66,11 +66,11 @@ func TestWriterWrite(t *testing.T) {
 			},
 			uint64buf: make([]byte, 8),
 			running:   *atomic.NewBool(true),
-			metricWriteBytes: common.RedoWriteBytesGauge.
+			metricWriteBytes: misc.RedoWriteBytesGauge.
 				WithLabelValues("default", "test-cf", redo.RedoRowLogFileType),
-			metricFsyncDuration: common.RedoFsyncDurationHistogram.
+			metricFsyncDuration: misc.RedoFsyncDurationHistogram.
 				WithLabelValues("default", "test-cf", redo.RedoRowLogFileType),
-			metricFlushAllDuration: common.RedoFlushAllDurationHistogram.
+			metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
 				WithLabelValues("default", "test-cf", redo.RedoRowLogFileType),
 			uuidGenerator: uuidGen,
 		}
@@ -80,13 +80,13 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		var fileName string
 		// create a .tmp file
-		if w.cfg.ChangeFeedID.Namespace == model.DefaultNamespace {
+		if w.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.ID,
+				w.cfg.ChangeFeedID.Name(),
 				w.cfg.LogType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		} else {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Namespace, w.cfg.ChangeFeedID.ID,
+				w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(),
 				w.cfg.LogType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		}
 		path := filepath.Join(w.cfg.Dir, fileName)
@@ -102,13 +102,13 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 
 		// after rotate, rename to .log
-		if w.cfg.ChangeFeedID.Namespace == model.DefaultNamespace {
+		if w.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.ID,
+				w.cfg.ChangeFeedID.Name(),
 				w.cfg.LogType, 1, uuidGen.NewString(), redo.LogEXT)
 		} else {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Namespace, w.cfg.ChangeFeedID.ID,
+				w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(),
 				w.cfg.LogType, 1, uuidGen.NewString(), redo.LogEXT)
 		}
 		path = filepath.Join(w.cfg.Dir, fileName)
@@ -116,13 +116,13 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		require.Equal(t, fileName, info.Name())
 		// create a .tmp file with first eventCommitTS as name
-		if w.cfg.ChangeFeedID.Namespace == model.DefaultNamespace {
+		if w.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.ID,
+				w.cfg.ChangeFeedID.Name(),
 				w.cfg.LogType, 12, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		} else {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Namespace, w.cfg.ChangeFeedID.ID,
+				w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(),
 				w.cfg.LogType, 12, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		}
 		path = filepath.Join(w.cfg.Dir, fileName)
@@ -133,13 +133,13 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		require.False(t, w.IsRunning())
 		// safe close, rename to .log with max eventCommitTS as name
-		if w.cfg.ChangeFeedID.Namespace == model.DefaultNamespace {
+		if w.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.ID,
+				w.cfg.ChangeFeedID.Name(),
 				w.cfg.LogType, 22, uuidGen.NewString(), redo.LogEXT)
 		} else {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Namespace, w.cfg.ChangeFeedID.ID,
+				w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(),
 				w.cfg.LogType, 22, uuidGen.NewString(), redo.LogEXT)
 		}
 		path = filepath.Join(w.cfg.Dir, fileName)
@@ -157,11 +157,11 @@ func TestWriterWrite(t *testing.T) {
 			},
 			uint64buf: make([]byte, 8),
 			running:   *atomic.NewBool(true),
-			metricWriteBytes: common.RedoWriteBytesGauge.
+			metricWriteBytes: misc.RedoWriteBytesGauge.
 				WithLabelValues("default", "test-cf11", redo.RedoRowLogFileType),
-			metricFsyncDuration: common.RedoFsyncDurationHistogram.
+			metricFsyncDuration: misc.RedoFsyncDurationHistogram.
 				WithLabelValues("default", "test-cf11", redo.RedoRowLogFileType),
-			metricFlushAllDuration: common.RedoFlushAllDurationHistogram.
+			metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
 				WithLabelValues("default", "test-cf11", redo.RedoRowLogFileType),
 			uuidGenerator: uuidGen,
 		}
@@ -170,13 +170,13 @@ func TestWriterWrite(t *testing.T) {
 		_, err = w1.Write([]byte("tes1t11111"))
 		require.Nil(t, err)
 		// create a .tmp file
-		if w1.cfg.ChangeFeedID.Namespace == model.DefaultNamespace {
+		if w1.cfg.ChangeFeedID.Namespace() == common.DefaultNamespace {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w1.cfg.CaptureID,
-				w1.cfg.ChangeFeedID.ID,
+				w1.cfg.ChangeFeedID.Name(),
 				w1.cfg.LogType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		} else {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w1.cfg.CaptureID,
-				w1.cfg.ChangeFeedID.Namespace, w1.cfg.ChangeFeedID.ID,
+				w1.cfg.ChangeFeedID.Namespace(), w1.cfg.ChangeFeedID.Name(),
 				w1.cfg.LogType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		}
 		path = filepath.Join(w1.cfg.Dir, fileName)
@@ -236,10 +236,10 @@ func TestNewFileWriter(t *testing.T) {
 	mockStorage.EXPECT().WriteFile(gomock.Any(), "cp_abcd_test_ddl_0_const-uuid.log",
 		gomock.Any()).Return(nil).Times(1)
 
-	changefeed := common.ChangeFeedID{
+	changefeed := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 		Namespace: "abcd",
-		ID:        "test",
-	}
+		Name:      "test",
+	})
 	w = &Writer{
 		cfg: &writer.LogWriterConfig{
 			Dir:          dir,
@@ -252,11 +252,11 @@ func TestNewFileWriter(t *testing.T) {
 		},
 		uint64buf: make([]byte, 8),
 		storage:   mockStorage,
-		metricWriteBytes: common.RedoWriteBytesGauge.
+		metricWriteBytes: misc.RedoWriteBytesGauge.
 			WithLabelValues("default", "test", redo.RedoRowLogFileType),
-		metricFsyncDuration: common.RedoFsyncDurationHistogram.
+		metricFsyncDuration: misc.RedoFsyncDurationHistogram.
 			WithLabelValues("default", "test", redo.RedoRowLogFileType),
-		metricFlushAllDuration: common.RedoFlushAllDurationHistogram.
+		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
 			WithLabelValues("default", "test", redo.RedoRowLogFileType),
 		uuidGenerator: uuidGen,
 	}
@@ -294,10 +294,10 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 	uuidGen.Push("uuid-3")
 	uuidGen.Push("uuid-4")
 	uuidGen.Push("uuid-5")
-	changefeed := common.ChangeFeedID{
+	changefeed := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 		Namespace: "abcd",
-		ID:        "test",
-	}
+		Name:      "test",
+	})
 	w := &Writer{
 		cfg: &writer.LogWriterConfig{
 			Dir:          dir,
@@ -309,11 +309,11 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 			MaxLogSizeInBytes:  redo.DefaultMaxLogSize * redo.Megabyte,
 		},
 		uint64buf: make([]byte, 8),
-		metricWriteBytes: common.RedoWriteBytesGauge.
+		metricWriteBytes: misc.RedoWriteBytesGauge.
 			WithLabelValues("default", "test", redo.RedoRowLogFileType),
-		metricFsyncDuration: common.RedoFsyncDurationHistogram.
+		metricFsyncDuration: misc.RedoFsyncDurationHistogram.
 			WithLabelValues("default", "test", redo.RedoRowLogFileType),
-		metricFlushAllDuration: common.RedoFlushAllDurationHistogram.
+		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
 			WithLabelValues("default", "test", redo.RedoRowLogFileType),
 		storage:       mockStorage,
 		uuidGenerator: uuidGen,
@@ -361,10 +361,10 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 	uuidGen.Push("uuid-4")
 	uuidGen.Push("uuid-5")
 	uuidGen.Push("uuid-6")
-	changefeed := common.ChangeFeedID{
+	changefeed := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 		Namespace: "abcd",
-		ID:        "test",
-	}
+		Name:      "test",
+	})
 	w := &Writer{
 		cfg: &writer.LogWriterConfig{
 			Dir:          dir,
@@ -376,11 +376,11 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 			MaxLogSizeInBytes:  redo.DefaultMaxLogSize * redo.Megabyte,
 		},
 		uint64buf: make([]byte, 8),
-		metricWriteBytes: common.RedoWriteBytesGauge.
+		metricWriteBytes: misc.RedoWriteBytesGauge.
 			WithLabelValues("default", "test", redo.RedoDDLLogFileType),
-		metricFsyncDuration: common.RedoFsyncDurationHistogram.
+		metricFsyncDuration: misc.RedoFsyncDurationHistogram.
 			WithLabelValues("default", "test", redo.RedoDDLLogFileType),
-		metricFlushAllDuration: common.RedoFlushAllDurationHistogram.
+		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
 			WithLabelValues("default", "test", redo.RedoDDLLogFileType),
 		storage:       mockStorage,
 		uuidGenerator: uuidGen,

@@ -18,9 +18,10 @@ import (
 	"testing"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/tiflow/cdc/model"
+	"github.com/pingcap/ticdc/pkg/common"
+	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/redo/writer"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -33,12 +34,7 @@ func TestLogWriterWriteLog(t *testing.T) {
 		ctx  context.Context
 		rows []writer.RedoEvent
 	}
-	tableInfo := &model.TableInfo{
-		TableName: model.TableName{
-			Schema: "test",
-			Table:  "t",
-		},
-	}
+	tableInfo := &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t"}}
 	tests := []struct {
 		name      string
 		args      arg
@@ -135,8 +131,9 @@ func TestLogWriterWriteDDL(t *testing.T) {
 	type arg struct {
 		ctx     context.Context
 		tableID int64
-		ddl     *model.RedoDDLEvent
+		ddl     *pevent.DDLEvent
 	}
+	tableInfo := &common.TableInfo{}
 	tests := []struct {
 		name      string
 		args      arg
@@ -150,7 +147,7 @@ func TestLogWriterWriteDDL(t *testing.T) {
 			args: arg{
 				ctx:     context.Background(),
 				tableID: 1,
-				ddl:     &model.RedoDDLEvent{DDL: &pevent.DDLEvent{CommitTs: 1}},
+				ddl:     &pevent.DDLEvent{FinishedTs: 1, TableInfo: tableInfo},
 			},
 			isRunning: true,
 			writerErr: nil,
@@ -160,7 +157,7 @@ func TestLogWriterWriteDDL(t *testing.T) {
 			args: arg{
 				ctx:     context.Background(),
 				tableID: 1,
-				ddl:     &model.RedoDDLEvent{DDL: &pevent.DDLEvent{CommitTs: 1}},
+				ddl:     &pevent.DDLEvent{FinishedTs: 1, TableInfo: tableInfo},
 			},
 			writerErr: errors.New("err"),
 			wantErr:   errors.New("err"),
@@ -181,7 +178,7 @@ func TestLogWriterWriteDDL(t *testing.T) {
 			args: arg{
 				ctx:     context.Background(),
 				tableID: 1,
-				ddl:     &model.RedoDDLEvent{DDL: &pevent.DDLEvent{CommitTs: 1}},
+				ddl:     &pevent.DDLEvent{FinishedTs: 1, TableInfo: tableInfo},
 			},
 			writerErr: errors.ErrRedoWriterStopped,
 			isRunning: false,
@@ -192,7 +189,7 @@ func TestLogWriterWriteDDL(t *testing.T) {
 			args: arg{
 				ctx:     context.Background(),
 				tableID: 1,
-				ddl:     &model.RedoDDLEvent{DDL: &pevent.DDLEvent{CommitTs: 1}},
+				ddl:     &pevent.DDLEvent{FinishedTs: 1, TableInfo: tableInfo},
 			},
 			writerErr: nil,
 			isRunning: true,
@@ -218,7 +215,7 @@ func TestLogWriterWriteDDL(t *testing.T) {
 
 		var e writer.RedoEvent
 		if tt.args.ddl != nil {
-			e = tt.args.ddl.DDL
+			e = tt.args.ddl
 		}
 		err := w.WriteEvents(tt.args.ctx, e)
 		if tt.wantErr != nil {
@@ -301,7 +298,7 @@ func TestLogWriterFlushLog(t *testing.T) {
 		mockWriter.On("IsRunning").Return(tt.isRunning)
 		cfg := &writer.LogWriterConfig{
 			Dir:                dir,
-			ChangeFeedID:       model.DefaultChangeFeedID("test-cf"),
+			ChangeFeedID:       common.NewChangeFeedIDWithName("test-cf"),
 			CaptureID:          "cp",
 			MaxLogSizeInBytes:  10,
 			UseExternalStorage: true,
