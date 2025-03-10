@@ -97,7 +97,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 			// TODO:clean code
 			// create range checker if dispatcher is ddl dispatcher
 			// otherwise store dispatcherID in reportedDispatchers, and not create rangeChecker
-			if dispatcherID == controller.ddlDispatcherID {
+			if controller.isDDLDispatcher(dispatcherID) {
 				event.createRangeCheckerForTypeDB()
 			} else {
 				event.reportedDispatchers[dispatcherID] = struct{}{}
@@ -105,7 +105,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		case heartbeatpb.InfluenceType_All:
 			// create range checker if dispatcher is ddl dispatcher
 			// otherwise store dispatcherID in reportedDispatchers, and not create rangeChecker
-			if dispatcherID == controller.ddlDispatcherID {
+			if controller.isDDLDispatcher(dispatcherID) {
 				event.createRangeCheckerForTypeAll()
 			} else {
 				event.reportedDispatchers[dispatcherID] = struct{}{}
@@ -266,7 +266,7 @@ func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID
 	}
 	if be.rangeChecker == nil {
 		// rangeChecker is not created
-		if dispatcherID == be.controller.ddlDispatcherID {
+		if be.controller.isDDLDispatcher(dispatcherID) {
 			// create rangeChecker
 			switch be.blockedDispatchers.InfluenceType {
 			case heartbeatpb.InfluenceType_Normal:
@@ -423,11 +423,14 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 		if stm == nil || stm.GetNodeID() == "" {
 			log.Warn("writer dispatcher not found",
 				zap.String("changefeed", be.cfID.Name()),
+				zap.String("dispatcher", be.writerDispatcher.String()),
+				zap.Stringer("node", stm.GetNodeID()),
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Bool("isSyncPoint", be.isSyncPoint))
-			// todo: select a new writer
+			// TODO: select a new writer
 			return nil
 		}
+
 		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID())}
 	} else {
 		// the writer dispatcher is advanced, resend pass action

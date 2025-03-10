@@ -365,6 +365,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 		// It means it's a special task for stopping the table.
 		if region.isStopped() {
 			req := &cdcpb.ChangeDataRequest{
+				Header:    &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
 				RequestId: uint64(subID),
 				Request: &cdcpb.ChangeDataRequest_Deregister_{
 					Deregister: &cdcpb.ChangeDataRequest_Deregister{},
