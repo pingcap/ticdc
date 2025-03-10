@@ -26,17 +26,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// DMLProducer is the interface for message producer.
-type DMLProducer interface {
-	// AsyncSendMessage sends a message asynchronously.
-	AsyncSendMessage(
-		ctx context.Context, topic string, partition int32, message *common.Message,
-	) error
-	Run(ctx context.Context) error
-	// Close closes the producer and client(s).
-	Close()
-}
-
 // kafkaDMLProducer is used to send messages to kafka.
 type KafkaDMLProducer struct {
 	// id indicates which processor (changefeed) this sink belongs to.

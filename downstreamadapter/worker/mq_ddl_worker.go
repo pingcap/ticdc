@@ -31,8 +31,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// KafkaDDLWorker handle DDL and checkpoint event
-type KafkaDDLWorker struct {
+// MQDDLWorker handle DDL and checkpoint event
+type MQDDLWorker struct {
 	// changeFeedID indicates this sink belongs to which processor(changefeed).
 	changeFeedID commonType.ChangeFeedID
 
@@ -44,7 +44,7 @@ type KafkaDDLWorker struct {
 	// It is also responsible for creating topics.
 	topicManager topicmanager.TopicManager
 
-	// producer is used to send the messages to the Kafka broker.
+	// producer is used to send the messages to the MQ broker.
 	producer producer.DDLProducer
 
 	tableSchemaStore *util.TableSchemaStore
@@ -73,8 +73,8 @@ func getDDLDispatchRule(protocol config.Protocol) DDLDispatchRule {
 	return PartitionAll
 }
 
-// NewKafkaDDLWorker return a ddl worker instance.
-func NewKafkaDDLWorker(
+// NewMQDDLWorker return a ddl worker instance.
+func NewMQDDLWorker(
 	id commonType.ChangeFeedID,
 	protocol config.Protocol,
 	producer producer.DDLProducer,
@@ -82,8 +82,8 @@ func NewKafkaDDLWorker(
 	eventRouter *eventrouter.EventRouter,
 	topicManager topicmanager.TopicManager,
 	statistics *metrics.Statistics,
-) *KafkaDDLWorker {
-	return &KafkaDDLWorker{
+) *MQDDLWorker {
+	return &MQDDLWorker{
 		changeFeedID:     id,
 		encoder:          encoder,
 		producer:         producer,
@@ -95,28 +95,34 @@ func NewKafkaDDLWorker(
 	}
 }
 
-func (w *KafkaDDLWorker) Run(ctx context.Context) error {
+func (w *MQDDLWorker) Run(ctx context.Context) error {
 	return w.encodeAndSendCheckpointEvents(ctx)
 }
 
-func (w *KafkaDDLWorker) AddCheckpoint(ts uint64) {
+func (w *MQDDLWorker) AddCheckpoint(ts uint64) {
 	w.checkpointTsChan <- ts
 }
 
-func (w *KafkaDDLWorker) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (w *MQDDLWorker) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	w.tableSchemaStore = tableSchemaStore
 }
 
-func (w *KafkaDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent) error {
+func (w *MQDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent) error {
 	for _, e := range event.GetEvents() {
 		message, err := w.encoder.EncodeDDLEvent(e)
 		if err != nil {
 			return errors.Trace(err)
 		}
 		topic := w.eventRouter.GetTopicForDDL(e)
-
+		// Notice: We must call GetPartitionNum here,
+		// which will be responsible for automatically creating topics when they don't exist.
+		// If it is not called here and kafka has `auto.create.topics.enable` turned on,
+		// then the auto-created topic will not be created as configured by ticdc.
+		partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
+		if err != nil {
+			return errors.Trace(err)
+		}
 		if w.partitionRule == PartitionAll {
-			partitionNum, err := w.topicManager.GetPartitionNum(ctx, topic)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -132,13 +138,13 @@ func (w *KafkaDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEv
 			return errors.Trace(err)
 		}
 	}
-	log.Info("kafka ddl worker send block event", zap.Any("event", event))
+	log.Info("MQ ddl worker send block event", zap.Any("event", event))
 	// after flush all the ddl event, we call the callback function.
 	event.PostFlush()
 	return nil
 }
 
-func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) error {
+func (w *MQDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) error {
 	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
 	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
 
@@ -209,6 +215,6 @@ func (w *KafkaDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) erro
 	}
 }
 
-func (w *KafkaDDLWorker) Close() {
+func (w *MQDDLWorker) Close() {
 	w.producer.Close()
 }
