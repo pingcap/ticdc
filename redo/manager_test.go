@@ -151,11 +151,11 @@ func TestLogManagerInProcessor(t *testing.T) {
 		}
 		testCases := []struct {
 			span tablepb.Span
-			rows []*pevent.RowChangedEvent
+			rows []*pevent.DMLEvent
 		}{
 			{
 				span: spanz.TableIDToComparableSpan(53),
-				rows: []*pevent.RowChangedEvent{
+				rows: []*pevent.DMLEvent{
 					{CommitTs: 120, PhysicalTableID: 53, TableInfo: tableInfo},
 					{CommitTs: 125, PhysicalTableID: 53, TableInfo: tableInfo},
 					{CommitTs: 130, PhysicalTableID: 53, TableInfo: tableInfo},
@@ -163,20 +163,20 @@ func TestLogManagerInProcessor(t *testing.T) {
 			},
 			{
 				span: spanz.TableIDToComparableSpan(55),
-				rows: []*pevent.RowChangedEvent{
+				rows: []*pevent.DMLEvent{
 					{CommitTs: 130, PhysicalTableID: 55, TableInfo: tableInfo},
 					{CommitTs: 135, PhysicalTableID: 55, TableInfo: tableInfo},
 				},
 			},
 			{
 				span: spanz.TableIDToComparableSpan(57),
-				rows: []*pevent.RowChangedEvent{
+				rows: []*pevent.DMLEvent{
 					{CommitTs: 130, PhysicalTableID: 57, TableInfo: tableInfo},
 				},
 			},
 			{
 				span: spanz.TableIDToComparableSpan(59),
-				rows: []*pevent.RowChangedEvent{
+				rows: []*pevent.DMLEvent{
 					{CommitTs: 128, PhysicalTableID: 59, TableInfo: tableInfo},
 					{CommitTs: 130, PhysicalTableID: 59, TableInfo: tableInfo},
 					{CommitTs: 133, PhysicalTableID: 59, TableInfo: tableInfo},
@@ -184,7 +184,7 @@ func TestLogManagerInProcessor(t *testing.T) {
 			},
 		}
 		for _, tc := range testCases {
-			err := dmlMgr.EmitRowChangedEvents(ctx, tc.span, nil, tc.rows...)
+			err := dmlMgr.EmitDMLEvents(ctx, tc.span, nil, tc.rows...)
 			require.NoError(t, err)
 		}
 
@@ -305,9 +305,9 @@ func TestLogManagerError(t *testing.T) {
 		{
 			span: spanz.TableIDToComparableSpan(53),
 			rows: []writer.RedoEvent{
-				&pevent.RowChangedEvent{CommitTs: 120, PhysicalTableID: 53, TableInfo: tableInfo},
-				&pevent.RowChangedEvent{CommitTs: 125, PhysicalTableID: 53, TableInfo: tableInfo},
-				&pevent.RowChangedEvent{CommitTs: 130, PhysicalTableID: 53, TableInfo: tableInfo},
+				&pevent.DMLEvent{CommitTs: 120, PhysicalTableID: 53, TableInfo: tableInfo},
+				&pevent.DMLEvent{CommitTs: 125, PhysicalTableID: 53, TableInfo: tableInfo},
+				&pevent.DMLEvent{CommitTs: 130, PhysicalTableID: 53, TableInfo: tableInfo},
 			},
 		},
 	}
@@ -379,13 +379,13 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		go func(span tablepb.Span) {
 			defer wg.Done()
 			maxCommitTs := maxTsMap.GetV(span)
-			var rows []*pevent.RowChangedEvent
+			var rows []*pevent.DMLEvent
 			for i := 0; i < maxRowCount; i++ {
 				if i%100 == 0 {
 					// prepare new row change events
 					b.StopTimer()
 					*maxCommitTs += rand.Uint64() % 10
-					rows = []*pevent.RowChangedEvent{
+					rows = []*pevent.DMLEvent{
 						{CommitTs: *maxCommitTs, PhysicalTableID: span.TableID, TableInfo: tableInfo},
 						{CommitTs: *maxCommitTs, PhysicalTableID: span.TableID, TableInfo: tableInfo},
 						{CommitTs: *maxCommitTs, PhysicalTableID: span.TableID, TableInfo: tableInfo},
@@ -393,7 +393,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 
 					b.StartTimer()
 				}
-				dmlMgr.EmitRowChangedEvents(ctx, span, nil, rows...)
+				dmlMgr.EmitDMLEvents(ctx, span, nil, rows...)
 				if i%100 == 0 {
 					dmlMgr.UpdateResolvedTs(ctx, span, *maxCommitTs)
 				}

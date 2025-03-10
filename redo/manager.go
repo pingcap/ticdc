@@ -103,11 +103,11 @@ type DMLManager interface {
 	RemoveTable(span tablepb.Span)
 	UpdateResolvedTs(ctx context.Context, span tablepb.Span, resolvedTs uint64) error
 	GetResolvedTs(span tablepb.Span) common.Ts
-	EmitRowChangedEvents(
+	EmitDMLEvents(
 		ctx context.Context,
 		span tablepb.Span,
 		releaseRowsMemory func(),
-		rows ...*pevent.RowChangedEvent,
+		rows ...*pevent.DMLEvent,
 	) error
 }
 
@@ -131,12 +131,12 @@ type dmlManager struct {
 	*logManager
 }
 
-// EmitRowChangedEvents emits row changed events to the redo log.
-func (m *dmlManager) EmitRowChangedEvents(
+// EmitDMLEvents emits row changed events to the redo log.
+func (m *dmlManager) EmitDMLEvents(
 	ctx context.Context,
 	span tablepb.Span,
 	releaseRowsMemory func(),
-	rows ...*pevent.RowChangedEvent,
+	rows ...*pevent.DMLEvent,
 ) error {
 	var events []writer.RedoEvent
 	for _, row := range rows {

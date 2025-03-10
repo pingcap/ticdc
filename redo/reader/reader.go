@@ -46,7 +46,7 @@ type RedoLogReader interface {
 	// Run read and decode redo logs in background.
 	Run(ctx context.Context) error
 	// ReadNextRow read one row event from redo logs.
-	ReadNextRow(ctx context.Context) (*pevent.RowChangedEvent, error)
+	ReadNextRow(ctx context.Context) (*pevent.DMLEvent, error)
 	// ReadNextDDL read one ddl event from redo logs.
 	ReadNextDDL(ctx context.Context) (*pevent.DDLEvent, error)
 	// ReadMeta reads meta from redo logs and returns the latest checkpointTs and resolvedTs
@@ -87,7 +87,7 @@ type LogReaderConfig struct {
 type LogReader struct {
 	cfg   *LogReaderConfig
 	meta  *common.LogMeta
-	rowCh chan *pevent.RowChangedEventInRedoLog
+	rowCh chan *pevent.DMLEventInRedoLog
 	ddlCh chan *pevent.DDLEvent
 }
 
@@ -106,7 +106,7 @@ func newLogReader(ctx context.Context, cfg *LogReaderConfig) (*LogReader, error)
 
 	logReader := &LogReader{
 		cfg:   cfg,
-		rowCh: make(chan *pevent.RowChangedEventInRedoLog, defaultReaderChanSize),
+		rowCh: make(chan *pevent.DMLEventInRedoLog, defaultReaderChanSize),
 		ddlCh: make(chan *pevent.DDLEvent, defaultReaderChanSize),
 	}
 	// remove logs in local dir first, if have logs left belongs to previous changefeed with the same name may have error when apply logs
@@ -234,13 +234,13 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 }
 
 // ReadNextRow implement the `RedoLogReader` interface.
-func (l *LogReader) ReadNextRow(ctx context.Context) (*pevent.RowChangedEvent, error) {
+func (l *LogReader) ReadNextRow(ctx context.Context) (*pevent.DMLEvent, error) {
 	select {
 	case <-ctx.Done():
 		return nil, errors.Trace(ctx.Err())
 	case rowInRedoLog := <-l.rowCh:
 		if rowInRedoLog != nil {
-			return rowInRedoLog.ToRowChangedEvent(), nil
+			return rowInRedoLog.ToDMLEvent(), nil
 		}
 		return nil, nil
 	}
@@ -369,10 +369,10 @@ func (h logHeap) Less(i, j int) bool {
 			return h[i].data.RedoRow.Row.StartTs < h[j].data.RedoRow.Row.StartTs
 		}
 		// in the same txn, we need to sort by delete/update/insert order
-		if h[i].data.RedoRow.Row.ToRowChangedEvent().IsDelete() {
+		if h[i].data.RedoRow.Row.ToDMLEvent().IsDelete() {
 			return true
-		} else if h[i].data.RedoRow.Row.ToRowChangedEvent().IsUpdate() {
-			return !h[j].data.RedoRow.Row.ToRowChangedEvent().IsDelete()
+		} else if h[i].data.RedoRow.Row.ToDMLEvent().IsUpdate() {
+			return !h[j].data.RedoRow.Row.ToDMLEvent().IsDelete()
 		}
 		return false
 	}

@@ -52,7 +52,7 @@ func TestLogWriterWriteLog(t *testing.T) {
 			args: arg{
 				ctx: context.Background(),
 				rows: []writer.RedoEvent{
-					&pevent.RowChangedEvent{CommitTs: 1, PhysicalTableID: 111, TableInfo: tableInfo},
+					&pevent.DMLEvent{CommitTs: 1, PhysicalTableID: 111, TableInfo: tableInfo},
 				},
 			},
 			isRunning: true,
@@ -64,7 +64,7 @@ func TestLogWriterWriteLog(t *testing.T) {
 				ctx: context.Background(),
 				rows: []writer.RedoEvent{
 					nil,
-					&pevent.RowChangedEvent{CommitTs: 1, PhysicalTableID: 11, TableInfo: tableInfo},
+					&pevent.DMLEvent{CommitTs: 1, PhysicalTableID: 11, TableInfo: tableInfo},
 				},
 			},
 			writerErr: errors.New("err"),

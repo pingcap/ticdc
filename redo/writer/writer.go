@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	_ RedoEvent = (*pevent.RowChangedEvent)(nil)
+	_ RedoEvent = (*pevent.DMLEvent)(nil)
 	_ RedoEvent = (*pevent.DDLEvent)(nil)
 )
 

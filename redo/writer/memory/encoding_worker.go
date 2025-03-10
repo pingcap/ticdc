@@ -44,7 +44,7 @@ var (
 )
 
 type polymorphicRedoEvent struct {
-	// event is the redo event (pevent.RowChangedEvent or pevent.DDLEvent) to be encoded.
+	// event is the redo event (pevent.DMLEvent or pevent.DDLEvent) to be encoded.
 	event writer.RedoEvent
 	// data is the encoded redo event.
 	data     *bytes.Buffer

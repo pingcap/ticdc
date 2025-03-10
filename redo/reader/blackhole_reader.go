@@ -33,7 +33,7 @@ func (br *BlackHoleReader) Run(ctx context.Context) error {
 }
 
 // ReadNextRow implements LogReader.ReadNextRow
-func (br *BlackHoleReader) ReadNextRow(ctx context.Context) (*pevent.RowChangedEvent, error) {
+func (br *BlackHoleReader) ReadNextRow(ctx context.Context) (*pevent.DMLEvent, error) {
 	return nil, nil
 }
 
