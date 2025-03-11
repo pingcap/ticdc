@@ -131,10 +131,6 @@ func (be *BarrierEvent) createRangeCheckerForTypeAll() {
 		be.rangeChecker = range_checker.NewTableSpanRangeChecker(tbls)
 	} else {
 		be.rangeChecker = range_checker.NewTableCountChecker(be.controller.TaskSize())
-		spans := be.controller.GetAllTasks()
-		for _, span := range spans {
-			log.Info("createRangeCheckerForTypeAll task", zap.Any("span dispatcherID", span.ID))
-		}
 	}
 	log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs))
 }
