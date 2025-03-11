@@ -200,6 +200,16 @@ func (r *RedoLog) GetCommitTs() common.Ts {
 	}
 }
 
+// IsDelete checks whether it's a deletion or not.
+func (r RedoDMLEvent) IsDelete() bool {
+	return len(r.Row.PreColumns) > 0 && len(r.Row.Columns) == 0
+}
+
+// IsUpdate checks whether it's a update or not.
+func (r RedoDMLEvent) IsUpdate() bool {
+	return len(r.Row.PreColumns) > 0 && len(r.Row.Columns) > 0
+}
+
 func parseColumnValue(row *chunk.Row, column *model.ColumnInfo, i int) RedoColumnValue {
 	v, err := common.FormatColVal(row, column, i)
 	if err != nil {

@@ -16,7 +16,7 @@ package reader
 import (
 	"context"
 
-	"github.com/pingcap/tiflow/cdc/model"
+	pevent "github.com/pingcap/ticdc/pkg/common/event"
 )
 
 // BlackHoleReader is a blockHole storage which implements LogReader interface
@@ -33,13 +33,13 @@ func (br *BlackHoleReader) Run(ctx context.Context) error {
 }
 
 // ReadNextRow implements LogReader.ReadNextRow
-func (br *BlackHoleReader) ReadNextRow(ctx context.Context) (*pevent.DMLEvent, error) {
-	return nil, nil
+func (br *BlackHoleReader) ReadNextRow(ctx context.Context) (pevent.RedoDMLEvent, bool, error) {
+	return pevent.RedoDMLEvent{}, false, nil
 }
 
 // ReadNextDDL implements LogReader.ReadNextDDL
-func (br *BlackHoleReader) ReadNextDDL(ctx context.Context) (*pevent.DDLEvent, error) {
-	return nil, nil
+func (br *BlackHoleReader) ReadNextDDL(ctx context.Context) (pevent.RedoDDLEvent, bool, error) {
+	return pevent.RedoDDLEvent{}, false, nil
 }
 
 // ReadMeta implements LogReader.ReadMeta

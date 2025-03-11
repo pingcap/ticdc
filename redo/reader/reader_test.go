@@ -23,12 +23,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pingcap/ticdc/redo/common"
+	"github.com/pingcap/ticdc/pkg/common"
+	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/redo/codec"
+	misc "github.com/pingcap/ticdc/redo/common"
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/ticdc/redo/writer/file"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/cdc/model/codec"
-	"github.com/pingcap/tiflow/pkg/redo"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -53,8 +54,8 @@ func genLogFile(
 		for ts := maxCommitTs; ts >= minCommitTs; ts-- {
 			event := &pevent.DMLEvent{
 				CommitTs: ts,
-				TableInfo: &model.TableInfo{
-					TableName: model.TableName{
+				TableInfo: &common.TableInfo{
+					TableName: common.TableName{
 						Schema: "test",
 						Table:  "t",
 					},
@@ -68,8 +69,8 @@ func genLogFile(
 		}
 	} else if logType == redo.RedoDDLLogFileType {
 		event := &pevent.DDLEvent{
-			CommitTs:  maxCommitTs,
-			TableInfo: &model.TableInfo{},
+			FinishedTs: maxCommitTs,
+			TableInfo:  &common.TableInfo{},
 		}
 		log := event.ToRedoLog()
 		rawData, err := codec.MarshalRedoLog(log, nil)
@@ -87,7 +88,7 @@ func TestReadLogs(t *testing.T) {
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 
-	meta := &common.LogMeta{
+	meta := &misc.LogMeta{
 		CheckpointTs: 11,
 		ResolvedTs:   100,
 	}
@@ -109,8 +110,8 @@ func TestReadLogs(t *testing.T) {
 			UseExternalStorage: true,
 		},
 		meta:  meta,
-		rowCh: make(chan *pevent.DMLEventInRedoLog, defaultReaderChanSize),
-		ddlCh: make(chan *pevent.DDLEvent, defaultReaderChanSize),
+		rowCh: make(chan pevent.RedoDMLEvent, defaultReaderChanSize),
+		ddlCh: make(chan pevent.RedoDDLEvent, defaultReaderChanSize),
 	}
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
@@ -118,14 +119,16 @@ func TestReadLogs(t *testing.T) {
 	})
 
 	for _, ts := range expectedRows {
-		row, err := r.ReadNextRow(egCtx)
+		row, ok, err := r.ReadNextRow(egCtx)
+		require.True(t, ok)
 		require.NoError(t, err)
-		require.Equal(t, ts, row.CommitTs)
+		require.Equal(t, ts, row.Row.CommitTs)
 	}
 	for _, ts := range expectedDDLs {
-		ddl, err := r.ReadNextDDL(egCtx)
+		ddl, ok, err := r.ReadNextDDL(egCtx)
+		require.True(t, ok)
 		require.NoError(t, err)
-		require.Equal(t, ts, ddl.CommitTs)
+		require.Equal(t, ts, ddl.DDL.CommitTs)
 	}
 
 	cancel()
@@ -138,7 +141,7 @@ func TestLogReaderClose(t *testing.T) {
 	dir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 
-	meta := &common.LogMeta{
+	meta := &misc.LogMeta{
 		CheckpointTs: 11,
 		ResolvedTs:   100,
 	}
@@ -158,8 +161,8 @@ func TestLogReaderClose(t *testing.T) {
 			UseExternalStorage: true,
 		},
 		meta:  meta,
-		rowCh: make(chan *pevent.DMLEventInRedoLog, 1),
-		ddlCh: make(chan *pevent.DDLEvent, 1),
+		rowCh: make(chan pevent.RedoDMLEvent, 1),
+		ddlCh: make(chan pevent.RedoDDLEvent, 1),
 	}
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
@@ -175,11 +178,11 @@ func TestNewLogReaderAndReadMeta(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	genMetaFile(t, dir, &common.LogMeta{
+	genMetaFile(t, dir, &misc.LogMeta{
 		CheckpointTs: 11,
 		ResolvedTs:   22,
 	})
-	genMetaFile(t, dir, &common.LogMeta{
+	genMetaFile(t, dir, &misc.LogMeta{
 		CheckpointTs: 12,
 		ResolvedTs:   21,
 	})
@@ -241,7 +244,7 @@ func TestNewLogReaderAndReadMeta(t *testing.T) {
 	}
 }
 
-func genMetaFile(t *testing.T, dir string, meta *common.LogMeta) {
+func genMetaFile(t *testing.T, dir string, meta *misc.LogMeta) {
 	fileName := fmt.Sprintf(redo.RedoMetaFileFormat, "capture", "default",
 		"changefeed", redo.RedoMetaFileType, uuid.NewString(), redo.MetaEXT)
 	path := filepath.Join(dir, fileName)
@@ -267,22 +270,20 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
 									IsPartition: false,
 								},
-								PreColumns: []*model.Column{
+								PreColumns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 2,
+										Name: "col-2",
 									},
 								},
 							},
@@ -292,31 +293,27 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
 									IsPartition: false,
 								},
-								PreColumns: []*model.Column{
+								PreColumns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 2,
+										Name: "col-2",
 									},
 								},
-								Columns: []*model.Column{
+								Columns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 3,
+										Name: "col-2",
 									},
 								},
 							},
@@ -334,31 +331,27 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
 									IsPartition: false,
 								},
-								PreColumns: []*model.Column{
+								PreColumns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 2,
+										Name: "col-2",
 									},
 								},
-								Columns: []*model.Column{
+								Columns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 3,
+										Name: "col-2",
 									},
 								},
 							},
@@ -368,22 +361,20 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
 									IsPartition: false,
 								},
-								Columns: []*model.Column{
+								Columns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 1,
+										Name: "col-2",
 									},
 								},
 							},
@@ -401,31 +392,27 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
 									IsPartition: false,
 								},
-								PreColumns: []*model.Column{
+								PreColumns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 2,
+										Name: "col-2",
 									},
 								},
-								Columns: []*model.Column{
+								Columns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 3,
+										Name: "col-2",
 									},
 								},
 							},
@@ -435,22 +422,20 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
 									IsPartition: false,
 								},
-								PreColumns: []*model.Column{
+								PreColumns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 1,
+										Name: "col-2",
 									},
 								},
 							},
@@ -468,31 +453,27 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
 									IsPartition: false,
 								},
-								PreColumns: []*model.Column{
+								PreColumns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 2,
+										Name: "col-2",
 									},
 								},
-								Columns: []*model.Column{
+								Columns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 3,
+										Name: "col-2",
 									},
 								},
 							},
@@ -502,31 +483,27 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
 									IsPartition: false,
 								},
-								PreColumns: []*model.Column{
+								PreColumns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 1,
+										Name: "col-2",
 									},
 								},
-								Columns: []*model.Column{
+								Columns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 4,
+										Name: "col-2",
 									},
 								},
 							},
@@ -544,22 +521,20 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
 									IsPartition: false,
 								},
-								PreColumns: []*model.Column{
+								PreColumns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 1,
+										Name: "col-2",
 									},
 								},
 							},
@@ -569,22 +544,20 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
 									IsPartition: false,
 								},
-								Columns: []*model.Column{
+								Columns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 3,
+										Name: "col-2",
 									},
 								},
 							},
@@ -602,10 +575,10 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
@@ -618,10 +591,10 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 200,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
@@ -642,11 +615,11 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
 								StartTs:  80,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
@@ -659,11 +632,11 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
 								StartTs:  90,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
@@ -684,31 +657,27 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
 									IsPartition: false,
 								},
-								PreColumns: []*model.Column{
+								PreColumns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 2,
+										Name: "col-2",
 									},
 								},
-								Columns: []*model.Column{
+								Columns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 3,
+										Name: "col-2",
 									},
 								},
 							},
@@ -718,31 +687,27 @@ func TestLogHeapLess(t *testing.T) {
 				{
 					data: &pevent.RedoLog{
 						Type: pevent.RedoLogTypeRow,
-						RedoRow: model.RedoDMLEvent{
+						RedoRow: pevent.RedoDMLEvent{
 							Row: &pevent.DMLEventInRedoLog{
 								CommitTs: 100,
-								Table: &model.TableName{
+								Table: &common.TableName{
 									Schema:      "test",
 									Table:       "table",
 									TableID:     1,
 									IsPartition: false,
 								},
-								PreColumns: []*model.Column{
+								PreColumns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 1,
+										Name: "col-2",
 									},
 								},
-								Columns: []*model.Column{
+								Columns: []*pevent.RedoColumn{
 									{
-										Name:  "col-1",
-										Value: 1,
+										Name: "col-1",
 									}, {
-										Name:  "col-2",
-										Value: 3,
+										Name: "col-2",
 									},
 								},
 							},
