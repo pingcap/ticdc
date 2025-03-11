@@ -370,7 +370,6 @@ func (s *remoteMessageTarget) runSendMessages(sendCtx context.Context, stream gr
 					zap.Any("messageCenterID", s.messageCenterID),
 					zap.Any("remote", s.targetId))
 				err = AppError{Type: ErrorTypeMessageSendFailed, Reason: err.Error()}
-				s.collectErr(err.(AppError))
 				return err
 			}
 		}
