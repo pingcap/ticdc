@@ -185,7 +185,7 @@ func (c *EventCollector) Close() {
 }
 
 func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64) {
-	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()), zap.Any("send commit", target.GetStartTs()))
+	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
 	}()
