@@ -21,11 +21,11 @@ import (
 	"sync/atomic"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/redo/codec"
 	"github.com/pingcap/ticdc/redo/writer"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/cdc/model/codec"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/redo"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -128,8 +128,8 @@ func newEncodingWorkerGroup(cfg *writer.LogWriterConfig) *encodingWorkerGroup {
 func (e *encodingWorkerGroup) Run(ctx context.Context) (err error) {
 	defer func() {
 		log.Warn("redo encoding workers closed",
-			zap.String("namespace", e.changefeed.Namespace),
-			zap.String("changefeed", e.changefeed.ID),
+			zap.String("namespace", e.changefeed.Namespace()),
+			zap.String("changefeed", e.changefeed.Name()),
 			zap.Error(err))
 		if err != nil {
 			e.closed <- err
@@ -144,8 +144,8 @@ func (e *encodingWorkerGroup) Run(ctx context.Context) (err error) {
 		})
 	}
 	log.Info("redo log encoding workers started",
-		zap.String("namespace", e.changefeed.Namespace),
-		zap.String("changefeed", e.changefeed.ID),
+		zap.String("namespace", e.changefeed.Namespace()),
+		zap.String("changefeed", e.changefeed.Name()),
 		zap.Int("workerNum", e.workerNum))
 	return eg.Wait()
 }

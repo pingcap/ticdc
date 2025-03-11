@@ -133,7 +133,6 @@ func TestLogWriterWriteDDL(t *testing.T) {
 		tableID int64
 		ddl     *pevent.DDLEvent
 	}
-	tableInfo := &common.TableInfo{}
 	tests := []struct {
 		name      string
 		args      arg
@@ -147,7 +146,7 @@ func TestLogWriterWriteDDL(t *testing.T) {
 			args: arg{
 				ctx:     context.Background(),
 				tableID: 1,
-				ddl:     &pevent.DDLEvent{FinishedTs: 1, TableInfo: tableInfo},
+				ddl:     &pevent.DDLEvent{FinishedTs: 1},
 			},
 			isRunning: true,
 			writerErr: nil,
@@ -157,7 +156,7 @@ func TestLogWriterWriteDDL(t *testing.T) {
 			args: arg{
 				ctx:     context.Background(),
 				tableID: 1,
-				ddl:     &pevent.DDLEvent{FinishedTs: 1, TableInfo: tableInfo},
+				ddl:     &pevent.DDLEvent{FinishedTs: 1},
 			},
 			writerErr: errors.New("err"),
 			wantErr:   errors.New("err"),
@@ -178,7 +177,7 @@ func TestLogWriterWriteDDL(t *testing.T) {
 			args: arg{
 				ctx:     context.Background(),
 				tableID: 1,
-				ddl:     &pevent.DDLEvent{FinishedTs: 1, TableInfo: tableInfo},
+				ddl:     &pevent.DDLEvent{FinishedTs: 1},
 			},
 			writerErr: errors.ErrRedoWriterStopped,
 			isRunning: false,
@@ -189,7 +188,7 @@ func TestLogWriterWriteDDL(t *testing.T) {
 			args: arg{
 				ctx:     context.Background(),
 				tableID: 1,
-				ddl:     &pevent.DDLEvent{FinishedTs: 1, TableInfo: tableInfo},
+				ddl:     &pevent.DDLEvent{FinishedTs: 1},
 			},
 			writerErr: nil,
 			isRunning: true,

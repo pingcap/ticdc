@@ -20,11 +20,12 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
+	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/redo/writer"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/redo"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,17 +37,17 @@ func TestWriteDDL(t *testing.T) {
 		&pevent.DMLEvent{
 			PhysicalTableID: 11,
 			CommitTs:        11,
-			TableInfo:       &model.TableInfo{TableName: model.TableName{Schema: "test", Table: "t1"}},
+			TableInfo:       &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t1"}},
 		},
 		&pevent.DMLEvent{
 			PhysicalTableID: 12,
 			CommitTs:        15,
-			TableInfo:       &model.TableInfo{TableName: model.TableName{Schema: "test", Table: "t2"}},
+			TableInfo:       &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t2"}},
 		},
 		&pevent.DMLEvent{
 			PhysicalTableID: 12,
 			CommitTs:        8,
-			TableInfo:       &model.TableInfo{TableName: model.TableName{Schema: "test", Table: "t2"}},
+			TableInfo:       &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t2"}},
 		},
 	}
 	testWriteEvents(t, rows)
@@ -57,9 +58,9 @@ func TestWriteDML(t *testing.T) {
 
 	ddls := []writer.RedoEvent{
 		nil,
-		&pevent.DDLEvent{CommitTs: 1},
-		&pevent.DDLEvent{CommitTs: 10},
-		&pevent.DDLEvent{CommitTs: 8},
+		&pevent.DDLEvent{FinishedTs: 1},
+		&pevent.DDLEvent{FinishedTs: 10},
+		&pevent.DDLEvent{FinishedTs: 8},
 	}
 	testWriteEvents(t, ddls)
 }
@@ -73,7 +74,7 @@ func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 	lwcfg := &writer.LogWriterConfig{
 		LogType:            redo.RedoDDLLogFileType,
 		CaptureID:          "test-capture",
-		ChangeFeedID:       model.DefaultChangeFeedID("test-changefeed"),
+		ChangeFeedID:       common.NewChangeFeedIDWithName("test-changefeed"),
 		URI:                uri,
 		UseExternalStorage: true,
 		MaxLogSizeInBytes:  10 * redo.Megabyte,

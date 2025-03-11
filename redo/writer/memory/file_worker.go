@@ -23,14 +23,14 @@ import (
 
 	"github.com/pierrec/lz4/v4"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/redo/common"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/compression"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/uuid"
+	misc "github.com/pingcap/ticdc/redo/common"
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/compression"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/redo"
-	"github.com/pingcap/tiflow/pkg/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -143,10 +143,10 @@ func newFileWorkerGroup(
 			},
 		},
 		flushCh: make(chan *fileCache),
-		metricWriteBytes: common.RedoWriteBytesGauge.
-			WithLabelValues(cfg.ChangeFeedID.Namespace, cfg.ChangeFeedID.ID, cfg.LogType),
-		metricFlushAllDuration: common.RedoFlushAllDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Namespace, cfg.ChangeFeedID.ID, cfg.LogType),
+		metricWriteBytes: misc.RedoWriteBytesGauge.
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
+		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
 	}
 }
 
@@ -156,8 +156,8 @@ func (f *fileWorkerGroup) Run(
 	defer func() {
 		f.close()
 		log.Warn("redo file workers closed",
-			zap.String("namespace", f.cfg.ChangeFeedID.Namespace),
-			zap.String("changefeed", f.cfg.ChangeFeedID.ID),
+			zap.String("namespace", f.cfg.ChangeFeedID.Namespace()),
+			zap.String("changefeed", f.cfg.ChangeFeedID.Name()),
 			zap.Error(err))
 	}()
 
@@ -171,17 +171,17 @@ func (f *fileWorkerGroup) Run(
 		})
 	}
 	log.Info("redo file workers started",
-		zap.String("namespace", f.cfg.ChangeFeedID.Namespace),
-		zap.String("changefeed", f.cfg.ChangeFeedID.ID),
+		zap.String("namespace", f.cfg.ChangeFeedID.Namespace()),
+		zap.String("changefeed", f.cfg.ChangeFeedID.Name()),
 		zap.Int("workerNum", f.workerNum))
 	return eg.Wait()
 }
 
 func (f *fileWorkerGroup) close() {
-	common.RedoFlushAllDurationHistogram.
-		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace, f.cfg.ChangeFeedID.ID, f.cfg.LogType)
-	common.RedoWriteBytesGauge.
-		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace, f.cfg.ChangeFeedID.ID, f.cfg.LogType)
+	misc.RedoFlushAllDurationHistogram.
+		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.cfg.LogType)
+	misc.RedoWriteBytesGauge.
+		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.cfg.LogType)
 }
 
 func (f *fileWorkerGroup) bgFlushFileCache(egCtx context.Context) error {
@@ -299,7 +299,7 @@ func (f *fileWorkerGroup) writeToCache(
 	writeLen := int64(event.data.Len())
 	if writeLen > f.cfg.MaxLogSizeInBytes {
 		// TODO: maybe we need to deal with the oversized event.
-		return errors.ErrFileSizeExceed.GenWithStackByArgs(writeLen, f.cfg.MaxLogSizeInBytes)
+		return errors.ErrRedoFileSizeExceed.GenWithStackByArgs(writeLen, f.cfg.MaxLogSizeInBytes)
 	}
 	defer f.metricWriteBytes.Add(float64(writeLen))
 
@@ -351,12 +351,12 @@ func (f *fileWorkerGroup) getLogFileName(maxCommitTS common.Ts) string {
 		return f.op.GetLogFileName()
 	}
 	uid := f.uuidGenerator.NewString()
-	if common.DefaultNamespace == f.cfg.ChangeFeedID.Namespace {
+	if common.DefaultNamespace == f.cfg.ChangeFeedID.Namespace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
-			f.cfg.CaptureID, f.cfg.ChangeFeedID.ID, f.cfg.LogType,
+			f.cfg.CaptureID, f.cfg.ChangeFeedID.Name(), f.cfg.LogType,
 			maxCommitTS, uid, redo.LogEXT)
 	}
 	return fmt.Sprintf(redo.RedoLogFileFormatV2,
-		f.cfg.CaptureID, f.cfg.ChangeFeedID.Namespace, f.cfg.ChangeFeedID.ID,
+		f.cfg.CaptureID, f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(),
 		f.cfg.LogType, maxCommitTS, uid, redo.LogEXT)
 }

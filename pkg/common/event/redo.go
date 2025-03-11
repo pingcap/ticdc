@@ -106,14 +106,9 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 	redoLog := &RedoLog{
 		RedoRow: RedoDMLEvent{
 			Row: &DMLEventInRedoLog{
-				StartTs:  r.StartTs,
-				CommitTs: r.CommitTs,
-				Table: &common.TableName{
-					Schema:      r.TableInfo.GetSchemaName(),
-					Table:       r.TableInfo.GetTableName(),
-					TableID:     r.PhysicalTableID,
-					IsPartition: r.TableInfo.IsPartitionTable(),
-				},
+				StartTs:      r.StartTs,
+				CommitTs:     r.CommitTs,
+				Table:        nil,
 				Columns:      nil,
 				PreColumns:   nil,
 				IndexColumns: nil,
@@ -124,7 +119,10 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 		Type: RedoLogTypeRow,
 	}
 
-	if valid {
+	if valid && r.TableInfo != nil {
+		redoLog.RedoRow.Row.Table = new(common.TableName)
+		*redoLog.RedoRow.Row.Table = r.TableInfo.TableName
+
 		columnCount := len(r.TableInfo.GetColumns())
 		columns := make([]*RedoColumn, 0, columnCount)
 		switch row.RowType {
@@ -171,18 +169,22 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 
 // ToRedoLog converts ddl event to redo log
 func (d *DDLEvent) ToRedoLog() *RedoLog {
-	return &RedoLog{
+	redoLog := &RedoLog{
 		RedoDDL: RedoDDLEvent{
 			DDL: &DDLEventInRedoLog{
 				StartTs:  d.GetStartTs(),
 				CommitTs: d.GetCommitTs(),
 				Query:    d.Query,
 			},
-			Type:      d.Type,
-			TableName: d.TableInfo.TableName,
+			Type: d.Type,
 		},
 		Type: RedoLogTypeDDL,
 	}
+	if d.TableInfo != nil {
+		redoLog.RedoDDL.TableName = d.TableInfo.TableName
+	}
+
+	return redoLog
 }
 
 // GetCommitTs returns commit timestamp of the log event.
