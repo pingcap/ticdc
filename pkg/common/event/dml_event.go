@@ -387,16 +387,3 @@ const (
 	// RowTypeUpdate represents a update row.
 	RowTypeUpdate
 )
-
-func RowTypeToString(rowType RowType) string {
-	switch rowType {
-	case RowTypeInsert:
-		return "Insert"
-	case RowTypeDelete:
-		return "Delete"
-	case RowTypeUpdate:
-		return "Update"
-	default:
-		return "Unknown"
-	}
-}
