@@ -92,7 +92,6 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 	if len(raw.Value) != 0 {
 		if !rowcodec.IsNewFormat(raw.Value) {
 			err = m.rawKVToChunkV1(raw.Value, tableInfo, chk, recordID)
-
 		} else {
 			err = m.rawKVToChunkV2(raw.Value, tableInfo, chk, recordID)
 		}
