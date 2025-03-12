@@ -29,33 +29,33 @@ group_num=${group#G}
 
 mysql_groups=(
 	# G00
-	'changefeed_pause_resume region_merge'
+	'generate_column many_pk_or_uk'
 	# G01
-	'api_v2 availability bank'
+	'api_v2'
 	# G02
-	'multi_cdc_cluster multi_rocks'
+	'availability'
 	# G03
-	'multi_source fail_over'
+	'multi_source'
 	# G04
-	'syncpoint tidb_mysql_test resolve_lock'
+	'syncpoint'
 	# G05
-	'move_table cdc'
+	'move_table'
 	# G06
-	'fail_over_ddl_A fail_over_ddl_B'
+	'cdc'
 	# G07
-	'fail_over_ddl_C fail_over_ddl_D'
+	'resolve_lock'
 	# G08
-	'fail_over_ddl_E fail_over_ddl_F'
+	'bank'
 	# G09
-	'fail_over_ddl_G fail_over_ddl_H'
+	'drop_many_tables'
 	# G10
-	'fail_over_ddl_I fail_over_ddl_J'
+	'default_value http_proxies'
 	# G11
-	'fail_over_ddl_K fail_over_ddl_L'
+	'ddl_reentrant force_replicate_table'
 	# G12
-	'fail_over_ddl_M fail_over_ddl_N'
+	'tidb_mysql_test'
 	# G13
-	'fail_over_ddl_O'
+	'fail_over'
 	# G14
 	'fail_over_ddl_mix'
 	# G15
