@@ -29,37 +29,37 @@ group_num=${group#G}
 
 mysql_groups=(
 	# G00
-	'charset_gbk changefeed_finish sql_mode changefeed_reconstruct'
+	'charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
 	# G01
-	'common_1 foreign_key generate_column many_pk_or_uk drop_many_tables'
+	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
 	# G02
-	'new_ci_collation safe_mode savepoint'
+	'new_ci_collation safe_mode savepoint region_merge fail_over_ddl_C'
 	# G03
-	'capture_suicide_while_balance_table kv_client_stream_reconnect autorandom'
+	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
-	'ci_collation_compatibility multi_capture resourcecontrol'
+	'ci_collation_compatibility multi_capture resourcecontrol fail_over_ddl_E'
 	# G05
-	'vector simple partition_table'
+	'vector simple partition_table fail_over_ddl_F'
 	# G06
-	'http_api http_api_tls http_api_tls_with_user_auth'
+	'http_api http_api_tls fail_over_ddl_G'
 	# G07
-	'default_value http_proxies ddl_reentrant force_replicate_table'
+	'http_api_tls_with_user_auth fail_over_ddl_H'
 	# G08
-	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry'
+	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
 	# G09
-	'cdc_server_tips ddl_sequence server_config_compatibility'
+	'cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
 	# G10
-	'changefeed_error gc_safepoint'
+	'changefeed_error fail_over_ddl_K'
 	# G11
-	'multi_tables_ddl ddl_attributes'
+	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
-	'row_format tiflash'
+	'row_format tiflash multi_rocks fail_over_ddl_M'
 	# G13
-	'cli_tls_with_auth cli_with_auth'
+	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'batch_add_table batch_update_to_no_batch'
+	'batch_add_table batch_update_to_no_batch fail_over_ddl_O'
 	# G15
-	'split_region changefeed_resume_with_checkpoint_ts'
+	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint'
 )
 
 kafka_groups=(

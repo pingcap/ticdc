@@ -26,7 +26,6 @@ import (
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/hash"
 	"go.uber.org/zap"
@@ -79,7 +78,7 @@ func (t *TableCol) FromTiColumnInfo(col *timodel.ColumnInfo, outputColumnID bool
 	if mysql.HasNotNullFlag(col.GetFlag()) {
 		t.Nullable = "false"
 	}
-	t.Default = model.GetColumnDefaultValue(col)
+	t.Default = col.GetDefaultValue()
 
 	switch col.GetType() {
 	case mysql.TypeTimestamp, mysql.TypeDatetime, mysql.TypeDuration:
@@ -270,7 +269,7 @@ func (t *TableDefinition) ToTableInfo() (*common.TableInfo, error) {
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, tiCol)
 		nextMockID += 1
 	}
-	info := common.WrapTableInfo(100, t.Schema, tidbTableInfo)
+	info := common.WrapTableInfo(t.Schema, tidbTableInfo)
 
 	return info, nil
 }

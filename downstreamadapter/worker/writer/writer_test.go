@@ -101,7 +101,7 @@ func TestWriterRun(t *testing.T) {
 			{ID: 2, Name: pmodel.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
 		},
 	}
-	tableInfo := commonType.WrapTableInfo(100, "test", tidbTableInfo)
+	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
 
 	for i := 0; i < 5; i++ {
 		frag := EventFragment{

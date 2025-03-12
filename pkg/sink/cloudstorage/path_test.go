@@ -314,7 +314,7 @@ func TestCheckOrWriteSchema(t *testing.T) {
 		Columns: columns,
 		Version: 100,
 	}
-	tableInfo := commonType.WrapTableInfo(100, "test", tidbInfo)
+	tableInfo := commonType.WrapTableInfo("test", tidbInfo)
 
 	table := VersionedTableName{
 		TableNameWithPhysicTableID: tableInfo.TableName,

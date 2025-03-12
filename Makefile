@@ -3,6 +3,7 @@
 .PHONY: clean fmt check tidy \
 	generate-protobuf generate_mock \
 	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
+	prepare_test_binaries \
 	unit_test_in_verify_ci integration_test_build integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
 
 
@@ -153,6 +154,9 @@ fmt: tools/bin/gofumports tools/bin/shfmt tools/bin/gci
 	@echo "check log style"
 	scripts/check-log-style.sh
 	@make check-diff-line-width
+
+prepare_test_binaries:
+	./tests/scripts/download-integration-test-binaries.sh "$(branch)" "$(community)" "$(ver)" "$(os)" "$(arch)"
 
 check_third_party_binary:
 	@which bin/tidb-server

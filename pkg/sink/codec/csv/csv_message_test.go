@@ -927,7 +927,7 @@ func TestRowChangeEventConversion(t *testing.T) {
 			Name:    pmodel.NewCIStr(fmt.Sprintf("table%d", idx)),
 			Columns: colInfos,
 		}
-		e.TableInfo = commonType.WrapTableInfo(100, "test", tidbTableInfo)
+		e.TableInfo = commonType.WrapTableInfo("test", tidbTableInfo)
 
 		if idx%3 == 0 { // delete operation
 			e.Event.PreRow = chunk.MutRowFromValues(cols...).ToRow()

@@ -77,7 +77,7 @@ func TestDeframenter(t *testing.T) {
 			{ID: 2, Name: pmodel.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
 		},
 	}
-	tableInfo := common.WrapTableInfo(100, "test", tidbTableInfo)
+	tableInfo := common.WrapTableInfo("test", tidbTableInfo)
 	for i := 0; i < txnCnt; i++ {
 		go func(seq uint64) {
 			frag := EventFragment{
