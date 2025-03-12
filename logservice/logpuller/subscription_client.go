@@ -230,6 +230,7 @@ func NewSubscriptionClient(
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
 	option := dynstream.NewOption()
+	// Note: it is max batch size of the kv sent from tikv(not committed rows)
 	option.BatchCount = 1024
 	option.UseBuffer = false
 	option.EnableMemoryControl = true
@@ -261,24 +262,36 @@ func (s *SubscriptionClient) initMetrics() {
 }
 
 func (s *SubscriptionClient) updateMetrics(ctx context.Context) error {
-	ticker1 := time.NewTicker(10 * time.Second)
-	ticker2 := time.NewTicker(5 * time.Millisecond)
-	defer ticker1.Stop()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker1.C:
+		case <-ticker.C:
 			resolvedTsLag := s.GetResolvedTsLag()
 			if resolvedTsLag > 0 {
 				metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
 			}
-		case <-ticker2.C:
 			dsMetrics := s.ds.GetMetrics()
 			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
-			metricEventStoreDSAddPathNum.Set(float64(dsMetrics.AddPath))
-			metricEventStoreDSRemovePathNum.Set(float64(dsMetrics.RemovePath))
+			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 1 {
+				log.Panic("subscription client should have only one area")
+			}
+			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 0 {
+				areaMetric := dsMetrics.MemoryControl.AreaMemoryMetrics[0]
+				metrics.DynamicStreamMemoryUsage.WithLabelValues(
+					"log-puller",
+					"max",
+					"default",
+				).Set(float64(areaMetric.MaxMemory()))
+				metrics.DynamicStreamMemoryUsage.WithLabelValues(
+					"log-puller",
+					"used",
+					"default",
+				).Set(float64(areaMetric.MemoryUsage()))
+			}
 		}
 	}
 }
@@ -314,9 +327,8 @@ func (s *SubscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	s.ds.AddPath(rt.subID, rt, dynstream.AreaSettings{
-		MaxPendingSize: 2 * 1024 * 1024 * 1024, // 2GB
-	})
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(4*1024*1024*1024, dynstream.MemoryControlAlgorithmV1) // 4GB
+	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt}
 }
@@ -448,6 +460,13 @@ func (s *SubscriptionClient) onTableDrained(rt *subscribedSpan) {
 
 // Note: don't block the caller, otherwise there may be deadlock
 func (s *SubscriptionClient) onRegionFail(errInfo regionErrorInfo) {
+	// unlock the range early to prevent blocking the range.
+	if errInfo.subscribedSpan.rangeLock.UnlockRange(
+		errInfo.span.StartKey, errInfo.span.EndKey,
+		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
+		s.onTableDrained(errInfo.subscribedSpan)
+		return
+	}
 	s.errCache.add(errInfo)
 }
 
@@ -694,13 +713,6 @@ func (s *SubscriptionClient) handleErrors(ctx context.Context) error {
 }
 
 func (s *SubscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
-	if errInfo.subscribedSpan.rangeLock.UnlockRange(
-		errInfo.span.StartKey, errInfo.span.EndKey,
-		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
-		s.onTableDrained(errInfo.subscribedSpan)
-		return nil
-	}
-
 	err := errors.Cause(errInfo.err)
 	switch eerr := err.(type) {
 	case *eventError:
@@ -757,6 +769,9 @@ func (s *SubscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo)
+		return nil
+	case *requestCancelledErr:
+		// the corresponding subscription has been unsubscribed, just ignore.
 		return nil
 	default:
 		// TODO(qupeng): for some errors it's better to just deregister the region from TiKVs.

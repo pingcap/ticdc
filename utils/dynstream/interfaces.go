@@ -151,17 +151,13 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// No more events can be sent to or processed by the stream after it is closed.
 	Close()
 
-	// // In returns the channel to send events into the dynamic stream.
-	// In(path ...P) chan<- T
-	// // Wake returns the channel to mark the the path as ready to process the next event.
-	// Wake(path ...P) chan<- P
-
-	// In returns the channel to send events into the dynamic stream.
+	// Push an event to path.
 	Push(path P, event T)
-	// Wake returns the channel to mark the the path as ready to process the next event.
+	// Wake marks the the path as ready to process the next event.
+	// It is used when the handler returns true in the Handle method.
 	Wake(path P)
 
-	// Feedback returns the channel to receive the feedbacks for the listener.
+	// Feedback returns the channel to receive the feedbacks for the listener. Currently the feedbacks are used for the memory control.
 	// Return nil if Option.EnableMemoryControl is false.
 	Feedback() <-chan Feedback[A, P, D]
 
@@ -189,7 +185,7 @@ const (
 	DefaultInputBufferSize   = 1024
 	DefaultSchedulerInterval = 16 * time.Second
 	DefaultReportInterval    = 10 * time.Second
-	DefaultMaxPendingSize    = 1024 * 1024 * 1024 // 1 GB
+	DefaultMaxPendingSize    = uint64(1024 * 1024 * 1024) // 1 GB
 	DefaultFeedbackInterval  = 1000 * time.Millisecond
 )
 
@@ -233,30 +229,30 @@ func (o *Option) fix() {
 }
 
 type AreaSettings struct {
-	MaxPendingSize   int           // The max memory usage of the pending events of the area. Must be larger than 0. By default 128 MB.
-	FeedbackInterval time.Duration // The interval of sending feedbacks to the upstream. < 0 means no feedback. Must be larger than 0. By default 1 second.
+	maxPendingSize   uint64        // The max memory usage of the pending events of the area. Must be larger than 0. By default 128 MB.
+	feedbackInterval time.Duration // The interval of sending feedbacks to the upstream. < 0 means no feedback. Must be larger than 0. By default 1 second.
+
+	// Remove it when we determine the v2 is working well.
+	algorithm string // The algorithm of the memory control. By default "v2".
 }
 
 func (s *AreaSettings) fix() {
-	if s.MaxPendingSize <= 0 {
-		s.MaxPendingSize = DefaultMaxPendingSize
+	if s.maxPendingSize <= 0 {
+		s.maxPendingSize = DefaultMaxPendingSize
 	}
-	if s.FeedbackInterval == 0 {
-		s.FeedbackInterval = DefaultFeedbackInterval
+	if s.feedbackInterval == 0 {
+		s.feedbackInterval = DefaultFeedbackInterval
 	}
-}
-
-func NewAreaSettings() AreaSettings {
-	return AreaSettings{
-		MaxPendingSize:   DefaultMaxPendingSize,
-		FeedbackInterval: DefaultFeedbackInterval,
+	if s.algorithm == "" {
+		s.algorithm = "v1"
 	}
 }
 
-func NewAreaSettingsWithMaxPendingSize(size int) AreaSettings {
+func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithmVersion string) AreaSettings {
 	return AreaSettings{
-		MaxPendingSize:   size,
-		FeedbackInterval: DefaultFeedbackInterval,
+		maxPendingSize:   size,
+		feedbackInterval: DefaultFeedbackInterval,
+		algorithm:        memoryControlAlgorithmVersion,
 	}
 }
 

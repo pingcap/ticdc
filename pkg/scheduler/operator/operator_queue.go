@@ -19,41 +19,51 @@ import (
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 )
 
+// OperatorWithTime is a wrapper for Operator, it contains the time the operator enqueued and created.
 type OperatorWithTime[T replica.ReplicationID, S replica.ReplicationStatus] struct {
-	OP          Operator[T, S]
-	Time        time.Time
-	EnqueueTime time.Time
-	Removed     bool
+	// OP is the underlying operator to be executed
+	OP Operator[T, S]
+	// NotifyAt records when this operator should be notified
+	NotifyAt time.Time
+	// CreatedAt records when this operator was created
+	CreatedAt time.Time
+	// IsRemoved indicates whether this operator has been marked for removal
+	IsRemoved bool
 }
 
 func NewOperatorWithTime[T replica.ReplicationID, S replica.ReplicationStatus](op Operator[T, S], time time.Time) *OperatorWithTime[T, S] {
-	return &OperatorWithTime[T, S]{OP: op, Time: time, EnqueueTime: time}
+	return &OperatorWithTime[T, S]{OP: op, NotifyAt: time, CreatedAt: time}
 }
 
+// OperatorQueue is a priority queue of operators that implements heap.Interface.
+// It orders operators based on their enqueue time (FIFO order).
+// Type parameters:
+//   - T: represents the ReplicationID type for identifying replications
+//   - S: represents the ReplicationStatus type for tracking replication state
 type OperatorQueue[T replica.ReplicationID, S replica.ReplicationStatus] []*OperatorWithTime[T, S]
 
-func (opn OperatorQueue[T, S]) Len() int { return len(opn) }
+func (o OperatorQueue[T, S]) Len() int { return len(o) }
 
-func (opn OperatorQueue[T, S]) Less(i, j int) bool {
-	return opn[i].Time.Before(opn[j].Time)
+func (o OperatorQueue[T, S]) Less(i, j int) bool {
+	return o[i].NotifyAt.Before(o[j].NotifyAt)
 }
 
-func (opn OperatorQueue[T, S]) Swap(i, j int) {
-	opn[i], opn[j] = opn[j], opn[i]
+func (o OperatorQueue[T, S]) Swap(i, j int) {
+	o[i], o[j] = o[j], o[i]
 }
 
-func (opn *OperatorQueue[T, S]) Push(x interface{}) {
+func (o *OperatorQueue[T, S]) Push(x interface{}) {
 	item := x.(*OperatorWithTime[T, S])
-	*opn = append(*opn, item)
+	*o = append(*o, item)
 }
 
-func (opn *OperatorQueue[T, S]) Pop() interface{} {
-	old := *opn
+func (o *OperatorQueue[T, S]) Pop() interface{} {
+	old := *o
 	n := len(old)
 	if n == 0 {
 		return nil
 	}
 	item := old[n-1]
-	*opn = old[0 : n-1]
+	*o = old[0 : n-1]
 	return item
 }

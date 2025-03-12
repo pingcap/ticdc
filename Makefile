@@ -3,6 +3,7 @@
 .PHONY: clean fmt check tidy \
 	generate-protobuf generate_mock \
 	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
+	prepare_test_binaries \
 	unit_test_in_verify_ci integration_test_build integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
 
 
@@ -72,11 +73,11 @@ ifeq ($(RELEASE_VERSION),)
 endif
 
 # Version LDFLAGS.
-LDFLAGS += -X "$(CDC_PKG)/version.ReleaseVersion=$(RELEASE_VERSION)"
-LDFLAGS += -X "$(CDC_PKG)/version.BuildTS=$(BUILDTS)"
-LDFLAGS += -X "$(CDC_PKG)/version.GitHash=$(GITHASH)"
-LDFLAGS += -X "$(CDC_PKG)/version.GitBranch=$(GITBRANCH)"
-LDFLAGS += -X "$(CDC_PKG)/version.GoVersion=$(GOVERSION)"
+LDFLAGS += -X "$(CDC_PKG)/pkg/version.ReleaseVersion=$(RELEASE_VERSION)"
+LDFLAGS += -X "$(CDC_PKG)/pkg/version.BuildTS=$(BUILDTS)"
+LDFLAGS += -X "$(CDC_PKG)/pkg/version.GitHash=$(GITHASH)"
+LDFLAGS += -X "$(CDC_PKG)/pkg/version.GitBranch=$(GITBRANCH)"
+LDFLAGS += -X "$(CDC_PKG)/pkg/version.GoVersion=$(GOVERSION)"
 LDFLAGS += -X "github.com/pingcap/tidb/pkg/parser/mysql.TiDBReleaseVersion=$(RELEASE_VERSION)"
 
 # For Tiflow CDC
@@ -112,11 +113,11 @@ P=3
 
 # The following packages are used in unit tests.
 # Add new packages here if you want to include them in unit tests.
-UT_PACKAGES_DISPATCHER := ./pkg/sink/mysql/... ./pkg/sink/util/... ./downstreamadapter/sink/... ./downstreamadapter/dispatcher/... ./downstreamadapter/worker/... ./pkg/sink/codec/open/... ./pkg/sink/codec/canal/...
+UT_PACKAGES_DISPATCHER := ./pkg/sink/cloudstorage/... ./pkg/sink/mysql/... ./pkg/sink/util/... ./downstreamadapter/sink/... ./downstreamadapter/dispatcher/... ./downstreamadapter/worker/... ./downstreamadapter/worker/writer/... ./pkg/sink/codec/open/... ./pkg/sink/codec/csv/... ./pkg/sink/codec/canal/... 
 UT_PACKAGES_MAINTAINER := ./maintainer/...
 UT_PACKAGES_COORDINATOR := ./coordinator/...
 UT_PACKAGES_LOGSERVICE := ./logservice/...
-UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./utils/dynstream/...
+UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream/...
 
 include tools/Makefile
 
@@ -153,6 +154,9 @@ fmt: tools/bin/gofumports tools/bin/shfmt tools/bin/gci
 	@echo "check log style"
 	scripts/check-log-style.sh
 	@make check-diff-line-width
+
+prepare_test_binaries:
+	./tests/scripts/download-integration-test-binaries.sh "$(branch)" "$(community)" "$(ver)" "$(os)" "$(arch)"
 
 check_third_party_binary:
 	@which bin/tidb-server

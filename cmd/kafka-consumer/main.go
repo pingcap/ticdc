@@ -26,7 +26,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/logger"
-	"github.com/pingcap/ticdc/version"
+	"github.com/pingcap/ticdc/pkg/version"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )

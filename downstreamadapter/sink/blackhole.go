@@ -43,13 +43,14 @@ func (s *BlackHoleSink) SinkType() common.SinkType {
 func (s *BlackHoleSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 }
 
-func (s *BlackHoleSink) AddDMLEvent(event *commonEvent.DMLEvent) {
+func (s *BlackHoleSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
 	// NOTE: don't change the log, integration test `lossy_ddl` depends on it.
 	// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L23
 	log.Debug("BlackHoleSink: WriteEvents", zap.Any("dml", event))
 	for _, callback := range event.PostTxnFlushed {
 		callback()
 	}
+	return nil
 }
 
 func (s *BlackHoleSink) PassBlockEvent(event commonEvent.BlockEvent) {

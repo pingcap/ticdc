@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -39,7 +40,7 @@ import (
 
 func testFilePathGenerator(ctx context.Context, t *testing.T, dir string) *FilePathGenerator {
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
-	storage, err := util.GetExternalStorageFromURI(ctx, uri)
+	storage, err := helper.GetExternalStorageFromURI(ctx, uri)
 	require.NoError(t, err)
 
 	sinkURI, err := url.Parse(uri)
@@ -307,7 +308,13 @@ func TestCheckOrWriteSchema(t *testing.T) {
 		DefaultValue: 10,
 	}
 	columns = append(columns, col)
-	tableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{Columns: columns})
+	tidbInfo := &timodel.TableInfo{
+		ID:      20,
+		Name:    pmodel.NewCIStr("table1"),
+		Columns: columns,
+		Version: 100,
+	}
+	tableInfo := commonType.WrapTableInfo("test", tidbInfo)
 
 	table := VersionedTableName{
 		TableNameWithPhysicTableID: tableInfo.TableName,
@@ -322,7 +329,8 @@ func TestCheckOrWriteSchema(t *testing.T) {
 	table.TableInfoVersion = 101
 	err = f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
-	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
+	fmt.Println(f.versionMap, table)
+	require.Equal(t, uint64(tidbInfo.Version), f.versionMap[table])
 
 	dir = filepath.Join(dir, "test/table1/meta")
 	files, err := os.ReadDir(dir)
@@ -353,7 +361,7 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 	defer cancel()
 	dir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
-	storage, err := util.GetExternalStorageFromURI(ctx, uri)
+	storage, err := helper.GetExternalStorageFromURI(ctx, uri)
 	require.NoError(t, err)
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)

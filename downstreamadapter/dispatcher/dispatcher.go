@@ -342,7 +342,18 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 					wakeCallback()
 				}
 			})
-			d.AddDMLEventToSink(dml)
+			err := d.AddDMLEventToSink(dml)
+			if err != nil {
+				select {
+				case d.errCh <- err:
+				default:
+					log.Error("error channel is full, discard error",
+						zap.Stringer("changefeedID", d.changefeedID),
+						zap.Stringer("dispatcherID", d.id),
+						zap.Error(err))
+				}
+				return
+			}
 		case commonEvent.TypeDDLEvent:
 			if len(dispatcherEvents) != 1 {
 				log.Panic("ddl event should only be singly handled",
@@ -410,9 +421,9 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	return block
 }
 
-func (d *Dispatcher) AddDMLEventToSink(event *commonEvent.DMLEvent) {
+func (d *Dispatcher) AddDMLEventToSink(event *commonEvent.DMLEvent) error {
 	d.tableProgress.Add(event)
-	d.sink.AddDMLEvent(event)
+	return d.sink.AddDMLEvent(event)
 }
 
 func (d *Dispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {

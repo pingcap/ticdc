@@ -62,6 +62,14 @@ func (b *BlockedEventMap) Range(f func(key eventKey, value *BarrierEvent) bool) 
 	}
 }
 
+func (b *BlockedEventMap) RangeWoLock(f func(key eventKey, value *BarrierEvent) bool) {
+	for k, v := range b.m {
+		if !f(k, v) {
+			break
+		}
+	}
+}
+
 func (b *BlockedEventMap) Get(key eventKey) (*BarrierEvent, bool) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
@@ -95,6 +103,15 @@ func NewBarrier(controller *Controller, splitTableEnabled bool) *Barrier {
 		controller:        controller,
 		splitTableEnabled: splitTableEnabled,
 	}
+}
+
+func (b *Barrier) GetLock() *sync.Mutex {
+	b.blockedEvents.mutex.Lock()
+	return &b.blockedEvents.mutex
+}
+
+func (b *Barrier) ReleaseLock(mutex *sync.Mutex) {
+	mutex.Unlock()
 }
 
 // HandleStatus handle the block status from dispatcher manager
@@ -277,7 +294,7 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 // because on the
 func (b *Barrier) ShouldBlockCheckpointTs() bool {
 	flag := false
-	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
+	b.blockedEvents.RangeWoLock(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		if barrierEvent.hasNewTable {
 			flag = true
 			return false
@@ -370,8 +387,13 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	// it's not a blocked event, it must be sent by table event trigger dispatcher, just for doing scheduler
 	// and the ddl already synced to downstream , e.g.: create table
 	// if ack failed, dispatcher will send a heartbeat again, so we do not need to care about resend message here
-	event := NewBlockEvent(changefeedID, dispatcherID, b.controller, blockState, b.splitTableEnabled)
+	//
+	// Besides, we need to add the event into the blockedEvents map first, and then delete after finish scheduler
+	// that make scheduleBlockEvent can calculate correctly.
+	key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
+	event := b.getOrInsertNewEvent(changefeedID, dispatcherID, key, blockState)
 	event.scheduleBlockEvent()
+	b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
 	return event, nil
 }
 

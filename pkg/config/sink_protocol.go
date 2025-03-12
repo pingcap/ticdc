@@ -73,8 +73,8 @@ func ParseSinkProtocolFromString(protocol string) (Protocol, error) {
 	case "simple":
 		return ProtocolSimple, nil
 	default:
+		return ProtocolUnknown, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(protocol)
 	}
-	return ProtocolUnknown, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(protocol)
 }
 
 // String converts the Protocol enum type string to string.

@@ -25,8 +25,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -41,13 +43,14 @@ const (
 const (
 	HotSpanWriteThreshold = 1024 * 1024 // 1MB per second
 	HotSpanScoreThreshold = 3           // TODO: bump to 10 befroe release
-	DefaultScoreThreshold = 3
+	DefaultScoreThreshold = 10
 
-	defaultHardImbalanceThreshold = float64(1.35) // used to trigger the rebalance
-	clearTimeout                  = 300           // seconds
+	// defaultHardImbalanceThreshold = float64(1.35) // used to trigger the rebalance
+	defaultHardImbalanceThreshold = float64(5) // used to trigger the rebalance
+	clearTimeout                  = 300        // seconds
 )
 
-var MinSpanNumberCoefficient = 32 // // This number is twice the default worker count of the MySQL sink. It can help evenly split and dispatch high - throughput tables.
+var MinSpanNumberCoefficient = 0
 
 type CheckResult struct {
 	OpType       OpType
@@ -229,6 +232,8 @@ type rebalanceChecker struct {
 	softRebalanceScoreThreshold int
 	softMergeScore              int // add 1 when the total load is lowwer than the softWriteThreshold
 	softMergeScoreThreshold     int
+
+	pdClock pdutil.Clock
 }
 
 func newImbalanceChecker(cfID common.ChangeFeedID) *rebalanceChecker {
@@ -241,9 +246,10 @@ func newImbalanceChecker(cfID common.ChangeFeedID) *rebalanceChecker {
 		hardImbalanceThreshold: defaultHardImbalanceThreshold,
 
 		softWriteThreshold:          3 * HotSpanWriteThreshold,
-		softImbalanceThreshold:      1.2, // 2 * defaultHardImbalanceThreshold,
+		softImbalanceThreshold:      2 * defaultHardImbalanceThreshold,
 		softRebalanceScoreThreshold: DefaultScoreThreshold,
 		softMergeScoreThreshold:     DefaultScoreThreshold,
+		pdClock:                     appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 	}
 }
 
@@ -276,6 +282,8 @@ func (s *rebalanceChecker) Check(_ int) replica.GroupCheckResult {
 	nodeLoads := make(map[node.ID]float64)
 	replications := []*SpanReplication{}
 	totalEventSizePerSecond := float32(0)
+
+	minCheckpointTs := uint64(math.MaxUint64)
 	for _, span := range s.allTasks {
 		status := span.GetStatus()
 		nodeID := span.GetNodeID()
@@ -287,10 +295,22 @@ func (s *rebalanceChecker) Check(_ int) replica.GroupCheckResult {
 		totalEventSizePerSecond += status.EventSizePerSecond
 		nodeLoads[span.GetNodeID()] += float64(status.EventSizePerSecond)
 		replications = append(replications, span.SpanReplication)
+		if status.CheckpointTs < minCheckpointTs {
+			minCheckpointTs = status.CheckpointTs
+		}
 	}
 
+	pdTime := s.pdClock.CurrentTime()
+
+	phyCkpTs := oracle.ExtractPhysical(minCheckpointTs)
+	lag := float64(oracle.GetPhysical(pdTime)-phyCkpTs) / 1e3
+
+	log.Debug("rebalanceChecker Check", zap.Any("lag", lag))
+
 	// check merge
-	if totalEventSizePerSecond < s.softWriteThreshold {
+	// only when the lag is small(less than 60s), we can merge the spans.
+	// otherwise, we may wait for puller to get enough data.
+	if totalEventSizePerSecond < s.softWriteThreshold && lag < 60 {
 		s.softRebalanceScore = 0
 		s.softMergeScore++
 		if s.softMergeScore >= s.softMergeScoreThreshold {
@@ -306,9 +326,12 @@ func (s *rebalanceChecker) Check(_ int) replica.GroupCheckResult {
 	}
 	s.softMergeScore = 0
 
-	return s.checkRebalance(nodeLoads, replications)
+	return nil
+	// disable rebalance for now
+	// return s.checkRebalance(nodeLoads, replications)
 }
 
+/*
 func (s *rebalanceChecker) checkRebalance(
 	nodeLoads map[node.ID]float64, replications []*SpanReplication,
 ) []CheckResult {
@@ -321,6 +344,11 @@ func (s *rebalanceChecker) checkRebalance(
 	// case 1: too much nodes, need split more spans
 	allNodes := s.nodeManager.GetAliveNodes()
 	if len(s.allTasks) < len(allNodes)*MinSpanNumberCoefficient {
+		log.Info("task number is smaller than node number * MinSpanNumberCoefficient",
+			zap.Any("allTasksNumber", len(s.allTasks)),
+			zap.Any("allNodesNumber", len(allNodes)),
+			zap.Any("MinSpanNumberCoefficient", MinSpanNumberCoefficient),
+		)
 		return ret
 	}
 	if len(nodeLoads) != len(allNodes) {
@@ -340,6 +368,12 @@ func (s *rebalanceChecker) checkRebalance(
 	// case 2: check hard rebalance
 	if maxLoad-minLoad >= float64(s.hardWriteThreshold) && maxLoad/minLoad > s.hardImbalanceThreshold {
 		s.softRebalanceScore = 0
+		log.Info("satisfy hard rebalance condition",
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Any("maxLoad", maxLoad),
+			zap.Any("minLoad", minLoad),
+			zap.Any("s.hardWriteThreshold", s.hardWriteThreshold),
+			zap.Any("s.hardImbalanceThreshold", s.hardImbalanceThreshold))
 		return ret
 	}
 
@@ -351,12 +385,19 @@ func (s *rebalanceChecker) checkRebalance(
 	}
 	if s.softRebalanceScore >= s.softRebalanceScoreThreshold {
 		s.softRebalanceScore = 0
+		log.Info("satisfy soft rebalance condition",
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Any("maxLoad", maxLoad),
+			zap.Any("minLoad", minLoad),
+			zap.Any("s.softImbalanceThreshold", s.softImbalanceThreshold),
+			zap.Any("s.softRebalanceScoreThreshold", s.softRebalanceScoreThreshold))
 		return ret
 	}
 
 	// default case: no need to rebalance
 	return nil
 }
+*/
 
 func (s *rebalanceChecker) Stat() string {
 	res := strings.Builder{}
