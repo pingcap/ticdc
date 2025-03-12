@@ -66,7 +66,7 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 	}
 	columns = append(columns, col)
 
-	tableInfo := common.WrapTableInfo(100, "schema1", &timodel.TableInfo{
+	tableInfo := common.WrapTableInfo("schema1", &timodel.TableInfo{
 		ID:       20,
 		Name:     pmodel.NewCIStr("table1"),
 		Columns:  columns,

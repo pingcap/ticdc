@@ -573,9 +573,8 @@ func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 	return result
 }
 
-func NewTableInfo(schemaID int64, schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
+func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
 	ti := &TableInfo{
-		SchemaID: schemaID,
 		TableName: TableName{
 			Schema:      schemaName,
 			Table:       tableName,
@@ -596,12 +595,12 @@ func NewTableInfo(schemaID int64, schemaName string, tableName string, tableID i
 }
 
 // WrapTableInfo creates a TableInfo from a model.TableInfo
-func WrapTableInfo(schemaID int64, schemaName string, info *model.TableInfo) *TableInfo {
+func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 	// search column schema object
 	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
 	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
 
-	return NewTableInfo(schemaID, schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema)
+	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema)
 }
 
 // GetColumnDefaultValue returns the default definition of a column.
@@ -618,7 +617,6 @@ func GetColumnDefaultValue(col *model.ColumnInfo) interface{} {
 func BuildTiDBTableInfoWithoutVirtualColumns(source *TableInfo) *TableInfo {
 	newColumnSchema := source.columnSchema.getColumnSchemaWithoutVirtualColumns()
 	tableInfo := &TableInfo{
-		SchemaID:     source.SchemaID,
 		TableName:    source.TableName,
 		columnSchema: newColumnSchema,
 	}

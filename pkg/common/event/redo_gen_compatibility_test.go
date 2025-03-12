@@ -18,9 +18,9 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/types"
 	parserModel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	oldArchModel "github.com/pingcap/tiflow/cdc/model"
 	"github.com/stretchr/testify/require"
@@ -30,26 +30,26 @@ func TestDMLCompatibility(t *testing.T) {
 	tableInfo := &model.TableInfo{
 		Columns: []*model.ColumnInfo{
 			&model.ColumnInfo{
-				Name: parserModel.NewCIStr("c1"),
-				Offset: 0,
+				Name:                parserModel.NewCIStr("c1"),
+				Offset:              0,
 				GeneratedExprString: "xxx",
-				FieldType: *types.NewFieldType(mysql.TypeString),
+				FieldType:           *types.NewFieldType(mysql.TypeString),
 			},
 			&model.ColumnInfo{
-				Name: parserModel.NewCIStr("c2"),
-				Offset: 1,
+				Name:                parserModel.NewCIStr("c2"),
+				Offset:              1,
 				GeneratedExprString: "",
-				FieldType: *types.NewFieldType(mysql.TypeString),
+				FieldType:           *types.NewFieldType(mysql.TypeString),
 			},
 		},
 	}
 
-	rowEvent := &DMLEvent {
-		StartTs: 100,
-		CommitTs: 200,
-		TableInfo: common.WrapTableInfo(1, "test", tableInfo),
+	rowEvent := &DMLEvent{
+		StartTs:   100,
+		CommitTs:  200,
+		TableInfo: common.WrapTableInfo("test", tableInfo),
 		Rows: chunk.NewEmptyChunk([]*types.FieldType{
-			&tableInfo.Columns[0].FieldType, 
+			&tableInfo.Columns[0].FieldType,
 			&tableInfo.Columns[1].FieldType,
 		}),
 		RowTypes: []RowType{RowTypeUpdate},
