@@ -18,13 +18,61 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	pMySQL "github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
 	"go.uber.org/zap"
 )
+
+// GetMySQLType get the mysql type from column info
+func GetMySQLType(columnInfo *model.ColumnInfo, fullType bool) string {
+	if !fullType {
+		result := types.TypeToStr(columnInfo.GetType(), columnInfo.GetCharset())
+		result = withUnsigned4MySQLType(result, pMySQL.HasUnsignedFlag(columnInfo.GetFlag()))
+		result = withZerofill4MySQLType(result, pMySQL.HasZerofillFlag(columnInfo.GetFlag()))
+		return result
+	}
+	return columnInfo.GetTypeDesc()
+}
+
+// when encoding the canal format, for unsigned mysql type, add `unsigned` keyword.
+// it should have the form `t unsigned`, such as `int unsigned`
+func withUnsigned4MySQLType(mysqlType string, unsigned bool) string {
+	if unsigned && mysqlType != "bit" && mysqlType != "year" {
+		return mysqlType + " unsigned"
+	}
+	return mysqlType
+}
+
+func withZerofill4MySQLType(mysqlType string, zerofill bool) string {
+	if zerofill && !strings.HasPrefix(mysqlType, "year") {
+		return mysqlType + " zerofill"
+	}
+	return mysqlType
+}
+
+// IsBinaryMySQLType return true if the given mysqlType string is a binary type
+func IsBinaryMySQLType(mysqlType string) bool {
+	return strings.Contains(mysqlType, "blob") || strings.Contains(mysqlType, "binary")
+}
+
+// ExtractBasicMySQLType return the mysql type
+func ExtractBasicMySQLType(mysqlType string) byte {
+	for i := 0; i < len(mysqlType); i++ {
+		if mysqlType[i] == '(' || mysqlType[i] == ' ' {
+			return types.StrToType(mysqlType[:i])
+		}
+	}
+
+	return types.StrToType(mysqlType)
+}
 
 // ColumnsHolder read columns from sql.Rows
 type ColumnsHolder struct {
@@ -293,4 +341,38 @@ func trimLeadingZeroBytes(bytes []byte) []byte {
 		}
 	}
 	return bytes[pos:]
+}
+
+// FakeTableIDAllocator is a fake table id allocator
+type FakeTableIDAllocator struct {
+	tableIDs       map[string]int64
+	currentTableID int64
+}
+
+// NewFakeTableIDAllocator creates a new FakeTableIDAllocator
+func NewFakeTableIDAllocator() *FakeTableIDAllocator {
+	return &FakeTableIDAllocator{
+		tableIDs: make(map[string]int64),
+	}
+}
+
+func (g *FakeTableIDAllocator) allocateByKey(key string) int64 {
+	if tableID, ok := g.tableIDs[key]; ok {
+		return tableID
+	}
+	g.currentTableID++
+	g.tableIDs[key] = g.currentTableID
+	return g.currentTableID
+}
+
+// AllocateTableID allocates a table id
+func (g *FakeTableIDAllocator) AllocateTableID(schema, table string) int64 {
+	key := fmt.Sprintf("`%s`.`%s`", commonType.EscapeName(schema), commonType.EscapeName(table))
+	return g.allocateByKey(key)
+}
+
+// AllocatePartitionID allocates a partition id
+func (g *FakeTableIDAllocator) AllocatePartitionID(schema, table, name string) int64 {
+	key := fmt.Sprintf("`%s`.`%s`.`%s`", commonType.EscapeName(schema), commonType.EscapeName(table), commonType.EscapeName(name))
+	return g.allocateByKey(key)
 }
