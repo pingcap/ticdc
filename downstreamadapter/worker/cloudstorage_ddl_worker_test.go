@@ -73,7 +73,7 @@ func TestCloudStorageWriteDDLEvent(t *testing.T) {
 	sink, err := newCloudStorageDDLWorkerForTest(parentDir)
 	require.NoError(t, err)
 
-	tableInfo := common.WrapTableInfo(100, "test", &timodel.TableInfo{
+	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:   20,
 		Name: pmodel.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{

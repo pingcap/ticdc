@@ -1315,29 +1315,28 @@ func extractTableInfoFuncForExchangeTablePartition(event *PersistedDDLEvent, tab
 	if tableID == event.TableID {
 		// old normal table id, return the table info of the partition table
 		return common.WrapTableInfo(event.ExtraSchemaName, event.TableInfo), false
-	} else {
-		physicalIDs := getAllPartitionIDs(event.TableInfo)
-		droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
-		if len(droppedIDs) != 1 {
-			log.Panic("exchange table partition should only drop one partition",
-				zap.Int64s("droppedIDs", droppedIDs))
-		}
-		if tableID != droppedIDs[0] {
-			log.Panic("should not reach here", zap.Int64("tableID", tableID), zap.Int64("expectedPartitionID", droppedIDs[0]))
-		}
-		if event.ExtraTableInfo == nil {
-			log.Panic("cannot find extra table info", zap.Int64("tableID", tableID))
-		}
-		// old partition id, return the table info of the normal table
-		columnSchema := event.ExtraTableInfo.ShadowCopyColumnSchema()
-		tableInfo := common.NewTableInfo(
-			event.SchemaName,
-			pmodel.NewCIStr(event.TableName).O,
-			tableID,
-			false,
-			columnSchema)
-		return tableInfo, false
 	}
+	physicalIDs := getAllPartitionIDs(event.TableInfo)
+	droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
+	if len(droppedIDs) != 1 {
+		log.Panic("exchange table partition should only drop one partition",
+			zap.Int64s("droppedIDs", droppedIDs))
+	}
+	if tableID != droppedIDs[0] {
+		log.Panic("should not reach here", zap.Int64("tableID", tableID), zap.Int64("expectedPartitionID", droppedIDs[0]))
+	}
+	if event.ExtraTableInfo == nil {
+		log.Panic("cannot find extra table info", zap.Int64("tableID", tableID))
+	}
+	// old partition id, return the table info of the normal table
+	columnSchema := event.ExtraTableInfo.ShadowCopyColumnSchema()
+	tableInfo := common.NewTableInfo(
+		event.SchemaName,
+		pmodel.NewCIStr(event.TableName).O,
+		tableID,
+		false,
+		columnSchema)
+	return tableInfo, false
 }
 
 func extractTableInfoFuncIgnore(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
@@ -1360,12 +1359,12 @@ func extractTableInfoFuncForTruncateTable(event *PersistedDDLEvent, tableID int6
 			}
 		}
 		return nil, true
-	} else {
-		if tableID == event.ExtraTableID {
-			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
-		} else if tableID == event.TableID {
-			return nil, true
-		}
+	}
+	if tableID == event.ExtraTableID {
+		return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
+	}
+	if tableID == event.TableID {
+		return nil, true
 	}
 	log.Panic("should not reach here", zap.Int64("tableID", tableID))
 	return nil, false
@@ -1468,11 +1467,10 @@ func extractTableInfoFuncForAlterTablePartitioning(event *PersistedDDLEvent, tab
 func extractTableInfoFuncForRemovePartitioning(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
 	if event.TableID == tableID {
 		return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
-	} else {
-		for _, partitionID := range event.PrevPartitions {
-			if tableID == partitionID {
-				return nil, true
-			}
+	}
+	for _, partitionID := range event.PrevPartitions {
+		if tableID == partitionID {
+			return nil, true
 		}
 	}
 	log.Panic("should not reach here", zap.Int64("tableID", tableID))
@@ -1490,7 +1488,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 	// TODO: ShouldDiscardDDL is used for old architecture, should be removed later
 	if tableFilter != nil && rawEvent.SchemaName != "" && rawEvent.TableName != "" {
 		filtered = tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.SchemaName, rawEvent.TableName, rawEvent.TableInfo)
-		// if the ddl invovles another table name, only set filtered to true when all of them should be filtered
+		// if the ddl involve another table name, only set filtered to true when all of them should be filtered
 		if rawEvent.ExtraSchemaName != "" && rawEvent.ExtraTableName != "" {
 			filtered = filtered && tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.ExtraSchemaName, rawEvent.ExtraTableName, rawEvent.TableInfo)
 		}
