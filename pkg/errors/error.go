@@ -54,6 +54,10 @@ var (
 	)
 
 	// codec related errors
+	ErrDDLUnsupportType = errors.Normalize(
+		"unsupport ddl type %s, query %s",
+		errors.RFCCodeText("CDC:ErrDDLUnsupportType"),
+	)
 	ErrEncodeFailed = errors.Normalize(
 		"encode failed",
 		errors.RFCCodeText("CDC:ErrEncodeFailed"),
