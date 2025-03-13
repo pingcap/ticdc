@@ -27,11 +27,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"workload/schema"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	plog "github.com/pingcap/log"
 	"go.uber.org/zap"
-	"workload/schema"
 )
 
 var (
@@ -251,8 +252,10 @@ func executeWorkload(dbs []*sql.DB, workload schema.Workload, wg *sync.WaitGroup
 
 func handlePrepareAction(dbs []*sql.DB, insertConcurrency int, workload schema.Workload, wg *sync.WaitGroup) {
 	plog.Info("start to create tables", zap.Int("tableCount", tableCount))
+	wg = &sync.WaitGroup{}
 	for _, db := range dbs {
-		if err := initTables(db, workload); err != nil {
+		wg.Add(1)
+		if err := initTables(wg, db, workload); err != nil {
 			panic(err)
 		}
 	}
@@ -348,28 +351,23 @@ func closeDatabases(dbs []*sql.DB) {
 }
 
 // initTables create tables if not exists
-func initTables(db *sql.DB, workload schema.Workload) error {
+func initTables(wg *sync.WaitGroup, db *sql.DB, workload schema.Workload) error {
 	var tableNum atomic.Int32
-	wg := sync.WaitGroup{}
-	for i := 0; i < tableCount; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				tableIndex := int(tableNum.Load())
-				if tableIndex >= tableCount {
-					return
-				}
-				tableNum.Add(1)
-				plog.Info("try to create table", zap.Int("index", tableIndex+tableStartIndex))
-				if _, err := db.Exec(workload.BuildCreateTableStatement(tableIndex + tableStartIndex)); err != nil {
-					err := errors.Annotate(err, "create table failed")
-					plog.Error("create table failed", zap.Error(err))
-				}
+	go func() {
+		defer wg.Done()
+		for range tableCount {
+			tableIndex := int(tableNum.Load())
+			if tableIndex >= tableCount {
+				return
 			}
-		}()
-	}
-	wg.Wait()
+			tableNum.Add(1)
+			plog.Info("try to create table", zap.Int("index", tableIndex+tableStartIndex))
+			if _, err := db.Exec(workload.BuildCreateTableStatement(tableIndex + tableStartIndex)); err != nil {
+				err := errors.Annotate(err, "create table failed")
+				plog.Error("create table failed", zap.Error(err))
+			}
+		}
+	}()
 	plog.Info("create tables finished")
 	return nil
 }
