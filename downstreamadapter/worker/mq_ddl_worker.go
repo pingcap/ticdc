@@ -123,9 +123,6 @@ func (w *MQDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent
 			return errors.Trace(err)
 		}
 		if w.partitionRule == PartitionAll {
-			if err != nil {
-				return errors.Trace(err)
-			}
 			err = w.statistics.RecordDDLExecution(func() error {
 				return w.producer.SyncBroadcastMessage(ctx, topic, partitionNum, message)
 			})
