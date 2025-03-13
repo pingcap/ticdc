@@ -246,7 +246,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
 
-	partitionGenerator = d.GetPartitionGenerator(dmlEvent.TableInfo.GetSchemaName(), dmlEvent.TableInfo.GetTableName())
+	partitionGenerator = d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&row, 10, dmlEvent.TableInfo, 2)
 	require.NoError(t, err)
 	require.Equal(t, int32(9), p)

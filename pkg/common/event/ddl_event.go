@@ -32,8 +32,7 @@ type DDLEvent struct {
 	// Version is the version of the DDLEvent struct.
 	Version      byte                `json:"version"`
 	DispatcherID common.DispatcherID `json:"-"`
-	// todo: can we set this as ActionType ?
-	Type byte `json:"type"`
+	Type         byte                `json:"type"`
 	// SchemaID is from upstream job.SchemaID
 	SchemaID int64 `json:"schema_id"`
 	// TableID is from upstream job.TableID
@@ -75,7 +74,6 @@ type DDLEvent struct {
 	//   Recover Table
 	TableNameChange *TableNameChange `json:"table_name_change"`
 
-	// shall we expose this field, and make can be marshalled ?
 	TiDBOnly bool `json:"tidb_only"`
 	// Call when event flush is completed
 	PostTxnFlushed []func() `json:"-"`

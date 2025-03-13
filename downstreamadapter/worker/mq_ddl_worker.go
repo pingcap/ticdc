@@ -144,6 +144,7 @@ func (w *MQDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent
 func (w *MQDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) error {
 	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
 	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
+
 	defer func() {
 		metrics.CheckpointTsMessageDuration.DeleteLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
 		metrics.CheckpointTsMessageCount.DeleteLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())

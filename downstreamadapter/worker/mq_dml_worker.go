@@ -128,6 +128,7 @@ func (w *MQDMLWorker) calculateKeyPartitions(ctx context.Context) error {
 			if err != nil {
 				return errors.Trace(err)
 			}
+
 			schema := event.TableInfo.GetSchemaName()
 			table := event.TableInfo.GetTableName()
 			partitionGenerator := w.eventRouter.GetPartitionGenerator(schema, table)

@@ -584,6 +584,7 @@ func newTableInfo(schema, table string, tableID int64, isPartition bool, columnS
 
 func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
 	ti := newTableInfo(schemaName, tableName, tableID, isPartition, columnSchema)
+
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appeared when tableInfo is created as a pair.
 	runtime.SetFinalizer(ti, func(ti *TableInfo) {
