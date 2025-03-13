@@ -356,7 +356,6 @@ func initTables(wg *sync.WaitGroup, db *sql.DB, workload schema.Workload) error 
 	defer wg.Done()
 	for tableIndex := range tableCount {
 		sql := workload.BuildCreateTableStatement(tableIndex + tableStartIndex)
-		plog.Info("create table sql", zap.String("sql", sql))
 		if _, err := db.Exec(sql); err != nil {
 			err := errors.Annotate(err, "create table failed")
 			plog.Error("create table failed", zap.Error(err))
