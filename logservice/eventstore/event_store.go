@@ -488,7 +488,11 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 		delete(e.dispatcherMeta.subscriptionStats, subID)
 		// TODO: do we need unlock before puller.Unsubscribe?
 		e.subClient.Unsubscribe(subID)
-		if err := e.deleteEvents(subscriptionStat.dbIndex, uint64(subscriptionStat.subID), tableID, 0, math.MaxUint64); err != nil {
+		log.Info("clean data for subscription",
+			zap.Int("dbIndex", subscriptionStat.dbIndex),
+			zap.Uint64("subID", uint64(subID)),
+			zap.Int64("tableID", subscriptionStat.tableID))
+		if err := e.deleteEvents(subscriptionStat.dbIndex, uint64(subID), subscriptionStat.tableID, 0, math.MaxUint64); err != nil {
 			log.Warn("fail to delete events", zap.Error(err))
 		}
 		metrics.EventStoreSubscriptionGauge.Dec()
