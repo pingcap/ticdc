@@ -19,6 +19,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -627,6 +628,17 @@ func (e *eventStore) updateMetrics(ctx context.Context) error {
 }
 
 func (e *eventStore) updateMetricsOnce() {
+	for i, db := range e.dbs {
+		stats := db.Metrics()
+		id := strconv.Itoa(i + 1)
+		metrics.EventStoreOnDiskDataSizeGauge.WithLabelValues(id).Set(float64(stats.DiskSpaceUsage()))
+		memorySize := stats.MemTable.Size
+		if stats.BlockCache.Size > 0 {
+			memorySize += uint64(stats.BlockCache.Size)
+		}
+		metrics.EventStoreInMemoryDataSizeGauge.WithLabelValues(id).Set(float64(memorySize))
+	}
+
 	pdTime := e.pdClock.CurrentTime()
 	pdPhyTs := oracle.GetPhysical(pdTime)
 	minResolvedTs := uint64(0)
