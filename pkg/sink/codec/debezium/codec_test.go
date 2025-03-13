@@ -18,16 +18,12 @@ import (
 	"testing"
 	"time"
 
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/types"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"github.com/thanhpk/randstr"
 )
@@ -39,47 +35,38 @@ func TestDDLEvent(t *testing.T) {
 		nowFunc:   func() time.Time { return time.Unix(1701326309, 0) },
 	}
 
-	query := "RENAME TABLE test.table2 to test.table1"
-	tableInfo1 := commonType.WrapTableInfo("test", &timodel.TableInfo{
-		Name: pmodel.NewCIStr("table1"),
-		Columns: []*timodel.ColumnInfo{{
-			Name:      pmodel.NewCIStr("id"),
-			FieldType: *types.NewFieldType(mysql.TypeLong),
-			// Flag:      model.PrimaryKeyFlag | model.HandleKeyFlag,
-		}},
-	})
-	tableInfo2 := commonType.WrapTableInfo("test", &timodel.TableInfo{
-		Name: pmodel.NewCIStr("table2"),
-		Columns: []*timodel.ColumnInfo{{
-			Name:      pmodel.NewCIStr("id"),
-			FieldType: *types.NewFieldType(mysql.TypeLong),
-			// Flag:      model.PrimaryKeyFlag | model.HandleKeyFlag,
-		}},
-	})
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	helper.DDL2Job(`create table test.table1(id int(10) primary key)`)
+	job := helper.DDL2Job(`RENAME TABLE test.table1 to test.table2`)
+	tableInfo := helper.GetTableInfo(job)
 
 	e := &commonEvent.DDLEvent{
 		FinishedTs:      1,
-		TableInfo:       tableInfo1,
-		SchemaName:      "test",
-		TableName:       "table1",
-		ExtraSchemaName: "test",
-		ExtraTableName:  "table2",
-		Type:            byte(timodel.ActionNone),
-		Query:           query,
-	}
-	keyBuf := bytes.NewBuffer(nil)
-	buf := bytes.NewBuffer(nil)
-	err := codec.EncodeDDLEvent(e, keyBuf, buf)
-	require.ErrorIs(t, err, cerror.ErrDDLUnsupportType)
-
-	e = &commonEvent.DDLEvent{
-		FinishedTs:      1,
-		TableInfo:       tableInfo1,
+		TableInfo:       tableInfo,
 		SchemaName:      "test",
 		TableName:       "table2",
 		ExtraSchemaName: "test",
 		ExtraTableName:  "table1",
-		Query:           query,
+		Type:            byte(timodel.ActionNone),
+		Query:           job.Query,
+	}
+	keyBuf := bytes.NewBuffer(nil)
+	buf := bytes.NewBuffer(nil)
+	err := codec.EncodeDDLEvent(e, keyBuf, buf)
+	require.ErrorIs(t, err, errors.ErrDDLUnsupportType)
+
+	e = &commonEvent.DDLEvent{
+		FinishedTs:      1,
+		TableInfo:       tableInfo,
+		SchemaName:      "test",
+		TableName:       "table2",
+		ExtraSchemaName: "test",
+		ExtraTableName:  "table1",
+		Query:           job.Query,
 		Type:            byte(timodel.ActionRenameTable),
 	}
 	keyBuf.Reset()
@@ -116,7 +103,7 @@ func TestDDLEvent(t *testing.T) {
 				"ts_ms": 0,
 				"snapshot": "false",
 				"db": "test",
-				"table": "table1",
+				"table": "table2",
 				"server_id": 0,
 				"gtid": null,
 				"file": "",
@@ -130,11 +117,11 @@ func TestDDLEvent(t *testing.T) {
 			"ts_ms": 1701326309000,
 			"databaseName": "test", 
       		"schemaName": null,
-    		"ddl": "RENAME TABLE test.table2 to test.table1", 
+    		"ddl": "RENAME TABLE test.table1 to test.table2", 
       		"tableChanges": [
 				{
 					"type": "ALTER", 
-					"id": "\"test\".\"table2\",\"test\".\"table1\"", 
+					"id": "\"test\".\"table1\",\"test\".\"table2\"", 
 					"table": {    
 						"defaultCharsetName": "",
 						"primaryKeyColumnNames": ["id"],
@@ -149,7 +136,7 @@ func TestDDLEvent(t *testing.T) {
 								"typeName": "INT",
 								"typeExpression": "INT",
 								"charsetName": null,
-								"length": 0,
+								"length": 10,
 								"scale": null,
 								"position": 1,
 								"optional": false,
@@ -426,13 +413,14 @@ func TestDDLEvent(t *testing.T) {
 
 	codec.config.DebeziumDisableSchema = true
 
-	query = "CREATE TABLE test.table1"
+	job = helper.DDL2Job("CREATE TABLE test.table1")
+	tableInfo = helper.GetTableInfo(job)
 	e = &commonEvent.DDLEvent{
 		FinishedTs: 1,
-		TableInfo:  tableInfo1,
-		SchemaName: "test",
-		TableName:  "table1",
-		Query:      query,
+		TableInfo:  tableInfo,
+		SchemaName: job.SchemaName,
+		TableName:  job.TableName,
+		Query:      job.Query,
 		Type:       byte(timodel.ActionCreateTable),
 	}
 	keyBuf.Reset()
@@ -503,13 +491,14 @@ func TestDDLEvent(t *testing.T) {
 		}
 	}`, buf.String())
 
-	query = "DROP TABLE test.table2"
+	job = helper.DDL2Job("DROP TABLE test.table2")
+	tableInfo = helper.GetTableInfo(job)
 	e = &commonEvent.DDLEvent{
 		FinishedTs: 1,
-		TableInfo:  tableInfo2,
-		SchemaName: "test",
-		TableName:  "table2",
-		Query:      query,
+		TableInfo:  tableInfo,
+		SchemaName: job.SchemaName,
+		TableName:  job.TableName,
+		Query:      job.Query,
 		Type:       byte(timodel.ActionDropTable),
 	}
 	keyBuf.Reset()
@@ -821,7 +810,7 @@ func TestEncodeInsert(t *testing.T) {
 			"fields": [
 			{
 				"field":"tiny",
-				"optional":true,
+				"optional":false,
 				"type":"int16"
 			}
 			],
@@ -872,14 +861,14 @@ func TestEncodeInsert(t *testing.T) {
 					"optional": true,
 					"name": "test_cluster.test.table1.Value",
 					"field": "before",
-					"fields": [{ "type": "int16", "optional": true, "field": "tiny" }]
+					"fields": [{ "type": "int16", "optional": false, "field": "tiny" }]
 				},
 				{
 					"type": "struct",
 					"optional": true,
 					"name": "test_cluster.test.table1.Value",
 					"field": "after",
-					"fields": [{ "type": "int16", "optional": true, "field": "tiny" }]
+					"fields": [{ "type": "int16", "optional": false, "field": "tiny" }]
 				},
 				{
 					"type": "struct",
@@ -950,10 +939,14 @@ func TestEncodeUpdate(t *testing.T) {
 	helper.Tk().MustExec("use test")
 
 	job := helper.DDL2Job(`create table test.table1(tiny tinyint primary key)`)
-	helper.DML2Event("test", "table1", `insert into test.table1 values (1)`)
-	dmlEvent := helper.DML2Event("test", "table1", `update test.table1 tiny=2 where tiny=1`)
+	dmlEvent := helper.DML2Event("test", "table1", `insert into test.table1 values (2)`)
+	require.NotNil(t, dmlEvent)
+	insertRow, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+	dmlEvent = helper.DML2Event("test", "table1", `update test.table1 set tiny=1 where tiny=2`)
 	require.NotNil(t, dmlEvent)
 	row, ok := dmlEvent.GetNextRow()
+	row.PreRow = insertRow.Row
 	require.True(t, ok)
 	tableInfo := helper.GetTableInfo(job)
 
@@ -1026,7 +1019,7 @@ func TestEncodeUpdate(t *testing.T) {
 			"fields": [
 			{
 				"field":"tiny",
-				"optional":true,
+				"optional":false,
 				"type":"int16"
 			}
 			],
@@ -1078,14 +1071,14 @@ func TestEncodeUpdate(t *testing.T) {
 					"optional": true,
 					"name": "test_cluster.test.table1.Value",
 					"field": "before",
-					"fields": [{ "type": "int16", "optional": true, "field": "tiny" }]
+					"fields": [{ "type": "int16", "optional": false, "field": "tiny" }]
 				},
 				{
 					"type": "struct",
 					"optional": true,
 					"name": "test_cluster.test.table1.Value",
 					"field": "after",
-					"fields": [{ "type": "int16", "optional": true, "field": "tiny" }]
+					"fields": [{ "type": "int16", "optional": false, "field": "tiny" }]
 				},
 				{
 					"type": "struct",
@@ -1203,12 +1196,14 @@ func TestEncodeDelete(t *testing.T) {
 	helper.Tk().MustExec("use test")
 
 	job := helper.DDL2Job(`create table test.table1(tiny tinyint primary key)`)
-	helper.DML2Event("test", "table1", `insert into test.table1 values (1)`, `update test.table1 set tiny=2 where tiny=1`)
-	dmlEvent := helper.DML2Event("test", "table1", `delete from test.table1 where tiny=2`)
+	dmlEvent := helper.DML2Event("test", "table1", `insert into test.table1 values (2)`)
 	require.NotNil(t, dmlEvent)
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
 	tableInfo := helper.GetTableInfo(job)
+	tmpRow := row.Row
+	row.Row = row.PreRow
+	row.PreRow = tmpRow
 
 	e := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
@@ -1217,7 +1212,6 @@ func TestEncodeDelete(t *testing.T) {
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 		Callback:       func() {},
 	}
-
 	buf := bytes.NewBuffer(nil)
 	keyBuf := bytes.NewBuffer(nil)
 	err := codec.EncodeKey(e, keyBuf)
@@ -1278,7 +1272,7 @@ func TestEncodeDelete(t *testing.T) {
 			"fields": [
 			{
 				"field":"tiny",
-				"optional":true,
+				"optional":false,
 				"type":"int16"
 			}
 			],
@@ -1330,14 +1324,14 @@ func TestEncodeDelete(t *testing.T) {
 					"optional": true,
 					"name": "test_cluster.test.table1.Value",
 					"field": "before",
-					"fields": [{ "type": "int16", "optional": true, "field": "tiny" }]
+					"fields": [{ "type": "int16", "optional": false, "field": "tiny" }]
 				},
 				{
 					"type": "struct",
 					"optional": true,
 					"name": "test_cluster.test.table1.Value",
 					"field": "after",
-					"fields": [{ "type": "int16", "optional": true, "field": "tiny" }]
+					"fields": [{ "type": "int16", "optional": false, "field": "tiny" }]
 				},
 				{
 					"type": "struct",

@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -31,7 +32,6 @@ import (
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
@@ -520,8 +520,8 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 	case mysql.TypeNewDecimal:
 		v, err := datum.GetMysqlDecimal().ToFloat64()
 		if err != nil {
-			return cerror.WrapError(
-				cerror.ErrDebeziumEncodeFailed,
+			return errors.WrapError(
+				errors.ErrDebeziumEncodeFailed,
 				err)
 		}
 		writer.WriteFloat64Field(colName, v)
@@ -563,8 +563,8 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		}
 		t, err := types.StrToDateTime(types.DefaultStmtNoWarningContext, v, ft.GetDecimal())
 		if err != nil {
-			return cerror.WrapError(
-				cerror.ErrDebeziumEncodeFailed,
+			return errors.WrapError(
+				errors.ErrDebeziumEncodeFailed,
 				err)
 		}
 		gt, err := t.GoTime(time.UTC)
@@ -612,8 +612,8 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		}
 		t, err := types.StrToDateTime(types.DefaultStmtNoWarningContext.WithLocation(c.config.TimeZone), v, ft.GetDecimal())
 		if err != nil {
-			return cerror.WrapError(
-				cerror.ErrDebeziumEncodeFailed,
+			return errors.WrapError(
+				errors.ErrDebeziumEncodeFailed,
 				err)
 		}
 		if t.Compare(types.MinTimestamp) < 0 {
@@ -626,8 +626,8 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		}
 		gt, err := t.GoTime(c.config.TimeZone)
 		if err != nil {
-			return cerror.WrapError(
-				cerror.ErrDebeziumEncodeFailed,
+			return errors.WrapError(
+				errors.ErrDebeziumEncodeFailed,
 				err)
 		}
 		str := gt.UTC().Format("2006-01-02T15:04:05")
@@ -788,6 +788,9 @@ func (c *dbzCodec) EncodeKey(
 		jWriter.WriteObjectField("payload", func() {
 			columns := e.TableInfo.GetColumns()
 			row := e.GetRows()
+			if e.IsDelete() {
+				row = e.GetPreRows()
+			}
 			for idx, colInfo := range columns {
 				if colInfo != nil && e.TableInfo.ForceGetColumnFlagType(colInfo.ID).IsHandleKey() {
 					err = c.writeDebeziumFieldValue(jWriter, row, idx, colInfo)
@@ -1032,7 +1035,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 		timodel.ActionDropView:
 		changeType = "DROP"
 	default:
-		return cerror.ErrDDLUnsupportType.GenWithStackByArgs(e.Type, e.Query)
+		return errors.ErrDDLUnsupportType.GenWithStackByArgs(e.Type, e.Query)
 	}
 
 	var err error
