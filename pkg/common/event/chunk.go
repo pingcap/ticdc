@@ -50,7 +50,7 @@ func newChunkDecoderV2(tableInfo *common.TableInfo, tz *time.Location) *rowcodec
 			log.Panic("column not found", zap.Int64("columnID", reqCols[i].ID))
 		}
 
-		colDatum, _, _, warn, err := getDefaultOrZeroValue(ci, m.tz)
+		colDatum, _, _, warn, err := getDefaultOrZeroValue(ci, tz)
 		if err != nil {
 			return err
 		}

@@ -111,12 +111,16 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	if err != nil {
 		return err
 	}
-	for i := 0; i < count; i++ {
+	for range count {
 		t.RowTypes = append(t.RowTypes, RowType)
 	}
 	t.Length += 1
 	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
 	return nil
+}
+
+func (t *DMLEvent) GetTableID() int64 {
+	return t.PhysicalTableID
 }
 
 func (t *DMLEvent) GetType() int {
@@ -367,10 +371,6 @@ func (t *DMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	t.Rows, _ = decoder.Decode(t.RawRows)
 	t.TableInfo = tableInfo
 	t.RawRows = nil
-}
-
-func (t *DMLEvent) GetTableID() int64 {
-	return t.PhysicalTableID
 }
 
 type RowChange struct {

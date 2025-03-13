@@ -123,9 +123,6 @@ func (w *MQDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent
 			return errors.Trace(err)
 		}
 		if w.partitionRule == PartitionAll {
-			if err != nil {
-				return errors.Trace(err)
-			}
 			err = w.statistics.RecordDDLExecution(func() error {
 				return w.producer.SyncBroadcastMessage(ctx, topic, partitionNum, message)
 			})
@@ -151,7 +148,6 @@ func (w *MQDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) error {
 		metrics.CheckpointTsMessageDuration.DeleteLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
 		metrics.CheckpointTsMessageCount.DeleteLabelValues(w.changeFeedID.Namespace(), w.changeFeedID.Name())
 	}()
-
 	var (
 		msg          *common.Message
 		partitionNum int32

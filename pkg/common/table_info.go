@@ -20,7 +20,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -270,8 +269,6 @@ type TableInfo struct {
 		m             [4]string
 	} `json:"-"`
 }
-
-var count atomic.Int64
 
 func (ti *TableInfo) InitPrivateFields() {
 	if ti == nil {
@@ -596,13 +593,6 @@ func NewTableInfo(schemaName string, tableName string, tableID int64, isPartitio
 	return ti
 }
 
-// NewTableInfo4Decoder is only used by the codec decoder for the test purpose,
-// do not call this method on the production code.
-func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
-	cs := newColumnSchema4Decoder(tableInfo)
-	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs)
-}
-
 // WrapTableInfo creates a TableInfo from a model.TableInfo
 func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 	// search column schema object
@@ -610,6 +600,13 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
 
 	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema)
+}
+
+// NewTableInfo4Decoder is only used by the codec decoder for the test purpose,
+// do not call this method on the production code.
+func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
+	cs := newColumnSchema4Decoder(tableInfo)
+	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs)
 }
 
 // GetColumnDefaultValue returns the default definition of a column.
