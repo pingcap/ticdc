@@ -486,4 +486,46 @@ var (
 		"user %s unauthorized, error: %s",
 		errors.RFCCodeText("CDC:ErrUnauthorized"),
 	)
+
+	ErrExternalStorageAPI = errors.Normalize(
+		"external storage api",
+		errors.RFCCodeText("CDC:ErrS3StorageAPI"),
+	)
+	ErrConsistentStorage = errors.Normalize(
+		"consistent storage (%s) not support",
+		errors.RFCCodeText("CDC:ErrConsistentStorage"),
+	)
+	ErrStorageInitialize = errors.Normalize(
+		"fail to open storage for redo log",
+		errors.RFCCodeText("CDC:ErrStorageInitialize"),
+	)
+
+	ErrRedoConfigInvalid = errors.Normalize(
+		"redo log config invalid",
+		errors.RFCCodeText("CDC:ErrRedoConfigInvalid"),
+	)
+	ErrRedoDownloadFailed = errors.Normalize(
+		"redo log down load to local failed",
+		errors.RFCCodeText("CDC:ErrRedoDownloadFailed"),
+	)
+	ErrRedoWriterStopped = errors.Normalize(
+		"redo log writer stopped",
+		errors.RFCCodeText("CDC:ErrRedoWriterStopped"),
+	)
+	ErrRedoFileOp = errors.Normalize(
+		"redo file operation",
+		errors.RFCCodeText("CDC:ErrRedoFileOp"),
+	)
+	ErrRedoFileSizeExceed = errors.Normalize(
+		"redo file size %d exceeds maximum %d",
+		errors.RFCCodeText("CDC:ErrRedoFileSizeExceed"),
+	)
+	ErrRedoMetaFileNotFound = errors.Normalize(
+		"no redo meta file found in dir: %s",
+		errors.RFCCodeText("CDC:ErrRedoMetaFileNotFound"),
+	)
+	ErrRedoMetaInitialize = errors.Normalize(
+		"initialize meta for redo log",
+		errors.RFCCodeText("CDC:ErrRedoMetaInitialize"),
+	)
 )
