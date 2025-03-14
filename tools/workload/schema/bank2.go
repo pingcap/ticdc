@@ -19,6 +19,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 const createTableSQL = `CREATE TABLE info_%d (
@@ -250,6 +253,8 @@ func NewBank2Workload() Workload {
 func (c *Bank2Workload) BuildCreateTableStatement(n int) string {
 	switch n % 2 {
 	case 0: // info
+		sql := fmt.Sprintf(createTableSQL, n)
+		log.Info("create table sql", zap.String("sql", sql))
 		return fmt.Sprintf(createTableSQL, n)
 	case 1: // log
 		return fmt.Sprintf(createLogTableSQL, n)
