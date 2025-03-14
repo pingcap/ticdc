@@ -81,8 +81,7 @@ const (
 	largeRow = "large_row"
 	shopItem = "shop_item"
 	uuu      = "uuu"
-	// for gf case, at most support table count = 2. Here only 2 tables in this cases.
-	// And each insert sql contains 200 batch, each update sql only contains 1 batch.
+	// And each insert sql contains 200 batch, each update sql contains 200 batch.
 	bank2 = "bank2"
 )
 
