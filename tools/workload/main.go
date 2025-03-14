@@ -27,11 +27,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"workload/schema"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	plog "github.com/pingcap/log"
 	"go.uber.org/zap"
-	"workload/schema"
 )
 
 var (
@@ -72,6 +73,8 @@ var (
 
 	dbNum    int
 	dbPrefix string
+
+	updateLargeColumnSize int
 )
 
 const (
@@ -113,6 +116,7 @@ func init() {
 	flag.IntVar(&rowSize, "row-size", 10240, "the size of each row")
 	flag.IntVar(&largeRowSize, "large-row-size", 1024*1024, "the size of the large row")
 	flag.Float64Var(&largeRowRatio, "large-ratio", 0.0, "large row ratio in the each transaction")
+	flag.IntVar(&updateLargeColumnSize, "update-large-column-size", 1024, "the size of the large column to update")
 	flag.Parse()
 }
 
@@ -227,7 +231,7 @@ func createWorkload() schema.Workload {
 	case bank2:
 		workload = schema.NewBank2Workload()
 	case updateBank:
-		workload = schema.NewUpdateBankWorkload(totalRowCount)
+		workload = schema.NewUpdateBankWorkload(totalRowCount, updateLargeColumnSize)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", workloadType))
 	}

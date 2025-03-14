@@ -25,11 +25,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	largeColSize = 4000
-	smallColSize = 1
-)
-
 const createUpdateBankTable = `
 create table if not exists update_bank%d
 (
@@ -95,28 +90,30 @@ col58 DATETIME,
 col59 DATETIME,                    
 col60 DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),                    
 col61 VARCHAR(30) DEFAULT 'Z',
-large_col VARCHAR(4000),           -- large column, 4KB
+large_col VARCHAR(%d),           -- large column, 1KB
 small_col INT DEFAULT 1,           -- small column, 1 byte
 PRIMARY KEY (id)
 );
 `
 
 type UpdateBankWorkload struct {
-	nextID        atomic.Int64
-	totalRowCount uint64
-	cacheLargeCol string
+	nextID                atomic.Int64
+	totalRowCount         uint64
+	cacheLargeCol         string
+	updateLargeColumnSize int
 }
 
-func NewUpdateBankWorkload(totalRowCount uint64) Workload {
+func NewUpdateBankWorkload(totalRowCount uint64, updateLargeColumnSize int) Workload {
 	return &UpdateBankWorkload{
-		nextID:        atomic.Int64{},
-		totalRowCount: totalRowCount,
-		cacheLargeCol: generateRandomString(largeColSize),
+		nextID:                atomic.Int64{},
+		totalRowCount:         totalRowCount,
+		cacheLargeCol:         generateRandomString(updateLargeColumnSize),
+		updateLargeColumnSize: updateLargeColumnSize,
 	}
 }
 
 func (c *UpdateBankWorkload) BuildCreateTableStatement(n int) string {
-	return fmt.Sprintf(createUpdateBankTable, n)
+	return fmt.Sprintf(createUpdateBankTable, n, c.updateLargeColumnSize)
 }
 
 func (c *UpdateBankWorkload) BuildInsertSql(tableN int, batchSize int) string {
