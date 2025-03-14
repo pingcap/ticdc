@@ -349,22 +349,11 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 }
 
 func (pi *pathInfo[A, P, T, D, H]) updatePendingSize(delta int64) {
-	oldSize := pi.pendingSize.Load()
-	// Check for integer overflow/underflow
-	newSize := oldSize + delta
-	if delta > 0 && newSize < oldSize {
-		log.Error("Integer overflow detected in updatePendingSize",
-			zap.Int64("oldSize", oldSize),
-			zap.Int64("delta", delta))
-		return
+	pi.pendingSize.Add(delta)
+	if pi.pendingSize.Load() < 0 {
+		log.Warn("pendingSize is negative", zap.Int64("pendingSize", pi.pendingSize.Load()))
+		pi.pendingSize.Store(0)
 	}
-	if delta < 0 && newSize > oldSize {
-		log.Error("Integer underflow detected in updatePendingSize",
-			zap.Int64("oldSize", oldSize),
-			zap.Int64("delta", delta))
-		return
-	}
-	pi.pendingSize.Store(newSize)
 }
 
 // eventWrap contains the event and the path info.

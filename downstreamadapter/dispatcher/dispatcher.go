@@ -188,23 +188,26 @@ func NewDispatcher(
 	return dispatcher
 }
 
-func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo) error {
+// InitializeTableSchemaStore initializes the tableSchemaStore for the table trigger event dispatcher.
+// It returns true if the tableSchemaStore is initialized successfully, otherwise returns false.
+func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo) (ok bool, err error) {
 	// Only the table trigger event dispatcher need to create a tableSchemaStore
 	// Because we only need to calculate the tableNames or TableIds in the sink
 	// when the event dispatcher manager have table trigger event dispatcher
 	if !d.tableSpan.Equal(heartbeatpb.DDLSpan) {
 		log.Error("InitializeTableSchemaStore should only be received by table trigger event dispatcher", zap.Any("dispatcher", d.id))
-		return apperror.ErrChangefeedInitTableTriggerEventDispatcherFailed.
+		return false, apperror.ErrChangefeedInitTableTriggerEventDispatcherFailed.
 			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger event dispatcher")
 	}
 
 	if d.tableSchemaStore != nil {
 		log.Info("tableSchemaStore has already been initialized", zap.Stringer("dispatcher", d.id))
-		return nil
+		return false, nil
 	}
+
 	d.tableSchemaStore = util.NewTableSchemaStore(schemaInfo, d.sink.SinkType())
 	d.sink.SetTableSchemaStore(d.tableSchemaStore)
-	return nil
+	return true, nil
 }
 
 // HandleDispatcherStatus is used to handle the dispatcher status from the Maintainer to deal with the block event.

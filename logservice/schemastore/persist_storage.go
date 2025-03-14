@@ -519,7 +519,9 @@ func (p *persistentStorage) gc(ctx context.Context) error {
 func (p *persistentStorage) doGc(gcTs uint64) error {
 	p.mu.Lock()
 	if gcTs > p.upperBound.ResolvedTs {
-		log.Panic("gc safe point is larger than resolvedTs",
+		// It might happen when all changefeed is removed in the maintainer side,
+		// the gc safe point thus advanced.
+		log.Warn("gc safe point is larger than resolvedTs, ignore it",
 			zap.Uint64("gcTs", gcTs),
 			zap.Uint64("resolvedTs", p.upperBound.ResolvedTs))
 	}

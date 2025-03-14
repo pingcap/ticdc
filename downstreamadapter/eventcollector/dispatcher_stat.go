@@ -150,10 +150,19 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 	if d.eventServiceInfo.serverID == server {
 		// case 1: already received ready signal from the same server
 		if d.eventServiceInfo.readyEventReceived {
+			log.Info("received ready signal from the same server again, ignore it",
+				zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+				zap.Stringer("dispatcher", d.target.GetId()),
+				zap.Stringer("server", server))
 			return
 		}
 		// case 2: first ready signal from the server
 		// (must be a remote candidate, because we won't set d.eventServiceInfo.serverID to local event service until we receive ready signal)
+		log.Info("received ready signal from the remote server, prepare to reset the dispatcher",
+			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Stringer("dispatcher", d.target.GetId()),
+			zap.Stringer("server", server))
+
 		d.eventServiceInfo.serverID = server
 		d.eventServiceInfo.readyEventReceived = true
 		eventCollector.addDispatcherRequestToSendingQueue(

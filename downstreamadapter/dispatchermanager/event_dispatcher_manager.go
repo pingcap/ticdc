@@ -408,10 +408,16 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 	if e.tableTriggerEventDispatcher == nil {
 		return nil
 	}
-	err := e.tableTriggerEventDispatcher.InitializeTableSchemaStore(schemaInfo)
+
+	needAddDispatcher, err := e.tableTriggerEventDispatcher.InitializeTableSchemaStore(schemaInfo)
 	if err != nil {
 		return errors.Trace(err)
 	}
+
+	if !needAddDispatcher {
+		return nil
+	}
+
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.config.MemoryQuota)
 

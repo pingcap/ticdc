@@ -297,6 +297,13 @@ func (c *eventBroker) logUnresetDispatchers(ctx context.Context) {
 				}
 				return true
 			})
+			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
+				dispatcher := value.(*dispatcherStat)
+				if dispatcher.resetTs.Load() == 0 {
+					log.Info("table trigger dispatcher not reset", zap.Any("dispatcher", dispatcher.id))
+				}
+				return true
+			})
 		}
 	}
 }
@@ -725,6 +732,19 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			receivedMinResolvedTs := uint64(0)
 			sentMinWaterMark := uint64(0)
 			c.dispatchers.Range(func(key, value interface{}) bool {
+				dispatcher := value.(*dispatcherStat)
+				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
+				if receivedMinResolvedTs == 0 || resolvedTs < receivedMinResolvedTs {
+					receivedMinResolvedTs = resolvedTs
+				}
+				watermark := dispatcher.sentResolvedTs.Load()
+				if sentMinWaterMark == 0 || watermark < sentMinWaterMark {
+					sentMinWaterMark = watermark
+				}
+				return true
+			})
+			// Include the table trigger dispatchers in the metrics.
+			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*dispatcherStat)
 				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
 				if receivedMinResolvedTs == 0 || resolvedTs < receivedMinResolvedTs {
