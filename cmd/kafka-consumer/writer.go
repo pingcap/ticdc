@@ -322,7 +322,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			}
 			needFlush = true
 		case common.MessageTypeRow:
-			row, err := progress.decoder.NextRowChangedEvent()
+			row, err := progress.decoder.NextDMLEvent()
 			if err != nil {
 				log.Panic("decode message value failed",
 					zap.Int32("partition", partition), zap.Any("offset", offset),

@@ -193,7 +193,7 @@ func (b *canalJSONDecoder) assembleClaimCheckRowChangedEvent(
 	}
 
 	b.msg = message
-	return b.NextRowChangedEvent()
+	return b.NextDMLEvent()
 }
 
 func (b *canalJSONDecoder) buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string, error) {
@@ -287,12 +287,12 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyRowChangedEvent(
 	}
 
 	b.msg = result
-	return b.NextRowChangedEvent()
+	return b.NextDMLEvent()
 }
 
 // NextRowChangedEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextRowChangedEvent() (*commonEvent.DMLEvent, error) {
+func (b *canalJSONDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeRow {
 		return nil, errors.ErrCodecDecode.
 			GenWithStack("not found row changed event message")

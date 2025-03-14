@@ -32,9 +32,8 @@ type RowEventDecoder interface {
 	HasNext() (MessageType, bool, error)
 	// NextResolvedEvent returns the next resolved event if exists
 	NextResolvedEvent() (uint64, error)
-	// NextRowChangedEvent returns the next row changed event if exists
-	// todo: rename this to NextRow, since there is no more RowChangedEvent.
-	NextRowChangedEvent() (*commonEvent.DMLEvent, error)
+	// NextDMLEvent returns the next DML event if exists
+	NextDMLEvent() (*commonEvent.DMLEvent, error)
 	// NextDDLEvent returns the next DDL event if exists
 	NextDDLEvent() (*commonEvent.DDLEvent, error)
 }
