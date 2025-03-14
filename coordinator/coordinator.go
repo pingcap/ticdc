@@ -37,7 +37,6 @@ import (
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
-	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -93,7 +92,6 @@ type coordinator struct {
 	changefeedChangeCh chan []*ChangefeedChange
 
 	cancel func()
-	closed atomic.Bool
 }
 
 func New(node *node.Info,
@@ -123,7 +121,6 @@ func New(node *node.Info,
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
 
 	c.taskScheduler = threadpool.NewThreadPoolDefault()
-	c.closed.Store(false)
 
 	controller := NewController(
 		c.version,
@@ -154,11 +151,15 @@ func New(node *node.Info,
 	return c
 }
 
-func (c *coordinator) recvMessages(_ context.Context, msg *messaging.TargetMessage) error {
-	if c.closed.Load() {
-		return nil
+func (c *coordinator) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		// use ctx.Done to avoid send message into a closed channel
+		c.eventCh.In() <- &Event{message: msg}
 	}
-	c.eventCh.In() <- &Event{message: msg}
+
 	return nil
 }
 
@@ -386,13 +387,12 @@ func (c *coordinator) GetChangefeed(ctx context.Context, changefeedDisplayName c
 }
 
 func (c *coordinator) AsyncStop() {
-	if c.closed.CompareAndSwap(false, true) {
-		c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
-		c.controller.Stop()
-		c.taskScheduler.Stop()
-		c.eventCh.CloseAndDrain()
-		c.cancel()
-	}
+	c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
+	c.controller.Stop()
+	c.taskScheduler.Stop()
+	c.cancel()
+	// close eventCh after cancel, to avoid send or get event from the channel
+	c.eventCh.CloseAndDrain()
 }
 
 func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
