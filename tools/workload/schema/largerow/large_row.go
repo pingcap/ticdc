@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package schema
+package largerow
 
 import (
 	"fmt"
@@ -21,6 +21,8 @@ import (
 
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
+	"workload/schema"
+	"workload/util"
 )
 
 const varcharColumnMaxLen = 16383
@@ -29,7 +31,7 @@ func newColumnValues(r *rand.Rand, size, count int) [][]byte {
 	result := make([][]byte, 0, count)
 	for i := 0; i < count; i++ {
 		buf := make([]byte, size)
-		randomBytes(r, buf)
+		util.RandomBytes(r, buf)
 		result = append(result, buf)
 	}
 	return result
@@ -84,7 +86,7 @@ type LargeRowWorkload struct {
 
 func NewLargeRowWorkload(
 	normalRowSize, largeRowSize int, largeRatio float64,
-) Workload {
+) schema.Workload {
 	columnCount := int(float64(largeRowSize) / varcharColumnMaxLen)
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -139,7 +141,7 @@ func (l *LargeRowWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	return insertSQL
 }
 
-func (l *LargeRowWorkload) BuildUpdateSql(opts UpdateOption) string {
+func (l *LargeRowWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 	tableName := getTableName(opts.Table)
 	upsertSQL := strings.Builder{}
 	upsertSQL.WriteString(fmt.Sprintf("INSERT INTO %s VALUES (%d,%s)", tableName, rand.Int63()%100000, l.getSmallRow()))
@@ -162,15 +164,3 @@ func (l *LargeRowWorkload) BuildUpdateSql(opts UpdateOption) string {
 }
 
 var letters = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-
-func randomBytes(r *rand.Rand, buffer []byte) {
-	for i := range buffer {
-		idx := 1
-		if r == nil {
-			idx = rand.Intn(len(letters))
-		} else {
-			idx = r.Intn(len(letters))
-		}
-		buffer[i] = letters[idx]
-	}
-}

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package schema
+package shop
 
 import (
 	"fmt"
@@ -19,6 +19,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"workload/schema"
+	"workload/util"
 )
 
 const createShopItemTable = `
@@ -58,7 +60,7 @@ type ShopItemWorkload struct {
 	totalRow      uint64
 }
 
-func NewShopItemWorkload(totalCount uint64, rowSize int) Workload {
+func NewShopItemWorkload(totalCount uint64, rowSize int) schema.Workload {
 	jsonFieldSize := rowSize / 13
 	return &ShopItemWorkload{
 		jsonFieldSize: jsonFieldSize,
@@ -86,12 +88,12 @@ func (s *ShopItemWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	return sb.String()
 }
 
-func (s *ShopItemWorkload) BuildUpdateSql(opt UpdateOption) string {
+func (s *ShopItemWorkload) BuildUpdateSql(opt schema.UpdateOption) string {
 	return s.buildUpsertSql(opt)
 	// return s.buildUpdateSql(opt)
 }
 
-func (s *ShopItemWorkload) buildUpsertSql(opt UpdateOption) string {
+func (s *ShopItemWorkload) buildUpsertSql(opt schema.UpdateOption) string {
 	tableName := fmt.Sprintf("shop_item_%d", opt.Table)
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("INSERT INTO %s VALUES ", tableName))
@@ -108,7 +110,7 @@ func (s *ShopItemWorkload) buildUpsertSql(opt UpdateOption) string {
 	return sb.String()
 }
 
-func (s *ShopItemWorkload) buildUpdateSql(opt UpdateOption) string {
+func (s *ShopItemWorkload) buildUpdateSql(opt schema.UpdateOption) string {
 	tableName := fmt.Sprintf("shop_item_%d", opt.Table)
 	var sb strings.Builder
 
@@ -162,8 +164,8 @@ func randomJSONString(size int) string {
 			sb.WriteString(",")
 			remaining-- // account for comma
 		}
-		randomBytes(nil, keyBuf)
-		randomBytes(nil, valueBuf)
+		util.RandomBytes(nil, keyBuf)
+		util.RandomBytes(nil, valueBuf)
 		entry := fmt.Sprintf("\"%s-%d-%s\":\"%s-%d-%s\"", "key", idx, keyBuf, "value", idx, valueBuf)
 		sb.WriteString(entry)
 		remaining -= len(entry)

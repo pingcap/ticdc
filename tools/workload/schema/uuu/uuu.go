@@ -11,13 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package schema
+package uuu
 
 import (
 	"fmt"
 	mrand "math/rand"
 	"strings"
 	"sync"
+
+	"workload/schema"
 )
 
 const createDataTableFormat = `
@@ -44,7 +46,7 @@ CREATE TABLE IF NOT EXISTS index_Data%d (
 
 type UUUWorkload struct{}
 
-func NewUUUWorkload() Workload {
+func NewUUUWorkload() schema.Workload {
 	return &UUUWorkload{}
 }
 
@@ -89,7 +91,7 @@ func (c *UUUWorkload) BuildInsertSqlWithValues(tableN int, batchSize int) (strin
 	}
 }
 
-func (c *UUUWorkload) BuildUpdateSql(opts UpdateOption) string {
+func (c *UUUWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 	panic("unimplemented")
 }
 

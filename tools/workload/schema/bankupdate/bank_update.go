@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,16 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package schema
+package bankupdate
 
 import (
 	"bytes"
 	"fmt"
 	"math/rand"
+	"os"
+	"sync/atomic"
+
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
+	"workload/schema"
+	"workload/util"
 )
 
-const createBankTable = `
-create table if not exists bank%d
+const createUpdateBankTable = `
+create table if not exists update_bank%d
 (
 id    BIGINT NOT NULL,                    
 col1  VARCHAR(5),                    
@@ -84,25 +91,39 @@ col58 DATETIME,
 col59 DATETIME,                    
 col60 DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),                    
 col61 VARCHAR(30) DEFAULT 'Z',
+large_col VARCHAR(%d),           -- large column, 1KB
+small_col INT DEFAULT 1,           -- small column, 1 byte
 PRIMARY KEY (id)
 );
 `
 
-type BankWorkload struct{}
-
-func NewBankWorkload() Workload {
-	return &BankWorkload{}
+type BankUpdateWorkload struct {
+	nextID                atomic.Int64
+	totalRowCount         uint64
+	cacheLargeCol         string
+	updateLargeColumnSize int
 }
 
-func (c *BankWorkload) BuildCreateTableStatement(n int) string {
-	return fmt.Sprintf(createBankTable, n)
+func NewBankUpdateWorkload(totalRowCount uint64, updateLargeColumnSize int) schema.Workload {
+	return &BankUpdateWorkload{
+		nextID:                atomic.Int64{},
+		totalRowCount:         totalRowCount,
+		cacheLargeCol:         util.GenerateRandomString(updateLargeColumnSize),
+		updateLargeColumnSize: updateLargeColumnSize,
+	}
 }
 
-func (c *BankWorkload) BuildInsertSql(tableN int, batchSize int) string {
-	n := rand.Int63()
+func (c *BankUpdateWorkload) BuildCreateTableStatement(n int) string {
+	return fmt.Sprintf(createUpdateBankTable, n, c.updateLargeColumnSize)
+}
+
+func (c *BankUpdateWorkload) BuildInsertSql(tableN int, batchSize int) string {
+	if tableN > 1 {
+		log.Panic("Current bankupdate workload only supports one table")
+	}
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf(`
-insert into bank%d (id, 
+replace into update_bank%d (id, 
 col1,
 col2,
 col3,
@@ -163,77 +184,25 @@ col57,
 col58,
 col59,
 col60,
-col61
+col61,
+large_col,
+small_col
 )
-values(%d, 
-'abcde', 
-'2019-03-05 01:53:56', 
-'2019-03-05 01:53:56',
-100,
-'abcdefghijklmnopsrstuvwxy', 
-'1234567890',
-'123456', 
-10000,
-'12345',
-1000,
-1000,
-'12345',
-'12345678',
-'123456789',
-'123456789',
-'123456789',
-'123456789',
-'123',
-'1',
-'1234567890',
-'1',
-1111111,
-'1',
-'12345678',
-'123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890',
-'1',
-'1',
-100,
-'123456',
-'1234567890',
-'123456789',
-100,
-'123456',
-'12345678',
-'1234567890',
-'12345',
-'12345',
-'1',
-'12345678901234567890123456789012',
-'12345678901234567890123',
-'12345',
-'1',
-'123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890',
-'123456789012345678',
-'1234',
-'12',
-'1',
-10,
-'12345678901234567890123456789012345',
-'12345678',
-'12345678',
-'12345678',
-'123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890',
-'12345678',
-'12345678901234567890123',
-'12',
-'1234567890',
-'2019-03-05 01:53:56',
-'2019-03-05 01:53:56',
-'2019-03-05 01:53:56',
-'123456789012345678901234567890'
-)
-`, tableN, n))
+values`, tableN))
 
-	for r := 1; r < batchSize; r++ {
-		n = rand.Int63()
-		buf.WriteString(fmt.Sprintf(
-			`,
+	// generate a 4KB random string as the value of large_col
+	largeColValue := c.cacheLargeCol
+
+	for r := 0; r < batchSize; r++ {
+		id := c.nextID.Add(1)
+		if id > int64(c.totalRowCount) {
+			log.Info("id is greater than total row count", zap.Int64("id", id), zap.Uint64("totalRowCount", c.totalRowCount))
+			os.Exit(1)
+		}
+		if r > 0 {
+			buf.WriteString(",")
+		}
+		buf.WriteString(fmt.Sprintf(`
 (%d, 
 'abcde', 
 '2019-03-05 01:53:56', 
@@ -295,13 +264,23 @@ values(%d,
 '2019-03-05 01:53:56',
 '2019-03-05 01:53:56',
 '2019-03-05 01:53:56',
-'123456789012345678901234567890'
-)
-`, n))
+'123456789012345678901234567890',
+'%s',
+1
+)`, id, largeColValue))
 	}
 	return buf.String()
 }
 
-func (c *BankWorkload) BuildUpdateSql(opts UpdateOption) string {
-	panic("unimplemented")
+func (c *BankUpdateWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
+	rangeSize := opts.Batch
+	startID := rand.Int63n(int64(c.totalRowCount) - int64(rangeSize))
+	endID := startID + int64(rangeSize) - 1
+	newValue := util.GenerateRandomInt()
+
+	return fmt.Sprintf(`
+UPDATE update_bank%d 
+SET small_col = %d 
+WHERE id >= %d AND id <= %d
+`, opts.Table, newValue, startID, endID)
 }
