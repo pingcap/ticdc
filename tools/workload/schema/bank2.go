@@ -315,8 +315,10 @@ func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []i
 	case 0: // info
 		sql = c.infoTableUpdateSQL
 		nonPrimaryValues := generateNonPrimaryValuesForTable()
-		values = append(values, generatePrimaryValuesForTable()...)
-		values = append(values, nonPrimaryValues...)
+		for r := 0; r < 200; r++ {
+			values = append(values, generatePrimaryValuesForTable()...)
+			values = append(values, nonPrimaryValues...)
+		}
 	case 1: // log
 		sql = "insert into log (col5 , col111 , id , col84 , col122 , col112 , col121 , col124 , col106 , col125 , col98 , col115 , col116 , col114 , col9 , col94 , col99 , col118 , col95 , col91 , col113 , col87 , col105 , col119 , col_1 , col104 , col8 , col3 , col88 , col96 , col117 , col86 , col85 , col4 , col6 , col126 , col102 , col89 , col7 , col120 , col93 , col90 , col97 , col92 , col123 ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE col5=VALUES(col5), col111=VALUES(col111), id=VALUES(id)"
 		values = append(values, generatePrimaryValuesForLogTable()...)
