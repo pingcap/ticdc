@@ -20,10 +20,9 @@ import (
 
 const tidbWaterMarkType = "TIDB_WATERMARK"
 
-// // The TiCDC Canal-JSON implementation extend the official format with a TiDB extension field.
-// // canalJSONMessageInterface is used to support this without affect the original format.
+// The TiCDC Canal-JSON implementation extend the official format with a TiDB extension field.
+// canalJSONMessageInterface is used to support this without affect the original format.
 type canalJSONMessageInterface interface {
-	messageType() common.MessageType
 	getSchema() *string
 	getTable() *string
 	getCommitTs() uint64
@@ -32,6 +31,7 @@ type canalJSONMessageInterface interface {
 	getData() map[string]interface{}
 	getMySQLType() map[string]string
 	getJavaSQLType() map[string]int32
+	messageType() common.MessageType
 	eventType() canal.EventType
 	pkNameSet() map[string]struct{}
 }
@@ -58,16 +58,6 @@ type JSONMessage struct {
 	// A Datum should be a string or nil
 	Data []map[string]interface{} `json:"data"`
 	Old  []map[string]interface{} `json:"old"`
-}
-
-func (c *JSONMessage) messageType() common.MessageType {
-	if c.IsDDL {
-		return common.MessageTypeDDL
-	}
-	if c.EventType == tidbWaterMarkType {
-		return common.MessageTypeResolved
-	}
-	return common.MessageTypeRow
 }
 
 func (c *JSONMessage) getSchema() *string {
@@ -107,6 +97,18 @@ func (c *JSONMessage) getMySQLType() map[string]string {
 
 func (c *JSONMessage) getJavaSQLType() map[string]int32 {
 	return c.SQLType
+}
+
+func (c *JSONMessage) messageType() common.MessageType {
+	if c.IsDDL {
+		return common.MessageTypeDDL
+	}
+
+	if c.EventType == tidbWaterMarkType {
+		return common.MessageTypeResolved
+	}
+
+	return common.MessageTypeRow
 }
 
 func (c *JSONMessage) eventType() canal.EventType {

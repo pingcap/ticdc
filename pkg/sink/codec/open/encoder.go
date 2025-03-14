@@ -18,10 +18,9 @@ import (
 	"context"
 	"encoding/binary"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -63,7 +62,7 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 				zap.Int("length", length),
 				zap.Any("table", e.TableInfo.TableName),
 				zap.Any("key", key))
-			return cerror.ErrMessageTooLarge.GenWithStackByArgs()
+			return errors.ErrMessageTooLarge.GenWithStackByArgs()
 		}
 
 		if d.config.LargeMessageHandle.EnableClaimCheck() {
@@ -87,7 +86,7 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 					zap.Int("maxMessageBytes", d.config.MaxMessageBytes),
 					zap.Int("length", length),
 					zap.Any("key", key))
-				return cerror.ErrMessageTooLarge.GenWithStackByArgs()
+				return errors.ErrMessageTooLarge.GenWithStackByArgs()
 			}
 		}
 
@@ -104,7 +103,7 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 					zap.Int("length", length),
 					zap.Any("table", e.TableInfo.TableName),
 					zap.Any("key", key))
-				return cerror.ErrMessageTooLarge.GenWithStackByArgs()
+				return errors.ErrMessageTooLarge.GenWithStackByArgs()
 			}
 		}
 	}

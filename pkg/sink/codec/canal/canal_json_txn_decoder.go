@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
 )
@@ -100,7 +99,7 @@ func (d *canalJSONTxnEventDecoder) HasNext() (common.MessageType, bool, error) {
 // `HasNext` should be called before this.
 func (d *canalJSONTxnEventDecoder) NextRowChangedEvent() (*commonEvent.DMLEvent, error) {
 	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
-		return nil, cerror.ErrCanalDecodeFailed.
+		return nil, errors.ErrCanalEncodeFailed.
 			GenWithStack("not found row changed event message")
 	}
 	result, err := d.canalJSONMessage2RowChange()
