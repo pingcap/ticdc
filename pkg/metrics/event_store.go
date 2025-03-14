@@ -91,6 +91,20 @@ var (
 			Buckets:   LagBucket(),
 		})
 
+	EventStoreOnDiskDataSizeGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "on_disk_data_size",
+		Help:      "The amount of pending data stored on-disk for event store",
+	}, []string{"id"})
+
+	EventStoreInMemoryDataSizeGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "in_memory_data_size",
+		Help:      "The amount of pending data stored in-memory for event store",
+	}, []string{"id"})
+
 	EventStoreResolvedTsLagGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -161,6 +175,8 @@ func InitEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreScanBytes)
 	registry.MustRegister(EventStoreDeleteRangeCount)
 	registry.MustRegister(EventStoreDispatcherResolvedTsLagHist)
+	registry.MustRegister(EventStoreOnDiskDataSizeGauge)
+	registry.MustRegister(EventStoreInMemoryDataSizeGauge)
 	registry.MustRegister(EventStoreResolvedTsLagGauge)
 	registry.MustRegister(EventStoreDispatcherWatermarkLagHist)
 	registry.MustRegister(EventStoreCompressRatio)

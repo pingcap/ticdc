@@ -35,10 +35,7 @@ import (
 )
 
 // rawKVToChunkV2 is used to decode the new format of row data.
-func (m *mounter) rawKVToChunkV2(value []byte, tableInfo *common.TableInfo, chk *chunk.Chunk, handle kv.Handle) error {
-	if len(value) == 0 {
-		return nil
-	}
+func newChunkDecoderV2(tableInfo *common.TableInfo, tz *time.Location) *rowcodec.ChunkDecoder {
 	handleColIDs, _, reqCols := tableInfo.GetRowColInfos()
 	// This function is used to set the default value for the column that
 	// is not in the raw data.
@@ -54,7 +51,7 @@ func (m *mounter) rawKVToChunkV2(value []byte, tableInfo *common.TableInfo, chk 
 			log.Panic("column not found", zap.Int64("columnID", reqCols[i].ID))
 		}
 
-		colDatum, _, _, warn, err := getDefaultOrZeroValue(ci, m.tz)
+		colDatum, _, _, warn, err := getDefaultOrZeroValue(ci, tz)
 		if err != nil {
 			return err
 		}
@@ -65,7 +62,15 @@ func (m *mounter) rawKVToChunkV2(value []byte, tableInfo *common.TableInfo, chk 
 		chk.AppendDatum(i, &colDatum)
 		return nil
 	}
-	decoder := rowcodec.NewChunkDecoder(reqCols, handleColIDs, defVal, m.tz)
+	return rowcodec.NewChunkDecoder(reqCols, handleColIDs, defVal, tz)
+}
+
+// rawKVToChunkV2 is used to decode the new format of row data.
+func (m *mounter) rawKVToChunkV2(value []byte, tableInfo *common.TableInfo, chk *chunk.Chunk, handle kv.Handle) error {
+	if len(value) == 0 {
+		return nil
+	}
+	decoder := newChunkDecoderV2(tableInfo, m.tz)
 	// cache it for later use
 	err := decoder.DecodeToChunk(value, handle, chk)
 	if err != nil {
