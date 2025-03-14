@@ -151,6 +151,10 @@ func newCluster() (*cluster, error) {
 // moveAllTables moves all tables from source node to target node
 func (c *cluster) moveAllTables(sourceNode, targetNode string) error {
 	for _, table := range c.servers[sourceNode] {
+		if table.id == 0 {
+			// table trigger dispatcher is not support to move, except the maintainer is crashed
+			continue
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		err := c.
