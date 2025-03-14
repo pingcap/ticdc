@@ -22,16 +22,18 @@ import (
 	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"workload/schema"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	plog "github.com/pingcap/log"
 	"go.uber.org/zap"
-	"workload/schema"
 )
 
 var (
@@ -95,7 +97,7 @@ func init() {
 	flag.IntVar(&tableStartIndex, "table-start-index", 0, "table start index, sbtest<index>")
 	flag.IntVar(&thread, "thread", 16, "total thread of the workload")
 	flag.IntVar(&batchSize, "batch-size", 10, "batch size of each insert/update/delete")
-	flag.Uint64Var(&totalRowCount, "total-row-count", 1000000, "the total row count of the workload")
+	flag.Uint64Var(&totalRowCount, "total-row-count", 1000000000, "the total row count of the workload, default is 1 billion")
 	flag.Float64Var(&percentageForUpdate, "percentage-for-update", 0, "percentage for update: [0, 1.0]")
 	flag.BoolVar(&skipCreateTable, "skip-create-table", false, "do not create tables")
 	flag.StringVar(&action, "action", "prepare", "action of the workload: [prepare, insert, update, delete, write, cleanup]")
@@ -538,6 +540,11 @@ func reportMetrics() {
 		lastErrorCount = stats.errCount
 		// Print statistics
 		printStats(stats)
+
+		if stats.flushedRowCount > totalRowCount {
+			plog.Info("total row count reached", zap.Uint64("flushedRowCount", stats.flushedRowCount), zap.Uint64("totalRowCount", totalRowCount))
+			os.Exit(0)
+		}
 	}
 }
 
