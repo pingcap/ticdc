@@ -187,7 +187,7 @@ const createLogTableSQL = `CREATE TABLE log_%d (
   col105 varchar(1) NOT NULL DEFAULT 'N',
   col106 varchar(256) DEFAULT NULL,
   PRIMARY KEY (col5,col111,col110) /*T![clustered_index] NONCLUSTERED */,
-  KEY idx_1 (col5,col3,id),
+  KEY idx_1 (col5,col3,col110),
   KEY idx_2 (col99,col91,col105)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin /*T! SHARD_ROW_ID_BITS=9 PRE_SPLIT_REGIONS=9 */`
 
