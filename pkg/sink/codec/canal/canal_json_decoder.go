@@ -398,7 +398,7 @@ func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEv
 	result.BlockedTables = nil // todo: set this
 	// todo: getDDLActionType can handle ActionExchangeTablePartition,
 	// it's used by the mysql sink.
-	result.Type = byte(getDDLActionType(result.Query))
+	result.Type = getDDLActionType(result.Query)
 	result.FinishedTs = msg.getCommitTs()
 	result.SchemaName = *msg.getSchema()
 	result.TableName = *msg.getTable()
@@ -564,6 +564,8 @@ func getDDLActionType(query string) timodel.ActionType {
 	if strings.HasPrefix(query, "drop schema") || strings.HasPrefix(query, "drop database") {
 		return timodel.ActionDropSchema
 	}
-
+	if strings.HasPrefix(query, "create table") {
+		return timodel.ActionCreateTable
+	}
 	return timodel.ActionNone
 }

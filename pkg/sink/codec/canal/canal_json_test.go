@@ -734,62 +734,59 @@ func TestDMLTypeEvent(t *testing.T) {
 	require.Equal(t, `[{"a":"1","b":"2"}]`, string(newValue))
 }
 
-// ddl
-func TestDDLTypeEvent(t *testing.T) {
+func TestCreateTableDDL(t *testing.T) {
 	helper := pevent.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
 
 	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
-
-	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
-	encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
-	require.NoError(t, err)
+	require.NotNil(t, job)
 
 	ddlEvent := &pevent.DDLEvent{
 		Query:      job.Query,
-		Type:       byte(job.Type),
+		Type:       job.Type,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
 		FinishedTs: 1,
 	}
 
-	message, err := encoder.EncodeDDLEvent(ddlEvent)
-	require.NoError(t, err)
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+	ctx := context.Background()
 
-	var value JSONMessage
-	err = json.Unmarshal(message.Value, &value)
-	require.NoError(t, err)
+	for _, enableTiDBExtension := range []bool{false, true} {
+		codecConfig.EnableTiDBExtension = enableTiDBExtension
+		encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+		require.NoError(t, err)
 
-	require.Equal(t, int64(0), value.ID)
-	require.Equal(t, "test", value.Schema)
-	require.Equal(t, "t", value.Table)
-	require.Equal(t, true, value.IsDDL)
-	require.Equal(t, "CREATE", value.EventType)
-	require.Equal(t, int64(1>>18), value.ExecutionTime)
-	require.Equal(t, job.Query, value.Query)
+		message, err := encoder.EncodeDDLEvent(ddlEvent)
+		require.NoError(t, err)
 
-	// extension tidb
-	protocolConfig.EnableTiDBExtension = true
-	encoder, err = NewJSONRowEventEncoder(context.Background(), protocolConfig)
-	require.NoError(t, err)
+		decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+		require.NoError(t, err)
 
-	message, err = encoder.EncodeDDLEvent(ddlEvent)
-	require.NoError(t, err)
+		err = decoder.AddKeyValue(message.Key, message.Value)
+		require.NoError(t, err)
 
-	var extensionValue canalJSONMessageWithTiDBExtension
-	err = json.Unmarshal(message.Value, &extensionValue)
-	require.NoError(t, err)
+		messageType, hasNext, err := decoder.HasNext()
+		require.NoError(t, err)
+		require.True(t, hasNext)
+		require.Equal(t, common.MessageTypeDDL, messageType)
 
-	require.Equal(t, uint64(1), extensionValue.Extensions.CommitTs)
+		obtained, err := decoder.NextDDLEvent()
+		require.NoError(t, err)
+		require.Equal(t, ddlEvent.Query, obtained.Query)
+		require.Equal(t, ddlEvent.Type, obtained.Type)
+		require.Equal(t, ddlEvent.SchemaName, obtained.SchemaName)
+		require.Equal(t, ddlEvent.TableName, obtained.TableName)
+		if enableTiDBExtension {
+			require.Equal(t, ddlEvent.FinishedTs, obtained.FinishedTs)
+		}
+	}
 }
 
 // checkpointTs
 func TestCheckpointTs(t *testing.T) {
-	helper := pevent.NewEventTestHelper(t)
-	defer helper.Close()
-
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
