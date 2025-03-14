@@ -410,7 +410,7 @@ func doUpdate(conn *sql.Conn, workload schema.Workload, input chan updateTask) {
 		}
 
 		if err != nil {
-			plog.Info("update error", zap.Error(err), zap.String("sql", updateSql[:20]))
+			plog.Info("update error", zap.Error(err), zap.String("sql", updateSql))
 			errCount.Add(1)
 		}
 		if res != nil {
