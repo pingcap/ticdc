@@ -27,11 +27,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"workload/schema"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	plog "github.com/pingcap/log"
 	"go.uber.org/zap"
-	"workload/schema"
 )
 
 var (
@@ -82,7 +83,8 @@ const (
 	uuu      = "uuu"
 	// for gf case, at most support table count = 2. Here only 2 tables in this cases.
 	// And each insert sql contains 200 batch, each update sql only contains 1 batch.
-	bank2 = "bank2"
+	bank2      = "bank2"
+	updateBank = "update_bank"
 )
 
 // Add a prepared statement cache
@@ -225,6 +227,8 @@ func createWorkload() schema.Workload {
 		workload = schema.NewUUUWorkload()
 	case bank2:
 		workload = schema.NewBank2Workload()
+	case updateBank:
+		workload = schema.NewUpdateBankWorkload(totalRowCount)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", workloadType))
 	}
@@ -404,7 +408,7 @@ func doUpdate(conn *sql.Conn, workload schema.Workload, input chan updateTask) {
 			updateSql, values := workload.(*schema.Bank2Workload).BuildUpdateSqlWithValues(task.UpdateOption)
 			res, err = executeWithValues(conn, updateSql, workload, task.UpdateOption.Table, values)
 		} else {
-			updateSql := workload.BuildUpdateSql(task.UpdateOption)
+			updateSql = workload.BuildUpdateSql(task.UpdateOption)
 			res, err = execute(conn, updateSql, workload, task.Table)
 		}
 

@@ -18,6 +18,12 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync/atomic"
+)
+
+const (
+	largeColSize = 4000
+	smallColSize = 1
 )
 
 const createUpdateBankTable = `
@@ -91,10 +97,18 @@ PRIMARY KEY (id)
 );
 `
 
-type UpdateBankWorkload struct{}
+type UpdateBankWorkload struct {
+	nextID        atomic.Int64
+	totalRowCount uint64
+	cacheLargeCol string
+}
 
-func NewUpdateBankWorkload() Workload {
-	return &UpdateBankWorkload{}
+func NewUpdateBankWorkload(totalRowCount uint64) Workload {
+	return &UpdateBankWorkload{
+		nextID:        atomic.Int64{},
+		totalRowCount: totalRowCount,
+		cacheLargeCol: generateRandomString(largeColSize),
+	}
 }
 
 func (c *UpdateBankWorkload) BuildCreateTableStatement(n int) string {
@@ -104,7 +118,7 @@ func (c *UpdateBankWorkload) BuildCreateTableStatement(n int) string {
 func (c *UpdateBankWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf(`
-insert into update_bank%d (id, 
+replace into update_bank%d (id, 
 col1,
 col2,
 col3,
@@ -171,11 +185,11 @@ small_col
 )
 values`, tableN))
 
-	// 生成4KB的随机字符串作为large_col的值
-	largeColValue := generateRandomString(4000)
+	// generate a 4KB random string as the value of large_col
+	largeColValue := c.cacheLargeCol
 
 	for r := 0; r < batchSize; r++ {
-		n := rand.Int63()
+		id := c.nextID.Add(1)
 		if r > 0 {
 			buf.WriteString(",")
 		}
@@ -244,18 +258,16 @@ values`, tableN))
 '123456789012345678901234567890',
 '%s',
 1
-)`, n, largeColValue))
+)`, id, largeColValue))
 	}
 	return buf.String()
 }
 
 func (c *UpdateBankWorkload) BuildUpdateSql(opts UpdateOption) string {
-	// 实现范围更新操作
-	// 每次更新连续的ID范围，将small_col列更新为随机整数
 	rangeSize := opts.Batch
-	startID := rand.Int63n(1000000 - int64(rangeSize)) // 假设ID范围在0-1000000之间
+	startID := rand.Int63n(int64(c.totalRowCount) - int64(rangeSize))
 	endID := startID + int64(rangeSize) - 1
-	newValue := rand.Intn(1000000) // 生成一个随机整数作为新值
+	newValue := generateRandomInt()
 
 	return fmt.Sprintf(`
 UPDATE update_bank%d 
@@ -264,11 +276,11 @@ WHERE id >= %d AND id <= %d
 `, opts.Table, newValue, startID, endID)
 }
 
-// 生成指定长度的随机字符串
+// generateRandomString generates a random string of a given length
 func generateRandomString(length int) string {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-	// 为了提高效率，我们生成一个较短的随机字符串，然后重复它
+	// to improve the efficiency, we generate a short random string, then repeat it
 	baseLength := 100
 	if length < baseLength {
 		baseLength = length
@@ -294,4 +306,8 @@ func generateRandomString(length int) string {
 	}
 
 	return builder.String()
+}
+
+func generateRandomInt() int {
+	return rand.Intn(1000000)
 }
