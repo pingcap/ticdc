@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -42,7 +43,7 @@ type BatchDecoder struct {
 	valueBytes []byte
 
 	nextKey   *messageKey
-	nextEvent *model.RowChangedEvent
+	nextEvent *commonEvent.DMLEvent
 
 	storage storage.ExternalStorage
 
@@ -256,8 +257,8 @@ func (b *BatchDecoder) buildColumns(
 }
 
 func (b *BatchDecoder) assembleHandleKeyOnlyEvent(
-	ctx context.Context, handleKeyOnlyEvent *model.RowChangedEvent,
-) *model.RowChangedEvent {
+	ctx context.Context, handleKeyOnlyEvent *commonEvent.DMLEvent,
+) *commonEvent.DMLEvent {
 	var (
 		schema   = handleKeyOnlyEvent.TableInfo.GetSchemaName()
 		table    = handleKeyOnlyEvent.TableInfo.GetTableName()
@@ -312,7 +313,7 @@ func (b *BatchDecoder) assembleHandleKeyOnlyEvent(
 	return handleKeyOnlyEvent
 }
 
-func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (*model.RowChangedEvent, error) {
+func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (*commonEvent.DMLEvent, error) {
 	_, claimCheckFileName := filepath.Split(b.nextKey.ClaimCheckLocation)
 	b.nextKey = nil
 	data, err := b.storage.ReadFile(ctx, claimCheckFileName)
@@ -355,8 +356,8 @@ func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 	return event, nil
 }
 
-func (b *BatchDecoder) msgToRowChange(key *messageKey, value *messageRow) *model.RowChangedEvent {
-	e := new(model.RowChangedEvent)
+func (b *BatchDecoder) msgToRowChange(key *messageKey, value *messageRow) *commonEvent.DMLEvent {
+	e := new(commonEvent.DMLEvent)
 	// TODO: we lost the startTs from kafka message
 	// startTs-based txn filter is out of work
 	e.CommitTs = key.Ts
@@ -385,11 +386,11 @@ func (b *BatchDecoder) msgToRowChange(key *messageKey, value *messageRow) *model
 	return e
 }
 
-func codecColumns2RowChangeColumns(cols map[string]column) []*model.Column {
+func codecColumns2RowChangeColumns(cols map[string]column) []*commonType.Column {
 	if len(cols) == 0 {
 		return nil
 	}
-	columns := make([]*model.Column, 0, len(cols))
+	columns := make([]*commonType.Column, 0, len(cols))
 	for name, col := range cols {
 		c := col.toRowChangeColumn(name)
 		columns = append(columns, c)
