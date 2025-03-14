@@ -17,11 +17,10 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
-	"workload/schema"
-
-	"workload/util"
 
 	"github.com/google/uuid"
+	"workload/schema"
+	"workload/util"
 )
 
 const createShopItemTable = `

@@ -18,11 +18,11 @@ import (
 	"math/rand"
 	"strings"
 	"time"
-	"workload/schema"
-	"workload/util"
 
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
+	"workload/schema"
+	"workload/util"
 )
 
 const varcharColumnMaxLen = 16383

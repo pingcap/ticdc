@@ -18,6 +18,7 @@ import (
 	mrand "math/rand"
 	"strings"
 	"sync"
+
 	"workload/schema"
 )
 

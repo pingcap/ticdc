@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
+
 	"workload/schema"
 )
 
