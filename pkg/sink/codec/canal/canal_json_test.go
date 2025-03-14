@@ -16,6 +16,7 @@ package canal
 import (
 	"context"
 	"encoding/json"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
@@ -27,6 +28,28 @@ import (
 )
 
 // TODO: claim check
+
+func CompareRow(t *testing.T, tableInfo *commonType.TableInfo, expected pevent.RowChange, actual pevent.RowChange) {
+	fields := tableInfo.GetFieldSlice()
+
+	if !expected.Row.IsEmpty() {
+		a := expected.Row.GetDatumRow(fields)
+		b := actual.Row.GetDatumRow(fields)
+		require.Equal(t, len(a), len(b))
+		for i := range fields {
+			require.Equal(t, a[i], b[i])
+		}
+	}
+
+	if !expected.PreRow.IsEmpty() {
+		a := expected.PreRow.GetDatumRow(fields)
+		b := expected.PreRow.GetDatumRow(fields)
+		require.Equal(t, len(a), len(b))
+		for i := range fields {
+			require.Equal(t, a[i], b[i])
+		}
+	}
+}
 
 func TestBasicTypes(t *testing.T) {
 	helper := pevent.NewEventTestHelper(t)
@@ -42,8 +65,9 @@ func TestBasicTypes(t *testing.T) {
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
 
+	tableInfo := helper.GetTableInfo(job)
 	rowEvent := &pevent.RowEvent{
-		TableInfo:      helper.GetTableInfo(job),
+		TableInfo:      tableInfo,
 		CommitTs:       1,
 		Event:          row,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
@@ -78,17 +102,7 @@ func TestBasicTypes(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, change.Row)
 
-	//value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
-	//require.NoError(t, err)
-	//
-	//var message JSONMessage
-	//
-	//err = json.Unmarshal(value, &message)
-	//require.NoError(t, err)
-	//
-	//newValue, err := json.Marshal(message.Data)
-	//require.NoError(t, err)
-	//require.Equal(t, `[{"a":"1","bi":"PNG\r\n\u001a\n"}]`, string(newValue))
+	CompareRow(t, tableInfo, row, change)
 }
 
 func TestAllTypes(t *testing.T) {

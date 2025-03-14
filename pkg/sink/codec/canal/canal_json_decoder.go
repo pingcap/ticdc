@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"golang.org/x/text/encoding/charmap"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -39,7 +40,6 @@ import (
 	"github.com/pingcap/tiflow/pkg/util"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
-	"golang.org/x/text/encoding/charmap"
 )
 
 type tableKey struct {
@@ -318,21 +318,23 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	tableInfo := b.queryTableInfo(msg)
 
 	result := new(commonEvent.DMLEvent)
-	result.Length++                    // todo: set this field correctly
-	result.StartTs = msg.getCommitTs() // todo: how to set this correctly?
+	result.Length++
+	result.StartTs = msg.getCommitTs()
 	result.ApproximateSize = 0
 	result.TableInfo = tableInfo
-	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	result.CommitTs = msg.getCommitTs()
+	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 
 	columns := tableInfo.GetColumns()
 	switch msg.eventType() {
 	case canal.EventType_DELETE:
 		data := msg.getData()
 		appendRow2Chunk(data, columns, chk)
+		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
 	case canal.EventType_INSERT:
 		data := msg.getData()
 		appendRow2Chunk(data, columns, chk)
+		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
 	case canal.EventType_UPDATE:
 		previous := msg.getOld()
 		data := msg.getData()
@@ -343,6 +345,8 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 		}
 		appendRow2Chunk(previous, columns, chk)
 		appendRow2Chunk(data, columns, chk)
+		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
+		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 	default:
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}
@@ -411,17 +415,18 @@ func appendCol2Chunk(idx int, raw interface{}, columnInfo *timodel.ColumnInfo, c
 		chk.AppendNull(idx)
 		return
 	}
+
 	rawValue, ok := raw.(string)
 	if !ok {
 		log.Panic("canal-json encoded message should have type in `string`")
 	}
 	if mysql.HasBinaryFlag(columnInfo.FieldType.GetFlag()) {
 		// when encoding the `JavaSQLTypeBLOB`, use `ISO8859_1` decoder, now reverse it back.
-		encoder := charmap.ISO8859_1.NewEncoder()
-		rawValue, err := encoder.String(rawValue)
+		encoded, err := charmap.ISO8859_1.NewEncoder().String(rawValue)
 		if err != nil {
 			log.Panic("invalid column value, please report a bug", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
+		rawValue = encoded
 	}
 	switch mysqlType {
 	case mysql.TypeBit, mysql.TypeSet:
@@ -471,9 +476,11 @@ func appendCol2Chunk(idx int, raw interface{}, columnInfo *timodel.ColumnInfo, c
 			log.Panic("cannot parse vector32 value from string", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
 		chk.AppendVectorFloat32(idx, value)
+	case mysql.TypeVarchar:
+		chk.AppendBytes(idx, []byte(rawValue))
 	default:
+		log.Panic("unknown column type", zap.Any("mysqlType", mysqlType), zap.Any("rawValue", rawValue))
 	}
-	log.Panic("unknown column type", zap.Any("mysqlType", mysqlType), zap.Any("rawValue", rawValue))
 }
 
 func appendRow2Chunk(data map[string]interface{}, columns []*timodel.ColumnInfo, chk *chunk.Chunk) {
