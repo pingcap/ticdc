@@ -29,7 +29,7 @@ import (
 func (h *OpenAPIV2) ResignOwner(c *gin.Context) {
 	o, _ := h.server.GetCoordinator()
 	if o != nil {
-		o.AsyncStop()
+		o.Stop()
 	}
 
 	c.JSON(getStatus(c), &EmptyResponse{})

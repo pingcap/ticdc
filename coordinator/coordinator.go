@@ -144,7 +144,7 @@ func New(node *node.Info,
 				log.Info("Coordinator changed, and I am not the coordinator, stop myself",
 					zap.String("selfID", string(c.nodeInfo.ID)),
 					zap.String("newCoordinatorID", newCoordinatorID))
-				c.AsyncStop()
+				c.Stop()
 			}
 		})
 
@@ -386,7 +386,7 @@ func (c *coordinator) GetChangefeed(ctx context.Context, changefeedDisplayName c
 	return c.controller.GetChangefeed(ctx, changefeedDisplayName)
 }
 
-func (c *coordinator) AsyncStop() {
+func (c *coordinator) Stop() {
 	c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
 	c.controller.Stop()
 	c.taskScheduler.Stop()
