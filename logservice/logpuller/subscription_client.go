@@ -460,6 +460,13 @@ func (s *SubscriptionClient) onTableDrained(rt *subscribedSpan) {
 
 // Note: don't block the caller, otherwise there may be deadlock
 func (s *SubscriptionClient) onRegionFail(errInfo regionErrorInfo) {
+	// unlock the range early to prevent blocking the range.
+	if errInfo.subscribedSpan.rangeLock.UnlockRange(
+		errInfo.span.StartKey, errInfo.span.EndKey,
+		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
+		s.onTableDrained(errInfo.subscribedSpan)
+		return
+	}
 	s.errCache.add(errInfo)
 }
 
@@ -706,13 +713,6 @@ func (s *SubscriptionClient) handleErrors(ctx context.Context) error {
 }
 
 func (s *SubscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
-	if errInfo.subscribedSpan.rangeLock.UnlockRange(
-		errInfo.span.StartKey, errInfo.span.EndKey,
-		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
-		s.onTableDrained(errInfo.subscribedSpan)
-		return nil
-	}
-
 	err := errors.Cause(errInfo.err)
 	switch eerr := err.(type) {
 	case *eventError:

@@ -84,10 +84,7 @@ func NewEventTestHelper(t testing.TB) *EventTestHelper {
 func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 	key := toTableInfosKey(job.SchemaName, job.TableName)
 	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
-	info := common.WrapTableInfo(
-		job.SchemaID,
-		job.SchemaName,
-		job.BinlogInfo.TableInfo)
+	info := common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo)
 	info.InitPrivateFields()
 	s.tableInfos[key] = info
 }

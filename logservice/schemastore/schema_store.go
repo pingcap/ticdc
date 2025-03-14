@@ -116,6 +116,7 @@ func New(
 		zap.Uint64("finishedDDLTS", s.finishedDDLTs),
 		zap.Int64("schemaVersion", s.schemaVersion))
 	s.ddlJobFetcher = newDDLJobFetcher(
+		ctx,
 		subClient,
 		kvStorage,
 		upperBound.ResolvedTs,
