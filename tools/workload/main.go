@@ -27,11 +27,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"workload/schema"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	plog "github.com/pingcap/log"
 	"go.uber.org/zap"
-	"workload/schema"
 )
 
 var (
@@ -80,8 +81,7 @@ const (
 	largeRow = "large_row"
 	shopItem = "shop_item"
 	uuu      = "uuu"
-	// for gf case, at most support table count = 2. Here only 2 tables in this cases.
-	// And each insert sql contains 200 batch, each update sql only contains 1 batch.
+	// And each insert sql contains 200 batch, each update sql contains 200 batch.
 	bank2 = "bank2"
 )
 
@@ -409,7 +409,7 @@ func doUpdate(conn *sql.Conn, workload schema.Workload, input chan updateTask) {
 		}
 
 		if err != nil {
-			plog.Info("update error", zap.Error(err), zap.String("sql", updateSql[:20]))
+			plog.Info("update error", zap.Error(err), zap.String("sql", updateSql))
 			errCount.Add(1)
 		}
 		if res != nil {
