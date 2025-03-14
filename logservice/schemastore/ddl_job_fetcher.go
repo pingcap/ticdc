@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/meta"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
@@ -148,12 +149,18 @@ func (p *ddlJobFetcher) unmarshalDDL(rawKV *common.RawKVEntry) (*model.Job, erro
 	return event.ParseDDLJob(rawKV, ddlTableInfo)
 }
 
+// getSnapshotMeta returns tidb meta information
+func getSnapshotMeta(tiStore kv.Storage, ts uint64) meta.Reader {
+	snapshot := tiStore.GetSnapshot(kv.NewVersion(ts))
+	return meta.NewReader(snapshot)
+}
+
 func initDDLTableInfo(ctx context.Context, kvStorage kv.Storage) error {
 	version, err := kvStorage.CurrentVersion(kv.GlobalTxnScope)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	snap := logpuller.GetSnapshotMeta(kvStorage, version.Ver)
+	snap := getSnapshotMeta(kvStorage, version.Ver)
 
 	dbInfos, err := snap.ListDatabases()
 	if err != nil {

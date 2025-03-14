@@ -16,7 +16,7 @@ package common
 import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/tiflow/pkg/compression"
+	"github.com/pingcap/ticdc/pkg/compression"
 )
 
 // Compress the given data by the given compression, also record the compression ratio metric.

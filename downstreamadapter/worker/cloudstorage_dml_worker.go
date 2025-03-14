@@ -156,10 +156,11 @@ func (w *CloudStorageDMLWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
 	}
 	seq := atomic.AddUint64(&w.lastSeqNum, 1)
 
-	// TODO: add ObserveRows interface
-	// w.statistics.ObserveRows(event.Rows...)
-	// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
-	w.alive.msgCh.In() <- writer.NewEventFragment(seq, tbl, event)
+	w.statistics.RecordBatchExecution(func() (int, int64, error) {
+		// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
+		w.alive.msgCh.In() <- writer.NewEventFragment(seq, tbl, event)
+		return int(event.Len()), event.GetRowsSize(), nil
+	})
 }
 
 func (w *CloudStorageDMLWorker) Close() {

@@ -60,7 +60,7 @@ type Statistics struct {
 	metricExecDMLCnt prometheus.Counter
 }
 
-// RecordBatchExecution stats batch executors which return (batchRowCount, error).
+// RecordBatchExecution stats batch executors which return (batchRowCount, batchWriteBytes, error).
 func (b *Statistics) RecordBatchExecution(executor func() (int, int64, error)) error {
 	batchSize, batchWriteBytes, err := executor()
 	if err != nil {

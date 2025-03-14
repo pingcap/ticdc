@@ -638,7 +638,7 @@ func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 
 	cachedResp := m.bootstrapper.HandleBootstrapResponse(
 		msg.From,
-		msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse),
+		resp,
 	)
 
 	if cachedResp != nil {
