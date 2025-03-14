@@ -95,8 +95,8 @@ col58 DATETIME,
 col59 DATETIME,                    
 col60 DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3),                    
 col61 VARCHAR(30) DEFAULT 'Z',
-large_col VARCHAR(4000),           -- 新增的大列，约4KB
-small_col INT DEFAULT 1,           -- 新增的小列，初始值为1
+large_col VARCHAR(4000),           -- large column, 4KB
+small_col INT DEFAULT 1,           -- small column, 1 byte
 PRIMARY KEY (id)
 );
 `
