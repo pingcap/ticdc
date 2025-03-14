@@ -249,6 +249,12 @@ type SqlValue struct {
 	Values []interface{}
 }
 
+var largeValuesPool = sync.Pool{
+	New: func() interface{} {
+		return make([]interface{}, 0, 120*200)
+	},
+}
+
 func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (string, []interface{}) {
 	switch tableN {
 	case 0: // info
