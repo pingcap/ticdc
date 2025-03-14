@@ -11,15 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package schema
+package bankupdate
 
 import (
 	"bytes"
 	"fmt"
 	"math/rand"
 	"os"
-	"strings"
 	"sync/atomic"
+	"workload/schema"
+	"workload/util"
 
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
@@ -96,27 +97,30 @@ PRIMARY KEY (id)
 );
 `
 
-type UpdateBankWorkload struct {
+type BankUpdateWorkload struct {
 	nextID                atomic.Int64
 	totalRowCount         uint64
 	cacheLargeCol         string
 	updateLargeColumnSize int
 }
 
-func NewUpdateBankWorkload(totalRowCount uint64, updateLargeColumnSize int) Workload {
-	return &UpdateBankWorkload{
+func NewBankUpdateWorkload(totalRowCount uint64, updateLargeColumnSize int) schema.Workload {
+	return &BankUpdateWorkload{
 		nextID:                atomic.Int64{},
 		totalRowCount:         totalRowCount,
-		cacheLargeCol:         generateRandomString(updateLargeColumnSize),
+		cacheLargeCol:         util.GenerateRandomString(updateLargeColumnSize),
 		updateLargeColumnSize: updateLargeColumnSize,
 	}
 }
 
-func (c *UpdateBankWorkload) BuildCreateTableStatement(n int) string {
+func (c *BankUpdateWorkload) BuildCreateTableStatement(n int) string {
 	return fmt.Sprintf(createUpdateBankTable, n, c.updateLargeColumnSize)
 }
 
-func (c *UpdateBankWorkload) BuildInsertSql(tableN int, batchSize int) string {
+func (c *BankUpdateWorkload) BuildInsertSql(tableN int, batchSize int) string {
+	if tableN > 1 {
+		log.Panic("Current bankupdate workload only supports one table")
+	}
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf(`
 replace into update_bank%d (id, 
@@ -268,50 +272,15 @@ values`, tableN))
 	return buf.String()
 }
 
-func (c *UpdateBankWorkload) BuildUpdateSql(opts UpdateOption) string {
+func (c *BankUpdateWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 	rangeSize := opts.Batch
 	startID := rand.Int63n(int64(c.totalRowCount) - int64(rangeSize))
 	endID := startID + int64(rangeSize) - 1
-	newValue := generateRandomInt()
+	newValue := util.GenerateRandomInt()
 
 	return fmt.Sprintf(`
 UPDATE update_bank%d 
 SET small_col = %d 
 WHERE id >= %d AND id <= %d
 `, opts.Table, newValue, startID, endID)
-}
-
-// generateRandomString generates a random string of a given length
-func generateRandomString(length int) string {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
-	// to improve the efficiency, we generate a short random string, then repeat it
-	baseLength := 100
-	if length < baseLength {
-		baseLength = length
-	}
-
-	b := make([]byte, baseLength)
-	for i := range b {
-		b[i] = charset[rand.Intn(len(charset))]
-	}
-	baseString := string(b)
-
-	var builder strings.Builder
-	repeats := length / baseLength
-	remainder := length % baseLength
-
-	for i := 0; i < repeats; i++ {
-		builder.WriteString(baseString)
-	}
-
-	if remainder > 0 {
-		builder.WriteString(baseString[:remainder])
-	}
-
-	return builder.String()
-}
-
-func generateRandomInt() int {
-	return rand.Intn(1000000)
 }

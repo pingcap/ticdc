@@ -11,12 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package schema
+package bank
 
 import (
 	"bytes"
 	"fmt"
 	"math/rand"
+	"workload/schema"
 )
 
 const createBankTable = `
@@ -90,7 +91,7 @@ PRIMARY KEY (id)
 
 type BankWorkload struct{}
 
-func NewBankWorkload() Workload {
+func NewBankWorkload() schema.Workload {
 	return &BankWorkload{}
 }
 
@@ -302,6 +303,6 @@ values(%d,
 	return buf.String()
 }
 
-func (c *BankWorkload) BuildUpdateSql(opts UpdateOption) string {
+func (c *BankWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 	panic("unimplemented")
 }

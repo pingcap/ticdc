@@ -28,6 +28,13 @@ import (
 	"time"
 
 	"workload/schema"
+	pbank "workload/schema/bank"
+	pbank2 "workload/schema/bank2"
+	"workload/schema/bankupdate"
+	"workload/schema/largerow"
+	"workload/schema/shop"
+	psysbench "workload/schema/sysbench"
+	puuu "workload/schema/uuu"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
@@ -86,7 +93,7 @@ const (
 	// for gf case, at most support table count = 2. Here only 2 tables in this cases.
 	// And each insert sql contains 200 batch, each update sql only contains 1 batch.
 	bank2      = "bank2"
-	updateBank = "update_bank"
+	bankUpdate = "bank_update"
 )
 
 // Add a prepared statement cache
@@ -103,7 +110,7 @@ func init() {
 	flag.Float64Var(&percentageForUpdate, "percentage-for-update", 0, "percentage for update: [0, 1.0]")
 	flag.BoolVar(&skipCreateTable, "skip-create-table", false, "do not create tables")
 	flag.StringVar(&action, "action", "prepare", "action of the workload: [prepare, insert, update, delete, write, cleanup]")
-	flag.StringVar(&workloadType, "workload-type", "sysbench", "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2]")
+	flag.StringVar(&workloadType, "workload-type", "sysbench", "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank_update]")
 	flag.StringVar(&dbHost, "database-host", "127.0.0.1", "database host")
 	flag.StringVar(&dbUser, "database-user", "root", "database user")
 	flag.StringVar(&dbPassword, "database-password", "", "database password")
@@ -219,19 +226,19 @@ func createWorkload() schema.Workload {
 	var workload schema.Workload
 	switch workloadType {
 	case bank:
-		workload = schema.NewBankWorkload()
+		workload = pbank.NewBankWorkload()
 	case sysbench:
-		workload = schema.NewSysbenchWorkload()
+		workload = psysbench.NewSysbenchWorkload()
 	case largeRow:
-		workload = schema.NewLargeRowWorkload(rowSize, largeRowSize, largeRowRatio)
+		workload = largerow.NewLargeRowWorkload(rowSize, largeRowSize, largeRowRatio)
 	case shopItem:
-		workload = schema.NewShopItemWorkload(totalRowCount, rowSize)
+		workload = shop.NewShopItemWorkload(totalRowCount, rowSize)
 	case uuu:
-		workload = schema.NewUUUWorkload()
+		workload = puuu.NewUUUWorkload()
 	case bank2:
-		workload = schema.NewBank2Workload()
-	case updateBank:
-		workload = schema.NewUpdateBankWorkload(totalRowCount, updateLargeColumnSize)
+		workload = pbank2.NewBank2Workload()
+	case bankUpdate:
+		workload = bankupdate.NewBankUpdateWorkload(totalRowCount, updateLargeColumnSize)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", workloadType))
 	}
@@ -408,7 +415,7 @@ func doUpdate(conn *sql.Conn, workload schema.Workload, input chan updateTask) {
 	for task := range input {
 		if workloadType == bank2 {
 			task.UpdateOption.Batch = 1
-			updateSql, values := workload.(*schema.Bank2Workload).BuildUpdateSqlWithValues(task.UpdateOption)
+			updateSql, values := workload.(*pbank2.Bank2Workload).BuildUpdateSqlWithValues(task.UpdateOption)
 			res, err = executeWithValues(conn, updateSql, workload, task.UpdateOption.Table, values)
 		} else {
 			updateSql = workload.BuildUpdateSql(task.UpdateOption)
@@ -443,13 +450,14 @@ func doInsert(conn *sql.Conn, workload schema.Workload) {
 		j := rand.Intn(tableCount) + tableStartIndex
 		var err error
 
-		if workloadType == uuu {
-			insertSql, values := workload.(*schema.UUUWorkload).BuildInsertSqlWithValues(j, batchSize)
+		switch workloadType {
+		case uuu:
+			insertSql, values := workload.(*puuu.UUUWorkload).BuildInsertSqlWithValues(j, batchSize)
 			_, err = executeWithValues(conn, insertSql, workload, j, values)
-		} else if workloadType == bank2 {
-			insertSql, values := workload.(*schema.Bank2Workload).BuildInsertSqlWithValues(j, batchSize)
+		case bank2:
+			insertSql, values := workload.(*pbank2.Bank2Workload).BuildInsertSqlWithValues(j, batchSize)
 			_, err = executeWithValues(conn, insertSql, workload, j, values)
-		} else {
+		default:
 			insertSql := workload.BuildInsertSql(j, batchSize)
 			_, err = execute(conn, insertSql, workload, j)
 		}
