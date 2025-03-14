@@ -31,9 +31,10 @@ import (
 func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, flag *common.ColumnFlagType) (string, JavaSQLType) {
 	colType := columnInfo.GetType()
 
-	var value string
-	var javaType JavaSQLType
-
+	var (
+		value    string
+		javaType JavaSQLType
+	)
 	switch colType {
 	case mysql.TypeBit:
 		javaType = JavaSQLTypeBIT
@@ -304,9 +305,9 @@ func convertToCanalTs(commitTs uint64) int64 {
 }
 
 // get the canal EventType according to the DDLEvent
-func convertDdlEventType(t byte) canal.EventType {
+func convertDdlEventType(t model.ActionType) canal.EventType {
 	// see https://github.com/alibaba/canal/blob/d53bfd7ee76f8fe6eb581049d64b07d4fcdd692d/parse/src/main/java/com/alibaba/otter/canal/parse/inbound/mysql/ddl/DruidDdlParser.java#L59-L178
-	switch model.ActionType(t) {
+	switch t {
 	case model.ActionCreateSchema, model.ActionDropSchema, model.ActionShardRowID, model.ActionCreateView,
 		model.ActionDropView, model.ActionRecoverTable, model.ActionModifySchemaCharsetAndCollate,
 		model.ActionLockTable, model.ActionUnlockTable, model.ActionRepairTable, model.ActionSetTiFlashReplica,

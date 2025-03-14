@@ -18,22 +18,15 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/pingcap/log"
-	cmdUtil "github.com/pingcap/ticdc/cmd/util"
+	"github.com/pingcap/ticdc/cmd/util"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/filter"
-	"github.com/pingcap/tiflow/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	putil "github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
-)
-
-var (
-	defaultVersion   = "2.4.0"
-	defaultRetryTime = 30
-	defaultTimeout   = time.Second * 10
 )
 
 type option struct {
@@ -49,11 +42,8 @@ type option struct {
 	protocol config.Protocol
 
 	codecConfig *common.Config
-	// the replicaConfig of the changefeed which produce data to the kafka topic
-	replicaConfig *config.ReplicaConfig
+	sinkConfig  *config.SinkConfig
 
-	logPath       string
-	logLevel      string
 	timezone      string
 	ca, cert, key string
 
@@ -64,27 +54,28 @@ type option struct {
 
 	// upstreamTiDBDSN is the dsn of the upstream TiDB cluster
 	upstreamTiDBDSN string
-
-	enableProfiling bool
-
-	// connect kafka retry times, default 30
-	retryTime int
-	// connect kafka  timeout, default 10s
-	timeout time.Duration
 }
 
 func newOption() *option {
 	return &option{
-		version:         defaultVersion,
+		version:         "2.4.0",
 		maxMessageBytes: math.MaxInt64,
 		maxBatchSize:    math.MaxInt64,
-		retryTime:       defaultRetryTime,
-		timeout:         defaultTimeout,
 	}
 }
 
 // Adjust the consumer option by the upstream uri passed in parameters.
-func (o *option) Adjust(upstreamURI *url.URL, configFile string) error {
+func (o *option) Adjust(upstreamURIStr string, configFile string) error {
+	upstreamURI, err := url.Parse(upstreamURIStr)
+	if err != nil {
+		log.Panic("invalid upstream-uri", zap.Error(err))
+	}
+	scheme := strings.ToLower(upstreamURI.Scheme)
+	if scheme != "kafka" {
+		log.Panic("invalid upstream-uri scheme, the scheme of upstream-uri must be `kafka`",
+			zap.String("upstreamURI", upstreamURIStr))
+	}
+
 	s := upstreamURI.Query().Get("version")
 	if s != "" {
 		o.version = s
@@ -127,16 +118,13 @@ func (o *option) Adjust(upstreamURI *url.URL, configFile string) error {
 	}
 	protocol, err := config.ParseSinkProtocolFromString(s)
 	if err != nil {
-		log.Panic("invalid protocol", zap.Error(err), zap.String("protocol", s))
+		log.Panic("invalid protocol", zap.String("protocol", s), zap.Error(err))
 	}
 	o.protocol = protocol
 
 	replicaConfig := config.GetDefaultReplicaConfig()
-	// the TiDB source ID should never be set to 0
-	replicaConfig.Sink.TiDBSourceID = 1
-	replicaConfig.Sink.Protocol = util.AddressOf(protocol.String())
 	if configFile != "" {
-		err = cmdUtil.StrictDecodeFile(configFile, "kafka consumer", replicaConfig)
+		err = util.StrictDecodeFile(configFile, "kafka consumer", replicaConfig)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -144,13 +132,15 @@ func (o *option) Adjust(upstreamURI *url.URL, configFile string) error {
 			return errors.Trace(err)
 		}
 	}
-	o.replicaConfig = replicaConfig
+	// the TiDB source ID should never be set to 0
+	replicaConfig.Sink.TiDBSourceID = 1
+	replicaConfig.Sink.Protocol = putil.AddressOf(protocol.String())
 
 	o.codecConfig = common.NewConfig(protocol)
-	if err = o.codecConfig.Apply(upstreamURI, o.replicaConfig); err != nil {
+	if err = o.codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		return errors.Trace(err)
 	}
-	tz, err := util.GetTimezone(o.timezone)
+	tz, err := putil.GetTimezone(o.timezone)
 	if err != nil {
 		return errors.Trace(err)
 	}

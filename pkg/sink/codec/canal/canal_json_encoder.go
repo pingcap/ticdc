@@ -205,8 +205,8 @@ func newJSONMessageForDML(
 		out.String("")
 	}
 
-	valueMap := make(map[int64]string, 0)         // colId -> value
-	javaTypeMap := make(map[int64]JavaSQLType, 0) // colId -> javaType
+	valueMap := make(map[int64]string, columnLen)         // colId -> value
+	javaTypeMap := make(map[int64]JavaSQLType, columnLen) // colId -> javaType
 
 	row := e.GetRows()
 	if e.IsDelete() {
