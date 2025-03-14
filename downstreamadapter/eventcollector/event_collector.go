@@ -15,6 +15,7 @@ package eventcollector
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -203,6 +204,11 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Info("add dispatcher to dynamic stream failed", zap.Error(err))
+
+		if strings.Contains(err.Error(), "Duplicate") {
+			log.Info("add dispatcher to dynamic stream failed, because the dispatcher already exists", zap.Stringer("dispatcher", target.GetId()))
+			return
+		}
 	}
 
 	// TODO: handle the return error(now even it return error, it will be retried later, we can just ignore it now)
