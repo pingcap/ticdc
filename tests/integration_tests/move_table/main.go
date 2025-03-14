@@ -235,6 +235,10 @@ func (c *cluster) checkSourceEmpty(sourceNode string) {
 		case <-ticker.C:
 			sourceTables := clusterForCheck.servers[sourceNode]
 			if len(sourceTables) != 0 {
+				if len(sourceTables) == 1 && sourceTables[0].id == 0 {
+					log.Info("source capture is empty, done")
+					return
+				}
 				log.Info("source capture is not empty, retrying", zap.Any("sourceTables", sourceTables))
 			} else {
 				log.Info("source capture is empty, done")
