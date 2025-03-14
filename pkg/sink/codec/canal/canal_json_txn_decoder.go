@@ -16,12 +16,12 @@ package canal
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/cdc/model"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
 )
@@ -102,63 +102,48 @@ func (d *canalJSONTxnEventDecoder) NextRowChangedEvent() (*commonEvent.DMLEvent,
 		return nil, errors.ErrCanalEncodeFailed.
 			GenWithStack("not found row changed event message")
 	}
-	result, err := d.canalJSONMessage2RowChange()
-	if err != nil {
-		return nil, err
-	}
+	result := d.canalJSONMessage2RowChange()
 	d.msg = nil
 	return result, nil
 }
 
-func (d *canalJSONTxnEventDecoder) canalJSONMessage2RowChange() (*commonEvent.DMLEvent, error) {
+func (d *canalJSONTxnEventDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
 	msg := d.msg
+
+	tableInfo := newTableInfo(msg, 0)
 	result := new(commonEvent.DMLEvent)
-	result.TableInfo = newTableInfo(msg, nil)
+	result.Length++                    // todo: set this field correctly
+	result.StartTs = msg.getCommitTs() // todo: how to set this correctly?
+	result.ApproximateSize = 0
+	result.TableInfo = tableInfo
+	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	result.CommitTs = msg.getCommitTs()
 
-	mysqlType := msg.getMySQLType()
-	var err error
-	if msg.eventType() == canal.EventType_DELETE {
-		// for `DELETE` event, `data` contain the old data, set it as the `PreColumns`
-		result.PreColumns, err = canalJSONColumnMap2RowChangeColumns(msg.getData(), mysqlType, result.TableInfo)
-		if err != nil {
-			return nil, err
-		}
-		return result, nil
-	}
-
-	// for `INSERT` and `UPDATE`, `data` contain fresh data, set it as the `Columns`
-	result.Columns, err = canalJSONColumnMap2RowChangeColumns(msg.getData(), mysqlType, result.TableInfo)
-	if err != nil {
-		return nil, err
-	}
-
-	// for `UPDATE`, `old` contain old data, set it as the `PreColumns`
-	if msg.eventType() == canal.EventType_UPDATE {
-		preCols, err := canalJSONColumnMap2RowChangeColumns(msg.getOld(), mysqlType, result.TableInfo)
-		if err != nil {
-			return nil, err
-		}
-		if len(preCols) < len(result.Columns) {
-			newPreCols := make([]*model.ColumnData, 0, len(preCols))
-			j := 0
-			// Columns are ordered by name
-			for _, col := range result.Columns {
-				if j < len(preCols) && col.ColumnID == preCols[j].ColumnID {
-					newPreCols = append(newPreCols, preCols[j])
-					j += 1
-				} else {
-					newPreCols = append(newPreCols, col)
-				}
+	columns := tableInfo.GetColumns()
+	switch msg.eventType() {
+	case canal.EventType_DELETE:
+		data := msg.getData()
+		appendRow2Chunk(data, columns, chk)
+	case canal.EventType_INSERT:
+		data := msg.getData()
+		appendRow2Chunk(data, columns, chk)
+	case canal.EventType_UPDATE:
+		previous := msg.getOld()
+		data := msg.getData()
+		for k, v := range data {
+			if _, ok := previous[k]; !ok {
+				previous[k] = v
 			}
-			preCols = newPreCols
 		}
-		result.PreColumns = preCols
-		if len(preCols) != len(result.Columns) {
-			log.Panic("column count mismatch", zap.Any("preCols", preCols), zap.Any("cols", result.Columns))
-		}
+		appendRow2Chunk(previous, columns, chk)
+		appendRow2Chunk(data, columns, chk)
+	default:
+		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}
-	return result, nil
+	result.Rows = chk
+	// todo: may fix this later.
+	result.PhysicalTableID = result.TableInfo.TableName.TableID
+	return result
 }
 
 // NextResolvedEvent implements the RowEventDecoder interface

@@ -29,11 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/pingcap/tidb/pkg/ddl"
-	"github.com/pingcap/tidb/pkg/meta/metabuild"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
@@ -43,7 +39,6 @@ import (
 	"github.com/pingcap/tiflow/pkg/util"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
-	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
 )
 
@@ -93,14 +88,10 @@ type canalJSONDecoder struct {
 
 	config *common.Config
 
-	storage storage.ExternalStorage
-
+	storage      storage.ExternalStorage
 	upstreamTiDB *sql.DB
-	bytesDecoder *encoding.Decoder
 
-	tableInfoCache     map[tableKey]*commonType.TableInfo
-	partitionInfoCache map[tableKey]*timodel.PartitionInfo
-
+	tableInfoCache   map[tableKey]*commonType.TableInfo
 	tableIDAllocator *common.FakeTableIDAllocator
 }
 
@@ -126,14 +117,12 @@ func NewCanalJSONDecoder(
 	}
 
 	return &canalJSONDecoder{
-		config:             codecConfig,
-		decoder:            newBufferedJSONDecoder(),
-		storage:            externalStorage,
-		upstreamTiDB:       db,
-		bytesDecoder:       charmap.ISO8859_1.NewDecoder(),
-		tableInfoCache:     make(map[tableKey]*commonType.TableInfo),
-		partitionInfoCache: make(map[tableKey]*timodel.PartitionInfo),
-		tableIDAllocator:   common.NewFakeTableIDAllocator(),
+		config:           codecConfig,
+		decoder:          newBufferedJSONDecoder(),
+		storage:          externalStorage,
+		upstreamTiDB:     db,
+		tableInfoCache:   make(map[tableKey]*commonType.TableInfo),
+		tableIDAllocator: common.NewFakeTableIDAllocator(),
 	}, nil
 }
 
@@ -220,7 +209,7 @@ func (b *canalJSONDecoder) buildData(holder *common.ColumnsHolder) (map[string]i
 		var value string
 		rawValue := holder.Values[i].([]uint8)
 		if common.IsBinaryMySQLType(mysqlType) {
-			rawValue, err := b.bytesDecoder.Bytes(rawValue)
+			rawValue, err := bytesDecoder.Bytes(rawValue)
 			if err != nil {
 				return nil, nil, errors.Trace(err)
 			}
@@ -320,11 +309,11 @@ func (b *canalJSONDecoder) NextRowChangedEvent() (*commonEvent.DMLEvent, error) 
 		}
 	}
 
-	result := b.canalJSONMessage2RowChange()
+	result := b.canalJSONMessage2DMLEvent()
 	return result, nil
 }
 
-func (b *canalJSONDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
+func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	msg := b.msg
 	tableInfo := b.queryTableInfo(msg)
 
@@ -381,24 +370,7 @@ func (b *canalJSONDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	// if receive a table level DDL, just remove the table info to trigger create a new one.
 	if schema != "" && table != "" {
 		delete(b.tableInfoCache, cacheKey)
-		delete(b.partitionInfoCache, cacheKey)
 	}
-
-	stmt, err := parser.New().ParseOneStmt(result.Query, "", "")
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	if v, ok := stmt.(*ast.CreateTableStmt); ok {
-		tableInfo, err := ddl.BuildTableInfoFromAST(metabuild.NewContext(), v)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
-		partitions := tableInfo.GetPartitionInfo()
-		if partitions != nil {
-			b.partitionInfoCache[cacheKey] = partitions
-		}
-	}
-
 	return result, nil
 }
 
@@ -520,21 +492,14 @@ func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *common
 	}
 	tableInfo, ok := b.tableInfoCache[cacheKey]
 	if !ok {
-		partitionInfo := b.partitionInfoCache[cacheKey]
 		tableID := b.tableIDAllocator.AllocateTableID(schema, table)
-		tableInfo = newTableInfo(msg, tableID, partitionInfo)
-		//if tableInfo.Partition != nil {
-		//	for idx, partition := range tableInfo.Partition.Definitions {
-		//		partitionID := b.tableIDAllocator.AllocatePartitionID(schema, table, partition.Name.O)
-		//		tableInfo.Partition.Definitions[idx].ID = partitionID
-		//	}
-		//}
+		tableInfo = newTableInfo(msg, tableID)
 		b.tableInfoCache[cacheKey] = tableInfo
 	}
 	return tableInfo
 }
 
-func newTableInfo(msg canalJSONMessageInterface, tableID int64, partitionInfo *timodel.PartitionInfo) *commonType.TableInfo {
+func newTableInfo(msg canalJSONMessageInterface, tableID int64) *commonType.TableInfo {
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = tableID
 	tableInfo.Name = pmodel.NewCIStr(*msg.getTable())
