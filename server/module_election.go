@@ -144,7 +144,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		e.svr.setCoordinator(co)
 		err = co.Run(ctx)
 		// When coordinator exits, we need to stop it.
-		e.svr.coordinator.AsyncStop()
+		e.svr.coordinator.Stop()
 		e.svr.setCoordinator(nil)
 		log.Info("coordinator stop", zap.String("captureID", string(e.svr.info.ID)),
 			zap.Int64("coordinatorVersion", coordinatorVersion), zap.Error(err))

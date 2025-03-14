@@ -280,7 +280,7 @@ func (c *server) Close(ctx context.Context) {
 	// and ignore it if the coordinator does not exist or is not set.
 	o, _ := c.GetCoordinator()
 	if o != nil {
-		o.AsyncStop()
+		o.Stop()
 		log.Info("coordinator closed", zap.String("captureID", string(c.info.ID)))
 	}
 
