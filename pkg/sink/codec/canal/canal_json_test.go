@@ -154,13 +154,19 @@ func TestAllTypes(t *testing.T) {
 		Callback:       func() {},
 	}
 
-	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
-	value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	var message JSONMessage
+	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
+	require.NoError(t, err)
 
-	err = json.Unmarshal(value, &message)
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	var message JSONMessage
+	err = json.Unmarshal(messages[0].Value, &message)
 	require.NoError(t, err)
 
 	require.Equal(t, int64(0), message.ID)
@@ -784,28 +790,35 @@ func TestCheckpointTs(t *testing.T) {
 	helper := pevent.NewEventTestHelper(t)
 	defer helper.Close()
 
-	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
-	encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	message, err := encoder.EncodeCheckpointEvent(1)
+	watermark := uint64(179394)
+	message, err := encoder.EncodeCheckpointEvent(watermark)
 	require.NoError(t, err)
 	require.Nil(t, message)
 
 	// with extension
-	protocolConfig.EnableTiDBExtension = true
-	encoder, err = NewJSONRowEventEncoder(context.Background(), protocolConfig)
+	codecConfig.EnableTiDBExtension = true
+	encoder, err = NewJSONRowEventEncoder(ctx, codecConfig)
 	require.NoError(t, err)
-	message, err = encoder.EncodeCheckpointEvent(1)
-	require.NoError(t, err)
-
-	var value canalJSONMessageWithTiDBExtension
-	err = json.Unmarshal(message.Value, &value)
+	message, err = encoder.EncodeCheckpointEvent(watermark)
 	require.NoError(t, err)
 
-	require.Equal(t, int64(0), value.ID)
-	require.Equal(t, false, value.IsDDL)
-	require.Equal(t, tidbWaterMarkType, value.EventType)
-	require.Equal(t, int64(1>>18), value.ExecutionTime)
-	require.Equal(t, uint64(1), value.Extensions.WatermarkTs)
+	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = decoder.AddKeyValue(message.Key, message.Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeResolved, messageType)
+
+	obtained, err := decoder.NextResolvedEvent()
+	require.NoError(t, err)
+	require.Equal(t, watermark, obtained)
 }
