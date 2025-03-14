@@ -284,14 +284,15 @@ var largeValuesPool = sync.Pool{
 }
 
 func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (string, []interface{}) {
+	values := largeValuesPool.Get().([]interface{})
+	defer largeValuesPool.Put(values[:0])
+	rand.Seed(time.Now().UnixNano())
+
 	switch tableN % 2 {
 	case 0: // info
 		nonPrimaryKeyValues := generateNonPrimaryValuesForTable() // to reduce time, these field we keep same for
 		sql := fmt.Sprintf(c.infoTableInsertSQL, tableN)
-		rand.Seed(time.Now().UnixNano())
 
-		values := valuesPool.Get().([]interface{})
-		defer valuesPool.Put(values[:0])
 		// 200 rows one txn
 		for r := 0; r < 200; r++ {
 			values = append(values, generatePrimaryValuesForTable()...)
@@ -302,10 +303,7 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (str
 	case 1: // log
 		sql := fmt.Sprintf(c.logTableInsertSQL, tableN)
 		nonPrimaryKeyValues := generateNonPrimaryValuesForLogTable()
-		rand.Seed(time.Now().UnixNano())
 
-		values := valuesPool.Get().([]interface{})
-		defer valuesPool.Put(values[:0])
 		// 200 rows one txn
 		for r := 0; r < 200; r++ {
 			values = append(values, generatePrimaryValuesForLogTable()...)
@@ -322,8 +320,8 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (str
 func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []interface{}) {
 	rand.Seed(time.Now().UnixNano())
 	var sql string
-	values := valuesPool.Get().([]interface{})
-	defer valuesPool.Put(values[:0])
+	values := largeValuesPool.Get().([]interface{})
+	defer largeValuesPool.Put(values[:0])
 	switch opts.Table % 2 {
 	case 0: // info
 		sql = fmt.Sprintf(c.infoTableUpdateSQL, opts.Table)
