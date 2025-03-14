@@ -20,11 +20,10 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	datumTypes "github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/tinylib/msgp/msgp"
@@ -272,8 +271,6 @@ type TableInfo struct {
 	} `json:"-"`
 }
 
-var count atomic.Int64
-
 func (ti *TableInfo) InitPrivateFields() {
 	if ti == nil {
 		return
@@ -467,12 +464,12 @@ func (ti *TableInfo) IsPartitionTable() bool {
 }
 
 // GetRowColInfos returns all column infos for rowcodec
-func (ti *TableInfo) GetRowColInfos() ([]int64, map[int64]*datumTypes.FieldType, []rowcodec.ColInfo) {
+func (ti *TableInfo) GetRowColInfos() ([]int64, map[int64]*types.FieldType, []rowcodec.ColInfo) {
 	return ti.columnSchema.HandleColID, ti.columnSchema.RowColFieldTps, ti.columnSchema.RowColInfos
 }
 
 // GetFieldSlice returns the field types of all columns
-func (ti *TableInfo) GetFieldSlice() []*datumTypes.FieldType {
+func (ti *TableInfo) GetFieldSlice() []*types.FieldType {
 	return ti.columnSchema.RowColFieldTpsSlice
 }
 
@@ -573,20 +570,26 @@ func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 	return result
 }
 
-func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
+func newTableInfo(schema, table string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
 	ti := &TableInfo{
+		SchemaID: tableID,
 		TableName: TableName{
-			Schema:      schemaName,
-			Table:       tableName,
+			Schema:      schema,
+			Table:       table,
 			TableID:     tableID,
 			IsPartition: isPartition,
-			quotedName:  QuoteSchema(schemaName, tableName),
+			quotedName:  QuoteSchema(schema, table),
 		},
 		columnSchema: columnSchema,
 	}
+	return ti
+}
+
+func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
+	ti := newTableInfo(schemaName, tableName, tableID, isPartition, columnSchema)
 
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
-	// This function should be appear when tableInfo is created as a pair.
+	// This function should be appeared when tableInfo is created as a pair.
 	runtime.SetFinalizer(ti, func(ti *TableInfo) {
 		GetSharedColumnSchemaStorage().tryReleaseColumnSchema(ti.columnSchema)
 	})
@@ -603,13 +606,20 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema)
 }
 
+// NewTableInfo4Decoder is only used by the codec decoder for the test purpose,
+// do not call this method on the production code.
+func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
+	cs := newColumnSchema4Decoder(tableInfo)
+	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs)
+}
+
 // GetColumnDefaultValue returns the default definition of a column.
 func GetColumnDefaultValue(col *model.ColumnInfo) interface{} {
 	defaultValue := col.GetDefaultValue()
 	if defaultValue == nil {
 		defaultValue = col.GetOriginDefaultValue()
 	}
-	defaultDatum := datumTypes.NewDatum(defaultValue)
+	defaultDatum := types.NewDatum(defaultValue)
 	return defaultDatum.GetValue()
 }
 

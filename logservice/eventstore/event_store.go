@@ -19,6 +19,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -487,6 +488,13 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 		delete(e.dispatcherMeta.subscriptionStats, subID)
 		// TODO: do we need unlock before puller.Unsubscribe?
 		e.subClient.Unsubscribe(subID)
+		log.Info("clean data for subscription",
+			zap.Int("dbIndex", subscriptionStat.dbIndex),
+			zap.Uint64("subID", uint64(subID)),
+			zap.Int64("tableID", subscriptionStat.tableID))
+		if err := e.deleteEvents(subscriptionStat.dbIndex, uint64(subID), subscriptionStat.tableID, 0, math.MaxUint64); err != nil {
+			log.Warn("fail to delete events", zap.Error(err))
+		}
 		metrics.EventStoreSubscriptionGauge.Dec()
 	}
 	subscriptionStat.dispatchers.Unlock()
@@ -627,6 +635,17 @@ func (e *eventStore) updateMetrics(ctx context.Context) error {
 }
 
 func (e *eventStore) updateMetricsOnce() {
+	for i, db := range e.dbs {
+		stats := db.Metrics()
+		id := strconv.Itoa(i + 1)
+		metrics.EventStoreOnDiskDataSizeGauge.WithLabelValues(id).Set(float64(stats.DiskSpaceUsage()))
+		memorySize := stats.MemTable.Size
+		if stats.BlockCache.Size > 0 {
+			memorySize += uint64(stats.BlockCache.Size)
+		}
+		metrics.EventStoreInMemoryDataSizeGauge.WithLabelValues(id).Set(float64(memorySize))
+	}
+
 	pdTime := e.pdClock.CurrentTime()
 	pdPhyTs := oracle.GetPhysical(pdTime)
 	minResolvedTs := uint64(0)
