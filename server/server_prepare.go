@@ -28,8 +28,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/upstream"
 	"github.com/pingcap/tidb/pkg/util/gctuner"
-	"github.com/pingcap/tiflow/cdc/kv"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/fsutil"
 	"github.com/tikv/client-go/v2/tikv"
@@ -120,7 +120,7 @@ func (c *server) prepare(ctx context.Context) error {
 			zap.Strings("upstreamEndpoints", c.pdEndpoints))
 	}
 
-	c.KVStorage, err = kv.CreateTiStore(strings.Join(allPDEndpoints, ","), conf.Security)
+	c.KVStorage, err = upstream.CreateTiStore(strings.Join(allPDEndpoints, ","), conf.Security)
 	if err != nil {
 		return errors.Trace(err)
 	}

@@ -23,7 +23,6 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
@@ -515,7 +514,7 @@ func writeSchemaSnapshotAndMeta(
 	snapTs uint64,
 	needTableInfo bool,
 ) (map[int64]*BasicDatabaseInfo, map[int64]*BasicTableInfo, error) {
-	meta := logpuller.GetSnapshotMeta(tiStore, snapTs)
+	meta := getSnapshotMeta(tiStore, snapTs)
 	start := time.Now()
 	dbInfos, err := meta.ListDatabases()
 	if err != nil {
