@@ -53,6 +53,7 @@ require (
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/pflag v1.0.5
 	github.com/stretchr/testify v1.10.0
+	github.com/thanhpk/randstr v1.0.6
 	github.com/tikv/client-go/v2 v2.0.8-0.20241209094930-06d7f4b9233b
 	github.com/tikv/pd v1.1.0-beta.0.20240407022249-7179657d129b
 	github.com/tikv/pd/client v0.0.0-20241111073742-238d4d79ea31
