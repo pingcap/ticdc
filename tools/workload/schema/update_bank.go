@@ -17,8 +17,12 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
+	"os"
 	"strings"
 	"sync/atomic"
+
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 const (
@@ -190,6 +194,10 @@ values`, tableN))
 
 	for r := 0; r < batchSize; r++ {
 		id := c.nextID.Add(1)
+		if id > int64(c.totalRowCount) {
+			log.Info("id is greater than total row count", zap.Int64("id", id), zap.Int64("total row count", c.totalRowCount))
+			os.Exit(1)
+		}
 		if r > 0 {
 			buf.WriteString(",")
 		}
