@@ -300,7 +300,6 @@ func generateRandomString(length int) string {
 	}
 	baseString := string(b)
 
-	// 重复字符串直到达到所需长度
 	var builder strings.Builder
 	repeats := length / baseLength
 	remainder := length % baseLength
