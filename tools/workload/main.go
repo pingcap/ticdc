@@ -28,12 +28,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"workload/schema"
-
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	plog "github.com/pingcap/log"
 	"go.uber.org/zap"
+	"workload/schema"
 )
 
 var (
