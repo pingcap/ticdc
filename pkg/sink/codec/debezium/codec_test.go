@@ -123,7 +123,7 @@ func TestDDLEvent(t *testing.T) {
 					"type": "ALTER", 
 					"id": "\"test\".\"table1\",\"test\".\"table2\"", 
 					"table": {    
-						"defaultCharsetName": "",
+						"defaultCharsetName": "utf8mb4",
 						"primaryKeyColumnNames": ["id"],
 						"columns": [
 						    {
@@ -413,7 +413,7 @@ func TestDDLEvent(t *testing.T) {
 
 	codec.config.DebeziumDisableSchema = true
 
-	job = helper.DDL2Job("CREATE TABLE test.table1")
+	job = helper.DDL2Job("CREATE TABLE test.table1(id int(10) primary key)")
 	tableInfo = helper.GetTableInfo(job)
 	e = &commonEvent.DDLEvent{
 		FinishedTs: 1,
@@ -457,13 +457,13 @@ func TestDDLEvent(t *testing.T) {
 			"ts_ms": 1701326309000,
 			"databaseName": "test", 
       		"schemaName": null,
-    		"ddl": "CREATE TABLE test.table1", 
+    		"ddl": "CREATE TABLE test.table1(id int(10) primary key)", 
       		"tableChanges": [
 				{
 					"type": "CREATE", 
 					"id": "\"test\".\"table1\"", 
 					"table": {    
-						"defaultCharsetName": "",
+						"defaultCharsetName": "utf8mb4",
 						"primaryKeyColumnNames": ["id"],
 						"columns": [
 						    {
@@ -476,7 +476,7 @@ func TestDDLEvent(t *testing.T) {
 								"typeName": "INT",
 								"typeExpression": "INT",
 								"charsetName": null,
-								"length": 0,
+								"length": 10,
 								"scale": null,
 								"position": 1,
 								"optional": false,
@@ -494,12 +494,12 @@ func TestDDLEvent(t *testing.T) {
 	job = helper.DDL2Job("DROP TABLE test.table2")
 	tableInfo = helper.GetTableInfo(job)
 	e = &commonEvent.DDLEvent{
-		FinishedTs: 1,
-		TableInfo:  tableInfo,
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
-		Query:      job.Query,
-		Type:       byte(timodel.ActionDropTable),
+		FinishedTs:      1,
+		TableInfo:       tableInfo,
+		ExtraSchemaName: job.SchemaName,
+		ExtraTableName:  job.TableName,
+		Query:           job.Query,
+		Type:            byte(timodel.ActionDropTable),
 	}
 	keyBuf.Reset()
 	buf.Reset()

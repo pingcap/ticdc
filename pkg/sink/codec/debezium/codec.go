@@ -1132,7 +1132,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 						return
 					}
 					jWriter.WriteObjectField("table", func() {
-						jWriter.WriteStringField("defaultCharsetName", mysql.DefaultCharset)
+						jWriter.WriteStringField("defaultCharsetName", e.TableInfo.Charset)
 						jWriter.WriteArrayField("primaryKeyColumnNames", func() {
 							for _, pk := range e.TableInfo.GetPrimaryKeyColumnNames() {
 								jWriter.WriteStringElement(pk)
