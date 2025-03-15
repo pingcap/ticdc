@@ -1307,7 +1307,10 @@ func extractTableInfoFuncForSingleTableDDL(event *PersistedDDLEvent, tableID int
 			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 		}
 	}
-	log.Panic("should not reach here", zap.Any("event", event), zap.Int64("tableID", tableID))
+	log.Panic("should not reach here",
+		zap.Any("type", event.Type),
+		zap.String("query", event.Query),
+		zap.Int64("tableID", tableID))
 	return nil, false
 }
 
