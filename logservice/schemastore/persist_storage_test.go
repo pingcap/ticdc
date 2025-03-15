@@ -272,6 +272,99 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 		},
+		// test create table/drop table for partition table
+		{
+			"drop partition table",
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+			},
+			func() []*model.Job {
+				return []*model.Job{
+					buildCreatePartitionTableJobForTest(100, 200, "t1", []int64{301, 302, 303}, 1010), // create table 200
+					buildDropPartitionTableJobForTest(100, 200, "t1", []int64{301, 302, 303}, 1020),   // drop table 200
+				}
+			}(),
+			map[int64]*BasicTableInfo{},
+			nil,
+			map[int64]*BasicDatabaseInfo{
+				100: {
+					Name:   "test",
+					Tables: map[int64]bool{},
+				},
+			},
+			map[int64][]uint64{
+				301: {1010, 1020},
+				302: {1010, 1020},
+				303: {1010, 1020},
+			},
+			[]uint64{1010, 1020},
+			nil,
+			nil,
+			[]FetchTableTriggerDDLEventsTestCase{
+				{
+					startTs: 1000,
+					limit:   100,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionCreateTable),
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  301,
+								},
+								{
+									SchemaID: 100,
+									TableID:  302,
+								},
+								{
+									SchemaID: 100,
+									TableID:  303,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+								},
+							},
+						},
+						{
+							Type:       byte(model.ActionDropTable),
+							FinishedTs: 1020,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 301, 302, 303},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{301, 302, 303},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								DropName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+								},
+							},
+							Query: "DROP TABLE `test`.`t1`",
+						},
+					},
+				},
+			},
+		},
 		// test partition table related ddl
 		{
 			"partition table",

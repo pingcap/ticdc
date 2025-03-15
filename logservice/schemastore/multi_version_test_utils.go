@@ -85,6 +85,31 @@ func buildCreatePartitionTableEventForTest(schemaID, tableID int64, schemaName, 
 	}
 }
 
+func buildDropPartitionTableEventForTest(schemaID, tableID int64, schemaName, tableName string, partitionIDs []int64, finishedTs uint64) *PersistedDDLEvent {
+	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
+	for _, partitionID := range partitionIDs {
+		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
+			ID: partitionID,
+		})
+	}
+	return &PersistedDDLEvent{
+		Type:       byte(model.ActionDropTable),
+		SchemaID:   schemaID,
+		TableID:    tableID,
+		SchemaName: schemaName,
+		TableName:  tableName,
+		TableInfo: &model.TableInfo{
+			ID:   tableID,
+			Name: pmodel.NewCIStr(tableName),
+			Partition: &model.PartitionInfo{
+				Definitions: partitionDefinitions,
+				Enable:      true,
+			},
+		},
+		FinishedTs: finishedTs,
+	}
+}
+
 func buildTruncateTableEventForTest(schemaID, oldTableID, newTableID int64, schemaName, tableName string, finishedTs uint64) *PersistedDDLEvent {
 	return &PersistedDDLEvent{
 		Type:         byte(model.ActionTruncateTable),
@@ -96,6 +121,35 @@ func buildTruncateTableEventForTest(schemaID, oldTableID, newTableID int64, sche
 		TableInfo: &model.TableInfo{
 			ID:   newTableID,
 			Name: pmodel.NewCIStr(tableName),
+		},
+		FinishedTs: finishedTs,
+	}
+}
+
+func buildTruncatePartitionTableEventForTest(
+	schemaID, oldTableID int64, newTableID int64,
+	schemaName, tableName string,
+	newPartitionIDs []int64, finishedTs uint64,
+) *PersistedDDLEvent {
+	partitionDefinitions := make([]model.PartitionDefinition, 0, len(newPartitionIDs))
+	for _, partitionID := range newPartitionIDs {
+		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
+			ID: partitionID,
+		})
+	}
+	return &PersistedDDLEvent{
+		Type:       byte(model.ActionTruncateTable),
+		SchemaID:   schemaID,
+		TableID:    oldTableID,
+		SchemaName: schemaName,
+		TableName:  tableName,
+		TableInfo: &model.TableInfo{
+			ID:   newTableID,
+			Name: pmodel.NewCIStr(tableName),
+			Partition: &model.PartitionInfo{
+				Definitions: partitionDefinitions,
+				Enable:      true,
+			},
 		},
 		FinishedTs: finishedTs,
 	}

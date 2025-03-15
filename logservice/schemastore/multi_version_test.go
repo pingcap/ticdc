@@ -53,6 +53,57 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 			deleteVersion: 1010,
 		},
 		{
+			testName: "truncate partition table 1",
+			tableID:  301,
+			ddlEvents: func() []*PersistedDDLEvent {
+				return []*PersistedDDLEvent{
+					buildCreatePartitionTableEventForTest(10, 100, "test", "t", []int64{301, 302, 303}, 1000),        // create table 100
+					buildTruncatePartitionTableEventForTest(10, 100, 101, "test", "t", []int64{401, 402, 403}, 1010), // truncate partition table 100 to 101
+				}
+			}(),
+			queryCases: []QueryTableInfoTestCase{
+				{
+					snapTs:     1000,
+					schemaName: "test",
+					tableName:  "t",
+				},
+			},
+			deleteVersion: 1010,
+		},
+		{
+			testName: "truncate partition table 2",
+			tableID:  401,
+			ddlEvents: func() []*PersistedDDLEvent {
+				return []*PersistedDDLEvent{
+					buildTruncatePartitionTableEventForTest(10, 100, 101, "test", "t", []int64{401, 402, 403}, 1010), // truncate partition table 100 to 101
+				}
+			}(),
+			queryCases: []QueryTableInfoTestCase{
+				{
+					snapTs:     1010,
+					schemaName: "test",
+					tableName:  "t",
+				},
+			},
+		},
+		{
+			testName: "drop partition table",
+			tableID:  301,
+			ddlEvents: func() []*PersistedDDLEvent {
+				return []*PersistedDDLEvent{
+					buildCreatePartitionTableEventForTest(10, 100, "test", "t", []int64{301, 302, 303}, 1000), // create table 100
+					buildDropPartitionTableEventForTest(10, 100, "test", "t", []int64{301, 302, 303}, 1010),   // drop table 100
+				}
+			}(),
+			queryCases: []QueryTableInfoTestCase{
+				{
+					snapTs:     1000,
+					schemaName: "test",
+					tableName:  "t",
+				},
+			},
+		},
+		{
 			testName: "rename table",
 			tableID:  101,
 			ddlEvents: func() []*PersistedDDLEvent {
