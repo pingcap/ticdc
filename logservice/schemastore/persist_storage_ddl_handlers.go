@@ -1344,10 +1344,21 @@ func extractTableInfoFuncIgnore(event *PersistedDDLEvent, tableID int64) (*commo
 }
 
 func extractTableInfoFuncForDropTable(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
-	if event.TableID == tableID {
-		return nil, true
+	if isPartitionTable(event.TableInfo) {
+		for _, partitionID := range getAllPartitionIDs(event.TableInfo) {
+			if tableID == partitionID {
+				return nil, true
+			}
+		}
+	} else {
+		if event.TableID == tableID {
+			return nil, true
+		}
 	}
-	log.Panic("should not reach here", zap.Int64("tableID", tableID))
+	log.Panic("should not reach here",
+		zap.Bool("isPartitionTable", isPartitionTable(event.TableInfo)),
+		zap.Int64("eventTableID", event.TableID),
+		zap.Int64("tableID", tableID))
 	return nil, false
 }
 
