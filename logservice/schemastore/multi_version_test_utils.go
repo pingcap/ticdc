@@ -129,7 +129,8 @@ func buildTruncateTableEventForTest(schemaID, oldTableID, newTableID int64, sche
 func buildTruncatePartitionTableEventForTest(
 	schemaID, oldTableID int64, newTableID int64,
 	schemaName, tableName string,
-	newPartitionIDs []int64, finishedTs uint64) *PersistedDDLEvent {
+	newPartitionIDs []int64, finishedTs uint64,
+) *PersistedDDLEvent {
 	partitionDefinitions := make([]model.PartitionDefinition, 0, len(newPartitionIDs))
 	for _, partitionID := range newPartitionIDs {
 		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
