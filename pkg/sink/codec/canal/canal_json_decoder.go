@@ -478,6 +478,8 @@ func appendCol2Chunk(idx int, raw interface{}, columnInfo *timodel.ColumnInfo, c
 		chk.AppendVectorFloat32(idx, value)
 	case mysql.TypeVarchar:
 		chk.AppendBytes(idx, []byte(rawValue))
+	case mysql.TypeDatetime, mysql.TypeTimestamp:
+		chk.AppendString(idx, rawValue)
 	default:
 		log.Panic("unknown column type", zap.Any("mysqlType", mysqlType), zap.Any("rawValue", rawValue))
 	}
