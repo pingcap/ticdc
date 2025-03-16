@@ -92,6 +92,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 		s.mutex.RLock()
 		if pi, ok = s.pathMap[path]; !ok {
 			s.handler.OnDrop(e)
+			s.mutex.RUnlock()
 			return
 		}
 		s.mutex.RUnlock()
@@ -115,6 +116,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Wake(path P) {
 	{
 		s.mutex.RLock()
 		if pi, ok = s.pathMap[path]; !ok {
+			s.mutex.RUnlock()
 			return
 		}
 		s.mutex.RUnlock()
@@ -152,6 +154,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	s.mutex.Lock()
 	pi, ok := s.pathMap[path]
 	if !ok {
+		s.mutex.Unlock()
 		return NewAppErrorS(ErrorTypeNotExist)
 	}
 	delete(s.pathMap, path)
