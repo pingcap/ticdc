@@ -90,11 +90,11 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 	var ok bool
 	{
 		s.mutex.RLock()
-		defer s.mutex.RUnlock()
 		if pi, ok = s.pathMap[path]; !ok {
 			s.handler.OnDrop(e)
 			return
 		}
+		s.mutex.RUnlock()
 	}
 
 	ew := eventWrap[A, P, T, D, H]{
@@ -114,10 +114,10 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Wake(path P) {
 	var ok bool
 	{
 		s.mutex.RLock()
-		defer s.mutex.RUnlock()
 		if pi, ok = s.pathMap[path]; !ok {
 			return
 		}
+		s.mutex.RUnlock()
 	}
 
 	pi.stream.in() <- eventWrap[A, P, T, D, H]{wake: true, pathInfo: pi}
@@ -150,12 +150,12 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 
 func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
 	pi, ok := s.pathMap[path]
 	if !ok {
 		return NewAppErrorS(ErrorTypeNotExist)
 	}
+	delete(s.pathMap, path)
+	s.mutex.Unlock()
 
 	pi.removed.Store(true)
 
@@ -163,7 +163,6 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 		s.memControl.removePathFromArea(pi)
 	}
 	pi.stream.in() <- eventWrap[A, P, T, D, H]{pathInfo: pi}
-	delete(s.pathMap, path)
 
 	s._statRemovePathCount.Add(1)
 	return nil
