@@ -36,6 +36,11 @@ type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D
 	eventExtraSize int
 	memControl     *memControl[A, P, T, D, H] // TODO: implement memory control
 
+	// Note: avoid holding this lock in methods which maybe called by Handler
+	//  when sending event to stream to avoid the following deadlock:
+	// goroutine 1: holding lock -> send event to stream
+	// (but the stream channel is full, so the send operation is blocked, which must wait for the stream handleLoop to consume the events in the channel)
+	// stream handleLoop goroutine: call handler -> call method like RemovePath -> try hold lock
 	mutex sync.RWMutex
 
 	feedbackChan chan Feedback[A, P, D]
