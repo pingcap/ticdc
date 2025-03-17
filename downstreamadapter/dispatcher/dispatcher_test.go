@@ -124,6 +124,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dis
 		nil,          // filterConfig
 		common.Ts(0), // pdTs
 		make(chan error, 1),
+		false,
 	)
 }
 

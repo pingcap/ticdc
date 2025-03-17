@@ -74,7 +74,8 @@ type DDLEvent struct {
 	//   Recover Table
 	TableNameChange *TableNameChange `json:"table_name_change"`
 
-	TiDBOnly bool `json:"tidb_only"`
+	TiDBOnly bool   `json:"tidb_only"`
+	BDRMode  string `json:"bdr_mode"`
 	// Call when event flush is completed
 	PostTxnFlushed []func() `json:"-"`
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.

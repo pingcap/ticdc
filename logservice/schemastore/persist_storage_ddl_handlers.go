@@ -1509,6 +1509,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 		TableInfo:  wrapTableInfo,
 		FinishedTs: rawEvent.FinishedTs,
 		TiDBOnly:   tiDBOnly,
+		BDRMode:    rawEvent.BDRRole,
 	}, !filtered
 }
 
