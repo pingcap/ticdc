@@ -114,10 +114,10 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 	settings := AreaSettings{maxPendingSize: 1024, feedbackInterval: 10 * time.Millisecond}
 	// The path is belong to area 0
 	stream.AddPath("path1", "dest1", settings)
-	stream.mutex.Lock()
-	require.Equal(t, 1, len(stream.pathMap))
-	pi := stream.pathMap["path1"]
-	stream.mutex.Unlock()
+	stream.pathMap.RLock()
+	require.Equal(t, 1, len(stream.pathMap.m))
+	pi := stream.pathMap.m["path1"]
+	stream.pathMap.RUnlock()
 	require.Equal(t, 0, pi.area)
 	require.Equal(t, uint64(1024), pi.areaMemStat.settings.Load().maxPendingSize)
 	require.Equal(t, 10*time.Millisecond, pi.areaMemStat.settings.Load().feedbackInterval)
