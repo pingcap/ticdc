@@ -371,7 +371,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
 			// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
 			if d.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
-				log.Info("changefeed is in BDRMode and the DDL is not executed by Primary Cluster, skip it")
+				log.Info("changefeed is in BDRMode and the DDL is not executed by Primary Cluster, skip it", zap.Any("query", ddl.Query), zap.Any("BDRMode", ddl.BDRMode))
 				continue
 			}
 			// Some DDL have some problem to sync to downstream, such as rename table with inappropriate filter

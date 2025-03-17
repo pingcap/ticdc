@@ -473,7 +473,6 @@ func (s *regionRequestWorker) clearRegionStates() map[SubscriptionID]regionFeedS
 func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
 	regions := make([]regionInfo, 0, len(s.requestsCh))
 	if s.preFetchForConnecting != nil {
-		log.Error("clearPendingRegions ")
 		region := *s.preFetchForConnecting
 		s.preFetchForConnecting = nil
 		regions = append(regions, region)

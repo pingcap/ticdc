@@ -171,7 +171,7 @@ func (w *MysqlWriter) execDDL(event *commonEvent.DDLEvent) error {
 	}
 
 	// we try to set cdc write source for the ddl
-	if err = SetWriteSource(w.cfg, tx); err != nil {
+	if err = SetWriteSource(ctx, w.cfg, tx); err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil {
 			if errors.Cause(rbErr) != context.Canceled {
 				log.Error("Failed to rollback", zap.Error(err))
@@ -183,7 +183,7 @@ func (w *MysqlWriter) execDDL(event *commonEvent.DDLEvent) error {
 	query := event.GetDDLQuery()
 	_, err = tx.ExecContext(ctx, query)
 	if err != nil {
-		log.Error("Fail to ExecContext", zap.Any("err", err))
+		log.Error("Fail to ExecContext", zap.Any("err", err), zap.Any("IsWriteSourceExisted", w.cfg.IsWriteSourceExisted), zap.Any("cfg.SourceID", w.cfg.SourceID), zap.Any("query", query))
 		if rbErr := tx.Rollback(); rbErr != nil {
 			log.Error("Failed to rollback", zap.String("sql", event.GetDDLQuery()), zap.Error(err))
 		}
