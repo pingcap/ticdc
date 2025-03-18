@@ -18,28 +18,27 @@ import (
 	"container/list"
 	"encoding/hex"
 	"fmt"
-	"math/rand"
 	"sync"
-	"time"
+	"workload/util"
 )
 
 const createContentTable = `
-CREATE TABLE content_crawled_%d (
-  content_id varchar(128) NOT NULL,
-  html mediumtext DEFAULT NULL,
-  visual_representation mediumblob DEFAULT NULL,
-  microdata json DEFAULT NULL,
-  opengraph json DEFAULT NULL,
-  meta_tags json DEFAULT NULL,
-  status_code int(11) DEFAULT NULL,
-  crawler_config_id int(11) DEFAULT NULL,
-  country int(11) DEFAULT NULL,
-  language int(11) DEFAULT NULL,
+CREATE TABLE contents_%d (
+  id varchar(128) NOT NULL,
+  col1 mediumtext DEFAULT NULL,
+  contents mediumblob DEFAULT NULL,
+  col2 json DEFAULT NULL,
+  col3 json DEFAULT NULL,
+  col4 json DEFAULT NULL,
+  code int(11) DEFAULT NULL,
+  config int(11) DEFAULT NULL,
+  col5 int(11) DEFAULT NULL,
+  col6 int(11) DEFAULT NULL,
   updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  html_s3_path varchar(1024) DEFAULT NULL,
-  html_compression_algorithm int(11) DEFAULT NULL,
-  currency int(11) DEFAULT NULL,
+  col7 varchar(1024) DEFAULT NULL,
+  col8 int(11) DEFAULT NULL,
+  col9 int(11) DEFAULT NULL,
   PRIMARY KEY (content_id) /*T![clustered_index] CLUSTERED */
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
 `
@@ -86,27 +85,27 @@ func (c *CrawlerWorkload) BuildCreateTableStatement(n int) string {
 func (c *CrawlerWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	var buf bytes.Buffer
 	key := c.getNewRowKey()
-	buf.WriteString(fmt.Sprintf("INSERT INTO content_crawled_%d ( "+
-		"content_id, "+
-		"html, "+
-		"html_s3_path, "+
-		"html_compression_algorithm, "+
-		"visual_representation, "+
-		"microdata, "+
-		"opengraph, "+
-		"meta_tags, "+
-		"status_code, "+
-		"crawler_config_id, "+
-		"language, "+
-		"country, "+
-		"currency) VALUES ( "+
+	buf.WriteString(fmt.Sprintf("INSERT INTO contents_%d ( "+
+		"id, "+
+		"col1, "+
+		"col2, "+
+		"col3, "+
+		"content, "+
+		"col4, "+
+		"col5, "+
+		"col6, "+
+		"code, "+
+		"config, "+
+		"col7, "+
+		"col8, "+
+		"col9) VALUES ( "+
 		"'%s', NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, '%s', NULL, NULL, NULL, 200, 1, NULL, NULL, NULL)",
-		tableN, key, key, randomStringForCrawler(10)))
+		tableN, key, key, util.GenerateRandomString(10)))
 
 	for r := 1; r < batchSize; r++ {
 		key = c.getNewRowKey()
 		buf.WriteString(fmt.Sprintf(", ('%s', NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, '%s', NULL, NULL, NULL, 200, 1, NULL, NULL, NULL)",
-			key, key, randomStringForCrawler(10)))
+			key, key, util.GenerateRandomString(10)))
 	}
 	insertSQL := buf.String()
 	return insertSQL
@@ -120,35 +119,14 @@ func (c *CrawlerWorkload) BuildUpdateSql(opts UpdateOption) string {
 			break
 		}
 		buf.WriteString(fmt.Sprintf("UPDATE content_crawled_%d SET html = %s WHERE content_id = %s;",
-			opts.Table, randomStringForCrawler(10), key))
+			opts.Table, util.GenerateRandomString(10), key))
 	}
 	return buf.String()
 }
 
 func randomKeyForCrawler() string {
 	buffer := make([]byte, 16)
-	randomBytes(nil, buffer)
+	util.RandomBytes(nil, buffer)
 	randomString := hex.EncodeToString(buffer)
 	return randomString
-}
-
-const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()"
-
-var (
-	seededRand *rand.Rand
-	randMutex  sync.Mutex
-)
-
-func init() {
-	seededRand = rand.New(rand.NewSource(time.Now().UnixNano()))
-}
-
-func randomStringForCrawler(length int) string {
-	randMutex.Lock()
-	defer randMutex.Unlock()
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = charset[seededRand.Intn(len(charset))]
-	}
-	return string(b)
 }
