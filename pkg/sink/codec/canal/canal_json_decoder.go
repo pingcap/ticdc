@@ -290,12 +290,11 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyRowChangedEvent(
 	return b.NextDMLEvent()
 }
 
-// NextRowChangedEvent implements the RowEventDecoder interface
+// NextDMLEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
 func (b *canalJSONDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeRow {
-		return nil, errors.ErrCodecDecode.
-			GenWithStack("not found row changed event message")
+		return nil, errors.ErrCodecDecode.GenWithStack("not found row changed event message")
 	}
 
 	message, withExtension := b.msg.(*canalJSONMessageWithTiDBExtension)
@@ -360,19 +359,18 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 // `HasNext` should be called before this.
 func (b *canalJSONDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeDDL {
-		return nil, errors.ErrDecodeFailed.
-			GenWithStack("not found ddl event message")
+		return nil, errors.ErrDecodeFailed.GenWithStack("not found ddl event message")
 	}
 
 	result := canalJSONMessage2DDLEvent(b.msg)
-	schema := *b.msg.getSchema()
-	table := *b.msg.getTable()
-	cacheKey := tableKey{
-		schema: schema,
-		table:  table,
-	}
+	schemaName := result.GetSchemaName()
+	tableName := result.GetTableName()
 	// if receive a table level DDL, just remove the table info to trigger create a new one.
-	if schema != "" && table != "" {
+	if schemaName != "" && tableName != "" {
+		cacheKey := tableKey{
+			schema: schemaName,
+			table:  tableName,
+		}
 		delete(b.tableInfoCache, cacheKey)
 	}
 	return result, nil
@@ -382,16 +380,14 @@ func (b *canalJSONDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 // `HasNext` should be called before this.
 func (b *canalJSONDecoder) NextResolvedEvent() (uint64, error) {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeResolved {
-		return 0, errors.ErrDecodeFailed.
-			GenWithStack("not found resolved event message")
+		return 0, errors.ErrDecodeFailed.GenWithStack("not found resolved event message")
 	}
 
 	withExtensionEvent, ok := b.msg.(*canalJSONMessageWithTiDBExtension)
 	if !ok {
 		log.Error("canal-json resolved event message should have tidb extension, but not found",
 			zap.Any("msg", b.msg))
-		return 0, errors.ErrDecodeFailed.
-			GenWithStack("MessageTypeResolved tidb extension not found")
+		return 0, errors.ErrDecodeFailed.GenWithStack("MessageTypeResolved tidb extension not found")
 	}
 	return withExtensionEvent.Extensions.WatermarkTs, nil
 }
@@ -407,8 +403,8 @@ func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEv
 	return result
 }
 
-func appendCol2Chunk(idx int, raw interface{}, columnInfo *timodel.ColumnInfo, chk *chunk.Chunk) {
-	mysqlType := columnInfo.FieldType.GetType()
+func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Chunk) {
+	mysqlType := ft.GetType()
 	if raw == nil {
 		chk.AppendNull(idx)
 		return
@@ -418,7 +414,7 @@ func appendCol2Chunk(idx int, raw interface{}, columnInfo *timodel.ColumnInfo, c
 	if !ok {
 		log.Panic("canal-json encoded message should have type in `string`")
 	}
-	if mysql.HasBinaryFlag(columnInfo.FieldType.GetFlag()) {
+	if mysql.HasBinaryFlag(ft.GetFlag()) {
 		// when encoding the `JavaSQLTypeBLOB`, use `ISO8859_1` decoder, now reverse it back.
 		encoded, err := charmap.ISO8859_1.NewEncoder().String(rawValue)
 		if err != nil {
@@ -432,7 +428,7 @@ func appendCol2Chunk(idx int, raw interface{}, columnInfo *timodel.ColumnInfo, c
 		if err != nil {
 			log.Panic("invalid column value for set", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		setValue, err := tiTypes.ParseSetValue(columnInfo.FieldType.GetElems(), value)
+		setValue, err := tiTypes.ParseSetValue(ft.GetElems(), value)
 		if err != nil {
 			log.Panic("parse set value failed", zap.Any("rawValue", rawValue),
 				zap.Any("setValue", setValue), zap.Error(err))
@@ -451,7 +447,7 @@ func appendCol2Chunk(idx int, raw interface{}, columnInfo *timodel.ColumnInfo, c
 		if err != nil {
 			log.Panic("invalid column value for enum", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		enum, err := tiTypes.ParseEnumValue(columnInfo.FieldType.GetElems(), enumValue)
+		enum, err := tiTypes.ParseEnumValue(ft.GetElems(), enumValue)
 		if err != nil {
 			log.Panic("parse enum value failed", zap.Any("rawValue", rawValue),
 				zap.Any("enumValue", enumValue), zap.Error(err))
@@ -500,7 +496,7 @@ func appendCol2Chunk(idx int, raw interface{}, columnInfo *timodel.ColumnInfo, c
 		}
 		chk.AppendMyDecimal(idx, value)
 	case mysql.TypeDuration:
-		dur, _, err := tiTypes.ParseDuration(tiTypes.StrictContext, rawValue, columnInfo.FieldType.GetDecimal())
+		dur, _, err := tiTypes.ParseDuration(tiTypes.StrictContext, rawValue, ft.GetDecimal())
 		if err != nil {
 			log.Panic("invalid column value for duration", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
@@ -523,7 +519,7 @@ func appendCol2Chunk(idx int, raw interface{}, columnInfo *timodel.ColumnInfo, c
 func appendRow2Chunk(data map[string]interface{}, columns []*timodel.ColumnInfo, chk *chunk.Chunk) {
 	for idx, col := range columns {
 		raw := data[col.Name.O]
-		appendCol2Chunk(idx, raw, col, chk)
+		appendCol2Chunk(idx, raw, col.FieldType, chk)
 	}
 }
 
@@ -549,9 +545,8 @@ func newTableInfo(msg canalJSONMessageInterface, tableID int64) *commonType.Tabl
 	tableInfo.Name = pmodel.NewCIStr(*msg.getTable())
 
 	columns := newTiColumns(msg)
-	indices := newTiIndices(columns, msg.pkNameSet())
 	tableInfo.Columns = columns
-	tableInfo.Indices = indices
+	tableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
 	return commonType.NewTableInfo4Decoder(*msg.getSchema(), tableInfo)
 }
 
