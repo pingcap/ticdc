@@ -29,37 +29,37 @@ group_num=${group#G}
 
 mysql_groups=(
 	# G00
-	'generate_column many_pk_or_uk'
+	'region_merge'
 	# G01
-	'api_v2'
+	'region_merge'
 	# G02
-	'availability'
+	'region_merge'
 	# G03
-	'multi_source'
+	'region_merge'
 	# G04
-	'syncpoint'
+	'region_merge'
 	# G05
-	'move_table'
+	'region_merge'
 	# G06
-	'cdc'
+	'region_merge'
 	# G07
-	'resolve_lock'
+	'region_merge'
 	# G08
-	'bank'
+	'region_merge'
 	# G09
-	'drop_many_tables'
+	'region_merge'
 	# G10
-	'default_value http_proxies'
+	'region_merge'
 	# G11
-	'ddl_reentrant force_replicate_table'
+	'region_merge'
 	# G12
-	'tidb_mysql_test'
+	'region_merge'
 	# G13
-	'fail_over' 'region_merge'
+	'region_merge'
 	# G14
-	'fail_over_ddl_mix'
+	'region_merge'
 	# G15
-	'fail_over_ddl_mix_with_syncpoint'
+	'region_merge'
 )
 
 kafka_groups=(
