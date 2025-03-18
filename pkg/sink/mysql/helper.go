@@ -365,6 +365,9 @@ func needSwitchDB(event *commonEvent.DDLEvent) bool {
 	return true
 }
 
+// SetWriteSource sets write source for the transaction.
+// When this variable is set to a value other than 0, data written in this session is considered to be written by TiCDC.
+// DDLs executed in a PRIMARY cluster can be replicated to a SECONDARY cluster by TiCDC.
 func SetWriteSource(ctx context.Context, cfg *MysqlConfig, txn *sql.Tx) error {
 	// we only set write source when donwstream is TiDB and write source is existed.
 	if !cfg.IsWriteSourceExisted {
