@@ -16,9 +16,9 @@ package config
 import (
 	"fmt"
 
+	"github.com/pingcap/ticdc/pkg/compression"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/pingcap/tiflow/pkg/compression"
 	"github.com/pingcap/tiflow/pkg/redo"
 	"github.com/pingcap/tiflow/pkg/util"
 )
