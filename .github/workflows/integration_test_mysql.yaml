@@ -27,13 +27,9 @@ concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# Currently, we have migrated all integration tests to the self - hosted CI environment. 
-# Only keep the boilerplate test group to facilitate future debugging. 
-# For example, if we want to trigger certain test cases multiple times, 
-# we can use GitHub Actions as a convenient way to do so. You can achieve this by adding your 
-# test case to the all group and pushing a PR to run them concurrently in the GitHub Actions environment.
 jobs:
-  test_group_1:
+  # # To boost the test speed, we split every 15 test cases into a group.
+  e2e_test_group_1:
     ## Only run ci when PR is not draft
     if: github.event.pull_request.draft == false
 
@@ -59,6 +55,104 @@ jobs:
         run: |
           pwd && ls -l bin/ && ls -l tools/bin/
           export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
+
+      - name: Test changefeed_finish
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_finish
+      
+      - name: Test sql_mode
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=sql_mode
+        
+      - name: Test changefeed_pause_resume
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_pause_resume
+
+      - name: Test changefeed_reconstruct
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_reconstruct
+
+      - name: Test common_1
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=common_1
+
+      - name: Test foreign_key
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=foreign_key
+
+      # The 7th case in this group
+      - name: Test generate_column
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=generate_column
+      
+      # The 8th case in this group
+      - name: Test many_pk_or_uk
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=many_pk_or_uk
+      
+      # The 9th case in this group
+      - name: Test drop_many_tables
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=drop_many_tables
+
+      # The 10th case in this group     
+      - name: Test new_ci_collation
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=new_ci_collation
+
+      # The 11th case in this group     
+      - name: Test region_merge
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=region_merge
+
+      # The 12th case in this group     
+      - name: Test safe mode
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=safe_mode
+
+      # The 13th case in this group     
+      - name: Test savepoint
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=savepoint
+
+      - name: Test server config compatibility
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=server_config_compatibility
+
+      - name: Test split region
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=split_region
+      
+      # The 16th case in this group     
+      - name: Test changefeed resume with checkpoint ts
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=changefeed_resume_with_checkpoint_ts  
+
+      - name: Test capture suicide while balance table
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=capture_suicide_while_balance_table 
+
+      - name: Test kv client stream reconnect
+        if: ${{ success() }}
+        run: |
+          export TICDC_NEWARCH=true && make integration_test CASE=kv_client_stream_reconnect  
 
       - name: Upload test logs
         if: always()
