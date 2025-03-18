@@ -232,7 +232,9 @@ func NewSubscriptionClient(
 	option := dynstream.NewOption()
 	// Note: it is max batch size of the kv sent from tikv(not committed rows)
 	option.BatchCount = 1024
-	option.UseBuffer = false
+	// TODO: only set UseBuffer to false when it can be guaranteed that handler provided to ds won't call any method of ds.
+	// Currently there is a dead lock: ds.handleLoop fetch events from `ch` -> handler.Handle -> ds.RemovePath-> send event to `ch``
+	option.UseBuffer = true
 	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
 		func(subID SubscriptionID) uint64 { return uint64(subID) },
