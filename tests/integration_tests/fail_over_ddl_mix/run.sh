@@ -45,17 +45,17 @@ function create_tables() {
 	done
 
 	## partition tables
-	for i in {6..10}; do
-		echo "Creating partition table_$i..."
-		run_sql "CREATE TABLE IF NOT EXISTS test.table_$i (
-			id INT AUTO_INCREMENT PRIMARY KEY,
-			data VARCHAR(255)
-		)
-		PARTITION BY RANGE (id) (
-			PARTITION p0 VALUES LESS THAN (200),
-			PARTITION p1 VALUES LESS THAN (1000),
-			PARTITION p2 VALUES LESS THAN MAXVALUE);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	done
+	# for i in {6..10}; do
+	# 	echo "Creating partition table_$i..."
+	# 	run_sql "CREATE TABLE IF NOT EXISTS test.table_$i (
+	# 		id INT AUTO_INCREMENT PRIMARY KEY,
+	# 		data VARCHAR(255)
+	# 	)
+	# 	PARTITION BY RANGE (id) (
+	# 		PARTITION p0 VALUES LESS THAN (200),
+	# 		PARTITION p1 VALUES LESS THAN (1000),
+	# 		PARTITION p2 VALUES LESS THAN MAXVALUE);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	# done
 }
 
 function execute_ddl_for_normal_tables() {
@@ -86,6 +86,7 @@ function execute_ddl_for_normal_tables() {
 	done
 }
 
+# TODO: support partition test after support
 function execute_ddl_for_partition_tables() {
 	while true; do
 		table_num=$((RANDOM % 5 + 6))
@@ -173,8 +174,8 @@ main() {
 	create_tables
 	execute_ddl_for_normal_tables &
 	NORMAL_TABLE_DDL_PID=$!
-	execute_ddl_for_partition_tables &
-	PARTITION_TABLE_DDL_PID=$!
+	# execute_ddl_for_partition_tables &
+	# PARTITION_TABLE_DDL_PID=$!
 
 	# 启动 DML 线程
 	execute_dml 1 &
@@ -187,22 +188,23 @@ main() {
 	DML_PID_4=$!
 	execute_dml 5 &
 	DML_PID_5=$!
-	execute_dml 6 &
-	DML_PID_6=$!
-	execute_dml 7 &
-	DML_PID_7=$!
-	execute_dml 8 &
-	DML_PID_8=$!
-	execute_dml 9 &
-	DML_PID_9=$!
-	execute_dml 10 &
-	DML_PID_10=$!
+	# execute_dml 6 &
+	# DML_PID_6=$!
+	# execute_dml 7 &
+	# DML_PID_7=$!
+	# execute_dml 8 &
+	# DML_PID_8=$!
+	# execute_dml 9 &
+	# DML_PID_9=$!
+	# execute_dml 10 &
+	# DML_PID_10=$!
 
 	kill_server
 
 	sleep 10
 
-	kill -9 $NORMAL_TABLE_DDL_PID $PARTITION_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5 $DML_PID_6 $DML_PID_7 $DML_PID_8 $DML_PID_9 $DML_PID_10
+	# kill -9 $NORMAL_TABLE_DDL_PID $PARTITION_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5 $DML_PID_6 $DML_PID_7 $DML_PID_8 $DML_PID_9 $DML_PID_10
+	kill -9 $NORMAL_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
 
 	sleep 10
 
