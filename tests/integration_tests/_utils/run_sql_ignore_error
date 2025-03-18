@@ -31,7 +31,7 @@ if [ -n "$TEST_NAME" ] && [[ "$OUT_DIR" == *"/$TEST_NAME"* ]]; then
     ADJUSTED_OUT_DIR="${OUT_DIR%/$TEST_NAME}"
 fi
 
-log_file="$ADJUSTED_OUT_DIR/sql_res.$TEST_NAME.log"
+log_file="$ADJUSTED_OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.log"
 
 echo "[$(date)] Executing SQL: ${sql}" >>"$log_file"
 
