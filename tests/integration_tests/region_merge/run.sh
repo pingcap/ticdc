@@ -13,13 +13,17 @@ function split_and_random_merge() {
 	pd_addr=$1
 	scale=$2
 	echo "split_and_random_merge scale: $scale"
-	run_sql "SPLIT TABLE region_merge.t1 BETWEEN (-9223372036854775808) AND (9223372036854775807) REGIONS $scale;" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+	run_sql "ALTER TABLE region_merge.t1 ATTRIBUTES 'merge_option=deny';" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "SELECT count(distinct region_id) from information_schema.tikv_region_status where db_name = 'region_merge' and table_name = 't1';" &&
+		cat $LOG_FILE
+	run_sql "SPLIT TABLE region_merge.t1 BETWEEN (-9223372036854775808) AND (9223372036854775807) REGIONS $scale;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "SELECT count(distinct region_id) from information_schema.tikv_region_status where db_name = 'region_merge' and table_name = 't1';" &&
 		cat $LOG_FILE
 	run_sql "insert into region_merge.t1 values (-9223372036854775808),(0),(1),(9223372036854775807);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "truncate table region_merge.t1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	# sleep 5s to wait some region merge
-	sleep 10
+	run_sql "delete from region_merge.t1 where id=-9223372036854775808 or id=0 or id=1 or id=9223372036854775807;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "ALTER TABLE region_merge.t1 ATTRIBUTES 'merge_option=allow';" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	# sleep 5s to wait some regions merge
+	sleep 5
 }
 
 large_scale=(100 200 400 800 1600 3200 6400 12800 25600 51200)
