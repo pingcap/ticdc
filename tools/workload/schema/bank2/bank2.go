@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package schema
+package bank2
 
 import (
 	"fmt"
@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"workload/schema"
 )
 
 const createTableSQL = `CREATE TABLE info (
@@ -193,7 +195,7 @@ type Bank2Workload struct {
 	logTableInsertSQL  string
 }
 
-func NewBank2Workload() Workload {
+func NewBank2Workload() schema.Workload {
 	var builder strings.Builder
 	builder.WriteString("insert into info (col5 , col3 , col6 , col2 ,col35 , col12 , col16 , col107 , col101 , col98 , col73 , col27 , col59 , col26 , col72 , col23 , col81 , col34 , col14 , col95 , col60 , col38 , col33 , col_1 , col31 , col104 , col32 , col85 , col4 , col74 , col102 , col7 , col47 , col29 , col69 , col76 , col75 , col94 , col99 , col20 , col68 , col42 , col25 , col57 , col87 , col82 , col50 , col30 , col83 , col19 , col78 , col43 , col62 , col28 , col11 , col49 , col90 , col56 , col109 , col71 , col15 , col51 , col106 , col53 , col22 , col61 , col91 , col46 , col55 , col108 , col105 , col103 , col63 , col36 , col44 , col88 , col18 , col86 , col10 , col70 , col45 , col64 , col24 , col40 , col84 , col67 , col66 , col17 , col9 ,  col41 , col77 , col54 , col100 , col37 , col21 , col8 , col52 , col48 , col39 , col96 , col80 , col13 , col89 , col79 , col65 , col93 , col97 , col92 , col58 ) values ")
 	for r := 0; r < 200; r++ {
@@ -234,7 +236,7 @@ func (c *Bank2Workload) BuildInsertSql(tableN int, batchSize int) string {
 	panic("unimplemented")
 }
 
-func (c *Bank2Workload) BuildUpdateSql(opts UpdateOption) string {
+func (c *Bank2Workload) BuildUpdateSql(opts schema.UpdateOption) string {
 	panic("unimplemented")
 }
 
@@ -291,7 +293,7 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (str
 	// return sql, values
 }
 
-func (c *Bank2Workload) BuildUpdateSqlWithValues(opts UpdateOption) (string, []interface{}) {
+func (c *Bank2Workload) BuildUpdateSqlWithValues(opts schema.UpdateOption) (string, []interface{}) {
 	rand.Seed(time.Now().UnixNano())
 	var sql string
 	values := make([]interface{}, 0, 120)
