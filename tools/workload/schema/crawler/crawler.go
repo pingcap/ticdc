@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sync"
 
+	"workload/schema"
 	"workload/util"
 )
 
@@ -50,7 +51,7 @@ type CrawlerWorkload struct {
 	maxKeyCapacity int
 }
 
-func NewCrawlerWorkload() Workload {
+func NewCrawlerWorkload() schema.Workload {
 	return &CrawlerWorkload{
 		keys:           list.New(),
 		maxKeyCapacity: 1000000,
@@ -112,7 +113,7 @@ func (c *CrawlerWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	return insertSQL
 }
 
-func (c *CrawlerWorkload) BuildUpdateSql(opts UpdateOption) string {
+func (c *CrawlerWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 	var buf bytes.Buffer
 	for i := 0; i < opts.Batch; i++ {
 		key, ok := c.getExistingRowKey()
