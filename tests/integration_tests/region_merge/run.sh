@@ -17,9 +17,9 @@ function split_and_random_merge() {
 	run_sql "SELECT count(distinct region_id) from information_schema.tikv_region_status where db_name = 'region_merge' and table_name = 't1';" &&
 		cat $LOG_FILE
 	run_sql "insert into region_merge.t1 values (-9223372036854775808),(0),(1),(9223372036854775807);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "delete from region_merge.t1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "truncate table region_merge.t1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	# sleep 5s to wait some region merge
-	sleep 5
+	sleep 10
 }
 
 large_scale=(100 200 400 800 1600 3200 6400 12800 25600 51200)
@@ -63,8 +63,8 @@ EOF
 	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --ca "${WORK_DIR}/ca.cert.pem" --auth-tls-private-key-path "${WORK_DIR}/broker_client.key-pk8.pem" --auth-tls-certificate-path="${WORK_DIR}/broker_client.cert.pem" ;;
 	esac
 
-	# set max_execution_time to 90s, because split region could block even region has been split.
-	run_sql "SET @@global.MAX_EXECUTION_TIME = 90000;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	# set max_execution_time to 150s, because split region could block even region has been split.
+	run_sql "SET @@global.MAX_EXECUTION_TIME = 150000;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE DATABASE region_merge;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE region_merge.t1 (id bigint primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
