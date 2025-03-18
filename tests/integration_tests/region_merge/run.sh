@@ -62,8 +62,8 @@ EOF
 	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --ca "${WORK_DIR}/ca.cert.pem" --auth-tls-private-key-path "${WORK_DIR}/broker_client.key-pk8.pem" --auth-tls-certificate-path="${WORK_DIR}/broker_client.cert.pem" ;;
 	esac
 
-	# set max_execution_time to 30s, because split region could block even region has been split.
-	run_sql "SET @@global.MAX_EXECUTION_TIME = 30000;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	# set max_execution_time to 90s, because split region could block even region has been split.
+	run_sql "SET @@global.MAX_EXECUTION_TIME = 90000;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE DATABASE region_merge;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE region_merge.t1 (id bigint primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
