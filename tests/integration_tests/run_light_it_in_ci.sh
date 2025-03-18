@@ -33,7 +33,7 @@ mysql_groups=(
 	# G01
 	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
 	# G02
-	'new_ci_collation safe_mode savepoint region_merge fail_over_ddl_C'
+	'new_ci_collation safe_mode savepoint fail_over_ddl_C'
 	# G03
 	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
 	# G04

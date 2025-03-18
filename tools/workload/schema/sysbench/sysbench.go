@@ -11,12 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package schema
+package sysbench
 
 import (
 	"bytes"
 	"fmt"
 	"math/rand"
+
+	"workload/schema"
 )
 
 const createTable = `
@@ -32,7 +34,7 @@ KEY k_1 (k)
 
 type SysbenchWorkload struct{}
 
-func NewSysbenchWorkload() Workload {
+func NewSysbenchWorkload() schema.Workload {
 	return &SysbenchWorkload{}
 }
 
@@ -57,6 +59,6 @@ func GetAddIndexStatement(n int) string {
 	return fmt.Sprintf("alter table sbtest%d add index k2(k);", n)
 }
 
-func (c *SysbenchWorkload) BuildUpdateSql(opts UpdateOption) string {
+func (c *SysbenchWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 	panic("unimplemented")
 }

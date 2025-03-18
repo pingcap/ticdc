@@ -25,7 +25,7 @@ fi
 
 prepare="set global tidb_enable_clustered_index = 'int_only';"
 
-echo "[$(date)] Executing SQL: ${sql}" >"$OUT_DIR/sql_res.$TEST_NAME.txt"
+echo "[$(date)] Executing SQL: ${sql}" >"$OUT_DIR/sql_res.$TEST_NAME.log"
 
-mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${prepare}" >"$OUT_DIR/sql_res.$TEST_NAME.txt"
-mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${sql}" >"$OUT_DIR/sql_res.$TEST_NAME.txt"
+mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${prepare}" >"$OUT_DIR/sql_res.$TEST_NAME.log"
+mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${sql}" >"$OUT_DIR/sql_res.$TEST_NAME.log"
