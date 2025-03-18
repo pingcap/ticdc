@@ -39,7 +39,7 @@ CREATE TABLE contents_%d (
   col7 varchar(1024) DEFAULT NULL,
   col8 int(11) DEFAULT NULL,
   col9 int(11) DEFAULT NULL,
-  PRIMARY KEY (content_id) /*T![clustered_index] CLUSTERED */
+  PRIMARY KEY (id) /*T![clustered_index] CLUSTERED */
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
 `
 
