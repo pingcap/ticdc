@@ -33,28 +33,28 @@ create table t3(
     id int primary key,
     name varchar(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
-)
-PARTITION BY RANGE (id)
-(
-    PARTITION p0 VALUES LESS THAN (100),
-    PARTITION p1 VALUES LESS THAN (200),
-    PARTITION p2 VALUES LESS THAN (300),
-    PARTITION p3 VALUES LESS THAN (400)
 );
+-- PARTITION BY RANGE (id)
+-- (
+--     PARTITION p0 VALUES LESS THAN (100),
+--     PARTITION p1 VALUES LESS THAN (200),
+--     PARTITION p2 VALUES LESS THAN (300),
+--     PARTITION p3 VALUES LESS THAN (400)
+-- );
 
 create table t4(
     id int primary key,
     name varchar(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     UNIQUE KEY `idx_name_id` (`name`,`id`)
-)
-PARTITION BY RANGE (id)
-(
-    PARTITION p0 VALUES LESS THAN (100),
-    PARTITION p1 VALUES LESS THAN (200),
-    PARTITION p2 VALUES LESS THAN (300),
-    PARTITION p3 VALUES LESS THAN (400)
 );
+-- PARTITION BY RANGE (id)
+-- (
+--     PARTITION p0 VALUES LESS THAN (100),
+--     PARTITION p1 VALUES LESS THAN (200),
+--     PARTITION p2 VALUES LESS THAN (300),
+--     PARTITION p3 VALUES LESS THAN (400)
+-- );
 
 INSERT INTO t3 (id, name) VALUES (1, 'John');
 INSERT INTO t3 (id, name) VALUES (2, 'Emma');
@@ -110,7 +110,7 @@ INSERT INTO t4 (id, name) VALUES (13, 'Michael 3');
 INSERT INTO t4 (id, name) VALUES (14, 'Sophia 3');
 
 -- add partition 
-ALTER TABLE t3 ADD PARTITION (PARTITION p4 VALUES LESS THAN (500));
+-- ALTER TABLE t3 ADD PARTITION (PARTITION p4 VALUES LESS THAN (500));
 
 
 -- insert some data 
