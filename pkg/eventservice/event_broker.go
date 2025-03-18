@@ -414,7 +414,7 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 // We need call this function every time we send a event(whether dml/ddl/resolvedTs),
 // thus to ensure the sync point event is in correct order for each dispatcher.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
-	if d.enableSyncPoint && ts > d.nextSyncPoint {
+	for d.enableSyncPoint && ts > d.nextSyncPoint {
 		// Send the sync point event.
 		syncPointEvent := newWrapSyncPointEvent(
 			remoteID,
@@ -565,7 +565,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 				if task.isRemoved.Load() {
 					log.Warn("get table info failed, since the dispatcher is removed", zap.Error(err))
 					return
-				} else if errors.Is(err, &schemastore.TableDeletedError{}) {
+				}
+				if errors.Is(err, &schemastore.TableDeletedError{}) {
 					// After a table is truncated, it is possible to receive more dml events, just ignore is ok.
 					// TODO: tables may be deleted in many ways, we need to check if it is safe to ignore later dmls in all cases.
 					// We must send the remaining ddl events to the dispatcher in this case.
@@ -577,7 +578,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			}
 			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
 		}
-		dml.AppendRow(e, c.mounter.DecodeToChunk)
+		if err = dml.AppendRow(e, c.mounter.DecodeToChunk); err != nil {
+			log.Panic("append row failed", zap.Error(err))
+		}
 	}
 }
 

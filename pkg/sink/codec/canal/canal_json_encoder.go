@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 package canal
 
 import (
-	"bytes"
 	"context"
 	"time"
 
@@ -26,10 +25,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/internal"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
-	"github.com/pingcap/tiflow/pkg/sink/codec"
-	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"go.uber.org/zap"
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
@@ -144,7 +140,7 @@ func newJSONMessageForDML(
 		}
 	}
 	if columnLen == 0 {
-		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found invlaid columns for the event")
+		return nil, errors.ErrCanalEncodeFailed.GenWithStack("not found valid columns for the event")
 	}
 
 	mysqlTypeMap := make(map[string]string, columnLen)
@@ -209,8 +205,8 @@ func newJSONMessageForDML(
 		out.String("")
 	}
 
-	valueMap := make(map[int64]string, 0)                  // colId -> value
-	javaTypeMap := make(map[int64]internal.JavaSQLType, 0) // colId -> javaType
+	valueMap := make(map[int64]string, 0)         // colId -> value
+	javaTypeMap := make(map[int64]JavaSQLType, 0) // colId -> javaType
 
 	row := e.GetRows()
 	if e.IsDelete() {
@@ -249,7 +245,7 @@ func newJSONMessageForDML(
 				out.String(colName)
 				out.RawByte(':')
 				out.Int32(int32(javaTypeMap[colID]))
-				mysqlTypeMap[colName] = utils.GetMySQLType(col, config.ContentCompatible)
+				mysqlTypeMap[colName] = common.GetMySQLType(col, config.ContentCompatible)
 			}
 		}
 		if emptyColumn {
@@ -507,7 +503,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 
 		if c.config.LargeMessageHandle.EnableClaimCheck() {
 			claimCheckFileName := claimcheck.NewFileName()
-			if err := c.claimCheck.WriteMessage(ctx, m.Key, m.Value, claimCheckFileName); err != nil {
+			if err = c.claimCheck.WriteMessage(ctx, m.Key, m.Value, claimCheckFileName); err != nil {
 				return errors.Trace(err)
 			}
 
@@ -581,95 +577,8 @@ func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.M
 	return common.NewMsg(nil, value), nil
 }
 
-func (b *JSONRowEventEncoder) Clean() {
-	if b.claimCheck != nil {
-		b.claimCheck.CleanMetrics()
+func (c *JSONRowEventEncoder) Clean() {
+	if c.claimCheck != nil {
+		c.claimCheck.CleanMetrics()
 	}
-}
-
-// JSONTxnEventEncoder encodes txn event in JSON format
-type JSONTxnEventEncoder struct {
-	config *common.Config
-
-	// the symbol separating two lines
-	terminator []byte
-	valueBuf   *bytes.Buffer
-	batchSize  int
-	callback   func()
-
-	// Store some fields of the txn event.
-	txnCommitTs uint64
-	txnSchema   *string
-	txnTable    *string
-
-	columnSelector columnselector.Selector
-}
-
-// NewJSONTxnEventEncoderBuilder creates a new JSONTxnEventEncoder
-func NewJSONTxnEventEncoderBuilder(config *common.Config) common.TxnEventEncoder {
-	return &JSONTxnEventEncoder{
-		valueBuf:       &bytes.Buffer{},
-		terminator:     []byte(config.Terminator),
-		columnSelector: columnselector.NewDefaultColumnSelector(),
-		config:         config,
-	}
-}
-
-// AppendTxnEvent appends a txn event to the encoder.
-func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error {
-	for {
-		row, ok := event.GetNextRow()
-		if !ok {
-			break
-		}
-		value, err := newJSONMessageForDML(&commonEvent.RowEvent{
-			TableInfo:      event.TableInfo,
-			CommitTs:       event.CommitTs,
-			Event:          row,
-			ColumnSelector: j.columnSelector,
-		}, j.config, false, "")
-		if err != nil {
-			return err
-		}
-		length := len(value) + common.MaxRecordOverhead
-		// For single message that is longer than max-message-bytes, do not send it.
-		if length > j.config.MaxMessageBytes {
-			log.Warn("Single message is too large for canal-json",
-				zap.Int("maxMessageBytes", j.config.MaxMessageBytes),
-				zap.Int("length", length),
-				zap.Any("table", event.TableInfo.TableName))
-			return errors.ErrMessageTooLarge.GenWithStackByArgs()
-		}
-		j.valueBuf.Write(value)
-		j.valueBuf.Write(j.terminator)
-		j.batchSize++
-	}
-	j.callback = event.PostFlush
-	j.txnCommitTs = event.CommitTs
-	j.txnSchema = event.TableInfo.GetSchemaNamePtr()
-	j.txnTable = event.TableInfo.GetTableNamePtr()
-	return nil
-}
-
-// Build builds a message from the encoder and resets the encoder.
-func (j *JSONTxnEventEncoder) Build() []*common.Message {
-	if j.batchSize == 0 {
-		return nil
-	}
-
-	ret := common.NewMsg(nil, j.valueBuf.Bytes())
-	ret.SetRowsCount(j.batchSize)
-	ret.Callback = j.callback
-	if j.valueBuf.Cap() > codec.MemBufShrinkThreshold {
-		j.valueBuf = &bytes.Buffer{}
-	} else {
-		j.valueBuf.Reset()
-	}
-	j.callback = nil
-	j.batchSize = 0
-	j.txnCommitTs = 0
-	j.txnSchema = nil
-	j.txnTable = nil
-
-	return []*common.Message{ret}
 }

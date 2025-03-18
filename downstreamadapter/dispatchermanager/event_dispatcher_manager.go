@@ -74,7 +74,7 @@ type EventDispatcherManager struct {
 	// TODO: changefeed update config
 	syncPointConfig *syncpoint.SyncPointConfig
 
-	// tableTriggerEventDispatcher is a special dispatcher, that is responsible for helping handling ddl events.
+	// tableTriggerEventDispatcher is a special dispatcher, that is responsible for handling ddl and checkpoint events.
 	tableTriggerEventDispatcher *dispatcher.Dispatcher
 	// dispatcherMap restore all the dispatchers in the EventDispatcherManager, including table trigger event dispatcher
 	dispatcherMap *DispatcherMap

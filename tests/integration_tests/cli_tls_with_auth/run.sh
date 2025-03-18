@@ -137,17 +137,9 @@ EOF
 		echo "[$(date)] <<<<< changefeed info is not updated as expected ${changefeed_info} >>>>>"
 		exit 1
 	fi
-	if [ "$SINK_TYPE" == "kafka" ]; then
-		if [[ ! $changefeed_info == *"\"enable_table_across_nodes\":true"* ]]; then
-			echo "[$(date)] <<<<< changefeed info is not updated as expected ${changefeed_info} >>>>>"
-			exit 1
-		fi
-	else
-		# Currently, MySQL changefeed does not support scale out feature.
-		if [[ $changefeed_info == *"\"enable_table_across_nodes\":true"* ]]; then
-			echo "[$(date)] <<<<< changefeed info is not updated as expected ${changefeed_info} >>>>>"
-			exit 1
-		fi
+	if [[ ! $changefeed_info == *"\"enable_table_across_nodes\":true"* ]]; then
+		echo "[$(date)] <<<<< changefeed info is not updated as expected ${changefeed_info} >>>>>"
+		exit 1
 	fi
 
 	# Resume changefeed

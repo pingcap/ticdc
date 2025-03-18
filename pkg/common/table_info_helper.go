@@ -243,6 +243,7 @@ func (s *SharedColumnSchemaStorage) GetOrSetColumnSchema(tableInfo *model.TableI
 	if !ok {
 		// generate Column Schema
 		columnSchema := newColumnSchema(tableInfo, digest)
+		SharedColumnSchemaCountGauge.Inc()
 		s.m[digest] = make([]ColumnSchemaWithCount, 1)
 		s.m[digest][0] = *NewColumnSchemaWithCount(columnSchema)
 		return columnSchema
@@ -256,6 +257,7 @@ func (s *SharedColumnSchemaStorage) GetOrSetColumnSchema(tableInfo *model.TableI
 		}
 		// not found the same column info, create a new one
 		columnSchema := newColumnSchema(tableInfo, digest)
+		SharedColumnSchemaCountGauge.Inc()
 		s.m[digest] = append(s.m[digest], *NewColumnSchemaWithCount(columnSchema))
 		return columnSchema
 	}
@@ -373,6 +375,8 @@ type columnSchema struct {
 	// indexColumnsOffset: [[0], [0, 1], [0, 2]]
 	IndexColumnsOffset [][]int `json:"index_columns_offset"`
 
+	PKIndexOffset []int `json:"pk_index_offset"`
+
 	// The following 3 fields, should only be used to decode datum from the raw value bytes, do not abuse those field.
 	// RowColInfos extend the model.ColumnInfo with some extra information
 	// it's the same length and order with the model.TableInfo.Columns
@@ -415,6 +419,12 @@ func unmarshalJsonToColumnSchema(data []byte) (*columnSchema, error) {
 	return sharedColumnSchema, nil
 }
 
+// newColumnSchema4Decoder should only be used by the codec decoder for the test purpose,
+// do not call this method in the TiCDC code.
+func newColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
+	return newColumnSchema(tableInfo, Digest{})
+}
+
 // make newColumnSchema as a private method, in order to avoid other method to directly create a columnSchema object.
 // we only want user to get columnSchema by GetOrSetColumnSchema or Clone method.
 func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
@@ -434,6 +444,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		HandleIndexID:    HandleIndexTableIneligible,
 		RowColInfos:      make([]rowcodec.ColInfo, len(tableInfo.Columns)),
 		RowColFieldTps:   make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
+		PKIndexOffset:    make([]int, 0),
 	}
 
 	rowColumnsCurrentOffset := 0
@@ -453,6 +464,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 				colSchema.HandleIndexID = HandleIndexPKIsHandle
 				colSchema.HasUniqueColumn = true
 				colSchema.IndexColumnsOffset = append(colSchema.IndexColumnsOffset, []int{colSchema.RowColumnsOffset[col.ID]})
+				colSchema.PKIndexOffset = []int{colSchema.RowColumnsOffset[col.ID]}
 			} else if tableInfo.IsCommonHandle {
 				colSchema.HandleIndexID = HandleIndexPKIsHandle
 				colSchema.HandleColID = colSchema.HandleColID[:0]
@@ -489,6 +501,9 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 			}
 			if len(indexColOffset) > 0 {
 				colSchema.IndexColumnsOffset = append(colSchema.IndexColumnsOffset, indexColOffset)
+				if idx.Primary {
+					colSchema.PKIndexOffset = indexColOffset
+				}
 			}
 		}
 	}
@@ -497,8 +512,6 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 	colSchema.initColumnsFlag()
 
 	colSchema.InitPreSQLs(tableInfo.Name.O)
-
-	SharedColumnSchemaCountGauge.Inc()
 	return colSchema
 }
 

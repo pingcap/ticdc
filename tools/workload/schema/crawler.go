@@ -101,12 +101,12 @@ func (c *CrawlerWorkload) BuildInsertSql(tableN int, batchSize int) string {
 		"country, "+
 		"currency) VALUES ( "+
 		"'%s', NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, '%s', NULL, NULL, NULL, 200, 1, NULL, NULL, NULL)",
-		tableN, key, key, randomString(10)))
+		tableN, key, key, randomStringForCrawler(10)))
 
 	for r := 1; r < batchSize; r++ {
 		key = c.getNewRowKey()
 		buf.WriteString(fmt.Sprintf(", ('%s', NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, '%s', NULL, NULL, NULL, 200, 1, NULL, NULL, NULL)",
-			key, key, randomString(10)))
+			key, key, randomStringForCrawler(10)))
 	}
 	insertSQL := buf.String()
 	return insertSQL
@@ -120,7 +120,7 @@ func (c *CrawlerWorkload) BuildUpdateSql(opts UpdateOption) string {
 			break
 		}
 		buf.WriteString(fmt.Sprintf("UPDATE content_crawled_%d SET html = %s WHERE content_id = %s;",
-			opts.Table, randomString(10), key))
+			opts.Table, randomStringForCrawler(10), key))
 	}
 	return buf.String()
 }
@@ -143,7 +143,7 @@ func init() {
 	seededRand = rand.New(rand.NewSource(time.Now().UnixNano()))
 }
 
-func randomString(length int) string {
+func randomStringForCrawler(length int) string {
 	randMutex.Lock()
 	defer randMutex.Unlock()
 	b := make([]byte, length)

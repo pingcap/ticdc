@@ -25,9 +25,10 @@ import (
 
 const BlockLenInPendingQueue = 32
 
-// A stream uses two goroutines
-// 1. handleLoop: to handle the events.
-// 2. reportStatLoop: to report the statistics.
+// A stream has two goroutines: receiver and handleLoop.
+// The receiver receives the events and buffers them.
+// The handleLoop handles the events.
+// While if UseBuffer is false, the receiver is not needed, and the handleLoop directly receives the events.
 type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	id int
 
