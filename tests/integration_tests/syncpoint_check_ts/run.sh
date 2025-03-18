@@ -44,8 +44,8 @@ function run() {
 
 	run_sql "SELECT primary_ts, secondary_ts FROM tidb_cdc.syncpoint_v1 order by primary_ts limit 1;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	echo "____________________________________"
-	cat "$OUT_DIR/sql_res.$TEST_NAME.txt"
-	primary_ts=($(grep primary_ts $OUT_DIR/sql_res.$TEST_NAME.txt | awk -F ": " '{print $2}'))
+	cat "$OUT_DIR/sql_res.$TEST_NAME.log"
+	primary_ts=($(grep primary_ts $OUT_DIR/sql_res.$TEST_NAME.log | awk -F ": " '{print $2}'))
 	echo "primary_ts is " $primary_ts "start_ts is " $start_ts
 
 	shifted_primary_ts=$(($primary_ts >> 18))

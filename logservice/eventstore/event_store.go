@@ -733,7 +733,10 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	copiedValue := make([]byte, len(value))
 	copy(copiedValue, value)
 	rawKV := &common.RawKVEntry{}
-	rawKV.Decode(copiedValue)
+	err := rawKV.Decode(copiedValue)
+	if err != nil {
+		log.Panic("fail to decode raw kv entry", zap.Error(err))
+	}
 	metrics.EventStoreScanBytes.Add(float64(len(copiedValue)))
 	isNewTxn := false
 	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {

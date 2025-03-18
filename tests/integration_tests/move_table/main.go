@@ -151,6 +151,10 @@ func newCluster() (*cluster, error) {
 // moveAllTables moves all tables from source node to target node
 func (c *cluster) moveAllTables(sourceNode, targetNode string) error {
 	for _, table := range c.servers[sourceNode] {
+		if table.id == 0 {
+			// table trigger dispatcher is not support to move, except the maintainer is crashed
+			continue
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		err := c.
@@ -231,6 +235,10 @@ func (c *cluster) checkSourceEmpty(sourceNode string) {
 		case <-ticker.C:
 			sourceTables := clusterForCheck.servers[sourceNode]
 			if len(sourceTables) != 0 {
+				if len(sourceTables) == 1 && sourceTables[0].id == 0 {
+					log.Info("source capture is empty, done")
+					return
+				}
 				log.Info("source capture is not empty, retrying", zap.Any("sourceTables", sourceTables))
 			} else {
 				log.Info("source capture is empty, done")
