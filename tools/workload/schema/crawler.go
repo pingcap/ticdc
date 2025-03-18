@@ -25,20 +25,20 @@ import (
 const createContentTable = `
 CREATE TABLE contents_%d (
   id varchar(128) NOT NULL,
-  col1 mediumtext DEFAULT NULL,
+  path varchar(1024) DEFAULT NULL,
   content mediumblob DEFAULT NULL,
+  code int(11) DEFAULT NULL,
+  config int(11) DEFAULT NULL,
+  col1 mediumtext DEFAULT NULL,
   col2 json DEFAULT NULL,
   col3 json DEFAULT NULL,
   col4 json DEFAULT NULL,
-  code int(11) DEFAULT NULL,
-  config int(11) DEFAULT NULL,
   col5 int(11) DEFAULT NULL,
   col6 int(11) DEFAULT NULL,
-  updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  path varchar(1024) DEFAULT NULL,
   col7 int(11) DEFAULT NULL,
   col8 int(11) DEFAULT NULL,
+  updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id) /*T![clustered_index] CLUSTERED */
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
 `
@@ -87,24 +87,24 @@ func (c *CrawlerWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	key := c.getNewRowKey()
 	buf.WriteString(fmt.Sprintf("INSERT INTO contents_%d ( "+
 		"id, "+
-		"col1, "+
 		"path, "+
-		"col2, "+
 		"content, "+
+		"code, "+
+		"config, "+
+		"col1, "+
+		"col2, "+
 		"col3, "+
 		"col4, "+
 		"col5, "+
-		"code, "+
-		"config, "+
 		"col6, "+
 		"col7, "+
 		"col8) VALUES ( "+
-		"'%s', NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, '%s', NULL, NULL, NULL, 200, 1, NULL, NULL, NULL)",
+		"'%s', 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com','%s', 200, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
 		tableN, key, key, util.GenerateRandomString(10)))
 
 	for r := 1; r < batchSize; r++ {
 		key = c.getNewRowKey()
-		buf.WriteString(fmt.Sprintf(", ('%s', NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, '%s', NULL, NULL, NULL, 200, 1, NULL, NULL, NULL)",
+		buf.WriteString(fmt.Sprintf(", ('%s','s3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', '%s', 200, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
 			key, key, util.GenerateRandomString(10)))
 	}
 	insertSQL := buf.String()
