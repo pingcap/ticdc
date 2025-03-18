@@ -420,7 +420,16 @@ func (c *Controller) updateChangefeedStatus(
 			Code:    err.Code,
 			Message: err.Message,
 		}
+
+		log.Error("changefeed maintainer report an error",
+			zap.Stringer("changefeed", cfID),
+			zap.Uint64("checkpointTs", cf.GetStatus().CheckpointTs),
+			zap.String("node", err.Node),
+			zap.String("code", err.Code),
+			zap.String("state", string(change.state)),
+			zap.Any("error", change.err))
 	}
+
 	log.Info("changefeed status changed",
 		zap.Stringer("changefeed", cfID),
 		zap.String("state", string(change.state)),
