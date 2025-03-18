@@ -14,15 +14,16 @@
 package open
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -61,7 +62,7 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 				zap.Int("length", length),
 				zap.Any("table", e.TableInfo.TableName),
 				zap.Any("key", key))
-			return cerror.ErrMessageTooLarge.GenWithStackByArgs()
+			return errors.ErrMessageTooLarge.GenWithStackByArgs()
 		}
 
 		if d.config.LargeMessageHandle.EnableClaimCheck() {
@@ -85,7 +86,7 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 					zap.Int("maxMessageBytes", d.config.MaxMessageBytes),
 					zap.Int("length", length),
 					zap.Any("key", key))
-				return cerror.ErrMessageTooLarge.GenWithStackByArgs()
+				return errors.ErrMessageTooLarge.GenWithStackByArgs()
 			}
 		}
 
@@ -102,7 +103,7 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 					zap.Int("length", length),
 					zap.Any("table", e.TableInfo.TableName),
 					zap.Any("key", key))
-				return cerror.ErrMessageTooLarge.GenWithStackByArgs()
+				return errors.ErrMessageTooLarge.GenWithStackByArgs()
 			}
 		}
 	}
@@ -220,6 +221,35 @@ func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
 func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
-	key, value := encodeResolvedTs(ts)
+	keyBuf := &bytes.Buffer{}
+	keyWriter := util.BorrowJSONWriter(keyBuf)
+
+	keyWriter.WriteObject(func() {
+		keyWriter.WriteUint64Field("ts", ts)
+		keyWriter.WriteIntField("t", int(common.MessageTypeResolved))
+	})
+
+	util.ReturnJSONWriter(keyWriter)
+
+	key := keyBuf.Bytes()
+
+	var keyLenByte [8]byte
+	var valueLenByte [8]byte
+	var versionByte [8]byte
+	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
+	binary.BigEndian.PutUint64(valueLenByte[:], 0)
+	binary.BigEndian.PutUint64(versionByte[:], batchVersion1)
+
+	keyOutput := new(bytes.Buffer)
+
+	keyOutput.Write(versionByte[:])
+	keyOutput.Write(keyLenByte[:])
+	keyOutput.Write(key)
+
+	valueOutput := new(bytes.Buffer)
+	valueOutput.Write(valueLenByte[:])
+
+	key = keyOutput.Bytes()
+	value := valueOutput.Bytes()
 	return common.NewMsg(key, value), nil
 }
