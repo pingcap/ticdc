@@ -74,6 +74,18 @@ func ExtractBasicMySQLType(mysqlType string) byte {
 	return types.StrToType(mysqlType)
 }
 
+// ExtractElements for the Enum and Set Type
+func ExtractElements(mysqlType string) []string {
+	start := strings.Index(mysqlType, "(")
+	end := strings.LastIndex(mysqlType, ")")
+	parts := strings.Split(mysqlType[start+1:end], ",")
+	elements := make([]string, 0, len(parts))
+	for _, part := range parts {
+		elements = append(elements, strings.Trim(part, "'"))
+	}
+	return elements
+}
+
 // ColumnsHolder read columns from sql.Rows
 type ColumnsHolder struct {
 	Values        []interface{}

@@ -562,7 +562,8 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 		col := new(timodel.ColumnInfo)
 		col.ID = nextColumnID
 		col.Name = pmodel.NewCIStr(name)
-		col.FieldType = *types.NewFieldType(types.StrToType(mysqlType))
+		basicType := common.ExtractBasicMySQLType(mysqlType)
+		col.FieldType = *types.NewFieldType(basicType)
 		if utils.IsBinaryMySQLType(mysqlType) {
 			col.AddFlag(mysql.BinaryFlag)
 			col.SetCharset("binary")
@@ -571,6 +572,12 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 			col.AddFlag(mysql.PriKeyFlag)
 			col.AddFlag(mysql.UniqueKeyFlag)
 			col.AddFlag(mysql.NotNullFlag)
+		}
+		switch basicType {
+		case mysql.TypeEnum, mysql.TypeSet:
+			elements := common.ExtractElements(mysqlType)
+			col.SetElems(elements)
+		default:
 		}
 		result = append(result, col)
 		nextColumnID++
