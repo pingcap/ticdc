@@ -15,6 +15,6 @@ fi
 
 log_file="$ADJUSTED_OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.log"
 
-echo "[$(date)] Executing SQL: $1" >>"$log_file"
-mysql -uroot -h$2 -P$3 --default-character-set utf8mb4 -E -e "${prepare}" >>"$log_file"
-mysql -uroot -h$2 -P$3 --default-character-set utf8mb4 -vv <"$1" >>"$log_file"
+echo "[$(date)] Executing SQL: $1" > "$log_file"
+mysql -uroot -h$2 -P$3 --default-character-set utf8mb4 -E -e "${prepare}" > "$log_file"
+mysql -uroot -h$2 -P$3 --default-character-set utf8mb4 -vv <"$1" > "$log_file"
