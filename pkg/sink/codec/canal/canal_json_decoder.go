@@ -18,7 +18,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"golang.org/x/text/encoding/charmap"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,6 +39,7 @@ import (
 	"github.com/pingcap/tiflow/pkg/util"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
+	"golang.org/x/text/encoding/charmap"
 )
 
 type tableKey struct {
@@ -323,8 +323,8 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	result.ApproximateSize = 0
 	result.TableInfo = tableInfo
 	result.CommitTs = msg.getCommitTs()
-	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 
+	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	columns := tableInfo.GetColumns()
 	switch msg.eventType() {
 	case canal.EventType_DELETE:
@@ -400,8 +400,6 @@ func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEv
 	result := new(commonEvent.DDLEvent)
 	result.Query = msg.getQuery()
 	result.BlockedTables = nil // todo: set this
-	// todo: getDDLActionType can handle ActionExchangeTablePartition,
-	// it's used by the mysql sink.
 	result.Type = getDDLActionType(result.Query)
 	result.FinishedTs = msg.getCommitTs()
 	result.SchemaName = *msg.getSchema()
@@ -429,12 +427,19 @@ func appendCol2Chunk(idx int, raw interface{}, columnInfo *timodel.ColumnInfo, c
 		rawValue = encoded
 	}
 	switch mysqlType {
-	case mysql.TypeBit, mysql.TypeSet:
+	case mysql.TypeSet:
 		value, err := strconv.ParseUint(rawValue, 10, 64)
 		if err != nil {
-			log.Panic("invalid column value for bit", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value for set", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		chk.AppendUint64(idx, value)
+		setValue, err := tiTypes.ParseSetValue(columnInfo.FieldType.GetElems(), value)
+		if err != nil {
+			log.Panic("parse set value failed", zap.Any("rawValue", rawValue),
+				zap.Any("setValue", setValue), zap.Error(err))
+		}
+		chk.AppendSet(idx, setValue)
+	case mysql.TypeBit:
+		chk.AppendBytes(idx, []byte(rawValue))
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeInt24, mysql.TypeYear:
 		value, err := strconv.ParseInt(rawValue, 10, 64)
 		if err != nil {
@@ -442,11 +447,16 @@ func appendCol2Chunk(idx int, raw interface{}, columnInfo *timodel.ColumnInfo, c
 		}
 		chk.AppendInt64(idx, value)
 	case mysql.TypeEnum:
-		value, err := strconv.ParseInt(rawValue, 10, 64)
+		enumValue, err := strconv.ParseUint(rawValue, 10, 64)
 		if err != nil {
 			log.Panic("invalid column value for enum", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		chk.AppendInt64(idx, value)
+		enum, err := tiTypes.ParseEnumValue(columnInfo.FieldType.GetElems(), enumValue)
+		if err != nil {
+			log.Panic("parse enum value failed", zap.Any("rawValue", rawValue),
+				zap.Any("enumValue", enumValue), zap.Error(err))
+		}
+		chk.AppendEnum(idx, enum)
 	case mysql.TypeLonglong:
 		value, err := strconv.ParseInt(rawValue, 10, 64)
 		if err == nil {
@@ -480,6 +490,31 @@ func appendCol2Chunk(idx int, raw interface{}, columnInfo *timodel.ColumnInfo, c
 		chk.AppendBytes(idx, []byte(rawValue))
 	case mysql.TypeDatetime, mysql.TypeTimestamp:
 		chk.AppendString(idx, rawValue)
+	case mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
+		chk.AppendString(idx, rawValue)
+	case mysql.TypeNewDecimal:
+		value := new(tiTypes.MyDecimal)
+		err := value.FromString([]byte(rawValue))
+		if err != nil {
+			log.Panic("invalid column value for decimal", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		chk.AppendMyDecimal(idx, value)
+	case mysql.TypeDuration:
+		dur, _, err := tiTypes.ParseDuration(tiTypes.StrictContext, rawValue, columnInfo.FieldType.GetDecimal())
+		if err != nil {
+			log.Panic("invalid column value for duration", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		chk.AppendDuration(idx, dur)
+	case mysql.TypeString:
+		chk.AppendString(idx, rawValue)
+	case mysql.TypeDate:
+		chk.AppendString(idx, rawValue)
+	case mysql.TypeJSON:
+		bj, err := tiTypes.ParseBinaryJSONFromString(rawValue)
+		if err != nil {
+			log.Panic("invalid column value for json", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		chk.AppendJSON(idx, bj)
 	default:
 		log.Panic("unknown column type", zap.Any("mysqlType", mysqlType), zap.Any("rawValue", rawValue))
 	}
@@ -575,6 +610,9 @@ func getDDLActionType(query string) timodel.ActionType {
 	}
 	if strings.HasPrefix(query, "create table") {
 		return timodel.ActionCreateTable
+	}
+	if strings.Contains(query, "exchange partition") {
+		return timodel.ActionExchangeTablePartition
 	}
 	return timodel.ActionNone
 }

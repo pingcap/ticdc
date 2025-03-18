@@ -16,11 +16,11 @@ package canal
 import (
 	"context"
 	"encoding/json"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	"testing"
 
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -29,7 +29,7 @@ import (
 
 // TODO: claim check
 
-func CompareRow(t *testing.T, tableInfo *commonType.TableInfo, expected pevent.RowChange, actual pevent.RowChange) {
+func CompareRow(t *testing.T, tableInfo *commonType.TableInfo, expected commonEvent.RowChange, actual commonEvent.RowChange) {
 	fields := tableInfo.GetFieldSlice()
 
 	if !expected.Row.IsEmpty() {
@@ -52,13 +52,11 @@ func CompareRow(t *testing.T, tableInfo *commonType.TableInfo, expected pevent.R
 }
 
 func TestBasicTypes(t *testing.T) {
-	helper := pevent.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job(`create table test.t(
-		a tinyint primary key, 
-		bi varbinary(16))`)
+	job := helper.DDL2Job(`create table test.t(a tinyint primary key, bi varbinary(16))`)
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,bi) values (1, x'89504E470D0A1A0A')`)
 	require.NotNil(t, dmlEvent)
@@ -66,7 +64,7 @@ func TestBasicTypes(t *testing.T) {
 	require.True(t, ok)
 
 	tableInfo := helper.GetTableInfo(job)
-	rowEvent := &pevent.RowEvent{
+	rowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
 		CommitTs:       1,
 		Event:          row,
@@ -106,7 +104,7 @@ func TestBasicTypes(t *testing.T) {
 }
 
 func TestAllTypes(t *testing.T) {
-	helper := pevent.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
@@ -157,7 +155,7 @@ func TestAllTypes(t *testing.T) {
 	require.True(t, ok)
 
 	tableInfo := helper.GetTableInfo(job)
-	rowEvent := &pevent.RowEvent{
+	rowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
 		CommitTs:       1,
 		Event:          row,
@@ -200,7 +198,7 @@ func TestAllTypes(t *testing.T) {
 func TestGeneralDMLEvent(t *testing.T) {
 	// columnSelector
 	{
-		helper := pevent.NewEventTestHelper(t)
+		helper := commonEvent.NewEventTestHelper(t)
 		defer helper.Close()
 
 		helper.Tk().MustExec("use test")
@@ -222,7 +220,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 		selectors, err := columnselector.NewColumnSelectors(replicaConfig.Sink)
 		require.NoError(t, err)
 
-		rowEvent := &pevent.RowEvent{
+		rowEvent := &commonEvent.RowEvent{
 			TableInfo:      tableInfo,
 			CommitTs:       1,
 			Event:          row,
@@ -265,7 +263,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 	}
 	// EnableTiDBExtension
 	{
-		helper := pevent.NewEventTestHelper(t)
+		helper := commonEvent.NewEventTestHelper(t)
 		defer helper.Close()
 
 		helper.Tk().MustExec("use test")
@@ -277,7 +275,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 		require.True(t, ok)
 		tableInfo := helper.GetTableInfo(job)
 
-		rowEvent := &pevent.RowEvent{
+		rowEvent := &commonEvent.RowEvent{
 			TableInfo:      tableInfo,
 			CommitTs:       1,
 			Event:          row,
@@ -325,7 +323,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 	}
 	// multi pk
 	{
-		helper := pevent.NewEventTestHelper(t)
+		helper := commonEvent.NewEventTestHelper(t)
 		defer helper.Close()
 
 		helper.Tk().MustExec("use test")
@@ -337,7 +335,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 		require.True(t, ok)
 		tableInfo := helper.GetTableInfo(job)
 
-		rowEvent := &pevent.RowEvent{
+		rowEvent := &commonEvent.RowEvent{
 			TableInfo:      tableInfo,
 			CommitTs:       1,
 			Event:          row,
@@ -374,7 +372,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 	}
 	// message large
 	{
-		helper := pevent.NewEventTestHelper(t)
+		helper := commonEvent.NewEventTestHelper(t)
 		defer helper.Close()
 
 		helper.Tk().MustExec("use test")
@@ -424,7 +422,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 		require.True(t, ok)
 		tableInfo := helper.GetTableInfo(job)
 
-		rowEvent := &pevent.RowEvent{
+		rowEvent := &commonEvent.RowEvent{
 			TableInfo:      tableInfo,
 			CommitTs:       1,
 			Event:          row,
@@ -442,7 +440,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 	}
 	// message large + handle only
 	{
-		helper := pevent.NewEventTestHelper(t)
+		helper := commonEvent.NewEventTestHelper(t)
 		defer helper.Close()
 
 		helper.Tk().MustExec("use test")
@@ -492,7 +490,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 		require.True(t, ok)
 		tableInfo := helper.GetTableInfo(job)
 
-		rowEvent := &pevent.RowEvent{
+		rowEvent := &commonEvent.RowEvent{
 			TableInfo:      tableInfo,
 			CommitTs:       1,
 			Event:          row,
@@ -540,7 +538,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 }
 
 func TestInsertEvent(t *testing.T) {
-	helper := pevent.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
@@ -557,7 +555,7 @@ func TestInsertEvent(t *testing.T) {
 	insertRow, ok := insertEvent.GetNextRow()
 	require.True(t, ok)
 
-	rowEvent := &pevent.RowEvent{
+	rowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
 		CommitTs:       1,
 		Event:          insertRow,
@@ -626,7 +624,7 @@ func TestInsertEvent(t *testing.T) {
 //	require.True(t, ok)
 //	updateRow.PreRow = insertRow.Row
 //
-//	updateRowEvent := &pevent.RowEvent{
+//	updateRowEvent := &commonEvent.RowEvent{
 //		TableInfo:      tableInfo,
 //		CommitTs:       2,
 //		Event:          updateRow,
@@ -672,7 +670,7 @@ func TestInsertEvent(t *testing.T) {
 //	deleteRow.PreRow = updateRow.Row
 //	deleteRow.Row = chunk.Row{}
 //
-//	deleteRowEvent := &pevent.RowEvent{
+//	deleteRowEvent := &commonEvent.RowEvent{
 //		TableInfo:      tableInfo,
 //		CommitTs:       3,
 //		Event:          deleteRow,
@@ -753,7 +751,7 @@ func TestInsertEvent(t *testing.T) {
 //}
 
 func TestCreateTableDDL(t *testing.T) {
-	helper := pevent.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
@@ -761,7 +759,7 @@ func TestCreateTableDDL(t *testing.T) {
 	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
 	require.NotNil(t, job)
 
-	ddlEvent := &pevent.DDLEvent{
+	ddlEvent := &commonEvent.DDLEvent{
 		Query:      job.Query,
 		Type:       job.Type,
 		SchemaName: job.SchemaName,
