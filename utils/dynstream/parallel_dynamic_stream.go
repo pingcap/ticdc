@@ -31,12 +31,13 @@ type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D
 	handler    H
 	pathHasher PathHasher[P]
 	streams    []*stream[A, P, T, D, H]
-	pathMap    map[P]*pathInfo[A, P, T, D, H]
+	pathMap    struct {
+		sync.RWMutex
+		m map[P]*pathInfo[A, P, T, D, H]
+	}
 
 	eventExtraSize int
 	memControl     *memControl[A, P, T, D, H] // TODO: implement memory control
-
-	mutex sync.RWMutex
 
 	feedbackChan chan Feedback[A, P, D]
 
@@ -59,9 +60,11 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 	s := &parallelDynamicStream[A, P, T, D, H]{
 		handler:        handler,
 		pathHasher:     hasher,
-		pathMap:        make(map[P]*pathInfo[A, P, T, D, H]),
 		eventExtraSize: eventExtraSize,
 	}
+
+	s.pathMap.m = make(map[P]*pathInfo[A, P, T, D, H])
+
 	if option.EnableMemoryControl {
 		log.Info("Dynamic stream enable memory control")
 		s.feedbackChan = make(chan Feedback[A, P, D], 1024)
@@ -88,13 +91,15 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Close() {
 func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 	var pi *pathInfo[A, P, T, D, H]
 	var ok bool
+
 	{
-		s.mutex.RLock()
-		defer s.mutex.RUnlock()
-		if pi, ok = s.pathMap[path]; !ok {
+		s.pathMap.RLock()
+		if pi, ok = s.pathMap.m[path]; !ok {
 			s.handler.OnDrop(e)
+			s.pathMap.RUnlock()
 			return
 		}
+		s.pathMap.RUnlock()
 	}
 
 	ew := eventWrap[A, P, T, D, H]{
@@ -113,11 +118,12 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Wake(path P) {
 	var pi *pathInfo[A, P, T, D, H]
 	var ok bool
 	{
-		s.mutex.RLock()
-		defer s.mutex.RUnlock()
-		if pi, ok = s.pathMap[path]; !ok {
+		s.pathMap.RLock()
+		if pi, ok = s.pathMap.m[path]; !ok {
+			s.pathMap.RUnlock()
 			return
 		}
+		s.pathMap.RUnlock()
 	}
 
 	pi.stream.in() <- eventWrap[A, P, T, D, H]{wake: true, pathInfo: pi}
@@ -128,18 +134,20 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Feedback() <-chan Feedback[A, P, 
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...AreaSettings) error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	s.pathMap.Lock()
 
-	_, ok := s.pathMap[path]
+	_, ok := s.pathMap.m[path]
 	if ok {
+		s.pathMap.Unlock()
 		return NewAppError(ErrorTypeDuplicate, fmt.Sprintf("path %v already exists", path))
 	}
 
 	area := s.handler.GetArea(path, dest)
 	pi := newPathInfo[A, P, T, D, H](area, path, dest)
 	pi.setStream(s.streams[s.hash(path)])
-	s.pathMap[path] = pi
+	s.pathMap.m[path] = pi
+	s.pathMap.Unlock()
+
 	s.setMemControl(pi, as...)
 
 	pi.stream.addPath(pi)
@@ -149,11 +157,11 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	s.pathMap.Lock()
 
-	pi, ok := s.pathMap[path]
+	pi, ok := s.pathMap.m[path]
 	if !ok {
+		s.pathMap.Unlock()
 		return NewAppErrorS(ErrorTypeNotExist)
 	}
 
@@ -162,8 +170,10 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	if s.memControl != nil {
 		s.memControl.removePathFromArea(pi)
 	}
+	delete(s.pathMap.m, path)
+	s.pathMap.Unlock()
+
 	pi.stream.in() <- eventWrap[A, P, T, D, H]{pathInfo: pi}
-	delete(s.pathMap, path)
 
 	s._statRemovePathCount.Add(1)
 	return nil

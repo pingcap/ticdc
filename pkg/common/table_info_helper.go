@@ -243,6 +243,7 @@ func (s *SharedColumnSchemaStorage) GetOrSetColumnSchema(tableInfo *model.TableI
 	if !ok {
 		// generate Column Schema
 		columnSchema := newColumnSchema(tableInfo, digest)
+		SharedColumnSchemaCountGauge.Inc()
 		s.m[digest] = make([]ColumnSchemaWithCount, 1)
 		s.m[digest][0] = *NewColumnSchemaWithCount(columnSchema)
 		return columnSchema
@@ -256,6 +257,7 @@ func (s *SharedColumnSchemaStorage) GetOrSetColumnSchema(tableInfo *model.TableI
 		}
 		// not found the same column info, create a new one
 		columnSchema := newColumnSchema(tableInfo, digest)
+		SharedColumnSchemaCountGauge.Inc()
 		s.m[digest] = append(s.m[digest], *NewColumnSchemaWithCount(columnSchema))
 		return columnSchema
 	}
@@ -417,6 +419,12 @@ func unmarshalJsonToColumnSchema(data []byte) (*columnSchema, error) {
 	return sharedColumnSchema, nil
 }
 
+// newColumnSchema4Decoder should only be used by the codec decoder for the test purpose,
+// do not call this method in the TiCDC code.
+func newColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
+	return newColumnSchema(tableInfo, Digest{})
+}
+
 // make newColumnSchema as a private method, in order to avoid other method to directly create a columnSchema object.
 // we only want user to get columnSchema by GetOrSetColumnSchema or Clone method.
 func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
@@ -504,8 +512,6 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 	colSchema.initColumnsFlag()
 
 	colSchema.InitPreSQLs(tableInfo.Name.O)
-
-	SharedColumnSchemaCountGauge.Inc()
 	return colSchema
 }
 

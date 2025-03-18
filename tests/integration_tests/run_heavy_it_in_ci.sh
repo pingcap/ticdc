@@ -37,7 +37,7 @@ mysql_groups=(
 	# G03
 	'multi_source'
 	# G04
-	'syncpoint'
+	'syncpoint syncpoint_check_ts'
 	# G05
 	'move_table'
 	# G06
@@ -55,7 +55,7 @@ mysql_groups=(
 	# G12
 	'tidb_mysql_test'
 	# G13
-	'fail_over'
+	'fail_over' 'region_merge'
 	# G14
 	'fail_over_ddl_mix'
 	# G15
