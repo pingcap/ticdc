@@ -368,12 +368,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			block = true
 			ddl := event.(*commonEvent.DDLEvent)
 
-			// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
-			// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
-			if d.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
-				log.Info("changefeed is in BDRMode and the DDL is not executed by Primary Cluster, skip it", zap.Any("query", ddl.Query), zap.Any("BDRMode", ddl.BDRMode))
-				continue
-			}
 			// Some DDL have some problem to sync to downstream, such as rename table with inappropriate filter
 			// such as https://docs.pingcap.com/zh/tidb/stable/ticdc-ddl#rename-table-%E7%B1%BB%E5%9E%8B%E7%9A%84-ddl-%E6%B3%A8%E6%84%8F%E4%BA%8B%E9%A1%B9
 			// so we need report the error to maintainer.
@@ -501,17 +495,24 @@ func (d *Dispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 // 2. If the event is a multi-table DDL / sync point Event, it will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
 func (d *Dispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	if !d.shouldBlock(event) {
-		err := d.AddBlockEventToSink(event)
-		if err != nil {
-			select {
-			case d.errCh <- err:
-			default:
-				log.Error("error channel is full, discard error",
-					zap.Stringer("changefeedID", d.changefeedID),
-					zap.Stringer("dispatcherID", d.id),
-					zap.Error(err))
+		ddl, ok := event.(*commonEvent.DDLEvent)
+		// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
+		// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
+		if ok && d.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
+			d.PassBlockEventToSink(event)
+		} else {
+			err := d.AddBlockEventToSink(event)
+			if err != nil {
+				select {
+				case d.errCh <- err:
+				default:
+					log.Error("error channel is full, discard error",
+						zap.Stringer("changefeedID", d.changefeedID),
+						zap.Stringer("dispatcherID", d.id),
+						zap.Error(err))
+				}
+				return
 			}
-			return
 		}
 		if event.GetNeedAddedTables() != nil || event.GetNeedDroppedTables() != nil {
 			message := &heartbeatpb.TableSpanBlockStatus{
