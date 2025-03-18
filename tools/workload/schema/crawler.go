@@ -36,9 +36,9 @@ CREATE TABLE contents_%d (
   col6 int(11) DEFAULT NULL,
   updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  col7 varchar(1024) DEFAULT NULL,
+  path varchar(1024) DEFAULT NULL,
+  col7 int(11) DEFAULT NULL,
   col8 int(11) DEFAULT NULL,
-  col9 int(11) DEFAULT NULL,
   PRIMARY KEY (id) /*T![clustered_index] CLUSTERED */
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
 `
@@ -88,17 +88,17 @@ func (c *CrawlerWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	buf.WriteString(fmt.Sprintf("INSERT INTO contents_%d ( "+
 		"id, "+
 		"col1, "+
+		"path, "+
 		"col2, "+
-		"col3, "+
 		"content, "+
+		"col3, "+
 		"col4, "+
 		"col5, "+
-		"col6, "+
 		"code, "+
 		"config, "+
+		"col6, "+
 		"col7, "+
-		"col8, "+
-		"col9) VALUES ( "+
+		"col8) VALUES ( "+
 		"'%s', NULL, 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', NULL, '%s', NULL, NULL, NULL, 200, 1, NULL, NULL, NULL)",
 		tableN, key, key, util.GenerateRandomString(10)))
 
