@@ -27,75 +27,39 @@ group_num=${group#G}
 # For pulsar: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_integration_pulsar_test.groovy
 # For storage: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_integration_storage_test.groovy
 
-# mysql_groups=(
-# 	# G00
-# 	'generate_column many_pk_or_uk'
-# 	# G01
-# 	'api_v2'
-# 	# G02
-# 	'availability'
-# 	# G03
-# 	'multi_source'
-# 	# G04
-# 	'syncpoint syncpoint_check_ts'
-# 	# G05
-# 	'move_table'
-# 	# G06
-# 	'cdc'
-# 	# G07
-# 	'resolve_lock'
-# 	# G08
-# 	'bank'
-# 	# G09
-# 	'drop_many_tables'
-# 	# G10
-# 	'default_value http_proxies'
-# 	# G11
-# 	'ddl_reentrant force_replicate_table'
-# 	# G12
-# 	'tidb_mysql_test'
-# 	# G13
-# 	'fail_over' 'region_merge'
-# 	# G14
-# 	'fail_over_ddl_mix'
-# 	# G15
-# 	'fail_over_ddl_mix_with_syncpoint'
-# )
-
-
 mysql_groups=(
 	# G00
-	'multi_tables_ddl multi_tables_ddl'
+	'generate_column many_pk_or_uk'
 	# G01
-	'multi_tables_ddl multi_tables_ddl'
+	'api_v2'
 	# G02
-	'multi_tables_ddl multi_tables_ddl'
+	'availability'
 	# G03
-	'multi_tables_ddl multi_tables_ddl'
+	'multi_source'
 	# G04
-	'multi_tables_ddl multi_tables_ddl'
+	'syncpoint syncpoint_check_ts'
 	# G05
-	'multi_tables_ddl multi_tables_ddl'
+	'move_table'
 	# G06
-	'multi_tables_ddl multi_tables_ddl'
+	'cdc'
 	# G07
-	'multi_tables_ddl multi_tables_ddl'
+	'resolve_lock'
 	# G08
-	'multi_tables_ddl multi_tables_ddl'
+	'bank'
 	# G09
-	'multi_tables_ddl multi_tables_ddl'
+	'drop_many_tables'
 	# G10
-	'multi_tables_ddl multi_tables_ddl'
+	'default_value http_proxies'
 	# G11
-	'multi_tables_ddl multi_tables_ddl'
+	'ddl_reentrant force_replicate_table'
 	# G12
-	'multi_tables_ddl multi_tables_ddl'
+	'tidb_mysql_test'
 	# G13
-	'multi_tables_ddl multi_tables_ddl'
+	'fail_over' 'region_merge'
 	# G14
-	'multi_tables_ddl multi_tables_ddl'
+	'fail_over_ddl_mix'
 	# G15
-	'multi_tables_ddl multi_tables_ddl'
+	'fail_over_ddl_mix_with_syncpoint'
 )
 
 kafka_groups=(
