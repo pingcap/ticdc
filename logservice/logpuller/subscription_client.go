@@ -452,9 +452,14 @@ func (s *SubscriptionClient) onTableDrained(rt *subscribedSpan) {
 	log.Info("subscription client stop span is finished",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
+	err := s.ds.RemovePath(rt.subID)
+	if err != nil {
+		log.Warn("subscription client remove path failed",
+			zap.Uint64("subscriptionID", uint64(rt.subID)),
+			zap.Error(err))
+	}
 	s.totalSpans.Lock()
 	defer s.totalSpans.Unlock()
-	s.ds.RemovePath(rt.subID)
 	delete(s.totalSpans.spanMap, rt.subID)
 }
 
