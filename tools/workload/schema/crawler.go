@@ -26,7 +26,7 @@ const createContentTable = `
 CREATE TABLE contents_%d (
   id varchar(128) NOT NULL,
   col1 mediumtext DEFAULT NULL,
-  contents mediumblob DEFAULT NULL,
+  content mediumblob DEFAULT NULL,
   col2 json DEFAULT NULL,
   col3 json DEFAULT NULL,
   col4 json DEFAULT NULL,
