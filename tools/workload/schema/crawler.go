@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sync"
+
 	"workload/util"
 )
 
@@ -100,12 +101,12 @@ func (c *CrawlerWorkload) BuildInsertSql(tableN int, batchSize int) string {
 		"col7, "+
 		"col8) VALUES ( "+
 		"'%s', 's3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com','%s', 200, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
-		tableN, key, key, util.GenerateRandomString(10)))
+		tableN, key, key, util.GenerateRandomString(1000)))
 
 	for r := 1; r < batchSize; r++ {
 		key = c.getNewRowKey()
 		buf.WriteString(fmt.Sprintf(", ('%s','s3://crawler-debug/hello/METADATA/00/00/00/%s-zzzz.com', '%s', 200, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)",
-			key, key, util.GenerateRandomString(10)))
+			key, key, util.GenerateRandomString(1000)))
 	}
 	insertSQL := buf.String()
 	return insertSQL
@@ -119,7 +120,7 @@ func (c *CrawlerWorkload) BuildUpdateSql(opts UpdateOption) string {
 			break
 		}
 		buf.WriteString(fmt.Sprintf("UPDATE contents_%d SET content = %s WHERE id = %s;",
-			opts.Table, util.GenerateRandomString(10), key))
+			opts.Table, util.GenerateRandomString(1000), key))
 	}
 	return buf.String()
 }
