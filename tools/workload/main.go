@@ -28,6 +28,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/pingcap/errors"
+	plog "github.com/pingcap/log"
+	"go.uber.org/zap"
 	"workload/schema"
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
@@ -37,11 +41,6 @@ import (
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
 	puuu "workload/schema/uuu"
-
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/errors"
-	plog "github.com/pingcap/log"
-	"go.uber.org/zap"
 )
 
 var (
