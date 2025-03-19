@@ -113,7 +113,8 @@ func genKeyList(
 			return nil, nil
 		}
 
-		value, err := common.FormatColVal(row, columnInfos[i], i)
+		ft := columnInfos[i].FieldType
+		value, err := common.ExtractColVal(row, ft, i)
 		if err != nil {
 			return nil, err
 		}
@@ -135,7 +136,7 @@ func genKeyList(
 	}
 	tableKey := make([]byte, 16)
 	binary.BigEndian.PutUint64(tableKey[:8], uint64(iIdx))
-	binary.BigEndian.PutUint64(tableKey[8:], uint64(dispatcherID.GetLow()))
+	binary.BigEndian.PutUint64(tableKey[8:], dispatcherID.GetLow())
 	key = append(key, tableKey...)
 	return key, nil
 }

@@ -19,7 +19,6 @@ import (
 	"unsafe"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -28,14 +27,14 @@ import (
 
 var EmptyBytes = make([]byte, 0)
 
-// getColumnValue returns the column value in the row
-func FormatColVal(row *chunk.Row, col *model.ColumnInfo, idx int) (
+// ExtractColVal returns the value in the row
+func ExtractColVal(row *chunk.Row, ft types.FieldType, idx int) (
 	value interface{}, err error,
 ) {
 	if row.IsNull(idx) {
 		return nil, nil
 	}
-	switch col.GetType() {
+	switch ft.GetType() {
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeNewDate, mysql.TypeTimestamp:
 		return row.GetTime(idx).String(), nil
 	case mysql.TypeDuration:
@@ -52,7 +51,7 @@ func FormatColVal(row *chunk.Row, col *model.ColumnInfo, idx int) (
 	case mysql.TypeEnum, mysql.TypeSet:
 		return row.GetEnum(idx).Value, nil
 	case mysql.TypeBit:
-		d := row.GetDatum(idx, &col.FieldType)
+		d := row.GetDatum(idx, &ft)
 		dp := &d
 		// Encode bits as integers to avoid pingcap/tidb#10988 (which also affects MySQL itself)
 		return dp.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
@@ -66,7 +65,7 @@ func FormatColVal(row *chunk.Row, col *model.ColumnInfo, idx int) (
 		// representation. Because if we use the byte array respresentation, the go-sql-driver
 		// will automatically set `_binary` charset for that column, which is not expected.
 		// See https://github.com/go-sql-driver/mysql/blob/ce134bfc/connection.go#L267
-		if col.GetCharset() != "" && col.GetCharset() != charset.CharsetBin {
+		if ft.GetCharset() != "" && ft.GetCharset() != charset.CharsetBin {
 			if len(b) == 0 {
 				return "", nil
 			}
@@ -93,7 +92,7 @@ func FormatColVal(row *chunk.Row, col *model.ColumnInfo, idx int) (
 		b := row.GetVectorFloat32(idx).String()
 		return b, nil
 	default:
-		d := row.GetDatum(idx, &col.FieldType)
+		d := row.GetDatum(idx, &ft)
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
 		// Make specified convert upper if you need
 		// Go sql support type ref to: https://github.com/golang/go/blob/go1.17.4/src/database/sql/driver/types.go#L236
