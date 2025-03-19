@@ -23,6 +23,6 @@ import (
 func TestFilterValue(t *testing.T) {
 	ft, err := NewFilter(&config.FilterConfig{}, "", false, false)
 	require.Nil(t, err)
-	ok := ft.ShouldIgnoreSchema("workload_schema")
+	ok := ft.ShouldIgnoreSchema(TiDBWorkloadSchema)
 	require.True(t, ok)
 }
