@@ -414,9 +414,10 @@ func (w *MysqlWriter) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEven
 }
 
 func (w *MysqlWriter) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
-	var querys []string
-	var args [][]interface{}
-
+	var (
+		queries []string
+		args    [][]interface{}
+	)
 	for _, event := range events {
 		if event.Len() == 0 {
 			continue
@@ -426,36 +427,36 @@ func (w *MysqlWriter) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]stri
 		if err != nil {
 			return nil, nil, errors.Trace(err)
 		}
-
-		for i := 0; i < len(queryList); i++ {
-			querys = append(querys, queryList[i])
-			args = append(args, argsList[i])
-		}
+		queries = append(queries, queryList...)
+		args = append(args, argsList...)
 	}
-	return querys, args, nil
+	return queries, args, nil
 }
 
 func (w *MysqlWriter) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
-	var queryList []string
-	var argsList [][]interface{}
+	var (
+		queryList []string
+		argsList  [][]interface{}
+	)
 
 	inSafeMode := !w.cfg.SafeMode && event.CommitTs > event.ReplicatingTs
-
 	log.Debug("inSafeMode",
 		zap.Bool("inSafeMode", inSafeMode),
 		zap.Uint64("firstRowCommitTs", event.CommitTs),
 		zap.Uint64("firstRowReplicatingTs", event.ReplicatingTs),
 		zap.Bool("safeMode", w.cfg.SafeMode))
 
-	var query string
-	var args []interface{}
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
 			break
 		}
 
-		var err error
+		var (
+			query string
+			args  []interface{}
+			err   error
+		)
 		switch row.RowType {
 		case commonEvent.RowTypeUpdate:
 			if inSafeMode {
@@ -480,7 +481,7 @@ func (w *MysqlWriter) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, 
 		if err != nil {
 			return queryList, argsList, errors.Trace(err)
 		}
-
+		
 		if query != "" {
 			queryList = append(queryList, query)
 			argsList = append(argsList, args)

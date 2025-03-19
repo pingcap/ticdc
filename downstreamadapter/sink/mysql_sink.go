@@ -16,11 +16,10 @@ package sink
 import (
 	"context"
 	"database/sql"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"net/url"
 	"sync/atomic"
 
-	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/conflictdetector"
 	"github.com/pingcap/ticdc/downstreamadapter/worker"
@@ -30,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"github.com/pingcap/tiflow/pkg/causality"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -210,19 +208,4 @@ func (s *MysqlSink) Close(removeChangefeed bool) {
 			zap.Error(err))
 	}
 	s.statistics.Close()
-}
-
-func MysqlSinkForTest() (*MysqlSink, sqlmock.Sqlmock) {
-	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-	ctx := context.Background()
-	changefeedID := common.NewChangefeedID4Test("test", "test")
-	cfg := mysql.NewMysqlConfig()
-	cfg.DMLMaxRetry = 1
-	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
-	cfg.CachePrepStmts = false
-
-	sink := newMysqlSinkWithDBAndConfig(ctx, changefeedID, 1, cfg, db)
-	go sink.Run(ctx)
-
-	return sink, mock
 }

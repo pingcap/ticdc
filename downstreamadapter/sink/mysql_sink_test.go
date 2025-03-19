@@ -14,7 +14,11 @@
 package sink
 
 import (
+	"context"
 	"errors"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,6 +29,21 @@ import (
 )
 
 var count atomic.Int64
+
+func MysqlSinkForTest() (*MysqlSink, sqlmock.Sqlmock) {
+	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	ctx := context.Background()
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	cfg := mysql.NewMysqlConfig()
+	cfg.DMLMaxRetry = 1
+	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
+	cfg.CachePrepStmts = false
+
+	sink := newMysqlSinkWithDBAndConfig(ctx, changefeedID, 1, cfg, db)
+	go sink.Run(ctx)
+
+	return sink, mock
+}
 
 // Test callback and tableProgress works as expected after AddDMLEvent
 func TestMysqlSinkBasicFunctionality(t *testing.T) {
