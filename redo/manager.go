@@ -21,17 +21,18 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/redo/common"
+	"github.com/pingcap/ticdc/pkg/common"
+	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/util"
+	misc "github.com/pingcap/ticdc/redo/common"
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/ticdc/redo/writer/factory"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/cdc/processor/tablepb"
 	"github.com/pingcap/tiflow/pkg/chann"
-	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/redo"
-	"github.com/pingcap/tiflow/pkg/spanz"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
@@ -42,7 +43,20 @@ var (
 )
 
 type redoManager interface {
-	util.Runnable
+	// Run all sub goroutines and block the current one. If an error occurs
+	// in any sub goroutine, return it and cancel all others.
+	//
+	// Generally a Runnable object can have some internal resources, like file
+	// descriptors, channels or memory buffers. Those resources may be still
+	// necessary by other components after this Runnable is returned. We can use
+	// Close to release them.
+	//
+	// `warnings` is used to retrieve internal warnings generated when running.
+	Run(ctx context.Context, warnings ...chan<- error) error
+	// WaitForReady blocks the current goroutine until `Run` initializes itself.
+	WaitForReady(ctx context.Context)
+	// Close all internal resources synchronously.
+	Close()
 
 	// Enabled returns whether the manager is enabled
 	Enabled() bool
@@ -230,14 +244,14 @@ func newLogManager(
 		},
 		logBuffer: chann.NewAutoDrainChann[cacheEvents](),
 		rtsMap:    spanz.SyncMap{},
-		metricWriteLogDuration: common.RedoWriteLogDurationHistogram.
-			WithLabelValues(changefeedID.Namespace, changefeedID.ID, logType),
-		metricFlushLogDuration: common.RedoFlushLogDurationHistogram.
-			WithLabelValues(changefeedID.Namespace, changefeedID.ID, logType),
-		metricTotalRowsCount: common.RedoTotalRowsCountGauge.
-			WithLabelValues(changefeedID.Namespace, changefeedID.ID, logType),
-		metricRedoWorkerBusyRatio: common.RedoWorkerBusyRatio.
-			WithLabelValues(changefeedID.Namespace, changefeedID.ID, logType),
+		metricWriteLogDuration: misc.RedoWriteLogDurationHistogram.
+			WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), logType),
+		metricFlushLogDuration: misc.RedoFlushLogDurationHistogram.
+			WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), logType),
+		metricTotalRowsCount: misc.RedoTotalRowsCountGauge.
+			WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), logType),
+		metricRedoWorkerBusyRatio: misc.RedoWorkerBusyRatio.
+			WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), logType),
 	}
 }
 
@@ -255,8 +269,8 @@ func (m *logManager) Run(ctx context.Context, _ ...chan<- error) error {
 	w, err := factory.NewRedoLogWriter(ctx, m.cfg)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
-			zap.String("namespace", m.cfg.ChangeFeedID.Namespace),
-			zap.String("changefeed", m.cfg.ChangeFeedID.ID),
+			zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+			zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
 		return err
@@ -274,8 +288,8 @@ func (m *logManager) getFlushDuration() time.Duration {
 	}
 	if flushIntervalInMs < redo.MinFlushIntervalInMs {
 		log.Warn("redo flush interval is too small, use default value",
-			zap.String("namespace", m.cfg.ChangeFeedID.Namespace),
-			zap.String("changefeed", m.cfg.ChangeFeedID.ID),
+			zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+			zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
 			zap.Int("default", defaultFlushIntervalInMs),
 			zap.String("logType", m.cfg.LogType),
 			zap.Int64("interval", flushIntervalInMs))
@@ -365,8 +379,8 @@ func (m *logManager) AddTable(span tablepb.Span, startTs uint64) {
 	_, loaded := m.rtsMap.LoadOrStore(span, &rts)
 	if loaded {
 		log.Warn("add duplicated table in redo log manager",
-			zap.String("namespace", m.cfg.ChangeFeedID.Namespace),
-			zap.String("changefeed", m.cfg.ChangeFeedID.ID),
+			zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+			zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
 			zap.Stringer("span", &span))
 		return
 	}
@@ -376,8 +390,8 @@ func (m *logManager) AddTable(span tablepb.Span, startTs uint64) {
 func (m *logManager) RemoveTable(span tablepb.Span) {
 	if _, ok := m.rtsMap.LoadAndDelete(span); !ok {
 		log.Warn("remove a table not maintained in redo log manager",
-			zap.String("namespace", m.cfg.ChangeFeedID.Namespace),
-			zap.String("changefeed", m.cfg.ChangeFeedID.ID),
+			zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+			zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
 			zap.Stringer("span", &span))
 		return
 	}
@@ -404,8 +418,8 @@ func (m *logManager) postFlush(tableRtsMap *spanz.HashMap[common.Ts]) {
 			changed := value.(*statefulRts).checkAndSetFlushed(flushed)
 			if !changed {
 				log.Debug("flush redo with regressed resolved ts",
-					zap.String("namespace", m.cfg.ChangeFeedID.Namespace),
-					zap.String("changefeed", m.cfg.ChangeFeedID.ID),
+					zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+					zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
 					zap.Stringer("span", &span),
 					zap.Uint64("flushed", flushed),
 					zap.Uint64("current", value.(*statefulRts).getFlushed()))
@@ -425,12 +439,12 @@ func (m *logManager) flushLog(
 	if !atomic.CompareAndSwapInt64(&m.flushing, 0, 1) {
 		log.Debug("Fail to update flush flag, "+
 			"the previous flush operation hasn't finished yet",
-			zap.String("namespace", m.cfg.ChangeFeedID.Namespace),
-			zap.String("changefeed", m.cfg.ChangeFeedID.ID))
+			zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+			zap.String("changefeed", m.cfg.ChangeFeedID.Name()))
 		if time.Since(m.lastFlushTime) > redo.FlushWarnDuration {
 			log.Warn("flushLog blocking too long, the redo manager may be stuck",
-				zap.String("namespace", m.cfg.ChangeFeedID.Namespace),
-				zap.String("changefeed", m.cfg.ChangeFeedID.ID),
+				zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+				zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
 				zap.Duration("duration", time.Since(m.lastFlushTime)))
 		}
 		return
@@ -444,8 +458,8 @@ func (m *logManager) flushLog(
 
 		tableRtsMap := m.prepareForFlush()
 		log.Debug("Flush redo log",
-			zap.String("namespace", m.cfg.ChangeFeedID.Namespace),
-			zap.String("changefeed", m.cfg.ChangeFeedID.ID),
+			zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+			zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
 			zap.String("logType", m.cfg.LogType),
 			zap.Any("tableRtsMap", tableRtsMap))
 		err := m.withLock(func(m *logManager) error {
@@ -485,8 +499,8 @@ func (m *logManager) handleEvent(
 		}
 		writeLogElapse := time.Since(start)
 		log.Debug("redo manager writes rows",
-			zap.String("namespace", m.cfg.ChangeFeedID.Namespace),
-			zap.String("changefeed", m.cfg.ChangeFeedID.ID),
+			zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+			zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
 			zap.Int("rows", len(e.events)),
 			zap.Error(err),
 			zap.Duration("writeLogElapse", writeLogElapse))
@@ -508,8 +522,8 @@ func (m *logManager) bgUpdateLog(ctx context.Context, flushDuration time.Duratio
 	ticker := time.NewTicker(flushDuration)
 	defer ticker.Stop()
 	log.Info("redo manager bgUpdateLog is running",
-		zap.String("namespace", m.cfg.ChangeFeedID.Namespace),
-		zap.String("changefeed", m.cfg.ChangeFeedID.ID),
+		zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+		zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
 		zap.Duration("flushIntervalInMs", flushDuration),
 		zap.Int64("maxLogSize", m.cfg.MaxLogSize),
 		zap.Int("encoderWorkerNum", m.cfg.EncodingWorkerNum),
@@ -543,8 +557,8 @@ func (m *logManager) bgUpdateLog(ctx context.Context, flushDuration time.Duratio
 		}
 		if err != nil {
 			log.Warn("redo manager writer meets write or flush fail",
-				zap.String("namespace", m.cfg.ChangeFeedID.Namespace),
-				zap.String("changefeed", m.cfg.ChangeFeedID.ID),
+				zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+				zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
 				zap.Error(err))
 			return err
 		}
@@ -569,12 +583,12 @@ func (m *logManager) close() {
 	if m.writer != nil {
 		if err := m.writer.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo manager fails to close writer",
-				zap.String("namespace", m.cfg.ChangeFeedID.Namespace),
-				zap.String("changefeed", m.cfg.ChangeFeedID.ID),
+				zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+				zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
 				zap.Error(err))
 		}
 	}
 	log.Info("redo manager closed",
-		zap.String("namespace", m.cfg.ChangeFeedID.Namespace),
-		zap.String("changefeed", m.cfg.ChangeFeedID.ID))
+		zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+		zap.String("changefeed", m.cfg.ChangeFeedID.Name()))
 }

@@ -23,12 +23,13 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
+	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/redo/writer"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/cdc/processor/tablepb"
-	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/redo"
-	"github.com/pingcap/tiflow/pkg/spanz"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -129,7 +130,7 @@ func TestLogManagerInProcessor(t *testing.T) {
 			FlushWorkerNum:        workerNumberForTest,
 			UseFileBackend:        useFileBackend,
 		}
-		dmlMgr := NewDMLManager(model.DefaultChangeFeedID("test"), cfg)
+		dmlMgr := NewDMLManager(common.NewChangeFeedIDWithName("test"), cfg)
 		var eg errgroup.Group
 		eg.Go(func() error {
 			return dmlMgr.Run(ctx)
@@ -146,9 +147,7 @@ func TestLogManagerInProcessor(t *testing.T) {
 		for _, span := range spans {
 			dmlMgr.AddTable(span, startTs)
 		}
-		tableInfo := &model.TableInfo{
-			TableName: model.TableName{Schema: "test", Table: "t"},
-		}
+		tableInfo := &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t"}}
 		testCases := []struct {
 			span tablepb.Span
 			rows []*pevent.DMLEvent
@@ -243,7 +242,7 @@ func TestLogManagerInOwner(t *testing.T) {
 			UseFileBackend:        useFileBackend,
 		}
 		startTs := common.Ts(10)
-		ddlMgr := NewDDLManager(model.DefaultChangeFeedID("test"), cfg, startTs)
+		ddlMgr := NewDDLManager(common.NewChangeFeedIDWithName("test"), cfg, startTs)
 
 		var eg errgroup.Group
 		eg.Go(func() error {
@@ -251,13 +250,13 @@ func TestLogManagerInOwner(t *testing.T) {
 		})
 
 		require.Equal(t, startTs, ddlMgr.GetResolvedTs())
-		ddl := &pevent.DDLEvent{StartTs: 100, CommitTs: 120, Query: "CREATE TABLE `TEST.T1`"}
+		ddl := &pevent.DDLEvent{FinishedTs: 120, Query: "CREATE TABLE `TEST.T1`"}
 		err := ddlMgr.EmitDDLEvent(ctx, ddl)
 		require.NoError(t, err)
 		require.Equal(t, startTs, ddlMgr.GetResolvedTs())
 
-		ddlMgr.UpdateResolvedTs(ctx, ddl.CommitTs)
-		checkResolvedTs(t, ddlMgr.logManager, ddl.CommitTs)
+		ddlMgr.UpdateResolvedTs(ctx, ddl.FinishedTs)
+		checkResolvedTs(t, ddlMgr.logManager, ddl.FinishedTs)
 
 		cancel()
 		require.ErrorIs(t, eg.Wait(), context.Canceled)
@@ -289,15 +288,13 @@ func TestLogManagerError(t *testing.T) {
 		EncodingWorkerNum:     workerNumberForTest,
 		FlushWorkerNum:        workerNumberForTest,
 	}
-	logMgr := NewDMLManager(model.DefaultChangeFeedID("test"), cfg)
+	logMgr := NewDMLManager(common.NewChangeFeedIDWithName("test"), cfg)
 	var eg errgroup.Group
 	eg.Go(func() error {
 		return logMgr.Run(ctx)
 	})
 
-	tableInfo := &model.TableInfo{
-		TableName: model.TableName{Schema: "test", Table: "t"},
-	}
+	tableInfo := &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t"}}
 	testCases := []struct {
 		span tablepb.Span
 		rows []writer.RedoEvent
@@ -347,7 +344,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
 		UseFileBackend:        useFileBackend,
 	}
-	dmlMgr := NewDMLManager(model.DefaultChangeFeedID("test"), cfg)
+	dmlMgr := NewDMLManager(common.NewChangeFeedIDWithName("test"), cfg)
 	var eg errgroup.Group
 	eg.Go(func() error {
 		return dmlMgr.Run(ctx)
@@ -355,11 +352,11 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 
 	// Init tables
 	numOfTables := 200
-	tables := make([]model.TableID, 0, numOfTables)
+	tables := make([]common.TableID, 0, numOfTables)
 	maxTsMap := spanz.NewHashMap[*common.Ts]()
 	startTs := uint64(100)
 	for i := 0; i < numOfTables; i++ {
-		tableID := model.TableID(i)
+		tableID := common.TableID(i)
 		tables = append(tables, tableID)
 		span := spanz.TableIDToComparableSpan(tableID)
 		ts := startTs
@@ -373,9 +370,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	b.ResetTimer()
 	for _, tableID := range tables {
 		wg.Add(1)
-		tableInfo := &model.TableInfo{
-			TableName: model.TableName{Schema: "test", Table: fmt.Sprintf("t_%d", tableID)},
-		}
+		tableInfo := &common.TableInfo{TableName: common.TableName{Schema: "test", Table: fmt.Sprintf("t_%d", tableID)}}
 		go func(span tablepb.Span) {
 			defer wg.Done()
 			maxCommitTs := maxTsMap.GetV(span)
