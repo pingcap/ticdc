@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/retry"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -262,11 +263,15 @@ func (s *bankTest) prepare(ctx context.Context, db *sql.DB, accounts, tableID, c
 }
 
 func (*bankTest) verify(ctx context.Context, db *sql.DB, accounts, tableID int, tag string, endTs uint64) error {
+	retryInterval := 1000
 	return retry.Do(ctx,
 		func() (err error) {
 			defer func() {
 				if err != nil {
-					log.Error("bank test verify failed", zap.Error(err))
+					physical := oracle.GetTimeFromTS(endTs)
+					physical = physical.Add(time.Duration(retryInterval) * time.Millisecond)
+					endTs = oracle.GoTimeToTS(physical)
+					log.Error("bank test verify failed", zap.Error(err), zap.Time("physical", physical), zap.Uint64("nextRetrySnapshotTs", endTs))
 				}
 			}()
 			// use a single connection to keep the same database session.
@@ -283,9 +288,14 @@ func (*bankTest) verify(ctx context.Context, db *sql.DB, accounts, tableID int, 
 			var obtained, expect int
 
 			query := fmt.Sprintf("SELECT SUM(balance) as total FROM accounts%d", tableID)
-			if err := conn.QueryRowContext(ctx, query).Scan(&obtained); err != nil {
-				log.Warn("query failed", zap.String("query", query), zap.Error(err), zap.String("tag", tag))
+			var nullableResult sql.NullInt64
+			if err := conn.QueryRowContext(ctx, query).Scan(&nullableResult); err != nil {
+				log.Error("query failed", zap.String("query", query), zap.Error(err), zap.String("tag", tag))
 				return errors.Trace(err)
+			}
+
+			if nullableResult.Valid {
+				obtained = int(nullableResult.Int64)
 			}
 
 			expect = accounts * initBalance
@@ -309,7 +319,7 @@ func (*bankTest) verify(ctx context.Context, db *sql.DB, accounts, tableID int, 
 			}
 
 			return nil
-		}, retry.WithBackoffMaxDelay(500), retry.WithBackoffMaxDelay(120*1000), retry.WithMaxTries(10), retry.WithIsRetryableErr(cerror.IsRetryableError))
+		}, retry.WithBackoffBaseDelay(int64(retryInterval)), retry.WithBackoffMaxDelay(120*1000), retry.WithMaxTries(20), retry.WithIsRetryableErr(cerror.IsRetryableError))
 }
 
 // tryDropDB will drop table if data incorrect and panic error likes bad connect.

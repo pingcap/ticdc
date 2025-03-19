@@ -28,10 +28,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/errors"
-	plog "github.com/pingcap/log"
-	"go.uber.org/zap"
 	"workload/schema"
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
@@ -41,6 +37,11 @@ import (
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
 	puuu "workload/schema/uuu"
+
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/pingcap/errors"
+	plog "github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 var (
@@ -420,7 +421,10 @@ func doUpdate(conn *sql.Conn, workload schema.Workload, input chan updateTask) {
 			res, err = execute(conn, updateSql, workload, task.Table)
 		}
 		if err != nil {
-			plog.Info("update error", zap.Error(err), zap.String("sql", updateSql[:20]))
+			if len(updateSql) > 20 {
+				updateSql = updateSql[:20] + "..."
+			}
+			plog.Info("update error", zap.Error(err), zap.String("sql", updateSql))
 			errCount.Add(1)
 		}
 		if res != nil {
