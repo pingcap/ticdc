@@ -17,11 +17,8 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
 	"math/rand"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -491,8 +488,9 @@ func run(
 		}
 	}
 
-	// DDL is a strong sync point in TiCDC. Once finishmark table is replicated to downstream
-	// all previous DDL and DML are replicated too.
+	// After we implement concurrent DDL of different tables, DDL is no longer a strong sync point in TiCDC.
+	// We need to use changefeed's checkpoint > ddl.FinishedTS to ensure all previous DDL and DML before
+	// the DDL are synced.
 	mustExec(ctx, upstreamDB, `CREATE TABLE IF NOT EXISTS finishmark (foo BIGINT PRIMARY KEY)`)
 	waitCtx, waitCancel := context.WithTimeout(ctx, 15*time.Minute)
 	endTs, err := getDownStreamSyncedEndTs(waitCtx, downstreamDB, downstreamAPIEndpoint, "finishmark")
@@ -628,7 +626,6 @@ func getDownStreamSyncedEndTs(ctx context.Context, db *sql.DB, tidbAPIEndpoint, 
 			log.Error("get downstream sync end ts failed due to timeout", zap.String("table", tableName), zap.Error(ctx.Err()))
 			return 0, ctx.Err()
 		case <-time.After(2 * time.Second):
-			// result, ok := tryGetEndTs(db, tidbAPIEndpoint, tableName)
 			result, ok := tryGetEndTsFromLog(db, tableName)
 			if ok {
 				return result, nil
@@ -637,63 +634,7 @@ func getDownStreamSyncedEndTs(ctx context.Context, db *sql.DB, tidbAPIEndpoint, 
 	}
 }
 
-func tryGetEndTs(db *sql.DB, tidbAPIEndpoint, tableName string) (result uint64, ok bool) {
-	// Note: We should not use `END_TS` in the table, because it is encoded in
-	// the format `2023-03-16 18:12:51`, it's not precise enough.
-	query := "SELECT JOB_ID FROM information_schema.ddl_jobs WHERE table_name = ?"
-	log.Info("try get end ts", zap.String("query", query), zap.String("tableName", tableName))
-	var jobID uint64
-	row := db.QueryRow(query, tableName)
-	if err := row.Scan(&jobID); err != nil {
-		if err != sql.ErrNoRows {
-			log.Info("rows scan failed", zap.Error(err))
-		}
-		return 0, false
-	}
-	ddlJobURL := fmt.Sprintf(
-		"http://%s/ddl/history?start_job_id=%d&limit=1", tidbAPIEndpoint, jobID)
-	ddlJobResp, err := http.Get(ddlJobURL)
-	if err != nil {
-		log.Warn("fail to get DDL history",
-			zap.String("URL", ddlJobURL), zap.Error(err))
-		return 0, false
-	}
-	defer ddlJobResp.Body.Close()
-	ddlJobJSON, err := io.ReadAll(ddlJobResp.Body)
-	if err != nil {
-		log.Warn("fail to read DDL history",
-			zap.String("URL", ddlJobURL), zap.Error(err))
-		return 0, false
-	}
-	ddlJob := []struct {
-		Binlog struct {
-			FinishedTS uint64 `json:"FinishedTS"`
-		} `json:"binlog"`
-	}{{}}
-	err = json.Unmarshal(ddlJobJSON, &ddlJob)
-	if err != nil {
-		log.Warn("fail to unmarshal DDL history",
-			zap.String("URL", ddlJobURL), zap.String("resp", string(ddlJobJSON)), zap.Error(err))
-		return 0, false
-	}
-	log.Info("get end ts",
-		zap.String("tableName", tableName),
-		zap.Uint64("ts", ddlJob[0].Binlog.FinishedTS))
-	return ddlJob[0].Binlog.FinishedTS, true
-}
-
 func tryGetEndTsFromLog(db *sql.DB, tableName string) (result uint64, ok bool) {
-	query := "SELECT JOB_ID FROM information_schema.ddl_jobs WHERE table_name = ?"
-	log.Info("try get end ts", zap.String("query", query), zap.String("tableName", tableName))
-	var jobID uint64
-	row := db.QueryRow(query, tableName)
-	if err := row.Scan(&jobID); err != nil {
-		if err != sql.ErrNoRows {
-			log.Info("rows scan failed", zap.Error(err))
-		}
-		return 0, false
-	}
-
 	log.Info("try parse finishedTs from ticdc log", zap.String("tableName", tableName))
 
 	logFilePath := "/tmp/tidb_cdc_test/bank"
