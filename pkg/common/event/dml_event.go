@@ -97,22 +97,22 @@ func NewDMLEvent(
 
 func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	decode func(
-		rawKv *common.RawKVEntry,
-		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error),
+	rawKv *common.RawKVEntry,
+	tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error),
 ) error {
-	RowType := RowTypeInsert
+	rowType := RowTypeInsert
 	if raw.OpType == common.OpTypeDelete {
-		RowType = RowTypeDelete
+		rowType = RowTypeDelete
 	}
 	if len(raw.Value) != 0 && len(raw.OldValue) != 0 {
-		RowType = RowTypeUpdate
+		rowType = RowTypeUpdate
 	}
 	count, err := decode(raw, t.TableInfo, t.Rows)
 	if err != nil {
 		return err
 	}
 	for range count {
-		t.RowTypes = append(t.RowTypes, RowType)
+		t.RowTypes = append(t.RowTypes, rowType)
 	}
 	t.Length += 1
 	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))

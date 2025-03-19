@@ -20,8 +20,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/tablecodec"
@@ -84,22 +84,23 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		} else {
 			err = m.rawKVToChunkV2(raw.OldValue, tableInfo, chk, recordID)
 		}
-		if err != nil {
-			return 0, errors.Trace(err)
-		}
-		count++
 	}
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	count++
+
 	if len(raw.Value) != 0 {
 		if !rowcodec.IsNewFormat(raw.Value) {
 			err = m.rawKVToChunkV1(raw.Value, tableInfo, chk, recordID)
 		} else {
 			err = m.rawKVToChunkV2(raw.Value, tableInfo, chk, recordID)
 		}
-		if err != nil {
-			return 0, errors.Trace(err)
-		}
-		count++
 	}
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	count++
 	return count, nil
 }
 
