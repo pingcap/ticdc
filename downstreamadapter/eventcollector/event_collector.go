@@ -202,7 +202,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2)
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
-		log.Info("add dispatcher to dynamic stream failed", zap.Error(err))
+		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
 
 	// TODO: handle the return error(now even it return error, it will be retried later, we can just ignore it now)

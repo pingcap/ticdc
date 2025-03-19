@@ -14,6 +14,7 @@ set -eu
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
+LOG_FILE="$WORK_DIR/sql_res.$TEST_NAME.log"
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
@@ -118,8 +119,8 @@ function checkValidSyncPointTs() {
 }
 
 function checkDiff() {
-	primaryArr=($(grep primary_ts $OUT_DIR/sql_res.$TEST_NAME.log | awk -F ": " '{print $2}'))
-	secondaryArr=($(grep secondary_ts $OUT_DIR/sql_res.$TEST_NAME.log | awk -F ": " '{print $2}'))
+	primaryArr=($(grep primary_ts $LOG_FILE | awk -F ": " '{print $2}'))
+	secondaryArr=($(grep secondary_ts $LOG_FILE | awk -F ": " '{print $2}'))
 	tsos=($(curl -s http://$UP_TIDB_HOST:$UP_TIDB_STATUS/ddl/history | grep -E "real_start_ts|FinishedTS" | grep -oE "[0-9]*"))
 	firstDDLTs=($(curl -s http://$UP_TIDB_HOST:$UP_TIDB_STATUS/ddl/history | grep -B 3 "CREATE table testSync" | grep "real_start_ts" | grep -oE "[0-9]*"))
 	num=${#primaryArr[*]}
@@ -175,7 +176,7 @@ function run() {
 
 	run_sql "SELECT primary_ts, secondary_ts FROM tidb_cdc.syncpoint_v1;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	echo "____________________________________"
-	cat "$OUT_DIR/sql_res.$TEST_NAME.log"
+	cat "$LOG_FILE"
 	checkDiff
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config_final.toml
 

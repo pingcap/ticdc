@@ -27,7 +27,15 @@ fi
 
 prepare="set global tidb_enable_clustered_index = 'int_only';"
 
-echo "[$(date)] Executing SQL: ${sql}" >"$OUT_DIR/sql_res.$TEST_NAME.log"
+# Check if OUT_DIR contains TEST_NAME, if so, truncate OUT_DIR to the parent directory
+ADJUSTED_OUT_DIR="$OUT_DIR"
+if [ -n "$TEST_NAME" ] && [[ "$OUT_DIR" == *"/$TEST_NAME"* ]]; then
+	ADJUSTED_OUT_DIR="${OUT_DIR%/$TEST_NAME}"
+fi
 
-mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${prepare}" >"$OUT_DIR/sql_res.$TEST_NAME.log"
-mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${sql}" >"$OUT_DIR/sql_res.$TEST_NAME.log"
+log_file="$ADJUSTED_OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.log"
+
+echo "[$(date)] Executing SQL: ${sql}" >"$log_file"
+
+mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${prepare}" >"$log_file"
+mysql -uroot -h${host} -P${port} ${other} --default-character-set utf8mb4 -E -e "${sql}" >"$log_file"

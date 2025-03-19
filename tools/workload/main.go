@@ -22,6 +22,7 @@ import (
 	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,6 +36,7 @@ import (
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
 	"workload/schema/bankupdate"
+	pcrawler "workload/schema/crawler"
 	"workload/schema/largerow"
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
@@ -89,6 +91,7 @@ const (
 	largeRow = "large_row"
 	shopItem = "shop_item"
 	uuu      = "uuu"
+	crawler  = "crawler"
 	// for gf case, at most support table count = 2. Here only 2 tables in this cases.
 	// And each insert sql contains 200 batch, each update sql only contains 1 batch.
 	bank2      = "bank2"
@@ -105,11 +108,11 @@ func init() {
 	flag.IntVar(&tableStartIndex, "table-start-index", 0, "table start index, sbtest<index>")
 	flag.IntVar(&thread, "thread", 16, "total thread of the workload")
 	flag.IntVar(&batchSize, "batch-size", 10, "batch size of each insert/update/delete")
-	flag.Uint64Var(&totalRowCount, "total-row-count", 1000000, "the total row count of the workload")
+	flag.Uint64Var(&totalRowCount, "total-row-count", 1000000000, "the total row count of the workload, default is 1 billion")
 	flag.Float64Var(&percentageForUpdate, "percentage-for-update", 0, "percentage for update: [0, 1.0]")
 	flag.BoolVar(&skipCreateTable, "skip-create-table", false, "do not create tables")
 	flag.StringVar(&action, "action", "prepare", "action of the workload: [prepare, insert, update, delete, write, cleanup]")
-	flag.StringVar(&workloadType, "workload-type", "sysbench", "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank_update]")
+	flag.StringVar(&workloadType, "workload-type", "sysbench", "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank_update, crawler]")
 	flag.StringVar(&dbHost, "database-host", "127.0.0.1", "database host")
 	flag.StringVar(&dbUser, "database-user", "root", "database user")
 	flag.StringVar(&dbPassword, "database-password", "", "database password")
@@ -234,6 +237,8 @@ func createWorkload() schema.Workload {
 		workload = shop.NewShopItemWorkload(totalRowCount, rowSize)
 	case uuu:
 		workload = puuu.NewUUUWorkload()
+	case crawler:
+		workload = pcrawler.NewCrawlerWorkload()
 	case bank2:
 		workload = pbank2.NewBank2Workload()
 	case bankUpdate:
@@ -262,14 +267,15 @@ func executeWorkload(dbs []*sql.DB, workload schema.Workload, wg *sync.WaitGroup
 	handleWorkloadExecution(dbs, insertConcurrency, updateConcurrency, workload, wg)
 }
 
-func handlePrepareAction(dbs []*sql.DB, insertConcurrency int, workload schema.Workload, wg *sync.WaitGroup) {
+func handlePrepareAction(dbs []*sql.DB, insertConcurrency int, workload schema.Workload, _ *sync.WaitGroup) {
 	plog.Info("start to create tables", zap.Int("tableCount", tableCount))
+	wg := &sync.WaitGroup{}
 	for _, db := range dbs {
-		if err := initTables(db, workload); err != nil {
-			panic(err)
-		}
+		wg.Add(1)
+		go initTables(wg, db, workload)
 	}
-
+	wg.Wait()
+	plog.Info("All dbs create tables finished")
 	if totalRowCount != 0 {
 		executeInsertWorkers(dbs, insertConcurrency, workload, wg)
 	}
@@ -360,29 +366,19 @@ func closeDatabases(dbs []*sql.DB) {
 	}
 }
 
+var createdTableNum atomic.Int32
+
 // initTables create tables if not exists
-func initTables(db *sql.DB, workload schema.Workload) error {
-	var tableNum atomic.Int32
-	wg := sync.WaitGroup{}
-	for i := 0; i < tableCount; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				tableIndex := int(tableNum.Load())
-				if tableIndex >= tableCount {
-					return
-				}
-				tableNum.Add(1)
-				plog.Info("try to create table", zap.Int("index", tableIndex+tableStartIndex))
-				if _, err := db.Exec(workload.BuildCreateTableStatement(tableIndex + tableStartIndex)); err != nil {
-					err := errors.Annotate(err, "create table failed")
-					plog.Error("create table failed", zap.Error(err))
-				}
-			}
-		}()
+func initTables(wg *sync.WaitGroup, db *sql.DB, workload schema.Workload) error {
+	defer wg.Done()
+	for tableIndex := range tableCount {
+		sql := workload.BuildCreateTableStatement(tableIndex + tableStartIndex)
+		if _, err := db.Exec(sql); err != nil {
+			err := errors.Annotate(err, "create table failed")
+			plog.Error("create table failed", zap.Error(err))
+		}
+		createdTableNum.Add(1)
 	}
-	wg.Wait()
 	plog.Info("create tables finished")
 	return nil
 }
@@ -417,10 +413,12 @@ func doUpdate(conn *sql.Conn, workload schema.Workload, input chan updateTask) {
 			updateSql, values := workload.(*pbank2.Bank2Workload).BuildUpdateSqlWithValues(task.UpdateOption)
 			res, err = executeWithValues(conn, updateSql, workload, task.UpdateOption.Table, values)
 		} else {
-			updateSql = workload.BuildUpdateSql(task.UpdateOption)
+			updateSql := workload.BuildUpdateSql(task.UpdateOption)
+			if updateSql == "" {
+				continue
+			}
 			res, err = execute(conn, updateSql, workload, task.Table)
 		}
-
 		if err != nil {
 			plog.Info("update error", zap.Error(err), zap.String("sql", updateSql[:20]))
 			errCount.Add(1)
@@ -561,6 +559,11 @@ func reportMetrics() {
 		lastErrorCount = stats.errCount
 		// Print statistics
 		printStats(stats)
+
+		if stats.flushedRowCount > totalRowCount {
+			plog.Info("total row count reached", zap.Uint64("flushedRowCount", stats.flushedRowCount), zap.Uint64("totalRowCount", totalRowCount))
+			os.Exit(0)
+		}
 	}
 }
 
@@ -598,9 +601,10 @@ func calculateStats(
 
 func printStats(stats statistics) {
 	status := fmt.Sprintf(
-		"Total Write Rows: %d, Total Queries: %d, Total Errors: %d, QPS: %d, Row/s: %d, Error/s: %d",
+		"Total Write Rows: %d, Total Queries: %d, Total Created Tables: %d, Total Errors: %d, QPS: %d, Row/s: %d, Error/s: %d",
 		stats.flushedRowCount,
 		stats.queryCount,
+		createdTableNum.Load(),
 		stats.errCount,
 		stats.qps,
 		stats.rps,
