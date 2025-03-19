@@ -231,7 +231,9 @@ func NewSubscriptionClient(
 	option := dynstream.NewOption()
 	// Note: it is max batch size of the kv sent from tikv(not committed rows)
 	option.BatchCount = 1024
-	option.UseBuffer = false
+	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
+	// 	ds.handleLoop fetch events from `ch` -> regionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
+	option.UseBuffer = true
 	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
 		func(subID SubscriptionID) uint64 { return uint64(subID) },
@@ -452,9 +454,14 @@ func (s *SubscriptionClient) onTableDrained(rt *subscribedSpan) {
 	log.Info("subscription client stop span is finished",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
+	err := s.ds.RemovePath(rt.subID)
+	if err != nil {
+		log.Warn("subscription client remove path failed",
+			zap.Uint64("subscriptionID", uint64(rt.subID)),
+			zap.Error(err))
+	}
 	s.totalSpans.Lock()
 	defer s.totalSpans.Unlock()
-	s.ds.RemovePath(rt.subID)
 	delete(s.totalSpans.spanMap, rt.subID)
 }
 
@@ -906,7 +913,7 @@ func (s *SubscriptionClient) logSlowRegions(ctx context.Context) error {
 			ckptTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
 			if attr.SlowestRegion.Initialized {
 				if currTime.Sub(ckptTime) > 2*resolveLockMinInterval {
-					log.Info("subscription client finds a initialized slow region",
+					log.Debug("subscription client finds a initialized slow region",
 						zap.Uint64("subscriptionID", uint64(subscriptionID)),
 						zap.Any("slowRegion", attr.SlowestRegion))
 				}

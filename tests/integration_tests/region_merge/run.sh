@@ -5,6 +5,7 @@ set -eu
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
+LOG_FILE="$WORK_DIR/sql_res.$TEST_NAME.log"
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
@@ -12,12 +13,16 @@ function split_and_random_merge() {
 	pd_addr=$1
 	scale=$2
 	echo "split_and_random_merge scale: $scale"
-	run_sql "SPLIT TABLE region_merge.t1 BETWEEN (-9223372036854775808) AND (9223372036854775807) REGIONS $scale;" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+	run_sql "ALTER TABLE region_merge.t1 ATTRIBUTES 'merge_option=deny';" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "SELECT count(distinct region_id) from information_schema.tikv_region_status where db_name = 'region_merge' and table_name = 't1';" &&
-		cat $OUT_DIR/sql_res.region_merge.log
+		cat $LOG_FILE
+	run_sql "SPLIT TABLE region_merge.t1 BETWEEN (-9223372036854775808) AND (9223372036854775807) REGIONS $scale;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "SELECT count(distinct region_id) from information_schema.tikv_region_status where db_name = 'region_merge' and table_name = 't1';" &&
+		cat $LOG_FILE
 	run_sql "insert into region_merge.t1 values (-9223372036854775808),(0),(1),(9223372036854775807);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "delete from region_merge.t1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	# sleep 5s to wait some region merge
+	run_sql "delete from region_merge.t1 where id=-9223372036854775808 or id=0 or id=1 or id=9223372036854775807;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "ALTER TABLE region_merge.t1 ATTRIBUTES 'merge_option=allow';" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	# sleep 5s to wait some regions merge
 	sleep 5
 }
 
@@ -62,8 +67,8 @@ EOF
 	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --ca "${WORK_DIR}/ca.cert.pem" --auth-tls-private-key-path "${WORK_DIR}/broker_client.key-pk8.pem" --auth-tls-certificate-path="${WORK_DIR}/broker_client.cert.pem" ;;
 	esac
 
-	# set max_execution_time to 30s, because split region could block even region has been split.
-	run_sql "SET @@global.MAX_EXECUTION_TIME = 30000;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	# set max_execution_time to 150s, because split region could block even region has been split.
+	run_sql "SET @@global.MAX_EXECUTION_TIME = 150000;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE DATABASE region_merge;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE region_merge.t1 (id bigint primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 

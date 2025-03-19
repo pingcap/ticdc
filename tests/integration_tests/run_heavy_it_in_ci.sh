@@ -37,7 +37,7 @@ mysql_groups=(
 	# G03
 	'multi_source'
 	# G04
-	'syncpoint'
+	'syncpoint syncpoint_check_ts'
 	# G05
 	'move_table'
 	# G06
