@@ -19,9 +19,10 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
-	timodel "github.com/pingcap/tiflow/cdc/model"
+	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/integrity"
 	"go.uber.org/zap"
 )
@@ -107,7 +108,7 @@ func (r *RowChangedEvent) ApproximateBytes() int {
 	return size
 }
 
-func ColumnDatas2Columns(cols []*timodel.ColumnData, tableInfo *common.TableInfo) []*common.Column {
+func ColumnDatas2Columns(cols []*model.ColumnData, tableInfo *common.TableInfo) []*common.Column {
 	if cols == nil {
 		return nil
 	}
@@ -124,7 +125,7 @@ func ColumnDatas2Columns(cols []*timodel.ColumnData, tableInfo *common.TableInfo
 	return columns
 }
 
-func columnData2Column(col *timodel.ColumnData, tableInfo *common.TableInfo) *common.Column {
+func columnData2Column(col *model.ColumnData, tableInfo *common.TableInfo) *common.Column {
 	colID := col.ColumnID
 	offset, ok := tableInfo.GetColumnsOffset()[colID]
 	if !ok {
@@ -205,7 +206,7 @@ func (r *RowChangedEvent) PrimaryKeyColumnNames() []string {
 }
 
 type MQRowEvent struct {
-	Key      timodel.TopicPartitionKey
+	Key      model.TopicPartitionKey
 	RowEvent RowEvent
 }
 
@@ -251,4 +252,19 @@ func (e *RowEvent) PrimaryKeyColumnNames() []string {
 		}
 	}
 	return result
+}
+
+// PrimaryKeyColumn return all primary key's indexes and column infos
+func (e *RowEvent) PrimaryKeyColumn() ([]int, []*timodel.ColumnInfo) {
+	infos := make([]*timodel.ColumnInfo, 0)
+	index := make([]int, 0)
+	tableInfo := e.TableInfo
+	columns := e.TableInfo.GetColumns()
+	for i, col := range columns {
+		if col != nil && tableInfo.ForceGetColumnFlagType(col.ID).IsPrimaryKey() {
+			infos = append(infos, col)
+			index = append(index, i)
+		}
+	}
+	return index, infos
 }
