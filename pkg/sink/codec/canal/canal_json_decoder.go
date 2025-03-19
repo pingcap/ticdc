@@ -423,47 +423,26 @@ func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Ch
 		rawValue = encoded
 	}
 	switch mysqlType {
-	case mysql.TypeSet:
-		value, err := strconv.ParseUint(rawValue, 10, 64)
-		if err != nil {
-			log.Panic("invalid column value for set", zap.Any("rawValue", rawValue), zap.Error(err))
-		}
-		setValue, err := tiTypes.ParseSetValue(ft.GetElems(), value)
-		if err != nil {
-			log.Panic("parse set value failed", zap.Any("rawValue", rawValue),
-				zap.Any("setValue", setValue), zap.Error(err))
-		}
-		chk.AppendSet(idx, setValue)
-	case mysql.TypeBit:
-		chk.AppendBytes(idx, []byte(rawValue))
-	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeInt24, mysql.TypeYear:
-		value, err := strconv.ParseInt(rawValue, 10, 64)
-		if err != nil {
-			log.Panic("invalid column value for int", zap.Any("rawValue", rawValue), zap.Error(err))
-		}
-		chk.AppendInt64(idx, value)
-	case mysql.TypeEnum:
-		enumValue, err := strconv.ParseUint(rawValue, 10, 64)
-		if err != nil {
-			log.Panic("invalid column value for enum", zap.Any("rawValue", rawValue), zap.Error(err))
-		}
-		enum, err := tiTypes.ParseEnumValue(ft.GetElems(), enumValue)
-		if err != nil {
-			log.Panic("parse enum value failed", zap.Any("rawValue", rawValue),
-				zap.Any("enumValue", enumValue), zap.Error(err))
-		}
-		chk.AppendEnum(idx, enum)
-	case mysql.TypeLonglong:
-		value, err := strconv.ParseInt(rawValue, 10, 64)
-		if err == nil {
-			chk.AppendInt64(idx, value)
+	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
+		if mysql.HasUnsignedFlag(ft.GetFlag()) {
+			value, err := strconv.ParseUint(rawValue, 10, 64)
+			if err != nil {
+				log.Panic("invalid column value for unsigned integer", zap.Any("rawValue", rawValue), zap.Error(err))
+			}
+			chk.AppendUint64(idx, value)
 			return
 		}
-		uValue, err := strconv.ParseUint(rawValue, 10, 64)
+		value, err := strconv.ParseInt(rawValue, 10, 64)
 		if err != nil {
-			log.Panic("invalid column value for bigint", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value for integer", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		chk.AppendUint64(idx, uValue)
+		chk.AppendInt64(idx, value)
+	case mysql.TypeYear:
+		value, err := strconv.ParseInt(rawValue, 10, 64)
+		if err != nil {
+			log.Panic("invalid column value for year", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		chk.AppendInt64(idx, value)
 	case mysql.TypeFloat:
 		value, err := strconv.ParseFloat(rawValue, 32)
 		if err != nil {
@@ -476,18 +455,9 @@ func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Ch
 			log.Panic("invalid column value for double", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
 		chk.AppendFloat64(idx, value)
-	case mysql.TypeTiDBVectorFloat32:
-		value, err := tiTypes.ParseVectorFloat32(rawValue)
-		if err != nil {
-			log.Panic("cannot parse vector32 value from string", zap.Any("rawValue", rawValue), zap.Error(err))
-		}
-		chk.AppendVectorFloat32(idx, value)
-	case mysql.TypeVarchar:
+	case mysql.TypeVarString, mysql.TypeVarchar, mysql.TypeString,
+		mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
 		chk.AppendBytes(idx, []byte(rawValue))
-	case mysql.TypeDatetime, mysql.TypeTimestamp:
-		chk.AppendString(idx, rawValue)
-	case mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
-		chk.AppendString(idx, rawValue)
 	case mysql.TypeNewDecimal:
 		value := new(tiTypes.MyDecimal)
 		err := value.FromString([]byte(rawValue))
@@ -495,22 +465,66 @@ func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Ch
 			log.Panic("invalid column value for decimal", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
 		chk.AppendMyDecimal(idx, value)
+	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
+		t, err := tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, rawValue, ft.GetType(), ft.GetDecimal())
+		if err != nil {
+			log.Panic("invalid column value for time", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		// todo: shall we also convert timezone for the mysql.TypeTimestamp ?
+		//if mysqlType == mysql.TypeTimestamp && decoder.loc != nil && !t.IsZero() {
+		//	err = t.ConvertTimeZone(time.UTC, decoder.loc)
+		//	if err != nil {
+		//		log.Panic("convert timestamp to local timezone failed", zap.Any("rawValue", rawValue), zap.Error(err))
+		//	}
+		//}
+		chk.AppendTime(idx, t)
 	case mysql.TypeDuration:
-		dur, _, err := tiTypes.ParseDuration(tiTypes.StrictContext, rawValue, ft.GetDecimal())
+		dur, _, err := tiTypes.ParseDuration(tiTypes.DefaultStmtNoWarningContext, rawValue, ft.GetDecimal())
 		if err != nil {
 			log.Panic("invalid column value for duration", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
 		chk.AppendDuration(idx, dur)
-	case mysql.TypeString:
-		chk.AppendString(idx, rawValue)
-	case mysql.TypeDate:
-		chk.AppendString(idx, rawValue)
+	case mysql.TypeEnum:
+		enumValue, err := strconv.ParseUint(rawValue, 10, 64)
+		if err != nil {
+			log.Panic("invalid column value for enum", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		enum, err := tiTypes.ParseEnumValue(ft.GetElems(), enumValue)
+		if err != nil {
+			log.Panic("parse enum value failed", zap.Any("rawValue", rawValue),
+				zap.Any("enumValue", enumValue), zap.Error(err))
+		}
+		chk.AppendEnum(idx, enum)
+	case mysql.TypeSet:
+		value, err := strconv.ParseUint(rawValue, 10, 64)
+		if err != nil {
+			log.Panic("invalid column value for set", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		setValue, err := tiTypes.ParseSetValue(ft.GetElems(), value)
+		if err != nil {
+			log.Panic("parse set value failed", zap.Any("rawValue", rawValue),
+				zap.Any("setValue", setValue), zap.Error(err))
+		}
+		chk.AppendSet(idx, setValue)
+	case mysql.TypeBit:
+		value, err := strconv.ParseUint(rawValue, 10, 64)
+		if err != nil {
+			log.Panic("invalid column value for bit", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		byteSize := (ft.GetFlen() + 7) >> 3
+		chk.AppendBytes(idx, tiTypes.NewBinaryLiteralFromUint(value, byteSize))
 	case mysql.TypeJSON:
 		bj, err := tiTypes.ParseBinaryJSONFromString(rawValue)
 		if err != nil {
 			log.Panic("invalid column value for json", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
 		chk.AppendJSON(idx, bj)
+	case mysql.TypeTiDBVectorFloat32:
+		value, err := tiTypes.ParseVectorFloat32(rawValue)
+		if err != nil {
+			log.Panic("cannot parse vector32 value from string", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		chk.AppendVectorFloat32(idx, value)
 	default:
 		log.Panic("unknown column type", zap.Any("mysqlType", mysqlType), zap.Any("rawValue", rawValue))
 	}
