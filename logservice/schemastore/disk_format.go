@@ -474,7 +474,7 @@ func isTableRawKey(key []byte) bool {
 	return strings.HasPrefix(string(key), mTablePrefix)
 }
 
-func writeSchemaInfoToBatch(batch *pebble.Batch, ts uint64, info *model.DBInfo) {
+func addSchemaInfoToBatch(batch *pebble.Batch, ts uint64, info *model.DBInfo) {
 	schemaKey, err := schemaInfoKey(ts, info.ID)
 	if err != nil {
 		log.Fatal("generate schema key failed", zap.Error(err))
@@ -486,7 +486,7 @@ func writeSchemaInfoToBatch(batch *pebble.Batch, ts uint64, info *model.DBInfo) 
 	batch.Set(schemaKey, schemaValue, pebble.NoSync)
 }
 
-func writeTableInfoToBatch(batch *pebble.Batch, ts uint64, dbInfo *model.DBInfo, tableInfoValue []byte) (int64, string) {
+func addTableInfoToBatch(batch *pebble.Batch, ts uint64, dbInfo *model.DBInfo, tableInfoValue []byte) (int64, string) {
 	tbNameInfo := model.TableNameInfo{}
 	if err := json.Unmarshal(tableInfoValue, &tbNameInfo); err != nil {
 		log.Fatal("unmarshal table info failed", zap.Error(err))
@@ -508,6 +508,7 @@ func writeTableInfoToBatch(batch *pebble.Batch, ts uint64, dbInfo *model.DBInfo,
 	return tbNameInfo.ID, tbNameInfo.Name.O
 }
 
+// writeSchemaSnapshotAndMeta write database info and table info to disks.
 func writeSchemaSnapshotAndMeta(
 	db *pebble.DB,
 	tiStore kv.Storage,
@@ -533,7 +534,7 @@ func writeSchemaSnapshotAndMeta(
 		}
 		batch := db.NewBatch()
 
-		writeSchemaInfoToBatch(batch, snapTs, dbInfo)
+		addSchemaInfoToBatch(batch, snapTs, dbInfo)
 
 		rawTables, err := meta.GetMetasByDBID(dbInfo.ID)
 		if err != nil {
@@ -547,7 +548,7 @@ func writeSchemaSnapshotAndMeta(
 			if !isTableRawKey(rawTable.Field) {
 				continue
 			}
-			tableID, tableName := writeTableInfoToBatch(batch, snapTs, dbInfo, rawTable.Value)
+			tableID, tableName := addTableInfoToBatch(batch, snapTs, dbInfo, rawTable.Value)
 			if needTableInfo {
 				tablesInKVSnap[tableID] = &BasicTableInfo{
 					SchemaID: dbInfo.ID,
