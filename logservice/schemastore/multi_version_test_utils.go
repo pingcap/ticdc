@@ -74,24 +74,15 @@ func buildCreatePartitionTableEventForTest(schemaID, tableID int64, schemaName, 
 		SchemaName: schemaName,
 		TableName:  tableName,
 		TableInfo: &model.TableInfo{
-			ID:   tableID,
-			Name: pmodel.NewCIStr(tableName),
-			Partition: &model.PartitionInfo{
-				Definitions: partitionDefinitions,
-				Enable:      true,
-			},
+			ID:        tableID,
+			Name:      pmodel.NewCIStr(tableName),
+			Partition: buildPartitionDefinitionsForTest(partitionIDs),
 		},
 		FinishedTs: finishedTs,
 	}
 }
 
 func buildDropPartitionTableEventForTest(schemaID, tableID int64, schemaName, tableName string, partitionIDs []int64, finishedTs uint64) *PersistedDDLEvent {
-	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
-	for _, partitionID := range partitionIDs {
-		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
-			ID: partitionID,
-		})
-	}
 	return &PersistedDDLEvent{
 		Type:       byte(model.ActionDropTable),
 		SchemaID:   schemaID,
@@ -99,12 +90,9 @@ func buildDropPartitionTableEventForTest(schemaID, tableID int64, schemaName, ta
 		SchemaName: schemaName,
 		TableName:  tableName,
 		TableInfo: &model.TableInfo{
-			ID:   tableID,
-			Name: pmodel.NewCIStr(tableName),
-			Partition: &model.PartitionInfo{
-				Definitions: partitionDefinitions,
-				Enable:      true,
-			},
+			ID:        tableID,
+			Name:      pmodel.NewCIStr(tableName),
+			Partition: buildPartitionDefinitionsForTest(partitionIDs),
 		},
 		FinishedTs: finishedTs,
 	}
@@ -131,12 +119,6 @@ func buildTruncatePartitionTableEventForTest(
 	schemaName, tableName string,
 	newPartitionIDs []int64, finishedTs uint64,
 ) *PersistedDDLEvent {
-	partitionDefinitions := make([]model.PartitionDefinition, 0, len(newPartitionIDs))
-	for _, partitionID := range newPartitionIDs {
-		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
-			ID: partitionID,
-		})
-	}
 	return &PersistedDDLEvent{
 		Type:       byte(model.ActionTruncateTable),
 		SchemaID:   schemaID,
@@ -144,12 +126,9 @@ func buildTruncatePartitionTableEventForTest(
 		SchemaName: schemaName,
 		TableName:  tableName,
 		TableInfo: &model.TableInfo{
-			ID:   newTableID,
-			Name: pmodel.NewCIStr(tableName),
-			Partition: &model.PartitionInfo{
-				Definitions: partitionDefinitions,
-				Enable:      true,
-			},
+			ID:        newTableID,
+			Name:      pmodel.NewCIStr(tableName),
+			Partition: buildPartitionDefinitionsForTest(newPartitionIDs),
 		},
 		FinishedTs: finishedTs,
 	}
@@ -178,12 +157,6 @@ func buildExchangePartitionTableEventForTest(
 	normalSchemaName, normalTableName, partitionSchemaName, partitionTableName string,
 	oldPartitionIDs, newPartitionIDs []int64, finishedTs uint64,
 ) *PersistedDDLEvent {
-	partitionDefinitions := make([]model.PartitionDefinition, 0, len(newPartitionIDs))
-	for _, partitionID := range newPartitionIDs {
-		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
-			ID: partitionID,
-		})
-	}
 	return &PersistedDDLEvent{
 		Type:            byte(model.ActionExchangeTablePartition),
 		SchemaID:        normalSchemaID,
@@ -195,12 +168,9 @@ func buildExchangePartitionTableEventForTest(
 		ExtraSchemaName: partitionSchemaName,
 		ExtraTableName:  partitionTableName,
 		TableInfo: &model.TableInfo{
-			ID:   partitionTableID,
-			Name: pmodel.NewCIStr(partitionTableName),
-			Partition: &model.PartitionInfo{
-				Definitions: partitionDefinitions,
-				Enable:      true,
-			},
+			ID:        partitionTableID,
+			Name:      pmodel.NewCIStr(partitionTableName),
+			Partition: buildPartitionDefinitionsForTest(newPartitionIDs),
 		},
 		ExtraTableInfo: common.WrapTableInfo(normalSchemaName, &model.TableInfo{
 			ID:   normalTableID,
@@ -208,5 +178,18 @@ func buildExchangePartitionTableEventForTest(
 		}),
 		PrevPartitions: oldPartitionIDs,
 		FinishedTs:     finishedTs,
+	}
+}
+
+func buildPartitionDefinitionsForTest(partitionIDs []int64) *model.PartitionInfo {
+	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
+	for _, partitionID := range partitionIDs {
+		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
+			ID: partitionID,
+		})
+	}
+	return &model.PartitionInfo{
+		Definitions: partitionDefinitions,
+		Enable:      true,
 	}
 }

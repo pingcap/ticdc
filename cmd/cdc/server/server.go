@@ -15,7 +15,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/fatih/color"
@@ -26,6 +28,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/ticdc/server"
+	tiflowServer "github.com/pingcap/tiflow/pkg/cmd/server"
+	tiflowConfig "github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -54,6 +58,7 @@ func newOptions() *options {
 // addFlags receives a *cobra.Command reference and binds
 // flags related to template printing to it.
 func (o *options) addFlags(cmd *cobra.Command) {
+	cmd.Flags().BoolVarP(&o.serverConfig.Newarch, "newarch", "x", o.serverConfig.Newarch, "Run the new architecture of TiCDC server")
 	cmd.Flags().StringVar(&o.serverConfig.ClusterID, "cluster-id", "default", "Set cdc cluster id")
 	cmd.Flags().StringVar(&o.serverConfig.Addr, "addr", o.serverConfig.Addr, "Set the listening address")
 	cmd.Flags().StringVar(&o.serverConfig.AdvertiseAddr, "advertise-addr", o.serverConfig.AdvertiseAddr, "Set the advertise listening address for client communication")
@@ -157,6 +162,8 @@ func (o *options) complete(command *cobra.Command) error {
 			cfg.ClusterID = o.serverConfig.ClusterID
 		case "pd", "config":
 			// do nothing
+		case "newarch", "x":
+			cfg.Newarch = o.serverConfig.Newarch
 		default:
 			log.Panic("unknown flag, please report a bug", zap.String("flagName", flag.Name))
 		}
@@ -181,6 +188,7 @@ func (o *options) validate() error {
 	if len(o.pdEndpoints) == 0 {
 		return errors.ErrInvalidServerOption.GenWithStack("empty PD address")
 	}
+	log.Info("validate pd address", zap.Strings("pd", o.pdEndpoints), zap.Int("pdCount", len(o.pdEndpoints)))
 	for _, ep := range o.pdEndpoints {
 		// NOTICE: The configuration used here is the one that has been completed,
 		// as it may be configured by the configuration file.
@@ -206,6 +214,83 @@ func (o *options) getCredential() *security.Credential {
 	}
 }
 
+func parseConfigFlagFromOSArgs() string {
+	var serverConfigFilePath string
+	for i, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "--config=") {
+			serverConfigFilePath = strings.SplitN(arg, "=", 2)[1]
+		} else if arg == "--config" && i+2 < len(os.Args) {
+			serverConfigFilePath = os.Args[i+2]
+		}
+	}
+	log.Info("parse config file path from os.Args", zap.String("config", serverConfigFilePath))
+
+	// If the command is `cdc cli changefeed`, means it's not a server config file.
+	if slices.Contains(os.Args, "cli") && slices.Contains(os.Args, "changefeed") {
+		serverConfigFilePath = ""
+	}
+
+	return serverConfigFilePath
+}
+
+func isNewArchEnabledByConfig(serverConfigFilePath string) bool {
+	cfg := config.GetDefaultServerConfig()
+	if len(serverConfigFilePath) > 0 {
+		// strict decode config file, but ignore debug item
+		if err := util.StrictDecodeFile(serverConfigFilePath, "TiCDC server", cfg, config.DebugConfigurationItem); err != nil {
+			log.Error("failed to parse server configuration, please check the config file for errors and try again.", zap.Error(err))
+			return false
+		}
+	}
+
+	return cfg.Newarch
+}
+
+func isNewArchEnabled(o *options) bool {
+	newarch := o.serverConfig.Newarch
+	if newarch {
+		log.Debug("Set newarch from command line")
+		return newarch
+	}
+
+	newarch = os.Getenv("TICDC_NEWARCH") == "true"
+	if newarch {
+		log.Debug("Set newarch from environment variable")
+		return newarch
+	}
+
+	serverConfigFilePath := parseConfigFlagFromOSArgs()
+	newarch = isNewArchEnabledByConfig(serverConfigFilePath)
+	if newarch {
+		log.Debug("Set newarch from config file")
+	}
+	return newarch
+}
+
+func runTiFlowServer(o *options, cmd *cobra.Command) error {
+	cfgData, err := json.Marshal(o.serverConfig)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	var oldCfg tiflowConfig.ServerConfig
+	err = json.Unmarshal(cfgData, &oldCfg)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	var oldOptions tiflowServer.Options
+	oldOptions.ServerConfig = &oldCfg
+	oldOptions.ServerPdAddr = strings.Join(o.pdEndpoints, ",")
+	oldOptions.ServerConfigFilePath = o.serverConfigFilePath
+	oldOptions.CaPath = o.caPath
+	oldOptions.CertPath = o.certPath
+	oldOptions.KeyPath = o.keyPath
+	oldOptions.AllowedCertCN = o.allowedCertCN
+
+	return tiflowServer.Run(&oldOptions, cmd)
+}
+
 // NewCmdServer creates the `server` command.
 func NewCmdServer() *cobra.Command {
 	o := newOptions()
@@ -215,17 +300,22 @@ func NewCmdServer() *cobra.Command {
 		Short: "Start a TiCDC server server",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			err := o.complete(cmd)
-			if err != nil {
-				return err
+			if isNewArchEnabled(o) {
+				log.Info("Running TiCDC server in new architecture")
+				err := o.complete(cmd)
+				if err != nil {
+					return err
+				}
+				err = o.validate()
+				if err != nil {
+					return err
+				}
+				err = o.run(cmd)
+				cobra.CheckErr(err)
+				return nil
 			}
-			err = o.validate()
-			if err != nil {
-				return err
-			}
-			err = o.run(cmd)
-			cobra.CheckErr(err)
-			return nil
+			log.Info("Running TiCDC server in old architecture")
+			return runTiFlowServer(o, cmd)
 		},
 	}
 

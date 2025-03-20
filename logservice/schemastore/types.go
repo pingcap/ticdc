@@ -116,6 +116,18 @@ type BasicTableInfo struct {
 
 type BasicPartitionInfo map[int64]interface{}
 
+func (info BasicPartitionInfo) AddPartitionIDs(ids ...int64) {
+	for _, id := range ids {
+		info[id] = nil
+	}
+}
+
+func (info BasicPartitionInfo) RemovePartitionIDs(ids ...int64) {
+	for _, id := range ids {
+		delete(info, id)
+	}
+}
+
 //msgp:ignore DDLJobWithCommitTs
 type DDLJobWithCommitTs struct {
 	Job *model.Job
