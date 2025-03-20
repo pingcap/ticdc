@@ -16,6 +16,7 @@ package canal
 import (
 	"context"
 	"encoding/json"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
@@ -30,37 +31,26 @@ import (
 
 func CompareRow(
 	t *testing.T,
-	origin *commonEvent.DMLEvent,
-	obtained *commonEvent.DMLEvent,
+	origin commonEvent.RowChange,
+	originTableInfo *commonType.TableInfo,
+	obtained commonEvent.RowChange,
+	obtainedTableInfo *commonType.TableInfo,
 ) {
-	for {
-		originRow, ok := origin.GetNextRow()
-		if !ok {
-			break
+	if !origin.Row.IsEmpty() {
+		a := origin.Row.GetDatumRow(originTableInfo.GetFieldSlice())
+		b := obtained.Row.GetDatumRow(obtainedTableInfo.GetFieldSlice())
+		require.Equal(t, len(a), len(b))
+		for i := range a {
+			require.Equal(t, a[i], b[i])
 		}
+	}
 
-		obtainedRow, ok := obtained.GetNextRow()
-		require.True(t, ok)
-
-		originFieldTypes := origin.TableInfo.GetFieldSlice()
-		obtainedFieldTypes := obtained.TableInfo.GetFieldSlice()
-
-		if !originRow.Row.IsEmpty() {
-			a := originRow.Row.GetDatumRow(originFieldTypes)
-			b := obtainedRow.Row.GetDatumRow(obtainedFieldTypes))
-			require.Equal(t, len(a), len(b))
-			for i := range a {
-				require.Equal(t, a[i], b[i])
-			}
-		}
-
-		if !originRow.PreRow.IsEmpty() {
-			a := originRow.PreRow.GetDatumRow(originFieldTypes)
-			b := obtainedRow.PreRow.GetDatumRow(obtainedFieldTypes)
-			require.Equal(t, len(a), len(b))
-			for i := range a {
-				require.Equal(t, a[i], b[i])
-			}
+	if !origin.PreRow.IsEmpty() {
+		a := origin.PreRow.GetDatumRow(originTableInfo.GetFieldSlice())
+		b := obtained.PreRow.GetDatumRow(obtainedTableInfo.GetFieldSlice())
+		require.Equal(t, len(a), len(b))
+		for i := range a {
+			require.Equal(t, a[i], b[i])
 		}
 	}
 }
@@ -112,9 +102,8 @@ func TestBasicTypes(t *testing.T) {
 	require.NoError(t, err)
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
-	require.NotNil(t, change.Row)
 
-	CompareRow(t, dmlEvent, event)
+	CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
 
 func TestIntegerTypes(t *testing.T) {
@@ -181,9 +170,8 @@ func TestIntegerTypes(t *testing.T) {
 
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
-	require.NotNil(t, change.Row)
 
-	CompareRow(t, minValues, event)
+	CompareRow(t, minValueEvent.Event, minValueEvent.TableInfo, change, event.TableInfo)
 
 	//sql = `insert into test.t values (
 	//	2,

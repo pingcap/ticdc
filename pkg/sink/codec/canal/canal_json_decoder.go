@@ -591,6 +591,7 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 		if utils.IsBinaryMySQLType(mysqlType) {
 			col.AddFlag(mysql.BinaryFlag)
 			col.SetCharset("binary")
+			col.SetCollate("binary")
 		}
 		if _, ok := msg.pkNameSet()[name]; ok {
 			col.AddFlag(mysql.PriKeyFlag)
