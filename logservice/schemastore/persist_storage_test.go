@@ -2119,14 +2119,19 @@ func TestRegisterTable(t *testing.T) {
 		tableID int64
 		snapTs  uint64
 		name    string
+		deleted bool
 	}
 	testCases := []struct {
 		name           string
 		initialDBInfos []mockDBInfo
 		ddlJobs        []*model.Job
-		preDDLTables   []int64 // tables registered before apply ddl
-		postDDLTables  []int64 // tables registered after apply ddl
-		queryCases     []QueryTableInfoTestCase
+		// tables registered before apply ddl
+		// used for test to apply online ddl jobs
+		preDDLTables []int64
+		// tables registered after apply ddl
+		// used for test to load and apply ddls from disk
+		postDDLTables []int64
+		queryCases    []QueryTableInfoTestCase
 	}{
 		{
 			name: "rename table",
@@ -2227,6 +2232,52 @@ func TestRegisterTable(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "drop partition table",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: pmodel.NewCIStr("test"),
+					},
+					tables: []*model.TableInfo{
+						{
+							ID:        102,
+							Name:      pmodel.NewCIStr("t1"),
+							Partition: buildPartitionDefinitions([]int64{201, 202, 203}),
+						},
+					},
+				},
+			},
+			preDDLTables: []int64{201, 202, 203},
+			ddlJobs: func() []*model.Job {
+				return []*model.Job{
+					buildDropPartitionTableJobForTest(50, 102, "t4", []int64{201, 202, 203}, 1030), // drop partition table 102
+				}
+			}(),
+			queryCases: []QueryTableInfoTestCase{
+				{
+					tableID: 201,
+					snapTs:  1029,
+					name:    "t4",
+				},
+				{
+					tableID: 202,
+					snapTs:  1029,
+					name:    "t4",
+				},
+				{
+					tableID: 203,
+					snapTs:  1029,
+					name:    "t4",
+				},
+				{
+					tableID: 201,
+					snapTs:  1030,
+					deleted: true,
+				},
+			},
+		},
 	}
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2246,8 +2297,15 @@ func TestRegisterTable(t *testing.T) {
 			}
 			for _, testCase := range tt.queryCases {
 				tableInfo, err := pStorage.getTableInfo(testCase.tableID, testCase.snapTs)
-				require.Nil(t, err)
-				require.Equal(t, testCase.name, tableInfo.TableName.Table)
+				if testCase.deleted {
+					require.Nil(t, tableInfo)
+					if _, ok := err.(*TableDeletedError); !ok {
+						t.Error("expect TableDeletedError, but got", err)
+					}
+				} else {
+					require.Nil(t, err)
+					require.Equal(t, testCase.name, tableInfo.TableName.Table)
+				}
 			}
 			pStorage.close()
 		})

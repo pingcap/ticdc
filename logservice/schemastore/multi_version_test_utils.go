@@ -210,3 +210,16 @@ func buildExchangePartitionTableEventForTest(
 		FinishedTs:     finishedTs,
 	}
 }
+
+func buildPartitionDefinitions(partitionIDs []int64) *model.PartitionInfo {
+	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
+	for _, partitionID := range partitionIDs {
+		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
+			ID: partitionID,
+		})
+	}
+	return &model.PartitionInfo{
+		Definitions: partitionDefinitions,
+		Enable:      true,
+	}
+}
