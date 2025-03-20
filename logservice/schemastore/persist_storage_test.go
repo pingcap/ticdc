@@ -2121,12 +2121,16 @@ func TestRegisterTable(t *testing.T) {
 		name    string
 	}
 	testCases := []struct {
-		initailDBInfos []mockDBInfo // tables in initailDBInfos will be registered before apply ddl
+		name           string
+		initialDBInfos []mockDBInfo
 		ddlJobs        []*model.Job
+		preDDLTables   []int64 // tables registered before apply ddl
+		postDDLTables  []int64 // tables registered after apply ddl
 		queryCases     []QueryTableInfoTestCase
 	}{
 		{
-			initailDBInfos: []mockDBInfo{
+			name: "rename table",
+			initialDBInfos: []mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
 						ID:   50,
@@ -2142,12 +2146,10 @@ func TestRegisterTable(t *testing.T) {
 			},
 			ddlJobs: func() []*model.Job {
 				return []*model.Job{
-					buildRenameTableJobForTest(50, 99, "t2", 1000, nil),                              // rename table 99 to t2
-					buildCreateTableJobForTest(50, 100, "t3", 1010),                                  // create table 100
-					buildTruncateTableJobForTest(50, 100, 101, "t3", 1020),                           // truncate table 100 to 101
-					buildCreatePartitionTableJobForTest(50, 102, "t4", []int64{201, 202, 203}, 1030), // create partition table 102
+					buildRenameTableJobForTest(50, 99, "t2", 1000, nil), // rename table 99 to t2
 				}
 			}(),
+			postDDLTables: []int64{99},
 			queryCases: []QueryTableInfoTestCase{
 				{
 					tableID: 99,
@@ -2159,6 +2161,26 @@ func TestRegisterTable(t *testing.T) {
 					snapTs:  1000,
 					name:    "t2",
 				},
+			},
+		},
+		{
+			name: "truncate table",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+			},
+			ddlJobs: func() []*model.Job {
+				return []*model.Job{
+					buildCreateTableJobForTest(50, 100, "t3", 1010),        // create table 100
+					buildTruncateTableJobForTest(50, 100, 101, "t3", 1020), // truncate table 100 to 101
+				}
+			}(),
+			postDDLTables: []int64{100, 101},
+			queryCases: []QueryTableInfoTestCase{
 				{
 					tableID: 100,
 					snapTs:  1010,
@@ -2169,6 +2191,25 @@ func TestRegisterTable(t *testing.T) {
 					snapTs:  1020,
 					name:    "t3",
 				},
+			},
+		},
+		{
+			name: "create partition table",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+			},
+			ddlJobs: func() []*model.Job {
+				return []*model.Job{
+					buildCreatePartitionTableJobForTest(50, 102, "t4", []int64{201, 202, 203}, 1030), // create partition table 102
+				}
+			}(),
+			postDDLTables: []int64{201, 202, 203},
+			queryCases: []QueryTableInfoTestCase{
 				{
 					tableID: 201,
 					snapTs:  1030,
@@ -2188,24 +2229,28 @@ func TestRegisterTable(t *testing.T) {
 		},
 	}
 	for _, tt := range testCases {
-		dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
-		pStorage := newPersistentStorageForTest(dbPath, tt.initailDBInfos)
-		for _, db := range tt.initailDBInfos {
-			for _, table := range db.tables {
-				pStorage.registerTable(table.ID, 0) // second arguments is not important
+		t.Run(tt.name, func(t *testing.T) {
+			dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
+			pStorage := newPersistentStorageForTest(dbPath, tt.initialDBInfos)
+			for _, tableID := range tt.preDDLTables {
+				err := pStorage.registerTable(tableID, 0) // second arguments is not important
+				require.Nil(t, err)
 			}
-		}
-		for _, job := range tt.ddlJobs {
-			err := pStorage.handleDDLJob(job)
-			require.Nil(t, err)
-		}
-		for _, testCase := range tt.queryCases {
-			pStorage.registerTable(testCase.tableID, 0) // second arguments is not important
-			tableInfo, err := pStorage.getTableInfo(testCase.tableID, testCase.snapTs)
-			require.Nil(t, err)
-			require.Equal(t, testCase.name, tableInfo.TableName.Table)
-		}
-		pStorage.close()
+			for _, job := range tt.ddlJobs {
+				err := pStorage.handleDDLJob(job)
+				require.Nil(t, err)
+			}
+			for _, tableID := range tt.postDDLTables {
+				err := pStorage.registerTable(tableID, 0) // second arguments is not important
+				require.Nil(t, err)
+			}
+			for _, testCase := range tt.queryCases {
+				tableInfo, err := pStorage.getTableInfo(testCase.tableID, testCase.snapTs)
+				require.Nil(t, err)
+				require.Equal(t, testCase.name, tableInfo.TableName.Table)
+			}
+			pStorage.close()
+		})
 	}
 }
 

@@ -46,11 +46,11 @@ import (
 //     and we will pull ddl job from `resolved_ts` at restart if the current gc ts is smaller than resolved_ts.
 
 const (
-	snapshotSchemaKeyPrefix = "ss_"
-	snapshotTableKeyPrefix  = "st_"
+	snapshotSchemaKeyPrefix    = "ss_"
+	snapshotTableKeyPrefix     = "st_"
+	snapshotPartitionKeyPrefix = "sp_"
+	ddlKeyPrefix               = "ds_"
 )
-
-const ddlKeyPrefix = "ds_"
 
 func gcTsKey() []byte {
 	return []byte("gc")
