@@ -14,6 +14,7 @@
 package simple
 
 import (
+	"encoding/base64"
 	"fmt"
 	"time"
 
@@ -428,6 +429,9 @@ func encodeValue(
 	switch ft.GetType() {
 	case mysql.TypeBit:
 		value, err = d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
+		if err != nil {
+			log.Panic("parse bit to int failed", zap.Any("name", value), zap.Error(err))
+		}
 	case mysql.TypeTimestamp:
 		return map[string]string{
 			"location": location,
@@ -439,14 +443,18 @@ func encodeValue(
 		value = d.GetMysqlSet().Value
 	case mysql.TypeTiDBVectorFloat32:
 		value = d.GetVectorFloat32().String()
+	case mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob,
+		mysql.TypeVarchar, mysql.TypeVarString, mysql.TypeString:
+		if mysql.HasBinaryFlag(ft.GetFlag()) {
+			value = base64.StdEncoding.EncodeToString(d.GetBytes())
+		} else {
+			value = d.GetString()
+		}
 	default:
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
 		// Make specified convert upper if you need
 		// Go sql support type ref to: https://github.com/golang/go/blob/go1.17.4/src/database/sql/driver/types.go#L236
 		value = fmt.Sprintf("%v", d.GetValue())
-	}
-	if err != nil {
-		log.Panic("parse bit to int failed", zap.Any("name", value), zap.Error(err))
 	}
 	return value
 }
