@@ -19,7 +19,9 @@ import (
 	"time"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -187,13 +189,13 @@ func newDDLMessageMap(ddl *commonEvent.DDLEvent) map[string]interface{} {
 		"buildTs":  time.Now().UnixMilli(),
 	}
 
-	if ddl.TableInfo != nil && ddl.TableInfo != nil {
+	if ddl.TableInfo != nil {
 		tableSchema := newTableSchemaMap(ddl.TableInfo)
 		result["tableSchema"] = map[string]interface{}{
 			"com.pingcap.simple.avro.TableSchema": tableSchema,
 		}
 	}
-	if len(ddl.MultipleTableInfos) > 1 {
+	if ddl.GetDDLType() != model.ActionCreateTable && len(ddl.MultipleTableInfos) > 1 {
 		preTableInfo := ddl.MultipleTableInfos[1] // previous table info, TODO: need check it
 		tableSchema := newTableSchemaMap(preTableInfo)
 		result["preTableSchema"] = map[string]interface{}{
@@ -288,17 +290,17 @@ func (a *avroMarshaller) newDMLMessageMap(
 	// }
 
 	if event.IsInsert() {
-		data := a.collectColumns(event.GetRows(), event.TableInfo, onlyHandleKey)
+		data := a.collectColumns(event.GetRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)
 		dmlMessagePayload["data"] = data
 		dmlMessagePayload["type"] = string(DMLTypeInsert)
 	} else if event.IsDelete() {
-		old := a.collectColumns(event.GetPreRows(), event.TableInfo, onlyHandleKey)
+		old := a.collectColumns(event.GetPreRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)
 		dmlMessagePayload["old"] = old
 		dmlMessagePayload["type"] = string(DMLTypeDelete)
 	} else if event.IsUpdate() {
-		data := a.collectColumns(event.GetRows(), event.TableInfo, onlyHandleKey)
+		data := a.collectColumns(event.GetRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)
 		dmlMessagePayload["data"] = data
-		old := a.collectColumns(event.GetPreRows(), event.TableInfo, onlyHandleKey)
+		old := a.collectColumns(event.GetPreRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)
 		dmlMessagePayload["old"] = old
 		dmlMessagePayload["type"] = string(DMLTypeUpdate)
 	}
@@ -363,11 +365,14 @@ func recycleMap(m map[string]interface{}) {
 }
 
 func (a *avroMarshaller) collectColumns(
-	row *chunk.Row, tableInfo *commonType.TableInfo, onlyHandleKey bool,
+	row *chunk.Row, tableInfo *commonType.TableInfo, onlyHandleKey bool, columnSelector columnselector.Selector,
 ) map[string]interface{} {
 	result := rowMapPool.Get().(map[string]interface{})
 	for i, colInfo := range tableInfo.GetColumns() {
 		if colInfo != nil {
+			if !columnSelector.Select(colInfo) {
+				continue
+			}
 			if onlyHandleKey && !tableInfo.ForceGetColumnFlagType(colInfo.ID).IsPrimaryKey() {
 				continue
 			}

@@ -20,15 +20,14 @@ import (
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	tiTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"go.uber.org/zap"
 )
 
@@ -154,67 +153,6 @@ func newColumnSchema(col *timodel.ColumnInfo) *columnSchema {
 	}
 }
 
-// newTiColumnInfo uses columnSchema and IndexSchema to construct a tidb column info.
-func newTiColumnInfo(
-	column *columnSchema, colID int64, indexes []*IndexSchema,
-) *timodel.ColumnInfo {
-	col := new(timodel.ColumnInfo)
-	col.ID = colID
-	col.Name = pmodel.NewCIStr(column.Name)
-
-	col.FieldType = *types.NewFieldType(types.StrToType(column.DataType.MySQLType))
-	col.SetCharset(column.DataType.Charset)
-	col.SetCollate(column.DataType.Collate)
-	if column.DataType.Unsigned {
-		col.AddFlag(mysql.UnsignedFlag)
-	}
-	if column.DataType.Zerofill {
-		col.AddFlag(mysql.ZerofillFlag)
-	}
-	col.SetFlen(column.DataType.Length)
-	col.SetDecimal(column.DataType.Decimal)
-	col.SetElems(column.DataType.Elements)
-
-	if utils.IsBinaryMySQLType(column.DataType.MySQLType) {
-		col.AddFlag(mysql.BinaryFlag)
-	}
-
-	if !column.Nullable {
-		col.AddFlag(mysql.NotNullFlag)
-	}
-
-	defaultValue := column.Default
-	if defaultValue != nil && col.GetType() == mysql.TypeBit {
-		switch v := defaultValue.(type) {
-		case float64:
-			byteSize := (col.GetFlen() + 7) >> 3
-			defaultValue = tiTypes.NewBinaryLiteralFromUint(uint64(v), byteSize)
-			defaultValue = defaultValue.(tiTypes.BinaryLiteral).ToString()
-		default:
-		}
-	}
-
-	for _, index := range indexes {
-		for _, name := range index.Columns {
-			if name == column.Name {
-				if index.Primary {
-					col.AddFlag(mysql.PriKeyFlag)
-				} else if index.Unique {
-					col.AddFlag(mysql.UniqueKeyFlag)
-				} else {
-					col.AddFlag(mysql.MultipleKeyFlag)
-				}
-			}
-		}
-	}
-
-	err := col.SetDefaultValue(defaultValue)
-	if err != nil {
-		log.Panic("set default value failed", zap.Any("column", col), zap.Any("default", defaultValue))
-	}
-	return col
-}
-
 // IndexSchema is the schema of the index.
 type IndexSchema struct {
 	Name     string   `json:"name"`
@@ -240,32 +178,6 @@ func newIndexSchema(index *timodel.IndexInfo, columns []*timodel.ColumnInfo) *In
 		}
 	}
 	return indexSchema
-}
-
-// newTiIndexInfo convert IndexSchema to a tidb index info.
-func newTiIndexInfo(indexSchema *IndexSchema, columns []*timodel.ColumnInfo, indexID int64) *timodel.IndexInfo {
-	indexColumns := make([]*timodel.IndexColumn, len(indexSchema.Columns))
-	for i, col := range indexSchema.Columns {
-		var offset int
-		for idx, column := range columns {
-			if column.Name.O == col {
-				offset = idx
-				break
-			}
-		}
-		indexColumns[i] = &timodel.IndexColumn{
-			Name:   pmodel.NewCIStr(col),
-			Offset: offset,
-		}
-	}
-
-	return &timodel.IndexInfo{
-		ID:      indexID,
-		Name:    pmodel.NewCIStr(indexSchema.Name),
-		Columns: indexColumns,
-		Unique:  indexSchema.Unique,
-		Primary: indexSchema.Primary,
-	}
 }
 
 // TableSchema is the schema of the table.
@@ -323,56 +235,6 @@ func newTableSchema(tableInfo *commonType.TableInfo) *TableSchema {
 		Columns: columns,
 		Indexes: indexes,
 	}
-}
-
-// newTableInfo converts from TableSchema to TableInfo.
-func newTableInfo(m *TableSchema) *commonType.TableInfo {
-	var database string
-
-	tidbTableInfo := &timodel.TableInfo{}
-	if m != nil {
-		database = m.Schema
-
-		tidbTableInfo.ID = m.TableID
-		tidbTableInfo.Name = pmodel.NewCIStr(m.Table)
-		tidbTableInfo.UpdateTS = m.Version
-
-		nextMockID := int64(100)
-		for _, col := range m.Columns {
-			tiCol := newTiColumnInfo(col, nextMockID, m.Indexes)
-			nextMockID += 100
-			tidbTableInfo.Columns = append(tidbTableInfo.Columns, tiCol)
-		}
-
-		mockIndexID := int64(1)
-		for _, idx := range m.Indexes {
-			index := newTiIndexInfo(idx, tidbTableInfo.Columns, mockIndexID)
-			tidbTableInfo.Indices = append(tidbTableInfo.Indices, index)
-			mockIndexID += 1
-		}
-	}
-	return commonType.WrapTableInfo(database, tidbTableInfo)
-}
-
-// newDDLEvent converts from message to DDLEvent.
-func newDDLEvent(msg *message) *commonEvent.DDLEvent {
-	var (
-		tableInfo    *commonType.TableInfo
-		preTableInfo *commonType.TableInfo
-	)
-
-	tableInfo = newTableInfo(msg.TableSchema)
-
-	ddl := &commonEvent.DDLEvent{
-		FinishedTs: msg.CommitTs,
-		TableInfo:  tableInfo,
-		Query:      msg.SQL,
-	}
-	if msg.PreTableSchema != nil {
-		preTableInfo = newTableInfo(msg.PreTableSchema)
-		ddl.MultipleTableInfos = append(ddl.MultipleTableInfos, tableInfo, preTableInfo)
-	}
-	return ddl
 }
 
 type checksum struct {
@@ -476,14 +338,14 @@ func (a *JSONMarshaller) newDMLMessage(
 	}
 	if event.IsInsert() {
 		m.Type = DMLTypeInsert
-		m.Data = a.formatColumns(event.GetRows(), event.TableInfo, onlyHandleKey)
+		m.Data = a.formatColumns(event.GetRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)
 	} else if event.IsDelete() {
 		m.Type = DMLTypeDelete
-		m.Old = a.formatColumns(event.GetPreRows(), event.TableInfo, onlyHandleKey)
+		m.Old = a.formatColumns(event.GetPreRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)
 	} else if event.IsUpdate() {
 		m.Type = DMLTypeUpdate
-		m.Data = a.formatColumns(event.GetRows(), event.TableInfo, onlyHandleKey)
-		m.Old = a.formatColumns(event.GetPreRows(), event.TableInfo, onlyHandleKey)
+		m.Data = a.formatColumns(event.GetRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)
+		m.Old = a.formatColumns(event.GetPreRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)
 	}
 	// TODO: EnableRowChecksum
 	// if a.config.EnableRowChecksum && event.Checksum != nil {
@@ -498,11 +360,14 @@ func (a *JSONMarshaller) newDMLMessage(
 }
 
 func (a *JSONMarshaller) formatColumns(
-	row *chunk.Row, tableInfo *commonType.TableInfo, onlyHandleKey bool,
+	row *chunk.Row, tableInfo *commonType.TableInfo, onlyHandleKey bool, columnSelector columnselector.Selector,
 ) map[string]interface{} {
 	colInfos := tableInfo.GetColumns()
 	result := make(map[string]interface{}, len(colInfos))
 	for i, colInfo := range colInfos {
+		if !columnSelector.Select(colInfo) {
+			continue
+		}
 		if colInfo != nil {
 			if onlyHandleKey && !tableInfo.ForceGetColumnFlagType(colInfo.ID).IsPrimaryKey() {
 				continue
