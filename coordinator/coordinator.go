@@ -37,6 +37,7 @@ import (
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -92,6 +93,7 @@ type coordinator struct {
 	changefeedChangeCh chan []*ChangefeedChange
 
 	cancel func()
+	closed atomic.Bool
 }
 
 func New(node *node.Info,
@@ -387,12 +389,14 @@ func (c *coordinator) GetChangefeed(ctx context.Context, changefeedDisplayName c
 }
 
 func (c *coordinator) Stop() {
-	c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
-	c.controller.Stop()
-	c.taskScheduler.Stop()
-	c.cancel()
-	// close eventCh after cancel, to avoid send or get event from the channel
-	c.eventCh.CloseAndDrain()
+	if c.closed.CompareAndSwap(false, true) {
+		c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
+		c.controller.Stop()
+		c.taskScheduler.Stop()
+		c.cancel()
+		// close eventCh after cancel, to avoid send or get event from the channel
+		c.eventCh.CloseAndDrain()
+	}
 }
 
 func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
