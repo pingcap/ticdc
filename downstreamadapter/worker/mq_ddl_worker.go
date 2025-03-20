@@ -113,6 +113,12 @@ func (w *MQDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent
 		if err != nil {
 			return errors.Trace(err)
 		}
+		if message == nil {
+			log.Info("Skip ddl event", zap.Uint64("commitTs", e.GetCommitTs()),
+				zap.String("query", e.Query),
+				zap.String("changefeed", w.changeFeedID.String()))
+			return nil
+		}
 		topic := w.eventRouter.GetTopicForDDL(e)
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
