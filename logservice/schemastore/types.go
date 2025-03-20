@@ -116,12 +116,16 @@ type BasicTableInfo struct {
 
 type BasicPartitionInfo map[int64]interface{}
 
-func (b BasicPartitionInfo) AddPartitionID(id int64) {
-	b[id] = nil
+func (info BasicPartitionInfo) AddPartitionIDs(ids ...int64) {
+	for _, id := range ids {
+		info[id] = nil
+	}
 }
 
-func (b BasicPartitionInfo) RemovePartitionID(id int64) {
-	delete(b, id)
+func (info BasicPartitionInfo) RemovePartitionIDs(ids ...int64) {
+	for _, id := range ids {
+		delete(info, id)
+	}
 }
 
 //msgp:ignore DDLJobWithCommitTs

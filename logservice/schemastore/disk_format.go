@@ -632,7 +632,7 @@ func persistSchemaSnapshot(
 				if len(partitionIDs) > 0 {
 					partitionMap[tableID] = make(BasicPartitionInfo)
 					for _, partitionID := range partitionIDs {
-						partitionMap[tableID].AddPartitionID(partitionID)
+						partitionMap[tableID].AddPartitionIDs(partitionID)
 					}
 				}
 			}
