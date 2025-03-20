@@ -84,6 +84,18 @@ func tableInfoKey(ts uint64, tableID int64) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+func partitionInfoKey(ts uint64, partitionID int64) ([]byte, error) {
+	buf := new(bytes.Buffer)
+	buf.WriteString(snapshotPartitionKeyPrefix)
+	if err := binary.Write(buf, binary.BigEndian, ts); err != nil {
+		return nil, err
+	}
+	if err := binary.Write(buf, binary.BigEndian, partitionID); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func ddlJobKey(ts uint64) ([]byte, error) {
 	buf := new(bytes.Buffer)
 	buf.WriteString(ddlKeyPrefix)
@@ -486,12 +498,18 @@ func addSchemaInfoToBatch(batch *pebble.Batch, ts uint64, info *model.DBInfo) {
 	batch.Set(schemaKey, schemaValue, pebble.NoSync)
 }
 
-func addTableInfoToBatch(batch *pebble.Batch, ts uint64, dbInfo *model.DBInfo, tableInfoValue []byte) (int64, string) {
-	tbNameInfo := model.TableNameInfo{}
-	if err := json.Unmarshal(tableInfoValue, &tbNameInfo); err != nil {
+func addTableInfoToBatch(
+	batch *pebble.Batch,
+	ts uint64,
+	dbInfo *model.DBInfo,
+	tableInfoValue []byte,
+) (int64, string, []int64) {
+	tableInfo := model.TableInfo{}
+	if err := json.Unmarshal(tableInfoValue, &tableInfo); err != nil {
 		log.Fatal("unmarshal table info failed", zap.Error(err))
 	}
-	tableKey, err := tableInfoKey(ts, tbNameInfo.ID)
+	// write table info to batch
+	tableKey, err := tableInfoKey(ts, tableInfo.ID)
 	if err != nil {
 		log.Fatal("generate table key failed", zap.Error(err))
 	}
@@ -505,16 +523,33 @@ func addTableInfoToBatch(batch *pebble.Batch, ts uint64, dbInfo *model.DBInfo, t
 		log.Fatal("marshal table info entry failed", zap.Error(err))
 	}
 	batch.Set(tableKey, tableInfoEntryValue, pebble.NoSync)
-	return tbNameInfo.ID, tbNameInfo.Name.O
+
+	// write partition info to batch if the table is a partition table
+	var partitionIDs []int64
+	if tableInfo.Partition != nil {
+		for _, partition := range tableInfo.Partition.Definitions {
+			partitionKey, err := partitionInfoKey(ts, partition.ID)
+			if err != nil {
+				log.Fatal("generate partition key failed", zap.Error(err))
+			}
+			valueBuf := new(bytes.Buffer)
+			if err := binary.Write(valueBuf, binary.BigEndian, tableInfo.ID); err != nil {
+				log.Fatal("generate partition value failed", zap.Error(err))
+			}
+			batch.Set(partitionKey, valueBuf.Bytes(), pebble.NoSync)
+			partitionIDs = append(partitionIDs, partition.ID)
+		}
+	}
+	return tableInfo.ID, tableInfo.Name.O, partitionIDs
 }
 
-// writeSchemaSnapshotAndMeta write database info and table info to disks.
-func writeSchemaSnapshotAndMeta(
+// persistSchemaSnapshot write database/table/partition info to disks.
+func persistSchemaSnapshot(
 	db *pebble.DB,
 	tiStore kv.Storage,
 	snapTs uint64,
-	needTableInfo bool,
-) (map[int64]*BasicDatabaseInfo, map[int64]*BasicTableInfo, error) {
+	collectMetaInfo bool,
+) (map[int64]*BasicDatabaseInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
 	meta := getSnapshotMeta(tiStore, snapTs)
 	start := time.Now()
 	dbInfos, err := meta.ListDatabases()
@@ -523,56 +558,62 @@ func writeSchemaSnapshotAndMeta(
 	}
 
 	var databaseMap map[int64]*BasicDatabaseInfo
-	var tablesInKVSnap map[int64]*BasicTableInfo
-	if needTableInfo {
+	var tableMap map[int64]*BasicTableInfo
+	var partitionMap map[int64]BasicPartitionInfo
+	if collectMetaInfo {
 		databaseMap = make(map[int64]*BasicDatabaseInfo)
-		tablesInKVSnap = make(map[int64]*BasicTableInfo)
+		tableMap = make(map[int64]*BasicTableInfo)
+		partitionMap = make(map[int64]BasicPartitionInfo)
 	}
 	for _, dbInfo := range dbInfos {
 		if filter.IsSysSchema(dbInfo.Name.O) {
 			continue
 		}
 		batch := db.NewBatch()
-
 		addSchemaInfoToBatch(batch, snapTs, dbInfo)
-
 		rawTables, err := meta.GetMetasByDBID(dbInfo.ID)
 		if err != nil {
 			log.Fatal("get tables failed", zap.Error(err))
 		}
-		var tables map[int64]bool
-		if needTableInfo {
-			tables = make(map[int64]bool)
+		var tablesInDB map[int64]bool
+		if collectMetaInfo {
+			tablesInDB = make(map[int64]bool)
 		}
 		for _, rawTable := range rawTables {
 			if !isTableRawKey(rawTable.Field) {
 				continue
 			}
-			tableID, tableName := addTableInfoToBatch(batch, snapTs, dbInfo, rawTable.Value)
-			if needTableInfo {
-				tablesInKVSnap[tableID] = &BasicTableInfo{
+			tableID, tableName, partitionIDs := addTableInfoToBatch(batch, snapTs, dbInfo, rawTable.Value)
+			if collectMetaInfo {
+				tableMap[tableID] = &BasicTableInfo{
 					SchemaID: dbInfo.ID,
 					Name:     tableName,
 				}
-				tables[tableID] = true
+				tablesInDB[tableID] = true
+				if len(partitionIDs) > 0 {
+					partitionMap[tableID] = make(BasicPartitionInfo)
+					for _, partitionID := range partitionIDs {
+						partitionMap[tableID].AddPartitionID(partitionID)
+					}
+				}
 			}
 			// 8M is arbitrary, we can adjust it later
 			if batch.Len() >= 8*1024*1024 {
 				if err := batch.Commit(pebble.NoSync); err != nil {
-					return nil, nil, err
+					return nil, nil, nil, err
 				}
 				batch = db.NewBatch()
 			}
 		}
-		if needTableInfo {
+		if collectMetaInfo {
 			databaseInfo := &BasicDatabaseInfo{
 				Name:   dbInfo.Name.O,
-				Tables: tables,
+				Tables: tablesInDB,
 			}
 			databaseMap[dbInfo.ID] = databaseInfo
 		}
 		if err := batch.Commit(pebble.NoSync); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 
@@ -580,7 +621,7 @@ func writeSchemaSnapshotAndMeta(
 
 	log.Info("finish write schema snapshot",
 		zap.Any("duration", time.Since(start).Seconds()))
-	return databaseMap, tablesInKVSnap, nil
+	return databaseMap, tableMap, partitionMap, nil
 }
 
 func cleanObsoleteData(db *pebble.DB, oldGcTs uint64, gcTs uint64) {

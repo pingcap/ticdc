@@ -368,11 +368,23 @@ func TestApplyDDLJobs(t *testing.T) {
 		// test partition table related ddl
 		{
 			"partition table",
-			nil,
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+					tables: []*model.TableInfo{
+						{
+							ID:        200,
+							Name:      pmodel.NewCIStr("t1"),
+							Partition: buildPartitionDefinitionsForTest([]int64{201, 202, 203}),
+						},
+					},
+				},
+			},
 			func() []*model.Job {
 				return []*model.Job{
-					buildCreateSchemaJobForTest(100, "test", 1000),                                           // create schema 100
-					buildCreatePartitionTableJobForTest(100, 200, "t1", []int64{201, 202, 203}, 1010),        // create partition table 200
 					buildTruncatePartitionTableJobForTest(100, 200, 300, "t1", []int64{204, 205, 206}, 1020), // truncate partition table 200 to 300
 					buildAddPartitionJobForTest(100, 300, "t1", []int64{204, 205, 206, 207}, 1030),           // add partition 207
 					buildDropPartitionJobForTest(100, 300, "t1", []int64{205, 206, 207}, 1040),               // drop partition 204
@@ -401,16 +413,16 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 			map[int64][]uint64{
-				201: {1010, 1020},
-				202: {1010, 1020},
-				203: {1010, 1020},
+				201: {1020},
+				202: {1020},
+				203: {1020},
 				204: {1020, 1030, 1040},
 				205: {1020, 1030, 1040, 1050},
 				206: {1020, 1030, 1040, 1050},
 				207: {1030, 1040, 1050},
 				208: {1050},
 			},
-			[]uint64{1000, 1010, 1020, 1030, 1040, 1050},
+			[]uint64{1020, 1030, 1040, 1050},
 			[]PhysicalTableQueryTestCase{
 				{
 					snapTs: 1010,
@@ -516,11 +528,29 @@ func TestApplyDDLJobs(t *testing.T) {
 					limit:   1,
 					result: []commonEvent.DDLEvent{
 						{
-							Type:       byte(model.ActionCreateSchema),
-							FinishedTs: 1000,
+							Type:       byte(model.ActionTruncateTable),
+							FinishedTs: 1020,
 							BlockedTables: &commonEvent.InfluencedTables{
 								InfluenceType: commonEvent.InfluenceTypeNormal,
-								TableIDs:      []int64{0},
+								TableIDs:      []int64{0, 201, 202, 203},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{201, 202, 203},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  204,
+								},
+								{
+									SchemaID: 100,
+									TableID:  205,
+								},
+								{
+									SchemaID: 100,
+									TableID:  206,
+								},
 							},
 						},
 					},
@@ -529,36 +559,6 @@ func TestApplyDDLJobs(t *testing.T) {
 					startTs: 1000,
 					limit:   10,
 					result: []commonEvent.DDLEvent{
-						{
-							Type:       byte(model.ActionCreateTable),
-							FinishedTs: 1010,
-							BlockedTables: &commonEvent.InfluencedTables{
-								InfluenceType: commonEvent.InfluenceTypeNormal,
-								TableIDs:      []int64{0},
-							},
-							NeedAddedTables: []commonEvent.Table{
-								{
-									SchemaID: 100,
-									TableID:  201,
-								},
-								{
-									SchemaID: 100,
-									TableID:  202,
-								},
-								{
-									SchemaID: 100,
-									TableID:  203,
-								},
-							},
-							TableNameChange: &commonEvent.TableNameChange{
-								AddName: []commonEvent.SchemaTableName{
-									{
-										SchemaName: "test",
-										TableName:  "t1",
-									},
-								},
-							},
-						},
 						{
 							Type:       byte(model.ActionTruncateTable),
 							FinishedTs: 1020,
@@ -2244,7 +2244,7 @@ func TestRegisterTable(t *testing.T) {
 						{
 							ID:        102,
 							Name:      pmodel.NewCIStr("t1"),
-							Partition: buildPartitionDefinitions([]int64{201, 202, 203}),
+							Partition: buildPartitionDefinitionsForTest([]int64{201, 202, 203}),
 						},
 					},
 				},
