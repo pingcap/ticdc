@@ -124,7 +124,7 @@ func newTableSchemaMap(tableInfo *commonType.TableInfo) interface{} {
 		"database": tableInfo.TableName.Schema,
 		"table":    tableInfo.TableName.Table,
 		"tableID":  tableInfo.TableName.TableID,
-		"version":  tableInfo.UpdateTS(),
+		"version":  int64(tableInfo.UpdateTS()),
 		"columns":  columnsSchema,
 		"indexes":  indexesSchema,
 	}
@@ -178,9 +178,9 @@ func newBootstrapMessageMap(tableInfo *commonType.TableInfo) map[string]interfac
 func newDDLMessageMap(ddl *commonEvent.DDLEvent) map[string]interface{} {
 	result := map[string]interface{}{
 		"version":  defaultVersion,
-		"type":     ddl.GetDDLType(),
+		"type":     string(getDDLType(ddl.GetDDLType())),
 		"sql":      ddl.Query,
-		"commitTs": ddl.GetCommitTs(),
+		"commitTs": int64(ddl.GetCommitTs()),
 		"buildTs":  time.Now().UnixMilli(),
 	}
 
@@ -254,9 +254,9 @@ func (a *avroMarshaller) newDMLMessageMap(
 	dmlMessagePayload["database"] = event.TableInfo.GetSchemaName()
 	dmlMessagePayload["table"] = event.TableInfo.GetTableName()
 	dmlMessagePayload["tableID"] = event.TableInfo.TableName.TableID
-	dmlMessagePayload["commitTs"] = event.CommitTs
+	dmlMessagePayload["commitTs"] = int64(event.CommitTs)
 	dmlMessagePayload["buildTs"] = time.Now().UnixMilli()
-	dmlMessagePayload["schemaVersion"] = event.TableInfo.UpdateTS()
+	dmlMessagePayload["schemaVersion"] = int64(event.TableInfo.UpdateTS())
 
 	if !a.config.LargeMessageHandle.Disabled() && onlyHandleKey {
 		dmlMessagePayload["handleKeyOnly"] = map[string]interface{}{

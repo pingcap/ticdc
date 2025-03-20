@@ -378,43 +378,55 @@ func (a *avroMarshaller) encodeValue4Avro(row *chunk.Row, i int, ft *types.Field
 	if row.IsNull(i) {
 		return nil, "null"
 	}
+	d := row.GetDatum(i, ft)
 	switch ft.GetType() {
 	case mysql.TypeTimestamp:
 		return map[string]interface{}{
 			"location": a.config.TimeZone.String(),
-			"value":    row.GetString(i),
+			"value":    d.GetMysqlTime().String(),
 		}, "com.pingcap.simple.avro.Timestamp"
 	case mysql.TypeLonglong:
 		if mysql.HasUnsignedFlag(ft.GetFlag()) {
 			return map[string]interface{}{
-				"value": row.GetInt64(i),
+				"value": d.GetInt64(),
 			}, "com.pingcap.simple.avro.UnsignedBigint"
 		}
-	}
-	d := row.GetDatum(i, ft)
-	value := d.GetValue()
-	switch v := value.(type) {
-	case uint64:
-		return int64(v), "long"
-	case int64:
-		return v, "long"
-	case []byte:
+		return d.GetInt64(), "long"
+	case mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob,
+		mysql.TypeVarchar, mysql.TypeVarString, mysql.TypeString:
 		if mysql.HasBinaryFlag(ft.GetFlag()) {
-			return v, "bytes"
+			return d.GetBytes(), "bytes"
 		}
-		return string(v), "string"
-	case float32:
-		return v, "float"
-	case float64:
-		return v, "double"
-	case string:
-		return v, "string"
-	case types.VectorFloat32:
-		return v.String(), "string"
+		return d.GetString(), "string"
+	case mysql.TypeTiDBVectorFloat32:
+		return d.GetVectorFloat32().String(), "string"
+	case mysql.TypeFloat:
+		return d.GetFloat32(), "float"
+	case mysql.TypeDouble:
+		return d.GetFloat64(), "double"
+	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong,
+		mysql.TypeYear, mysql.TypeEnum, mysql.TypeSet:
+		return d.GetInt64(), "long"
+	case mysql.TypeNewDecimal:
+		return string(d.GetMysqlDecimal().ToString()), "string"
+	case mysql.TypeDate, mysql.TypeDatetime:
+		return d.GetMysqlTime().String(), "string"
+	case mysql.TypeDuration:
+		return d.GetMysqlDuration().String(), "string"
+	case mysql.TypeBit:
+		v, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
+		if err != nil {
+			log.Panic("unexpected type for avro value", zap.Error(err))
+		}
+		return v, "long"
+	case mysql.TypeJSON:
+		return d.GetMysqlJSON().String(), "string"
 	default:
-		log.Panic("unexpected type for avro value", zap.Any("value", value))
+		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
+		// Make specified convert upper if you need
+		// Go sql support type ref to: https://github.com/golang/go/blob/go1.17.4/src/database/sql/driver/types.go#L236
+		return d.GetValue(), ""
 	}
-	return value, ""
 }
 
 func encodeValue(
