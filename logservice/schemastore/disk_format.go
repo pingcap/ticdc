@@ -372,31 +372,70 @@ func loadAndApplyDDLHistory(
 	return tablesDDLHistory, tableTriggerDDLHistory, nil
 }
 
-func readTableInfoInKVSnap(snap *pebble.Snapshot, tableID int64, version uint64) *common.TableInfo {
-	targetKey, err := tableInfoKey(version, tableID)
+// if tableID is a physical partition id, return the logic table id of it
+func tryReadLogicalTableID(snap *pebble.Snapshot, tableID int64, version uint64) int64 {
+	key, err := partitionInfoKey(version, tableID)
 	if err != nil {
-		log.Fatal("generate table info failed", zap.Error(err))
+		return 0
 	}
-	value, closer, err := snap.Get(targetKey)
+	val, closer, err := snap.Get(key)
 	if err == pebble.ErrNotFound {
-		return nil
+		return 0
 	}
 	if err != nil {
-		log.Fatal("get table info failed", zap.Error(err))
+		log.Fatal("read partition meta failed", zap.Error(err))
+		return 0
 	}
 	defer closer.Close()
 
-	var table_info_entry PersistedTableInfoEntry
-	if _, err := table_info_entry.UnmarshalMsg(value); err != nil {
-		log.Fatal("unmarshal table info entry failed", zap.Error(err))
+	if len(val) != 8 {
+		log.Fatal("invalid meta value length", zap.Int("len", len(val)))
+		return 0
 	}
+	return int64(binary.BigEndian.Uint64(val))
+}
 
-	tableInfo := &model.TableInfo{}
-	err = json.Unmarshal(table_info_entry.TableInfoValue, tableInfo)
-	if err != nil {
-		log.Fatal("unmarshal table info failed", zap.Error(err))
+func readTableInfoInKVSnap(snap *pebble.Snapshot, tableID int64, version uint64) *common.TableInfo {
+	readRawTableInfo := func(targetTableID int64) (string, *model.TableInfo) {
+		targetKey, err := tableInfoKey(version, targetTableID)
+		if err != nil {
+			log.Fatal("generate table info failed", zap.Error(err))
+		}
+		value, closer, err := snap.Get(targetKey)
+		if err == pebble.ErrNotFound {
+			return "", nil
+		}
+		if err != nil {
+			log.Fatal("get table info failed", zap.Error(err))
+		}
+		defer closer.Close()
+
+		var table_info_entry PersistedTableInfoEntry
+		if _, err := table_info_entry.UnmarshalMsg(value); err != nil {
+			log.Fatal("unmarshal table info entry failed", zap.Error(err))
+		}
+
+		tableInfo := &model.TableInfo{}
+		err = json.Unmarshal(table_info_entry.TableInfoValue, tableInfo)
+		if err != nil {
+			log.Fatal("unmarshal table info failed", zap.Error(err))
+		}
+		return table_info_entry.SchemaName, tableInfo
 	}
-	return common.WrapTableInfo(table_info_entry.SchemaName, tableInfo)
+	schemaName, tableInfo := readRawTableInfo(tableID)
+	if tableInfo == nil {
+		// check whether it a physical partition id
+		logicalTableID := tryReadLogicalTableID(snap, tableID, version)
+		if logicalTableID != 0 {
+			schemaName, tableInfo = readRawTableInfo(logicalTableID)
+			if tableInfo == nil {
+				return nil
+			}
+		} else {
+			return nil
+		}
+	}
+	return common.WrapTableInfo(schemaName, tableInfo)
 }
 
 func unmarshalPersistedDDLEvent(value []byte) PersistedDDLEvent {

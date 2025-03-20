@@ -2259,17 +2259,17 @@ func TestRegisterTable(t *testing.T) {
 				{
 					tableID: 201,
 					snapTs:  1029,
-					name:    "t4",
+					name:    "t1",
 				},
 				{
 					tableID: 202,
 					snapTs:  1029,
-					name:    "t4",
+					name:    "t1",
 				},
 				{
 					tableID: 203,
 					snapTs:  1029,
-					name:    "t4",
+					name:    "t1",
 				},
 				{
 					tableID: 201,
