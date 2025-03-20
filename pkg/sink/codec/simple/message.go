@@ -15,7 +15,6 @@ package simple
 
 import (
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/pingcap/log"
@@ -25,8 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/parser/types"
-	tiTypes "github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
@@ -216,10 +214,6 @@ func newTableSchema(tableInfo *commonType.TableInfo) *TableSchema {
 			indexes = append(indexes, index)
 		}
 	}
-
-	sort.SliceStable(colInfos, func(i, j int) bool {
-		return colInfos[i].ID < colInfos[j].ID
-	})
 
 	columns := make([]*columnSchema, 0, len(colInfos))
 	for _, col := range colInfos {
@@ -414,7 +408,7 @@ func (a *avroMarshaller) encodeValue4Avro(row *chunk.Row, i int, ft *types.Field
 		return v, "double"
 	case string:
 		return v, "string"
-	case tiTypes.VectorFloat32:
+	case types.VectorFloat32:
 		return v.String(), "string"
 	default:
 		log.Panic("unexpected type for avro value", zap.Any("value", value))
@@ -433,7 +427,7 @@ func encodeValue(
 	var err error
 	switch ft.GetType() {
 	case mysql.TypeBit:
-		value, err = d.GetMysqlBit().ToInt(tiTypes.DefaultStmtNoWarningContext)
+		value, err = d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 	case mysql.TypeTimestamp:
 		return map[string]string{
 			"location": location,

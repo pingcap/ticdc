@@ -14,7 +14,6 @@
 package simple
 
 import (
-	"sort"
 	"sync"
 	"time"
 
@@ -68,10 +67,6 @@ func newTableSchemaMap(tableInfo *commonType.TableInfo) interface{} {
 			indexesSchema = append(indexesSchema, index)
 		}
 	}
-
-	sort.SliceStable(colInfos, func(i, j int) bool {
-		return colInfos[i].ID < colInfos[j].ID
-	})
 
 	columnsSchema := make([]interface{}, 0, len(colInfos))
 	for _, col := range colInfos {
