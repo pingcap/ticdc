@@ -418,7 +418,7 @@ func (a *avroMarshaller) encodeValue4Avro(row *chunk.Row, i int, ft *types.Field
 		if err != nil {
 			log.Panic("unexpected type for avro value", zap.Error(err))
 		}
-		return v, "long"
+		return int64(v), "long"
 	case mysql.TypeJSON:
 		return d.GetMysqlJSON().String(), "string"
 	default:
