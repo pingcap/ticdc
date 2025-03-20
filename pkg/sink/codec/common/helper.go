@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -72,6 +73,24 @@ func ExtractBasicMySQLType(mysqlType string) byte {
 	}
 
 	return types.StrToType(mysqlType)
+}
+
+func IsUnsignedFlag(mysqlType string) bool {
+	return strings.Contains(mysqlType, "unsigned")
+}
+
+func ExtractFlen(mysqlType string) int {
+	start := strings.Index(mysqlType, "(")
+	end := strings.Index(mysqlType, ")")
+	if start == -1 || end == -1 {
+		return -1
+	}
+	flen := mysqlType[start+1 : end]
+	result, err := strconv.ParseInt(flen, 10, 64)
+	if err != nil {
+		log.Panic("parse flen failed", zap.String("flen", flen), zap.Error(err))
+	}
+	return int(result)
 }
 
 // ExtractElements for the Enum and Set Type

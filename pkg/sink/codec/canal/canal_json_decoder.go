@@ -598,6 +598,10 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 			col.AddFlag(mysql.UniqueKeyFlag)
 			col.AddFlag(mysql.NotNullFlag)
 		}
+		if common.IsUnsignedFlag(mysqlType) {
+			col.AddFlag(mysql.UnsignedFlag)
+		}
+		col.FieldType.SetFlen(common.ExtractFlen(mysqlType))
 		switch basicType {
 		case mysql.TypeEnum, mysql.TypeSet:
 			elements := common.ExtractElements(mysqlType)

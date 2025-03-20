@@ -347,8 +347,12 @@ func (ti *TableInfo) GetIndices() []*model.IndexInfo {
 	return ti.columnSchema.Indices
 }
 
-func (ti *TableInfo) GetColumnsOffset() map[int64]int {
-	return ti.columnSchema.ColumnsOffset
+func (ti *TableInfo) MustGetColumnOffsetByID(id int64) int {
+	offset, ok := ti.columnSchema.ColumnsOffset[id]
+	if !ok {
+		log.Panic("invalid column id", zap.Int64("columnID", id))
+	}
+	return offset
 }
 
 func (ti *TableInfo) GetIndexColumnsOffset() [][]int {

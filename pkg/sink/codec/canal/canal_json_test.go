@@ -16,9 +16,9 @@ package canal
 import (
 	"context"
 	"encoding/json"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	"testing"
 
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -40,8 +40,11 @@ func CompareRow(
 		a := origin.Row.GetDatumRow(originTableInfo.GetFieldSlice())
 		b := obtained.Row.GetDatumRow(obtainedTableInfo.GetFieldSlice())
 		require.Equal(t, len(a), len(b))
-		for i := range a {
-			require.Equal(t, a[i], b[i])
+		for idx, col := range originTableInfo.GetColumns() {
+			colID := obtainedTableInfo.ForceGetColumnIDByName(col.Name.O)
+			offset := obtainedTableInfo.MustGetColumnOffsetByID(colID)
+
+			require.Equal(t, a[idx], b[offset])
 		}
 	}
 
@@ -49,8 +52,10 @@ func CompareRow(
 		a := origin.PreRow.GetDatumRow(originTableInfo.GetFieldSlice())
 		b := obtained.PreRow.GetDatumRow(obtainedTableInfo.GetFieldSlice())
 		require.Equal(t, len(a), len(b))
-		for i := range a {
-			require.Equal(t, a[i], b[i])
+		for idx, col := range originTableInfo.GetColumns() {
+			colID := obtainedTableInfo.ForceGetColumnIDByName(col.Name.O)
+			offset := obtainedTableInfo.MustGetColumnOffsetByID(colID)
+			require.Equal(t, a[idx], b[offset])
 		}
 	}
 }
@@ -173,46 +178,46 @@ func TestIntegerTypes(t *testing.T) {
 
 	CompareRow(t, minValueEvent.Event, minValueEvent.TableInfo, change, event.TableInfo)
 
-	//sql = `insert into test.t values (
-	//	2,
-	//--  		127, 255,
-	//--  		32767, 65535,
-	//--  		8388607, 16777215,
-	//--  		2147483647, 4294967295,
-	//9223372036854775807, 18446744073709551615)`
-	//maxValues := helper.DML2Event("test", "t", sql)
-	//maxRow, ok := maxValues.GetNextRow()
-	//
-	//maxValueEvent := &commonEvent.RowEvent{
-	//	TableInfo:      tableInfo,
-	//	CommitTs:       1,
-	//	Event:          maxRow,
-	//	ColumnSelector: columnselector.NewDefaultColumnSelector(),
-	//	Callback:       func() {},
-	//}
-	//
-	//err = encoder.AppendRowChangedEvent(ctx, "", maxValueEvent)
-	//require.NoError(t, err)
-	//
-	//messages = encoder.Build()
-	//require.Len(t, messages, 1)
-	//
-	//err = decoder.AddKeyValue(messages[0].Key, messages[0].Value)
-	//require.NoError(t, err)
-	//
-	//messageType, hasNext, err = decoder.HasNext()
-	//require.NoError(t, err)
-	//require.True(t, hasNext)
-	//require.Equal(t, common.MessageTypeRow, messageType)
-	//
-	//event, err = decoder.NextDMLEvent()
-	//require.NoError(t, err)
-	//
-	//change, ok = event.GetNextRow()
-	//require.True(t, ok)
-	//require.NotNil(t, change.Row)
-	//
-	//CompareRow(t, tableInfo, maxValueEvent.Event, change)
+	sql = `insert into test.t values (
+		2,
+		127, 255,
+		32767, 65535,
+		8388607, 16777215,
+		2147483647, 4294967295,
+	9223372036854775807, 18446744073709551615)`
+	maxValues := helper.DML2Event("test", "t", sql)
+	maxRow, ok := maxValues.GetNextRow()
+
+	maxValueEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       1,
+		Event:          maxRow,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	err = encoder.AppendRowChangedEvent(ctx, "", maxValueEvent)
+	require.NoError(t, err)
+
+	messages = encoder.Build()
+	require.Len(t, messages, 1)
+
+	err = decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err = decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	event, err = decoder.NextDMLEvent()
+	require.NoError(t, err)
+
+	change, ok = event.GetNextRow()
+	require.True(t, ok)
+	require.NotNil(t, change.Row)
+
+	CompareRow(t, maxValueEvent.Event, maxValueEvent.TableInfo, change, event.TableInfo)
 }
 
 //func TestAllTypes(t *testing.T) {
