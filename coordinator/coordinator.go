@@ -154,6 +154,10 @@ func New(node *node.Info,
 }
 
 func (c *coordinator) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
+	if c.closed.Load() {
+		return nil
+	}
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
