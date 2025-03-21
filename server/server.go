@@ -291,8 +291,14 @@ func (c *server) Close(ctx context.Context) {
 		log.Info("coordinator closed", zap.String("captureID", string(c.info.ID)))
 	}
 
+	closeCtx, cancel := context.WithTimeout(context.Background(), closeServiceTimeout)
+	defer cancel()
+	closeGroup, closeCtx := errgroup.WithContext(closeCtx)
 	for _, service := range c.preServices {
-		service.Close()
+		closeGroup.Go(func() error {
+			service.Close()
+			return nil
+		})
 	}
 
 	for _, subModule := range c.subModules {
@@ -315,6 +321,7 @@ func (c *server) Close(ctx context.Context) {
 		log.Info("server info deleted from etcd", zap.String("captureID", string(c.info.ID)))
 	}
 
+	closeGroup.Wait()
 	log.Info("server closed", zap.Any("ServerInfo", c.info))
 }
 
