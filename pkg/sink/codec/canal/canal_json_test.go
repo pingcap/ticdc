@@ -43,7 +43,6 @@ func CompareRow(
 		for idx, col := range originTableInfo.GetColumns() {
 			colID := obtainedTableInfo.ForceGetColumnIDByName(col.Name.O)
 			offset := obtainedTableInfo.MustGetColumnOffsetByID(colID)
-
 			require.Equal(t, a[idx], b[offset])
 		}
 	}
@@ -221,15 +220,17 @@ func TestIntegerTypes(t *testing.T) {
 	CompareRow(t, maxValueEvent.Event, maxValueEvent.TableInfo, change, event.TableInfo)
 }
 
-// todo: is float type also support flen ?
 func TestFloatTypes(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job(`create table test.t(a float primary key, b double)`)
+	job := helper.DDL2Job(`create table test.t(
+    	id int primary key auto_increment,
+	    a float, b float(10, 3), c float(10), 
+	    d double, e double(20, 3))`)
 
-	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b) values (1.23, 4.56)`)
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d,e) values (1.23, 4.56, 7.89, 10.11, 12.13)`)
 	require.NotNil(t, dmlEvent)
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
@@ -278,9 +279,10 @@ func TestTimeTypes(t *testing.T) {
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job(`create table test.t(a timestamp primary key, b datetime, c date, d time)`)
+	job := helper.DDL2Job(`create table test.t(id int primary key auto_increment, a timestamp, b datetime, c date, d time)`)
 
-	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d) values ("2020-01-01 12:00:00","2020-01-01 12:00:00","2020-01-01","12:00:00")`)
+	dmlEvent := helper.DML2Event("test", "t",
+		`insert into test.t(a,b,c,d) values ("2020-01-01 12:00:00", "2020-01-01 12:00:00", "2020-01-01", "12:00:00")`)
 	require.NotNil(t, dmlEvent)
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
@@ -330,7 +332,7 @@ func TestStringTypes(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job(`create table test.t(
-		a char(10) primary key, b varchar(10), c binary(10), d varbinary(10))`)
+    	id int primary key auto_increment, a char(10) , b varchar(10), c binary(10), d varbinary(10))`)
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d) values ("char","varchar","binary","varbinary")`)
 	require.NotNil(t, dmlEvent)
@@ -382,7 +384,8 @@ func TestBlobTypes(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job(`create table test.t(
-		a tinyblob primary key, b blob, c mediumblob, d longblob)`)
+    	id int primary key auto_increment,
+		a tinyblob, b blob, c mediumblob, d longblob)`)
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d) values (0x010201,0x010202,0x010203,0x010204)`)
 	require.NotNil(t, dmlEvent)
@@ -434,7 +437,8 @@ func TestTextTypes(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job(`create table test.t(
-		a tinytext primary key, b text, c mediumtext, d longtext)`)
+    	id int primary key auto_increment,
+		a tinytext, b text, c mediumtext, d longtext)`)
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d) values ("tinytext","text","mediumtext","longtext")`)
 	require.NotNil(t, dmlEvent)
@@ -486,27 +490,23 @@ func TestOtherTypes(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job(`create table test.t(
-		c bool, d bool,
-		y year, z year,
-		ae bit(10), af bit(10),
-		ag json, ah json,
-		ai decimal(10,2), aj decimal(10,2),
-		ak enum('a','b','c'), al enum('a','b','c'),
-		am set('a','b','c'), an set('a','b','c'))`)
+    	id int primary key auto_increment, 
+    	a bool, b bool, c year,
+		d bit(10), e json, 
+		f decimal(10,2), 
+		g enum('a','b','c'), h set('a','b','c'))`)
+	tableInfo := helper.GetTableInfo(job)
 
-	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(
-		c,d,y,z,ae,af,ag,ah,ai,aj,ak,al,am,an) values (
-			true, false, 2000, 2000,
-			0b0101010101, 0b0101010101,
-			'{"key1": "value1"}', '{"key1": "value1"}',
-			153.123, 153.123,
-			'a', 'b',
-			'a,b', 'a,b')`)
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a, b, c, d, e, f, g, h) values (
+   		true, false, 2000, 
+	    0b0101010101, '{"key1": "value1"}', 
+	    153.123, 
+	    'a', 'a,b')`)
+
 	require.NotNil(t, dmlEvent)
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
 
-	tableInfo := helper.GetTableInfo(job)
 	rowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
 		CommitTs:       1,
@@ -517,6 +517,7 @@ func TestOtherTypes(t *testing.T) {
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+	codecConfig.ContentCompatible = true
 
 	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
 	require.NoError(t, err)
@@ -961,7 +962,6 @@ func TestInsertEvent(t *testing.T) {
 	//require.NoError(t, err)
 	//require.Equal(t, `[{"a":"1","b":"3"}]`, string(newValue))
 	//
-
 }
 
 // insert / update(with only updated or not) / delete

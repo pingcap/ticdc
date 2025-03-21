@@ -479,6 +479,15 @@ func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Ch
 		if err != nil {
 			log.Panic("invalid column value for decimal", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
+		// workaround the decimal `digitInt` field incorrect problem.
+		bin, err := value.ToBin(ft.GetFlen(), ft.GetDecimal())
+		if err != nil {
+			log.Panic("convert decimal to binary failed", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
+		_, err = value.FromBin(bin, ft.GetFlen(), ft.GetDecimal())
+		if err != nil {
+			log.Panic("convert binary to decimal failed", zap.Any("rawValue", rawValue), zap.Error(err))
+		}
 		chk.AppendMyDecimal(idx, value)
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
 		t, err := tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, rawValue, ft.GetType(), ft.GetDecimal())
@@ -593,6 +602,15 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 			col.SetCharset("binary")
 			col.SetCollate("binary")
 		}
+		if strings.HasPrefix(mysqlType, "char") ||
+			strings.HasPrefix(mysqlType, "varchar") ||
+			strings.Contains(mysqlType, "text") ||
+			strings.Contains(mysqlType, "enum") ||
+			strings.Contains(mysqlType, "set") {
+			col.SetCharset("utf8mb4")
+			col.SetCollate("utf8mb4_bin")
+		}
+
 		if _, ok := msg.pkNameSet()[name]; ok {
 			col.AddFlag(mysql.PriKeyFlag)
 			col.AddFlag(mysql.UniqueKeyFlag)
@@ -601,11 +619,16 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 		if common.IsUnsignedFlag(mysqlType) {
 			col.AddFlag(mysql.UnsignedFlag)
 		}
-		col.FieldType.SetFlen(common.ExtractFlen(mysqlType))
+		flen, decimal := common.ExtractFlenDecimal(mysqlType)
+		col.FieldType.SetFlen(flen)
+		col.FieldType.SetDecimal(decimal)
 		switch basicType {
 		case mysql.TypeEnum, mysql.TypeSet:
 			elements := common.ExtractElements(mysqlType)
 			col.SetElems(elements)
+		case mysql.TypeDuration:
+			decimal = common.ExtractDecimal(mysqlType)
+			col.FieldType.SetDecimal(decimal)
 		default:
 		}
 		result = append(result, col)

@@ -79,18 +79,31 @@ func IsUnsignedFlag(mysqlType string) bool {
 	return strings.Contains(mysqlType, "unsigned")
 }
 
-func ExtractFlen(mysqlType string) int {
+func ExtractFlenDecimal(mysqlType string) (int, int) {
+	if strings.HasPrefix(mysqlType, "enum") || strings.HasPrefix(mysqlType, "set") {
+		return 0, 0
+	}
 	start := strings.Index(mysqlType, "(")
 	end := strings.Index(mysqlType, ")")
 	if start == -1 || end == -1 {
-		return -1
+		return -1, types.UnspecifiedLength
 	}
-	flen := mysqlType[start+1 : end]
-	result, err := strconv.ParseInt(flen, 10, 64)
+
+	data := strings.Split(mysqlType[start+1:end], ",")
+	flen, err := strconv.ParseInt(data[0], 10, 64)
 	if err != nil {
-		log.Panic("parse flen failed", zap.String("flen", flen), zap.Error(err))
+		log.Panic("parse flen failed", zap.String("flen", data[0]), zap.Error(err))
 	}
-	return int(result)
+
+	if len(data) != 2 {
+		return int(flen), types.UnspecifiedLength
+	}
+
+	decimal, err := strconv.ParseInt(data[1], 10, 64)
+	if err != nil {
+		log.Panic("parse decimal failed", zap.String("decimal", data[1]), zap.Error(err))
+	}
+	return int(flen), int(decimal)
 }
 
 // ExtractElements for the Enum and Set Type
@@ -103,6 +116,20 @@ func ExtractElements(mysqlType string) []string {
 		elements = append(elements, strings.Trim(part, "'"))
 	}
 	return elements
+}
+
+func ExtractDecimal(mysqlType string) int {
+	start := strings.Index(mysqlType, "(")
+	end := strings.Index(mysqlType, ")")
+	if start == -1 || end == -1 {
+		return 0
+	}
+	decimal := mysqlType[start+1 : end]
+	result, err := strconv.ParseInt(decimal, 10, 64)
+	if err != nil {
+		log.Panic("parse decimal failed", zap.String("decimal", decimal), zap.Error(err))
+	}
+	return int(result)
 }
 
 // ColumnsHolder read columns from sql.Rows
