@@ -511,17 +511,19 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 	// Note: if a ddl involve multiple tables, job.TableID is different with job.BinlogInfo.TableInfo.ID
 	// and usually job.BinlogInfo.TableInfo.ID will be the newly created IDs.
 	event := PersistedDDLEvent{
-		ID:             job.ID,
-		Type:           byte(job.Type),
-		SchemaID:       job.SchemaID,
-		TableID:        job.TableID,
-		Query:          query,
-		SchemaVersion:  job.BinlogInfo.SchemaVersion,
-		DBInfo:         job.BinlogInfo.DBInfo,
-		TableInfo:      job.BinlogInfo.TableInfo,
-		FinishedTs:     job.BinlogInfo.FinishedTS,
-		BDRRole:        job.BDRRole,
-		CDCWriteSource: job.CDCWriteSource,
+		ID:                job.ID,
+		Type:              byte(job.Type),
+		TableNameInDDLJob: job.TableName,
+		DBNameInDDLJob:    job.SchemaName,
+		SchemaID:          job.SchemaID,
+		TableID:           job.TableID,
+		Query:             query,
+		SchemaVersion:     job.BinlogInfo.SchemaVersion,
+		DBInfo:            job.BinlogInfo.DBInfo,
+		TableInfo:         job.BinlogInfo.TableInfo,
+		FinishedTs:        job.BinlogInfo.FinishedTS,
+		BDRRole:           job.BDRRole,
+		CDCWriteSource:    job.CDCWriteSource,
 	}
 	return event
 }
@@ -1014,9 +1016,7 @@ func updateSchemaMetadataForNewTableDDL(args updateSchemaMetadataFuncArgs) {
 	}
 	if isPartitionTable(args.event.TableInfo) {
 		partitionInfo := make(BasicPartitionInfo)
-		for _, id := range getAllPartitionIDs(args.event.TableInfo) {
-			partitionInfo[id] = nil
-		}
+		partitionInfo.AddPartitionIDs(getAllPartitionIDs(args.event.TableInfo)...)
 		args.partitionMap[tableID] = partitionInfo
 	}
 }
@@ -1047,9 +1047,7 @@ func updateSchemaMetadataForTruncateTable(args updateSchemaMetadataFuncArgs) {
 	if isPartitionTable(args.event.TableInfo) {
 		delete(args.partitionMap, oldTableID)
 		partitionInfo := make(BasicPartitionInfo)
-		for _, id := range getAllPartitionIDs(args.event.TableInfo) {
-			partitionInfo[id] = nil
-		}
+		partitionInfo.AddPartitionIDs(getAllPartitionIDs(args.event.TableInfo)...)
 		args.partitionMap[newTableID] = partitionInfo
 	}
 }
@@ -1140,9 +1138,7 @@ func updateSchemaMetadataForCreateTables(args updateSchemaMetadataFuncArgs) {
 		}
 		if isPartitionTable(info) {
 			partitionInfo := make(BasicPartitionInfo)
-			for _, id := range getAllPartitionIDs(info) {
-				partitionInfo[id] = nil
-			}
+			partitionInfo.AddPartitionIDs((getAllPartitionIDs(info))...)
 			args.partitionMap[info.ID] = partitionInfo
 		}
 	}
@@ -1152,13 +1148,9 @@ func updateSchemaMetadataForReorganizePartition(args updateSchemaMetadataFuncArg
 	tableID := args.event.TableID
 	physicalIDs := getAllPartitionIDs(args.event.TableInfo)
 	droppedIDs := getDroppedIDs(args.event.PrevPartitions, physicalIDs)
-	for _, id := range droppedIDs {
-		delete(args.partitionMap[tableID], id)
-	}
+	args.partitionMap[tableID].RemovePartitionIDs(droppedIDs...)
 	newCreatedIDs := getCreatedIDs(args.event.PrevPartitions, physicalIDs)
-	for _, id := range newCreatedIDs {
-		args.partitionMap[tableID][id] = nil
-	}
+	args.partitionMap[tableID].AddPartitionIDs(newCreatedIDs...)
 }
 
 func updateSchemaMetadataForAlterTablePartitioning(args updateSchemaMetadataFuncArgs) {
@@ -1176,9 +1168,7 @@ func updateSchemaMetadataForAlterTablePartitioning(args updateSchemaMetadataFunc
 		Name:     args.event.TableName,
 	}
 	args.partitionMap[newTableID] = make(BasicPartitionInfo)
-	for _, id := range getAllPartitionIDs(args.event.TableInfo) {
-		args.partitionMap[newTableID][id] = nil
-	}
+	args.partitionMap[newTableID].AddPartitionIDs(getAllPartitionIDs(args.event.TableInfo)...)
 }
 
 func updateSchemaMetadataForRemovePartitioning(args updateSchemaMetadataFuncArgs) {
@@ -1523,6 +1513,9 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 		TableInfo:  wrapTableInfo,
 		FinishedTs: rawEvent.FinishedTs,
 		TiDBOnly:   tiDBOnly,
+
+		TableNameInDDLJob: rawEvent.TableNameInDDLJob,
+		DBNameInDDLJob:    rawEvent.DBNameInDDLJob,
 	}, !filtered
 }
 

@@ -797,8 +797,8 @@ github.com/pingcap/tidb-dashboard v0.0.0-20240326110213-9768844ff5d7 h1:eFu98Fbf
 github.com/pingcap/tidb-dashboard v0.0.0-20240326110213-9768844ff5d7/go.mod h1:ucZBRz52icb23T/5Z4CsuUHmarYiin7p2MeiVBe+o8c=
 github.com/pingcap/tidb/pkg/parser v0.0.0-20241223052309-3735ed55a394 h1:Kd5UaT2mbA1gB0G19dkyRB4/Y5DYN8Sy/dgWYg9zNwI=
 github.com/pingcap/tidb/pkg/parser v0.0.0-20241223052309-3735ed55a394/go.mod h1:Hju1TEWZvrctQKbztTRwXH7rd41Yq0Pgmq4PrEKcq7o=
-github.com/pingcap/tiflow v0.0.0-20250307070542-b67943012af2 h1:V9eAn/kK3rTCzf/IdiULIbrG0ToiZKFzJtIczSyHC/g=
-github.com/pingcap/tiflow v0.0.0-20250307070542-b67943012af2/go.mod h1:kLYTUjCGZfBFLtSTboIZrYY1Nv4nZJm2XoX+HgiT78s=
+github.com/pingcap/tiflow v0.0.0-20250318113613-e23fa78655fa h1:9jGrp7qawtE8nYKYkDpk+r2b/J4WOU1kMY/ojCeUEEM=
+github.com/pingcap/tiflow v0.0.0-20250318113613-e23fa78655fa/go.mod h1:kLYTUjCGZfBFLtSTboIZrYY1Nv4nZJm2XoX+HgiT78s=
 github.com/pingcap/tipb v0.0.0-20241105053214-f91fdb81a69e h1:7DdrYVwWpYr4o1AyKl8T376B4h2RsMEjkmom8MxQuuM=
 github.com/pingcap/tipb v0.0.0-20241105053214-f91fdb81a69e/go.mod h1:zrnYy8vReNODg8G0OiYaX9OK+kpq+rK1jHmvd1DnIWw=
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmdv1U2eRNDiU2ErMBj1gwrq8eQ=

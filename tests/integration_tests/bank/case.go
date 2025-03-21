@@ -14,13 +14,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"io"
 	"math/rand"
-	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -28,8 +30,9 @@ import (
 	_ "github.com/go-sql-driver/mysql" // MySQL driver
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/retry"
+	cerror "github.com/pingcap/tiflow/pkg/errors"
+	"github.com/pingcap/tiflow/pkg/retry"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -260,11 +263,15 @@ func (s *bankTest) prepare(ctx context.Context, db *sql.DB, accounts, tableID, c
 }
 
 func (*bankTest) verify(ctx context.Context, db *sql.DB, accounts, tableID int, tag string, endTs uint64) error {
+	retryInterval := 1000
 	return retry.Do(ctx,
 		func() (err error) {
 			defer func() {
 				if err != nil {
-					log.Error("bank test verify failed", zap.Error(err))
+					physical := oracle.GetTimeFromTS(endTs)
+					physical = physical.Add(time.Duration(retryInterval) * time.Millisecond)
+					endTs = oracle.GoTimeToTS(physical)
+					log.Error("bank test verify failed", zap.Error(err), zap.Time("physical", physical), zap.Uint64("nextRetrySnapshotTs", endTs))
 				}
 			}()
 			// use a single connection to keep the same database session.
@@ -281,9 +288,14 @@ func (*bankTest) verify(ctx context.Context, db *sql.DB, accounts, tableID int, 
 			var obtained, expect int
 
 			query := fmt.Sprintf("SELECT SUM(balance) as total FROM accounts%d", tableID)
-			if err := conn.QueryRowContext(ctx, query).Scan(&obtained); err != nil {
-				log.Warn("query failed", zap.String("query", query), zap.Error(err), zap.String("tag", tag))
+			var nullableResult sql.NullInt64
+			if err := conn.QueryRowContext(ctx, query).Scan(&nullableResult); err != nil {
+				log.Error("query failed", zap.String("query", query), zap.Error(err), zap.String("tag", tag))
 				return errors.Trace(err)
+			}
+
+			if nullableResult.Valid {
+				obtained = int(nullableResult.Int64)
 			}
 
 			expect = accounts * initBalance
@@ -307,7 +319,7 @@ func (*bankTest) verify(ctx context.Context, db *sql.DB, accounts, tableID int, 
 			}
 
 			return nil
-		}, retry.WithBackoffMaxDelay(500), retry.WithBackoffMaxDelay(120*1000), retry.WithMaxTries(10), retry.WithIsRetryableErr(cerror.IsRetryableError))
+		}, retry.WithBackoffBaseDelay(int64(retryInterval)), retry.WithBackoffMaxDelay(120*1000), retry.WithMaxTries(20), retry.WithIsRetryableErr(cerror.IsRetryableError))
 }
 
 // tryDropDB will drop table if data incorrect and panic error likes bad connect.
@@ -486,8 +498,9 @@ func run(
 		}
 	}
 
-	// DDL is a strong sync point in TiCDC. Once finishmark table is replicated to downstream
-	// all previous DDL and DML are replicated too.
+	// After we implement concurrent DDL of different tables, DDL is no longer a strong sync point in TiCDC.
+	// We need to use changefeed's checkpoint > ddl.FinishedTS to ensure all previous DDL and DML before
+	// the DDL are synced.
 	mustExec(ctx, upstreamDB, `CREATE TABLE IF NOT EXISTS finishmark (foo BIGINT PRIMARY KEY)`)
 	waitCtx, waitCancel := context.WithTimeout(ctx, 15*time.Minute)
 	endTs, err := getDownStreamSyncedEndTs(waitCtx, downstreamDB, downstreamAPIEndpoint, "finishmark")
@@ -623,7 +636,7 @@ func getDownStreamSyncedEndTs(ctx context.Context, db *sql.DB, tidbAPIEndpoint, 
 			log.Error("get downstream sync end ts failed due to timeout", zap.String("table", tableName), zap.Error(ctx.Err()))
 			return 0, ctx.Err()
 		case <-time.After(2 * time.Second):
-			result, ok := tryGetEndTs(db, tidbAPIEndpoint, tableName)
+			result, ok := tryGetEndTsFromLog(db, tableName)
 			if ok {
 				return result, nil
 			}
@@ -631,47 +644,61 @@ func getDownStreamSyncedEndTs(ctx context.Context, db *sql.DB, tidbAPIEndpoint, 
 	}
 }
 
-func tryGetEndTs(db *sql.DB, tidbAPIEndpoint, tableName string) (result uint64, ok bool) {
-	// Note: We should not use `END_TS` in the table, because it is encoded in
-	// the format `2023-03-16 18:12:51`, it's not precise enough.
-	query := "SELECT JOB_ID FROM information_schema.ddl_jobs WHERE table_name = ?"
-	log.Info("try get end ts", zap.String("query", query), zap.String("tableName", tableName))
-	var jobID uint64
-	row := db.QueryRow(query, tableName)
-	if err := row.Scan(&jobID); err != nil {
-		if err != sql.ErrNoRows {
-			log.Info("rows scan failed", zap.Error(err))
+func tryGetEndTsFromLog(db *sql.DB, tableName string) (result uint64, ok bool) {
+	log.Info("try parse finishedTs from ticdc log", zap.String("tableName", tableName))
+
+	logFilePath := "/tmp/tidb_cdc_test/bank"
+	cdcLogFiles := make([]string, 0)
+	// walk all file with cdc prefix
+	err := filepath.WalkDir(logFilePath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		return 0, false
-	}
-	ddlJobURL := fmt.Sprintf(
-		"http://%s/ddl/history?start_job_id=%d&limit=1", tidbAPIEndpoint, jobID)
-	ddlJobResp, err := http.Get(ddlJobURL)
+		if !d.IsDir() {
+			if strings.Contains(d.Name(), "down") && strings.Contains(d.Name(), "cdc") && strings.Contains(d.Name(), "log") {
+				cdcLogFiles = append(cdcLogFiles, path)
+				fmt.Println(path)
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		log.Warn("fail to get DDL history",
-			zap.String("URL", ddlJobURL), zap.Error(err))
-		return 0, false
+		log.Error("Failed to walk dir: %v", zap.Error(err))
 	}
-	defer ddlJobResp.Body.Close()
-	ddlJobJSON, err := io.ReadAll(ddlJobResp.Body)
-	if err != nil {
-		log.Warn("fail to read DDL history",
-			zap.String("URL", ddlJobURL), zap.Error(err))
-		return 0, false
+	log.Info("total files", zap.Any("file", cdcLogFiles))
+
+	logRegex := regexp.MustCompile(`handle a ddl job`)
+	tableNameRegex := regexp.MustCompile(tableName + "`")
+	timeStampRegex := regexp.MustCompile(`jobFinishTs=([0-9]+)`)
+	for _, f := range cdcLogFiles {
+		file, err := os.Open(f)
+		if err != nil {
+			log.Error("Failed to open file: %v", zap.Error(err))
+		}
+		defer file.Close()
+
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !logRegex.MatchString(line) || !tableNameRegex.MatchString(line) {
+				continue
+			}
+
+			matches := timeStampRegex.FindStringSubmatch(line)
+			if len(matches) > 1 {
+				fmt.Println("found first match line: ", matches[1], ": ", line)
+				// convert to uint64
+				result, err := strconv.ParseUint(matches[1], 10, 64)
+				if err != nil {
+					log.Error("Failed to parse uint64: %v", zap.Error(err))
+				}
+				return result, true
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			log.Error("Error scanning file: %v", zap.Error(err))
+		}
 	}
-	ddlJob := []struct {
-		Binlog struct {
-			FinishedTS uint64 `json:"FinishedTS"`
-		} `json:"binlog"`
-	}{{}}
-	err = json.Unmarshal(ddlJobJSON, &ddlJob)
-	if err != nil {
-		log.Warn("fail to unmarshal DDL history",
-			zap.String("URL", ddlJobURL), zap.String("resp", string(ddlJobJSON)), zap.Error(err))
-		return 0, false
-	}
-	log.Info("get end ts",
-		zap.String("tableName", tableName),
-		zap.Uint64("ts", ddlJob[0].Binlog.FinishedTS))
-	return ddlJob[0].Binlog.FinishedTS, true
+	return 0, false
 }

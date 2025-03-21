@@ -101,22 +101,14 @@ const (
 func (r *DMLEvent) ToRedoLog() *RedoLog {
 	r.FinishGetRow()
 	row, valid := r.GetNextRow()
-	if !valid {
-		log.Panic("DMLEvent.ToRedoLog must be called with a valid row")
-	}
 	r.FinishGetRow()
 
 	redoLog := &RedoLog{
 		RedoRow: RedoDMLEvent{
 			Row: &DMLEventInRedoLog{
-				StartTs:  r.StartTs,
-				CommitTs: r.CommitTs,
-				Table: &common.TableName{
-					Schema:      r.TableInfo.GetSchemaName(),
-					Table:       r.TableInfo.GetTableName(),
-					TableID:     r.PhysicalTableID,
-					IsPartition: r.TableInfo.IsPartitionTable(),
-				},
+				StartTs:      r.StartTs,
+				CommitTs:     r.CommitTs,
+				Table:        nil,
 				Columns:      nil,
 				PreColumns:   nil,
 				IndexColumns: nil,
@@ -127,60 +119,95 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 		Type: RedoLogTypeRow,
 	}
 
-	columnCount := len(r.TableInfo.GetColumns())
-	columns := make([]*RedoColumn, 0, columnCount)
-	switch row.RowType {
-	case RowTypeInsert:
-		redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
-	case RowTypeDelete:
-		redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
-	case RowTypeUpdate:
-		redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
-		redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
-	default:
-	}
+	if valid && r.TableInfo != nil {
+		redoLog.RedoRow.Row.Table = new(common.TableName)
+		*redoLog.RedoRow.Row.Table = r.TableInfo.TableName
 
-	for i, column := range r.TableInfo.GetColumns() {
-		if common.IsColCDCVisible(column) {
-			columns = append(columns, &RedoColumn{
-				Name:      column.Name.String(),
-				Type:      column.GetType(),
-				Charset:   column.GetCharset(),
-				Collation: column.GetCollate(),
-			})
-			switch row.RowType {
-			case RowTypeInsert:
-				v := parseColumnValue(&row.Row, column, i)
-				redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
-			case RowTypeDelete:
-				v := parseColumnValue(&row.PreRow, column, i)
-				redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
-			case RowTypeUpdate:
-				v := parseColumnValue(&row.Row, column, i)
-				redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
-				v = parseColumnValue(&row.PreRow, column, i)
-				redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
-			default:
+		columnCount := len(r.TableInfo.GetColumns())
+		columns := make([]*RedoColumn, 0, columnCount)
+		switch row.RowType {
+		case RowTypeInsert:
+			redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
+		case RowTypeDelete:
+			redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
+		case RowTypeUpdate:
+			redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
+			redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
+		default:
+		}
+
+		for i, column := range r.TableInfo.GetColumns() {
+			if common.IsColCDCVisible(column) {
+				columns = append(columns, &RedoColumn{
+					Name:      column.Name.String(),
+					Type:      column.GetType(),
+					Charset:   column.GetCharset(),
+					Collation: column.GetCollate(),
+				})
+				switch row.RowType {
+				case RowTypeInsert:
+					v := parseColumnValue(&row.Row, column, i)
+					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
+				case RowTypeDelete:
+					v := parseColumnValue(&row.PreRow, column, i)
+					redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
+				case RowTypeUpdate:
+					v := parseColumnValue(&row.Row, column, i)
+					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
+					v = parseColumnValue(&row.PreRow, column, i)
+					redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
+				default:
+				}
 			}
 		}
+		redoLog.RedoRow.Row.Columns = columns
+		redoLog.RedoRow.Row.PreColumns = columns
 	}
-	redoLog.RedoRow.Row.Columns = columns
-	redoLog.RedoRow.Row.PreColumns = columns
 
 	return redoLog
 }
 
 // ToRedoLog converts ddl event to redo log
 func (d *DDLEvent) ToRedoLog() *RedoLog {
-	ddlInRedoLog := &DDLEventInRedoLog{
-		StartTs:  d.GetStartTs(),
-		CommitTs: d.GetCommitTs(),
-		Query:    d.Query,
+	redoLog := &RedoLog{
+		RedoDDL: RedoDDLEvent{
+			DDL: &DDLEventInRedoLog{
+				StartTs:  d.GetStartTs(),
+				CommitTs: d.GetCommitTs(),
+				Query:    d.Query,
+			},
+			Type: d.Type,
+		},
+		Type: RedoLogTypeDDL,
 	}
-	return &RedoLog{
-		RedoDDL: RedoDDLEvent{DDL: ddlInRedoLog},
-		Type:    RedoLogTypeDDL,
+	if d.TableInfo != nil {
+		redoLog.RedoDDL.TableName = d.TableInfo.TableName
 	}
+
+	return redoLog
+}
+
+// GetCommitTs returns commit timestamp of the log event.
+func (r *RedoLog) GetCommitTs() common.Ts {
+	switch r.Type {
+	case RedoLogTypeRow:
+		return r.RedoRow.Row.CommitTs
+	case RedoLogTypeDDL:
+		return r.RedoDDL.DDL.CommitTs
+	default:
+		log.Panic("Unexpected redo log type")
+		return 0
+	}
+}
+
+// IsDelete checks whether it's a deletion or not.
+func (r RedoDMLEvent) IsDelete() bool {
+	return len(r.Row.PreColumns) > 0 && len(r.Row.Columns) == 0
+}
+
+// IsUpdate checks whether it's a update or not.
+func (r RedoDMLEvent) IsUpdate() bool {
+	return len(r.Row.PreColumns) > 0 && len(r.Row.Columns) > 0
 }
 
 func parseColumnValue(row *chunk.Row, column *model.ColumnInfo, i int) RedoColumnValue {
