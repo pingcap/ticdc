@@ -148,7 +148,7 @@ function kill_server() {
 			if [ -z "$cdc_pid_1" ]; then
 				continue
 			fi
-			kill -9 $cdc_pid_1
+			kill_cdc_pid $cdc_pid_1
 
 			sleep 15
 			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-$count" --addr "127.0.0.1:8300"
@@ -158,7 +158,7 @@ function kill_server() {
 			if [ -z "$cdc_pid_2" ]; then
 				continue
 			fi
-			kill -9 $cdc_pid_2
+			kill_cdc_pid $cdc_pid_2
 
 			sleep 15
 			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-$count" --addr "127.0.0.1:8301"
@@ -201,12 +201,12 @@ main() {
 
 	kill_server
 
-	sleep 15
+	sleep 10
 
 	# kill -9 $NORMAL_TABLE_DDL_PID $PARTITION_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5 $DML_PID_6 $DML_PID_7 $DML_PID_8 $DML_PID_9 $DML_PID_10
 	kill -9 $NORMAL_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
 
-	sleep 15
+	sleep 10
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 
