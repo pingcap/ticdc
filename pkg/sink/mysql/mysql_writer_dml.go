@@ -510,7 +510,7 @@ func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		// Set session variables first and then execute the transaction.
 		// we try to set write source for each txn,
 		// so we can use it to trace the data source
-		if err = SetWriteSource(w.cfg, tx); err != nil {
+		if err = SetWriteSource(w.ctx, w.cfg, tx); err != nil {
 			log.Error("Failed to set write source", zap.Error(err))
 			if rbErr := tx.Rollback(); rbErr != nil {
 				if errors.Cause(rbErr) != context.Canceled {

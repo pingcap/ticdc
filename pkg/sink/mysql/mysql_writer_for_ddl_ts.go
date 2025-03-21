@@ -512,7 +512,7 @@ func (w *MysqlWriter) createTable(dbName string, tableName string, createTableQu
 	}
 
 	// we try to set cdc write source for the ddl
-	if err = SetWriteSource(w.cfg, tx); err != nil {
+	if err = SetWriteSource(w.ctx, w.cfg, tx); err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil {
 			if errors.Cause(rbErr) != context.Canceled {
 				log.Error("Failed to rollback", zap.Error(err))
@@ -547,7 +547,10 @@ func (w *MysqlWriter) createTable(dbName string, tableName string, createTableQu
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: Exec fail; Query is %s", tableName, createTableQuery)))
 	}
 	err = tx.Commit()
-	return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: Commit Failed; Query is %s", tableName, createTableQuery)))
+	if err != nil {
+		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: Commit Failed; Query is %s", tableName, createTableQuery)))
+	}
+	return nil
 }
 
 func (w *MysqlWriter) createDDLTsTable() error {

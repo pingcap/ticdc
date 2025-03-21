@@ -37,6 +37,10 @@ import (
 var (
 	once         sync.Once
 	ddlTableInfo *event.DDLTableInfo
+	// ddl puller should never filter any DDL jobs even if
+	// the changefeed is in BDR mode, because the DDL jobs should
+	// be filtered before they are sent to the sink
+	ddlPullerFilterLoop = false
 )
 
 type ddlJobFetcher struct {
@@ -82,7 +86,7 @@ func newDDLJobFetcher(
 		advanceSubSpanResolvedTs := func(ts uint64) {
 			ddlJobFetcher.tryAdvanceResolvedTs(subID, ts)
 		}
-		subClient.Subscribe(subID, span, startTs, ddlJobFetcher.input, advanceSubSpanResolvedTs, 0)
+		subClient.Subscribe(subID, span, startTs, ddlJobFetcher.input, advanceSubSpanResolvedTs, 0, ddlPullerFilterLoop)
 	}
 
 	return ddlJobFetcher
