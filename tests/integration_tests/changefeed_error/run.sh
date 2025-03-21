@@ -73,7 +73,7 @@ function run() {
 
 	export GO_FAILPOINTS=''
 	cleanup_process $CDC_BINARY
-	
+
 	# make sure old capture key and old owner key expire in etcd
 	ensure $MAX_RETRIES "check_etcd_meta_not_exist '/tidb/cdc/default/__cdc_meta__/capture' 'capture'"
 	ensure $MAX_RETRIES "check_etcd_meta_not_exist '/tidb/cdc/default/__cdc_meta__/owner' 'owner'"
