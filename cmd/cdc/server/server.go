@@ -112,6 +112,16 @@ func (o *options) run(cmd *cobra.Command) error {
 	log.Info("TiCDC(new arch) server created",
 		zap.Strings("pd", o.pdEndpoints), zap.Stringer("config", o.serverConfig))
 
+	// shutdown is used to notify the server to shutdown (by closing the context) when receiving the signal, and exit the process.
+	shutdown := func() <-chan struct{} {
+		done := make(chan struct{})
+		cancel()
+		close(done)
+		return done
+	}
+	// Gracefully shutdown the server when receiving the signal, and exit the process.
+	util.InitSignalHandling(shutdown, cancel)
+
 	err = svr.Run(ctx)
 	if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 		log.Warn("cdc server exits with error", zap.Error(err))

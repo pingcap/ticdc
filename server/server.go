@@ -17,6 +17,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -51,7 +52,8 @@ import (
 )
 
 const (
-	cleanMetaDuration = 10 * time.Second
+	closeServiceTimeout = 15 * time.Second
+	cleanMetaDuration   = 10 * time.Second
 )
 
 type server struct {
@@ -87,6 +89,8 @@ type server struct {
 	// subModules is the modules will be start after PreServices are started
 	// And will be closed when the server is closing
 	subModules []common.SubModule
+
+	closed atomic.Bool
 }
 
 // New returns a new Server instance
@@ -275,6 +279,9 @@ func (c *server) GetCoordinator() (tiserver.Coordinator, error) {
 // it also closes the coordinator and processorManager
 // Note: this function should be reentrant
 func (c *server) Close(ctx context.Context) {
+	if !c.closed.CompareAndSwap(false, true) {
+		return
+	}
 	log.Info("server closing", zap.Any("ServerInfo", c.info))
 	// Safety: Here we mainly want to stop the coordinator
 	// and ignore it if the coordinator does not exist or is not set.
@@ -304,6 +311,8 @@ func (c *server) Close(ctx context.Context) {
 		log.Warn("failed to delete server info when server exited",
 			zap.String("captureID", string(c.info.ID)),
 			zap.Error(err))
+	} else {
+		log.Info("server info deleted from etcd", zap.String("captureID", string(c.info.ID)))
 	}
 
 	log.Info("server closed", zap.Any("ServerInfo", c.info))
