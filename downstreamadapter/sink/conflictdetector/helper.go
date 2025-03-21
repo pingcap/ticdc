@@ -113,7 +113,7 @@ func genKeyList(
 			return nil, nil
 		}
 
-		value, err := common.FormatColVal(row, columnInfos[i], i)
+		value, err := common.ExtractColVal(row, columnInfos[i], i)
 		if err != nil {
 			return nil, err
 		}

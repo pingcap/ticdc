@@ -28,8 +28,8 @@ import (
 
 var EmptyBytes = make([]byte, 0)
 
-// getColumnValue returns the column value in the row
-func FormatColVal(row *chunk.Row, col *model.ColumnInfo, idx int) (
+// ExtractColVal returns the column value in the row
+func ExtractColVal(row *chunk.Row, col *model.ColumnInfo, idx int) (
 	value interface{}, err error,
 ) {
 	if row.IsNull(idx) {

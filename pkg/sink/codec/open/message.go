@@ -20,11 +20,11 @@ import (
 	"strconv"
 
 	"github.com/pingcap/log"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
 
@@ -51,14 +51,14 @@ func (m *messageKey) Decode(data []byte) error {
 type column struct {
 	Type byte `json:"t"`
 	// Deprecated: please use Flag instead.
-	WhereHandle *bool                `json:"h,omitempty"`
-	Flag        model.ColumnFlagType `json:"f"`
-	Value       any                  `json:"v"`
+	WhereHandle *bool                     `json:"h,omitempty"`
+	Flag        commonType.ColumnFlagType `json:"f"`
+	Value       any                       `json:"v"`
 }
 
 // toRowChangeColumn converts from a codec column to a row changed column.
-func (c *column) toRowChangeColumn(name string) *model.Column {
-	col := new(model.Column)
+func (c *column) toRowChangeColumn(name string) *commonType.Column {
+	col := new(commonType.Column)
 	col.Type = c.Type
 	col.Flag = c.Flag
 	col.Name = name
@@ -158,21 +158,21 @@ func (m *messageRow) decode(data []byte) error {
 	if err != nil {
 		return errors.WrapError(errors.ErrUnmarshalFailed, err)
 	}
-	for colName, column := range m.Update {
-		m.Update[colName] = formatColumn(column)
+	for name, col := range m.Update {
+		m.Update[name] = formatColumn(col)
 	}
-	for colName, column := range m.Delete {
-		m.Delete[colName] = formatColumn(column)
+	for name, col := range m.Delete {
+		m.Delete[name] = formatColumn(col)
 	}
-	for colName, column := range m.PreColumns {
-		m.PreColumns[colName] = formatColumn(column)
+	for name, col := range m.PreColumns {
+		m.PreColumns[name] = formatColumn(col)
 	}
 	return nil
 }
 
 type messageDDL struct {
-	Query string             `json:"q"`
-	Type  timodel.ActionType `json:"t"`
+	Query string           `json:"q"`
+	Type  model.ActionType `json:"t"`
 }
 
 func (m *messageDDL) decode(data []byte) error {
