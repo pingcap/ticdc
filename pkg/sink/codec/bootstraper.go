@@ -108,9 +108,9 @@ func (b *bootstrapWorker) run(ctx context.Context) error {
 func (b *bootstrapWorker) addEvent(
 	ctx context.Context,
 	key model.TopicPartitionKey,
-	row *commonEvent.RowChangedEvent,
+	row *commonEvent.RowEvent,
 ) error {
-	table, ok := b.activeTables.Load(row.GetTableID())
+	table, ok := b.activeTables.Load(row.TableInfo.TableName.TableID)
 	if !ok {
 		tb := newTableStatistic(key, row)
 		b.activeTables.Store(tb.id, tb)
@@ -154,10 +154,9 @@ func (b *bootstrapWorker) sendBootstrapMsg(ctx context.Context, table *tableStat
 
 func NewBootstrapDDLEvent(tableInfo *commonType.TableInfo) *commonEvent.DDLEvent {
 	return &commonEvent.DDLEvent{
-		// StartTs:  0,
-		FinishedTs: 0,
-		// TableInfo:   tableInfo,
-		// IsBootstrap: true,
+		FinishedTs:  0,
+		TableInfo:   tableInfo,
+		IsBootstrap: true,
 	}
 }
 
@@ -230,9 +229,9 @@ type tableStatistic struct {
 	tableInfo atomic.Value
 }
 
-func newTableStatistic(key model.TopicPartitionKey, row *commonEvent.RowChangedEvent) *tableStatistic {
+func newTableStatistic(key model.TopicPartitionKey, row *commonEvent.RowEvent) *tableStatistic {
 	res := &tableStatistic{
-		id:    row.GetTableID(),
+		id:    row.TableInfo.TableName.TableID,
 		topic: key.Topic,
 	}
 	res.totalPartition.Store(key.TotalPartition)
@@ -253,7 +252,7 @@ func (t *tableStatistic) shouldSendBootstrapMsg(
 		t.counter.Load() >= sendBootstrapMsgCountInterval
 }
 
-func (t *tableStatistic) update(row *commonEvent.RowChangedEvent, totalPartition int32) {
+func (t *tableStatistic) update(row *commonEvent.RowEvent, totalPartition int32) {
 	t.counter.Add(1)
 	t.lastMsgReceivedTime.Store(time.Now())
 
