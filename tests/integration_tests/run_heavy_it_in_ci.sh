@@ -62,7 +62,6 @@ mysql_groups=(
 	'fail_over_ddl_mix_with_syncpoint'
 )
 
-
 kafka_groups=(
 	# G00
 	''
