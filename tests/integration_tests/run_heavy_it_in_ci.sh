@@ -64,37 +64,37 @@ group_num=${group#G}
 
 mysql_groups=(
 	# G00
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G01
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G02
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G03
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G04
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G05
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G06
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G07
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G08
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G09
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G10
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G11
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G12
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G13
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G14
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 	# G15
-	'fail_over_ddl_mix'
+	'fail_over_ddl_mix fail_over_ddl_A'
 )
 
 kafka_groups=(
