@@ -74,33 +74,29 @@ func newRegionRequestWorker(
 	}
 	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
 
-	waitForPreFetching := func() error {
+	waitForPreFetching := func() {
 		if worker.preFetchForConnecting != nil {
 			log.Panic("preFetchForConnecting should be nil",
 				zap.Uint64("workerID", worker.workerID),
 				zap.Uint64("storeID", store.storeID),
 				zap.String("addr", store.storeAddr))
 		}
-		for {
-			select {
-			case <-ctx.Done():
-				log.Warn("region request work receive context done, should return now")
-				return ctx.Err()
-			case region := <-worker.requestsCh:
-				if !region.isStopped() {
-					worker.preFetchForConnecting = new(regionInfo)
-					*worker.preFetchForConnecting = region
-					return nil
-				}
+		for regionRequest := range worker.requestsCh {
+			if !regionRequest.isStopped() {
+				worker.preFetchForConnecting = &regionRequest
+				return
 			}
 		}
 	}
 
 	g.Go(func() error {
 		for {
-			if err := waitForPreFetching(); err != nil {
-				return err
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
 			}
+			waitForPreFetching()
 			var regionErr error
 			if err := version.CheckStoreVersion(ctx, worker.client.pd, worker.store.storeID); err != nil {
 				if errors.Cause(err) == context.Canceled {
