@@ -91,8 +91,6 @@ func newRegionRequestWorker(
 					worker.preFetchForConnecting = new(regionInfo)
 					*worker.preFetchForConnecting = region
 					return nil
-				} else {
-					log.Warn("region is stopped, ignore it")
 				}
 			}
 		}
@@ -335,13 +333,6 @@ func (s *regionRequestWorker) processRegionSendTask(
 				zap.Error(err))
 			return errors.Trace(err)
 		}
-		log.Warn("region request worker send request to grpc stream",
-			zap.Uint64("workerID", s.workerID),
-			zap.Uint64("subscriptionID", req.RequestId),
-			zap.Uint64("regionID", req.RegionId),
-			zap.Uint64("storeID", s.store.storeID),
-			zap.String("addr", s.store.storeAddr),
-			zap.String("semver", req.Header.TicdcVersion))
 		// TODO: add a metric?
 		return nil
 	}
