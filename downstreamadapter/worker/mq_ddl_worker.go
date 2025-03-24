@@ -117,7 +117,7 @@ func (w *MQDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent
 			log.Info("Skip ddl event", zap.Uint64("commitTs", e.GetCommitTs()),
 				zap.String("query", e.Query),
 				zap.String("changefeed", w.changeFeedID.String()))
-			return nil
+			continue
 		}
 		topic := w.eventRouter.GetTopicForDDL(e)
 		// Notice: We must call GetPartitionNum here,

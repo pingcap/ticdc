@@ -471,16 +471,21 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 	switch colInfo.GetType() {
 	case mysql.TypeBit:
 		n := ft.GetFlen()
-		v := datum.GetMysqlBit().ToBitLiteralString(true)
+		v, err := datum.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
+		if err != nil {
+			return errors.WrapError(
+				errors.ErrDebeziumEncodeFailed,
+				err)
+		}
 		// Debezium behavior:
 		// BIT(1) → BOOLEAN
 		// BIT(>1) → BYTES		The byte[] contains the bits in little-endian form and is sized to
 		//						contain the specified number of bits.
 		if n == 1 {
-			writer.WriteBoolField(colName, v != "0")
+			writer.WriteBoolField(colName, v != 0)
 			return nil
 		} else {
-			c.writeBinaryField(writer, colName, common.UnsafeStringToBytes(v))
+			c.writeBinaryField(writer, colName, getBitFromUint64(n, v))
 			return nil
 		}
 
@@ -556,18 +561,29 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		// Debezium behavior from doc:
 		// > Such columns are converted into epoch milliseconds or microseconds based on the
 		// > column's precision by using UTC.
-		v := datum.GetString()
-		if v == "CURRENT_TIMESTAMP" {
-			writer.WriteInt64Field(colName, 0)
-			return nil
+		value := datum.GetValue()
+		var v types.Time
+		switch val := value.(type) {
+		case string:
+			if val == "CURRENT_TIMESTAMP" {
+				writer.WriteInt64Field(colName, 0)
+				return nil
+			} else {
+				t, err := types.StrToDateTime(types.DefaultStmtNoWarningContext.WithLocation(c.config.TimeZone), val, ft.GetDecimal())
+				if err != nil {
+					return errors.WrapError(
+						errors.ErrDebeziumEncodeFailed,
+						err)
+				}
+				v = t
+			}
+		case types.Time:
+			v = val
+		default:
+			return errors.Trace(
+				errors.ErrDebeziumEncodeFailed)
 		}
-		t, err := types.StrToDateTime(types.DefaultStmtNoWarningContext, v, ft.GetDecimal())
-		if err != nil {
-			return errors.WrapError(
-				errors.ErrDebeziumEncodeFailed,
-				err)
-		}
-		gt, err := t.GoTime(time.UTC)
+		gt, err := v.GoTime(time.UTC)
 		if err != nil {
 			if mysql.HasNotNullFlag(ft.GetFlag()) {
 				writer.WriteInt64Field(colName, 0)
@@ -601,22 +617,30 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		// > based on the server (or session's) current time zone. The time zone will be queried from
 		// > the server by default. If this fails, it must be specified explicitly by the database
 		// > connectionTimeZone MySQL configuration option.
-		v := datum.GetString()
-		if v == "CURRENT_TIMESTAMP" {
-			if mysql.HasNotNullFlag(ft.GetFlag()) {
-				writer.WriteStringField(colName, "1970-01-01T00:00:00Z")
+		value := datum.GetValue()
+		var v types.Time
+		switch val := value.(type) {
+		case string:
+			if val == "CURRENT_TIMESTAMP" {
+				if mysql.HasNotNullFlag(ft.GetFlag()) {
+					writer.WriteStringField(colName, "1970-01-01T00:00:00Z")
+				} else {
+					writer.WriteNullField(colName)
+				}
+				return nil
 			} else {
-				writer.WriteNullField(colName)
+				t, err := types.StrToDateTime(types.DefaultStmtNoWarningContext.WithLocation(c.config.TimeZone), val, ft.GetDecimal())
+				if err != nil {
+					return errors.WrapError(
+						errors.ErrDebeziumEncodeFailed,
+						err)
+				}
+				v = t
 			}
-			return nil
+		case types.Time:
+			v = val
 		}
-		t, err := types.StrToDateTime(types.DefaultStmtNoWarningContext.WithLocation(c.config.TimeZone), v, ft.GetDecimal())
-		if err != nil {
-			return errors.WrapError(
-				errors.ErrDebeziumEncodeFailed,
-				err)
-		}
-		if t.Compare(types.MinTimestamp) < 0 {
+		if v.Compare(types.MinTimestamp) < 0 {
 			if row.IsNull(idx) {
 				writer.WriteNullField(colName)
 			} else {
@@ -624,7 +648,7 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 			}
 			return nil
 		}
-		gt, err := t.GoTime(c.config.TimeZone)
+		gt, err := v.GoTime(c.config.TimeZone)
 		if err != nil {
 			return errors.WrapError(
 				errors.ErrDebeziumEncodeFailed,
@@ -653,17 +677,37 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		// actually uses INT64. Debezium also uses INT32 for SMALLINT.
 		maxValue := types.GetMaxValue(ft)
 		minValue := types.GetMinValue(ft)
-		v := datum.GetInt64()
-		if v < minValue.GetInt64() || v > maxValue.GetInt64() {
-			writer.WriteAnyField(colName, -1)
+		isUnsigned := mysql.HasUnsignedFlag(colInfo.GetFlag())
+		if isUnsigned {
+			v := datum.GetUint64()
+			if ft.GetType() == mysql.TypeLonglong && v == maxValue.GetUint64() || v > maxValue.GetUint64() {
+				writer.WriteAnyField(colName, -1)
+			} else {
+				writer.WriteInt64Field(colName, int64(v))
+			}
 		} else {
-			writer.WriteInt64Field(colName, v)
+			v := datum.GetInt64()
+			if v < minValue.GetInt64() || v > maxValue.GetInt64() {
+				writer.WriteAnyField(colName, -1)
+			} else {
+				writer.WriteInt64Field(colName, v)
+			}
 		}
 		return nil
 
-	case mysql.TypeDouble, mysql.TypeFloat:
+	case mysql.TypeDouble:
 		v := datum.GetFloat64()
 		writer.WriteFloat64Field(colName, v)
+		return nil
+
+	case mysql.TypeFloat:
+		v := datum.GetFloat32()
+		writer.WriteFloat32Field(colName, v)
+		return nil
+
+	case mysql.TypeYear:
+		v := datum.GetInt64()
+		writer.WriteInt64Field(colName, v)
 		return nil
 
 	case mysql.TypeTiDBVectorFloat32:
@@ -671,8 +715,10 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		writer.WriteStringField(colName, v.String())
 		return nil
 	}
-
-	writer.WriteAnyField(colName, datum.GetValue())
+	// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
+	// Make specified convert upper if you need
+	// Go sql support type ref to: https://github.com/golang/go/blob/go1.17.4/src/database/sql/driver/types.go#L236
+	writer.WriteAnyField(colName, fmt.Sprintf("%v", datum.GetValue()))
 	return nil
 }
 
@@ -1001,6 +1047,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 	switch e.GetDDLType() {
 	case timodel.ActionCreateSchema,
 		timodel.ActionCreateTable,
+		timodel.ActionCreateTables,
 		timodel.ActionCreateView:
 		changeType = "CREATE"
 	case timodel.ActionAddColumn,
