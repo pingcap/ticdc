@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/security"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	grpcstatus "google.golang.org/grpc/status"
@@ -64,7 +63,6 @@ type regionRequestWorker struct {
 func newRegionRequestWorker(
 	ctx context.Context,
 	client *SubscriptionClient,
-	credential *security.Credential,
 	g *errgroup.Group,
 	store *requestedStore,
 ) *regionRequestWorker {
@@ -86,12 +84,15 @@ func newRegionRequestWorker(
 		for {
 			select {
 			case <-ctx.Done():
+				log.Warn("region request work receive context done, should return now")
 				return ctx.Err()
 			case region := <-worker.requestsCh:
 				if !region.isStopped() {
 					worker.preFetchForConnecting = new(regionInfo)
 					*worker.preFetchForConnecting = region
 					return nil
+				} else {
+					log.Warn("region is stopped, ignore it")
 				}
 			}
 		}
@@ -118,7 +119,7 @@ func newRegionRequestWorker(
 					regionErr = &sendRequestToStoreErr{}
 				}
 			} else {
-				if canceled := worker.run(ctx, credential); canceled {
+				if canceled := worker.run(ctx); canceled {
 					return nil
 				}
 				regionErr = &sendRequestToStoreErr{}
@@ -150,7 +151,7 @@ func newRegionRequestWorker(
 	return worker
 }
 
-func (s *regionRequestWorker) run(ctx context.Context, credential *security.Credential) (canceled bool) {
+func (s *regionRequestWorker) run(ctx context.Context) (canceled bool) {
 	isCanceled := func() bool {
 		select {
 		case <-ctx.Done():
@@ -174,7 +175,7 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 	}()
 
 	g, gctx := errgroup.WithContext(ctx)
-	conn, err := Connect(gctx, credential, s.store.storeAddr)
+	conn, err := Connect(gctx, s.client.credential, s.store.storeAddr)
 	if err != nil {
 		log.Warn("region request worker create grpc stream failed",
 			zap.Uint64("workerID", s.workerID),
@@ -334,6 +335,13 @@ func (s *regionRequestWorker) processRegionSendTask(
 				zap.Error(err))
 			return errors.Trace(err)
 		}
+		log.Warn("region request worker send request to grpc stream",
+			zap.Uint64("workerID", s.workerID),
+			zap.Uint64("subscriptionID", req.RequestId),
+			zap.Uint64("regionID", req.RegionId),
+			zap.Uint64("storeID", s.store.storeID),
+			zap.String("addr", s.store.storeAddr),
+			zap.String("semver", req.Header.TicdcVersion))
 		// TODO: add a metric?
 		return nil
 	}

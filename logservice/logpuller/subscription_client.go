@@ -503,10 +503,9 @@ func (s *SubscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		rs = &requestedStore{storeID: storeID, storeAddr: storeAddr}
 		stores[storeID] = rs
 		for i := uint(0); i < s.config.RegionRequestWorkerPerStore; i++ {
-			requestWorker := newRegionRequestWorker(ctx, s, s.credential, eg, rs)
+			requestWorker := newRegionRequestWorker(ctx, s, eg, rs)
 			rs.requestWorkers = append(rs.requestWorkers, requestWorker)
 		}
-
 		return rs
 	}
 
@@ -544,13 +543,6 @@ func (s *SubscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			store := getStore(region.rpcCtx.Peer.StoreId, region.rpcCtx.Addr)
 			worker := store.getRequestWorker()
 			worker.requestsCh <- region
-
-			log.Debug("subscription client will request a region",
-				zap.Uint64("workID", worker.workerID),
-				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
-				zap.Uint64("regionID", region.verID.GetID()),
-				zap.Uint64("storeID", store.storeID),
-				zap.String("addr", store.storeAddr))
 		}
 	}
 }
