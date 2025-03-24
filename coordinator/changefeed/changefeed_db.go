@@ -106,31 +106,33 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
+	var nodeID node.ID
 	cf, ok := db.changefeeds[cfID]
-	if ok {
-		// remove the changefeed
-		delete(db.changefeeds, cfID)
-		delete(db.stopped, cf.ID)
-		db.RemoveReplicaWithoutLock(cf)
-
-		if remove {
-			log.Info("remove changefeed", zap.String("changefeed", cf.ID.String()))
-		} else {
-			log.Info("stop changefeed", zap.String("changefeed", cfID.String()))
-			// push back to stopped
-			db.changefeeds[cfID] = cf
-			db.stopped[cfID] = cf
-		}
-
-		nodeID := cf.GetNodeID()
-		if cf.GetNodeID() == "" {
-			log.Info("changefeed is not scheduled, delete directly")
-			return ""
-		}
-		cf.SetNodeID("")
+	if !ok {
 		return nodeID
 	}
-	return ""
+
+	// remove the changefeed
+	delete(db.changefeeds, cfID)
+	delete(db.stopped, cf.ID)
+	db.RemoveReplicaWithoutLock(cf)
+
+	if remove {
+		log.Info("remove changefeed", zap.String("changefeed", cf.ID.String()))
+	} else {
+		log.Info("stop changefeed", zap.String("changefeed", cfID.String()))
+		// push back to stopped
+		db.changefeeds[cfID] = cf
+		db.stopped[cfID] = cf
+	}
+
+	nodeID = cf.GetNodeID()
+	if nodeID == "" {
+		log.Info("changefeed is not scheduled, delete directly")
+		return ""
+	}
+	cf.SetNodeID("")
+	return nodeID
 }
 
 // GetSize returns the size of the all chagnefeeds
