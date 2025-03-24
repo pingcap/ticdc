@@ -30,15 +30,22 @@ var (
 	GoVersion      = "None"
 )
 
+var (
+	releaseSemver string
+)
+
 // ReleaseSemver returns a valid Semantic Versions or an empty if the
 // ReleaseVersion is not set at compile time.
 func ReleaseSemver() string {
-	s := SanitizeVersion(ReleaseVersion)
-	v, err := semver.NewVersion(s)
-	if err != nil {
-		return ""
+	if releaseSemver == "" {
+		s := SanitizeVersion(ReleaseVersion)
+		v, err := semver.NewVersion(s)
+		if err != nil {
+			return ""
+		}
+		releaseSemver = v.String()
 	}
-	return v.String()
+	return releaseSemver
 }
 
 // LogVersionInfo prints the CDC version information.
