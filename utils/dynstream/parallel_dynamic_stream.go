@@ -85,11 +85,11 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Start() {
 func (s *parallelDynamicStream[A, P, T, D, H]) Close() {
 	// clean pathMap, to avoid sending into a closed channel after close()
 	{
-		s.pathMap.RLock()
+		s.pathMap.Lock()
 		for k := range s.pathMap.m {
 			delete(s.pathMap.m, k)
 		}
-		s.pathMap.RUnlock()
+		s.pathMap.Unlock()
 	}
 
 	for _, ds := range s.streams {
