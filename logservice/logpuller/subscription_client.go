@@ -476,9 +476,16 @@ type requestedStore struct {
 	requestWorkers []*regionRequestWorker
 }
 
-func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
+func (rs *requestedStore) broadcastRegionRequest(region regionInfo) {
+	for _, worker := range rs.requestWorkers {
+		worker.sendRegionRequest(region)
+	}
+}
+
+func (rs *requestedStore) sendRegionRequest(region regionInfo) {
 	index := rs.nextWorker.Add(1) % uint32(len(rs.requestWorkers))
-	return rs.requestWorkers[index]
+	worker := rs.requestWorkers[index]
+	worker.sendRegionRequest(region)
 }
 
 // handleRegions receives regionInfo from regionCh and attch rpcCtx to them,
@@ -517,9 +524,7 @@ func (s *SubscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		case region := <-s.regionCh:
 			if region.isStopped() {
 				for _, rs := range stores {
-					for _, worker := range rs.requestWorkers {
-						_ = worker.sendRegionRequest(ctx, region)
-					}
+					rs.broadcastRegionRequest(region)
 				}
 				continue
 			}
@@ -531,11 +536,7 @@ func (s *SubscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			}
 
 			store := getStore(region.rpcCtx.Peer.StoreId, region.rpcCtx.Addr)
-			worker := store.getRequestWorker()
-			err := worker.sendRegionRequest(ctx, region)
-			if err != nil {
-				return err
-			}
+			store.sendRegionRequest(region)
 		}
 	}
 }

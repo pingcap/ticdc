@@ -97,13 +97,12 @@ func (o *options) run(cmd *cobra.Command) error {
 		os.Exit(1)
 	}
 	log.Info("init log", zap.String("file", loggerConfig.File), zap.String("level", loggerConfig.Level))
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	version.LogVersionInfo("Change Data Capture (CDC)")
 	log.Info("The TiCDC release version", zap.String("ReleaseVersion", version.ReleaseVersion))
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	
 	util.LogHTTPProxies()
 	svr, err := server.New(o.serverConfig, o.pdEndpoints)
 	if err != nil {

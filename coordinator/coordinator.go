@@ -67,8 +67,6 @@ import (
 // 5. Controller reports checkpoint TS
 // 6. Coordinator saves checkpoint TS to meta store
 
-var updateGCTickerInterval = 1 * time.Minute
-
 // coordinator implements the Coordinator interface
 type coordinator struct {
 	nodeInfo     *node.Info
@@ -204,14 +202,14 @@ func (c *coordinator) Run(ctx context.Context) error {
 // 2. store the changefeed checkpointTs to meta store
 // 3. handle the state changed event
 func (c *coordinator) run(ctx context.Context) error {
+	var updateGCTickerInterval = time.Minute
 	failpoint.Inject("InjectUpdateGCTickerInterval", func(val failpoint.Value) {
 		updateGCTickerInterval = time.Duration(val.(int) * int(time.Millisecond))
 	})
 	gcTick := time.NewTicker(updateGCTickerInterval)
-
-	defer gcTick.Stop()
-	updateMetricsTicker := time.NewTicker(time.Second * 1)
-	defer updateMetricsTicker.Stop()
+	defer func() {
+		gcTick.Stop()
+	}()
 
 	failpoint.Inject("coordinator-run-with-error", func() error {
 		return errors.New("coordinator run with error")
@@ -222,7 +220,7 @@ func (c *coordinator) run(ctx context.Context) error {
 			return ctx.Err()
 		case <-gcTick.C:
 			if err := c.updateGCSafepoint(ctx); err != nil {
-				log.Warn("update gc safepoint failed",
+				log.Warn("update gc safePoint failed",
 					zap.Error(err))
 			}
 			now := time.Now()

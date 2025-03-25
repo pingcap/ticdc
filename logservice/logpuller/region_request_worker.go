@@ -62,13 +62,8 @@ type regionRequestWorker struct {
 	requestHeader *cdcpb.Header
 }
 
-func (s *regionRequestWorker) sendRegionRequest(ctx context.Context, region regionInfo) error {
-	select {
-	case <-ctx.Done():
-		return errors.Trace(ctx.Err())
-	case s.requestsCh <- region:
-	}
-	return nil
+func (s *regionRequestWorker) sendRegionRequest(region regionInfo) {
+	s.requestsCh <- region
 }
 
 func newRegionRequestWorker(
