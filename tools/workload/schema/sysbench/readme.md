@@ -37,6 +37,7 @@ This command:
 ```
 
 This command:
+
 - Runs updates on the `k` column using range-based updates
 - Uses 16 threads dedicated to updates
 - Divides the table into 5 update ranges for better concurrency
