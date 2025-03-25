@@ -14,14 +14,13 @@
 package api
 
 import (
-	"net/http/pprof"
-
 	"github.com/gin-gonic/gin"
 	v1 "github.com/pingcap/ticdc/api/v1"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"net/http/pprof"
 )
 
 // RegisterRoutes create a router for OpenAPI
@@ -43,7 +42,7 @@ func RegisterRoutes(
 	pprofGroup.GET("/symbol", gin.WrapF(pprof.Symbol))
 	pprofGroup.GET("/trace", gin.WrapF(pprof.Trace))
 	pprofGroup.GET("/threadcreate", gin.WrapF(pprof.Handler("threadcreate").ServeHTTP))
-
+	pprofGroup.GET("/block", gin.WrapF(pprof.Handler("block").ServeHTTP))
 	// Promtheus metrics API
 	prometheus.DefaultGatherer = registry
 	router.Any("/metrics", gin.WrapH(promhttp.Handler()))

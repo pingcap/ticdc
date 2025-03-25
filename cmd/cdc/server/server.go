@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -122,6 +123,7 @@ func (o *options) run(cmd *cobra.Command) error {
 	// Gracefully shutdown the server when receiving the signal, and exit the process.
 	util.InitSignalHandling(shutdown, cancel)
 
+	runtime.SetBlockProfileRate(1)
 	err = svr.Run(ctx)
 	if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 		log.Warn("cdc server exits with error", zap.Error(err))
