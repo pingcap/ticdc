@@ -20,10 +20,12 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
+	"sync/atomic"
+
+	"workload/schema"
 
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
-	"workload/schema"
 )
 
 const createTable = `
@@ -37,12 +39,37 @@ KEY k_1 (k)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
 `
 
+const (
+	padStringLength = 20
+	cacheSize       = 100000
+)
+
+var cachePadString = make(map[int]string)
+var cacheIdx atomic.Int64
+
+// InitPadStringCache initializes the cache with random pad strings
+func InitPadStringCache() {
+	for i := 0; i < cacheSize; i++ {
+		cachePadString[i] = genRandomPadString(padStringLength)
+	}
+	log.Info("Initialized pad string cache",
+		zap.Int("cacheSize", cacheSize),
+		zap.Int("stringLength", padStringLength))
+}
+
+func getPadString() string {
+	// Get a random index from the cache
+	idx := cacheIdx.Add(1) % int64(cacheSize)
+	return cachePadString[int(idx)]
+}
+
 type SysbenchWorkload struct {
 	mu                     sync.RWMutex
 	tableUpdateRangesCache map[int]*schema.TableUpdateRangeCache
 }
 
 func NewSysbenchWorkload() schema.Workload {
+	InitPadStringCache()
 	return &SysbenchWorkload{
 		tableUpdateRangesCache: make(map[int]*schema.TableUpdateRangeCache),
 	}
@@ -56,11 +83,13 @@ func (c *SysbenchWorkload) BuildCreateTableStatement(n int) string {
 func (c *SysbenchWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	n := rand.Int63()
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf("insert into sbtest%d (id, k, c, pad) values(%d, %d, 'abcdefghijklmnopsrstuvwxyzabcd', 'abcdefghijklmnopsrst')", tableN, n, n))
+	buf.WriteString(fmt.Sprintf("insert into sbtest%d (id, k, c, pad) values(%d, %d, 'abcdefghijklmnopsrstuvwxyzabcd', '%s')",
+		tableN, n, n, getPadString()))
 
 	for r := 1; r < batchSize; r++ {
 		n = rand.Int63()
-		buf.WriteString(fmt.Sprintf(",(%d, %d, 'abcdefghijklmnopsrstuvwxyzabcd', 'abcdefghijklmnopsrst')", n, n))
+		buf.WriteString(fmt.Sprintf(",(%d, %d, 'abcdefghijklmnopsrstuvwxyzabcd', '%s')",
+			n, n, getPadString()))
 	}
 	return buf.String()
 }
@@ -193,14 +222,21 @@ func (c *SysbenchWorkload) divideIntoRanges(cache *schema.TableUpdateRangeCache,
 
 // buildRangeUpdateSQL builds the final update SQL for a range
 func (c *SysbenchWorkload) buildRangeUpdateSQL(tableIndex int, updateRange *schema.TableUpdateRange) string {
-	n := rand.Int63()
 	var buf bytes.Buffer
 	buf.WriteString(fmt.Sprintf(
-		"update sbtest%d set k = %d where id between %d and %d;",
+		"update sbtest%d set pad = '%s' where id between %d and %d;",
 		tableIndex,
-		n,
+		getPadString(),
 		updateRange.Start,
 		updateRange.End,
 	))
 	return buf.String()
+}
+
+func genRandomPadString(length int) string {
+	buf := make([]byte, length)
+	for i := 0; i < length; i++ {
+		buf[i] = byte(rand.Intn(26) + 97)
+	}
+	return string(buf)
 }

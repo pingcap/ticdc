@@ -37,10 +37,10 @@ This command:
 ```
 
 This command:
-
-- Runs updates on the `k` column using range-based updates
+- Runs updates on the `pad` column using range-based updates
 - Uses 16 threads dedicated to updates
 - Divides the table into 5 update ranges for better concurrency
+- Updates use pre-cached random 20-byte strings for better performance
 
 ### Multiple Databases Mode
 
@@ -117,7 +117,8 @@ CREATE TABLE sbtest%d (
 
 - Updates are performed using range-based operations for better efficiency
 - The workload maintains a cache of update ranges to ensure even distribution
-- Each update modifies the `k` column with random values within specified ID ranges
+- Each update modifies the `pad` column with pre-cached random strings within specified ID ranges
+- The workload pre-generates 100,000 random 20-byte strings for pad values to improve performance
 - Multiple tables are supported through the `-table-count` parameter
 - When using multiple databases, the total workload is distributed evenly across all databases and tables
 - Each thread operates independently on its assigned database and table
