@@ -523,6 +523,8 @@ func (p *persistentStorage) doGc(gcTs uint64) error {
 		// It might happen when all changefeed is removed in the maintainer side,
 		// the gc safe point thus advanced.
 		log.Warn("gc safe point is larger than resolvedTs, ignore it",
+			zap.Uint64("gcTs", gcTs),
+			zap.Uint64("resolvedTs", p.upperBound.ResolvedTs))
 	}
 	if gcTs <= p.gcTs {
 		p.mu.Unlock()
