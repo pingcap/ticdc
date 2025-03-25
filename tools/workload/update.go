@@ -23,6 +23,8 @@ import (
 	"workload/schema"
 	pbank2 "workload/schema/bank2"
 
+	psysbench "workload/schema/sysbench"
+
 	plog "github.com/pingcap/log"
 	"go.uber.org/zap"
 )
@@ -90,8 +92,9 @@ func (app *WorkloadApp) genUpdateTask(output chan updateTask) {
 		tableIndex := rand.Intn(app.Config.TableCount) + app.Config.TableStartIndex
 		task := updateTask{
 			UpdateOption: schema.UpdateOption{
-				Table: tableIndex,
-				Batch: app.Config.BatchSize,
+				TableIndex: tableIndex,
+				Batch:      app.Config.BatchSize,
+				RangeNum:   app.Config.RangeNum,
 			},
 		}
 		output <- task
@@ -134,17 +137,30 @@ func (app *WorkloadApp) processUpdateTask(conn *sql.Conn, task updateTask) error
 
 // executeUpdate performs the actual update operation based on workload type
 func (app *WorkloadApp) executeUpdate(conn *sql.Conn, task updateTask) (sql.Result, error) {
-	if app.Config.WorkloadType == bank2 {
+	switch app.Config.WorkloadType {
+	case bank2:
 		return app.executeBank2Update(conn, task)
+	case sysbench:
+		return app.executeSysbenchUpdate(conn, task)
+	default:
+		return app.executeRegularUpdate(conn, task)
 	}
-	return app.executeRegularUpdate(conn, task)
 }
 
 // executeBank2Update handles updates specific to bank2 workload
 func (app *WorkloadApp) executeBank2Update(conn *sql.Conn, task updateTask) (sql.Result, error) {
 	task.UpdateOption.Batch = 1
 	updateSQL, values := app.Workload.(*pbank2.Bank2Workload).BuildUpdateSqlWithValues(task.UpdateOption)
-	return app.executeWithValues(conn, updateSQL, task.UpdateOption.Table, values)
+	return app.executeWithValues(conn, updateSQL, task.UpdateOption.TableIndex, values)
+}
+
+// executeSysbenchUpdate handles updates specific to sysbench workload
+func (app *WorkloadApp) executeSysbenchUpdate(conn *sql.Conn, task updateTask) (sql.Result, error) {
+	updateSQL := app.Workload.(*psysbench.SysbenchWorkload).BuildUpdateSqlWithConn(conn, task.UpdateOption)
+	if updateSQL == "" {
+		return nil, nil
+	}
+	return app.execute(conn, updateSQL, task.TableIndex)
 }
 
 // executeRegularUpdate handles updates for non-bank2 workloads
@@ -153,7 +169,7 @@ func (app *WorkloadApp) executeRegularUpdate(conn *sql.Conn, task updateTask) (s
 	if updateSQL == "" {
 		return nil, nil
 	}
-	return app.execute(conn, updateSQL, task.Table)
+	return app.execute(conn, updateSQL, task.TableIndex)
 }
 
 // handleUpdateError processes update operation errors
@@ -174,7 +190,7 @@ func (app *WorkloadApp) processUpdateResult(res sql.Result, task updateTask) err
 	}
 
 	cnt, err := res.RowsAffected()
-	if err != nil || cnt < int64(task.Batch) {
+	if err != nil {
 		plog.Info("get rows affected error",
 			zap.Error(err),
 			zap.Int64("affectedRows", cnt),
@@ -187,7 +203,7 @@ func (app *WorkloadApp) processUpdateResult(res sql.Result, task updateTask) err
 
 	if task.IsSpecialUpdate {
 		plog.Info("update full table succeed",
-			zap.Int("table", task.Table),
+			zap.Int("table", task.TableIndex),
 			zap.Int64("affectedRows", cnt))
 	}
 

@@ -19,7 +19,7 @@ import (
 	"sync"
 )
 
-// WorkloadConfig 保存工作负载的所有配置
+// WorkloadConfig saves all the configurations for the workload
 type WorkloadConfig struct {
 	// Database related
 	DBHost     string
@@ -45,10 +45,13 @@ type WorkloadConfig struct {
 	OnlyDDL         bool
 
 	// Special workload config
-	RowSize               int
-	LargeRowSize          int
-	LargeRowRatio         float64
+	RowSize       int
+	LargeRowSize  int
+	LargeRowRatio float64
+	// Only for bankupdate workload
 	UpdateLargeColumnSize int
+	// For sysbench workload
+	RangeNum int
 
 	// Log related
 	LogFile  string
@@ -58,7 +61,7 @@ type WorkloadConfig struct {
 // NewWorkloadConfig creates a new config with default values
 func NewWorkloadConfig() *WorkloadConfig {
 	return &WorkloadConfig{
-		// 默认数据库配置
+		// Default database config
 		DBHost:     "127.0.0.1",
 		DBPort:     4000,
 		DBUser:     "root",
@@ -67,7 +70,7 @@ func NewWorkloadConfig() *WorkloadConfig {
 		DBPrefix:   "",
 		DBNum:      1,
 
-		// 默认工作负载配置
+		// Default workload config
 		WorkloadType:        "sysbench",
 		TableCount:          1,
 		TableStartIndex:     0,
@@ -76,18 +79,23 @@ func NewWorkloadConfig() *WorkloadConfig {
 		TotalRowCount:       1000000000,
 		PercentageForUpdate: 0,
 
-		// 默认行为控制
+		// Action control
 		Action:          "prepare",
 		SkipCreateTable: false,
 		OnlyDDL:         false,
 
-		// 特殊工作负载配置
-		RowSize:               10240,
-		LargeRowSize:          1024 * 1024,
-		LargeRowRatio:         0.0,
+		// For large row workload
+		RowSize:       10240,
+		LargeRowSize:  1024 * 1024,
+		LargeRowRatio: 0.0,
+
+		// For bankupdate workload
 		UpdateLargeColumnSize: 1024,
 
-		// 日志相关
+		// For sysbench workload
+		RangeNum: 5,
+
+		// Log related
 		LogFile:  "workload.log",
 		LogLevel: "info",
 	}
@@ -119,10 +127,12 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.IntVar(&c.LargeRowSize, "large-row-size", c.LargeRowSize, "the size of the large row")
 	flag.Float64Var(&c.LargeRowRatio, "large-ratio", c.LargeRowRatio, "large row ratio in the each transaction")
 	flag.IntVar(&c.UpdateLargeColumnSize, "update-large-column-size", c.UpdateLargeColumnSize, "the size of the large column to update")
+	// For sysbench workload
+	flag.IntVar(&c.RangeNum, "range-num", c.RangeNum, "the number of ranges for sysbench workload")
 
 	flag.Parse()
 
-	// 验证命令行参数
+	// Validate command line arguments
 	if flags := flag.Args(); len(flags) > 0 {
 		return fmt.Errorf("unparsed flags: %v", flags)
 	}

@@ -280,7 +280,7 @@ func (app *WorkloadApp) doInsert(conn *sql.Conn) error {
 }
 
 // execute executes a SQL statement
-func (app *WorkloadApp) execute(conn *sql.Conn, sql string, n int) (sql.Result, error) {
+func (app *WorkloadApp) execute(conn *sql.Conn, sql string, tableIndex int) (sql.Result, error) {
 	app.Stats.QueryCount.Add(1)
 	res, err := conn.ExecContext(context.Background(), sql)
 	if err != nil {
@@ -289,7 +289,7 @@ func (app *WorkloadApp) execute(conn *sql.Conn, sql string, n int) (sql.Result, 
 			return res, err
 		}
 		// if table not exists, we create it
-		_, err := conn.ExecContext(context.Background(), app.Workload.BuildCreateTableStatement(n))
+		_, err := conn.ExecContext(context.Background(), app.Workload.BuildCreateTableStatement(tableIndex))
 		if err != nil {
 			plog.Info("create table error: ", zap.Error(err))
 			return res, err

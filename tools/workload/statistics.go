@@ -96,7 +96,7 @@ func (app *WorkloadApp) reportMetrics() {
 		// Print statistics
 		app.printStats(stats)
 
-		if stats.flushedRowCount > app.Config.TotalRowCount {
+		if stats.flushedRowCount > app.Config.TotalRowCount && app.Config.Action != "update" {
 			plog.Info("total row count reached",
 				zap.Uint64("flushedRowCount", stats.flushedRowCount),
 				zap.Uint64("totalRowCount", app.Config.TotalRowCount))
