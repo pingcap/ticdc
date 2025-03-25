@@ -302,7 +302,7 @@ func (p *persistentStorage) deregisterTable(tableID int64) error {
 	p.tableRegisteredCount[tableID] -= 1
 	if p.tableRegisteredCount[tableID] <= 0 {
 		if _, ok := p.tableInfoStoreMap[tableID]; !ok {
-			log.Panic("deregister table from persistent storage but not found", zap.Int64("tableID", tableID))
+			log.Warn("deregister table from persistent storage but not found", zap.Int64("tableID", tableID))
 		}
 		delete(p.tableInfoStoreMap, tableID)
 	}
