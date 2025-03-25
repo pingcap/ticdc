@@ -16,6 +16,7 @@ package debezium
 import (
 	"encoding/binary"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/pingcap/log"
@@ -114,6 +115,33 @@ func parseBit(s string, n int) string {
 		result += fmt.Sprintf("%08b", s[i])
 	}
 	return result
+}
+
+func getValueFromDefault(defaultVal any, tp *types.FieldType) any {
+	// TODO: more data types need be consider
+	switch tp.GetType() {
+	case mysql.TypeNewDecimal:
+		if val, ok := defaultVal.(string); ok {
+			return types.NewDecFromStringForTest(val)
+		}
+	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
+		if val, ok := defaultVal.(string); ok {
+			v, err := strconv.ParseInt(val, 10, 64)
+			if err == nil {
+				return v
+			}
+			log.Error("unexpected column value type string for int column", zap.Error(err), zap.Any("defaultValue", defaultVal))
+		}
+	case mysql.TypeDouble, mysql.TypeFloat:
+		if val, ok := defaultVal.(string); ok {
+			v, err := strconv.ParseFloat(val, 64)
+			if err == nil {
+				return v
+			}
+			log.Error("unexpected column value type string for float column", zap.Error(err), zap.Any("defaultValue", defaultVal))
+		}
+	}
+	return defaultVal
 }
 
 func getCharset(ft types.FieldType) string {
