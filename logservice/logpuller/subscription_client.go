@@ -518,7 +518,7 @@ func (s *SubscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			if region.isStopped() {
 				for _, rs := range stores {
 					for _, worker := range rs.requestWorkers {
-						worker.requestsCh <- region
+						_ = worker.sendRegionRequest(ctx, region)
 					}
 				}
 				continue
@@ -532,7 +532,10 @@ func (s *SubscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 			store := getStore(region.rpcCtx.Peer.StoreId, region.rpcCtx.Addr)
 			worker := store.getRequestWorker()
-			worker.requestsCh <- region
+			err := worker.sendRegionRequest(ctx, region)
+			if err != nil {
+				return err
+			}
 		}
 	}
 }
