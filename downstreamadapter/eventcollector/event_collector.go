@@ -433,7 +433,7 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						}
 						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(event.Len()))
 					case commonEvent.TypeDMLEvent:
-						c.metricDispatcherReceivedOtherEventCount.Add(float64(event.Len()))
+						c.metricDispatcherReceivedKVEventCount.Add(float64(event.Len()))
 						c.ds.Push(event.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, event))
 					default:
 						c.metricDispatcherReceivedOtherEventCount.Add(float64(event.Len()))
