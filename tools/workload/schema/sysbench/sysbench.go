@@ -22,10 +22,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"workload/schema"
-
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
+	"workload/schema"
 )
 
 const createTable = `
@@ -44,8 +43,10 @@ const (
 	cacheSize       = 100000
 )
 
-var cachePadString = make(map[int]string)
-var cacheIdx atomic.Int64
+var (
+	cachePadString = make(map[int]string)
+	cacheIdx       atomic.Int64
+)
 
 // InitPadStringCache initializes the cache with random pad strings
 func InitPadStringCache() {
