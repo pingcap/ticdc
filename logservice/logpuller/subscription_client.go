@@ -472,7 +472,7 @@ type requestedStore struct {
 	storeID   uint64
 	storeAddr string
 	// Use to select a worker to send request.
-	nextWorker     atomic.Uint32
+	nextWorker     int
 	requestWorkers []*regionRequestWorker
 }
 
@@ -483,9 +483,15 @@ func (rs *requestedStore) broadcastRegionRequest(region regionInfo) {
 }
 
 func (rs *requestedStore) sendRegionRequest(region regionInfo) {
-	index := rs.nextWorker.Add(1) % uint32(len(rs.requestWorkers))
-	worker := rs.requestWorkers[index]
-	worker.sendRegionRequest(region)
+	index := rs.nextWorker % len(rs.requestWorkers)
+	rs.requestWorkers[index].sendRegionRequest(region)
+	rs.nextWorker++
+}
+
+func (rs *requestedStore) stopWorkers() {
+	for _, w := range rs.requestWorkers {
+		close(w.requestsCh)
+	}
 }
 
 // handleRegions receives regionInfo from regionCh and attch rpcCtx to them,
@@ -508,12 +514,7 @@ func (s *SubscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 	defer func() {
 		for _, rs := range stores {
-			for _, w := range rs.requestWorkers {
-				close(w.requestsCh)
-				for range w.requestsCh {
-					// TODO: do we need handle it?
-				}
-			}
+			rs.stopWorkers()
 		}
 	}()
 

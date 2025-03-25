@@ -102,7 +102,7 @@ func (o *options) run(cmd *cobra.Command) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	util.LogHTTPProxies()
 	svr, err := server.New(o.serverConfig, o.pdEndpoints)
 	if err != nil {
