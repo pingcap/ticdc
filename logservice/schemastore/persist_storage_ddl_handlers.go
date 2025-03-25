@@ -851,7 +851,13 @@ func updateDDLHistoryForDropPartition(args updateDDLHistoryFuncArgs) []uint64 {
 func updateDDLHistoryForCreateView(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	for tableID := range args.tableMap {
-		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
+		if partitionInfo, ok := args.partitionMap[tableID]; ok {
+			for id := range partitionInfo {
+				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, id)
+			}
+		} else {
+			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
+		}
 	}
 	return args.tableTriggerDDLHistory
 }
