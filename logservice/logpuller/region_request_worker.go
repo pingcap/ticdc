@@ -58,6 +58,8 @@ type regionRequestWorker struct {
 
 		subscriptions map[SubscriptionID]regionFeedStates
 	}
+
+	requestHeader *cdcpb.Header
 }
 
 func (s *regionRequestWorker) sendRegionRequest(ctx context.Context, region regionInfo) error {
@@ -80,6 +82,8 @@ func newRegionRequestWorker(
 		client:     client,
 		store:      store,
 		requestsCh: make(chan regionInfo, 256), // 256 is an arbitrary number.
+
+		requestHeader: &cdcpb.Header{ClusterId: client.clusterID, TicdcVersion: version.ReleaseSemver()},
 	}
 	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
 
@@ -327,8 +331,8 @@ func (s *regionRequestWorker) processRegionSendTask(
 	ctx context.Context,
 	conn *ConnAndClient,
 ) error {
-	doSend := func(req *cdcpb.ChangeDataRequest) error {
-		if err := conn.Client.Send(req); err != nil {
+	doSend := func(req cdcpb.ChangeDataRequest) error {
+		if err := conn.Client.Send(&req); err != nil {
 			log.Warn("region request worker send request to grpc stream failed",
 				zap.Uint64("workerID", s.workerID),
 				zap.Uint64("subscriptionID", req.RequestId),
@@ -368,8 +372,8 @@ func (s *regionRequestWorker) processRegionSendTask(
 
 		// It means it's a special task for stopping the table.
 		if region.isStopped() {
-			req := &cdcpb.ChangeDataRequest{
-				Header:    &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
+			req := cdcpb.ChangeDataRequest{
+				Header:    s.requestHeader,
 				RequestId: uint64(subID),
 				Request: &cdcpb.ChangeDataRequest_Deregister_{
 					Deregister: &cdcpb.ChangeDataRequest_Deregister{},
@@ -408,9 +412,9 @@ func (s *regionRequestWorker) processRegionSendTask(
 	}
 }
 
-func (s *regionRequestWorker) createRegionRequest(region regionInfo) *cdcpb.ChangeDataRequest {
-	return &cdcpb.ChangeDataRequest{
-		Header:       &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
+func (s *regionRequestWorker) createRegionRequest(region regionInfo) cdcpb.ChangeDataRequest {
+	return cdcpb.ChangeDataRequest{
+		Header:       s.requestHeader,
 		RegionId:     region.verID.GetID(),
 		RequestId:    uint64(region.subscribedSpan.subID),
 		RegionEpoch:  region.rpcCtx.Meta.RegionEpoch,
