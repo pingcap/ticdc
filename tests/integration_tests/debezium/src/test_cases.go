@@ -267,12 +267,6 @@ var ignoredRecordPaths = map[string]bool{
 
 var headingColor = color.New(color.FgHiWhite, color.Bold)
 
-func printRecord(obj any) {
-	v, _ := json.MarshalIndent(obj, "", "  ")
-	quick.Highlight(os.Stdout, string(v), "json", "terminal16m", "vs")
-	fmt.Println()
-}
-
 func normalizeSQL(sql string) string {
 	p := parser.New()
 	p.SetSQLMode(mysql.ModeRealAsFloat) // necessary
