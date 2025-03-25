@@ -126,13 +126,13 @@ func mockWriteKVSnapOnDisk(db *pebble.DB, snapTs uint64, dbInfos []mockDBInfo) {
 	batch := db.NewBatch()
 	defer batch.Close()
 	for _, dbInfo := range dbInfos {
-		writeSchemaInfoToBatch(batch, snapTs, dbInfo.dbInfo)
+		addSchemaInfoToBatch(batch, snapTs, dbInfo.dbInfo)
 		for _, tableInfo := range dbInfo.tables {
 			tableInfoValue, err := json.Marshal(tableInfo)
 			if err != nil {
 				log.Panic("marshal table info fail", zap.Error(err))
 			}
-			writeTableInfoToBatch(batch, snapTs, dbInfo.dbInfo, tableInfoValue)
+			addTableInfoToBatch(batch, snapTs, dbInfo.dbInfo, tableInfoValue)
 		}
 	}
 	if err := batch.Commit(pebble.NoSync); err != nil {

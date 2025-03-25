@@ -123,7 +123,6 @@ func New(node *node.Info,
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
 
 	c.taskScheduler = threadpool.NewThreadPoolDefault()
-	c.closed.Store(false)
 
 	controller := NewController(
 		c.version,
@@ -147,18 +146,41 @@ func New(node *node.Info,
 				log.Info("Coordinator changed, and I am not the coordinator, stop myself",
 					zap.String("selfID", string(c.nodeInfo.ID)),
 					zap.String("newCoordinatorID", newCoordinatorID))
-				c.AsyncStop()
+				c.Stop()
 			}
 		})
 
 	return c
 }
 
-func (c *coordinator) recvMessages(_ context.Context, msg *messaging.TargetMessage) error {
+func (c *coordinator) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
 	if c.closed.Load() {
 		return nil
 	}
-	c.eventCh.In() <- &Event{message: msg}
+
+	defer func() {
+		if r := recover(); r != nil {
+			// There is chance that:
+			// 1. Just before the c.eventCh is closed, the recvMessages is called
+			// 2. Then the goroutine(call it g1) that calls recvMessages is scheduled out by runtime, and the msg is in flight
+			// 3. The c.eventCh is closed by another goroutine(call it g2)
+			// 4. g1 is scheduled back by runtime, and the msg is sent to the closed channel
+			// 5. g1 panics
+			// To avoid the panic, we have two choices:
+			// 1. Use a mutex to protect this function, but it will reduce the throughput
+			// 2. Recover the panic, and log the error
+			// We choose the second option here.
+			log.Error("panic in recvMessages", zap.Any("msg", msg), zap.Any("panic", r))
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		c.eventCh.In() <- &Event{message: msg}
+	}
+
 	return nil
 }
 
@@ -385,13 +407,14 @@ func (c *coordinator) GetChangefeed(ctx context.Context, changefeedDisplayName c
 	return c.controller.GetChangefeed(ctx, changefeedDisplayName)
 }
 
-func (c *coordinator) AsyncStop() {
+func (c *coordinator) Stop() {
 	if c.closed.CompareAndSwap(false, true) {
 		c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
 		c.controller.Stop()
 		c.taskScheduler.Stop()
-		c.eventCh.CloseAndDrain()
 		c.cancel()
+		// close eventCh after cancel, to avoid send or get event from the channel
+		c.eventCh.CloseAndDrain()
 	}
 }
 

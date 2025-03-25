@@ -13,6 +13,11 @@
 
 package canal
 
+import (
+	"github.com/pingcap/tiflow/cdc/model"
+	canal "github.com/pingcap/tiflow/proto/canal"
+)
+
 // import (
 // 	"github.com/pingcap/tiflow/cdc/model"
 // 	canal "github.com/pingcap/tiflow/proto/canal"
@@ -20,20 +25,20 @@ package canal
 
 const tidbWaterMarkType = "TIDB_WATERMARK"
 
-// // The TiCDC Canal-JSON implementation extend the official format with a TiDB extension field.
-// // canalJSONMessageInterface is used to support this without affect the original format.
+// The TiCDC Canal-JSON implementation extend the official format with a TiDB extension field.
+// canalJSONMessageInterface is used to support this without affect the original format.
 type canalJSONMessageInterface interface {
-	// getSchema() *string
-	// getTable() *string
-	// getCommitTs() uint64
-	// getQuery() string
-	// getOld() map[string]interface{}
-	// getData() map[string]interface{}
-	// getMySQLType() map[string]string
-	// getJavaSQLType() map[string]int32
-	// messageType() model.MessageType
-	// eventType() canal.EventType
-	// pkNameSet() map[string]struct{}
+	getSchema() *string
+	getTable() *string
+	getCommitTs() uint64
+	getQuery() string
+	getOld() map[string]interface{}
+	getData() map[string]interface{}
+	getMySQLType() map[string]string
+	getJavaSQLType() map[string]int32
+	messageType() model.MessageType
+	eventType() canal.EventType
+	pkNameSet() map[string]struct{}
 }
 
 // JSONMessage adapted from https://github.com/alibaba/canal/blob/b54bea5e3337c9597c427a53071d214ff04628d1/protocol/src/main/java/com/alibaba/otter/canal/protocol/FlatMessage.java#L1
@@ -60,68 +65,68 @@ type JSONMessage struct {
 	Old  []map[string]interface{} `json:"old"`
 }
 
-// func (c *JSONMessage) getSchema() *string {
-// 	return &c.Schema
-// }
+func (c *JSONMessage) getSchema() *string {
+	return &c.Schema
+}
 
-// func (c *JSONMessage) getTable() *string {
-// 	return &c.Table
-// }
+func (c *JSONMessage) getTable() *string {
+	return &c.Table
+}
 
-// // for JSONMessage, we lost the commitTs.
-// func (c *JSONMessage) getCommitTs() uint64 {
-// 	return 0
-// }
+// for JSONMessage, we lost the commitTs.
+func (c *JSONMessage) getCommitTs() uint64 {
+	return 0
+}
 
-// func (c *JSONMessage) getQuery() string {
-// 	return c.Query
-// }
+func (c *JSONMessage) getQuery() string {
+	return c.Query
+}
 
-// func (c *JSONMessage) getOld() map[string]interface{} {
-// 	if c.Old == nil {
-// 		return nil
-// 	}
-// 	return c.Old[0]
-// }
+func (c *JSONMessage) getOld() map[string]interface{} {
+	if c.Old == nil {
+		return nil
+	}
+	return c.Old[0]
+}
 
-// func (c *JSONMessage) getData() map[string]interface{} {
-// 	if c.Data == nil {
-// 		return nil
-// 	}
-// 	return c.Data[0]
-// }
+func (c *JSONMessage) getData() map[string]interface{} {
+	if c.Data == nil {
+		return nil
+	}
+	return c.Data[0]
+}
 
-// func (c *JSONMessage) getMySQLType() map[string]string {
-// 	return c.MySQLType
-// }
+func (c *JSONMessage) getMySQLType() map[string]string {
+	return c.MySQLType
+}
 
-// func (c *JSONMessage) getJavaSQLType() map[string]int32 {
-// 	return c.SQLType
-// }
+func (c *JSONMessage) getJavaSQLType() map[string]int32 {
+	return c.SQLType
+}
 
-// func (c *JSONMessage) messageType() model.MessageType {
-// 	if c.IsDDL {
-// 		return model.MessageTypeDDL
-// 	}
+func (c *JSONMessage) messageType() model.MessageType {
+	if c.IsDDL {
+		return model.MessageTypeDDL
+	}
 
-// 	if c.EventType == tidbWaterMarkType {
-// 		return model.MessageTypeResolved
-// 	}
+	if c.EventType == tidbWaterMarkType {
+		return model.MessageTypeResolved
+	}
 
-// 	return model.MessageTypeRow
-// }
+	return model.MessageTypeRow
+}
 
-// func (c *JSONMessage) eventType() canal.EventType {
-// 	return canal.EventType(canal.EventType_value[c.EventType])
-// }
+func (c *JSONMessage) eventType() canal.EventType {
+	return canal.EventType(canal.EventType_value[c.EventType])
+}
 
-// func (c *JSONMessage) pkNameSet() map[string]struct{} {
-// 	result := make(map[string]struct{}, len(c.PKNames))
-// 	for _, item := range c.PKNames {
-// 		result[item] = struct{}{}
-// 	}
-// 	return result
-// }
+func (c *JSONMessage) pkNameSet() map[string]struct{} {
+	result := make(map[string]struct{}, len(c.PKNames))
+	for _, item := range c.PKNames {
+		result[item] = struct{}{}
+	}
+	return result
+}
 
 type tidbExtension struct {
 	CommitTs           uint64 `json:"commitTs,omitempty"`
@@ -139,6 +144,6 @@ type canalJSONMessageWithTiDBExtension struct {
 	Extensions *tidbExtension `json:"_tidb"`
 }
 
-// func (c *canalJSONMessageWithTiDBExtension) getCommitTs() uint64 {
-// 	return c.Extensions.CommitTs
-// }
+func (c *canalJSONMessageWithTiDBExtension) getCommitTs() uint64 {
+	return c.Extensions.CommitTs
+}

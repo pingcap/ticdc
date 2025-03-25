@@ -147,11 +147,20 @@ func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, model
 	// If the checkpointTs is not advanced, we should check if we should retry the changefeed
 	if len(status.Err) > 0 {
 		if m.isRestarting.Load() {
+			// FIXME: What does ignore the error mean?
 			log.Info("changefeed is already in restarting progress, ignore the error",
 				zap.String("changefeed", m.id.Name()),
 				zap.Any("err", status.Err[len(status.Err)-1].Message),
 			)
 		}
+
+		log.Error("changefeed maintainer report an error",
+			zap.Stringer("changefeed", m.id),
+			zap.Uint64("checkpointTs", m.checkpointTs),
+			zap.String("node", status.Err[len(status.Err)-1].Node),
+			zap.String("code", status.Err[len(status.Err)-1].Code),
+			zap.String("state", string(model.StateWarning)),
+			zap.Any("error", status.Err[len(status.Err)-1]))
 
 		// set the changefeed state to warning and waiting start the changefeed
 		m.isRestarting.Store(true)

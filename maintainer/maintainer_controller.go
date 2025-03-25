@@ -539,6 +539,10 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableId)
 	}
 
+	if tableId == 0 {
+		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableId)
+	}
+
 	nodes := c.nodeManager.GetAliveNodes()
 	hasNode := false
 	for _, node := range nodes {
