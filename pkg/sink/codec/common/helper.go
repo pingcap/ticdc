@@ -19,10 +19,6 @@ import (
 	"fmt"
 	"math"
 	"strings"
-<<<<<<< HEAD
-	"unsafe"
-=======
->>>>>>> master
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
@@ -428,16 +424,6 @@ func SanitizeTopicName(name string) string {
 		)
 	}
 	return sanitizedName
-}
-
-// UnsafeBytesToString create string from byte slice without copying
-func UnsafeBytesToString(b []byte) string {
-	return *(*string)(unsafe.Pointer(&b))
-}
-
-// UnsafeStringToBytes create byte slice from string without copying
-func UnsafeStringToBytes(s string) []byte {
-	return *(*[]byte)(unsafe.Pointer(&s))
 }
 
 // FakeTableIDAllocator is a fake table id allocator

@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tiflow/cdc/model"
+	"github.com/siddontang/go/hack"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
@@ -495,7 +496,7 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		v := datum.GetBytes()
 		isBinary := mysql.HasBinaryFlag(colInfo.GetFlag())
 		if !isBinary {
-			writer.WriteStringField(colName, common.UnsafeBytesToString(v))
+			writer.WriteStringField(colName, hack.String(v))
 		} else {
 			c.writeBinaryField(writer, colName, v)
 		}
