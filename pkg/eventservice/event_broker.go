@@ -924,22 +924,16 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	// So, we need to find a permanent solution to fix this problem.
 	if stat.(*dispatcherStat).changefeedStat.dispatcherCount.Load() == 0 {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
+			zap.Uint64("clusterID", c.tidbClusterID),
 			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
 		)
 		c.changefeedMap.Delete(dispatcherInfo.GetChangefeedID())
 	}
 
 	stat.(*dispatcherStat).isRemoved.Store(true)
-	c.eventStore.UnregisterDispatcher(id)
-	c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
+	_ = c.eventStore.DeregisterDispatcher(id)
+	_ = c.schemaStore.DeregisterTable(dispatcherInfo.GetTableSpan().TableID)
 	c.dispatchers.Delete(id)
-
-	log.Info("remove dispatcher",
-		zap.Uint64("clusterID", c.tidbClusterID),
-		zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
-		zap.Stringer("dispatcherID", id),
-		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
-	)
 }
 
 func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {

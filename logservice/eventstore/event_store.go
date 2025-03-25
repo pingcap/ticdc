@@ -71,7 +71,7 @@ type EventStore interface {
 		onlyReuse bool,
 	) (bool, error)
 
-	UnregisterDispatcher(dispatcherID common.DispatcherID) error
+	DeregisterDispatcher(dispatcherID common.DispatcherID) error
 
 	// TODO: Implement this after checkpointTs is correctly reported by the downstream dispatcher.
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64) error
@@ -462,15 +462,12 @@ func (e *eventStore) RegisterDispatcher(
 	return true, nil
 }
 
-func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) error {
-	log.Info("unregister dispatcher", zap.Stringer("dispatcherID", dispatcherID))
-	defer func() {
-		log.Info("unregister dispatcher done", zap.Stringer("dispatcherID", dispatcherID))
-	}()
+func (e *eventStore) DeregisterDispatcher(dispatcherID common.DispatcherID) error {
 	e.dispatcherMeta.Lock()
 	defer e.dispatcherMeta.Unlock()
 	stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]
 	if !ok {
+		log.Warn("deregister dispatcher but not found", zap.Stringer("dispatcherID", dispatcherID))
 		return nil
 	}
 	subID := stat.subID
@@ -480,7 +477,7 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 	// delete the dispatcher from subscription
 	subscriptionStat, ok := e.dispatcherMeta.subscriptionStats[subID]
 	if !ok {
-		log.Panic("should not happen")
+		log.Panic("deregister dispatcher but not found subscription", zap.Uint64("subID", uint64(subID)))
 	}
 	subscriptionStat.dispatchers.Lock()
 	delete(subscriptionStat.dispatchers.notifiers, dispatcherID)
@@ -488,12 +485,9 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 		delete(e.dispatcherMeta.subscriptionStats, subID)
 		// TODO: do we need unlock before puller.Unsubscribe?
 		e.subClient.Unsubscribe(subID)
-		log.Info("clean data for subscription",
-			zap.Int("dbIndex", subscriptionStat.dbIndex),
-			zap.Uint64("subID", uint64(subID)),
-			zap.Int64("tableID", subscriptionStat.tableID))
 		if err := e.deleteEvents(subscriptionStat.dbIndex, uint64(subID), subscriptionStat.tableID, 0, math.MaxUint64); err != nil {
-			log.Warn("fail to delete events", zap.Error(err))
+			log.Warn("fail to delete events", zap.Uint64("subID", uint64(subID)),
+				zap.Int64("tableID", subscriptionStat.tableID), zap.Error(err))
 		}
 		metrics.EventStoreSubscriptionGauge.Dec()
 	}
@@ -502,7 +496,7 @@ func (e *eventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) erro
 	// delete the dispatcher from table subscriptions
 	dispatchersForSameTable, ok := e.dispatcherMeta.tableToDispatchers[tableID]
 	if !ok {
-		log.Panic("should not happen")
+		log.Panic("deregister dispatcher but not found table", zap.Int64("tableID", tableID))
 	}
 	delete(dispatchersForSameTable, dispatcherID)
 	if len(dispatchersForSameTable) == 0 {

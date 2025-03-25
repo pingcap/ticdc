@@ -43,7 +43,7 @@ func RegisterRoutes(
 	pprofGroup.GET("/symbol", gin.WrapF(pprof.Symbol))
 	pprofGroup.GET("/trace", gin.WrapF(pprof.Trace))
 	pprofGroup.GET("/threadcreate", gin.WrapF(pprof.Handler("threadcreate").ServeHTTP))
-
+	pprofGroup.GET("/block", gin.WrapF(pprof.Handler("block").ServeHTTP))
 	// Promtheus metrics API
 	prometheus.DefaultGatherer = registry
 	router.Any("/metrics", gin.WrapH(promhttp.Handler()))

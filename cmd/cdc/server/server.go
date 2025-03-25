@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -96,12 +97,11 @@ func (o *options) run(cmd *cobra.Command) error {
 		os.Exit(1)
 	}
 	log.Info("init log", zap.String("file", loggerConfig.File), zap.String("level", loggerConfig.Level))
+	version.LogVersionInfo("Change Data Capture (CDC)")
+	log.Info("The TiCDC release version", zap.String("ReleaseVersion", version.ReleaseVersion))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	version.LogVersionInfo("Change Data Capture (CDC)")
-	log.Info("The TiCDC release version", zap.String("ReleaseVersion", version.ReleaseVersion))
 
 	util.LogHTTPProxies()
 	svr, err := server.New(o.serverConfig, o.pdEndpoints)
@@ -122,6 +122,7 @@ func (o *options) run(cmd *cobra.Command) error {
 	// Gracefully shutdown the server when receiving the signal, and exit the process.
 	util.InitSignalHandling(shutdown, cancel)
 
+	runtime.SetBlockProfileRate(1)
 	err = svr.Run(ctx)
 	if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 		log.Warn("cdc server exits with error", zap.Error(err))

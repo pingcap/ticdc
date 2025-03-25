@@ -254,7 +254,7 @@ func (m *mockEventStore) UpdateDispatcherCheckpointTs(dispatcherID common.Dispat
 	return nil
 }
 
-func (m *mockEventStore) UnregisterDispatcher(dispatcherID common.DispatcherID) error {
+func (m *mockEventStore) DeregisterDispatcher(dispatcherID common.DispatcherID) error {
 	m.spansMap.Delete(dispatcherID)
 	return nil
 }
@@ -390,7 +390,7 @@ func (m *mockSchemaStore) RegisterTable(
 	return nil
 }
 
-func (m *mockSchemaStore) UnregisterTable(tableID int64) error {
+func (m *mockSchemaStore) DeregisterTable(tableID int64) error {
 	return nil
 }
 

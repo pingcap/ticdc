@@ -347,10 +347,6 @@ func (s *SubscriptionClient) Unsubscribe(subID SubscriptionID) {
 		return
 	}
 	s.setTableStopped(rt)
-
-	log.Info("unsubscribe span success",
-		zap.Uint64("subscriptionID", uint64(rt.subID)),
-		zap.Bool("exists", rt != nil))
 }
 
 func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
@@ -436,9 +432,6 @@ func (s *SubscriptionClient) Close(ctx context.Context) error {
 }
 
 func (s *SubscriptionClient) setTableStopped(rt *subscribedSpan) {
-	log.Info("subscription client starts to stop table",
-		zap.Uint64("subscriptionID", uint64(rt.subID)))
-
 	// Set stopped to true so we can stop handling region events from the table.
 	// Then send a special singleRegionInfo to regionRouter to deregister the table
 	// from all TiKV instances.
@@ -451,9 +444,6 @@ func (s *SubscriptionClient) setTableStopped(rt *subscribedSpan) {
 }
 
 func (s *SubscriptionClient) onTableDrained(rt *subscribedSpan) {
-	log.Info("subscription client stop span is finished",
-		zap.Uint64("subscriptionID", uint64(rt.subID)))
-
 	err := s.ds.RemovePath(rt.subID)
 	if err != nil {
 		log.Warn("subscription client remove path failed",
@@ -482,13 +472,26 @@ type requestedStore struct {
 	storeID   uint64
 	storeAddr string
 	// Use to select a worker to send request.
-	nextWorker     atomic.Uint32
+	nextWorker     int
 	requestWorkers []*regionRequestWorker
 }
 
-func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
-	index := rs.nextWorker.Add(1) % uint32(len(rs.requestWorkers))
-	return rs.requestWorkers[index]
+func (rs *requestedStore) broadcastRegionRequest(region regionInfo) {
+	for _, worker := range rs.requestWorkers {
+		worker.sendRegionRequest(region)
+	}
+}
+
+func (rs *requestedStore) sendRegionRequest(region regionInfo) {
+	index := rs.nextWorker % len(rs.requestWorkers)
+	rs.requestWorkers[index].sendRegionRequest(region)
+	rs.nextWorker++
+}
+
+func (rs *requestedStore) stopWorkers() {
+	for _, w := range rs.requestWorkers {
+		close(w.requestsCh)
+	}
 }
 
 // handleRegions receives regionInfo from regionCh and attch rpcCtx to them,
@@ -503,21 +506,15 @@ func (s *SubscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		rs = &requestedStore{storeID: storeID, storeAddr: storeAddr}
 		stores[storeID] = rs
 		for i := uint(0); i < s.config.RegionRequestWorkerPerStore; i++ {
-			requestWorker := newRegionRequestWorker(ctx, s, s.credential, eg, rs)
+			requestWorker := newRegionRequestWorker(ctx, s, eg, rs)
 			rs.requestWorkers = append(rs.requestWorkers, requestWorker)
 		}
-
 		return rs
 	}
 
 	defer func() {
 		for _, rs := range stores {
-			for _, w := range rs.requestWorkers {
-				close(w.requestsCh)
-				for range w.requestsCh {
-					// TODO: do we need handle it?
-				}
-			}
+			rs.stopWorkers()
 		}
 	}()
 
@@ -528,9 +525,7 @@ func (s *SubscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		case region := <-s.regionCh:
 			if region.isStopped() {
 				for _, rs := range stores {
-					for _, worker := range rs.requestWorkers {
-						worker.requestsCh <- region
-					}
+					rs.broadcastRegionRequest(region)
 				}
 				continue
 			}
@@ -542,15 +537,7 @@ func (s *SubscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			}
 
 			store := getStore(region.rpcCtx.Peer.StoreId, region.rpcCtx.Addr)
-			worker := store.getRequestWorker()
-			worker.requestsCh <- region
-
-			log.Debug("subscription client will request a region",
-				zap.Uint64("workID", worker.workerID),
-				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
-				zap.Uint64("regionID", region.verID.GetID()),
-				zap.Uint64("storeID", store.storeID),
-				zap.String("addr", store.storeAddr))
+			store.sendRegionRequest(region)
 		}
 	}
 }
