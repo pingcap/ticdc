@@ -17,6 +17,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -51,7 +52,8 @@ import (
 )
 
 const (
-	cleanMetaDuration = 10 * time.Second
+	closeServiceTimeout = 15 * time.Second
+	cleanMetaDuration   = 10 * time.Second
 )
 
 type server struct {
@@ -87,6 +89,8 @@ type server struct {
 	// subModules is the modules will be start after PreServices are started
 	// And will be closed when the server is closing
 	subModules []common.SubModule
+
+	closed atomic.Bool
 }
 
 // New returns a new Server instance
@@ -275,23 +279,24 @@ func (c *server) GetCoordinator() (tiserver.Coordinator, error) {
 // it also closes the coordinator and processorManager
 // Note: this function should be reentrant
 func (c *server) Close(ctx context.Context) {
+	if !c.closed.CompareAndSwap(false, true) {
+		return
+	}
 	log.Info("server closing", zap.Any("ServerInfo", c.info))
 	// Safety: Here we mainly want to stop the coordinator
 	// and ignore it if the coordinator does not exist or is not set.
 	o, _ := c.GetCoordinator()
 	if o != nil {
-		o.AsyncStop()
+		o.Stop()
 		log.Info("coordinator closed", zap.String("captureID", string(c.info.ID)))
 	}
 
-	for _, service := range c.preServices {
-		service.Close()
-	}
+	closeGroup := c.closePreServices()
 
 	for _, subModule := range c.subModules {
 		if err := subModule.Close(ctx); err != nil {
-			log.Warn("failed to close sub watcher",
-				zap.String("watcher", subModule.Name()),
+			log.Warn("failed to close sub module",
+				zap.String("module", subModule.Name()),
 				zap.Error(err))
 		}
 		log.Info("sub module closed", zap.String("module", subModule.Name()))
@@ -304,9 +309,37 @@ func (c *server) Close(ctx context.Context) {
 		log.Warn("failed to delete server info when server exited",
 			zap.String("captureID", string(c.info.ID)),
 			zap.Error(err))
+	} else {
+		log.Info("server info deleted from etcd", zap.String("captureID", string(c.info.ID)))
 	}
 
+	closeGroup.Wait()
 	log.Info("server closed", zap.Any("ServerInfo", c.info))
+}
+
+func (c *server) closePreServices() *errgroup.Group {
+	closeCtx, cancel := context.WithTimeout(context.Background(), closeServiceTimeout)
+	defer cancel()
+	closeGroup, closeCtx := errgroup.WithContext(closeCtx)
+	for _, service := range c.preServices {
+		s := service
+		closeGroup.Go(func() error {
+			done := make(chan struct{})
+			go func() {
+				s.Close()
+				close(done)
+			}()
+
+			select {
+			case <-done:
+				return nil
+			case <-closeCtx.Done():
+				log.Warn("service close operation timed out", zap.Error(closeCtx.Err()))
+				return closeCtx.Err()
+			}
+		})
+	}
+	return closeGroup
 }
 
 // Liveness returns liveness of the server.

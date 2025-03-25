@@ -94,7 +94,7 @@ func (s *ShopItemWorkload) BuildUpdateSql(opt schema.UpdateOption) string {
 }
 
 func (s *ShopItemWorkload) buildUpsertSql(opt schema.UpdateOption) string {
-	tableName := fmt.Sprintf("shop_item_%d", opt.Table)
+	tableName := fmt.Sprintf("shop_item_%d", opt.TableIndex)
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("INSERT INTO %s VALUES ", tableName))
 
@@ -111,7 +111,7 @@ func (s *ShopItemWorkload) buildUpsertSql(opt schema.UpdateOption) string {
 }
 
 func (s *ShopItemWorkload) buildUpdateSql(opt schema.UpdateOption) string {
-	tableName := fmt.Sprintf("shop_item_%d", opt.Table)
+	tableName := fmt.Sprintf("shop_item_%d", opt.TableIndex)
 	var sb strings.Builder
 
 	for i := 0; i < opt.Batch; i++ {

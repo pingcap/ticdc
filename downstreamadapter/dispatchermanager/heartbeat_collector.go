@@ -212,6 +212,7 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 }
 
 func (c *HeartBeatCollector) Close() {
+	log.Info("heartbeat collector is closing")
 	c.mc.DeRegisterHandler(messaging.HeartbeatCollectorTopic)
 	c.cancel()
 	c.wg.Wait()
