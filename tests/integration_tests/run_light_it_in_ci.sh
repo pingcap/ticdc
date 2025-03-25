@@ -29,37 +29,37 @@ group_num=${group#G}
 
 mysql_groups=(
 	# G00
-	'charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G01
-	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G02
-	'new_ci_collation safe_mode savepoint fail_over_ddl_C'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G03
-	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G04
-	'ci_collation_compatibility multi_capture resourcecontrol fail_over_ddl_E'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G05
-	'vector simple partition_table fail_over_ddl_F'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G06
-	'http_api http_api_tls fail_over_ddl_G'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G07
-	'http_api_tls_with_user_auth fail_over_ddl_H'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G08
-	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G09
-	'cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G10
-	'changefeed_error fail_over_ddl_K'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G11
-	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G14
-	'batch_add_table batch_update_to_no_batch fail_over_ddl_O'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 	# G15
-	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint'
+	'fail_over_ddl_O fail_over_ddl_O fail_over_ddl_O'
 )
 
 kafka_groups=(

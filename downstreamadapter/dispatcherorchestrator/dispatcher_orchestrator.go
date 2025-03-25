@@ -16,6 +16,7 @@ package dispatcherorchestrator
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -36,6 +37,7 @@ import (
 // for different change feeds based on maintainer bootstrap messages.
 type DispatcherOrchestrator struct {
 	mc                 messaging.MessageCenter
+	mutex              sync.Mutex // protect dispatcherManagers
 	dispatcherManagers map[common.ChangeFeedID]*dispatchermanager.EventDispatcherManager
 }
 
@@ -81,6 +83,8 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		return err
 	}
 
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 	manager, exists := m.dispatcherManagers[cfId]
 	var err error
 	var startTs uint64
@@ -164,6 +168,9 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	req *heartbeatpb.MaintainerPostBootstrapRequest,
 ) error {
 	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 	manager, exists := m.dispatcherManagers[cfId]
 	if !exists || manager.GetTableTriggerEventDispatcher() == nil {
 		log.Error("Receive post bootstrap request but there is no table trigger event dispatcher",
@@ -220,6 +227,8 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 		Success:      true,
 	}
 
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 	if manager, ok := m.dispatcherManagers[cfId]; ok {
 		if closed := manager.TryClose(req.Removed); closed {
 			delete(m.dispatcherManagers, cfId)
@@ -275,6 +284,17 @@ func (m *DispatcherOrchestrator) sendResponse(to node.ID, topic string, msg mess
 func (m *DispatcherOrchestrator) Close() {
 	log.Info("dispatcher orchestrator is closing")
 	m.mc.DeRegisterHandler(messaging.DispatcherManagerManagerTopic)
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	for len(m.dispatcherManagers) > 0 {
+		for id, manager := range m.dispatcherManagers {
+			ok := manager.TryClose(false)
+			if ok {
+				delete(m.dispatcherManagers, id)
+			}
+		}
+	}
 	log.Info("dispatcher orchestrator closed")
 }
 
