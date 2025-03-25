@@ -21,10 +21,9 @@ import (
 	"math/rand"
 	"sync"
 
-	"workload/schema"
-
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
+	"workload/schema"
 )
 
 const createTable = `
@@ -158,8 +157,6 @@ func (c *SysbenchWorkload) fetchSortedIDs(conn *sql.Conn, tableIndex, limit int)
 		}
 		ids = append(ids, id)
 	}
-
-	log.Info("query sorted IDs from DB", zap.String("query", query), zap.Int("limit", limit), zap.String("tableName", tableName), zap.Int("rows", len(ids)))
 
 	if len(ids) == 0 {
 		log.Panic("no records found in table", zap.String("tableName", tableName))

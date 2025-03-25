@@ -18,10 +18,9 @@ import (
 	"math/rand"
 	"strings"
 
+	"github.com/google/uuid"
 	"workload/schema"
 	"workload/util"
-
-	"github.com/google/uuid"
 )
 
 const createShopItemTable = `

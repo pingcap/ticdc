@@ -20,11 +20,10 @@ import (
 	"os"
 	"sync/atomic"
 
-	"workload/schema"
-	"workload/util"
-
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
+	"workload/schema"
+	"workload/util"
 )
 
 const createUpdateBankTable = `
