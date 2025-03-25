@@ -428,16 +428,26 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 		d.nextSyncPoint = oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint).Add(d.syncPointInterval))
 	}
 
-	if len(commitTsList) > 0 {
-		// Send the sync point event.
+	for len(commitTsList) > 0 {
+		// we limit a sync point event to contain at most 16 commit ts, to avoid a too large event.
+		newCommitTsList := commitTsList
+		if len(commitTsList) > 16 {
+			newCommitTsList = commitTsList[:16]
+		}
 		syncPointEvent := newWrapSyncPointEvent(
 			remoteID,
 			&pevent.SyncPointEvent{
 				DispatcherID: d.id,
-				CommitTsList: commitTsList,
+				CommitTsList: newCommitTsList,
 			},
 			d.getEventSenderState())
 		c.getMessageCh(d.workerIndex) <- syncPointEvent
+
+		if len(commitTsList) > 16 {
+			commitTsList = commitTsList[16:]
+		} else {
+			break
+		}
 	}
 }
 

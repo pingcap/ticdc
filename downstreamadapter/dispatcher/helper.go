@@ -103,7 +103,6 @@ func (b *BlockEventStatus) setBlockEvent(event commonEvent.BlockEvent, blockStag
 	} else {
 		b.blockCommitTsMap[event.GetCommitTs()] = struct{}{}
 	}
-
 }
 
 func (b *BlockEventStatus) updateBlockStage(blockStage heartbeatpb.BlockStage) {
@@ -126,6 +125,10 @@ func (b *BlockEventStatus) getEventAndStage() (commonEvent.BlockEvent, heartbeat
 	return b.blockPendingEvent, b.blockStage
 }
 
+// actionMatchs checks whether the action is for the current pending ddl event.
+// Most of time, the pending event only have one commitTs, so when the commitTs of the action meets the pending event's commitTs, it is enough.
+// While if the pending event is a sync point event with multiple commitTs, we only can do the action
+// when all the commitTs have been received.
 func (b *BlockEventStatus) actionMatchs(action *heartbeatpb.DispatcherAction) bool {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()

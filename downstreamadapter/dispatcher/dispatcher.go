@@ -548,8 +548,10 @@ func (d *Dispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	} else {
 		d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
 
-		if event.GetType() == commonEvent.TypeSyncPointEvent && len(event.(*commonEvent.SyncPointEvent).GetCommitTsList()) > 0 {
+		if event.GetType() == commonEvent.TypeSyncPointEvent {
 			// deal with multi sync point commit ts in one Sync Point Event
+			// make each commitTs as a single message for maintainer
+			// Because the batch commitTs in different dispatchers can be different.
 			commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
 			blockTables := event.GetBlockedTables().ToPB()
 			needDroppedTables := event.GetNeedDroppedTables().ToPB()
@@ -585,13 +587,13 @@ func (d *Dispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
 					NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
 					UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()), // only exists for rename table and rename tables
-					IsSyncPoint:       event.GetType() == commonEvent.TypeSyncPointEvent,         // sync point event must should block
+					IsSyncPoint:       false,
 					Stage:             heartbeatpb.BlockStage_WAITING,
 				},
 			}
 			identifier := BlockEventIdentifier{
 				CommitTs:    event.GetCommitTs(),
-				IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
+				IsSyncPoint: false,
 			}
 			d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
 			d.blockStatusesChan <- message

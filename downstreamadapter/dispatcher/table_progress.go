@@ -64,6 +64,9 @@ func NewTableProgress() *TableProgress {
 func (p *TableProgress) Add(event commonEvent.FlushableEvent) {
 	commitTs := event.GetCommitTs()
 	if event.GetType() == commonEvent.TypeSyncPointEvent {
+		// if the event is a sync point event, we use the last commitTs(the largest commitTs in the event) to calculate the progress.
+		// because a sync point event with multiple commitTs means there is no ddl / dmls between these commitTses.
+		// So we can just use the largest commitTs in the sync point event to calculate the progress.
 		commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
 		commitTs = commitTsList[len(commitTsList)-1]
 	}
@@ -108,6 +111,9 @@ func (p *TableProgress) Pass(event commonEvent.BlockEvent) {
 	p.maxCommitTs = event.GetCommitTs()
 
 	if event.GetType() == commonEvent.TypeSyncPointEvent {
+		// if the event is a sync point event, we use the last commitTs(the largest commitTs in the event) to calculate the progress.
+		// because a sync point event with multiple commitTs means there is no ddl / dmls between these commitTses.
+		// So we can just use the largest commitTs in the sync point event to calculate the progress.
 		commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
 		p.maxCommitTs = commitTsList[len(commitTsList)-1]
 	}

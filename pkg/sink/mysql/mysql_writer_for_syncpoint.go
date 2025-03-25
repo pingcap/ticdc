@@ -70,10 +70,10 @@ func (w *MysqlWriter) SendSyncPointEvent(event *commonEvent.SyncPointEvent) erro
 	builder.WriteString(filter.TiCDCSystemSchema)
 	builder.WriteString(".")
 	builder.WriteString(filter.SyncPointTable)
-	builder.WriteString(" (ticdc_cluster_id, changefeed, primary_ts, secondary_ts) VALUES '")
+	builder.WriteString(" (ticdc_cluster_id, changefeed, primary_ts, secondary_ts) VALUES ")
 
 	for idx, commitTs := range commitTsList {
-		builder.WriteString("(")
+		builder.WriteString("('")
 		builder.WriteString(config.GetGlobalServerConfig().ClusterID)
 		builder.WriteString("', '")
 		builder.WriteString(w.ChangefeedID.String())
