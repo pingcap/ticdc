@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
 	"workload/schema"
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
@@ -36,19 +37,19 @@ import (
 	"go.uber.org/zap"
 )
 
-// WorkloadExecutor 执行工作负载并收集统计信息
+// WorkloadExecutor executes the workload and collects statistics
 type WorkloadExecutor struct {
 	Config    *WorkloadConfig
 	DBManager *DBManager
 	Workload  schema.Workload
 
-	// 统计信息
+	// statistics
 	FlushedRowCount atomic.Uint64
 	QueryCount      atomic.Uint64
 	ErrorCount      atomic.Uint64
 }
 
-// WorkloadStats 保存工作负载的统计信息
+// WorkloadStats saves the statistics of the workload
 type WorkloadStats struct {
 	FlushedRowCount atomic.Uint64
 	QueryCount      atomic.Uint64
@@ -56,7 +57,7 @@ type WorkloadStats struct {
 	CreatedTableNum atomic.Int32
 }
 
-// WorkloadApp 是应用程序的主要结构体
+// WorkloadApp is the main structure of the application
 type WorkloadApp struct {
 	Config    *WorkloadConfig
 	DBManager *DBManager
@@ -83,13 +84,6 @@ type stmtCacheKey struct {
 	sql  string
 }
 
-// updateTask defines a task for updating data
-type updateTask struct {
-	schema.UpdateOption
-	// reserved for future use
-	cb func()
-}
-
 // NewWorkloadApp creates a new workload application
 func NewWorkloadApp(config *WorkloadConfig) *WorkloadApp {
 	return &WorkloadApp{
@@ -100,14 +94,14 @@ func NewWorkloadApp(config *WorkloadConfig) *WorkloadApp {
 
 // Initialize initializes the workload application
 func (app *WorkloadApp) Initialize() error {
-	// 设置数据库连接
+	// set database connection
 	dbManager, err := NewDBManager(app.Config)
 	if err != nil {
 		return err
 	}
 	app.DBManager = dbManager
 
-	// 创建工作负载
+	// create workload
 	app.Workload = app.createWorkload()
 
 	return nil
@@ -156,7 +150,7 @@ func (app *WorkloadApp) executeWorkload(wg *sync.WaitGroup) error {
 	insertConcurrency := app.Config.Thread - updateConcurrency
 
 	plog.Info("database info",
-		zap.Int("dbCount", len(app.DBManager.Connections)),
+		zap.Int("dbCount", len(app.DBManager.GetDBs())),
 		zap.Int("tableCount", app.Config.TableCount))
 
 	if !app.Config.SkipCreateTable && app.Config.Action == "prepare" {
@@ -176,9 +170,9 @@ func (app *WorkloadApp) executeWorkload(wg *sync.WaitGroup) error {
 func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, mainWg *sync.WaitGroup) {
 	plog.Info("start to create tables", zap.Int("tableCount", app.Config.TableCount))
 	wg := &sync.WaitGroup{}
-	for _, db := range app.DBManager.Connections {
+	for _, db := range app.DBManager.GetDBs() {
 		wg.Add(1)
-		go app.initTables(wg, db)
+		go app.initTables(wg, db.DB)
 	}
 	wg.Wait()
 	plog.Info("All dbs create tables finished")
@@ -223,124 +217,33 @@ func (app *WorkloadApp) initTables(wg *sync.WaitGroup, db *sql.DB) {
 // executeInsertWorkers executes insert workers
 func (app *WorkloadApp) executeInsertWorkers(insertConcurrency int, wg *sync.WaitGroup) {
 	wg.Add(insertConcurrency)
-	for i := 0; i < insertConcurrency; i++ {
-		db := app.DBManager.Connections[i%len(app.DBManager.Connections)]
+	var retryCount atomic.Uint64
+	for i := range insertConcurrency {
+		db := app.DBManager.GetDB()
 		go func(workerID int) {
 			defer func() {
 				plog.Info("insert worker exited", zap.Int("worker", workerID))
 				wg.Done()
 			}()
 			for {
-				conn, err := db.Conn(context.Background())
+				conn, err := db.DB.Conn(context.Background())
 				if err != nil {
-					plog.Info("get connection failed", zap.Error(err))
-					return
+					plog.Info("get connection failed, wait 5 seconds and retry", zap.Error(err))
+					time.Sleep(time.Second * 5)
 				}
-				plog.Info("start insert worker", zap.Int("worker", workerID))
+				plog.Info("start insert worker to write data to db", zap.Int("worker", workerID), zap.String("db", db.Name))
 				err = app.doInsert(conn)
 				if err != nil {
 					plog.Info("do insert error, get another connection and retry", zap.Error(err))
 					app.Stats.ErrorCount.Add(1)
+					retryCount.Add(1)
 					conn.Close()
+					time.Sleep(time.Second * 2)
+					plog.Info("retry insert", zap.Int("worker", workerID), zap.String("db", db.Name), zap.Uint64("retryCount", retryCount.Load()))
 					continue
 				}
-				time.Sleep(time.Second * 5)
 			}
 		}(i)
-	}
-}
-
-// executeUpdateWorkers executes update workers
-func (app *WorkloadApp) executeUpdateWorkers(updateConcurrency int, wg *sync.WaitGroup) {
-	if updateConcurrency == 0 {
-		plog.Info("skip update workload",
-			zap.String("action", app.Config.Action),
-			zap.Int("totalThread", app.Config.Thread),
-			zap.Float64("percentageForUpdate", app.Config.PercentageForUpdate))
-		return
-	}
-
-	updateTaskCh := make(chan updateTask, updateConcurrency)
-	wg.Add(updateConcurrency + 1) // +1 for task generator
-
-	for i := 0; i < updateConcurrency; i++ {
-		db := app.DBManager.Connections[i%len(app.DBManager.Connections)]
-
-		conn, err := db.Conn(context.Background())
-		if err != nil {
-			plog.Info("get connection failed", zap.Error(err))
-			return
-		}
-		go func(workerID int) {
-			defer func() {
-				plog.Info("update worker exited", zap.Int("worker", workerID))
-				wg.Done()
-			}()
-			plog.Info("start update worker", zap.Int("worker", workerID))
-			app.doUpdate(conn, updateTaskCh)
-		}(i)
-	}
-
-	go func() {
-		defer wg.Done()
-		app.genUpdateTask(updateTaskCh)
-	}()
-}
-
-// genUpdateTask generates update tasks
-func (app *WorkloadApp) genUpdateTask(output chan updateTask) {
-	for {
-		j := rand.Intn(app.Config.TableCount) + app.Config.TableStartIndex
-		task := updateTask{
-			UpdateOption: schema.UpdateOption{
-				Table: j,
-				Batch: app.Config.BatchSize,
-			},
-		}
-		output <- task
-	}
-}
-
-// doUpdate performs update operations
-func (app *WorkloadApp) doUpdate(conn *sql.Conn, input chan updateTask) {
-	var err error
-	var res sql.Result
-	var updateSql string
-	for task := range input {
-		if app.Config.WorkloadType == bank2 {
-			task.UpdateOption.Batch = 1
-			updateSql, values := app.Workload.(*pbank2.Bank2Workload).BuildUpdateSqlWithValues(task.UpdateOption)
-			res, err = app.executeWithValues(conn, updateSql, task.UpdateOption.Table, values)
-		} else {
-			updateSql = app.Workload.BuildUpdateSql(task.UpdateOption)
-			if updateSql == "" {
-				continue
-			}
-			res, err = app.execute(conn, updateSql, task.Table)
-		}
-		if err != nil {
-			if len(updateSql) > 20 {
-				updateSql = updateSql[:20] + "..."
-			}
-			plog.Info("update error", zap.Error(err), zap.String("sql", updateSql))
-			app.Stats.ErrorCount.Add(1)
-		}
-		if res != nil {
-			cnt, err := res.RowsAffected()
-			if err != nil || cnt < int64(task.Batch) {
-				plog.Info("get rows affected error", zap.Error(err), zap.Int64("affectedRows", cnt), zap.Int("rowCount", task.Batch), zap.String("sql", updateSql))
-				app.Stats.ErrorCount.Add(1)
-			}
-			app.Stats.FlushedRowCount.Add(uint64(cnt))
-			if task.IsSpecialUpdate {
-				plog.Info("update full table succeed, row count %d\n", zap.Int("table", task.Table), zap.Int64("affectedRows", cnt))
-			}
-		} else {
-			plog.Info("update result is nil")
-		}
-		if task.cb != nil {
-			task.cb()
-		}
 	}
 }
 
@@ -437,4 +340,11 @@ func (app *WorkloadApp) executeWithValues(conn *sql.Conn, sqlStr string, n int, 
 // StartMetricsReporting starts reporting metrics
 func (app *WorkloadApp) StartMetricsReporting() {
 	go app.reportMetrics()
+}
+
+func getSQLPreview(sql string) string {
+	if len(sql) > 140 {
+		return sql[:140] + "..."
+	}
+	return sql
 }

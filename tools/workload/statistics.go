@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// statistics 保存工作负载的统计信息
+// statistics represents the statistics of the workload
 type statistics struct {
 	queryCount      uint64
 	flushedRowCount uint64
@@ -35,7 +35,7 @@ type statistics struct {
 	eps int
 }
 
-// calculateStats 计算统计信息
+// calculateStats calculates the statistics
 func (app *WorkloadApp) calculateStats(
 	lastQueryCount,
 	lastFlushed,
@@ -56,7 +56,7 @@ func (app *WorkloadApp) calculateStats(
 	}
 }
 
-// printStats 打印统计信息
+// printStats prints the statistics
 func (app *WorkloadApp) printStats(stats statistics) {
 	status := fmt.Sprintf(
 		"Total Write Rows: %d, Total Queries: %d, Total Created Tables: %d, Total Errors: %d, QPS: %d, Row/s: %d, Error/s: %d",
@@ -71,7 +71,7 @@ func (app *WorkloadApp) printStats(stats statistics) {
 	plog.Info(status)
 }
 
-// reportMetrics 每5秒打印一次吞吐量统计信息
+// reportMetrics prints the statistics every 5 seconds
 func (app *WorkloadApp) reportMetrics() {
 	plog.Info("start to report metrics")
 	const (
