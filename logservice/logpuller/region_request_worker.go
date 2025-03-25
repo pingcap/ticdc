@@ -76,7 +76,7 @@ func newRegionRequestWorker(
 		workerID:   workerIDGen.Add(1),
 		client:     client,
 		store:      store,
-		requestsCh: make(chan regionInfo, 256), // 256 is an arbitrary number.
+		requestsCh: make(chan regionInfo, 1024), // 256 is an arbitrary number.
 
 		requestHeader: &cdcpb.Header{ClusterId: client.clusterID, TicdcVersion: version.ReleaseSemver()},
 	}
