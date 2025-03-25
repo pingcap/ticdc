@@ -40,7 +40,7 @@ type SchemaStore interface {
 
 	RegisterTable(tableID int64, startTs uint64) error
 
-	UnregisterTable(tableID int64) error
+	DeregisterTable(tableID int64) error
 
 	// return table info with largest version <= ts
 	GetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error)
@@ -248,9 +248,9 @@ func (s *schemaStore) RegisterTable(tableID int64, startTs uint64) error {
 	return s.dataStorage.registerTable(tableID, startTs)
 }
 
-func (s *schemaStore) UnregisterTable(tableID int64) error {
+func (s *schemaStore) DeregisterTable(tableID int64) error {
 	metrics.SchemaStoreResolvedRegisterTableGauge.Dec()
-	return s.dataStorage.unregisterTable(tableID)
+	return s.dataStorage.deregisterTable(tableID)
 }
 
 func (s *schemaStore) GetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error) {

@@ -347,10 +347,6 @@ func (s *SubscriptionClient) Unsubscribe(subID SubscriptionID) {
 		return
 	}
 	s.setTableStopped(rt)
-
-	log.Info("unsubscribe span success",
-		zap.Uint64("subscriptionID", uint64(rt.subID)),
-		zap.Bool("exists", rt != nil))
 }
 
 func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
@@ -436,9 +432,6 @@ func (s *SubscriptionClient) Close(ctx context.Context) error {
 }
 
 func (s *SubscriptionClient) setTableStopped(rt *subscribedSpan) {
-	log.Info("subscription client starts to stop table",
-		zap.Uint64("subscriptionID", uint64(rt.subID)))
-
 	// Set stopped to true so we can stop handling region events from the table.
 	// Then send a special singleRegionInfo to regionRouter to deregister the table
 	// from all TiKV instances.
@@ -451,9 +444,6 @@ func (s *SubscriptionClient) setTableStopped(rt *subscribedSpan) {
 }
 
 func (s *SubscriptionClient) onTableDrained(rt *subscribedSpan) {
-	log.Info("subscription client stop span is finished",
-		zap.Uint64("subscriptionID", uint64(rt.subID)))
-
 	err := s.ds.RemovePath(rt.subID)
 	if err != nil {
 		log.Warn("subscription client remove path failed",

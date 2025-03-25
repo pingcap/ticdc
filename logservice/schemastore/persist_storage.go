@@ -296,17 +296,15 @@ func (p *persistentStorage) registerTable(tableID int64, startTs uint64) error {
 	return nil
 }
 
-func (p *persistentStorage) unregisterTable(tableID int64) error {
+func (p *persistentStorage) deregisterTable(tableID int64) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.tableRegisteredCount[tableID] -= 1
 	if p.tableRegisteredCount[tableID] <= 0 {
 		if _, ok := p.tableInfoStoreMap[tableID]; !ok {
-			return fmt.Errorf("table %d not found", tableID)
+			log.Panic("deregister table from persistent storage but not found", zap.Int64("tableID", tableID))
 		}
 		delete(p.tableInfoStoreMap, tableID)
-		log.Info("unregister table",
-			zap.Int64("tableID", tableID))
 	}
 	return nil
 }

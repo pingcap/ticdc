@@ -30,9 +30,7 @@ var (
 	GoVersion      = "None"
 )
 
-var (
-	releaseSemver string
-)
+var releaseSemver string
 
 // ReleaseSemver returns a valid Semantic Versions or an empty if the
 // ReleaseVersion is not set at compile time.
