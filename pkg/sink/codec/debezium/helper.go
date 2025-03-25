@@ -118,28 +118,30 @@ func parseBit(s string, n int) string {
 }
 
 func getValueFromDefault(defaultVal any, tp *types.FieldType) any {
+	// defaultValue shoul be string
+	// see https://github.com/pingcap/tidb/blob/72b1b7c564c301de33a4bd335a05770c78528db4/pkg/ddl/add_column.go#L791
+	val, ok := defaultVal.(string)
+	if !ok {
+		log.Debug("default value is not string", zap.Any("defaultValue", defaultVal))
+		return defaultVal
+	}
 	// TODO: more data types need be consider
 	switch tp.GetType() {
 	case mysql.TypeNewDecimal:
-		if val, ok := defaultVal.(string); ok {
-			return types.NewDecFromStringForTest(val)
+		return types.NewDecFromStringForTest(val)
+	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny,
+		mysql.TypeYear:
+		v, err := strconv.ParseInt(val, 10, 64)
+		if err == nil {
+			return v
 		}
-	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
-		if val, ok := defaultVal.(string); ok {
-			v, err := strconv.ParseInt(val, 10, 64)
-			if err == nil {
-				return v
-			}
-			log.Error("unexpected column value type string for int column", zap.Error(err), zap.Any("defaultValue", defaultVal))
-		}
+		log.Error("unexpected column value type string for int column", zap.Error(err), zap.Any("defaultValue", defaultVal))
 	case mysql.TypeDouble, mysql.TypeFloat:
-		if val, ok := defaultVal.(string); ok {
-			v, err := strconv.ParseFloat(val, 64)
-			if err == nil {
-				return v
-			}
-			log.Error("unexpected column value type string for float column", zap.Error(err), zap.Any("defaultValue", defaultVal))
+		v, err := strconv.ParseFloat(val, 64)
+		if err == nil {
+			return v
 		}
+		log.Error("unexpected column value type string for float column", zap.Error(err), zap.Any("defaultValue", defaultVal))
 	}
 	return defaultVal
 }
