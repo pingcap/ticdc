@@ -273,7 +273,9 @@ func (m *DispatcherOrchestrator) sendResponse(to node.ID, topic string, msg mess
 }
 
 func (m *DispatcherOrchestrator) Close() {
+	log.Info("dispatcher orchestrator is closing")
 	m.mc.DeRegisterHandler(messaging.DispatcherManagerManagerTopic)
+	log.Info("dispatcher orchestrator closed")
 }
 
 // handleDispatcherError creates and sends an error response for create dispatcher-related failures

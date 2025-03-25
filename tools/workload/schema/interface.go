@@ -13,6 +13,8 @@
 
 package schema
 
+import "sync/atomic"
+
 type Workload interface {
 	// BuildCreateTableStatement returns the create-table sql of the table n
 	BuildCreateTableStatement(n int) string
@@ -23,7 +25,43 @@ type Workload interface {
 }
 
 type UpdateOption struct {
-	Table           int
+	TableIndex      int
 	Batch           int
 	IsSpecialUpdate bool
+	RangeNum        int
+}
+
+type TableUpdateRange struct {
+	TableIndex int
+	// Indicate how many rows between start and end.
+	BatchSize int
+	Start     int
+	End       int
+}
+
+type TableUpdateRangeCache struct {
+	len int
+	// TableUpdateRanges is a slice of tableUpdateRange
+	tableUpdateRanges []*TableUpdateRange
+	nextIndex         atomic.Int32
+}
+
+func NewTableUpdateRangeCache(len int) *TableUpdateRangeCache {
+	return &TableUpdateRangeCache{
+		len:               len,
+		tableUpdateRanges: make([]*TableUpdateRange, 0, len),
+	}
+}
+
+func (c *TableUpdateRangeCache) GetNextTableUpdateRange() *TableUpdateRange {
+	c.nextIndex.Add(1)
+	return c.tableUpdateRanges[c.nextIndex.Load()%int32(len(c.tableUpdateRanges))]
+}
+
+func (c *TableUpdateRangeCache) AddTableUpdateRange(tableUpdateRange *TableUpdateRange) {
+	c.tableUpdateRanges = append(c.tableUpdateRanges, tableUpdateRange)
+}
+
+func (c *TableUpdateRangeCache) Len() int {
+	return c.len
 }

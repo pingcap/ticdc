@@ -111,14 +111,16 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	if err != nil {
 		return err
 	}
-	if count == 1 {
+	for range count {
 		t.RowTypes = append(t.RowTypes, RowType)
-	} else if count == 2 {
-		t.RowTypes = append(t.RowTypes, RowType, RowType)
 	}
 	t.Length += 1
 	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
 	return nil
+}
+
+func (t *DMLEvent) GetTableID() int64 {
+	return t.PhysicalTableID
 }
 
 func (t *DMLEvent) GetType() int {
@@ -130,11 +132,11 @@ func (t *DMLEvent) GetDispatcherID() common.DispatcherID {
 }
 
 func (t *DMLEvent) GetCommitTs() common.Ts {
-	return common.Ts(t.CommitTs)
+	return t.CommitTs
 }
 
 func (t *DMLEvent) GetStartTs() common.Ts {
-	return common.Ts(t.StartTs)
+	return t.StartTs
 }
 
 func (t *DMLEvent) PostFlush() {

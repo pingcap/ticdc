@@ -16,6 +16,7 @@ package replica
 import (
 	"bytes"
 	"encoding/hex"
+	"sync"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -39,11 +40,12 @@ type SpanReplication struct {
 	Span         *heartbeatpb.TableSpan
 	ChangefeedID common.ChangeFeedID
 
-	schemaID   int64
-	nodeID     node.ID
-	groupID    replica.GroupID
-	status     *atomic.Pointer[heartbeatpb.TableSpanStatus]
-	blockState *atomic.Pointer[heartbeatpb.State]
+	schemaID    int64
+	nodeIDMutex sync.Mutex // mutex for nodeID
+	nodeID      node.ID
+	groupID     replica.GroupID
+	status      *atomic.Pointer[heartbeatpb.TableSpanStatus]
+	blockState  *atomic.Pointer[heartbeatpb.State]
 
 	pdClock pdutil.Clock
 }
@@ -190,6 +192,8 @@ func (r *SpanReplication) SetSchemaID(schemaID int64) {
 }
 
 func (r *SpanReplication) SetNodeID(n node.ID) {
+	r.nodeIDMutex.Lock()
+	defer r.nodeIDMutex.Unlock()
 	r.nodeID = n
 }
 
@@ -198,11 +202,15 @@ func (r *SpanReplication) GetID() common.DispatcherID {
 }
 
 func (r *SpanReplication) GetNodeID() node.ID {
+	r.nodeIDMutex.Lock()
+	defer r.nodeIDMutex.Unlock()
 	return r.nodeID
 }
 
 // IsScheduled returns true if the span is scheduled to a node
 func (r *SpanReplication) IsScheduled() bool {
+	r.nodeIDMutex.Lock()
+	defer r.nodeIDMutex.Unlock()
 	return r.nodeID != ""
 }
 

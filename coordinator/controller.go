@@ -421,6 +421,7 @@ func (c *Controller) updateChangefeedStatus(
 			Message: err.Message,
 		}
 	}
+
 	log.Info("changefeed status changed",
 		zap.Stringer("changefeed", cfID),
 		zap.String("state", string(change.state)),
