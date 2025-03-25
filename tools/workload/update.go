@@ -82,7 +82,6 @@ func (app *WorkloadApp) executeUpdateWorkers(updateConcurrency int, wg *sync.Wai
 			}
 		}(i)
 	}
-
 }
 
 // genUpdateTask generates update tasks
