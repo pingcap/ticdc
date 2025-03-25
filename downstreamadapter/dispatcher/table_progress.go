@@ -62,12 +62,18 @@ func NewTableProgress() *TableProgress {
 
 // Add inserts a new event into the TableProgress.
 func (p *TableProgress) Add(event commonEvent.FlushableEvent) {
-	ts := Ts{startTs: event.GetStartTs(), commitTs: event.GetCommitTs()}
+	commitTs := event.GetCommitTs()
+	if event.GetType() == commonEvent.TypeSyncPointEvent {
+		commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
+		commitTs = commitTsList[len(commitTsList)-1]
+	}
+
+	ts := Ts{startTs: event.GetStartTs(), commitTs: commitTs}
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()
 	elem := p.list.PushBack(ts)
 	p.elemMap[ts] = elem
-	p.maxCommitTs = event.GetCommitTs()
+	p.maxCommitTs = commitTs
 	event.PushFrontFlushFunc(func() {
 		p.Remove(event)
 	})
@@ -98,7 +104,13 @@ func (p *TableProgress) Empty() bool {
 func (p *TableProgress) Pass(event commonEvent.BlockEvent) {
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()
+
 	p.maxCommitTs = event.GetCommitTs()
+
+	if event.GetType() == commonEvent.TypeSyncPointEvent {
+		commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
+		p.maxCommitTs = commitTsList[len(commitTsList)-1]
+	}
 }
 
 // GetCheckpointTs returns the current checkpoint timestamp for the table span.

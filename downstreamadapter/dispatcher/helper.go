@@ -74,6 +74,9 @@ type BlockEventStatus struct {
 	mutex             sync.Mutex
 	blockPendingEvent commonEvent.BlockEvent
 	blockStage        heartbeatpb.BlockStage
+	// record all the commitTs of this pending event
+	// mainly for the batch sync point event
+	blockCommitTsMap map[uint64]struct{}
 }
 
 func (b *BlockEventStatus) clear() {
@@ -82,6 +85,7 @@ func (b *BlockEventStatus) clear() {
 
 	b.blockPendingEvent = nil
 	b.blockStage = heartbeatpb.BlockStage_NONE
+	b.blockCommitTsMap = make(map[uint64]struct{})
 }
 
 func (b *BlockEventStatus) setBlockEvent(event commonEvent.BlockEvent, blockStage heartbeatpb.BlockStage) {
@@ -90,6 +94,16 @@ func (b *BlockEventStatus) setBlockEvent(event commonEvent.BlockEvent, blockStag
 
 	b.blockPendingEvent = event
 	b.blockStage = blockStage
+	b.blockCommitTsMap = make(map[uint64]struct{})
+
+	if event.GetType() == commonEvent.TypeSyncPointEvent {
+		for _, ts := range event.(*commonEvent.SyncPointEvent).GetCommitTsList() {
+			b.blockCommitTsMap[ts] = struct{}{}
+		}
+	} else {
+		b.blockCommitTsMap[event.GetCommitTs()] = struct{}{}
+	}
+
 }
 
 func (b *BlockEventStatus) updateBlockStage(blockStage heartbeatpb.BlockStage) {
@@ -98,11 +112,41 @@ func (b *BlockEventStatus) updateBlockStage(blockStage heartbeatpb.BlockStage) {
 	b.blockStage = blockStage
 }
 
+func (b *BlockEventStatus) getEvent() commonEvent.BlockEvent {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	return b.blockPendingEvent
+}
+
 func (b *BlockEventStatus) getEventAndStage() (commonEvent.BlockEvent, heartbeatpb.BlockStage) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 
 	return b.blockPendingEvent, b.blockStage
+}
+
+func (b *BlockEventStatus) actionMatchs(action *heartbeatpb.DispatcherAction) bool {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if b.blockPendingEvent == nil {
+		return false
+	}
+
+	if b.blockStage != heartbeatpb.BlockStage_WAITING {
+		return false
+	}
+
+	_, ok := b.blockCommitTsMap[action.CommitTs]
+	if ok {
+		delete(b.blockCommitTsMap, action.CommitTs)
+	}
+
+	if len(b.blockCommitTsMap) == 0 {
+		return true
+	}
+	return false
 }
 
 type SchemaIDToDispatchers struct {
