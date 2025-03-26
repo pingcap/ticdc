@@ -1654,14 +1654,14 @@ func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFi
 
 	// the event is related to the partition table
 	if rawEvent.TableInfo.Partition != nil {
-		partitionTableIds := make([]int64, 0)
+		partitionTableIDs := make([]int64, 0)
 		for _, partition := range rawEvent.TableInfo.Partition.Definitions {
-			partitionTableIds = append(partitionTableIds, partition.ID)
+			partitionTableIDs = append(partitionTableIDs, partition.ID)
 		}
 
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      partitionTableIds,
+			TableIDs:      partitionTableIDs,
 		}
 	} else {
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
@@ -1679,14 +1679,14 @@ func buildDDLEventForNormalDDLOnSingleTableForTiDB(rawEvent *PersistedDDLEvent, 
 	}
 	// the event is related to the partition table
 	if rawEvent.TableInfo.Partition != nil {
-		partitionTableIds := make([]int64, 0)
+		partitionTableIDs := make([]int64, 0)
 		for _, partition := range rawEvent.TableInfo.Partition.Definitions {
-			partitionTableIds = append(partitionTableIds, partition.ID)
+			partitionTableIDs = append(partitionTableIDs, partition.ID)
 		}
 
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      partitionTableIds,
+			TableIDs:      partitionTableIDs,
 		}
 	} else {
 		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
