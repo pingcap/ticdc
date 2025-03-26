@@ -84,8 +84,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	}
 
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
 	manager, exists := m.dispatcherManagers[cfId]
+	m.mutex.Unlock()
+
 	var err error
 	var startTs uint64
 	if !exists {
@@ -116,7 +117,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			}
 			return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 		}
+		m.mutex.Lock()
 		m.dispatcherManagers[cfId] = manager
+		m.mutex.Unlock()
 		metrics.EventDispatcherManagerGauge.WithLabelValues(cfId.Namespace(), cfId.Name()).Inc()
 	} else {
 		// Check and potentially add a table trigger event dispatcher.
@@ -170,8 +173,9 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
 
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
 	manager, exists := m.dispatcherManagers[cfId]
+	m.mutex.Unlock()
+
 	if !exists || manager.GetTableTriggerEventDispatcher() == nil {
 		log.Error("Receive post bootstrap request but there is no table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()))
@@ -228,7 +232,6 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	}
 
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
 	if manager, ok := m.dispatcherManagers[cfId]; ok {
 		if closed := manager.TryClose(req.Removed); closed {
 			delete(m.dispatcherManagers, cfId)
@@ -238,6 +241,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 			response.Success = false
 		}
 	}
+	m.mutex.Unlock()
 
 	log.Info("try close dispatcher manager",
 		zap.String("changefeed", cfId.Name()), zap.Bool("success", response.Success))
