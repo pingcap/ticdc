@@ -16,16 +16,16 @@
 set -ux
 
 cdc.test -test.coverprofile="$OUT_DIR/cov.$TEST_NAME.cli.$$.out" cli "$@"
-    
+
 retry_times=0
 retry_max_times=5
 while [ $? -ne 0 ]; do
-    retry_times=$((retry_times+1))
-    if [ $retry_times -gt $retry_max_times ]; then
-        echo "Failed to run cdc cli"
-        exit 1
-    fi
-    cdc.test -test.coverprofile="$OUT_DIR/cov.$TEST_NAME.cli.$$.out" cli "$@"    
+	retry_times=$((retry_times + 1))
+	if [ $retry_times -gt $retry_max_times ]; then
+		echo "Failed to run cdc cli"
+		exit 1
+	fi
+	cdc.test -test.coverprofile="$OUT_DIR/cov.$TEST_NAME.cli.$$.out" cli "$@"
 done
 
 set +x
