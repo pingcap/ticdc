@@ -85,6 +85,9 @@ type persistentStorage struct {
 
 	// tableID -> total registered count
 	tableRegisteredCount map[int64]int
+
+	mutexForHack  sync.Mutex
+	tablesForHack map[uint64][]commonEvent.Table
 }
 
 func exists(path string) bool {
@@ -149,6 +152,7 @@ func newPersistentStorage(
 		tableTriggerDDLHistory: make([]uint64, 0),
 		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
 		tableRegisteredCount:   make(map[int64]int),
+		tablesForHack:          make(map[uint64][]commonEvent.Table),
 	}
 
 	isDataReusable := false
@@ -267,7 +271,22 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 		log.Debug("getAllPhysicalTables finish",
 			zap.Any("duration(s)", time.Since(start).Seconds()))
 	}()
-	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
+
+	p.mutexForHack.Lock()
+	if p.tablesForHack[snapTs] != nil {
+		p.mutexForHack.Unlock()
+		return p.tablesForHack[snapTs], nil
+	}
+	p.mutexForHack.Unlock()
+
+	tables, err := loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
+	if err == nil {
+		p.mutexForHack.Lock()
+		p.tablesForHack[snapTs] = tables
+		p.mutexForHack.Unlock()
+	}
+	return tables, err
+	//return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
 }
 
 // only return when table info is initialized
