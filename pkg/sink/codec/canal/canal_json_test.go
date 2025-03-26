@@ -546,188 +546,186 @@ func TestOtherTypes(t *testing.T) {
 	CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
 
-func TestGeneralDMLEvent(t *testing.T) {
-	// columnSelector
-	{
-		helper := commonEvent.NewEventTestHelper(t)
-		defer helper.Close()
+func TestDMLEventWithColumnSelector(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
 
-		helper.Tk().MustExec("use test")
-		job := helper.DDL2Job(`create table test.t(a tinyint primary key, b tinyint)`)
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b tinyint)`)
 
-		dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a) values (1)`)
-		require.NotNil(t, dmlEvent)
-		row, ok := dmlEvent.GetNextRow()
-		require.True(t, ok)
-		tableInfo := helper.GetTableInfo(job)
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a) values (1)`)
+	require.NotNil(t, dmlEvent)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+	tableInfo := helper.GetTableInfo(job)
 
-		replicaConfig := config.GetDefaultReplicaConfig()
-		replicaConfig.Sink.ColumnSelectors = []*config.ColumnSelector{
-			{
-				Matcher: []string{"test.*"},
-				Columns: []string{"a"},
-			},
-		}
-		selectors, err := columnselector.NewColumnSelectors(replicaConfig.Sink)
-		require.NoError(t, err)
-
-		rowEvent := &commonEvent.RowEvent{
-			TableInfo:      tableInfo,
-			CommitTs:       1,
-			Event:          row,
-			ColumnSelector: selectors.GetSelector("test", "t"),
-			Callback:       func() {},
-		}
-
-		protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
-		value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
-		require.NoError(t, err)
-
-		var message JSONMessage
-
-		err = json.Unmarshal(value, &message)
-		require.NoError(t, err)
-
-		require.Equal(t, int64(0), message.ID)
-		require.Equal(t, "test", message.Schema)
-		require.Equal(t, "t", message.Table)
-		require.Equal(t, []string{"a"}, message.PKNames)
-		require.Equal(t, false, message.IsDDL)
-		require.Equal(t, "INSERT", message.EventType)
-		require.Equal(t, "", message.Query)
-
-		sqlValue, err := json.Marshal(message.SQLType)
-		require.NoError(t, err)
-		require.Equal(t, `{"a":-6}`, string(sqlValue))
-
-		mysqlValue, err := json.Marshal(message.MySQLType)
-		require.NoError(t, err)
-		require.Equal(t, `{"a":"tinyint"}`, string(mysqlValue))
-
-		oldValue, err := json.Marshal(message.Old)
-		require.NoError(t, err)
-		require.Equal(t, "null", string(oldValue))
-
-		newValue, err := json.Marshal(message.Data)
-		require.NoError(t, err)
-		require.Equal(t, `[{"a":"1"}]`, string(newValue))
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.ColumnSelectors = []*config.ColumnSelector{
+		{
+			Matcher: []string{"test.*"},
+			Columns: []string{"a"},
+		},
 	}
-	// EnableTiDBExtension
-	{
-		helper := commonEvent.NewEventTestHelper(t)
-		defer helper.Close()
+	selectors, err := columnselector.NewColumnSelectors(replicaConfig.Sink)
+	require.NoError(t, err)
 
-		helper.Tk().MustExec("use test")
-		job := helper.DDL2Job(`create table test.t(a tinyint primary key, b tinyint)`)
-
-		dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a) values (1)`)
-		require.NotNil(t, dmlEvent)
-		row, ok := dmlEvent.GetNextRow()
-		require.True(t, ok)
-		tableInfo := helper.GetTableInfo(job)
-
-		rowEvent := &commonEvent.RowEvent{
-			TableInfo:      tableInfo,
-			CommitTs:       1,
-			Event:          row,
-			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {},
-		}
-
-		protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
-		protocolConfig.EnableTiDBExtension = true
-		value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
-		require.NoError(t, err)
-
-		var message canalJSONMessageWithTiDBExtension
-
-		err = json.Unmarshal(value, &message)
-		require.NoError(t, err)
-
-		require.Equal(t, int64(0), message.ID)
-		require.Equal(t, "test", message.Schema)
-		require.Equal(t, "t", message.Table)
-		require.Equal(t, []string{"a"}, message.PKNames)
-		require.Equal(t, false, message.IsDDL)
-		require.Equal(t, "INSERT", message.EventType)
-		require.Equal(t, "", message.Query)
-
-		sqlValue, err := json.Marshal(message.SQLType)
-		require.NoError(t, err)
-		require.Equal(t, `{"a":-6,"b":-6}`, string(sqlValue))
-
-		mysqlValue, err := json.Marshal(message.MySQLType)
-		require.NoError(t, err)
-		require.Equal(t, `{"a":"tinyint","b":"tinyint"}`, string(mysqlValue))
-
-		oldValue, err := json.Marshal(message.Old)
-		require.NoError(t, err)
-		require.Equal(t, "null", string(oldValue))
-
-		newValue, err := json.Marshal(message.Data)
-		require.NoError(t, err)
-		require.Equal(t, `[{"a":"1","b":null}]`, string(newValue))
-
-		require.Equal(t, uint64(1), message.Extensions.CommitTs)
-		require.Equal(t, false, message.Extensions.OnlyHandleKey)
-		require.Equal(t, "", message.Extensions.ClaimCheckLocation)
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       1,
+		Event:          row,
+		ColumnSelector: selectors.GetSelector("test", "t"),
+		Callback:       func() {},
 	}
-	// multi pk
-	{
-		helper := commonEvent.NewEventTestHelper(t)
-		defer helper.Close()
 
-		helper.Tk().MustExec("use test")
-		job := helper.DDL2Job(`create table test.t(a tinyint, c int, b tinyint, PRIMARY KEY (a, b))`)
+	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
+	value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
+	require.NoError(t, err)
 
-		dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1,2,3)`)
-		require.NotNil(t, dmlEvent)
-		row, ok := dmlEvent.GetNextRow()
-		require.True(t, ok)
-		tableInfo := helper.GetTableInfo(job)
+	var message JSONMessage
 
-		rowEvent := &commonEvent.RowEvent{
-			TableInfo:      tableInfo,
-			CommitTs:       1,
-			Event:          row,
-			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {},
-		}
+	err = json.Unmarshal(value, &message)
+	require.NoError(t, err)
 
-		protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
-		value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
-		require.NoError(t, err)
+	require.Equal(t, int64(0), message.ID)
+	require.Equal(t, "test", message.Schema)
+	require.Equal(t, "t", message.Table)
+	require.Equal(t, []string{"a"}, message.PKNames)
+	require.Equal(t, false, message.IsDDL)
+	require.Equal(t, "INSERT", message.EventType)
+	require.Equal(t, "", message.Query)
 
-		var message JSONMessage
+	sqlValue, err := json.Marshal(message.SQLType)
+	require.NoError(t, err)
+	require.Equal(t, `{"a":-6}`, string(sqlValue))
 
-		err = json.Unmarshal(value, &message)
-		require.NoError(t, err)
+	mysqlValue, err := json.Marshal(message.MySQLType)
+	require.NoError(t, err)
+	require.Equal(t, `{"a":"tinyint"}`, string(mysqlValue))
 
-		require.Equal(t, []string{"a", "b"}, message.PKNames)
+	oldValue, err := json.Marshal(message.Old)
+	require.NoError(t, err)
+	require.Equal(t, "null", string(oldValue))
 
-		sqlValue, err := json.Marshal(message.SQLType)
-		require.NoError(t, err)
-		require.Equal(t, `{"a":-6,"b":-6,"c":4}`, string(sqlValue))
+	newValue, err := json.Marshal(message.Data)
+	require.NoError(t, err)
+	require.Equal(t, `[{"a":"1"}]`, string(newValue))
+}
 
-		mysqlValue, err := json.Marshal(message.MySQLType)
-		require.NoError(t, err)
-		require.Equal(t, `{"a":"tinyint","b":"tinyint","c":"int"}`, string(mysqlValue))
+func TestDMLMultiplePK(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
 
-		oldValue, err := json.Marshal(message.Old)
-		require.NoError(t, err)
-		require.Equal(t, "null", string(oldValue))
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(a tinyint, c int, b tinyint, PRIMARY KEY (a, b))`)
 
-		newValue, err := json.Marshal(message.Data)
-		require.NoError(t, err)
-		require.Equal(t, `[{"a":"1","b":"3","c":"2"}]`, string(newValue))
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1,2,3)`)
+	require.NotNil(t, dmlEvent)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+	tableInfo := helper.GetTableInfo(job)
+
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       1,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
 	}
-	// message large
-	{
-		helper := commonEvent.NewEventTestHelper(t)
-		defer helper.Close()
 
-		helper.Tk().MustExec("use test")
-		job := helper.DDL2Job(`create table test.t(
+	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
+	value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
+	require.NoError(t, err)
+
+	var message JSONMessage
+
+	err = json.Unmarshal(value, &message)
+	require.NoError(t, err)
+
+	require.Equal(t, []string{"a", "b"}, message.PKNames)
+
+	sqlValue, err := json.Marshal(message.SQLType)
+	require.NoError(t, err)
+	require.Equal(t, `{"a":-6,"b":-6,"c":4}`, string(sqlValue))
+
+	mysqlValue, err := json.Marshal(message.MySQLType)
+	require.NoError(t, err)
+	require.Equal(t, `{"a":"tinyint","b":"tinyint","c":"int"}`, string(mysqlValue))
+
+	oldValue, err := json.Marshal(message.Old)
+	require.NoError(t, err)
+	require.Equal(t, "null", string(oldValue))
+
+	newValue, err := json.Marshal(message.Data)
+	require.NoError(t, err)
+	require.Equal(t, `[{"a":"1","b":"3","c":"2"}]`, string(newValue))
+}
+
+func TestEnableTiDBExtension(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b tinyint)`)
+
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a) values (1)`)
+	require.NotNil(t, dmlEvent)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+	tableInfo := helper.GetTableInfo(job)
+
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       1,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
+	protocolConfig.EnableTiDBExtension = true
+	value, err := newJSONMessageForDML(rowEvent, protocolConfig, false, "")
+	require.NoError(t, err)
+
+	var message canalJSONMessageWithTiDBExtension
+
+	err = json.Unmarshal(value, &message)
+	require.NoError(t, err)
+
+	require.Equal(t, int64(0), message.ID)
+	require.Equal(t, "test", message.Schema)
+	require.Equal(t, "t", message.Table)
+	require.Equal(t, []string{"a"}, message.PKNames)
+	require.Equal(t, false, message.IsDDL)
+	require.Equal(t, "INSERT", message.EventType)
+	require.Equal(t, "", message.Query)
+
+	sqlValue, err := json.Marshal(message.SQLType)
+	require.NoError(t, err)
+	require.Equal(t, `{"a":-6,"b":-6}`, string(sqlValue))
+
+	mysqlValue, err := json.Marshal(message.MySQLType)
+	require.NoError(t, err)
+	require.Equal(t, `{"a":"tinyint","b":"tinyint"}`, string(mysqlValue))
+
+	oldValue, err := json.Marshal(message.Old)
+	require.NoError(t, err)
+	require.Equal(t, "null", string(oldValue))
+
+	newValue, err := json.Marshal(message.Data)
+	require.NoError(t, err)
+	require.Equal(t, `[{"a":"1","b":null}]`, string(newValue))
+
+	require.Equal(t, uint64(1), message.Extensions.CommitTs)
+	require.Equal(t, false, message.Extensions.OnlyHandleKey)
+	require.Equal(t, "", message.Extensions.ClaimCheckLocation)
+}
+
+func TestDMLMessageLarge(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(
 			a tinyint primary key, b tinyint,
 			c bool, d bool,
 			e smallint, f smallint,
@@ -759,7 +757,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 			be char(10), bf char(10),
 			bg binary(10), bh binary(10))`)
 
-		dmlEvent := helper.DML2Event("test", "t", `insert into test.t(
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(
 			a,c,e,g,i,k,m,o,q,s,u,w,y,aa,ac,ae,ag,ai,ak,am,ao,aq,as1,au,aw,ay,ba,bc,be,bg) values (
 				1, true, -1, 123, 153.123,153.123,
 				"1973-12-30 15:30:00",123,123,"2000-01-01","23:59:59",
@@ -768,34 +766,34 @@ func TestGeneralDMLEvent(t *testing.T) {
 				0x89504E470D0A1A0A,"5rWL6K+VdGV4dA==",0x4944330300000000,
 				"5rWL6K+VdGV4dA==",0x504B0304140000000800,"5rWL6K+VdGV4dA==",
 				0x255044462D312E34,"Alice",0x0102030405060708090A)`)
-		require.NotNil(t, dmlEvent)
-		row, ok := dmlEvent.GetNextRow()
-		require.True(t, ok)
-		tableInfo := helper.GetTableInfo(job)
+	require.NotNil(t, dmlEvent)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+	tableInfo := helper.GetTableInfo(job)
 
-		rowEvent := &commonEvent.RowEvent{
-			TableInfo:      tableInfo,
-			CommitTs:       1,
-			Event:          row,
-			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {},
-		}
-
-		protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
-		protocolConfig = protocolConfig.WithMaxMessageBytes(300)
-		protocolConfig.EnableTiDBExtension = true
-		encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
-		require.NoError(t, err)
-		err = encoder.AppendRowChangedEvent(context.Background(), "", rowEvent)
-		require.ErrorIs(t, err, errors.ErrMessageTooLarge)
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       1,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
 	}
-	// message large + handle only
-	{
-		helper := commonEvent.NewEventTestHelper(t)
-		defer helper.Close()
 
-		helper.Tk().MustExec("use test")
-		job := helper.DDL2Job(`create table test.t(
+	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
+	protocolConfig = protocolConfig.WithMaxMessageBytes(300)
+	protocolConfig.EnableTiDBExtension = true
+	encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
+	require.NoError(t, err)
+	err = encoder.AppendRowChangedEvent(context.Background(), "", rowEvent)
+	require.ErrorIs(t, err, errors.ErrMessageTooLarge)
+}
+
+func TestMessageLargeHandleKeyOnly(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(
 			a tinyint primary key, b tinyint,
 			c bool, d bool,
 			e smallint, f smallint,
@@ -827,7 +825,7 @@ func TestGeneralDMLEvent(t *testing.T) {
 			be char(10), bf char(10),
 			bg binary(10), bh binary(10))`)
 
-		dmlEvent := helper.DML2Event("test", "t", `insert into test.t(
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(
 			a,c,e,g,i,k,m,o,q,s,u,w,y,aa,ac,ae,ag,ai,ak,am,ao,aq,as1,au,aw,ay,ba,bc,be,bg) values (
 				1, true, -1, 123, 153.123,153.123,
 				"1973-12-30 15:30:00",123,123,"2000-01-01","23:59:59",
@@ -836,56 +834,55 @@ func TestGeneralDMLEvent(t *testing.T) {
 				0x89504E470D0A1A0A,"5rWL6K+VdGV4dA==",0x4944330300000000,
 				"5rWL6K+VdGV4dA==",0x504B0304140000000800,"5rWL6K+VdGV4dA==",
 				0x255044462D312E34,"Alice",0x0102030405060708090A)`)
-		require.NotNil(t, dmlEvent)
-		row, ok := dmlEvent.GetNextRow()
-		require.True(t, ok)
-		tableInfo := helper.GetTableInfo(job)
+	require.NotNil(t, dmlEvent)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+	tableInfo := helper.GetTableInfo(job)
 
-		rowEvent := &commonEvent.RowEvent{
-			TableInfo:      tableInfo,
-			CommitTs:       1,
-			Event:          row,
-			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {},
-		}
-
-		protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
-		protocolConfig = protocolConfig.WithMaxMessageBytes(300)
-		protocolConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
-		protocolConfig.EnableTiDBExtension = true
-		encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
-		require.NoError(t, err)
-		err = encoder.AppendRowChangedEvent(context.Background(), "", rowEvent)
-		require.NoError(t, err)
-
-		messages := encoder.Build()
-		require.Equal(t, 1, len(messages))
-		require.NotNil(t, messages[0].Callback)
-
-		value := messages[0].Value
-		var message canalJSONMessageWithTiDBExtension
-
-		err = json.Unmarshal(value, &message)
-		require.NoError(t, err)
-
-		sqlValue, err := json.Marshal(message.SQLType)
-		require.NoError(t, err)
-		require.Equal(t, `{"a":-6}`, string(sqlValue))
-
-		mysqlValue, err := json.Marshal(message.MySQLType)
-		require.NoError(t, err)
-		require.Equal(t, `{"a":"tinyint"}`, string(mysqlValue))
-
-		oldValue, err := json.Marshal(message.Old)
-		require.NoError(t, err)
-		require.Equal(t, "null", string(oldValue))
-
-		newValue, err := json.Marshal(message.Data)
-		require.NoError(t, err)
-		require.Equal(t, `[{"a":"1"}]`, string(newValue))
-
-		require.Equal(t, true, message.Extensions.OnlyHandleKey)
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       1,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
 	}
+
+	protocolConfig := common.NewConfig(config.ProtocolCanalJSON)
+	protocolConfig = protocolConfig.WithMaxMessageBytes(300)
+	protocolConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
+	protocolConfig.EnableTiDBExtension = true
+	encoder, err := NewJSONRowEventEncoder(context.Background(), protocolConfig)
+	require.NoError(t, err)
+	err = encoder.AppendRowChangedEvent(context.Background(), "", rowEvent)
+	require.NoError(t, err)
+
+	messages := encoder.Build()
+	require.Equal(t, 1, len(messages))
+	require.NotNil(t, messages[0].Callback)
+
+	value := messages[0].Value
+	var message canalJSONMessageWithTiDBExtension
+
+	err = json.Unmarshal(value, &message)
+	require.NoError(t, err)
+
+	sqlValue, err := json.Marshal(message.SQLType)
+	require.NoError(t, err)
+	require.Equal(t, `{"a":-6}`, string(sqlValue))
+
+	mysqlValue, err := json.Marshal(message.MySQLType)
+	require.NoError(t, err)
+	require.Equal(t, `{"a":"tinyint"}`, string(mysqlValue))
+
+	oldValue, err := json.Marshal(message.Old)
+	require.NoError(t, err)
+	require.Equal(t, "null", string(oldValue))
+
+	newValue, err := json.Marshal(message.Data)
+	require.NoError(t, err)
+	require.Equal(t, `[{"a":"1"}]`, string(newValue))
+
+	require.Equal(t, true, message.Extensions.OnlyHandleKey)
 }
 
 func TestInsertEvent(t *testing.T) {
