@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/pebble"
@@ -709,22 +710,44 @@ func cleanObsoleteData(db *pebble.DB, oldGcTs uint64, gcTs uint64) {
 	}
 }
 
+var mutexForHack sync.Mutex
+var tableInfoMapForHack = map[uint64]map[int64]*model.TableInfo{}
+var tableMapForHack = map[uint64]map[int64]*BasicTableInfo{}
+var partitionMapForHack = map[uint64]map[int64]BasicPartitionInfo{}
+
 func loadAllPhysicalTablesAtTs(
 	storageSnap *pebble.Snapshot,
 	gcTs uint64,
 	snapVersion uint64,
 	tableFilter filter.Filter,
 ) ([]commonEvent.Table, error) {
-	// TODO: respect tableFilter(filter table in kv snap is easy, filter ddl jobs need more attention)
-	databaseMap, err := loadDatabasesInKVSnap(storageSnap, gcTs)
-	if err != nil {
-		return nil, err
+	var tableInfoMap map[int64]*model.TableInfo
+	var tableMap map[int64]*BasicTableInfo
+	var partitionMap map[int64]BasicPartitionInfo
+
+	mutexForHack.Lock()
+	if tableInfoMapForHack[gcTs] != nil {
+		tableInfoMap = tableInfoMapForHack[gcTs]
+		tableMap = tableMapForHack[gcTs]
+		partitionMap = partitionMapForHack[gcTs]
+		mutexForHack.Unlock()
+	} else {
+		mutexForHack.Unlock()
+		// TODO: respect tableFilter(filter table in kv snap is easy, filter ddl jobs need more attention)
+		databaseMap, err := loadDatabasesInKVSnap(storageSnap, gcTs)
+		if err != nil {
+			return nil, err
+		}
+
+		tableInfoMap, tableMap, partitionMap, err = loadFullTablesInKVSnap(storageSnap, gcTs, databaseMap)
+		if err != nil {
+			return nil, err
+		}
+		tableInfoMapForHack[gcTs] = tableInfoMap
+		tableMapForHack[gcTs] = tableMap
+		partitionMapForHack[gcTs] = partitionMap
 	}
 
-	tableInfoMap, tableMap, partitionMap, err := loadFullTablesInKVSnap(storageSnap, gcTs, databaseMap)
-	if err != nil {
-		return nil, err
-	}
 	log.Info("after load tables in kv snap",
 		zap.Int("tableInfoMapLen", len(tableInfoMap)),
 		zap.Int("tableMapLen", len(tableMap)),
