@@ -111,9 +111,10 @@ func NewCanalJSONDecoder(
 		}
 	}
 
-	if codecConfig.LargeMessageHandle.HandleKeyOnly() && db == nil {
-		return nil, errors.ErrCodecDecode.
-			GenWithStack("handle-key-only is enabled, but upstream TiDB is not provided")
+	if codecConfig.LargeMessageHandle.HandleKeyOnly() {
+		if db == nil {
+			log.Warn("handle-key-only is enabled, but upstream TiDB is not provided, may in the unit test")
+		}
 	}
 
 	return &canalJSONDecoder{
@@ -300,7 +301,7 @@ func (b *canalJSONDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	message, withExtension := b.msg.(*canalJSONMessageWithTiDBExtension)
 	if withExtension {
 		ctx := context.Background()
-		if message.Extensions.OnlyHandleKey {
+		if message.Extensions.OnlyHandleKey && b.upstreamTiDB != nil {
 			return b.assembleHandleKeyOnlyRowChangedEvent(ctx, message)
 		}
 		if message.Extensions.ClaimCheckLocation != "" {
