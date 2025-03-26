@@ -35,7 +35,7 @@ function prepare() {
 
 	TOPIC_NAME="ticdc-failover-ddl-test-mix-$RANDOM"
 	SINK_URI="mysql://root@127.0.0.1:3306/"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
+	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
 }
 
 function create_tables() {
