@@ -16,6 +16,7 @@ package server
 import (
 	"context"
 	"net"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -23,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 )
 
 type GrpcModule struct {
@@ -34,6 +36,19 @@ func NewGrpcServer(lis net.Listener) common.SubModule {
 	option := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(256 * 1024 * 1024), // 256MB
 	}
+
+	kaep := keepalive.EnforcementPolicy{
+		MinTime:             20 * time.Second,
+		PermitWithoutStream: true,
+	}
+
+	kasp := keepalive.ServerParameters{
+		Time:    1 * time.Minute,
+		Timeout: 1 * time.Minute,
+	}
+
+	option = append(option, grpc.KeepaliveEnforcementPolicy(kaep), grpc.KeepaliveParams(kasp))
+
 	grpcServer := grpc.NewServer(option...)
 	proto.RegisterMessageCenterServer(grpcServer, messaging.NewMessageCenterServer(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)))
 	return &GrpcModule{
