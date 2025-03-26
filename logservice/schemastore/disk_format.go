@@ -725,6 +725,11 @@ func loadAllPhysicalTablesAtTs(
 	var tableMap map[int64]*BasicTableInfo
 	var partitionMap map[int64]BasicPartitionInfo
 
+	databaseMap, err := loadDatabasesInKVSnap(storageSnap, gcTs)
+	if err != nil {
+		return nil, err
+	}
+
 	mutexForHack.Lock()
 	if tableInfoMapForHack[gcTs] != nil {
 		tableInfoMap = tableInfoMapForHack[gcTs]
@@ -734,11 +739,6 @@ func loadAllPhysicalTablesAtTs(
 	} else {
 		mutexForHack.Unlock()
 		// TODO: respect tableFilter(filter table in kv snap is easy, filter ddl jobs need more attention)
-		databaseMap, err := loadDatabasesInKVSnap(storageSnap, gcTs)
-		if err != nil {
-			return nil, err
-		}
-
 		tableInfoMap, tableMap, partitionMap, err = loadFullTablesInKVSnap(storageSnap, gcTs, databaseMap)
 		if err != nil {
 			return nil, err
