@@ -210,7 +210,7 @@ func (c *MysqlConfig) Apply(
 
 	// c.EnableOldValue = config.EnableOldValue
 	c.ForceReplicate = cfg.ForceReplicate
-	// Note(dongmen): The TiDBSourceID should never be 0 here, but we have found that
+	// Note: The TiDBSourceID should never be 0 here, but we have found that
 	// in some problematic cases, the TiDBSourceID is 0 since something went wrong in the
 	// configuration process. So we need to check it here again.
 	// We do this is because it can cause the data to be inconsistent if the TiDBSourceID is 0
