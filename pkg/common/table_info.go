@@ -249,7 +249,6 @@ const (
 
 // TableInfo provides meta data describing a DB table.
 type TableInfo struct {
-	SchemaID int64 `json:"schema-id"`
 	// NOTICE: We probably store the logical ID inside TableName,
 	// not the physical ID.
 	// For normal table, there is only one ID, which is the physical ID.
@@ -572,7 +571,6 @@ func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 
 func newTableInfo(schema, table string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
 	ti := &TableInfo{
-		SchemaID: tableID,
 		TableName: TableName{
 			Schema:      schema,
 			Table:       table,
@@ -611,16 +609,6 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
 	cs := newColumnSchema4Decoder(tableInfo)
 	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs)
-}
-
-// GetColumnDefaultValue returns the default definition of a column.
-func GetColumnDefaultValue(col *model.ColumnInfo) interface{} {
-	defaultValue := col.GetDefaultValue()
-	if defaultValue == nil {
-		defaultValue = col.GetOriginDefaultValue()
-	}
-	defaultDatum := types.NewDatum(defaultValue)
-	return defaultDatum.GetValue()
 }
 
 // BuildTiDBTableInfoWithoutVirtualColumns build a TableInfo without virual columns from the source table info
