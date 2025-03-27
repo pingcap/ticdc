@@ -158,39 +158,6 @@ func encodeDDLEvent(e *commonEvent.DDLEvent, config *common.Config) ([]byte, []b
 	return keyOutput.Bytes(), valueOutput.Bytes(), nil
 }
 
-func encodeResolvedTs(ts uint64) ([]byte, []byte) {
-	keyBuf := &bytes.Buffer{}
-	keyWriter := util.BorrowJSONWriter(keyBuf)
-
-	keyWriter.WriteObject(func() {
-		keyWriter.WriteUint64Field("ts", ts)
-		keyWriter.WriteIntField("t", int(common.MessageTypeResolved))
-	})
-
-	util.ReturnJSONWriter(keyWriter)
-
-	key := keyBuf.Bytes()
-
-	var keyLenByte [8]byte
-	var valueLenByte [8]byte
-	var versionByte [8]byte
-	binary.BigEndian.PutUint64(keyLenByte[:], uint64(len(key)))
-	binary.BigEndian.PutUint64(valueLenByte[:], 0)
-	binary.BigEndian.PutUint64(versionByte[:], batchVersion1)
-
-	keyOutput := new(bytes.Buffer)
-
-	keyOutput.Write(versionByte[:])
-	keyOutput.Write(keyLenByte[:])
-	keyOutput.Write(key)
-
-	// todo: shall we really set value here?
-	valueOutput := new(bytes.Buffer)
-	valueOutput.Write(valueLenByte[:])
-
-	return keyOutput.Bytes(), valueOutput.Bytes()
-}
-
 func writeColumnFieldValue(
 	writer *util.JSONWriter,
 	col *model.ColumnInfo,
