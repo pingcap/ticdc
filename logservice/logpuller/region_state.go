@@ -43,7 +43,9 @@ type regionInfo struct {
 	subscribedSpan *subscribedSpan
 	// The state of the locked range of the region.
 	lockedRangeState *regionlock.LockedRangeState
-	filterLoop       bool
+	// Whether to filter out the value write by cdc itself.
+	// It should be `true` in BDR mode
+	filterLoop bool
 }
 
 func (s *regionInfo) isStopped() bool {
