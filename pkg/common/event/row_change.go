@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	timodel "github.com/pingcap/tiflow/cdc/model"
@@ -138,7 +139,7 @@ func columnData2Column(col *timodel.ColumnData, tableInfo *common.TableInfo) *co
 		Type:      colInfo.GetType(),
 		Charset:   colInfo.GetCharset(),
 		Collation: colInfo.GetCollate(),
-		Flag:      *tableInfo.GetColumnsFlag()[colID],
+		Flag:      tableInfo.GetColumnsFlag()[colID],
 		Value:     col.Value,
 		Default:   common.GetColumnDefaultValue(colInfo),
 	}
@@ -174,7 +175,7 @@ func (r *RowChangedEvent) HandleKeyColInfos() ([]*common.Column, []rowcodec.ColI
 	tableInfo := r.TableInfo
 	colInfos := tableInfo.GetColInfosForRowChangedEvent()
 	for i, col := range cols {
-		if col != nil && col.Flag.IsHandleKey() {
+		if col != nil && common.HasHandleKeyFlag(col.Flag) {
 			pkeyCols = append(pkeyCols, col)
 			pkeyColInfos = append(pkeyColInfos, colInfos[i])
 		}
@@ -197,7 +198,7 @@ func (r *RowChangedEvent) PrimaryKeyColumnNames() []string {
 
 	result = make([]string, 0)
 	for _, col := range cols {
-		if col != nil && col.Flag.IsPrimaryKey() {
+		if col != nil && mysql.HasPriKeyFlag(col.Flag) {
 			result = append(result, col.Name)
 		}
 	}
@@ -246,7 +247,7 @@ func (e *RowEvent) PrimaryKeyColumnNames() []string {
 	tableInfo := e.TableInfo
 	columns := e.TableInfo.GetColumns()
 	for _, col := range columns {
-		if col != nil && tableInfo.ForceGetColumnFlagType(col.ID).IsPrimaryKey() {
+		if col != nil && mysql.HasPriKeyFlag(tableInfo.ForceGetColumnFlagType(col.ID)) {
 			result = append(result, tableInfo.ForceGetColumnName(col.ID))
 		}
 	}

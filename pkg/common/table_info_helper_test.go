@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/tidb/pkg/meta/model"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +26,7 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 	tests := []struct {
 		name           string
 		columns        []*model.ColumnInfo
-		columnsFlag    map[int64]*ColumnFlagType
+		columnsFlag    map[int64]uint
 		isUpdate       bool
 		wantCount      int
 		wantColumnList string
@@ -37,10 +38,10 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2},
 				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3},
 			},
-			columnsFlag: map[int64]*ColumnFlagType{
-				1: NewColumnFlagType(PrimaryKeyFlag),
-				2: NewColumnFlagType(UniqueKeyFlag),
-				3: NewColumnFlagType(NullableFlag),
+			columnsFlag: map[int64]uint{
+				1: mysql.PriKeyFlag,
+				2: mysql.UniqueKeyFlag,
+				3: mysql.NotNullFlag,
 			},
 			isUpdate:       false,
 			wantCount:      3,
@@ -53,10 +54,10 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2},
 				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3},
 			},
-			columnsFlag: map[int64]*ColumnFlagType{
-				1: NewColumnFlagType(PrimaryKeyFlag),
-				2: NewColumnFlagType(UniqueKeyFlag),
-				3: NewColumnFlagType(NullableFlag),
+			columnsFlag: map[int64]uint{
+				1: mysql.PriKeyFlag,
+				2: mysql.UniqueKeyFlag,
+				3: mysql.NotNullFlag,
 			},
 			isUpdate:       true,
 			wantCount:      3,
@@ -69,10 +70,10 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2},
 				{Name: pmodel.CIStr{O: "full_name", L: "full_name"}, ID: 3}, // generated column
 			},
-			columnsFlag: map[int64]*ColumnFlagType{
-				1: NewColumnFlagType(PrimaryKeyFlag),
-				2: NewColumnFlagType(UniqueKeyFlag),
-				3: NewColumnFlagType(GeneratedColumnFlag),
+			columnsFlag: map[int64]uint{
+				1: mysql.PriKeyFlag,
+				2: mysql.UniqueKeyFlag,
+				3: mysql.NotNullFlag,
 			},
 			isUpdate:       false,
 			wantCount:      2,
@@ -85,9 +86,9 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 				nil,
 				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3},
 			},
-			columnsFlag: map[int64]*ColumnFlagType{
-				1: NewColumnFlagType(PrimaryKeyFlag),
-				3: NewColumnFlagType(NullableFlag),
+			columnsFlag: map[int64]uint{
+				1: mysql.PriKeyFlag,
+				3: mysql.NotNullFlag,
 			},
 			isUpdate:       false,
 			wantCount:      2,

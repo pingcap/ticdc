@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tiflow/pkg/quotes"
 )
@@ -175,7 +176,7 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceRe
 func getArgs(row *chunk.Row, tableInfo *common.TableInfo, enableGeneratedColumn bool) ([]interface{}, error) {
 	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
 	for i, col := range tableInfo.GetColumns() {
-		if col == nil || (tableInfo.GetColumnFlags()[col.ID].IsGeneratedColumn() && !enableGeneratedColumn) {
+		if col == nil || ((tableInfo.GetColumnFlags()[col.ID]&mysql.GeneratedColumnFlag) > 0 && !enableGeneratedColumn) {
 			continue
 		}
 		v, err := common.FormatColVal(row, col, i)
@@ -193,7 +194,7 @@ func whereSlice(row *chunk.Row, tableInfo *common.TableInfo, forceReplicate bool
 	colNames := make([]string, 0, len(tableInfo.GetColumns()))
 	// Try to use unique key values when available
 	for i, col := range tableInfo.GetColumns() {
-		if col == nil || !tableInfo.GetColumnFlags()[col.ID].IsHandleKey() {
+		if col == nil || !common.HasHandleKeyFlag(tableInfo.GetColumnFlags()[col.ID]) {
 			continue
 		}
 		colNames = append(colNames, col.Name.O)

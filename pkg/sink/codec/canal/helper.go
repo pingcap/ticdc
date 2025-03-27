@@ -19,7 +19,6 @@ import (
 	"strconv"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -28,7 +27,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, flag *common.ColumnFlagType) (string, JavaSQLType) {
+func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, flag uint) (string, JavaSQLType) {
 	colType := columnInfo.GetType()
 
 	var value string
@@ -49,7 +48,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 		}
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
 		bytesValue := row.GetBytes(idx)
-		if flag.IsBinary() {
+		if mysql.HasBinaryFlag(flag) {
 			javaType = JavaSQLTypeBLOB
 		} else {
 			javaType = JavaSQLTypeCLOB
@@ -59,7 +58,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			break
 		}
 
-		if flag.IsBinary() {
+		if mysql.HasBinaryFlag(flag) {
 			decoded, err := bytesDecoder.Bytes(bytesValue)
 			if err != nil {
 				log.Panic("failed to decode bytes", zap.Any("bytes", bytesValue), zap.Error(err))
@@ -70,7 +69,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 		}
 	case mysql.TypeVarchar, mysql.TypeVarString:
 		bytesValue := row.GetBytes(idx)
-		if flag.IsBinary() {
+		if mysql.HasBinaryFlag(flag) {
 			javaType = JavaSQLTypeBLOB
 		} else {
 			javaType = JavaSQLTypeVARCHAR
@@ -80,7 +79,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			value = "null"
 			break
 		}
-		if flag.IsBinary() {
+		if mysql.HasBinaryFlag(flag) {
 			decoded, err := bytesDecoder.Bytes(bytesValue)
 			if err != nil {
 				log.Panic("failed to decode bytes", zap.Any("bytes", bytesValue), zap.Error(err))
@@ -91,7 +90,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 		}
 	case mysql.TypeString:
 		bytesValue := row.GetBytes(idx)
-		if flag.IsBinary() {
+		if mysql.HasBinaryFlag(flag) {
 			javaType = JavaSQLTypeBLOB
 		} else {
 			javaType = JavaSQLTypeCHAR
@@ -100,7 +99,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			value = "null"
 			break
 		}
-		if flag.IsBinary() {
+		if mysql.HasBinaryFlag(flag) {
 			decoded, err := bytesDecoder.Bytes(bytesValue)
 			if err != nil {
 				log.Panic("failed to decode bytes", zap.Any("bytes", bytesValue), zap.Error(err))
@@ -176,7 +175,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 		if d.IsNull() {
 			value = "null"
 		} else {
-			if flag.IsUnsigned() {
+			if mysql.HasUnsignedFlag(flag) {
 				uintValue := d.GetUint64()
 				value = strconv.FormatUint(uintValue, 10)
 			} else {
@@ -190,7 +189,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 		if d.IsNull() {
 			value = "null"
 		} else {
-			if flag.IsUnsigned() {
+			if mysql.HasUnsignedFlag(flag) {
 				uintValue := d.GetUint64()
 				if uintValue > math.MaxInt8 {
 					javaType = JavaSQLTypeSMALLINT
@@ -207,7 +206,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 		if d.IsNull() {
 			value = "null"
 		} else {
-			if flag.IsUnsigned() {
+			if mysql.HasUnsignedFlag(flag) {
 				uintValue := d.GetUint64()
 				if uintValue > math.MaxInt16 {
 					javaType = JavaSQLTypeINTEGER
@@ -224,7 +223,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 		if d.IsNull() {
 			value = "null"
 		} else {
-			if flag.IsUnsigned() {
+			if mysql.HasUnsignedFlag(flag) {
 				uintValue := d.GetUint64()
 				if uintValue > math.MaxInt32 {
 					javaType = JavaSQLTypeBIGINT
@@ -241,7 +240,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 		if d.IsNull() {
 			value = "null"
 		} else {
-			if flag.IsUnsigned() {
+			if mysql.HasUnsignedFlag(flag) {
 				uintValue := d.GetUint64()
 				if uintValue > math.MaxInt64 {
 					javaType = JavaSQLTypeDECIMAL

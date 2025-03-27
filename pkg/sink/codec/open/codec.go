@@ -199,8 +199,8 @@ func writeColumnFieldValue(
 	tableInfo *commonType.TableInfo,
 ) {
 	colType := col.GetType()
-	flag := *tableInfo.GetColumnFlags()[col.ID]
-	whereHandle := flag.IsHandleKey()
+	flag := tableInfo.GetColumnFlags()[col.ID]
+	whereHandle := commonType.HasHandleKeyFlag(flag)
 
 	writer.WriteIntField("t", int(colType))
 	if whereHandle {
@@ -236,7 +236,7 @@ func writeColumnFieldValue(
 		if len(value) == 0 {
 			writer.WriteNullField("v")
 		} else {
-			if flag.IsBinary() {
+			if mysql.HasBinaryFlag(flag) {
 				str := string(value)
 				str = strconv.Quote(str)
 				str = str[1 : len(str)-1]
@@ -304,7 +304,7 @@ func writeColumnFieldValues(
 
 	for idx, col := range colInfo {
 		if selector.Select(col) {
-			if onlyHandleKeyColumns && !tableInfo.GetColumnFlags()[col.ID].IsHandleKey() {
+			if onlyHandleKeyColumns && !commonType.HasHandleKeyFlag(tableInfo.GetColumnFlags()[col.ID]) {
 				continue
 			}
 			flag = true
@@ -333,7 +333,7 @@ func writeUpdatedColumnFieldValues(
 
 	for idx, col := range colInfo {
 		if selector.Select(col) {
-			if onlyHandleKeyColumns && !tableInfo.GetColumnFlags()[col.ID].IsHandleKey() {
+			if onlyHandleKeyColumns && !commonType.HasHandleKeyFlag(tableInfo.GetColumnFlags()[col.ID]) {
 				continue
 			}
 			writeColumnFieldValueIfUpdated(jWriter, col, preRow, row, idx, tableInfo)
@@ -350,8 +350,8 @@ func writeColumnFieldValueIfUpdated(
 	tableInfo *commonType.TableInfo,
 ) {
 	colType := col.GetType()
-	flag := *tableInfo.GetColumnFlags()[col.ID]
-	whereHandle := flag.IsHandleKey()
+	flag := tableInfo.GetColumnFlags()[col.ID]
+	whereHandle := commonType.HasHandleKeyFlag(flag)
 
 	writeFunc := func(writeColumnValue func()) {
 		writer.WriteObjectField(col.Name.O, func() {
@@ -408,7 +408,7 @@ func writeColumnFieldValueIfUpdated(
 			if len(preRowValue) == 0 {
 				writeFunc(func() { writer.WriteNullField("v") })
 			} else {
-				if flag.IsBinary() {
+				if mysql.HasBinaryFlag(flag) {
 					str := string(preRowValue)
 					str = strconv.Quote(str)
 					str = str[1 : len(str)-1]

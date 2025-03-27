@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/table/tables"
+	"github.com/pingcap/tidb/pkg/types"
 	datumTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
@@ -353,7 +354,7 @@ type columnSchema struct {
 	// ColumnID -> offset in RowChangedEvents.Columns.
 	RowColumnsOffset map[int64]int `json:"row_columns_offset"`
 
-	ColumnsFlag map[int64]*ColumnFlagType `json:"columns_flag"`
+	ColumnsFlag map[int64]uint `json:"columns_flag"`
 
 	// the mounter will choose this index to output delete events
 	// special value:
@@ -439,7 +440,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		ColumnsOffset:    make(map[int64]int, len(tableInfo.Columns)),
 		NameToColID:      make(map[string]int64, len(tableInfo.Columns)),
 		RowColumnsOffset: make(map[int64]int, len(tableInfo.Columns)),
-		ColumnsFlag:      make(map[int64]*ColumnFlagType, len(tableInfo.Columns)),
+		ColumnsFlag:      make(map[int64]uint, len(tableInfo.Columns)),
 		HandleColID:      []int64{-1},
 		HandleIndexID:    HandleIndexTableIneligible,
 		RowColInfos:      make([]rowcodec.ColInfo, len(tableInfo.Columns)),
@@ -642,32 +643,13 @@ func (s *columnSchema) findHandleIndex(tableName string) {
 
 func (s *columnSchema) initColumnsFlag() {
 	for _, colInfo := range s.Columns {
-		var flag ColumnFlagType
 		if colInfo.GetCharset() == "binary" {
-			flag.SetIsBinary()
+			colInfo.AddFlag(mysql.BinaryFlag)
 		}
 		if colInfo.IsGenerated() {
-			flag.SetIsGeneratedColumn()
+			colInfo.AddFlag(mysql.GeneratedColumnFlag)
 		}
-		if mysql.HasPriKeyFlag(colInfo.GetFlag()) {
-			flag.SetIsPrimaryKey()
-			if s.HandleIndexID == HandleIndexPKIsHandle {
-				flag.SetIsHandleKey()
-			}
-		}
-		if mysql.HasUniKeyFlag(colInfo.GetFlag()) {
-			flag.SetIsUniqueKey()
-		}
-		if !mysql.HasNotNullFlag(colInfo.GetFlag()) {
-			flag.SetIsNullable()
-		}
-		if mysql.HasMultipleKeyFlag(colInfo.GetFlag()) {
-			flag.SetIsMultipleKey()
-		}
-		if mysql.HasUnsignedFlag(colInfo.GetFlag()) {
-			flag.SetIsUnsigned()
-		}
-		s.ColumnsFlag[colInfo.ID] = &flag
+		s.ColumnsFlag[colInfo.ID] = colInfo.GetFlag()
 	}
 
 	// In TiDB, just as in MySQL, only the first column of an index can be marked as "multiple key" or "unique key",
@@ -682,15 +664,16 @@ func (s *columnSchema) initColumnsFlag() {
 			colInfo := s.Columns[idxCol.Offset]
 			flag := s.ColumnsFlag[colInfo.ID]
 			if idxInfo.Primary {
-				flag.SetIsPrimaryKey()
+				types.SetTypeFlag(&flag, mysql.PriKeyFlag, true)
 			} else if idxInfo.Unique {
-				flag.SetIsUniqueKey()
+				types.SetTypeFlag(&flag, mysql.UniqueKeyFlag, true)
 			}
 			if len(idxInfo.Columns) > 1 {
-				flag.SetIsMultipleKey()
+				types.SetTypeFlag(&flag, mysql.MultipleKeyFlag, true)
 			}
 			if idxInfo.ID == s.HandleIndexID && s.HandleIndexID >= 0 {
-				flag.SetIsHandleKey()
+				// FIXME: hanldkey flag
+				types.SetTypeFlag(&flag, mysql.PriKeyFlag, true)
 			}
 			s.ColumnsFlag[colInfo.ID] = flag
 		}
@@ -819,7 +802,7 @@ func (s *columnSchema) getColumnList(isUpdate bool) (int, string) {
 	var b strings.Builder
 	nonGeneratedColumnCount := 0
 	for i, col := range s.Columns {
-		if col == nil || s.ColumnsFlag[col.ID].IsGeneratedColumn() {
+		if col == nil || (s.ColumnsFlag[col.ID]&mysql.GeneratedColumnFlag) > 0 {
 			continue
 		}
 		nonGeneratedColumnCount++

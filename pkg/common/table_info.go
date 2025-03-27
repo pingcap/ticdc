@@ -23,194 +23,11 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
-	"github.com/pingcap/tiflow/pkg/util"
-	"github.com/tinylib/msgp/msgp"
 	"go.uber.org/zap"
 )
-
-// ColumnFlagType is for encapsulating the flag operations for different flags.
-type ColumnFlagType util.Flag
-
-func (c *ColumnFlagType) Msgsize() int {
-	return 8
-}
-
-func (c ColumnFlagType) MarshalMsg(b []byte) ([]byte, error) {
-	return msgp.AppendUint64(b, uint64(c)), nil
-}
-
-func (c *ColumnFlagType) UnmarshalMsg(b []byte) (rest []byte, err error) {
-	var value uint64
-	value, rest, err = msgp.ReadUint64Bytes(b)
-	if err != nil {
-		return nil, err
-	}
-	*c = ColumnFlagType(value)
-	return rest, nil
-}
-
-func (c ColumnFlagType) EncodeMsg(en *msgp.Writer) error {
-	return en.WriteUint64(uint64(c))
-}
-
-func (c *ColumnFlagType) DecodeMsg(dc *msgp.Reader) error {
-	value, err := dc.ReadUint64()
-	if err != nil {
-		return err
-	}
-	*c = ColumnFlagType(value)
-	return nil
-}
-
-const (
-	// BinaryFlag means the column charset is binary
-	BinaryFlag ColumnFlagType = 1 << ColumnFlagType(iota)
-	// HandleKeyFlag means the column is selected as the handle key
-	// The handleKey is chosen by the following rules in the order:
-	// 1. if the table has primary key, it's the handle key.
-	// 2. If the table has not null unique key, it's the handle key.
-	// 3. If the table has no primary key and no not null unique key, it has no handleKey.
-	HandleKeyFlag
-	// GeneratedColumnFlag means the column is a generated column
-	GeneratedColumnFlag
-	// PrimaryKeyFlag means the column is primary key
-	PrimaryKeyFlag
-	// UniqueKeyFlag means the column is unique key
-	UniqueKeyFlag
-	// MultipleKeyFlag means the column is multiple key
-	MultipleKeyFlag
-	// NullableFlag means the column is nullable
-	NullableFlag
-	// UnsignedFlag means the column stores an unsigned integer
-	UnsignedFlag
-)
-
-func NewColumnFlagType(flag ColumnFlagType) *ColumnFlagType {
-	f := ColumnFlagType(flag)
-	return &f
-}
-
-// SetIsBinary sets BinaryFlag
-func (b *ColumnFlagType) SetIsBinary() {
-	(*Flag)(b).Add(Flag(BinaryFlag))
-}
-
-// UnsetIsBinary unsets BinaryFlag
-func (b *ColumnFlagType) UnsetIsBinary() {
-	(*Flag)(b).Remove(Flag(BinaryFlag))
-}
-
-// IsBinary shows whether BinaryFlag is set
-func (b *ColumnFlagType) IsBinary() bool {
-	return (*Flag)(b).HasAll(Flag(BinaryFlag))
-}
-
-// SetIsHandleKey sets HandleKey
-func (b *ColumnFlagType) SetIsHandleKey() {
-	(*Flag)(b).Add(Flag(HandleKeyFlag))
-}
-
-// UnsetIsHandleKey unsets HandleKey
-func (b *ColumnFlagType) UnsetIsHandleKey() {
-	(*Flag)(b).Remove(Flag(HandleKeyFlag))
-}
-
-// IsHandleKey shows whether HandleKey is set
-func (b *ColumnFlagType) IsHandleKey() bool {
-	return (*Flag)(b).HasAll(Flag(HandleKeyFlag))
-}
-
-// SetIsGeneratedColumn sets GeneratedColumn
-func (b *ColumnFlagType) SetIsGeneratedColumn() {
-	(*Flag)(b).Add(Flag(GeneratedColumnFlag))
-}
-
-// UnsetIsGeneratedColumn unsets GeneratedColumn
-func (b *ColumnFlagType) UnsetIsGeneratedColumn() {
-	(*Flag)(b).Remove(Flag(GeneratedColumnFlag))
-}
-
-// IsGeneratedColumn shows whether GeneratedColumn is set
-func (b *ColumnFlagType) IsGeneratedColumn() bool {
-	return (*Flag)(b).HasAll(Flag(GeneratedColumnFlag))
-}
-
-// SetIsPrimaryKey sets PrimaryKeyFlag
-func (b *ColumnFlagType) SetIsPrimaryKey() {
-	(*Flag)(b).Add(Flag(PrimaryKeyFlag))
-}
-
-// UnsetIsPrimaryKey unsets PrimaryKeyFlag
-func (b *ColumnFlagType) UnsetIsPrimaryKey() {
-	(*Flag)(b).Remove(Flag(PrimaryKeyFlag))
-}
-
-// IsPrimaryKey shows whether PrimaryKeyFlag is set
-func (b *ColumnFlagType) IsPrimaryKey() bool {
-	return (*Flag)(b).HasAll(Flag(PrimaryKeyFlag))
-}
-
-// SetIsUniqueKey sets UniqueKeyFlag
-func (b *ColumnFlagType) SetIsUniqueKey() {
-	(*Flag)(b).Add(Flag(UniqueKeyFlag))
-}
-
-// UnsetIsUniqueKey unsets UniqueKeyFlag
-func (b *ColumnFlagType) UnsetIsUniqueKey() {
-	(*Flag)(b).Remove(Flag(UniqueKeyFlag))
-}
-
-// IsUniqueKey shows whether UniqueKeyFlag is set
-func (b *ColumnFlagType) IsUniqueKey() bool {
-	return (*Flag)(b).HasAll(Flag(UniqueKeyFlag))
-}
-
-// IsMultipleKey shows whether MultipleKeyFlag is set
-func (b *ColumnFlagType) IsMultipleKey() bool {
-	return (*Flag)(b).HasAll(Flag(MultipleKeyFlag))
-}
-
-// SetIsMultipleKey sets MultipleKeyFlag
-func (b *ColumnFlagType) SetIsMultipleKey() {
-	(*Flag)(b).Add(Flag(MultipleKeyFlag))
-}
-
-// UnsetIsMultipleKey unsets MultipleKeyFlag
-func (b *ColumnFlagType) UnsetIsMultipleKey() {
-	(*Flag)(b).Remove(Flag(MultipleKeyFlag))
-}
-
-// IsNullable shows whether NullableFlag is set
-func (b *ColumnFlagType) IsNullable() bool {
-	return (*Flag)(b).HasAll(Flag(NullableFlag))
-}
-
-// SetIsNullable sets NullableFlag
-func (b *ColumnFlagType) SetIsNullable() {
-	(*Flag)(b).Add(Flag(NullableFlag))
-}
-
-// UnsetIsNullable unsets NullableFlag
-func (b *ColumnFlagType) UnsetIsNullable() {
-	(*Flag)(b).Remove(Flag(NullableFlag))
-}
-
-// IsUnsigned shows whether UnsignedFlag is set
-func (b *ColumnFlagType) IsUnsigned() bool {
-	return (*Flag)(b).HasAll(Flag(UnsignedFlag))
-}
-
-// SetIsUnsigned sets UnsignedFlag
-func (b *ColumnFlagType) SetIsUnsigned() {
-	(*Flag)(b).Add(Flag(UnsignedFlag))
-}
-
-// UnsetIsUnsigned unsets UnsignedFlag
-func (b *ColumnFlagType) UnsetIsUnsigned() {
-	(*Flag)(b).Remove(Flag(UnsignedFlag))
-}
 
 // QuoteSchema quotes a full table name
 func QuoteSchema(schema string, table string) string {
@@ -368,7 +185,7 @@ func (ti *TableInfo) UpdateTS() uint64 {
 	return ti.columnSchema.UpdateTS
 }
 
-func (ti *TableInfo) GetColumnsFlag() map[int64]*ColumnFlagType {
+func (ti *TableInfo) GetColumnsFlag() map[int64]uint {
 	return ti.columnSchema.ColumnsFlag
 }
 
@@ -414,7 +231,7 @@ func (ti *TableInfo) ForceGetColumnInfo(colID int64) *model.ColumnInfo {
 
 // ForceGetColumnFlagType return the column flag type by ID
 // Caller must ensure `colID` exists
-func (ti *TableInfo) ForceGetColumnFlagType(colID int64) *ColumnFlagType {
+func (ti *TableInfo) ForceGetColumnFlagType(colID int64) uint {
 	flag, ok := ti.columnSchema.ColumnsFlag[colID]
 	if !ok {
 		log.Panic("invalid column id", zap.Int64("columnID", colID))
@@ -479,7 +296,7 @@ func (ti *TableInfo) GetColInfosForRowChangedEvent() []rowcodec.ColInfo {
 	return *ti.columnSchema.RowColInfosWithoutVirtualCols
 }
 
-func (ti *TableInfo) GetColumnFlags() map[int64]*ColumnFlagType {
+func (ti *TableInfo) GetColumnFlags() map[int64]uint {
 	return ti.columnSchema.ColumnsFlag
 }
 
@@ -633,4 +450,14 @@ func BuildTiDBTableInfoWithoutVirtualColumns(source *TableInfo) *TableInfo {
 
 	tableInfo.InitPrivateFields()
 	return tableInfo
+}
+
+// HasHandleKeyFlag shows whether HandleKeyFlag is set
+// HandleKeyFlag means the column is selected as the handle key
+// The handleKey is chosen by the following rules in the order:
+// 1. if the table has primary key, it's the handle key.
+// 2. If the table has not null unique key, it's the handle key.
+// 3. If the table has no primary key and no not null unique key, it has no handleKey.
+func HasHandleKeyFlag(flag uint) bool {
+	return mysql.HasPriKeyFlag(flag) || mysql.HasNotNullFlag(flag)
 }
