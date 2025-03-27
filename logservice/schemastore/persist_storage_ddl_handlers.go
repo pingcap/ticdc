@@ -851,7 +851,13 @@ func updateDDLHistoryForDropPartition(args updateDDLHistoryFuncArgs) []uint64 {
 func updateDDLHistoryForCreateView(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	for tableID := range args.tableMap {
-		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
+		if partitionInfo, ok := args.partitionMap[tableID]; ok {
+			for id := range partitionInfo {
+				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, id)
+			}
+		} else {
+			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
+		}
 	}
 	return args.tableTriggerDDLHistory
 }
@@ -1645,9 +1651,23 @@ func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFi
 	if !ok {
 		return ddlEvent, false
 	}
-	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
-		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{rawEvent.TableID},
+
+	// the event is related to the partition table
+	if rawEvent.TableInfo.Partition != nil {
+		partitionTableIDs := make([]int64, 0)
+		for _, partition := range rawEvent.TableInfo.Partition.Definitions {
+			partitionTableIDs = append(partitionTableIDs, partition.ID)
+		}
+
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      partitionTableIDs,
+		}
+	} else {
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.TableID},
+		}
 	}
 	return ddlEvent, true
 }
@@ -1657,9 +1677,22 @@ func buildDDLEventForNormalDDLOnSingleTableForTiDB(rawEvent *PersistedDDLEvent, 
 	if !ok {
 		return ddlEvent, false
 	}
-	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
-		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{rawEvent.TableID},
+	// the event is related to the partition table
+	if rawEvent.TableInfo.Partition != nil {
+		partitionTableIDs := make([]int64, 0)
+		for _, partition := range rawEvent.TableInfo.Partition.Definitions {
+			partitionTableIDs = append(partitionTableIDs, partition.ID)
+		}
+
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      partitionTableIDs,
+		}
+	} else {
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.TableID},
+		}
 	}
 	return ddlEvent, true
 }

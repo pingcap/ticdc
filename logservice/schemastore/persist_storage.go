@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	pd "github.com/tikv/pd/client"
@@ -127,7 +128,7 @@ func newPersistentStorage(
 	pdCli pd.Client,
 	storage kv.Storage,
 ) *persistentStorage {
-	gcSafePoint, err := pdCli.UpdateServiceGCSafePoint(ctx, "cdc-new-store", 0, 0)
+	gcSafePoint, err := gc.SetServiceGCSafepoint(ctx, pdCli, "cdc-new-store", 0, 0)
 	if err != nil {
 		log.Panic("get ts failed", zap.Error(err))
 	}
@@ -210,7 +211,6 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, storage kv.St
 	log.Info("schema store initialize from kv storage done",
 		zap.Int("databaseMapLen", len(p.databaseMap)),
 		zap.Int("tableMapLen", len(p.tableMap)),
-		zap.Int("partitionMapLen", len(p.partitionMap)),
 		zap.Any("duration(s)", time.Since(now).Seconds()))
 }
 
@@ -507,7 +507,7 @@ func (p *persistentStorage) gc(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			gcSafePoint, err := p.pdCli.UpdateServiceGCSafePoint(ctx, "cdc-new-store", 0, 0)
+			gcSafePoint, err := gc.SetServiceGCSafepoint(ctx, p.pdCli, "cdc-new-store", 0, 0)
 			if err != nil {
 				log.Warn("get ts failed", zap.Error(err))
 				continue

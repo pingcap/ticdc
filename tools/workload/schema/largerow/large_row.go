@@ -142,7 +142,7 @@ func (l *LargeRowWorkload) BuildInsertSql(tableN int, batchSize int) string {
 }
 
 func (l *LargeRowWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
-	tableName := getTableName(opts.Table)
+	tableName := getTableName(opts.TableIndex)
 	upsertSQL := strings.Builder{}
 	upsertSQL.WriteString(fmt.Sprintf("INSERT INTO %s VALUES (%d,%s)", tableName, rand.Int63()%100000, l.getSmallRow()))
 
@@ -158,7 +158,7 @@ func (l *LargeRowWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 	upsertSQL.WriteString(" ON DUPLICATE KEY UPDATE col_0=VALUES(col_0)")
 
 	log.Debug("large row workload, upsert the table",
-		zap.Int("table", opts.Table), zap.Int("batchSize", opts.Batch),
+		zap.Int("table", opts.TableIndex), zap.Int("batchSize", opts.Batch),
 		zap.Int("largeRowCount", largeRowCount))
 	return upsertSQL.String()
 }
