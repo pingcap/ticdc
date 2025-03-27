@@ -321,7 +321,10 @@ func (c *server) closePreServices() *errgroup.Group {
 	closeCtx, cancel := context.WithTimeout(context.Background(), closeServiceTimeout)
 	defer cancel()
 	closeGroup, closeCtx := errgroup.WithContext(closeCtx)
-	for _, service := range c.preServices {
+
+	// close preServices in reverse order
+	for idx := len(c.preServices) - 1; idx >= 0; idx-- {
+		service := c.preServices[idx]
 		s := service
 		closeGroup.Go(func() error {
 			done := make(chan struct{})

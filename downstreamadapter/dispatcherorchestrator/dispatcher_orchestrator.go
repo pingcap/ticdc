@@ -16,6 +16,7 @@ package dispatcherorchestrator
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -36,6 +37,7 @@ import (
 // for different change feeds based on maintainer bootstrap messages.
 type DispatcherOrchestrator struct {
 	mc                 messaging.MessageCenter
+	mutex              sync.Mutex // protect dispatcherManagers
 	dispatcherManagers map[common.ChangeFeedID]*dispatchermanager.EventDispatcherManager
 }
 
@@ -81,7 +83,10 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		return err
 	}
 
+	m.mutex.Lock()
 	manager, exists := m.dispatcherManagers[cfId]
+	m.mutex.Unlock()
+
 	var err error
 	var startTs uint64
 	if !exists {
@@ -112,7 +117,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			}
 			return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 		}
+		m.mutex.Lock()
 		m.dispatcherManagers[cfId] = manager
+		m.mutex.Unlock()
 		metrics.EventDispatcherManagerGauge.WithLabelValues(cfId.Namespace(), cfId.Name()).Inc()
 	} else {
 		// Check and potentially add a table trigger event dispatcher.
@@ -164,7 +171,11 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	req *heartbeatpb.MaintainerPostBootstrapRequest,
 ) error {
 	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
+
+	m.mutex.Lock()
 	manager, exists := m.dispatcherManagers[cfId]
+	m.mutex.Unlock()
+
 	if !exists || manager.GetTableTriggerEventDispatcher() == nil {
 		log.Error("Receive post bootstrap request but there is no table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()))
@@ -220,6 +231,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 		Success:      true,
 	}
 
+	m.mutex.Lock()
 	if manager, ok := m.dispatcherManagers[cfId]; ok {
 		if closed := manager.TryClose(req.Removed); closed {
 			delete(m.dispatcherManagers, cfId)
@@ -229,6 +241,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 			response.Success = false
 		}
 	}
+	m.mutex.Unlock()
 
 	log.Info("try close dispatcher manager",
 		zap.String("changefeed", cfId.Name()), zap.Bool("success", response.Success))
@@ -275,6 +288,17 @@ func (m *DispatcherOrchestrator) sendResponse(to node.ID, topic string, msg mess
 func (m *DispatcherOrchestrator) Close() {
 	log.Info("dispatcher orchestrator is closing")
 	m.mc.DeRegisterHandler(messaging.DispatcherManagerManagerTopic)
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	for len(m.dispatcherManagers) > 0 {
+		for id, manager := range m.dispatcherManagers {
+			ok := manager.TryClose(false)
+			if ok {
+				delete(m.dispatcherManagers, id)
+			}
+		}
+	}
 	log.Info("dispatcher orchestrator closed")
 }
 

@@ -183,7 +183,7 @@ func (w *MysqlWriter) execDDL(event *commonEvent.DDLEvent) error {
 	query := event.GetDDLQuery()
 	_, err = tx.ExecContext(ctx, query)
 	if err != nil {
-		log.Error("Fail to ExecContext", zap.Any("err", err))
+		log.Error("Fail to ExecContext", zap.Any("err", err), zap.Any("query", query))
 		if rbErr := tx.Rollback(); rbErr != nil {
 			log.Error("Failed to rollback", zap.String("sql", event.GetDDLQuery()), zap.Error(err))
 		}
