@@ -899,7 +899,7 @@ func TestCreateTableDDL(t *testing.T) {
 
 	ddlEvent := &commonEvent.DDLEvent{
 		Query:      job.Query,
-		Type:       job.Type,
+		Type:       byte(job.Type),
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
 		FinishedTs: 1,
