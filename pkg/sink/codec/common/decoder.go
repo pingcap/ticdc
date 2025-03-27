@@ -30,10 +30,13 @@ type RowEventDecoder interface {
 	//     2. a bool if the next event is exist
 	//     3. error
 	HasNext() (MessageType, bool, error)
+
 	// NextResolvedEvent returns the next resolved event if exists
 	NextResolvedEvent() (uint64, error)
+
 	// NextDMLEvent returns the next DML event if exists
 	NextDMLEvent() (*commonEvent.DMLEvent, error)
+
 	// NextDDLEvent returns the next DDL event if exists
 	NextDDLEvent() (*commonEvent.DDLEvent, error)
 }

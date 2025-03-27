@@ -614,16 +614,6 @@ func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo 
 	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs)
 }
 
-// GetColumnDefaultValue returns the default definition of a column.
-func GetColumnDefaultValue(col *model.ColumnInfo) interface{} {
-	defaultValue := col.GetDefaultValue()
-	if defaultValue == nil {
-		defaultValue = col.GetOriginDefaultValue()
-	}
-	defaultDatum := types.NewDatum(defaultValue)
-	return defaultDatum.GetValue()
-}
-
 // BuildTiDBTableInfoWithoutVirtualColumns build a TableInfo without virual columns from the source table info
 func BuildTiDBTableInfoWithoutVirtualColumns(source *TableInfo) *TableInfo {
 	newColumnSchema := source.columnSchema.getColumnSchemaWithoutVirtualColumns()

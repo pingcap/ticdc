@@ -9,14 +9,26 @@ TiCDC pulls change logs from TiDB clusters and pushes them to downstream systems
 
 ## Quick Start
 
-### Find the latest tag
-Go to [pingcap/ticdc/tags](https://github.com/pingcap/ticdc/tags) to find the latest tag, e.g. `v9.0.0-alpha`
+### Obtaining TiCDC Nightly Build Download Links
 
-### Download the patch binary
-* For Linux x86-64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-linux-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-linux-amd64.tar.gz)
-* For Linux ARM64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-linux-arm64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-linux-arm64.tar.gz)
-* For MacOS x86-64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-darwin-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-darwin-amd64.tar.gz)
-* For MacOS ARM64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-alpha**-nightly-darwin-arm64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-alpha-nightly-darwin-arm64.tar.gz)
+#### Construct the Download Link Manually
+1. Go to [pingcap/ticdc/tags](https://github.com/pingcap/ticdc/tags) to find the latest tag, e.g. `v9.0.0-beta.1.pre`
+2. Use the tag to build the download link for your platform: `https://tiup-mirrors.pingcap.com/cdc-${tag}-nightly-${os}-${arch}.tar.gz`, for example:
+    * For Linux x86-64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-beta.1.pre**-nightly-linux-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-beta.1.pre-nightly-linux-amd64.tar.gz)
+    * For Linux ARM64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-beta.1.pre**-nightly-linux-arm64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-beta.1.pre-nightly-linux-arm64.tar.gz)
+    * For MacOS x86-64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-beta.1.pre**-nightly-darwin-amd64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-beta.1.pre-nightly-darwin-amd64.tar.gz)
+    * For MacOS ARM64: [https://tiup-mirrors.pingcap.com/cdc-**v9.0.0-beta.1.pre**-nightly-darwin-arm64.tar.gz](https://tiup-mirrors.pingcap.com/cdc-v9.0.0-beta.1.pre-nightly-darwin-arm64.tar.gz)
+
+#### Use TiUP to Retrieve the Download Link
+You can also use the tiup command to get the platform-specific nightly binary download link:
+
+```bash
+tiup install cdc:nightly --force
+```
+
+This command will provide the download address for the nightly build tailored to your platform.
+
+![TiUP Nightly](./docs/media/tiup-nightly-install.jpg)
 
 ### Patch to the existing TiCDC nodes
 Examples:

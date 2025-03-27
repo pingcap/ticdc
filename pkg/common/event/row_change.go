@@ -14,12 +14,9 @@
 package event
 
 import (
-	"unsafe"
-
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	timodel "github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/integrity"
 )
@@ -67,30 +64,6 @@ func (r *RowChangedEvent) GetColumns() []*common.Column {
 	return r.Columns
 }
 
-// GetPreColumns returns the pre columns of the event
-func (r *RowChangedEvent) GetPreColumns() []*common.Column {
-	return r.PreColumns
-}
-
-func (r *RowChangedEvent) ApproximateBytes() int {
-	const sizeOfRowEvent = int(unsafe.Sizeof(*r))
-	const sizeOfTable = int(unsafe.Sizeof(*r.TableInfo))
-	const sizeOfInt = int(unsafe.Sizeof(int(0)))
-	size := sizeOfRowEvent + sizeOfTable + 2*sizeOfInt
-
-	// Size of cols
-	for i := range r.Columns {
-		size += r.Columns[i].ApproximateBytes
-	}
-	// Size of pre cols
-	for i := range r.PreColumns {
-		if r.PreColumns[i] != nil {
-			size += r.PreColumns[i].ApproximateBytes
-		}
-	}
-	return size
-}
-
 // IsDelete returns true if the row is a delete event
 func (r *RowChangedEvent) IsDelete() bool {
 	return len(r.PreColumns) != 0 && len(r.Columns) == 0
@@ -104,51 +77,6 @@ func (r *RowChangedEvent) IsInsert() bool {
 // IsUpdate returns true if the row is an update event
 func (r *RowChangedEvent) IsUpdate() bool {
 	return len(r.PreColumns) != 0 && len(r.Columns) != 0
-}
-
-// HandleKeyColInfos returns the column(s) and colInfo(s) corresponding to the handle key(s)
-func (r *RowChangedEvent) HandleKeyColInfos() ([]*common.Column, []rowcodec.ColInfo) {
-	pkeyCols := make([]*common.Column, 0)
-	pkeyColInfos := make([]rowcodec.ColInfo, 0)
-
-	var cols []*common.Column
-	if r.IsDelete() {
-		cols = r.PreColumns
-	} else {
-		cols = r.Columns
-	}
-
-	tableInfo := r.TableInfo
-	colInfos := tableInfo.GetColInfosForRowChangedEvent()
-	for i, col := range cols {
-		if col != nil && col.Flag.IsHandleKey() {
-			pkeyCols = append(pkeyCols, col)
-			pkeyColInfos = append(pkeyColInfos, colInfos[i])
-		}
-	}
-
-	// It is okay not to have handle keys, so the empty array is an acceptable result
-	return pkeyCols, pkeyColInfos
-}
-
-// PrimaryKeyColumnNames return all primary key's name
-func (r *RowChangedEvent) PrimaryKeyColumnNames() []string {
-	var result []string
-
-	var cols []*common.Column
-	if r.IsDelete() {
-		cols = r.PreColumns
-	} else {
-		cols = r.Columns
-	}
-
-	result = make([]string, 0)
-	for _, col := range cols {
-		if col != nil && col.Flag.IsPrimaryKey() {
-			result = append(result, col.Name)
-		}
-	}
-	return result
 }
 
 type MQRowEvent struct {

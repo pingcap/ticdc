@@ -17,6 +17,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -38,4 +39,5 @@ func InitMetrics(registry *prometheus.Registry) {
 	InitDynamicStreamMetrics(registry)
 	kafka.InitMetrics(registry)
 	codec.InitMetrics(registry)
+	gc.InitMetrics(registry)
 }

@@ -107,8 +107,10 @@ func TestWriteAndReadRawKVEntry(t *testing.T) {
 	readEntries := make([]*common.RawKVEntry, 0, len(sourceEntries))
 	for iter.First(); iter.Valid(); iter.Next() {
 		value := iter.Value()
+		copiedValue := make([]byte, len(value))
+		copy(copiedValue, value)
 		entry := &common.RawKVEntry{}
-		entry.Decode(value)
+		entry.Decode(copiedValue)
 		readEntries = append(readEntries, entry)
 	}
 	for i, entry := range sourceEntries {

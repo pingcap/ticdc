@@ -297,6 +297,13 @@ func (c *eventBroker) logUnresetDispatchers(ctx context.Context) {
 				}
 				return true
 			})
+			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
+				dispatcher := value.(*dispatcherStat)
+				if dispatcher.resetTs.Load() == 0 {
+					log.Info("table trigger dispatcher not reset", zap.Any("dispatcher", dispatcher.id))
+				}
+				return true
+			})
 		}
 	}
 }
@@ -413,18 +420,34 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 // emitSyncPointEventIfNeeded emits a sync point event if the current ts is greater than the next sync point, and updates the next sync point.
 // We need call this function every time we send a event(whether dml/ddl/resolvedTs),
 // thus to ensure the sync point event is in correct order for each dispatcher.
+// When a period of time, there is no other dml and ddls, we will batch multiple sync point commit ts in one sync point event to enhance the speed.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
+	commitTsList := make([]uint64, 0)
 	for d.enableSyncPoint && ts > d.nextSyncPoint {
-		// Send the sync point event.
+		commitTsList = append(commitTsList, d.nextSyncPoint)
+		d.nextSyncPoint = oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint).Add(d.syncPointInterval))
+	}
+
+	for len(commitTsList) > 0 {
+		// we limit a sync point event to contain at most 16 commit ts, to avoid a too large event.
+		newCommitTsList := commitTsList
+		if len(commitTsList) > 16 {
+			newCommitTsList = commitTsList[:16]
+		}
 		syncPointEvent := newWrapSyncPointEvent(
 			remoteID,
 			&pevent.SyncPointEvent{
 				DispatcherID: d.id,
-				CommitTs:     d.nextSyncPoint,
+				CommitTsList: newCommitTsList,
 			},
 			d.getEventSenderState())
 		c.getMessageCh(d.workerIndex) <- syncPointEvent
-		d.nextSyncPoint = oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint).Add(d.syncPointInterval))
+
+		if len(commitTsList) > 16 {
+			commitTsList = commitTsList[16:]
+		} else {
+			break
+		}
 	}
 }
 
@@ -725,6 +748,19 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			receivedMinResolvedTs := uint64(0)
 			sentMinWaterMark := uint64(0)
 			c.dispatchers.Range(func(key, value interface{}) bool {
+				dispatcher := value.(*dispatcherStat)
+				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
+				if receivedMinResolvedTs == 0 || resolvedTs < receivedMinResolvedTs {
+					receivedMinResolvedTs = resolvedTs
+				}
+				watermark := dispatcher.sentResolvedTs.Load()
+				if sentMinWaterMark == 0 || watermark < sentMinWaterMark {
+					sentMinWaterMark = watermark
+				}
+				return true
+			})
+			// Include the table trigger dispatchers in the metrics.
+			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*dispatcherStat)
 				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
 				if receivedMinResolvedTs == 0 || resolvedTs < receivedMinResolvedTs {

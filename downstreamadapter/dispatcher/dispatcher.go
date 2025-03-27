@@ -188,23 +188,26 @@ func NewDispatcher(
 	return dispatcher
 }
 
-func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo) error {
+// InitializeTableSchemaStore initializes the tableSchemaStore for the table trigger event dispatcher.
+// It returns true if the tableSchemaStore is initialized successfully, otherwise returns false.
+func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo) (ok bool, err error) {
 	// Only the table trigger event dispatcher need to create a tableSchemaStore
 	// Because we only need to calculate the tableNames or TableIds in the sink
 	// when the event dispatcher manager have table trigger event dispatcher
 	if !d.tableSpan.Equal(heartbeatpb.DDLSpan) {
 		log.Error("InitializeTableSchemaStore should only be received by table trigger event dispatcher", zap.Any("dispatcher", d.id))
-		return apperror.ErrChangefeedInitTableTriggerEventDispatcherFailed.
+		return false, apperror.ErrChangefeedInitTableTriggerEventDispatcherFailed.
 			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger event dispatcher")
 	}
 
 	if d.tableSchemaStore != nil {
 		log.Info("tableSchemaStore has already been initialized", zap.Stringer("dispatcher", d.id))
-		return nil
+		return false, nil
 	}
+
 	d.tableSchemaStore = util.NewTableSchemaStore(schemaInfo, d.sink.SinkType())
 	d.sink.SetTableSchemaStore(d.tableSchemaStore)
-	return nil
+	return true, nil
 }
 
 // HandleDispatcherStatus is used to handle the dispatcher status from the Maintainer to deal with the block event.
@@ -232,7 +235,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 	// deal with the dispatcher action
 	action := dispatcherStatus.GetAction()
 	if action != nil {
-		pendingEvent, blockStatus := d.blockEventStatus.getEventAndStage()
+		pendingEvent := d.blockEventStatus.getEvent()
 		if pendingEvent == nil && action.CommitTs > d.GetResolvedTs() {
 			// we have not received the block event, and the action is for the future event, so just ignore
 			log.Info("pending event is nil, and the action's commit is larger than dispatchers resolvedTs",
@@ -242,7 +245,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 			// we have not received the block event, and the action is for the future event, so just ignore
 			return
 		}
-		if pendingEvent != nil && action.CommitTs == pendingEvent.GetCommitTs() && blockStatus == heartbeatpb.BlockStage_WAITING {
+		if d.blockEventStatus.actionMatchs(action) {
 			log.Info("pending event get the action",
 				zap.Any("action", action),
 				zap.Stringer("dispatcher", d.id),
@@ -401,8 +404,9 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			syncPoint := event.(*commonEvent.SyncPointEvent)
 			log.Info("dispatcher receive sync point event",
 				zap.Stringer("dispatcher", d.id),
-				zap.Uint64("commitTs", event.GetCommitTs()),
+				zap.Any("commitTsList", syncPoint.GetCommitTsList()),
 				zap.Uint64("seq", event.GetSeq()))
+
 			syncPoint.AddPostFlushFunc(func() {
 				wakeCallback()
 			})
@@ -543,25 +547,57 @@ func (d *Dispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 		}
 	} else {
 		d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
-		message := &heartbeatpb.TableSpanBlockStatus{
-			ID: d.id.ToPB(),
-			State: &heartbeatpb.State{
-				IsBlocked:         true,
-				BlockTs:           event.GetCommitTs(),
-				BlockTables:       event.GetBlockedTables().ToPB(),
-				NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
-				NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-				UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()), // only exists for rename table and rename tables
-				IsSyncPoint:       event.GetType() == commonEvent.TypeSyncPointEvent,         // sync point event must should block
-				Stage:             heartbeatpb.BlockStage_WAITING,
-			},
+
+		if event.GetType() == commonEvent.TypeSyncPointEvent {
+			// deal with multi sync point commit ts in one Sync Point Event
+			// make each commitTs as a single message for maintainer
+			// Because the batch commitTs in different dispatchers can be different.
+			commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
+			blockTables := event.GetBlockedTables().ToPB()
+			needDroppedTables := event.GetNeedDroppedTables().ToPB()
+			needAddedTables := commonEvent.ToTablesPB(event.GetNeedAddedTables())
+			for _, commitTs := range commitTsList {
+				message := &heartbeatpb.TableSpanBlockStatus{
+					ID: d.id.ToPB(),
+					State: &heartbeatpb.State{
+						IsBlocked:         true,
+						BlockTs:           commitTs,
+						BlockTables:       blockTables,
+						NeedDroppedTables: needDroppedTables,
+						NeedAddedTables:   needAddedTables,
+						UpdatedSchemas:    nil,
+						IsSyncPoint:       true,
+						Stage:             heartbeatpb.BlockStage_WAITING,
+					},
+				}
+				identifier := BlockEventIdentifier{
+					CommitTs:    commitTs,
+					IsSyncPoint: true,
+				}
+				d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
+				d.blockStatusesChan <- message
+			}
+		} else {
+			message := &heartbeatpb.TableSpanBlockStatus{
+				ID: d.id.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked:         true,
+					BlockTs:           event.GetCommitTs(),
+					BlockTables:       event.GetBlockedTables().ToPB(),
+					NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
+					NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+					UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()), // only exists for rename table and rename tables
+					IsSyncPoint:       false,
+					Stage:             heartbeatpb.BlockStage_WAITING,
+				},
+			}
+			identifier := BlockEventIdentifier{
+				CommitTs:    event.GetCommitTs(),
+				IsSyncPoint: false,
+			}
+			d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
+			d.blockStatusesChan <- message
 		}
-		identifier := BlockEventIdentifier{
-			CommitTs:    event.GetCommitTs(),
-			IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
-		}
-		d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-		d.blockStatusesChan <- message
 	}
 
 	// dealing with events which update schema ids

@@ -835,7 +835,8 @@ func TestDMLTypeEvent(t *testing.T) {
 	for _, event := range []*commonEvent.RowEvent{
 		insertEvent,
 		deleteEvent,
-		updateEvent} {
+		updateEvent,
+	} {
 
 		err = encoder.AppendRowChangedEvent(ctx, "", event)
 		require.NoError(t, err)
@@ -898,7 +899,7 @@ func TestCreateTableDDL(t *testing.T) {
 
 	ddlEvent := &commonEvent.DDLEvent{
 		Query:      job.Query,
-		Type:       job.Type,
+		Type:       byte(job.Type),
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
 		FinishedTs: 1,

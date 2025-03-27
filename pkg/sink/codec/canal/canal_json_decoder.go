@@ -397,26 +397,11 @@ func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEv
 	result := new(commonEvent.DDLEvent)
 	result.Query = msg.getQuery()
 	result.BlockedTables = nil // todo: set this
-	result.Type = getDDLActionType(result.Query)
+	result.Type = byte(getDDLActionType(result.Query))
 	result.FinishedTs = msg.getCommitTs()
 	result.SchemaName = *msg.getSchema()
 	result.TableName = *msg.getTable()
 	return result
-}
-
-func getArgs(row *chunk.Row, tableInfo *commonType.TableInfo, enableGeneratedColumn bool) ([]interface{}, error) {
-	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
-	for i, col := range tableInfo.GetColumns() {
-		if col == nil || (tableInfo.GetColumnFlags()[col.ID].IsGeneratedColumn() && !enableGeneratedColumn) {
-			continue
-		}
-		v, err := commonType.ExtractColVal(row, col, i)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, v)
-	}
-	return args, nil
 }
 
 func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Chunk) {

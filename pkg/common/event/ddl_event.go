@@ -32,7 +32,7 @@ type DDLEvent struct {
 	// Version is the version of the DDLEvent struct.
 	Version      byte                `json:"version"`
 	DispatcherID common.DispatcherID `json:"-"`
-	Type         model.ActionType    `json:"type"`
+	Type         byte                `json:"type"`
 	// SchemaID is from upstream job.SchemaID
 	SchemaID int64 `json:"schema_id"`
 	// TableID is from upstream job.TableID
@@ -73,6 +73,11 @@ type DDLEvent struct {
 	//   Drop Schema
 	//   Recover Table
 	TableNameChange *TableNameChange `json:"table_name_change"`
+
+	// the table name for the ddl job in the information_schema.ddl_jobs table(just ddl job.TableName)
+	TableNameInDDLJob string `msg:"table_name_in_ddl_job"`
+	// the database name for the ddl job in the information_schema.ddl_jobs table(just ddl job.dbName)
+	DBNameInDDLJob string `msg:"db_name_in_ddl_job"`
 
 	TiDBOnly bool `json:"tidb_only"`
 	// Call when event flush is completed
@@ -123,6 +128,14 @@ func (d *DDLEvent) GetExtraSchemaName() string {
 
 func (d *DDLEvent) GetExtraTableName() string {
 	return d.ExtraTableName
+}
+
+func (d *DDLEvent) GetTableNameInDDLJob() string {
+	return d.TableNameInDDLJob
+}
+
+func (d *DDLEvent) GetDBNameInDDLJob() string {
+	return d.DBNameInDDLJob
 }
 
 func (d *DDLEvent) GetEvents() []*DDLEvent {
