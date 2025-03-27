@@ -305,9 +305,9 @@ func convertToCanalTs(commitTs uint64) int64 {
 }
 
 // get the canal EventType according to the DDLEvent
-func convertDdlEventType(t model.ActionType) canal.EventType {
+func convertDdlEventType(t byte) canal.EventType {
 	// see https://github.com/alibaba/canal/blob/d53bfd7ee76f8fe6eb581049d64b07d4fcdd692d/parse/src/main/java/com/alibaba/otter/canal/parse/inbound/mysql/ddl/DruidDdlParser.java#L59-L178
-	switch t {
+	switch model.ActionType(t) {
 	case model.ActionCreateSchema, model.ActionDropSchema, model.ActionShardRowID, model.ActionCreateView,
 		model.ActionDropView, model.ActionRecoverTable, model.ActionModifySchemaCharsetAndCollate,
 		model.ActionLockTable, model.ActionUnlockTable, model.ActionRepairTable, model.ActionSetTiFlashReplica,
