@@ -324,7 +324,7 @@ func (a *JSONMarshaller) newDMLMessage(
 		Version:            defaultVersion,
 		Schema:             event.TableInfo.GetSchemaName(),
 		Table:              event.TableInfo.GetTableName(),
-		TableID:            event.TableInfo.TableName.TableID,
+		TableID:            event.GetTableID(),
 		CommitTs:           event.CommitTs,
 		BuildTs:            time.Now().UnixMilli(),
 		SchemaVersion:      event.TableInfo.UpdateTS(),
