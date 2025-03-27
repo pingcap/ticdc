@@ -23,7 +23,7 @@ import (
 	"workload/schema"
 )
 
-const createTableSQL = `CREATE TABLE info (
+const createTableSQL = `CREATE TABLE info_%d (
 	col_1 bigint(20) NOT NULL,
 	col2 bigint(20) NOT NULL,
 	col3 date NOT NULL,
@@ -139,7 +139,7 @@ const createTableSQL = `CREATE TABLE info (
 	KEY idx_2 (col2,col3)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`
 
-const createLogTableSQL = `CREATE TABLE log (
+const createLogTableSQL = `CREATE TABLE log_%d (
   col110 bigint(20) NOT NULL,
   col_1 bigint(20) NOT NULL,
   col111 date NOT NULL,
@@ -186,18 +186,20 @@ const createLogTableSQL = `CREATE TABLE log (
   col105 varchar(1) NOT NULL DEFAULT 'N',
   col106 varchar(256) DEFAULT NULL,
   PRIMARY KEY (col5,col111,col110) /*T![clustered_index] NONCLUSTERED */,
-  KEY idx_1 (col5,col3,id),
+  KEY idx_1 (col5,col3,col110),
   KEY idx_2 (col99,col91,col105)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin /*T! SHARD_ROW_ID_BITS=9 PRE_SPLIT_REGIONS=9 */`
 
 type Bank2Workload struct {
 	infoTableInsertSQL string
 	logTableInsertSQL  string
+	infoTableUpdateSQL string
+	logTableUpdateSQL  string
 }
 
 func NewBank2Workload() schema.Workload {
 	var builder strings.Builder
-	builder.WriteString("insert into info (col5 , col3 , col6 , col2 ,col35 , col12 , col16 , col107 , col101 , col98 , col73 , col27 , col59 , col26 , col72 , col23 , col81 , col34 , col14 , col95 , col60 , col38 , col33 , col_1 , col31 , col104 , col32 , col85 , col4 , col74 , col102 , col7 , col47 , col29 , col69 , col76 , col75 , col94 , col99 , col20 , col68 , col42 , col25 , col57 , col87 , col82 , col50 , col30 , col83 , col19 , col78 , col43 , col62 , col28 , col11 , col49 , col90 , col56 , col109 , col71 , col15 , col51 , col106 , col53 , col22 , col61 , col91 , col46 , col55 , col108 , col105 , col103 , col63 , col36 , col44 , col88 , col18 , col86 , col10 , col70 , col45 , col64 , col24 , col40 , col84 , col67 , col66 , col17 , col9 ,  col41 , col77 , col54 , col100 , col37 , col21 , col8 , col52 , col48 , col39 , col96 , col80 , col13 , col89 , col79 , col65 , col93 , col97 , col92 , col58 ) values ")
+	builder.WriteString("insert into info_%d (col5 , col3 , col6 , col2 ,col35 , col12 , col16 , col107 , col101 , col98 , col73 , col27 , col59 , col26 , col72 , col23 , col81 , col34 , col14 , col95 , col60 , col38 , col33 , col_1 , col31 , col104 , col32 , col85 , col4 , col74 , col102 , col7 , col47 , col29 , col69 , col76 , col75 , col94 , col99 , col20 , col68 , col42 , col25 , col57 , col87 , col82 , col50 , col30 , col83 , col19 , col78 , col43 , col62 , col28 , col11 , col49 , col90 , col56 , col109 , col71 , col15 , col51 , col106 , col53 , col22 , col61 , col91 , col46 , col55 , col108 , col105 , col103 , col63 , col36 , col44 , col88 , col18 , col86 , col10 , col70 , col45 , col64 , col24 , col40 , col84 , col67 , col66 , col17 , col9 ,  col41 , col77 , col54 , col100 , col37 , col21 , col8 , col52 , col48 , col39 , col96 , col80 , col13 , col89 , col79 , col65 , col93 , col97 , col92 , col58 ) values ")
 	for r := 0; r < 200; r++ {
 		if r != 0 {
 			builder.WriteString(",")
@@ -205,10 +207,20 @@ func NewBank2Workload() schema.Workload {
 		builder.WriteString("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
 	}
 	infoTableInsertSQL := builder.String()
-
 	builder.Reset()
 
-	builder.WriteString("insert into log (col5 , col111 , id , col84 , col122 , col112 , col121 , col124 , col106 , col125 , col98 , col115 , col116 , col114 , col9 , col94 , col99 , col118 , col95 , col91 , col113 , col87 , col105 , col119 , col_1 , col104 , col8 , col3 , col88 , col96 , col117 ,  col86 , col85 , col4 , col6 , col126 , col102 , col89 , col7 , col120 , col93 , col90 , col97 , col92 , col123 ) values ")
+	builder.WriteString("insert into info_%d (col5 , col3 , col6 , col2 ,col35 , col12 , col16 , col107 , col101 , col98 , col73 , col27 , col59 , col26 , col72 , col23 , col81 , col34 , col14 , col95 , col60 , col38 , col33 , col_1 , col31 , col104 , col32 , col85 , col4 , col74 , col102 , col7 , col47 , col29 , col69 , col76 , col75 , col94 , col99 , col20 , col68 , col42 , col25 , col57 , col87 , col82 , col50 , col30 , col83 , col19 , col78 , col43 , col62 , col28 , col11 , col49 , col90 , col56 , col109 , col71 , col15 , col51 , col106 , col53 , col22 , col61 , col91 , col46 , col55 , col108 , col105 , col103 , col63 , col36 , col44 , col88 , col18 , col86 , col10 , col70 , col45 , col64 , col24 , col40 , col84 , col67 , col66 , col17 , col9 ,  col41 , col77 , col54 , col100 , col37 , col21 , col8 , col52 , col48 , col39 , col96 , col80 , col13 , col89 , col79 , col65 , col93 , col97 , col92 , col58 ) values ")
+	for r := 0; r < 200; r++ {
+		if r != 0 {
+			builder.WriteString(",")
+		}
+		builder.WriteString("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+	}
+	builder.WriteString("ON DUPLICATE KEY UPDATE col5=VALUES(col5), col3=VALUES(col3), col6=VALUES(col6), col2=VALUES(col2);")
+	infoTableUpdateSQL := builder.String()
+	builder.Reset()
+
+	builder.WriteString("insert into log_%d (col5 , col111 , col110 , col84 , col122 , col112 , col121 , col124 , col106 , col125 , col98 , col115 , col116 , col114 , col9 , col94 , col99 , col118 , col95 , col91 , col113 , col87 , col105 , col119 , col_1 , col104 , col8 , col3 , col88 , col96 , col117 ,  col86 , col85 , col4 , col6 , col126 , col102 , col89 , col7 , col120 , col93 , col90 , col97 , col92 , col123 ) values ")
 	for r := 0; r < 200; r++ {
 		if r != 0 {
 			builder.WriteString(",")
@@ -216,17 +228,33 @@ func NewBank2Workload() schema.Workload {
 		builder.WriteString("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
 	}
 	logTableInsertSQL := builder.String()
+	builder.Reset()
 
-	workload := &Bank2Workload{infoTableInsertSQL: infoTableInsertSQL, logTableInsertSQL: logTableInsertSQL}
+	builder.WriteString("insert into log_%d (col5 , col111 , col110 , col84 , col122 , col112 , col121 , col124 , col106 , col125 , col98 , col115 , col116 , col114 , col9 , col94 , col99 , col118 , col95 , col91 , col113 , col87 , col105 , col119 , col_1 , col104 , col8 , col3 , col88 , col96 , col117 ,  col86 , col85 , col4 , col6 , col126 , col102 , col89 , col7 , col120 , col93 , col90 , col97 , col92 , col123 ) values ")
+	for r := 0; r < 200; r++ {
+		if r != 0 {
+			builder.WriteString(",")
+		}
+		builder.WriteString("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+	}
+	builder.WriteString("ON DUPLICATE KEY UPDATE col5=VALUES(col5), col111=VALUES(col111), col110=VALUES(col110);")
+	logTableUpdateSQL := builder.String()
+
+	workload := &Bank2Workload{
+		infoTableInsertSQL: infoTableInsertSQL,
+		logTableInsertSQL:  logTableInsertSQL,
+		infoTableUpdateSQL: infoTableUpdateSQL,
+		logTableUpdateSQL:  logTableUpdateSQL,
+	}
 	return workload
 }
 
 func (c *Bank2Workload) BuildCreateTableStatement(n int) string {
-	switch n {
+	switch n % 2 {
 	case 0: // info
-		return createTableSQL
+		return fmt.Sprintf(createTableSQL, n)
 	case 1: // log
-		return createLogTableSQL
+		return fmt.Sprintf(createLogTableSQL, n)
 	default:
 		panic("unknown table")
 	}
@@ -258,14 +286,15 @@ var largeValuesPool = sync.Pool{
 }
 
 func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (string, []interface{}) {
-	switch tableN {
+	values := largeValuesPool.Get().([]interface{})
+	defer largeValuesPool.Put(values[:0])
+	rand.Seed(time.Now().UnixNano())
+
+	switch tableN % 2 {
 	case 0: // info
 		nonPrimaryKeyValues := generateNonPrimaryValuesForTable() // to reduce time, these field we keep same for
-		sql := c.infoTableInsertSQL
-		rand.Seed(time.Now().UnixNano())
+		sql := fmt.Sprintf(c.infoTableInsertSQL, tableN)
 
-		values := valuesPool.Get().([]interface{})
-		defer valuesPool.Put(values[:0])
 		// 200 rows one txn
 		for r := 0; r < 200; r++ {
 			values = append(values, generatePrimaryValuesForTable()...)
@@ -274,12 +303,9 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (str
 
 		return sql, values
 	case 1: // log
-		sql := c.logTableInsertSQL
+		sql := fmt.Sprintf(c.logTableInsertSQL, tableN)
 		nonPrimaryKeyValues := generateNonPrimaryValuesForLogTable()
-		rand.Seed(time.Now().UnixNano())
 
-		values := valuesPool.Get().([]interface{})
-		defer valuesPool.Put(values[:0])
 		// 200 rows one txn
 		for r := 0; r < 200; r++ {
 			values = append(values, generatePrimaryValuesForLogTable()...)
@@ -296,16 +322,23 @@ func (c *Bank2Workload) BuildInsertSqlWithValues(tableN int, batchSize int) (str
 func (c *Bank2Workload) BuildUpdateSqlWithValues(opts schema.UpdateOption) (string, []interface{}) {
 	rand.Seed(time.Now().UnixNano())
 	var sql string
-	values := make([]interface{}, 0, 120)
-	switch opts.TableIndex {
+	values := largeValuesPool.Get().([]interface{})
+	defer largeValuesPool.Put(values[:0])
+	switch opts.TableIndex % 2 {
 	case 0: // info
-		sql = "insert into info (col5 , col3 , col6 , col2 ,col35 , col12 , col16 , col107 , col101 , col98 , col73 , col27 , col59 , col26 , col72 , col23 , col81 , col34 , col14 , col95 , col60 , col38 , col33 , col_1 , col31 , col104 , col32 , col85 , col4 , col74 , col102 , col7 , col47 , col29 , col69 , col76 , col75 , col94 , col99 , col20 , col68 , col42 , col25 , col57 , col87 , col82 , col50 , col30 , col83 , col19 , col78 , col43 , col62 , col28 , col11 , col49 , col90 , col56 , col109 , col71 , col15 , col51 , col106 , col53 , col22 , col61 , col91 , col46 , col55 , col108 , col105 , col103 , col63 , col36 , col44 , col88 , col18 , col86 , col10 , col70 , col45 , col64 , col24 , col40 , col84 , col67 , col66 , col17 , col9 ,  col41 , col77 , col54 , col100 , col37 , col21 , col8 , col52 , col48 , col39 , col96 , col80 , col13 , col89 , col79 , col65 , col93 , col97 , col92 , col58 ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE col5=VALUES(col5), col3=VALUES(col3), col6=VALUES(col6), col2=VALUES(col2)"
-		values = append(values, generatePrimaryValuesForTable()...)
-		values = append(values, generateNonPrimaryValuesForTable()...)
+		sql = fmt.Sprintf(c.infoTableUpdateSQL, opts.TableIndex)
+		nonPrimaryValues := generateNonPrimaryValuesForTable()
+		for r := 0; r < 200; r++ {
+			values = append(values, generatePrimaryValuesForTable()...)
+			values = append(values, nonPrimaryValues...)
+		}
 	case 1: // log
-		sql = "insert into log (col5 , col111 , id , col84 , col122 , col112 , col121 , col124 , col106 , col125 , col98 , col115 , col116 , col114 , col9 , col94 , col99 , col118 , col95 , col91 , col113 , col87 , col105 , col119 , col_1 , col104 , col8 , col3 , col88 , col96 , col117 , col86 , col85 , col4 , col6 , col126 , col102 , col89 , col7 , col120 , col93 , col90 , col97 , col92 , col123 ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE col5=VALUES(col5), col111=VALUES(col111), id=VALUES(id)"
-		values = append(values, generatePrimaryValuesForLogTable()...)
-		values = append(values, generateNonPrimaryValuesForLogTable()...)
+		sql = fmt.Sprintf(c.logTableUpdateSQL, opts.TableIndex)
+		nonPrimaryValues := generateNonPrimaryValuesForLogTable()
+		for r := 0; r < 200; r++ {
+			values = append(values, generatePrimaryValuesForLogTable()...)
+			values = append(values, nonPrimaryValues...)
+		}
 	default:
 		panic("unknown table")
 	}
