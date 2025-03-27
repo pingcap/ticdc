@@ -14,7 +14,7 @@
 package common
 
 import (
-	"github.com/pingcap/tiflow/cdc/model"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 )
 
 // RowEventDecoder is an abstraction for events decoder
@@ -29,11 +29,14 @@ type RowEventDecoder interface {
 	//     1. the type of the next event
 	//     2. a bool if the next event is exist
 	//     3. error
-	HasNext() (model.MessageType, bool, error)
+	HasNext() (MessageType, bool, error)
+
 	// NextResolvedEvent returns the next resolved event if exists
 	NextResolvedEvent() (uint64, error)
-	// NextRowChangedEvent returns the next row changed event if exists
-	// NextRowChangedEvent() (*common.RowChangedEvent, error)
+
+	// NextDMLEvent returns the next DML event if exists
+	NextDMLEvent() (*commonEvent.DMLEvent, error)
+
 	// NextDDLEvent returns the next DDL event if exists
-	NextDDLEvent() (*model.DDLEvent, error)
+	NextDDLEvent() (*commonEvent.DDLEvent, error)
 }

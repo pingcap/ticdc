@@ -438,6 +438,15 @@ func (ti *TableInfo) ForceGetColumnIDByName(name string) int64 {
 	return colID
 }
 
+// MustGetColumnOffsetByID return the column offset by the column ID
+func (ti *TableInfo) MustGetColumnOffsetByID(id int64) int {
+	offset, ok := ti.columnSchema.ColumnsOffset[id]
+	if !ok {
+		log.Panic("invalid column id", zap.Int64("columnID", id))
+	}
+	return offset
+}
+
 // GetSchemaName returns the schema name of the table
 func (ti *TableInfo) GetSchemaName() string {
 	return ti.TableName.Schema
