@@ -325,9 +325,7 @@ func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 	keyLen := binary.BigEndian.Uint64(key[:8])
 	key = key[8 : keyLen+8]
 	msgKey := new(messageKey)
-	if err = msgKey.Decode(key); err != nil {
-		return nil, errors.Trace(err)
-	}
+	msgKey.Decode(key)
 
 	valueLen := binary.BigEndian.Uint64(claimCheckM.Value[:8])
 	value := claimCheckM.Value[8 : valueLen+8]
@@ -337,10 +335,7 @@ func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 	}
 
 	rowMsg := new(messageRow)
-	if err = rowMsg.decode(value); err != nil {
-		return nil, errors.Trace(err)
-	}
-
+	rowMsg.decode(value)
 	event := b.msgToRowChange(msgKey, rowMsg)
 
 	return event, nil
