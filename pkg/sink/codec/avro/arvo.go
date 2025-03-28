@@ -251,8 +251,8 @@ func (a *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 		event := &ddlEvent{
 			Query:    e.Query,
 			Type:     e.GetDDLType(),
-			Schema:   e.TableInfo.TableName.Schema,
-			Table:    e.TableInfo.TableName.Table,
+			Schema:   e.GetSchemaName(),
+			Table:    e.GetTableName(),
 			CommitTs: e.GetCommitTs(),
 		}
 		data, err := json.Marshal(event)
@@ -802,26 +802,26 @@ func (r *avroEncodeResult) toEnvelope() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// // SetupEncoderAndSchemaRegistry4Testing start a local schema registry for testing.
-// func SetupEncoderAndSchemaRegistry4Testing(
-// 	ctx context.Context,
-// 	config *ticommon.Config,
-// ) (*BatchEncoder, error) {
-// 	startHTTPInterceptForTestingRegistry()
-// 	schemaM, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
-// 	if err != nil {
-// 		return nil, errors.Trace(err)
-// 	}
+// SetupEncoderAndSchemaRegistry4Testing start a local schema registry for testing.
+func SetupEncoderAndSchemaRegistry4Testing(
+	ctx context.Context,
+	config *common.Config,
+) (*BatchEncoder, error) {
+	startHTTPInterceptForTestingRegistry()
+	schemaM, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
 
-// 	return &BatchEncoder{
-// 		namespace: model.DefaultNamespace,
-// 		schemaM:   schemaM,
-// 		result:    make([]*codec.Message, 0, 1),
-// 		config:    config,
-// 	}, nil
-// }
+	return &BatchEncoder{
+		namespace: commonType.DefaultNamespace,
+		schemaM:   schemaM,
+		result:    make([]*common.Message, 0, 1),
+		config:    config,
+	}, nil
+}
 
-// // TeardownEncoderAndSchemaRegistry4Testing stop the local schema registry for testing.
-// func TeardownEncoderAndSchemaRegistry4Testing() {
-// 	stopHTTPInterceptForTestingRegistry()
-// }
+// TeardownEncoderAndSchemaRegistry4Testing stop the local schema registry for testing.
+func TeardownEncoderAndSchemaRegistry4Testing() {
+	stopHTTPInterceptForTestingRegistry()
+}
