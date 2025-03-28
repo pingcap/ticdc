@@ -14,20 +14,23 @@
 package simple
 
 import (
-	"sort"
 	"sync"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/columnselector"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
-	"github.com/pingcap/tiflow/cdc/model"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 )
 
-func newTableSchemaMap(tableInfo *model.TableInfo) interface{} {
+func newTableSchemaMap(tableInfo *commonType.TableInfo) interface{} {
 	pkInIndexes := false
-	indexesSchema := make([]interface{}, 0, len(tableInfo.Indices))
-	for _, idx := range tableInfo.Indices {
+	colInfos := tableInfo.GetColumns()
+	indexesSchema := make([]interface{}, 0, len(tableInfo.GetIndices()))
+	for _, idx := range tableInfo.GetIndices() {
 		index := map[string]interface{}{
 			"name":     idx.Name.O,
 			"unique":   idx.Unique,
@@ -37,7 +40,7 @@ func newTableSchemaMap(tableInfo *model.TableInfo) interface{} {
 		columns := make([]string, 0, len(idx.Columns))
 		for _, col := range idx.Columns {
 			columns = append(columns, col.Name.O)
-			colInfo := tableInfo.Columns[col.Offset]
+			colInfo := colInfos[col.Offset]
 			// An index is not null when all columns of are not null
 			if !mysql.HasNotNullFlag(colInfo.GetFlag()) {
 				index["nullable"] = true
@@ -65,12 +68,8 @@ func newTableSchemaMap(tableInfo *model.TableInfo) interface{} {
 		}
 	}
 
-	sort.SliceStable(tableInfo.Columns, func(i, j int) bool {
-		return tableInfo.Columns[i].ID < tableInfo.Columns[j].ID
-	})
-
-	columnsSchema := make([]interface{}, 0, len(tableInfo.Columns))
-	for _, col := range tableInfo.Columns {
+	columnsSchema := make([]interface{}, 0, len(colInfos))
+	for _, col := range colInfos {
 		mysqlType := map[string]interface{}{
 			"mysqlType": types.TypeToStr(col.GetType(), col.GetCharset()),
 			"charset":   col.GetCharset(),
@@ -110,7 +109,7 @@ func newTableSchemaMap(tableInfo *model.TableInfo) interface{} {
 			"nullable": !mysql.HasNotNullFlag(col.GetFlag()),
 			"default":  nil,
 		}
-		defaultValue := model.GetColumnDefaultValue(col)
+		defaultValue := col.GetDefaultValue()
 		if defaultValue != nil {
 			// according to TiDB source code, the default value is converted to string if not nil.
 			column["default"] = map[string]interface{}{
@@ -124,8 +123,8 @@ func newTableSchemaMap(tableInfo *model.TableInfo) interface{} {
 	result := map[string]interface{}{
 		"database": tableInfo.TableName.Schema,
 		"table":    tableInfo.TableName.Table,
-		"tableID":  tableInfo.ID,
-		"version":  int64(tableInfo.UpdateTS),
+		"tableID":  tableInfo.TableName.TableID,
+		"version":  int64(tableInfo.UpdateTS()),
 		"columns":  columnsSchema,
 		"indexes":  indexesSchema,
 	}
@@ -154,7 +153,7 @@ func newResolvedMessageMap(ts uint64) map[string]interface{} {
 	}
 }
 
-func newBootstrapMessageMap(tableInfo *model.TableInfo) map[string]interface{} {
+func newBootstrapMessageMap(tableInfo *commonType.TableInfo) map[string]interface{} {
 	m := map[string]interface{}{
 		"version":     defaultVersion,
 		"type":        string(MessageTypeBootstrap),
@@ -176,23 +175,24 @@ func newBootstrapMessageMap(tableInfo *model.TableInfo) map[string]interface{} {
 	}
 }
 
-func newDDLMessageMap(ddl *model.DDLEvent) map[string]interface{} {
+func newDDLMessageMap(ddl *commonEvent.DDLEvent) map[string]interface{} {
 	result := map[string]interface{}{
 		"version":  defaultVersion,
-		"type":     string(getDDLType(ddl.Type)),
+		"type":     string(getDDLType(ddl.GetDDLType())),
 		"sql":      ddl.Query,
-		"commitTs": int64(ddl.CommitTs),
+		"commitTs": int64(ddl.GetCommitTs()),
 		"buildTs":  time.Now().UnixMilli(),
 	}
 
-	if ddl.TableInfo != nil && ddl.TableInfo.TableInfo != nil {
+	if ddl.TableInfo != nil {
 		tableSchema := newTableSchemaMap(ddl.TableInfo)
 		result["tableSchema"] = map[string]interface{}{
 			"com.pingcap.simple.avro.TableSchema": tableSchema,
 		}
 	}
-	if ddl.PreTableInfo != nil && ddl.PreTableInfo.TableInfo != nil {
-		tableSchema := newTableSchemaMap(ddl.PreTableInfo)
+	if ddl.GetDDLType() != model.ActionCreateTable && len(ddl.MultipleTableInfos) > 1 {
+		preTableInfo := ddl.MultipleTableInfos[1] // previous table info, TODO: need check it
+		tableSchema := newTableSchemaMap(preTableInfo)
 		result["preTableSchema"] = map[string]interface{}{
 			"com.pingcap.simple.avro.TableSchema": tableSchema,
 		}
@@ -245,7 +245,7 @@ var (
 )
 
 func (a *avroMarshaller) newDMLMessageMap(
-	event *common.RowChangedEvent,
+	event *commonEvent.RowEvent,
 	onlyHandleKey bool,
 	claimCheckFileName string,
 ) map[string]interface{} {
@@ -253,10 +253,10 @@ func (a *avroMarshaller) newDMLMessageMap(
 	dmlMessagePayload["version"] = defaultVersion
 	dmlMessagePayload["database"] = event.TableInfo.GetSchemaName()
 	dmlMessagePayload["table"] = event.TableInfo.GetTableName()
-	dmlMessagePayload["tableID"] = event.TableInfo.ID
+	dmlMessagePayload["tableID"] = event.TableInfo.TableName.TableID
 	dmlMessagePayload["commitTs"] = int64(event.CommitTs)
 	dmlMessagePayload["buildTs"] = time.Now().UnixMilli()
-	dmlMessagePayload["schemaVersion"] = int64(event.TableInfo.UpdateTS)
+	dmlMessagePayload["schemaVersion"] = int64(event.TableInfo.UpdateTS())
 
 	if !a.config.LargeMessageHandle.Disabled() && onlyHandleKey {
 		dmlMessagePayload["handleKeyOnly"] = map[string]interface{}{
@@ -270,31 +270,32 @@ func (a *avroMarshaller) newDMLMessageMap(
 		}
 	}
 
-	if a.config.EnableRowChecksum && event.Checksum != nil {
-		cc := map[string]interface{}{
-			"version":   event.Checksum.Version,
-			"corrupted": event.Checksum.Corrupted,
-			"current":   int64(event.Checksum.Current),
-			"previous":  int64(event.Checksum.Previous),
-		}
+	// TODO: EnableRowChecksum
+	// if a.config.EnableRowChecksum && event.Checksum != nil {
+	// 	cc := map[string]interface{}{
+	// 		"version":   event.Checksum.Version,
+	// 		"corrupted": event.Checksum.Corrupted,
+	// 		"current":   int64(event.Checksum.Current),
+	// 		"previous":  int64(event.Checksum.Previous),
+	// 	}
 
-		holder := genericMapPool.Get().(map[string]interface{})
-		holder["com.pingcap.simple.avro.Checksum"] = cc
-		dmlMessagePayload["checksum"] = holder
-	}
+	// 	holder := genericMapPool.Get().(map[string]interface{})
+	// 	holder["com.pingcap.simple.avro.Checksum"] = cc
+	// 	dmlMessagePayload["checksum"] = holder
+	// }
 
 	if event.IsInsert() {
-		data := a.collectColumns(event.Columns, event.TableInfo, onlyHandleKey)
+		data := a.collectColumns(event.GetRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)
 		dmlMessagePayload["data"] = data
 		dmlMessagePayload["type"] = string(DMLTypeInsert)
 	} else if event.IsDelete() {
-		old := a.collectColumns(event.PreColumns, event.TableInfo, onlyHandleKey)
+		old := a.collectColumns(event.GetPreRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)
 		dmlMessagePayload["old"] = old
 		dmlMessagePayload["type"] = string(DMLTypeDelete)
 	} else if event.IsUpdate() {
-		data := a.collectColumns(event.Columns, event.TableInfo, onlyHandleKey)
+		data := a.collectColumns(event.GetRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)
 		dmlMessagePayload["data"] = data
-		old := a.collectColumns(event.PreColumns, event.TableInfo, onlyHandleKey)
+		old := a.collectColumns(event.GetPreRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)
 		dmlMessagePayload["old"] = old
 		dmlMessagePayload["type"] = string(DMLTypeUpdate)
 	}
@@ -359,18 +360,18 @@ func recycleMap(m map[string]interface{}) {
 }
 
 func (a *avroMarshaller) collectColumns(
-	columns []*common.Column, tableInfo *common.TableInfo, onlyHandleKey bool,
+	row *chunk.Row, tableInfo *commonType.TableInfo, onlyHandleKey bool, columnSelector columnselector.Selector,
 ) map[string]interface{} {
 	result := rowMapPool.Get().(map[string]interface{})
-	for _, col := range columns {
-		if col != nil {
-			colFlag := col.Flag
-			if onlyHandleKey && !colFlag.IsHandleKey() {
+	for i, colInfo := range tableInfo.GetColumns() {
+		if colInfo != nil {
+			if !columnSelector.Select(colInfo) {
 				continue
 			}
-			colId := tableInfo.ForceGetColumnIDByName(col.Name)
-			colInfo := tableInfo.ForceGetColumnInfo(colId)
-			value, avroType := a.encodeValue4Avro(col.Value, &colInfo.FieldType)
+			if onlyHandleKey && !tableInfo.ForceGetColumnFlagType(colInfo.ID).IsPrimaryKey() {
+				continue
+			}
+			value, avroType := a.encodeValue4Avro(row, i, &colInfo.FieldType)
 			holder := genericMapPool.Get().(map[string]interface{})
 			holder[avroType] = value
 			result[colInfo.Name.O] = holder

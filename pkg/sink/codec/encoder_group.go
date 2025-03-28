@@ -172,12 +172,12 @@ func (g *encoderGroup) AddEvents(
 	events ...*commonEvent.RowEvent,
 ) error {
 	// bootstrapWorker only not nil when the protocol is simple
-	// if g.bootstrapWorker != nil {
-	// 	err := g.bootstrapWorker.addEvent(ctx, key, events[0].Event)
-	// 	if err != nil {
-	// 		return errors.Trace(err)
-	// 	}
-	// }
+	if g.bootstrapWorker != nil {
+		err := g.bootstrapWorker.addEvent(ctx, key, events[0])
+		if err != nil {
+			return errors.Trace(err)
+		}
+	}
 
 	future := newFuture(key, events...)
 	index := atomic.AddUint64(&g.index, 1) % uint64(g.concurrency)

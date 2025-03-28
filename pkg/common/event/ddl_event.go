@@ -88,6 +88,8 @@ type DDLEvent struct {
 	eventSize int64 `json:"-"`
 
 	Err error `json:"-"`
+	// for simple protocol
+	IsBootstrap bool `msg:"-"`
 }
 
 func (d *DDLEvent) GetType() int {

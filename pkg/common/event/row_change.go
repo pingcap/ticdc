@@ -85,11 +85,12 @@ type MQRowEvent struct {
 }
 
 type RowEvent struct {
-	TableInfo      *common.TableInfo
-	CommitTs       uint64
-	Event          RowChange
-	ColumnSelector columnselector.Selector
-	Callback       func()
+	PhysicalTableID int64
+	TableInfo       *common.TableInfo
+	CommitTs        uint64
+	Event           RowChange
+	ColumnSelector  columnselector.Selector
+	Callback        func()
 }
 
 func (e *RowEvent) IsDelete() bool {
@@ -110,6 +111,10 @@ func (e *RowEvent) GetRows() *chunk.Row {
 
 func (e *RowEvent) GetPreRows() *chunk.Row {
 	return &e.Event.PreRow
+}
+
+func (t *RowEvent) GetTableID() int64 {
+	return t.PhysicalTableID
 }
 
 // PrimaryKeyColumnNames return all primary key's name
