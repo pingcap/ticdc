@@ -123,10 +123,10 @@ func (d *canalJSONTxnEventDecoder) canalJSONMessage2RowChange() *commonEvent.DML
 	switch msg.eventType() {
 	case canal.EventType_DELETE:
 		data := msg.getData()
-		appendRow2Chunk(data, columns, chk)
+		common.AppendRow2Chunk(data, columns, chk)
 	case canal.EventType_INSERT:
 		data := msg.getData()
-		appendRow2Chunk(data, columns, chk)
+		common.AppendRow2Chunk(data, columns, chk)
 	case canal.EventType_UPDATE:
 		previous := msg.getOld()
 		data := msg.getData()
@@ -135,8 +135,8 @@ func (d *canalJSONTxnEventDecoder) canalJSONMessage2RowChange() *commonEvent.DML
 				previous[k] = v
 			}
 		}
-		appendRow2Chunk(previous, columns, chk)
-		appendRow2Chunk(data, columns, chk)
+		common.AppendRow2Chunk(previous, columns, chk)
+		common.AppendRow2Chunk(data, columns, chk)
 	default:
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}
