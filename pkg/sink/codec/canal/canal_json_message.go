@@ -14,14 +14,9 @@
 package canal
 
 import (
-	"github.com/pingcap/tiflow/cdc/model"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	canal "github.com/pingcap/tiflow/proto/canal"
 )
-
-// import (
-// 	"github.com/pingcap/tiflow/cdc/model"
-// 	canal "github.com/pingcap/tiflow/proto/canal"
-// )
 
 const tidbWaterMarkType = "TIDB_WATERMARK"
 
@@ -36,7 +31,7 @@ type canalJSONMessageInterface interface {
 	getData() map[string]interface{}
 	getMySQLType() map[string]string
 	getJavaSQLType() map[string]int32
-	messageType() model.MessageType
+	messageType() common.MessageType
 	eventType() canal.EventType
 	pkNameSet() map[string]struct{}
 }
@@ -104,16 +99,16 @@ func (c *JSONMessage) getJavaSQLType() map[string]int32 {
 	return c.SQLType
 }
 
-func (c *JSONMessage) messageType() model.MessageType {
+func (c *JSONMessage) messageType() common.MessageType {
 	if c.IsDDL {
-		return model.MessageTypeDDL
+		return common.MessageTypeDDL
 	}
 
 	if c.EventType == tidbWaterMarkType {
-		return model.MessageTypeResolved
+		return common.MessageTypeResolved
 	}
 
-	return model.MessageTypeRow
+	return common.MessageTypeRow
 }
 
 func (c *JSONMessage) eventType() canal.EventType {

@@ -61,21 +61,33 @@ func (w *MysqlWriter) SendSyncPointEvent(event *commonEvent.SyncPointEvent) erro
 		}
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "failed to write syncpoint table; Failed to get tidb_current_ts;"))
 	}
+
+	commitTsList := event.GetCommitTsList()
+
 	// insert ts map
 	var builder strings.Builder
 	builder.WriteString("insert ignore into ")
 	builder.WriteString(filter.TiCDCSystemSchema)
 	builder.WriteString(".")
 	builder.WriteString(filter.SyncPointTable)
-	builder.WriteString(" (ticdc_cluster_id, changefeed, primary_ts, secondary_ts) VALUES ('")
-	builder.WriteString(config.GetGlobalServerConfig().ClusterID)
-	builder.WriteString("', '")
-	builder.WriteString(w.ChangefeedID.String())
-	builder.WriteString("', ")
-	builder.WriteString(strconv.FormatUint(event.GetCommitTs(), 10))
-	builder.WriteString(", ")
-	builder.WriteString(secondaryTs)
-	builder.WriteString(")")
+	builder.WriteString(" (ticdc_cluster_id, changefeed, primary_ts, secondary_ts) VALUES ")
+
+	for idx, commitTs := range commitTsList {
+		builder.WriteString("('")
+		builder.WriteString(config.GetGlobalServerConfig().ClusterID)
+		builder.WriteString("', '")
+		builder.WriteString(w.ChangefeedID.String())
+		builder.WriteString("', ")
+		builder.WriteString(strconv.FormatUint(commitTs, 10))
+		builder.WriteString(", ")
+		builder.WriteString(secondaryTs)
+		builder.WriteString(")")
+
+		if idx != len(commitTsList)-1 {
+			builder.WriteString(", ")
+		}
+	}
+
 	query := builder.String()
 
 	_, err = tx.Exec(query)

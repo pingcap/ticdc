@@ -161,9 +161,9 @@ func (c *EventCollector) Run(ctx context.Context) {
 }
 
 func (c *EventCollector) Close() {
+	log.Info("event collector is closing")
 	c.cancel()
 	c.ds.Close()
-
 	c.changefeedIDMap.Range(func(key, value any) bool {
 		cfID := value.(common.ChangeFeedID)
 		// Remove metrics for the changefeed.

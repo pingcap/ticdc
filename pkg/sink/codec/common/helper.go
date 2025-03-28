@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -72,6 +73,63 @@ func ExtractBasicMySQLType(mysqlType string) byte {
 	}
 
 	return types.StrToType(mysqlType)
+}
+
+func IsUnsignedFlag(mysqlType string) bool {
+	return strings.Contains(mysqlType, "unsigned")
+}
+
+func ExtractFlenDecimal(mysqlType string) (int, int) {
+	if strings.HasPrefix(mysqlType, "enum") || strings.HasPrefix(mysqlType, "set") {
+		return 0, 0
+	}
+	start := strings.Index(mysqlType, "(")
+	end := strings.Index(mysqlType, ")")
+	if start == -1 || end == -1 {
+		return -1, types.UnspecifiedLength
+	}
+
+	data := strings.Split(mysqlType[start+1:end], ",")
+	flen, err := strconv.ParseInt(data[0], 10, 64)
+	if err != nil {
+		log.Panic("parse flen failed", zap.String("flen", data[0]), zap.Error(err))
+	}
+
+	if len(data) != 2 {
+		return int(flen), types.UnspecifiedLength
+	}
+
+	decimal, err := strconv.ParseInt(data[1], 10, 64)
+	if err != nil {
+		log.Panic("parse decimal failed", zap.String("decimal", data[1]), zap.Error(err))
+	}
+	return int(flen), int(decimal)
+}
+
+// ExtractElements for the Enum and Set Type
+func ExtractElements(mysqlType string) []string {
+	start := strings.Index(mysqlType, "(")
+	end := strings.LastIndex(mysqlType, ")")
+	parts := strings.Split(mysqlType[start+1:end], ",")
+	elements := make([]string, 0, len(parts))
+	for _, part := range parts {
+		elements = append(elements, strings.Trim(part, "'"))
+	}
+	return elements
+}
+
+func ExtractDecimal(mysqlType string) int {
+	start := strings.Index(mysqlType, "(")
+	end := strings.Index(mysqlType, ")")
+	if start == -1 || end == -1 {
+		return 0
+	}
+	decimal := mysqlType[start+1 : end]
+	result, err := strconv.ParseInt(decimal, 10, 64)
+	if err != nil {
+		log.Panic("parse decimal failed", zap.String("decimal", decimal), zap.Error(err))
+	}
+	return int(result)
 }
 
 // ColumnsHolder read columns from sql.Rows

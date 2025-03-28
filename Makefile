@@ -141,6 +141,9 @@ storage_consumer:
 pulsar_consumer:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_pulsar_consumer ./cmd/pulsar-consumer/main.go
 
+oauth2_server:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/oauth2-server ./cmd/oauth2-server/main.go
+
 filter_helper:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_filter_helper ./cmd/filter-helper/main.go
 
@@ -171,7 +174,7 @@ check_third_party_binary:
 	@which bin/minio
 	@which bin/bin/schema-registry-start
 
-integration_test_build: check_failpoint_ctl
+integration_test_build: check_failpoint_ctl storage_consumer kafka_consumer pulsar_consumer oauth2_server
 	$(FAILPOINT_ENABLE)
 	$(GOTEST) -ldflags '$(LDFLAGS)' -c -cover -covermode=atomic \
 		-coverpkg=github.com/pingcap/ticdc/... \
@@ -191,16 +194,16 @@ check_failpoint_ctl: tools/bin/failpoint-ctl
 
 integration_test: integration_test_mysql
 
-integration_test_mysql:
-	tests/integration_tests/run.sh mysql "$(CASE)" "$(NEWARCH)" "$(START_AT)"
+integration_test_mysql: check_third_party_binary
+	tests/integration_tests/run.sh mysql "$(CASE)" "$(START_AT)"
 
 integration_test_kafka: check_third_party_binary
 	tests/integration_tests/run.sh kafka "$(CASE)" "$(START_AT)"
 
-integration_test_storage:
+integration_test_storage: check_third_party_binary
 	tests/integration_tests/run.sh storage "$(CASE)" "$(START_AT)"
 
-integration_test_pulsar:
+integration_test_pulsar: check_third_party_binary
 	tests/integration_tests/run.sh pulsar "$(CASE)" "$(START_AT)"
 
 unit_test: check_failpoint_ctl generate-protobuf
