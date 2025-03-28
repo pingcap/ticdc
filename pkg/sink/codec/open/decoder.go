@@ -19,6 +19,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -53,6 +55,7 @@ type BatchDecoder struct {
 
 	upstreamTiDB *sql.DB
 
+	tableInfoCache   map[tableKey]*commonType.TableInfo
 	tableIDAllocator *common.FakeTableIDAllocator
 }
 
@@ -151,7 +154,7 @@ func (b *BatchDecoder) HasNext() (common.MessageType, bool, error) {
 	}
 	rowMsg := new(messageRow)
 	rowMsg.decode(value)
-	b.nextEvent = b.msgToRowChange(b.nextKey, rowMsg)
+	b.nextEvent = b.assembleDMLEvent(b.nextKey, rowMsg)
 
 	return common.MessageTypeRow, true, nil
 }
@@ -350,52 +353,137 @@ func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 
 	rowMsg := new(messageRow)
 	rowMsg.decode(value)
-	event := b.msgToRowChange(msgKey, rowMsg)
+	event := b.assembleDMLEvent(msgKey, rowMsg)
 
 	return event, nil
 }
 
-func (b *BatchDecoder) msgToRowChange(key *messageKey, value *messageRow) *commonEvent.DMLEvent {
-	e := new(commonEvent.DMLEvent)
-	// TODO: we lost the startTs from kafka message
-	// startTs-based txn filter is out of work
-	e.CommitTs = key.Ts
+type tableKey struct {
+	schema string
+	table  string
+}
 
-	if len(value.Delete) != 0 {
-		preCols := codecColumns2RowChangeColumns(value.Delete)
-		indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(preCols)
-		e.TableInfo = model.BuildTableInfo(key.Schema, key.Table, preCols, indexColumns)
-		e.PreColumns = model.Columns2ColumnDatas(preCols, e.TableInfo)
-	} else {
-		cols := codecColumns2RowChangeColumns(value.Update)
-		preCols := codecColumns2RowChangeColumns(value.PreColumns)
-		indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(cols)
-		e.TableInfo = model.BuildTableInfo(key.Schema, key.Table, cols, indexColumns)
-		e.Columns = model.Columns2ColumnDatas(cols, e.TableInfo)
-		e.PreColumns = model.Columns2ColumnDatas(preCols, e.TableInfo)
+func (b *BatchDecoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+	cacheKey := tableKey{
+		schema: key.Schema,
+		table:  key.Table,
 	}
+	tableInfo, ok := b.tableInfoCache[cacheKey]
+	if !ok {
+		tableInfo = b.newTableInfo(key, value)
+		b.tableInfoCache[cacheKey] = tableInfo
+	}
+	return tableInfo
+}
 
-	// TODO: we lost the tableID from kafka message
+func (b *BatchDecoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+	tableInfo := new(timodel.TableInfo)
+	tableInfo.ID = b.tableIDAllocator.AllocateTableID(key.Schema, key.Table)
+	tableInfo.Name = pmodel.NewCIStr(key.Table)
+
+	var rawColumns map[string]column
+	if value.Update != nil {
+		rawColumns = value.Update
+	} else if value.Delete != nil {
+		rawColumns = value.Delete
+	}
+	columns := newTiColumns(rawColumns)
+	tableInfo.Columns = columns
+	tableInfo.Indices = newTiIndices(columns)
+	return commonType.NewTableInfo4Decoder(key.Schema, tableInfo)
+}
+
+func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
+	result := make([]*timodel.ColumnInfo, 0)
+	var nextColumnID int64
+	for name, raw := range rawColumns {
+		col := new(timodel.ColumnInfo)
+		col.ID = nextColumnID
+		col.Name = pmodel.NewCIStr(name)
+		col.FieldType = raw.Flag
+		nextColumnID++
+		result = append(result, col)
+	}
+	return result
+}
+
+func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
+	indexColumns := make([]*timodel.IndexColumn, 0)
+	for idx, col := range columns {
+		if mysql.HasPriKeyFlag(col.GetFlag()) {
+			indexColumns = append(indexColumns, &timodel.IndexColumn{
+				Name:   col.Name,
+				Offset: idx,
+			})
+		}
+	}
+	indexInfo := &timodel.IndexInfo{
+		ID:      1,
+		Name:    pmodel.NewCIStr("primary"),
+		Columns: indexColumns,
+		Primary: true,
+	}
+	result := []*timodel.IndexInfo{indexInfo}
+	return result
+}
+
+func (b *BatchDecoder) assembleDMLEvent(key *messageKey, value *messageRow) *commonEvent.DMLEvent {
+	tableInfo := b.queryTableInfo(key, value)
+	result := new(commonEvent.DMLEvent)
+	result.Length++
+	result.StartTs = key.Ts
+	result.ApproximateSize = 0
+	result.TableInfo = tableInfo
+	result.CommitTs = key.Ts
 	if key.Partition != nil {
-		e.PhysicalTableID = *key.Partition
-		e.TableInfo.TableName.IsPartition = true
-	} else {
-		e.PhysicalTableID = b.tableIDAllocator.AllocateTableID(key.Schema, key.Table)
+		result.PhysicalTableID = *key.Partition
+		result.TableInfo.TableName.IsPartition = true
 	}
-	return e
+
+	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
+	columns := tableInfo.GetColumns()
+	if len(value.Delete) != 0 {
+		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
+	} else if len(value.Update) != 0 && len(value.PreColumns) != 0 {
+		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
+		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
+	} else if len(value.Update) != 0 {
+		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
+	} else {
+		log.Panic("unknown event type")
+	}
+
+	result.Rows = chk
+	return result
+
+	//if len(value.Delete) != 0 {
+	//	preCols := codecColumns2RowChangeColumns(value.Delete)
+	//	indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(preCols)
+	//	e.TableInfo = model.BuildTableInfo(key.Schema, key.Table, preCols, indexColumns)
+	//	e.PreColumns = model.Columns2ColumnDatas(preCols, e.TableInfo)
+	//} else {
+	//	cols := codecColumns2RowChangeColumns(value.Update)
+	//	preCols := codecColumns2RowChangeColumns(value.PreColumns)
+	//	indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(cols)
+	//	e.TableInfo = model.BuildTableInfo(key.Schema, key.Table, cols, indexColumns)
+	//	e.Columns = model.Columns2ColumnDatas(cols, e.TableInfo)
+	//	e.PreColumns = model.Columns2ColumnDatas(preCols, e.TableInfo)
+	//}
+	//
+	//return e
 }
 
-func codecColumns2RowChangeColumns(cols map[string]column) []*commonType.Column {
-	if len(cols) == 0 {
-		return nil
-	}
-	columns := make([]*commonType.Column, 0, len(cols))
-	for name, col := range cols {
-		c := col.toRowChangeColumn(name)
-		columns = append(columns, c)
-	}
-	sort.Slice(columns, func(i, j int) bool {
-		return columns[i].Name < columns[j].Name
-	})
-	return columns
-}
+//func codecColumns2RowChangeColumns(cols map[string]column) []*commonType.Column {
+//	if len(cols) == 0 {
+//		return nil
+//	}
+//	columns := make([]*commonType.Column, 0, len(cols))
+//	for name, col := range cols {
+//		c := col.toRowChangeColumn(name)
+//		columns = append(columns, c)
+//	}
+//	sort.Slice(columns, func(i, j int) bool {
+//		return columns[i].Name < columns[j].Name
+//	})
+//	return columns
+//}
