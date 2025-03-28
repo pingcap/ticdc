@@ -58,9 +58,17 @@ type column struct {
 }
 
 // formatColumn formats a codec column.
-// todo: can we make this a method of the `column` ?
 func formatColumn(c column) column {
 	switch c.Type {
+	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
+		str := c.Value.(string)
+		var err error
+		if c.Flag.IsBinary() {
+			str, err = strconv.Unquote("\"" + str + "\"")
+			if err != nil {
+				log.Panic("invalid column value, please report a bug", zap.Any("value", str), zap.Error(err))
+			}
+		}
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob,
 		mysql.TypeLongBlob, mysql.TypeBlob:
 		if s, ok := c.Value.(string); ok {
@@ -71,14 +79,21 @@ func formatColumn(c column) column {
 			}
 		}
 	case mysql.TypeFloat, mysql.TypeDouble:
-		if s, ok := c.Value.(json.Number); ok {
-			f64, err := s.Float64()
-			if err != nil {
-				log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
-			}
-			c.Value = f64
+		s, ok := c.Value.(json.Number)
+		if !ok {
+			log.Panic("float / double not json.Number, please report a bug", zap.Any("value", c.Value))
 		}
-	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeLonglong, mysql.TypeInt24, mysql.TypeYear:
+		f64, err := s.Float64()
+		if err != nil {
+			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
+		}
+		if c.Type == mysql.TypeFloat {
+			c.Value = float32(f64)
+		} else {
+			c.Value = f64
+
+		}
+	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeLonglong, mysql.TypeInt24:
 		if s, ok := c.Value.(json.Number); ok {
 			var err error
 			if c.Flag.IsUnsigned() {
@@ -96,6 +111,8 @@ func formatColumn(c column) column {
 				c.Value = int64(f)
 			}
 		}
+	case mysql.TypeYear:
+		log.Info("how to handle year? convert to uint64	", zap.Any("value", c.Value))
 	case mysql.TypeBit:
 		if s, ok := c.Value.(json.Number); ok {
 			intNum, err := s.Int64()
