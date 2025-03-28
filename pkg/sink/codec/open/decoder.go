@@ -17,6 +17,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"encoding/json"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -132,23 +134,26 @@ func (b *BatchDecoder) HasNext() (common.MessageType, bool, error) {
 	}
 	b.decodeNextKey()
 
-	if b.nextKey.Type == common.MessageTypeRow {
-		valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
-		value := b.valueBytes[8 : valueLen+8]
-		b.valueBytes = b.valueBytes[valueLen+8:]
-
-		rowMsg := new(messageRow)
-		value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
-		if err != nil {
-			log.Panic("decompress failed",
-				zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
-				zap.Any("value", value), zap.Error(err))
-		}
-		rowMsg.decode(value)
-		b.nextEvent = b.msgToRowChange(b.nextKey, rowMsg)
+	switch b.nextKey.Type {
+	case common.MessageTypeResolved, common.MessageTypeDDL:
+		return b.nextKey.Type, true, nil
+	default:
 	}
+	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
+	value := b.valueBytes[8 : valueLen+8]
+	b.valueBytes = b.valueBytes[valueLen+8:]
 
-	return b.nextKey.Type, true, nil
+	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
+	if err != nil {
+		log.Panic("decompress failed",
+			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value), zap.Error(err))
+	}
+	rowMsg := new(messageRow)
+	rowMsg.decode(value)
+	b.nextEvent = b.msgToRowChange(b.nextKey, rowMsg)
+
+	return common.MessageTypeRow, true, nil
 }
 
 // NextResolvedEvent implements the RowEventDecoder interface
@@ -161,6 +166,11 @@ func (b *BatchDecoder) NextResolvedEvent() (uint64, error) {
 	// resolved ts event's value part is empty, can be ignored.
 	b.valueBytes = nil
 	return resolvedTs, nil
+}
+
+type messageDDL struct {
+	Query string             `json:"q"`
+	Type  timodel.ActionType `json:"t"`
 }
 
 // NextDDLEvent implements the RowEventDecoder interface
@@ -178,8 +188,12 @@ func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 			GenWithStack("decompress DDL event failed")
 	}
 
-	m := new(messageDDL)
-	m.decode(value)
+	var m messageDDL
+	err = json.Unmarshal(value, &m)
+	if err != nil {
+		log.Panic("decode message DDL failed", zap.Any("data", value), zap.Error(err))
+	}
+
 	result := new(commonEvent.DDLEvent)
 	result.Query = m.Query
 	result.Type = byte(m.Type)
@@ -249,56 +263,56 @@ func (b *BatchDecoder) buildColumns(
 func (b *BatchDecoder) assembleHandleKeyOnlyEvent(
 	ctx context.Context, handleKeyOnlyEvent *commonEvent.DMLEvent,
 ) *commonEvent.DMLEvent {
-	var (
-		schema   = handleKeyOnlyEvent.TableInfo.GetSchemaName()
-		table    = handleKeyOnlyEvent.TableInfo.GetTableName()
-		commitTs = handleKeyOnlyEvent.CommitTs
-	)
-
-	tableInfo := handleKeyOnlyEvent.TableInfo
-	if handleKeyOnlyEvent.IsInsert() {
-		conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.Columns))
-		for _, col := range handleKeyOnlyEvent.Columns {
-			colName := tableInfo.ForceGetColumnName(col.ColumnID)
-			conditions[colName] = col.Value
-		}
-		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		columns := b.buildColumns(holder, conditions)
-		indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(columns)
-		handleKeyOnlyEvent.TableInfo = model.BuildTableInfo(schema, table, columns, indexColumns)
-		handleKeyOnlyEvent.Columns = model.Columns2ColumnDatas(columns, handleKeyOnlyEvent.TableInfo)
-	} else if handleKeyOnlyEvent.IsDelete() {
-		conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.PreColumns))
-		for _, col := range handleKeyOnlyEvent.PreColumns {
-			colName := tableInfo.ForceGetColumnName(col.ColumnID)
-			conditions[colName] = col.Value
-		}
-		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		preColumns := b.buildColumns(holder, conditions)
-		indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(preColumns)
-		handleKeyOnlyEvent.TableInfo = model.BuildTableInfo(schema, table, preColumns, indexColumns)
-		handleKeyOnlyEvent.PreColumns = model.Columns2ColumnDatas(preColumns, handleKeyOnlyEvent.TableInfo)
-	} else if handleKeyOnlyEvent.IsUpdate() {
-		conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.Columns))
-		for _, col := range handleKeyOnlyEvent.Columns {
-			colName := tableInfo.ForceGetColumnName(col.ColumnID)
-			conditions[colName] = col.Value
-		}
-		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		columns := b.buildColumns(holder, conditions)
-		indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(columns)
-		handleKeyOnlyEvent.TableInfo = model.BuildTableInfo(schema, table, columns, indexColumns)
-		handleKeyOnlyEvent.Columns = model.Columns2ColumnDatas(columns, handleKeyOnlyEvent.TableInfo)
-
-		conditions = make(map[string]interface{}, len(handleKeyOnlyEvent.PreColumns))
-		for _, col := range handleKeyOnlyEvent.PreColumns {
-			colName := tableInfo.ForceGetColumnName(col.ColumnID)
-			conditions[colName] = col.Value
-		}
-		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		preColumns := b.buildColumns(holder, conditions)
-		handleKeyOnlyEvent.PreColumns = model.Columns2ColumnDatas(preColumns, handleKeyOnlyEvent.TableInfo)
-	}
+	//var (
+	//	schema   = handleKeyOnlyEvent.TableInfo.GetSchemaName()
+	//	table    = handleKeyOnlyEvent.TableInfo.GetTableName()
+	//	commitTs = handleKeyOnlyEvent.CommitTs
+	//)
+	//
+	//tableInfo := handleKeyOnlyEvent.TableInfo
+	//if handleKeyOnlyEvent.IsInsert() {
+	//	conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.Columns))
+	//	for _, col := range handleKeyOnlyEvent.Columns {
+	//		colName := tableInfo.ForceGetColumnName(col.ColumnID)
+	//		conditions[colName] = col.Value
+	//	}
+	//	holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
+	//	columns := b.buildColumns(holder, conditions)
+	//	indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(columns)
+	//	handleKeyOnlyEvent.TableInfo = model.BuildTableInfo(schema, table, columns, indexColumns)
+	//	handleKeyOnlyEvent.Columns = model.Columns2ColumnDatas(columns, handleKeyOnlyEvent.TableInfo)
+	//} else if handleKeyOnlyEvent.IsDelete() {
+	//	conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.PreColumns))
+	//	for _, col := range handleKeyOnlyEvent.PreColumns {
+	//		colName := tableInfo.ForceGetColumnName(col.ColumnID)
+	//		conditions[colName] = col.Value
+	//	}
+	//	holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
+	//	preColumns := b.buildColumns(holder, conditions)
+	//	indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(preColumns)
+	//	handleKeyOnlyEvent.TableInfo = model.BuildTableInfo(schema, table, preColumns, indexColumns)
+	//	handleKeyOnlyEvent.PreColumns = model.Columns2ColumnDatas(preColumns, handleKeyOnlyEvent.TableInfo)
+	//} else if handleKeyOnlyEvent.IsUpdate() {
+	//	conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.Columns))
+	//	for _, col := range handleKeyOnlyEvent.Columns {
+	//		colName := tableInfo.ForceGetColumnName(col.ColumnID)
+	//		conditions[colName] = col.Value
+	//	}
+	//	holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
+	//	columns := b.buildColumns(holder, conditions)
+	//	indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(columns)
+	//	handleKeyOnlyEvent.TableInfo = model.BuildTableInfo(schema, table, columns, indexColumns)
+	//	handleKeyOnlyEvent.Columns = model.Columns2ColumnDatas(columns, handleKeyOnlyEvent.TableInfo)
+	//
+	//	conditions = make(map[string]interface{}, len(handleKeyOnlyEvent.PreColumns))
+	//	for _, col := range handleKeyOnlyEvent.PreColumns {
+	//		colName := tableInfo.ForceGetColumnName(col.ColumnID)
+	//		conditions[colName] = col.Value
+	//	}
+	//	holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
+	//	preColumns := b.buildColumns(holder, conditions)
+	//	handleKeyOnlyEvent.PreColumns = model.Columns2ColumnDatas(preColumns, handleKeyOnlyEvent.TableInfo)
+	//}
 
 	return handleKeyOnlyEvent
 }

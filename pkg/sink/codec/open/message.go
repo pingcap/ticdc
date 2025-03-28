@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
 )
@@ -168,17 +167,5 @@ func (m *messageRow) decode(data []byte) {
 	}
 	for name, col := range m.PreColumns {
 		m.PreColumns[name] = formatColumn(col)
-	}
-}
-
-type messageDDL struct {
-	Query string           `json:"q"`
-	Type  model.ActionType `json:"t"`
-}
-
-func (m *messageDDL) decode(data []byte) {
-	err := json.Unmarshal(data, m)
-	if err != nil {
-		log.Panic("decode message DDL failed", zap.Any("data", data), zap.Error(err))
 	}
 }
