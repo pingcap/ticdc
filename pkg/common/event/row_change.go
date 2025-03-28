@@ -31,20 +31,6 @@ import (
 //
 //msgp:ignore DDLEvent
 
-// ColumnData represents a column value in row changed event
-//
-//msgp:ignore ColumnData
-type ColumnData struct {
-	// ColumnID may be just a mock id, because we don't store it in redo log.
-	// So after restore from redo log, we need to give every a column a mock id.
-	// The only guarantee is that the column id is unique in a RowChangedEvent
-	ColumnID int64
-	Value    interface{}
-
-	// ApproximateBytes is approximate bytes consumed by the column.
-	ApproximateBytes int
-}
-
 type RowChangedEvent struct {
 	PhysicalTableID int64
 

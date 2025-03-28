@@ -2246,8 +2246,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 }
 
 func buildDDLEventForAlterTablePartitioning(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool) {
-	// TODO: only tidb?
-	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithTiDBOnly)
+	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if !ok {
 		return ddlEvent, false
 	}
@@ -2278,8 +2277,7 @@ func buildDDLEventForAlterTablePartitioning(rawEvent *PersistedDDLEvent, tableFi
 }
 
 func buildDDLEventForRemovePartitioning(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool) {
-	// TODO: only tidb?
-	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithTiDBOnly)
+	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if !ok {
 		return ddlEvent, false
 	}

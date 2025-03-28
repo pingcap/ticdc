@@ -211,9 +211,9 @@ func (r RedoDMLEvent) IsUpdate() bool {
 }
 
 func parseColumnValue(row *chunk.Row, column *model.ColumnInfo, i int) RedoColumnValue {
-	v, err := common.FormatColVal(row, column, i)
+	v, err := common.ExtractColVal(row, column, i)
 	if err != nil {
-		log.Panic("FormatColVal fail", zap.Error(err))
+		log.Panic("ExtractColVal fail", zap.Error(err))
 	}
 	rrv := RedoColumnValue{Value: v}
 	switch t := rrv.Value.(type) {
