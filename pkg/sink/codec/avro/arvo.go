@@ -128,7 +128,6 @@ func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *commonEve
 	}
 
 	return a.encode(ctx, topic, e, keyColumns)
-
 }
 
 func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *commonEvent.RowEvent) ([]byte, error) {
@@ -150,7 +149,6 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *commonE
 	}
 
 	return a.encode(ctx, topic, e, input)
-
 }
 
 func (a *BatchEncoder) encode(ctx context.Context, topic string, e *commonEvent.RowEvent, input *avroEncodeInput) ([]byte, error) {
