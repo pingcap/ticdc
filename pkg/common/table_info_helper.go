@@ -353,12 +353,8 @@ type columnSchema struct {
 	// ColumnID -> offset in RowChangedEvents.Columns.
 	RowColumnsOffset map[int64]int `json:"row_columns_offset"`
 
-	// the mounter will choose this index to output delete events
-	// special value:
-	// HandleIndexPKIsHandle(-1) : pk is handle
-	// HandleIndexTableIneligible(-2) : the table is not eligible
-	HandleIndexID int64 `json:"handle_index_id"`
-
+	// store handle key column ids
+	handleKeyIDs map[int64]struct{}
 	// IndexColumnsOffset store the offset of the columns in row changed events for
 	// unique index and primary key
 	// The reason why we need this is that the Indexes in TableInfo
@@ -437,8 +433,8 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		ColumnsOffset:    make(map[int64]int, len(tableInfo.Columns)),
 		NameToColID:      make(map[string]int64, len(tableInfo.Columns)),
 		RowColumnsOffset: make(map[int64]int, len(tableInfo.Columns)),
+		handleKeyIDs:     make(map[int64]struct{}),
 		HandleColID:      []int64{-1},
-		HandleIndexID:    HandleIndexTableIneligible,
 		RowColInfos:      make([]rowcodec.ColInfo, len(tableInfo.Columns)),
 		RowColFieldTps:   make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
 		PKIndexOffset:    make([]int, 0),
@@ -458,12 +454,10 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 			if pkIsHandle {
 				// pk is handle
 				colSchema.HandleColID = []int64{col.ID}
-				colSchema.HandleIndexID = HandleIndexPKIsHandle
 				colSchema.HasUniqueColumn = true
 				colSchema.IndexColumnsOffset = append(colSchema.IndexColumnsOffset, []int{colSchema.RowColumnsOffset[col.ID]})
 				colSchema.PKIndexOffset = []int{colSchema.RowColumnsOffset[col.ID]}
 			} else if tableInfo.IsCommonHandle {
-				colSchema.HandleIndexID = HandleIndexPKIsHandle
 				colSchema.HandleColID = colSchema.HandleColID[:0]
 				pkIdx := tables.FindPrimaryIndex(tableInfo)
 				for _, pkCol := range pkIdx.Columns {
@@ -505,9 +499,8 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		}
 	}
 	colSchema.initRowColInfosWithoutVirtualCols()
-	colSchema.findHandleIndex(tableInfo.Name.O)
-
 	colSchema.InitPreSQLs(tableInfo.Name.O)
+	colSchema.findHandleKeyIDs(tableInfo.Name.O)
 	return colSchema
 }
 
@@ -606,19 +599,25 @@ func (s *columnSchema) initRowColInfosWithoutVirtualCols() {
 	s.RowColInfosWithoutVirtualCols = &colInfos
 }
 
-func (s *columnSchema) findHandleIndex(tableName string) {
-	if s.HandleIndexID == HandleIndexPKIsHandle {
-		// pk is handle
-		return
-	}
+func (s *columnSchema) findHandleKeyIDs(tableName string) {
 	handleIndexOffset := -1
 	for i, idx := range s.Indices {
-		if !s.IsIndexUniqueAndNotNull(idx) {
-			continue
-		}
 		if idx.Primary {
 			handleIndexOffset = i
 			break
+		}
+		if !idx.Unique {
+			continue
+		}
+		for _, col := range idx.Columns {
+			colInfo := s.Columns[col.Offset]
+			if !mysql.HasNotNullFlag(colInfo.GetFlag()) {
+				continue
+			}
+			// this column is a virtual generated column
+			if colInfo.IsGenerated() && !colInfo.GeneratedStored {
+				continue
+			}
 		}
 		if handleIndexOffset < 0 {
 			handleIndexOffset = i
@@ -630,31 +629,29 @@ func (s *columnSchema) findHandleIndex(tableName string) {
 			}
 		}
 	}
-	if handleIndexOffset >= 0 {
-		log.Info("find handle index", zap.String("table", tableName), zap.String("index", s.Indices[handleIndexOffset].Name.O))
-		s.HandleIndexID = s.Indices[handleIndexOffset].ID
+	if handleIndexOffset < 0 {
+		log.Error("not find handle index", zap.String("table", tableName), zap.Any("index", s.Indices))
+		return
+	}
+	selectCols := s.Indices[handleIndexOffset].Columns
+	for _, col := range selectCols {
+		s.handleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
 	}
 }
 
 // IsIndexUnique returns whether the index is unique and all columns are not null
 func (s *columnSchema) IsIndexUniqueAndNotNull(indexInfo *model.IndexInfo) bool {
-	if indexInfo.Primary {
-		return true
-	}
-	if indexInfo.Unique {
-		for _, col := range indexInfo.Columns {
-			colInfo := s.Columns[col.Offset]
-			if !mysql.HasNotNullFlag(colInfo.GetFlag()) {
-				return false
-			}
-			// this column is a virtual generated column
-			if colInfo.IsGenerated() && !colInfo.GeneratedStored {
-				return false
-			}
+	for _, col := range indexInfo.Columns {
+		colInfo := s.Columns[col.Offset]
+		if !mysql.HasNotNullFlag(colInfo.GetFlag()) {
+			return false
 		}
-		return true
+		// this column is a virtual generated column
+		if colInfo.IsGenerated() && !colInfo.GeneratedStored {
+			return false
+		}
 	}
-	return false
+	return true
 }
 
 // TryGetCommonPkColumnIds get the IDs of primary key column if the table has common handle.
@@ -785,7 +782,7 @@ func (s *columnSchema) getColumnSchemaWithoutVirtualColumns() *columnSchema {
 		NameToColID:                   s.NameToColID,
 		HasUniqueColumn:               s.HasUniqueColumn,
 		RowColumnsOffset:              s.RowColumnsOffset,
-		HandleIndexID:                 s.HandleIndexID,
+		handleKeyIDs:                  s.handleKeyIDs,
 		IndexColumnsOffset:            s.IndexColumnsOffset,
 		RowColInfos:                   s.RowColInfos,
 		RowColFieldTps:                s.RowColFieldTps,

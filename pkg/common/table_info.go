@@ -23,7 +23,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
@@ -362,7 +361,7 @@ func (ti *TableInfo) OffsetsByNames(names []string) ([]int, bool) {
 	return result, true
 }
 
-func (ti *TableInfo) HasHandleKey() bool {
+func (ti *TableInfo) HasPriKey() bool {
 	return ti.columnSchema.GetPkColInfo() != nil
 }
 
@@ -385,6 +384,17 @@ func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 		}
 	}
 	return result
+}
+
+// IsHandleKey shows whether HandleKeyFlag is set
+// HandleKeyFlag means the column is selected as the handle key
+// The handleKey is chosen by the following rules in the order:
+// 1. if the table has primary key, it's the handle key.
+// 2. If the table has not null unique key, it's the handle key.
+// 3. If the table has no primary key and no not null unique key, it has no handleKey.
+func (ti *TableInfo) IsHandleKey(colID int64) bool {
+	_, ok := ti.columnSchema.handleKeyIDs[colID]
+	return ok
 }
 
 func newTableInfo(schema, table string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
@@ -439,14 +449,4 @@ func BuildTiDBTableInfoWithoutVirtualColumns(source *TableInfo) *TableInfo {
 
 	tableInfo.InitPrivateFields()
 	return tableInfo
-}
-
-// HasHandleKeyFlag shows whether HandleKeyFlag is set
-// HandleKeyFlag means the column is selected as the handle key
-// The handleKey is chosen by the following rules in the order:
-// 1. if the table has primary key, it's the handle key.
-// 2. If the table has not null unique key, it's the handle key.
-// 3. If the table has no primary key and no not null unique key, it has no handleKey.
-func HasHandleKeyFlag(flag uint) bool {
-	return mysql.HasPriKeyFlag(flag) || mysql.HasNotNullFlag(flag)
 }

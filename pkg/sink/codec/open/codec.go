@@ -196,10 +196,11 @@ func writeColumnFieldValue(
 	col *model.ColumnInfo,
 	row *chunk.Row,
 	idx int,
+	tableInfo *commonType.TableInfo,
 ) {
 	colType := col.GetType()
 	flag := col.GetFlag()
-	whereHandle := commonType.HasHandleKeyFlag(flag)
+	whereHandle := tableInfo.IsHandleKey(col.ID)
 
 	writer.WriteIntField("t", int(colType))
 	if whereHandle {
@@ -302,12 +303,12 @@ func writeColumnFieldValues(
 
 	for idx, col := range colInfo {
 		if selector.Select(col) {
-			if onlyHandleKeyColumns && !commonType.HasHandleKeyFlag(col.GetFlag()) {
+			if onlyHandleKeyColumns && !tableInfo.IsHandleKey(col.ID) {
 				continue
 			}
 			flag = true
 			jWriter.WriteObjectField(col.Name.O, func() {
-				writeColumnFieldValue(jWriter, col, row, idx)
+				writeColumnFieldValue(jWriter, col, row, idx, tableInfo)
 			})
 		}
 	}
@@ -331,7 +332,7 @@ func writeUpdatedColumnFieldValues(
 
 	for idx, col := range colInfo {
 		if selector.Select(col) {
-			if onlyHandleKeyColumns && !commonType.HasHandleKeyFlag(col.GetFlag()) {
+			if onlyHandleKeyColumns && !tableInfo.IsHandleKey(col.ID) {
 				continue
 			}
 			writeColumnFieldValueIfUpdated(jWriter, col, preRow, row, idx, tableInfo)
@@ -349,7 +350,7 @@ func writeColumnFieldValueIfUpdated(
 ) {
 	colType := col.GetType()
 	flag := col.GetFlag()
-	whereHandle := commonType.HasHandleKeyFlag(flag)
+	whereHandle := tableInfo.IsHandleKey(col.ID)
 
 	writeFunc := func(writeColumnValue func()) {
 		writer.WriteObjectField(col.Name.O, func() {
@@ -370,7 +371,7 @@ func writeColumnFieldValueIfUpdated(
 		return
 	}
 	if !preRow.IsNull(idx) && row.IsNull(idx) {
-		writeColumnFieldValue(writer, col, preRow, idx)
+		writeColumnFieldValue(writer, col, preRow, idx, tableInfo)
 		return
 	}
 

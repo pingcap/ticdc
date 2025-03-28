@@ -73,7 +73,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 	var err error
 	for _, eventsInGroup := range eventsGroup {
 		tableInfo := eventsInGroup[0].TableInfo
-		if !tableInfo.HasHandleKey() || tableInfo.HasVirtualColumns() {
+		if !tableInfo.HasPriKey() || tableInfo.HasVirtualColumns() {
 			// check if the table has a handle key or has a virtual column
 			queryList, argsList, err = w.generateNormalSQLs(eventsInGroup)
 		} else if len(eventsInGroup) == 1 && eventsInGroup[0].Len() == 1 {

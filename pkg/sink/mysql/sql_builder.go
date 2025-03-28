@@ -194,7 +194,7 @@ func whereSlice(row *chunk.Row, tableInfo *common.TableInfo, forceReplicate bool
 	colNames := make([]string, 0, len(tableInfo.GetColumns()))
 	// Try to use unique key values when available
 	for i, col := range tableInfo.GetColumns() {
-		if col == nil || !common.HasHandleKeyFlag(col.GetFlag()) {
+		if col == nil || !tableInfo.IsHandleKey(col.ID) {
 			continue
 		}
 		colNames = append(colNames, col.Name.O)
