@@ -335,12 +335,23 @@ func (s *remoteMessageTarget) resetReceiveStream() {
 		}
 
 		s.client.Lock()
-		if eventStream, err := client.SendEvents(s.ctx, handshake); err == nil {
+		eventStream, err := client.SendEvents(s.ctx, handshake)
+		if err != nil {
+			log.Error("failed to send events",
+				zap.Any("messageCenterID", s.messageCenterID),
+				zap.Any("remote", s.targetId),
+				zap.Error(err))
+		} else {
 			s.client.eventRecvStream = eventStream
 			s.runReceiveMessages(eventStream, s.recvEventCh)
 		}
 
-		if commandStream, err := client.SendCommands(s.ctx, handshake); err == nil {
+		if commandStream, err := client.SendCommands(s.ctx, handshake); err != nil {
+			log.Error("failed to send commands handshake",
+				zap.Any("messageCenterID", s.messageCenterID),
+				zap.Any("remote", s.targetId),
+				zap.Error(err))
+		} else {
 			s.client.commandRecvStream = commandStream
 			s.runReceiveMessages(commandStream, s.recvCmdCh)
 		}
