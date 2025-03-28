@@ -173,15 +173,10 @@ func TestEncoderOneMessage(t *testing.T) {
 	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
 
-	CompareRow(t, insertRowEvent.Event, insertRowEvent.TableInfo, change, decoded.TableInfo)
+	common.CompareRow(t, insertRowEvent.Event, insertRowEvent.TableInfo, change, decoded.TableInfo)
 }
 
 func TestEncoderMultipleMessage(t *testing.T) {
-	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(400)
-	encoder, err := NewBatchEncoder(ctx, codecConfig)
-	require.NoError(t, err)
-
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
@@ -189,10 +184,19 @@ func TestEncoderMultipleMessage(t *testing.T) {
 	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
 	tableInfo := helper.GetTableInfo(job)
 
-	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 123)`, `insert into test.t values (2, 223)`, `insert into test.t values (3, 333)`)
+	dmlEvent := helper.DML2Event("test", "t",
+		`insert into test.t values (1, 123)`,
+		`insert into test.t values (2, 223)`,
+		`insert into test.t values (3, 333)`)
 
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(400)
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	insertEvents := make([]*commonEvent.RowEvent, 0, 3)
+	columnSelector := columnselector.NewDefaultColumnSelector()
 	count := 0
-
 	for {
 		insertRow, ok := dmlEvent.GetNextRow()
 		if !ok {
@@ -201,11 +205,12 @@ func TestEncoderMultipleMessage(t *testing.T) {
 
 		insertRowEvent := &commonEvent.RowEvent{
 			TableInfo:      tableInfo,
-			CommitTs:       1,
+			CommitTs:       dmlEvent.GetCommitTs(),
 			Event:          insertRow,
-			ColumnSelector: columnselector.NewDefaultColumnSelector(),
+			ColumnSelector: columnSelector,
 			Callback:       func() { count += 1 },
 		}
+		insertEvents = append(insertEvents, insertRowEvent)
 
 		err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 		require.NoError(t, err)
@@ -216,41 +221,61 @@ func TestEncoderMultipleMessage(t *testing.T) {
 	require.Equal(t, 2, messages[0].GetRowsCount())
 	require.Equal(t, 1, messages[1].GetRowsCount())
 
-	// message1
-	message1 := messages[0]
-	require.Equal(t, batchVersion1, readByteToUint(message1.Key[:8]))
-	length1 := readByteToUint(message1.Key[8:16])
-	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message1.Key[16:16+length1]))
-	length2 := readByteToUint(message1.Key[16+length1 : 24+length1])
-	require.Equal(t, uint64(len(message1.Key[24+length1:])), length2)
-	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message1.Key[24+length1:]))
-
-	length3 := readByteToUint(message1.Value[:8])
-	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1},"b":{"t":3,"f":65,"v":123}}}`, string(message1.Value[8:8+length3]))
-	length4 := readByteToUint(message1.Value[8+length3 : 16+length3])
-	require.Equal(t, uint64(len(message1.Value[16+length3:])), length4)
-	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":2},"b":{"t":3,"f":65,"v":223}}}`, string(message1.Value[16+length3:]))
-
-	// message2
-	message2 := messages[1]
-	require.Equal(t, batchVersion1, readByteToUint(message2.Key[:8]))
-	require.Equal(t, uint64(len(message2.Key[16:])), readByteToUint(message2.Key[8:16]))
-	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message2.Key[16:]))
-
-	require.Equal(t, uint64(len(message2.Value[8:])), readByteToUint(message2.Value[:8]))
-	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":3},"b":{"t":3,"f":65,"v":333}}}`, string(message2.Value[8:]))
-
 	for _, message := range messages {
 		message.Callback()
 	}
 
 	require.Equal(t, 3, count)
+
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, messageType, common.MessageTypeRow)
+
+	decoded, err := decoder.NextDMLEvent()
+	require.NoError(t, err)
+	change, ok := decoded.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, insertEvents[0].Event, insertEvents[0].TableInfo, change, decoded.TableInfo)
+
+	messageType, hasNext, err = decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, messageType, common.MessageTypeRow)
+
+	decoded, err = decoder.NextDMLEvent()
+	require.NoError(t, err)
+	change, ok = decoded.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, insertEvents[1].Event, insertEvents[1].TableInfo, change, decoded.TableInfo)
+
+	err = decoder.AddKeyValue(messages[1].Key, messages[1].Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err = decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, messageType, common.MessageTypeRow)
+
+	decoded, err = decoder.NextDMLEvent()
+	require.NoError(t, err)
+	change, ok = decoded.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, insertEvents[2].Event, insertEvents[2].TableInfo, change, decoded.TableInfo)
 }
 
-func TestLargeMessage(t *testing.T) {
+func TestMessageTooLarge(t *testing.T) {
 	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolOpen)
-	codecConfig = codecConfig.WithMaxMessageBytes(100)
+	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(100)
 	encoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
@@ -269,7 +294,7 @@ func TestLargeMessage(t *testing.T) {
 	count := 0
 	insertRowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
-		CommitTs:       1,
+		CommitTs:       dmlEvent.GetCommitTs(),
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 		Callback:       func() { count += 1 },
@@ -279,7 +304,7 @@ func TestLargeMessage(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrMessageTooLarge)
 }
 
-func TestLargeMessageWithHandle(t *testing.T) {
+func TestLargeMessageWithHandleKeyOnly(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(150)
 	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
@@ -300,7 +325,7 @@ func TestLargeMessageWithHandle(t *testing.T) {
 
 	insertRowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
-		CommitTs:       1,
+		CommitTs:       dmlEvent.GetCommitTs(),
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 		Callback:       func() {},
@@ -314,13 +339,24 @@ func TestLargeMessageWithHandle(t *testing.T) {
 	require.Equal(t, 1, len(messages))
 	require.Equal(t, 1, messages[0].GetRowsCount())
 
-	message := messages[0]
-	require.Equal(t, batchVersion1, readByteToUint(message.Key[:8]))
-	require.Equal(t, uint64(len(message.Key[16:])), readByteToUint(message.Key[8:16]))
-	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1,"ohk":true}`, string(message.Key[16:]))
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
 
-	require.Equal(t, uint64(len(message.Value[8:])), readByteToUint(message.Value[:8]))
-	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1}}}`, string(message.Value[8:]))
+	message := messages[0]
+	err = decoder.AddKeyValue(message.Key, message.Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, messageType, common.MessageTypeRow)
+
+	decoded, err := decoder.NextDMLEvent()
+	require.NoError(t, err)
+	change, ok := decoded.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, insertRowEvent.Event, insertRowEvent.TableInfo, change, decoded.TableInfo)
 }
 
 func TestLargeMessageWithoutHandle(t *testing.T) {
