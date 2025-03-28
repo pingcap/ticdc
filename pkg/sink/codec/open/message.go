@@ -20,11 +20,11 @@ import (
 	"strconv"
 
 	"github.com/pingcap/log"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
 
@@ -51,14 +51,14 @@ func (m *messageKey) Decode(data []byte) error {
 type column struct {
 	Type byte `json:"t"`
 	// Deprecated: please use Flag instead.
-	WhereHandle *bool                `json:"h,omitempty"`
-	Flag        model.ColumnFlagType `json:"f"`
-	Value       any                  `json:"v"`
+	WhereHandle *bool `json:"h,omitempty"`
+	Flag        uint  `json:"f"`
+	Value       any   `json:"v"`
 }
 
 // toRowChangeColumn converts from a codec column to a row changed column.
-func (c *column) toRowChangeColumn(name string) *model.Column {
-	col := new(model.Column)
+func (c *column) toRowChangeColumn(name string) *commonType.Column {
+	col := new(commonType.Column)
 	col.Type = c.Type
 	col.Flag = c.Flag
 	col.Name = name
@@ -70,7 +70,7 @@ func (c *column) toRowChangeColumn(name string) *model.Column {
 	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
 		str := col.Value.(string)
 		var err error
-		if c.Flag.IsBinary() {
+		if mysql.HasBinaryFlag(c.Flag) {
 			str, err = strconv.Unquote("\"" + str + "\"")
 			if err != nil {
 				log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
@@ -118,7 +118,7 @@ func formatColumn(c column) column {
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeLonglong, mysql.TypeInt24, mysql.TypeYear:
 		if s, ok := c.Value.(json.Number); ok {
 			var err error
-			if c.Flag.IsUnsigned() {
+			if mysql.HasUnsignedFlag(c.Flag) {
 				c.Value, err = strconv.ParseUint(s.String(), 10, 64)
 			} else {
 				c.Value, err = strconv.ParseInt(s.String(), 10, 64)
@@ -127,7 +127,7 @@ func formatColumn(c column) column {
 				log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
 			}
 		} else if f, ok := c.Value.(float64); ok {
-			if c.Flag.IsUnsigned() {
+			if mysql.HasUnsignedFlag(c.Flag) {
 				c.Value = uint64(f)
 			} else {
 				c.Value = int64(f)
