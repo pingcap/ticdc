@@ -476,23 +476,6 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		colSchema.RowColFieldTpsSlice = append(colSchema.RowColFieldTpsSlice, colSchema.RowColInfos[i].Ft)
 	}
 
-	// for _, idx := range colSchema.Indices {
-	// 	if idx.Primary || idx.Unique {
-	// 		indexColOffset := make([]int, 0, len(idx.Columns))
-	// 		for _, idxCol := range idx.Columns {
-	// 			colInfo := colSchema.Columns[idxCol.Offset]
-	// 			if IsColCDCVisible(colInfo) {
-	// 				indexColOffset = append(indexColOffset, colSchema.RowColumnsOffset[colInfo.ID])
-	// 			}
-	// 		}
-	// 		if len(indexColOffset) > 0 {
-	// 			colSchema.IndexColumnsOffset = append(colSchema.IndexColumnsOffset, indexColOffset)
-	// 			if idx.Primary {
-	// 				colSchema.PKIndexOffset = indexColOffset
-	// 			}
-	// 		}
-	// 	}
-	// }
 	colSchema.initRowColInfosWithoutVirtualCols()
 	colSchema.InitPreSQLs(tableInfo.Name.O)
 	colSchema.initIndex(tableInfo.Name.O)
@@ -594,6 +577,10 @@ func (s *columnSchema) initRowColInfosWithoutVirtualCols() {
 	s.RowColInfosWithoutVirtualCols = &colInfos
 }
 
+// The handleKey is chosen by the following rules in the order:
+// 1. if the table has primary key, it's the handle key.
+// 2. If the table has not null unique key, it's the handle key.
+// 3. If the table has no primary key and no not null unique key, it has no handleKey.
 func (s *columnSchema) initIndex(tableName string) {
 	handleIndexOffset := -1
 	hasPrimary := len(s.handleKeyIDs) != 0

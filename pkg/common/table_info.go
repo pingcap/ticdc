@@ -386,12 +386,7 @@ func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 	return result
 }
 
-// IsHandleKey shows whether HandleKeyFlag is set
-// HandleKeyFlag means the column is selected as the handle key
-// The handleKey is chosen by the following rules in the order:
-// 1. if the table has primary key, it's the handle key.
-// 2. If the table has not null unique key, it's the handle key.
-// 3. If the table has no primary key and no not null unique key, it has no handleKey.
+// IsHandleKey shows whether the column is selected as the handle key
 func (ti *TableInfo) IsHandleKey(colID int64) bool {
 	_, ok := ti.columnSchema.handleKeyIDs[colID]
 	return ok

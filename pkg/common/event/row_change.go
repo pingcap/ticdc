@@ -122,7 +122,7 @@ func (e *RowEvent) PrimaryKeyColumnNames() []string {
 	tableInfo := e.TableInfo
 	columns := e.TableInfo.GetColumns()
 	for _, col := range columns {
-		if col != nil && mysql.HasPriKeyFlag(tableInfo.ForceGetColumnFlagType(col.ID)) {
+		if col != nil && mysql.HasPriKeyFlag(col.GetFlag()) {
 			result = append(result, tableInfo.ForceGetColumnName(col.ID))
 		}
 	}
