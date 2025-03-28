@@ -20,6 +20,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"testing"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
@@ -29,8 +30,39 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	pMySQL "github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func CompareRow(
+	t *testing.T,
+	origin commonEvent.RowChange,
+	originTableInfo *commonType.TableInfo,
+	obtained commonEvent.RowChange,
+	obtainedTableInfo *commonType.TableInfo,
+) {
+	if !origin.Row.IsEmpty() {
+		a := origin.Row.GetDatumRow(originTableInfo.GetFieldSlice())
+		b := obtained.Row.GetDatumRow(obtainedTableInfo.GetFieldSlice())
+		require.Equal(t, len(a), len(b))
+		for idx, col := range originTableInfo.GetColumns() {
+			colID := obtainedTableInfo.ForceGetColumnIDByName(col.Name.O)
+			offset := obtainedTableInfo.MustGetColumnOffsetByID(colID)
+			require.Equal(t, a[idx], b[offset])
+		}
+	}
+
+	if !origin.PreRow.IsEmpty() {
+		a := origin.PreRow.GetDatumRow(originTableInfo.GetFieldSlice())
+		b := obtained.PreRow.GetDatumRow(obtainedTableInfo.GetFieldSlice())
+		require.Equal(t, len(a), len(b))
+		for idx, col := range originTableInfo.GetColumns() {
+			colID := obtainedTableInfo.ForceGetColumnIDByName(col.Name.O)
+			offset := obtainedTableInfo.MustGetColumnOffsetByID(colID)
+			require.Equal(t, a[idx], b[offset])
+		}
+	}
+}
 
 // GetMySQLType get the mysql type from column info
 func GetMySQLType(columnInfo *model.ColumnInfo, fullType bool) string {

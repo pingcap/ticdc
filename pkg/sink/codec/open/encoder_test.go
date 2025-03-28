@@ -88,8 +88,8 @@ func TestCreateTableDDL(t *testing.T) {
 		FinishedTs: 1,
 	}
 
-	codecConfig := common.NewConfig(config.ProtocolOpen)
 	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
 
 	encoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
@@ -119,8 +119,8 @@ func TestCreateTableDDL(t *testing.T) {
 
 func TestEncoderOneMessage(t *testing.T) {
 	ctx := context.Background()
-	config := common.NewConfig(config.ProtocolOpen)
-	encoder, err := NewBatchEncoder(ctx, config)
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
 	helper := commonEvent.NewEventTestHelper(t)
@@ -139,7 +139,7 @@ func TestEncoderOneMessage(t *testing.T) {
 
 	insertRowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
-		CommitTs:       1,
+		CommitTs:       dmlEvent.GetCommitTs(),
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 		Callback:       func() { count += 1 },
@@ -154,16 +154,26 @@ func TestEncoderOneMessage(t *testing.T) {
 	require.Equal(t, 1, messages[0].GetRowsCount())
 
 	message := messages[0]
-	require.Equal(t, batchVersion1, readByteToUint(message.Key[:8]))
-	require.Equal(t, uint64(len(message.Key[16:])), readByteToUint(message.Key[8:16]))
-	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message.Key[16:]))
-
-	require.Equal(t, uint64(len(message.Value[8:])), readByteToUint(message.Value[:8]))
-	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1},"b":{"t":3,"f":65,"v":123}}}`, string(message.Value[8:]))
-
 	message.Callback()
-
 	require.Equal(t, 1, count)
+
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, messageType, common.MessageTypeRow)
+
+	decoded, err := decoder.NextDMLEvent()
+	require.NoError(t, err)
+	change, ok := decoded.GetNextRow()
+	require.True(t, ok)
+
+	CompareRow(t, insertRowEvent.Event, insertRowEvent.TableInfo, change, decoded.TableInfo)
 }
 
 func TestEncoderMultipleMessage(t *testing.T) {
