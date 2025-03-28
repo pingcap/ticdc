@@ -17,7 +17,6 @@ import (
 	"context"
 	"testing"
 
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -28,36 +27,6 @@ import (
 )
 
 // TODO: claim check
-
-func CompareRow(
-	t *testing.T,
-	origin commonEvent.RowChange,
-	originTableInfo *commonType.TableInfo,
-	obtained commonEvent.RowChange,
-	obtainedTableInfo *commonType.TableInfo,
-) {
-	if !origin.Row.IsEmpty() {
-		a := origin.Row.GetDatumRow(originTableInfo.GetFieldSlice())
-		b := obtained.Row.GetDatumRow(obtainedTableInfo.GetFieldSlice())
-		require.Equal(t, len(a), len(b))
-		for idx, col := range originTableInfo.GetColumns() {
-			colID := obtainedTableInfo.ForceGetColumnIDByName(col.Name.O)
-			offset := obtainedTableInfo.MustGetColumnOffsetByID(colID)
-			require.Equal(t, a[idx], b[offset])
-		}
-	}
-
-	if !origin.PreRow.IsEmpty() {
-		a := origin.PreRow.GetDatumRow(originTableInfo.GetFieldSlice())
-		b := obtained.PreRow.GetDatumRow(obtainedTableInfo.GetFieldSlice())
-		require.Equal(t, len(a), len(b))
-		for idx, col := range originTableInfo.GetColumns() {
-			colID := obtainedTableInfo.ForceGetColumnIDByName(col.Name.O)
-			offset := obtainedTableInfo.MustGetColumnOffsetByID(colID)
-			require.Equal(t, a[idx], b[offset])
-		}
-	}
-}
 
 func TestIntegerTypes(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
@@ -151,7 +120,7 @@ func TestIntegerTypes(t *testing.T) {
 			change, ok := decoded.GetNextRow()
 			require.True(t, ok)
 
-			CompareRow(t, event.Event, event.TableInfo, change, decoded.TableInfo)
+			common.CompareRow(t, event.Event, event.TableInfo, change, decoded.TableInfo)
 		}
 	}
 }
@@ -207,7 +176,7 @@ func TestFloatTypes(t *testing.T) {
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
-	CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
 
 func TestTimeTypes(t *testing.T) {
@@ -259,7 +228,7 @@ func TestTimeTypes(t *testing.T) {
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
-	CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
 
 func TestStringTypes(t *testing.T) {
@@ -311,7 +280,7 @@ func TestStringTypes(t *testing.T) {
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
-	CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
 
 func TestBlobTypes(t *testing.T) {
@@ -364,7 +333,7 @@ func TestBlobTypes(t *testing.T) {
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
-	CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
 
 func TestTextTypes(t *testing.T) {
@@ -417,7 +386,7 @@ func TestTextTypes(t *testing.T) {
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
-	CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
 
 func TestOtherTypes(t *testing.T) {
@@ -479,7 +448,7 @@ func TestOtherTypes(t *testing.T) {
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
-	CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
 
 func TestDMLEventWithColumnSelector(t *testing.T) {
@@ -602,7 +571,7 @@ func TestDMLMultiplePK(t *testing.T) {
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
-	CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
 
 func TestDMLMessageTooLarge(t *testing.T) {
@@ -856,7 +825,7 @@ func TestDMLTypeEvent(t *testing.T) {
 		change, ok := decoded.GetNextRow()
 		require.True(t, ok)
 
-		CompareRow(t, event.Event, event.TableInfo, change, decoded.TableInfo)
+		common.CompareRow(t, event.Event, event.TableInfo, change, decoded.TableInfo)
 	}
 
 	// update with only updated columns
@@ -885,7 +854,7 @@ func TestDMLTypeEvent(t *testing.T) {
 	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
 
-	CompareRow(t, updateEvent.Event, updateEvent.TableInfo, change, decoded.TableInfo)
+	common.CompareRow(t, updateEvent.Event, updateEvent.TableInfo, change, decoded.TableInfo)
 }
 
 func TestCreateTableDDL(t *testing.T) {

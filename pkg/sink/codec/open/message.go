@@ -20,11 +20,9 @@ import (
 	"strconv"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/errors"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
 
@@ -43,61 +41,34 @@ type messageKey struct {
 }
 
 // Decode codes a message key from a byte slice.
-func (m *messageKey) Decode(data []byte) error {
-	return errors.WrapError(errors.ErrUnmarshalFailed, json.Unmarshal(data, m))
+func (m *messageKey) Decode(data []byte) {
+	err := json.Unmarshal(data, m)
+	if err != nil {
+		log.Panic("decode message key failed", zap.Any("data", data), zap.Error(err))
+	}
 }
 
 // column is a type only used in codec internally.
 type column struct {
 	Type byte `json:"t"`
 	// Deprecated: please use Flag instead.
-	WhereHandle *bool                `json:"h,omitempty"`
-	Flag        model.ColumnFlagType `json:"f"`
-	Value       any                  `json:"v"`
+	WhereHandle *bool                     `json:"h,omitempty"`
+	Flag        commonType.ColumnFlagType `json:"f"`
+	Value       any                       `json:"v"`
 }
 
-// toRowChangeColumn converts from a codec column to a row changed column.
-func (c *column) toRowChangeColumn(name string) *model.Column {
-	col := new(model.Column)
-	col.Type = c.Type
-	col.Flag = c.Flag
-	col.Name = name
-	col.Value = c.Value
-	if c.Value == nil {
-		return col
-	}
-	switch col.Type {
+// formatColumn formats a codec column.
+func formatColumn(c column) column {
+	switch c.Type {
 	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
-		str := col.Value.(string)
+		str := c.Value.(string)
 		var err error
 		if c.Flag.IsBinary() {
 			str, err = strconv.Unquote("\"" + str + "\"")
 			if err != nil {
-				log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
+				log.Panic("invalid column value, please report a bug", zap.Any("value", str), zap.Error(err))
 			}
 		}
-		col.Value = []byte(str)
-	case mysql.TypeFloat:
-		col.Value = float32(col.Value.(float64))
-	case mysql.TypeYear:
-		col.Value = int64(col.Value.(uint64))
-	case mysql.TypeEnum, mysql.TypeSet:
-		val, err := col.Value.(json.Number).Int64()
-		if err != nil {
-			log.Panic("invalid column value for enum, please report a bug",
-				zap.Any("col", c), zap.Error(err))
-		}
-		col.Value = uint64(val)
-	case mysql.TypeTiDBVectorFloat32:
-	default:
-	}
-	return col
-}
-
-// formatColumn formats a codec column.
-// todo: can we make this a method of the `column` ?
-func formatColumn(c column) column {
-	switch c.Type {
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob,
 		mysql.TypeLongBlob, mysql.TypeBlob:
 		if s, ok := c.Value.(string); ok {
@@ -108,14 +79,21 @@ func formatColumn(c column) column {
 			}
 		}
 	case mysql.TypeFloat, mysql.TypeDouble:
-		if s, ok := c.Value.(json.Number); ok {
-			f64, err := s.Float64()
-			if err != nil {
-				log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
-			}
-			c.Value = f64
+		s, ok := c.Value.(json.Number)
+		if !ok {
+			log.Panic("float / double not json.Number, please report a bug", zap.Any("value", c.Value))
 		}
-	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeLonglong, mysql.TypeInt24, mysql.TypeYear:
+		f64, err := s.Float64()
+		if err != nil {
+			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
+		}
+		if c.Type == mysql.TypeFloat {
+			c.Value = float32(f64)
+		} else {
+			c.Value = f64
+
+		}
+	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeLonglong, mysql.TypeInt24:
 		if s, ok := c.Value.(json.Number); ok {
 			var err error
 			if c.Flag.IsUnsigned() {
@@ -133,6 +111,8 @@ func formatColumn(c column) column {
 				c.Value = int64(f)
 			}
 		}
+	case mysql.TypeYear:
+		log.Info("how to handle year? convert to uint64	", zap.Any("value", c.Value))
 	case mysql.TypeBit:
 		if s, ok := c.Value.(json.Number); ok {
 			intNum, err := s.Int64()
@@ -151,30 +131,20 @@ type messageRow struct {
 	Delete     map[string]column `json:"d,omitempty"`
 }
 
-func (m *messageRow) decode(data []byte) error {
+func (m *messageRow) decode(data []byte) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	err := decoder.Decode(m)
 	if err != nil {
-		return errors.WrapError(errors.ErrUnmarshalFailed, err)
+		log.Panic("decode message row failed", zap.Any("data", data), zap.Error(err))
 	}
-	for colName, column := range m.Update {
-		m.Update[colName] = formatColumn(column)
+	for name, col := range m.Update {
+		m.Update[name] = formatColumn(col)
 	}
-	for colName, column := range m.Delete {
-		m.Delete[colName] = formatColumn(column)
+	for name, col := range m.Delete {
+		m.Delete[name] = formatColumn(col)
 	}
-	for colName, column := range m.PreColumns {
-		m.PreColumns[colName] = formatColumn(column)
+	for name, col := range m.PreColumns {
+		m.PreColumns[name] = formatColumn(col)
 	}
-	return nil
-}
-
-type messageDDL struct {
-	Query string             `json:"q"`
-	Type  timodel.ActionType `json:"t"`
-}
-
-func (m *messageDDL) decode(data []byte) error {
-	return errors.WrapError(errors.ErrUnmarshalFailed, json.Unmarshal(data, m))
 }
