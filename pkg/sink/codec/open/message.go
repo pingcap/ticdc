@@ -57,44 +57,6 @@ type column struct {
 	Value       any                       `json:"v"`
 }
 
-// toRowChangeColumn converts from a codec column to a row changed column.
-func (c *column) toRowChangeColumn(name string) *commonType.Column {
-	col := new(commonType.Column)
-	col.Type = c.Type
-	col.Flag = c.Flag
-	col.Name = name
-	col.Value = c.Value
-	if c.Value == nil {
-		return col
-	}
-	switch col.Type {
-	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
-		str := col.Value.(string)
-		var err error
-		if c.Flag.IsBinary() {
-			str, err = strconv.Unquote("\"" + str + "\"")
-			if err != nil {
-				log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
-			}
-		}
-		col.Value = []byte(str)
-	case mysql.TypeFloat:
-		col.Value = float32(col.Value.(float64))
-	case mysql.TypeYear:
-		col.Value = int64(col.Value.(uint64))
-	case mysql.TypeEnum, mysql.TypeSet:
-		val, err := col.Value.(json.Number).Int64()
-		if err != nil {
-			log.Panic("invalid column value for enum, please report a bug",
-				zap.Any("col", c), zap.Error(err))
-		}
-		col.Value = uint64(val)
-	case mysql.TypeTiDBVectorFloat32:
-	default:
-	}
-	return col
-}
-
 // formatColumn formats a codec column.
 // todo: can we make this a method of the `column` ?
 func formatColumn(c column) column {

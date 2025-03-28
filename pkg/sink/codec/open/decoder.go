@@ -20,9 +20,10 @@ import (
 	"encoding/json"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	tiTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"path/filepath"
-	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -400,7 +401,40 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		col := new(timodel.ColumnInfo)
 		col.ID = nextColumnID
 		col.Name = pmodel.NewCIStr(name)
-		col.FieldType = raw.Flag
+		col.FieldType = *types.NewFieldType(raw.Type)
+		if raw.Flag.IsUnsigned() {
+			col.AddFlag(mysql.BinaryFlag)
+			col.SetCharset("binary")
+			col.SetCollate("binary")
+		}
+		if raw.Flag.IsPrimaryKey() {
+			col.AddFlag(mysql.PriKeyFlag)
+			col.AddFlag(mysql.UniqueKeyFlag)
+			col.AddFlag(mysql.NotNullFlag)
+		}
+		if raw.Flag.IsUnsigned() {
+			col.AddFlag(mysql.UnsignedFlag)
+		}
+		//if strings.HasPrefix(mysqlType, "char") ||
+		//	strings.HasPrefix(mysqlType, "varchar") ||
+		//	strings.Contains(mysqlType, "text") ||
+		//	strings.Contains(mysqlType, "enum") ||
+		//	strings.Contains(mysqlType, "set") {
+		//	col.SetCharset("utf8mb4")
+		//	col.SetCollate("utf8mb4_bin")
+		//}
+		//flen, decimal := common.ExtractFlenDecimal(mysqlType)
+		//col.FieldType.SetFlen(flen)
+		//col.FieldType.SetDecimal(decimal)
+		//switch basicType {
+		//case mysql.TypeEnum, mysql.TypeSet:
+		//	elements := common.ExtractElements(mysqlType)
+		//	col.SetElems(elements)
+		//case mysql.TypeDuration:
+		//	decimal = common.ExtractDecimal(mysqlType)
+		//	col.FieldType.SetDecimal(decimal)
+		//default:
+		//}
 		nextColumnID++
 		result = append(result, col)
 	}
@@ -443,11 +477,15 @@ func (b *BatchDecoder) assembleDMLEvent(key *messageKey, value *messageRow) *com
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	columns := tableInfo.GetColumns()
 	if len(value.Delete) != 0 {
+		appendRow2Chunk(value.Delete, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
 	} else if len(value.Update) != 0 && len(value.PreColumns) != 0 {
+		appendRow2Chunk(value.PreColumns, columns, chk)
+		appendRow2Chunk(value.Update, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 	} else if len(value.Update) != 0 {
+		appendRow2Chunk(value.Update, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
 	} else {
 		log.Panic("unknown event type")
@@ -455,35 +493,56 @@ func (b *BatchDecoder) assembleDMLEvent(key *messageKey, value *messageRow) *com
 
 	result.Rows = chk
 	return result
-
-	//if len(value.Delete) != 0 {
-	//	preCols := codecColumns2RowChangeColumns(value.Delete)
-	//	indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(preCols)
-	//	e.TableInfo = model.BuildTableInfo(key.Schema, key.Table, preCols, indexColumns)
-	//	e.PreColumns = model.Columns2ColumnDatas(preCols, e.TableInfo)
-	//} else {
-	//	cols := codecColumns2RowChangeColumns(value.Update)
-	//	preCols := codecColumns2RowChangeColumns(value.PreColumns)
-	//	indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(cols)
-	//	e.TableInfo = model.BuildTableInfo(key.Schema, key.Table, cols, indexColumns)
-	//	e.Columns = model.Columns2ColumnDatas(cols, e.TableInfo)
-	//	e.PreColumns = model.Columns2ColumnDatas(preCols, e.TableInfo)
-	//}
-	//
-	//return e
 }
 
-//func codecColumns2RowChangeColumns(cols map[string]column) []*commonType.Column {
-//	if len(cols) == 0 {
-//		return nil
-//	}
-//	columns := make([]*commonType.Column, 0, len(cols))
-//	for name, col := range cols {
-//		c := col.toRowChangeColumn(name)
-//		columns = append(columns, c)
-//	}
-//	sort.Slice(columns, func(i, j int) bool {
-//		return columns[i].Name < columns[j].Name
-//	})
-//	return columns
-//}
+func appendRow2Chunk(rawColumns map[string]column, columns []*timodel.ColumnInfo, chk *chunk.Chunk) {
+	for idx, col := range columns {
+		raw := rawColumns[col.Name.O]
+		appendCol2Chunk(idx, raw.Value, col.FieldType, chk)
+	}
+}
+
+func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Chunk) {
+	if raw == nil {
+		chk.AppendNull(idx)
+		return
+	}
+	switch ft.GetType() {
+	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
+		str := raw.(string)
+		var err error
+		if mysql.HasBinaryFlag(ft.GetFlag()) {
+			str, err = strconv.Unquote("\"" + str + "\"")
+			if err != nil {
+				log.Panic("invalid column value, please report a bug", zap.Any("value", raw), zap.Error(err))
+			}
+		}
+		chk.AppendBytes(idx, []byte(str))
+	case mysql.TypeFloat:
+		chk.AppendFloat32(idx, float32(raw.(float64)))
+	case mysql.TypeDouble:
+		chk.AppendFloat64(idx, raw.(float64))
+	case mysql.TypeYear:
+		chk.AppendInt64(idx, int64(raw.(uint64)))
+	case mysql.TypeEnum:
+		val, err := raw.(json.Number).Int64()
+		if err != nil {
+			log.Panic("invalid column value for enum, please report a bug",
+				zap.Any("value", raw), zap.Error(err))
+		}
+		log.Info("how to handle enum ?", zap.Any("value", val))
+		var enum tiTypes.Enum
+		chk.AppendEnum(idx, enum)
+	case mysql.TypeSet:
+		val, err := raw.(json.Number).Int64()
+		if err != nil {
+			log.Panic("invalid column value for enum, please report a bug",
+				zap.Any("value", raw), zap.Error(err))
+		}
+		log.Info("how to handle set	?", zap.Any("value", val))
+		var setValue tiTypes.Set
+		chk.AppendSet(idx, setValue)
+	default:
+		log.Panic("meet unknown type", zap.Any("type", ft.GetType()), zap.Any("value", raw))
+	}
+}

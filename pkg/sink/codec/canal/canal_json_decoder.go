@@ -405,7 +405,6 @@ func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEv
 }
 
 func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Chunk) {
-	mysqlType := ft.GetType()
 	if raw == nil {
 		chk.AppendNull(idx)
 		return
@@ -423,7 +422,7 @@ func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Ch
 		}
 		rawValue = encoded
 	}
-	switch mysqlType {
+	switch ft.GetType() {
 	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
 		if mysql.HasUnsignedFlag(ft.GetFlag()) {
 			value, err := strconv.ParseUint(rawValue, 10, 64)
@@ -536,7 +535,7 @@ func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Ch
 		}
 		chk.AppendVectorFloat32(idx, value)
 	default:
-		log.Panic("unknown column type", zap.Any("mysqlType", mysqlType), zap.Any("rawValue", rawValue))
+		log.Panic("unknown column type", zap.Any("mysqlType", ft.GetType()), zap.Any("rawValue", rawValue))
 	}
 }
 
