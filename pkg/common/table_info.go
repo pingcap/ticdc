@@ -185,10 +185,6 @@ func (ti *TableInfo) UpdateTS() uint64 {
 	return ti.columnSchema.UpdateTS
 }
 
-func (ti *TableInfo) GetColumnsFlag() map[int64]uint {
-	return ti.columnSchema.ColumnsFlag
-}
-
 func (ti *TableInfo) GetPreInsertSQL() string {
 	if ti.preSQLs.m[preSQLInsert] == "" {
 		log.Panic("preSQLs[preSQLInsert] is not initialized")
@@ -232,11 +228,11 @@ func (ti *TableInfo) ForceGetColumnInfo(colID int64) *model.ColumnInfo {
 // ForceGetColumnFlagType return the column flag type by ID
 // Caller must ensure `colID` exists
 func (ti *TableInfo) ForceGetColumnFlagType(colID int64) uint {
-	flag, ok := ti.columnSchema.ColumnsFlag[colID]
-	if !ok {
+	info, exist := ti.GetColumnInfo(colID)
+	if !exist {
 		log.Panic("invalid column id", zap.Int64("columnID", colID))
 	}
-	return flag
+	return info.GetFlag()
 }
 
 // ForceGetColumnName return the column name by ID
@@ -294,10 +290,6 @@ func (ti *TableInfo) GetFieldSlice() []*types.FieldType {
 // The column order in the result is the same as the order in its corresponding RowChangedEvent
 func (ti *TableInfo) GetColInfosForRowChangedEvent() []rowcodec.ColInfo {
 	return *ti.columnSchema.RowColInfosWithoutVirtualCols
-}
-
-func (ti *TableInfo) GetColumnFlags() map[int64]uint {
-	return ti.columnSchema.ColumnsFlag
 }
 
 // IsColCDCVisible returns whether the col is visible for CDC

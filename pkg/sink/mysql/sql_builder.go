@@ -176,7 +176,7 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceRe
 func getArgs(row *chunk.Row, tableInfo *common.TableInfo, enableGeneratedColumn bool) ([]interface{}, error) {
 	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
 	for i, col := range tableInfo.GetColumns() {
-		if col == nil || ((tableInfo.GetColumnFlags()[col.ID]&mysql.GeneratedColumnFlag) > 0 && !enableGeneratedColumn) {
+		if col == nil || ((col.GetFlag()&mysql.GeneratedColumnFlag) > 0 && !enableGeneratedColumn) {
 			continue
 		}
 		v, err := common.FormatColVal(row, col, i)
@@ -194,7 +194,7 @@ func whereSlice(row *chunk.Row, tableInfo *common.TableInfo, forceReplicate bool
 	colNames := make([]string, 0, len(tableInfo.GetColumns()))
 	// Try to use unique key values when available
 	for i, col := range tableInfo.GetColumns() {
-		if col == nil || !common.HasHandleKeyFlag(tableInfo.GetColumnFlags()[col.ID]) {
+		if col == nil || !common.HasHandleKeyFlag(col.GetFlag()) {
 			continue
 		}
 		colNames = append(colNames, col.Name.O)

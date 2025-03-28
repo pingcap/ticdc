@@ -139,7 +139,7 @@ func columnData2Column(col *timodel.ColumnData, tableInfo *common.TableInfo) *co
 		Type:      colInfo.GetType(),
 		Charset:   colInfo.GetCharset(),
 		Collation: colInfo.GetCollate(),
-		Flag:      tableInfo.GetColumnsFlag()[colID],
+		Flag:      colInfo.GetFlag(),
 		Value:     col.Value,
 		Default:   common.GetColumnDefaultValue(colInfo),
 	}

@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/table/tables"
-	"github.com/pingcap/tidb/pkg/types"
 	datumTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"go.uber.org/zap"
@@ -354,8 +353,6 @@ type columnSchema struct {
 	// ColumnID -> offset in RowChangedEvents.Columns.
 	RowColumnsOffset map[int64]int `json:"row_columns_offset"`
 
-	ColumnsFlag map[int64]uint `json:"columns_flag"`
-
 	// the mounter will choose this index to output delete events
 	// special value:
 	// HandleIndexPKIsHandle(-1) : pk is handle
@@ -440,7 +437,6 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		ColumnsOffset:    make(map[int64]int, len(tableInfo.Columns)),
 		NameToColID:      make(map[string]int64, len(tableInfo.Columns)),
 		RowColumnsOffset: make(map[int64]int, len(tableInfo.Columns)),
-		ColumnsFlag:      make(map[int64]uint, len(tableInfo.Columns)),
 		HandleColID:      []int64{-1},
 		HandleIndexID:    HandleIndexTableIneligible,
 		RowColInfos:      make([]rowcodec.ColInfo, len(tableInfo.Columns)),
@@ -510,7 +506,6 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 	}
 	colSchema.initRowColInfosWithoutVirtualCols()
 	colSchema.findHandleIndex(tableInfo.Name.O)
-	colSchema.initColumnsFlag()
 
 	colSchema.InitPreSQLs(tableInfo.Name.O)
 	return colSchema
@@ -641,45 +636,6 @@ func (s *columnSchema) findHandleIndex(tableName string) {
 	}
 }
 
-func (s *columnSchema) initColumnsFlag() {
-	for _, colInfo := range s.Columns {
-		if colInfo.GetCharset() == "binary" {
-			colInfo.AddFlag(mysql.BinaryFlag)
-		}
-		if colInfo.IsGenerated() {
-			colInfo.AddFlag(mysql.GeneratedColumnFlag)
-		}
-		s.ColumnsFlag[colInfo.ID] = colInfo.GetFlag()
-	}
-
-	// In TiDB, just as in MySQL, only the first column of an index can be marked as "multiple key" or "unique key",
-	// and only the first column of a unique index may be marked as "unique key".
-	// See https://dev.mysql.com/doc/refman/5.7/en/show-columns.html.
-	// Yet if an index has multiple columns, we would like to easily determine that all those columns are indexed,
-	// which is crucial for the completeness of the information we pass to the downstream.
-	// Therefore, instead of using the MySQL standard,
-	// we made our own decision to mark all columns in an index with the appropriate flag(s).
-	for _, idxInfo := range s.Indices {
-		for _, idxCol := range idxInfo.Columns {
-			colInfo := s.Columns[idxCol.Offset]
-			flag := s.ColumnsFlag[colInfo.ID]
-			if idxInfo.Primary {
-				types.SetTypeFlag(&flag, mysql.PriKeyFlag, true)
-			} else if idxInfo.Unique {
-				types.SetTypeFlag(&flag, mysql.UniqueKeyFlag, true)
-			}
-			if len(idxInfo.Columns) > 1 {
-				types.SetTypeFlag(&flag, mysql.MultipleKeyFlag, true)
-			}
-			if idxInfo.ID == s.HandleIndexID && s.HandleIndexID >= 0 {
-				// FIXME: hanldkey flag
-				types.SetTypeFlag(&flag, mysql.PriKeyFlag, true)
-			}
-			s.ColumnsFlag[colInfo.ID] = flag
-		}
-	}
-}
-
 // IsIndexUnique returns whether the index is unique and all columns are not null
 func (s *columnSchema) IsIndexUniqueAndNotNull(indexInfo *model.IndexInfo) bool {
 	if indexInfo.Primary {
@@ -802,7 +758,7 @@ func (s *columnSchema) getColumnList(isUpdate bool) (int, string) {
 	var b strings.Builder
 	nonGeneratedColumnCount := 0
 	for i, col := range s.Columns {
-		if col == nil || (s.ColumnsFlag[col.ID]&mysql.GeneratedColumnFlag) > 0 {
+		if col == nil || (col.GetFlag()&mysql.GeneratedColumnFlag) > 0 {
 			continue
 		}
 		nonGeneratedColumnCount++
@@ -829,7 +785,6 @@ func (s *columnSchema) getColumnSchemaWithoutVirtualColumns() *columnSchema {
 		NameToColID:                   s.NameToColID,
 		HasUniqueColumn:               s.HasUniqueColumn,
 		RowColumnsOffset:              s.RowColumnsOffset,
-		ColumnsFlag:                   s.ColumnsFlag,
 		HandleIndexID:                 s.HandleIndexID,
 		IndexColumnsOffset:            s.IndexColumnsOffset,
 		RowColInfos:                   s.RowColInfos,

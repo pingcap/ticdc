@@ -61,7 +61,7 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonE
 			if col == nil {
 				continue
 			}
-			if common.HasHandleKeyFlag(tableInfo.GetColumnFlags()[col.ID]) {
+			if common.HasHandleKeyFlag(col.GetFlag()) {
 				value, err := common.FormatColVal(&rowData, col, idx)
 				if err != nil {
 					// FIXME:

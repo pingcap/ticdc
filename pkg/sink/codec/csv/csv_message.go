@@ -394,7 +394,7 @@ func rowChangeColumns2CSVColumns(csvConfig *common.Config, row *chunk.Row, table
 			continue
 		}
 
-		flag := tableInfo.GetColumnFlags()[col.ID]
+		flag := col.GetFlag()
 		converted, err := fromColValToCsvVal(csvConfig, row, i, col, flag)
 		if err != nil {
 			return nil, errors.Trace(err)
