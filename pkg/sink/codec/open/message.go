@@ -21,7 +21,6 @@ import (
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -43,8 +42,11 @@ type messageKey struct {
 }
 
 // Decode codes a message key from a byte slice.
-func (m *messageKey) Decode(data []byte) error {
-	return errors.WrapError(errors.ErrUnmarshalFailed, json.Unmarshal(data, m))
+func (m *messageKey) Decode(data []byte) {
+	err := json.Unmarshal(data, m)
+	if err != nil {
+		log.Panic("decode message key failed", zap.Any("data", data), zap.Error(err))
+	}
 }
 
 // column is a type only used in codec internally.
@@ -151,12 +153,12 @@ type messageRow struct {
 	Delete     map[string]column `json:"d,omitempty"`
 }
 
-func (m *messageRow) decode(data []byte) error {
+func (m *messageRow) decode(data []byte) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	err := decoder.Decode(m)
 	if err != nil {
-		return errors.WrapError(errors.ErrUnmarshalFailed, err)
+		log.Panic("decode message row failed", zap.Any("data", data), zap.Error(err))
 	}
 	for name, col := range m.Update {
 		m.Update[name] = formatColumn(col)
@@ -167,7 +169,6 @@ func (m *messageRow) decode(data []byte) error {
 	for name, col := range m.PreColumns {
 		m.PreColumns[name] = formatColumn(col)
 	}
-	return nil
 }
 
 type messageDDL struct {
@@ -175,6 +176,9 @@ type messageDDL struct {
 	Type  model.ActionType `json:"t"`
 }
 
-func (m *messageDDL) decode(data []byte) error {
-	return errors.WrapError(errors.ErrUnmarshalFailed, json.Unmarshal(data, m))
+func (m *messageDDL) decode(data []byte) {
+	err := json.Unmarshal(data, m)
+	if err != nil {
+		log.Panic("decode message DDL failed", zap.Any("data", data), zap.Error(err))
+	}
 }

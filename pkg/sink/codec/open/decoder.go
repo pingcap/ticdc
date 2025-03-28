@@ -115,18 +115,14 @@ func (b *BatchDecoder) hasNext() bool {
 	return false
 }
 
-func (b *BatchDecoder) decodeNextKey() error {
+func (b *BatchDecoder) decodeNextKey() {
 	keyLen := binary.BigEndian.Uint64(b.keyBytes[:8])
 	key := b.keyBytes[8 : keyLen+8]
 	msgKey := new(messageKey)
-	err := msgKey.Decode(key)
-	if err != nil {
-		return err
-	}
+	msgKey.Decode(key)
 	b.nextKey = msgKey
 
 	b.keyBytes = b.keyBytes[keyLen+8:]
-	return nil
 }
 
 // HasNext implements the RowEventDecoder interface
@@ -134,9 +130,7 @@ func (b *BatchDecoder) HasNext() (common.MessageType, bool, error) {
 	if !b.hasNext() {
 		return 0, false, nil
 	}
-	if err := b.decodeNextKey(); err != nil {
-		return 0, false, err
-	}
+	b.decodeNextKey()
 
 	if b.nextKey.Type == common.MessageTypeRow {
 		valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
@@ -146,12 +140,11 @@ func (b *BatchDecoder) HasNext() (common.MessageType, bool, error) {
 		rowMsg := new(messageRow)
 		value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 		if err != nil {
-			return common.MessageTypeUnknown, false, cerror.ErrOpenProtocolCodecInvalidData.
-				GenWithStack("decompress data failed")
+			log.Panic("decompress failed",
+				zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+				zap.Any("value", value), zap.Error(err))
 		}
-		if err = rowMsg.decode(value); err != nil {
-			return b.nextKey.Type, false, err
-		}
+		rowMsg.decode(value)
 		b.nextEvent = b.msgToRowChange(b.nextKey, rowMsg)
 	}
 
@@ -186,10 +179,7 @@ func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	}
 
 	m := new(messageDDL)
-	if err = m.decode(value); err != nil {
-		return nil, err
-	}
-
+	m.decode(value)
 	result := new(commonEvent.DDLEvent)
 	result.Query = m.Query
 	result.Type = byte(m.Type)
@@ -201,7 +191,7 @@ func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	return result, nil
 }
 
-// NextRowChangedEvent implements the RowEventDecoder interface
+// NextDMLEvent implements the RowEventDecoder interface
 func (b *BatchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	if b.nextKey.Type != common.MessageTypeRow {
 		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found row event message")
