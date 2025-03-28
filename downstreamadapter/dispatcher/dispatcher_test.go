@@ -363,7 +363,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	// ===== sync point event =====
 
 	syncPointEvent := &commonEvent.SyncPointEvent{
-		CommitTs: 6,
+		CommitTsList: []uint64{6},
 	}
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, syncPointEvent)}, callback)
 	require.Equal(t, true, block)
@@ -380,7 +380,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	// receive the ack info
 	dispatcherStatus = &heartbeatpb.DispatcherStatus{
 		Ack: &heartbeatpb.ACK{
-			CommitTs:    syncPointEvent.CommitTs,
+			CommitTs:    syncPointEvent.GetCommitTs(),
 			IsSyncPoint: true,
 		},
 	}
@@ -394,7 +394,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	dispatcherStatus = &heartbeatpb.DispatcherStatus{
 		Action: &heartbeatpb.DispatcherAction{
 			Action:      heartbeatpb.Action_Pass,
-			CommitTs:    syncPointEvent.CommitTs,
+			CommitTs:    syncPointEvent.GetCommitTs(),
 			IsSyncPoint: true,
 		},
 	}

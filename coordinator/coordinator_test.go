@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -475,6 +476,132 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 			co.controller.changefeedDB.GetStoppedSize() == 2 &&
 			co.controller.operatorController.OperatorSize() == 0
 	}, waitTime, time.Millisecond*5)
+}
+
+func TestConcurrentStopAndSendEvents(t *testing.T) {
+	// Setup context
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Initialize node info
+	info := node.NewInfo("127.0.0.1:28600", "")
+	etcdClient := newMockEtcdClient(string(info.ID))
+	nodeManager := watcher.NewNodeManager(nil, etcdClient)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+	nodeManager.GetAliveNodes()[info.ID] = info
+
+	// Initialize message center
+	mc := messaging.NewMessageCenter(ctx, info.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc.Run(ctx)
+	defer mc.Close()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	// Initialize backend
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper{}, nil).AnyTimes()
+
+	// Create coordinator
+	cr := New(info, &mockPdClient{}, pdutil.NewClock4Test(), backend, "test-gc-service", 100, 10000, time.Millisecond*10)
+	co := cr.(*coordinator)
+
+	// Number of goroutines for each operation
+	const (
+		sendEventGoroutines = 10
+		stopGoroutines      = 5
+		eventsPerGoroutine  = 100
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(sendEventGoroutines + stopGoroutines)
+
+	// Start the coordinator
+	ctxRun, cancelRun := context.WithCancel(ctx)
+	go func() {
+		err := cr.Run(ctxRun)
+		if err != nil && err != context.Canceled {
+			t.Errorf("Coordinator Run returned unexpected error: %v", err)
+		}
+	}()
+
+	// Give coordinator some time to initialize
+	time.Sleep(100 * time.Millisecond)
+
+	// Start goroutines to send events
+	for i := 0; i < sendEventGoroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			defer func() {
+				// Recover from potential panics
+				if r := recover(); r != nil {
+					t.Errorf("Panic in send event goroutine %d: %v", id, r)
+				}
+			}()
+
+			for j := 0; j < eventsPerGoroutine; j++ {
+				// Try to send an event
+				if co.closed.Load() {
+					// Coordinator is already closed, stop sending
+					return
+				}
+
+				msg := &messaging.TargetMessage{
+					Topic: messaging.CoordinatorTopic,
+					Type:  messaging.TypeMaintainerHeartbeatRequest,
+				}
+
+				// Use recvMessages to send event to channel
+				err := co.recvMessages(ctx, msg)
+				if err != nil && err != context.Canceled {
+					t.Logf("Failed to send event in goroutine %d: %v", id, err)
+				}
+
+				// Small sleep to increase chance of race conditions
+				time.Sleep(time.Millisecond)
+			}
+		}(i)
+	}
+
+	// Start goroutines to stop the coordinator
+	for i := 0; i < stopGoroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			// Small delay to ensure some events are sent first
+			time.Sleep(time.Duration(10+id*5) * time.Millisecond)
+			co.Stop()
+		}(i)
+	}
+
+	// Wait for all goroutines to complete
+	wg.Wait()
+
+	// Cancel the context to ensure the coordinator stops
+	cancelRun()
+
+	// Give some time for the coordinator to fully stop
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify that the coordinator is closed
+	require.True(t, co.closed.Load())
+
+	// Verify that event channel is closed
+	select {
+	case _, ok := <-co.eventCh.Out():
+		require.False(t, ok, "Event channel should be closed")
+	default:
+		// Channel might be already drained, which is fine
+	}
+
+	// Try sending another event - should not panic but may return error
+	msg := &messaging.TargetMessage{
+		Topic: messaging.CoordinatorTopic,
+		Type:  messaging.TypeMaintainerHeartbeatRequest,
+	}
+
+	err := co.recvMessages(ctx, msg)
+	require.NoError(t, err)
+	require.True(t, co.closed.Load())
 }
 
 type maintainNode struct {

@@ -55,7 +55,7 @@ mysql_groups=(
 	# G12
 	'tidb_mysql_test'
 	# G13
-	'fail_over' 'region_merge'
+	'fail_over region_merge'
 	# G14
 	'fail_over_ddl_mix'
 	# G15

@@ -116,36 +116,36 @@ func (s *remoteMessageTarget) Epoch() uint64 {
 func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 	if !s.eventSender.ready.Load() {
 		s.connectionNotfoundErrorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: "Stream has not been initialized"}
+		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has not been initialized, target: %s", s.targetId)}
 	}
 	select {
 	case <-s.ctx.Done():
 		s.connectionNotfoundErrorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: "Stream has been closed"}
+		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has been closed, target: %s", s.targetId)}
 	case s.sendEventCh <- s.newMessage(msg...):
 		s.sendEventCounter.Add(float64(len(msg)))
 		return nil
 	default:
 		s.congestedEventErrorCounter.Inc()
-		return AppError{Type: ErrorTypeMessageCongested, Reason: "Send event message is congested"}
+		return AppError{Type: ErrorTypeMessageCongested, Reason: fmt.Sprintf("Send event message is congested, target: %s", s.targetId)}
 	}
 }
 
 func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
 	if !s.commandSender.ready.Load() {
 		s.connectionNotfoundErrorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: "Stream has not been initialized"}
+		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has not been initialized, target: %s", s.targetId)}
 	}
 	select {
 	case <-s.ctx.Done():
 		s.connectionNotfoundErrorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: "Stream has been closed"}
+		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has been closed, target: %s", s.targetId)}
 	case s.sendCmdCh <- s.newMessage(msg...):
 		s.sendCmdCounter.Add(float64(len(msg)))
 		return nil
 	default:
 		s.congestedCmdErrorCounter.Inc()
-		return AppError{Type: ErrorTypeMessageCongested, Reason: "Send command message is congested"}
+		return AppError{Type: ErrorTypeMessageCongested, Reason: fmt.Sprintf("Send command message is congested, target: %s", s.targetId)}
 	}
 }
 

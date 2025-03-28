@@ -14,7 +14,6 @@ message Message {
     int32 type = 5;
     // topic is the destination of the message, it is used to route the message to the correct handler.
     string topic = 6;
-    // TODO, change to real types
     repeated bytes payload = 7;
 }
 

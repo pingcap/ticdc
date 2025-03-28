@@ -257,7 +257,7 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	defer db.Close()
 
 	syncPointEvent := &commonEvent.SyncPointEvent{
-		CommitTs: 1,
+		CommitTsList: []uint64{1},
 	}
 	tableSchemaStore := util.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
 	writer.SetTableSchemaStore(tableSchemaStore)
@@ -310,7 +310,7 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	syncPointEvent = &commonEvent.SyncPointEvent{
-		CommitTs: 2,
+		CommitTsList: []uint64{2},
 	}
 
 	mock.ExpectBegin()
@@ -321,6 +321,25 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint) VALUES ('default', 'test/test', '2', 0, '', '', 1, 1) ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), created_at=NOW(), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err = writer.FlushSyncPointEvent(syncPointEvent)
+	require.NoError(t, err)
+
+	// flush multiple sync point events
+
+	syncPointEvent = &commonEvent.SyncPointEvent{
+		CommitTsList: []uint64{3, 4, 5},
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("select @@tidb_current_ts").WillReturnRows(sqlmock.NewRows([]string{"@@tidb_current_ts"}).AddRow(3))
+	mock.ExpectExec("insert ignore into tidb_cdc.syncpoint_v1 (ticdc_cluster_id, changefeed, primary_ts, secondary_ts) VALUES ('default', 'test/test', 3, 3), ('default', 'test/test', 4, 3), ('default', 'test/test', 5, 3)").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("set global tidb_external_ts = 3").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint) VALUES ('default', 'test/test', '3', 0, '', '', 1, 1) ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), created_at=NOW(), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	err = writer.FlushSyncPointEvent(syncPointEvent)

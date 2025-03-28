@@ -31,9 +31,10 @@ import (
 func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, flag *common.ColumnFlagType) (string, JavaSQLType) {
 	colType := columnInfo.GetType()
 
-	var value string
-	var javaType JavaSQLType
-
+	var (
+		value    string
+		javaType JavaSQLType
+	)
 	switch colType {
 	case mysql.TypeBit:
 		javaType = JavaSQLTypeBIT

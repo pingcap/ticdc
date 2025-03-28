@@ -368,11 +368,23 @@ func TestApplyDDLJobs(t *testing.T) {
 		// test partition table related ddl
 		{
 			"partition table",
-			nil,
+			[]mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   100,
+						Name: pmodel.NewCIStr("test"),
+					},
+					tables: []*model.TableInfo{
+						{
+							ID:        200,
+							Name:      pmodel.NewCIStr("t1"),
+							Partition: buildPartitionDefinitionsForTest([]int64{201, 202, 203}),
+						},
+					},
+				},
+			},
 			func() []*model.Job {
 				return []*model.Job{
-					buildCreateSchemaJobForTest(100, "test", 1000),                                           // create schema 100
-					buildCreatePartitionTableJobForTest(100, 200, "t1", []int64{201, 202, 203}, 1010),        // create partition table 200
 					buildTruncatePartitionTableJobForTest(100, 200, 300, "t1", []int64{204, 205, 206}, 1020), // truncate partition table 200 to 300
 					buildAddPartitionJobForTest(100, 300, "t1", []int64{204, 205, 206, 207}, 1030),           // add partition 207
 					buildDropPartitionJobForTest(100, 300, "t1", []int64{205, 206, 207}, 1040),               // drop partition 204
@@ -401,16 +413,16 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 			map[int64][]uint64{
-				201: {1010, 1020},
-				202: {1010, 1020},
-				203: {1010, 1020},
+				201: {1020},
+				202: {1020},
+				203: {1020},
 				204: {1020, 1030, 1040},
 				205: {1020, 1030, 1040, 1050},
 				206: {1020, 1030, 1040, 1050},
 				207: {1030, 1040, 1050},
 				208: {1050},
 			},
-			[]uint64{1000, 1010, 1020, 1030, 1040, 1050},
+			[]uint64{1020, 1030, 1040, 1050},
 			[]PhysicalTableQueryTestCase{
 				{
 					snapTs: 1010,
@@ -516,11 +528,29 @@ func TestApplyDDLJobs(t *testing.T) {
 					limit:   1,
 					result: []commonEvent.DDLEvent{
 						{
-							Type:       byte(model.ActionCreateSchema),
-							FinishedTs: 1000,
+							Type:       byte(model.ActionTruncateTable),
+							FinishedTs: 1020,
 							BlockedTables: &commonEvent.InfluencedTables{
 								InfluenceType: commonEvent.InfluenceTypeNormal,
-								TableIDs:      []int64{0},
+								TableIDs:      []int64{0, 201, 202, 203},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{201, 202, 203},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID: 100,
+									TableID:  204,
+								},
+								{
+									SchemaID: 100,
+									TableID:  205,
+								},
+								{
+									SchemaID: 100,
+									TableID:  206,
+								},
 							},
 						},
 					},
@@ -529,36 +559,6 @@ func TestApplyDDLJobs(t *testing.T) {
 					startTs: 1000,
 					limit:   10,
 					result: []commonEvent.DDLEvent{
-						{
-							Type:       byte(model.ActionCreateTable),
-							FinishedTs: 1010,
-							BlockedTables: &commonEvent.InfluencedTables{
-								InfluenceType: commonEvent.InfluenceTypeNormal,
-								TableIDs:      []int64{0},
-							},
-							NeedAddedTables: []commonEvent.Table{
-								{
-									SchemaID: 100,
-									TableID:  201,
-								},
-								{
-									SchemaID: 100,
-									TableID:  202,
-								},
-								{
-									SchemaID: 100,
-									TableID:  203,
-								},
-							},
-							TableNameChange: &commonEvent.TableNameChange{
-								AddName: []commonEvent.SchemaTableName{
-									{
-										SchemaName: "test",
-										TableName:  "t1",
-									},
-								},
-							},
-						},
 						{
 							Type:       byte(model.ActionTruncateTable),
 							FinishedTs: 1020,
@@ -2119,14 +2119,23 @@ func TestRegisterTable(t *testing.T) {
 		tableID int64
 		snapTs  uint64
 		name    string
+		deleted bool
 	}
 	testCases := []struct {
-		initailDBInfos []mockDBInfo // tables in initailDBInfos will be registered before apply ddl
+		name           string
+		initialDBInfos []mockDBInfo
 		ddlJobs        []*model.Job
-		queryCases     []QueryTableInfoTestCase
+		// tables registered before apply ddl
+		// used for test to apply online ddl jobs
+		preDDLTables []int64
+		// tables registered after apply ddl
+		// used for test to load and apply ddls from disk
+		postDDLTables []int64
+		queryCases    []QueryTableInfoTestCase
 	}{
 		{
-			initailDBInfos: []mockDBInfo{
+			name: "rename table",
+			initialDBInfos: []mockDBInfo{
 				{
 					dbInfo: &model.DBInfo{
 						ID:   50,
@@ -2142,12 +2151,10 @@ func TestRegisterTable(t *testing.T) {
 			},
 			ddlJobs: func() []*model.Job {
 				return []*model.Job{
-					buildRenameTableJobForTest(50, 99, "t2", 1000, nil),                              // rename table 99 to t2
-					buildCreateTableJobForTest(50, 100, "t3", 1010),                                  // create table 100
-					buildTruncateTableJobForTest(50, 100, 101, "t3", 1020),                           // truncate table 100 to 101
-					buildCreatePartitionTableJobForTest(50, 102, "t4", []int64{201, 202, 203}, 1030), // create partition table 102
+					buildRenameTableJobForTest(50, 99, "t2", 1000, nil), // rename table 99 to t2
 				}
 			}(),
+			postDDLTables: []int64{99},
 			queryCases: []QueryTableInfoTestCase{
 				{
 					tableID: 99,
@@ -2159,6 +2166,26 @@ func TestRegisterTable(t *testing.T) {
 					snapTs:  1000,
 					name:    "t2",
 				},
+			},
+		},
+		{
+			name: "truncate table",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+			},
+			ddlJobs: func() []*model.Job {
+				return []*model.Job{
+					buildCreateTableJobForTest(50, 100, "t3", 1010),        // create table 100
+					buildTruncateTableJobForTest(50, 100, 101, "t3", 1020), // truncate table 100 to 101
+				}
+			}(),
+			postDDLTables: []int64{100, 101},
+			queryCases: []QueryTableInfoTestCase{
 				{
 					tableID: 100,
 					snapTs:  1010,
@@ -2169,6 +2196,25 @@ func TestRegisterTable(t *testing.T) {
 					snapTs:  1020,
 					name:    "t3",
 				},
+			},
+		},
+		{
+			name: "create partition table",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: pmodel.NewCIStr("test"),
+					},
+				},
+			},
+			ddlJobs: func() []*model.Job {
+				return []*model.Job{
+					buildCreatePartitionTableJobForTest(50, 102, "t4", []int64{201, 202, 203}, 1030), // create partition table 102
+				}
+			}(),
+			postDDLTables: []int64{201, 202, 203},
+			queryCases: []QueryTableInfoTestCase{
 				{
 					tableID: 201,
 					snapTs:  1030,
@@ -2186,26 +2232,83 @@ func TestRegisterTable(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "drop partition table",
+			initialDBInfos: []mockDBInfo{
+				{
+					dbInfo: &model.DBInfo{
+						ID:   50,
+						Name: pmodel.NewCIStr("test"),
+					},
+					tables: []*model.TableInfo{
+						{
+							ID:        102,
+							Name:      pmodel.NewCIStr("t1"),
+							Partition: buildPartitionDefinitionsForTest([]int64{201, 202, 203}),
+						},
+					},
+				},
+			},
+			preDDLTables: []int64{201, 202, 203},
+			ddlJobs: func() []*model.Job {
+				return []*model.Job{
+					buildDropPartitionTableJobForTest(50, 102, "t4", []int64{201, 202, 203}, 1030), // drop partition table 102
+				}
+			}(),
+			queryCases: []QueryTableInfoTestCase{
+				{
+					tableID: 201,
+					snapTs:  1029,
+					name:    "t1",
+				},
+				{
+					tableID: 202,
+					snapTs:  1029,
+					name:    "t1",
+				},
+				{
+					tableID: 203,
+					snapTs:  1029,
+					name:    "t1",
+				},
+				{
+					tableID: 201,
+					snapTs:  1030,
+					deleted: true,
+				},
+			},
+		},
 	}
 	for _, tt := range testCases {
-		dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
-		pStorage := newPersistentStorageForTest(dbPath, tt.initailDBInfos)
-		for _, db := range tt.initailDBInfos {
-			for _, table := range db.tables {
-				pStorage.registerTable(table.ID, 0) // second arguments is not important
+		t.Run(tt.name, func(t *testing.T) {
+			dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
+			pStorage := newPersistentStorageForTest(dbPath, tt.initialDBInfos)
+			for _, tableID := range tt.preDDLTables {
+				err := pStorage.registerTable(tableID, 0) // second arguments is not important
+				require.Nil(t, err)
 			}
-		}
-		for _, job := range tt.ddlJobs {
-			err := pStorage.handleDDLJob(job)
-			require.Nil(t, err)
-		}
-		for _, testCase := range tt.queryCases {
-			pStorage.registerTable(testCase.tableID, 0) // second arguments is not important
-			tableInfo, err := pStorage.getTableInfo(testCase.tableID, testCase.snapTs)
-			require.Nil(t, err)
-			require.Equal(t, testCase.name, tableInfo.TableName.Table)
-		}
-		pStorage.close()
+			for _, job := range tt.ddlJobs {
+				err := pStorage.handleDDLJob(job)
+				require.Nil(t, err)
+			}
+			for _, tableID := range tt.postDDLTables {
+				err := pStorage.registerTable(tableID, 0) // second arguments is not important
+				require.Nil(t, err)
+			}
+			for _, testCase := range tt.queryCases {
+				tableInfo, err := pStorage.getTableInfo(testCase.tableID, testCase.snapTs)
+				if testCase.deleted {
+					require.Nil(t, tableInfo)
+					if _, ok := err.(*TableDeletedError); !ok {
+						t.Error("expect TableDeletedError, but got", err)
+					}
+				} else {
+					require.Nil(t, err)
+					require.Equal(t, testCase.name, tableInfo.TableName.Table)
+				}
+			}
+			pStorage.close()
+		})
 	}
 }
 
