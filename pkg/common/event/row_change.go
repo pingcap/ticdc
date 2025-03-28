@@ -14,17 +14,12 @@
 package event
 
 import (
-	"unsafe"
-
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	timodel "github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/integrity"
-	"go.uber.org/zap"
 )
 
 //go:generate msgp
@@ -70,67 +65,6 @@ func (r *RowChangedEvent) GetColumns() []*common.Column {
 	return r.Columns
 }
 
-// GetPreColumns returns the pre columns of the event
-func (r *RowChangedEvent) GetPreColumns() []*common.Column {
-	return r.PreColumns
-}
-
-func (r *RowChangedEvent) ApproximateBytes() int {
-	const sizeOfRowEvent = int(unsafe.Sizeof(*r))
-	const sizeOfTable = int(unsafe.Sizeof(*r.TableInfo))
-	const sizeOfInt = int(unsafe.Sizeof(int(0)))
-	size := sizeOfRowEvent + sizeOfTable + 2*sizeOfInt
-
-	// Size of cols
-	for i := range r.Columns {
-		size += r.Columns[i].ApproximateBytes
-	}
-	// Size of pre cols
-	for i := range r.PreColumns {
-		if r.PreColumns[i] != nil {
-			size += r.PreColumns[i].ApproximateBytes
-		}
-	}
-	return size
-}
-
-func ColumnDatas2Columns(cols []*timodel.ColumnData, tableInfo *common.TableInfo) []*common.Column {
-	if cols == nil {
-		return nil
-	}
-	columns := make([]*common.Column, len(cols))
-	for i, colData := range cols {
-		if colData == nil {
-			log.Warn("meet nil column data, should not happened in production env",
-				zap.Any("cols", cols),
-				zap.Any("tableInfo", tableInfo))
-			continue
-		}
-		columns[i] = columnData2Column(colData, tableInfo)
-	}
-	return columns
-}
-
-func columnData2Column(col *timodel.ColumnData, tableInfo *common.TableInfo) *common.Column {
-	colID := col.ColumnID
-	offset, ok := tableInfo.GetColumnsOffset()[colID]
-	if !ok {
-		log.Warn("invalid column id",
-			zap.Int64("columnID", colID),
-			zap.Any("tableInfo", tableInfo))
-	}
-	colInfo := tableInfo.GetColumns()[offset]
-	return &common.Column{
-		Name:      colInfo.Name.O,
-		Type:      colInfo.GetType(),
-		Charset:   colInfo.GetCharset(),
-		Collation: colInfo.GetCollate(),
-		Flag:      colInfo.GetFlag(),
-		Value:     col.Value,
-		Default:   common.GetColumnDefaultValue(colInfo),
-	}
-}
-
 // IsDelete returns true if the row is a delete event
 func (r *RowChangedEvent) IsDelete() bool {
 	return len(r.PreColumns) != 0 && len(r.Columns) == 0
@@ -144,51 +78,6 @@ func (r *RowChangedEvent) IsInsert() bool {
 // IsUpdate returns true if the row is an update event
 func (r *RowChangedEvent) IsUpdate() bool {
 	return len(r.PreColumns) != 0 && len(r.Columns) != 0
-}
-
-// HandleKeyColInfos returns the column(s) and colInfo(s) corresponding to the handle key(s)
-func (r *RowChangedEvent) HandleKeyColInfos() ([]*common.Column, []rowcodec.ColInfo) {
-	pkeyCols := make([]*common.Column, 0)
-	pkeyColInfos := make([]rowcodec.ColInfo, 0)
-
-	var cols []*common.Column
-	if r.IsDelete() {
-		cols = r.PreColumns
-	} else {
-		cols = r.Columns
-	}
-
-	tableInfo := r.TableInfo
-	colInfos := tableInfo.GetColInfosForRowChangedEvent()
-	for i, col := range cols {
-		if col != nil && common.HasHandleKeyFlag(col.Flag) {
-			pkeyCols = append(pkeyCols, col)
-			pkeyColInfos = append(pkeyColInfos, colInfos[i])
-		}
-	}
-
-	// It is okay not to have handle keys, so the empty array is an acceptable result
-	return pkeyCols, pkeyColInfos
-}
-
-// PrimaryKeyColumnNames return all primary key's name
-func (r *RowChangedEvent) PrimaryKeyColumnNames() []string {
-	var result []string
-
-	var cols []*common.Column
-	if r.IsDelete() {
-		cols = r.PreColumns
-	} else {
-		cols = r.Columns
-	}
-
-	result = make([]string, 0)
-	for _, col := range cols {
-		if col != nil && mysql.HasPriKeyFlag(col.Flag) {
-			result = append(result, col.Name)
-		}
-	}
-	return result
 }
 
 type MQRowEvent struct {
