@@ -64,7 +64,7 @@ func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (co
 		storageURI := config.LargeMessageHandle.ClaimCheckStorageURI
 		externalStorage, err = util.GetExternalStorage(ctx, storageURI, nil, util.NewS3Retryer(10, 10*time.Second, 10*time.Second))
 		if err != nil {
-			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+			return nil, err
 		}
 	}
 
@@ -89,13 +89,12 @@ func (b *BatchDecoder) AddKeyValue(key, value []byte) error {
 			GenWithStack("decoder key and value not nil")
 	}
 	version := binary.BigEndian.Uint64(key[:8])
-	key = key[8:]
 	if version != batchVersion1 {
 		return errors.ErrOpenProtocolCodecInvalidData.
 			GenWithStack("unexpected key format version")
 	}
 
-	b.keyBytes = key
+	b.keyBytes = key[8:]
 	b.valueBytes = value
 	return nil
 }
@@ -122,7 +121,7 @@ func (b *BatchDecoder) decodeNextKey() error {
 	msgKey := new(messageKey)
 	err := msgKey.Decode(key)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	b.nextKey = msgKey
 
@@ -151,7 +150,7 @@ func (b *BatchDecoder) HasNext() (common.MessageType, bool, error) {
 				GenWithStack("decompress data failed")
 		}
 		if err = rowMsg.decode(value); err != nil {
-			return b.nextKey.Type, false, errors.Trace(err)
+			return b.nextKey.Type, false, err
 		}
 		b.nextEvent = b.msgToRowChange(b.nextKey, rowMsg)
 	}
@@ -188,7 +187,7 @@ func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 
 	m := new(messageDDL)
 	if err = m.decode(value); err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	result := new(commonEvent.DDLEvent)
