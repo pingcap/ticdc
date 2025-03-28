@@ -14,7 +14,6 @@
 package open
 
 import (
-	"context"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
@@ -201,47 +200,6 @@ func TestHandleOnlyEvent(t *testing.T) {
 
 	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1,"ohk":true}`, string(key))
 	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1}}}`, string(value))
-}
-
-func TestDDLEvent(t *testing.T) {
-	helper := pevent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-
-	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
-
-	ddlEvent := &pevent.DDLEvent{
-		Query:      job.Query,
-		Type:       byte(job.Type),
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
-		FinishedTs: 1,
-	}
-
-	codecConfig := common.NewConfig(config.ProtocolOpen)
-	ctx := context.Background()
-	encoder, err := NewBatchEncoder(ctx, codecConfig)
-	require.NoError(t, err)
-
-	m, err := encoder.EncodeDDLEvent(ddlEvent)
-	require.NoError(t, err)
-
-	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":2}`, string(m.Key)[16:])
-	require.Equal(t, `{"q":"create table test.t(a tinyint primary key, b int)","t":3}`, string(m.Value)[8:]) // ?
-}
-
-func TestResolvedTsEvent(t *testing.T) {
-	codecConfig := common.NewConfig(config.ProtocolOpen)
-	ctx := context.Background()
-	encoder, err := NewBatchEncoder(ctx, codecConfig)
-	require.NoError(t, err)
-
-	m, err := encoder.EncodeCheckpointEvent(12345678)
-	require.NoError(t, err)
-
-	require.Equal(t, `{"ts":12345678,"t":3}`, string(m.Key)[16:])
-	require.Equal(t, 8, len(string(m.Value)))
 }
 
 func TestEncodeWithColumnSelector(t *testing.T) {

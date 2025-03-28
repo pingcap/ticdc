@@ -68,9 +68,10 @@ func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (co
 		}
 	}
 
-	if config.LargeMessageHandle.HandleKeyOnly() && db == nil {
-		return nil, errors.ErrCodecDecode.
-			GenWithStack("handle-key-only is enabled, but upstream TiDB is not provided")
+	if config.LargeMessageHandle.HandleKeyOnly() {
+		if db == nil {
+			log.Warn("handle-key-only is enabled, but upstream TiDB is not provided")
+		}
 	}
 
 	return &BatchDecoder{

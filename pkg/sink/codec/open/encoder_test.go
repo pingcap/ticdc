@@ -21,7 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -45,13 +45,85 @@ func readByteToUint(b []byte) uint64 {
 	return value
 }
 
+func TestEncodeCheckpoint(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+	ctx := context.Background()
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	m, err := encoder.EncodeCheckpointEvent(12345678)
+	require.NoError(t, err)
+
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = decoder.AddKeyValue(m.Key, m.Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, messageType, common.MessageTypeResolved)
+
+	checkpoint, err := decoder.NextResolvedEvent()
+	require.NoError(t, err)
+
+	require.Equal(t, 12345678, checkpoint)
+}
+
+func TestCreateTableDDL(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
+	require.NotNil(t, job)
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      job.Query,
+		Type:       byte(job.Type),
+		SchemaName: job.SchemaName,
+		TableName:  job.TableName,
+		FinishedTs: 1,
+	}
+
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+	ctx := context.Background()
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	message, err := encoder.EncodeDDLEvent(ddlEvent)
+	require.NoError(t, err)
+
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = decoder.AddKeyValue(message.Key, message.Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	obtained, err := decoder.NextDDLEvent()
+	require.NoError(t, err)
+	require.Equal(t, ddlEvent.Query, obtained.Query)
+	require.Equal(t, ddlEvent.Type, obtained.Type)
+	require.Equal(t, ddlEvent.SchemaName, obtained.SchemaName)
+	require.Equal(t, ddlEvent.TableName, obtained.TableName)
+	require.Equal(t, ddlEvent.FinishedTs, obtained.FinishedTs)
+}
+
 func TestEncoderOneMessage(t *testing.T) {
 	ctx := context.Background()
 	config := common.NewConfig(config.ProtocolOpen)
-	batchEncoder, err := NewBatchEncoder(ctx, config)
+	encoder, err := NewBatchEncoder(ctx, config)
 	require.NoError(t, err)
 
-	helper := pevent.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
 
@@ -65,7 +137,7 @@ func TestEncoderOneMessage(t *testing.T) {
 
 	count := 0
 
-	insertRowEvent := &pevent.RowEvent{
+	insertRowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
 		CommitTs:       1,
 		Event:          insertRow,
@@ -73,10 +145,10 @@ func TestEncoderOneMessage(t *testing.T) {
 		Callback:       func() { count += 1 },
 	}
 
-	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.NoError(t, err)
 
-	messages := batchEncoder.Build()
+	messages := encoder.Build()
 
 	require.Equal(t, 1, len(messages))
 	require.Equal(t, 1, messages[0].GetRowsCount())
@@ -96,13 +168,11 @@ func TestEncoderOneMessage(t *testing.T) {
 
 func TestEncoderMultipleMessage(t *testing.T) {
 	ctx := context.Background()
-	config := common.NewConfig(config.ProtocolOpen)
-	config = config.WithMaxMessageBytes(400)
-
-	batchEncoder, err := NewBatchEncoder(ctx, config)
+	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(400)
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	helper := pevent.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
 
@@ -119,7 +189,7 @@ func TestEncoderMultipleMessage(t *testing.T) {
 			break
 		}
 
-		insertRowEvent := &pevent.RowEvent{
+		insertRowEvent := &commonEvent.RowEvent{
 			TableInfo:      tableInfo,
 			CommitTs:       1,
 			Event:          insertRow,
@@ -127,11 +197,10 @@ func TestEncoderMultipleMessage(t *testing.T) {
 			Callback:       func() { count += 1 },
 		}
 
-		err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+		err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 		require.NoError(t, err)
 	}
-
-	messages := batchEncoder.Build()
+	messages := encoder.Build()
 
 	require.Equal(t, 2, len(messages))
 	require.Equal(t, 2, messages[0].GetRowsCount())
@@ -172,10 +241,10 @@ func TestLargeMessage(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen)
 	codecConfig = codecConfig.WithMaxMessageBytes(100)
-	batchEncoder, err := NewBatchEncoder(ctx, codecConfig)
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	helper := pevent.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
 
@@ -188,8 +257,7 @@ func TestLargeMessage(t *testing.T) {
 	require.True(t, ok)
 
 	count := 0
-
-	insertRowEvent := &pevent.RowEvent{
+	insertRowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
 		CommitTs:       1,
 		Event:          insertRow,
@@ -197,19 +265,18 @@ func TestLargeMessage(t *testing.T) {
 		Callback:       func() { count += 1 },
 	}
 
-	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.ErrorIs(t, err, errors.ErrMessageTooLarge)
 }
 
 func TestLargeMessageWithHandle(t *testing.T) {
 	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolOpen)
-	codecConfig = codecConfig.WithMaxMessageBytes(150)
+	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(150)
 	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
-	batchEncoder, err := NewBatchEncoder(ctx, codecConfig)
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	helper := pevent.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
 
@@ -221,7 +288,7 @@ func TestLargeMessageWithHandle(t *testing.T) {
 	insertRow, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
 
-	insertRowEvent := &pevent.RowEvent{
+	insertRowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
 		CommitTs:       1,
 		Event:          insertRow,
@@ -229,10 +296,10 @@ func TestLargeMessageWithHandle(t *testing.T) {
 		Callback:       func() {},
 	}
 
-	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.NoError(t, err)
 
-	messages := batchEncoder.Build()
+	messages := encoder.Build()
 
 	require.Equal(t, 1, len(messages))
 	require.Equal(t, 1, messages[0].GetRowsCount())
@@ -248,13 +315,12 @@ func TestLargeMessageWithHandle(t *testing.T) {
 
 func TestLargeMessageWithoutHandle(t *testing.T) {
 	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolOpen)
-	codecConfig = codecConfig.WithMaxMessageBytes(150)
+	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(150)
 	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
-	batchEncoder, err := NewBatchEncoder(ctx, codecConfig)
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	helper := pevent.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
 
@@ -266,7 +332,7 @@ func TestLargeMessageWithoutHandle(t *testing.T) {
 	insertRow, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
 
-	insertRowEvent := &pevent.RowEvent{
+	insertRowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
 		CommitTs:       1,
 		Event:          insertRow,
@@ -274,6 +340,6 @@ func TestLargeMessageWithoutHandle(t *testing.T) {
 		Callback:       func() {},
 	}
 
-	err = batchEncoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.ErrorIs(t, err, errors.ErrOpenProtocolCodecInvalidData)
 }

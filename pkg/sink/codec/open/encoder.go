@@ -31,9 +31,9 @@ const (
 	batchVersion1 uint64 = 1
 )
 
-// BatchEncoder for open protocol will batch multiple row changed events into a single message.
+// batchEncoder for open protocol will batch multiple row changed events into a single message.
 // One message can contain at most MaxBatchSize events, and the total size of the message cannot exceed MaxMessageBytes.
-type BatchEncoder struct {
+type batchEncoder struct {
 	messages []*common.Message
 	// buff the callback of the latest message
 	callbackBuff []func()
@@ -43,8 +43,26 @@ type BatchEncoder struct {
 	config *common.Config
 }
 
+// NewBatchEncoder creates a new batchEncoder.
+func NewBatchEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
+	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return &batchEncoder{
+		config:     config,
+		claimCheck: claimCheck,
+	}, nil
+}
+
+func (d *batchEncoder) Clean() {
+	if d.claimCheck != nil {
+		d.claimCheck.CleanMetrics()
+	}
+}
+
 // AppendRowChangedEvent implements the RowEventEncoder interface
-func (d *BatchEncoder) AppendRowChangedEvent(
+func (d *batchEncoder) AppendRowChangedEvent(
 	ctx context.Context,
 	_ string,
 	e *commonEvent.RowEvent,
@@ -113,7 +131,7 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 }
 
 // Build implements the RowEventEncoder interface
-func (d *BatchEncoder) Build() (messages []*common.Message) {
+func (d *batchEncoder) Build() (messages []*common.Message) {
 	if len(d.messages) == 0 {
 		return nil
 	}
@@ -123,7 +141,7 @@ func (d *BatchEncoder) Build() (messages []*common.Message) {
 	return result
 }
 
-func (d *BatchEncoder) pushMessage(key, value []byte, callback func()) {
+func (d *batchEncoder) pushMessage(key, value []byte, callback func()) {
 	length := len(key) + len(value) + 16
 
 	var (
@@ -159,7 +177,7 @@ func (d *BatchEncoder) pushMessage(key, value []byte, callback func()) {
 	latestMessage.IncRowsCount()
 }
 
-func (d *BatchEncoder) finalizeCallback() {
+func (d *batchEncoder) finalizeCallback() {
 	if len(d.callbackBuff) == 0 || len(d.messages) == 0 {
 		return
 	}
@@ -192,25 +210,7 @@ func enhancedKeyValue(key, value []byte) ([]byte, []byte) {
 	return keyOutput, valueOutput
 }
 
-// NewBatchEncoder creates a new BatchEncoder.
-func NewBatchEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
-	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	return &BatchEncoder{
-		config:     config,
-		claimCheck: claimCheck,
-	}, nil
-}
-
-func (d *BatchEncoder) Clean() {
-	if d.claimCheck != nil {
-		d.claimCheck.CleanMetrics()
-	}
-}
-
-func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error) {
+func (d *batchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error) {
 	key, value, err := encodeDDLEvent(e, d.config)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -220,7 +220,7 @@ func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 }
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
-func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
+func (d *batchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
 	keyBuf := &bytes.Buffer{}
 	keyWriter := util.BorrowJSONWriter(keyBuf)
 
