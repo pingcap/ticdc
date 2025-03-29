@@ -16,8 +16,9 @@ package event
 import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	timodel "github.com/pingcap/tiflow/cdc/model"
+	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/integrity"
 )
 
@@ -80,7 +81,7 @@ func (r *RowChangedEvent) IsUpdate() bool {
 }
 
 type MQRowEvent struct {
-	Key      timodel.TopicPartitionKey
+	Key      model.TopicPartitionKey
 	RowEvent RowEvent
 }
 
@@ -126,4 +127,19 @@ func (e *RowEvent) PrimaryKeyColumnNames() []string {
 		}
 	}
 	return result
+}
+
+// PrimaryKeyColumn return all primary key's indexes and column infos
+func (e *RowEvent) PrimaryKeyColumn() ([]int, []*timodel.ColumnInfo) {
+	infos := make([]*timodel.ColumnInfo, 0)
+	index := make([]int, 0)
+	tableInfo := e.TableInfo
+	columns := e.TableInfo.GetColumns()
+	for i, col := range columns {
+		if col != nil && tableInfo.ForceGetColumnFlagType(col.ID).IsPrimaryKey() {
+			infos = append(infos, col)
+			index = append(index, i)
+		}
+	}
+	return index, infos
 }
