@@ -87,8 +87,7 @@ func TestEncoderOneMessage(t *testing.T) {
 	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message.Key[16:]))
 
 	require.Equal(t, uint64(len(message.Value[8:])), readByteToUint(message.Value[:8]))
-	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1},"b":{"t":3,"f":65,"v":123}}}`, string(message.Value[8:]))
-
+	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":4099,"v":1},"b":{"t":3,"f":0,"v":123}}}`, string(message.Value[8:]))
 	message.Callback()
 
 	require.Equal(t, 1, count)
@@ -147,10 +146,10 @@ func TestEncoderMultipleMessage(t *testing.T) {
 	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message1.Key[24+length1:]))
 
 	length3 := readByteToUint(message1.Value[:8])
-	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1},"b":{"t":3,"f":65,"v":123}}}`, string(message1.Value[8:8+length3]))
+	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":4099,"v":1},"b":{"t":3,"f":0,"v":123}}}`, string(message1.Value[8:8+length3]))
 	length4 := readByteToUint(message1.Value[8+length3 : 16+length3])
 	require.Equal(t, uint64(len(message1.Value[16+length3:])), length4)
-	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":2},"b":{"t":3,"f":65,"v":223}}}`, string(message1.Value[16+length3:]))
+	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":4099,"v":2},"b":{"t":3,"f":0,"v":223}}}`, string(message1.Value[16+length3:]))
 
 	// message2
 	message2 := messages[1]
@@ -159,7 +158,7 @@ func TestEncoderMultipleMessage(t *testing.T) {
 	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(message2.Key[16:]))
 
 	require.Equal(t, uint64(len(message2.Value[8:])), readByteToUint(message2.Value[:8]))
-	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":3},"b":{"t":3,"f":65,"v":333}}}`, string(message2.Value[8:]))
+	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":4099,"v":3},"b":{"t":3,"f":0,"v":333}}}`, string(message2.Value[8:]))
 
 	for _, message := range messages {
 		message.Callback()
@@ -204,7 +203,7 @@ func TestLargeMessage(t *testing.T) {
 func TestLargeMessageWithHandle(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen)
-	codecConfig = codecConfig.WithMaxMessageBytes(150)
+	codecConfig = codecConfig.WithMaxMessageBytes(160)
 	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
 	batchEncoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
@@ -243,7 +242,7 @@ func TestLargeMessageWithHandle(t *testing.T) {
 	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1,"ohk":true}`, string(message.Key[16:]))
 
 	require.Equal(t, uint64(len(message.Value[8:])), readByteToUint(message.Value[:8]))
-	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1}}}`, string(message.Value[8:]))
+	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":4099,"v":1}}}`, string(message.Value[8:]))
 }
 
 func TestLargeMessageWithoutHandle(t *testing.T) {

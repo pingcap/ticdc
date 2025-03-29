@@ -54,7 +54,7 @@ func fillColumns(
 		}
 		if col != nil {
 			colID := col.ID
-			if onlyHandleKeyColumn && !tableInfo.GetColumnFlags()[colID].IsHandleKey() {
+			if onlyHandleKeyColumn && !tableInfo.IsHandleKey(col.ID) {
 				continue
 			}
 			if isFirst {
@@ -98,7 +98,7 @@ func fillUpdateColumns(
 			if onlyOutputUpdatedColumn && newValueMap[colID] == oldValueMap[colID] {
 				continue
 			}
-			if onlyHandleKeyColumn && !tableInfo.GetColumnFlags()[colID].IsHandleKey() {
+			if onlyHandleKeyColumn && !tableInfo.IsHandleKey(col.ID) {
 				continue
 			}
 			if isFirst {
@@ -216,7 +216,7 @@ func newJSONMessageForDML(
 		if !e.ColumnSelector.Select(col) {
 			continue
 		}
-		flag := e.TableInfo.GetColumnFlags()[col.ID]
+		flag := col.GetFlag()
 		value, javaType := formatColumnValue(row, idx, col, flag)
 		valueMap[col.ID] = value
 		javaTypeMap[col.ID] = javaType
@@ -230,9 +230,8 @@ func newJSONMessageForDML(
 		for _, col := range columnInfos {
 			if col != nil && e.ColumnSelector.Select(col) {
 				colID := col.ID
-				colFlag := tableInfo.GetColumnFlags()[colID]
 				colName := col.Name.O
-				if onlyHandleKey && !colFlag.IsHandleKey() {
+				if onlyHandleKey && !tableInfo.IsHandleKey(colID) {
 					continue
 				}
 				if emptyColumn {
@@ -297,7 +296,7 @@ func newJSONMessageForDML(
 			if !e.ColumnSelector.Select(col) {
 				continue
 			}
-			flag := e.TableInfo.GetColumnFlags()[col.ID]
+			flag := col.GetFlag()
 			value, _ := formatColumnValue(preRow, idx, col, flag)
 			oldValueMap[col.ID] = value
 		}

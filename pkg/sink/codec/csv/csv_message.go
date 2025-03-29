@@ -275,7 +275,7 @@ func (c *csvMessage) formatValue(value any, strBuilder *strings.Builder) {
 }
 
 // fromColValToCsvVal converts column from TiDB type to csv type.
-func fromColValToCsvVal(csvConfig *common.Config, row *chunk.Row, idx int, colInfo *timodel.ColumnInfo, flag *commonType.ColumnFlagType) (any, error) {
+func fromColValToCsvVal(csvConfig *common.Config, row *chunk.Row, idx int, colInfo *timodel.ColumnInfo, flag uint) (any, error) {
 	if row.IsNull(idx) {
 		return nil, nil
 	}
@@ -283,7 +283,7 @@ func fromColValToCsvVal(csvConfig *common.Config, row *chunk.Row, idx int, colIn
 	switch colInfo.GetType() {
 	case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeTinyBlob,
 		mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
-		if flag.IsBinary() {
+		if mysql.HasBinaryFlag(flag) {
 			v := row.GetBytes(idx)
 			switch csvConfig.BinaryEncodingMethod {
 			case config.BinaryEncodingBase64:
@@ -394,7 +394,7 @@ func rowChangeColumns2CSVColumns(csvConfig *common.Config, row *chunk.Row, table
 			continue
 		}
 
-		flag := tableInfo.GetColumnFlags()[col.ID]
+		flag := col.GetFlag()
 		converted, err := fromColValToCsvVal(csvConfig, row, i, col, flag)
 		if err != nil {
 			return nil, errors.Trace(err)
