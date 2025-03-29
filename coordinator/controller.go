@@ -645,7 +645,7 @@ func (c *Controller) GetChangefeed(
 
 	maintainerID := cf.GetNodeID()
 	nodeInfo := c.nodeManager.GetNodeInfo(maintainerID)
-	maintainerAddr := ""
+	var maintainerAddr string
 	if nodeInfo != nil {
 		maintainerAddr = nodeInfo.AdvertiseAddr
 	}
