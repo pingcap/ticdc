@@ -14,12 +14,9 @@
 package open
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"testing"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -27,23 +24,428 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
-// normal message 1
-// normal message multiple to merge
-// large message (with handle / claim)
+func TestIntegerTypes(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
 
-func readByteToUint(b []byte) uint64 {
-	var value uint64
-	log.Info("read byte", zap.Any("b", b[:]))
-	buf := bytes.NewReader(b[:])
-	err := binary.Read(buf, binary.BigEndian, &value)
-	if err != nil {
-		log.Error("Error reading int64 from byte slice:", zap.Any("error", err))
-		return 0
+	helper.Tk().MustExec("use test")
+
+	createTableDDL := `create table test.t(
+		id int primary key auto_increment,
+ 		a tinyint, b tinyint unsigned,
+ 		c smallint, d smallint unsigned,
+ 		e mediumint, f mediumint unsigned,
+ 		g int, h int unsigned,
+ 		i bigint, j bigint unsigned)`
+
+	job := helper.DDL2Job(createTableDDL)
+	tableInfo := helper.GetTableInfo(job)
+
+	sql := `insert into test.t values(
+		1,
+		-128, 0,
+		-32768, 0,
+		-8388608, 0,
+		-2147483648, 0,
+		-9223372036854775808, 0)`
+	minValues := helper.DML2Event("test", "t", sql)
+	minRow, ok := minValues.GetNextRow()
+	require.True(t, ok)
+
+	columnSelector := columnselector.NewDefaultColumnSelector()
+
+	minValueEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       minValues.GetCommitTs(),
+		Event:          minRow,
+		ColumnSelector: columnSelector,
+		Callback:       func() {},
 	}
-	return value
+
+	sql = `insert into test.t values (
+		2,
+		127, 255,
+		32767, 65535,
+		8388607, 16777215,
+		2147483647, 4294967295,
+	9223372036854775807, 18446744073709551615)`
+	maxValues := helper.DML2Event("test", "t", sql)
+	maxRow, ok := maxValues.GetNextRow()
+
+	maxValueEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       maxValues.GetCommitTs(),
+		Event:          maxRow,
+		ColumnSelector: columnSelector,
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+	for _, enableTiDBExtension := range []bool{true, false} {
+		for _, event := range []*commonEvent.RowEvent{minValueEvent, maxValueEvent} {
+			codecConfig.EnableTiDBExtension = enableTiDBExtension
+			encoder, err := NewBatchEncoder(ctx, codecConfig)
+			require.NoError(t, err)
+
+			err = encoder.AppendRowChangedEvent(ctx, "", event)
+			require.NoError(t, err)
+
+			messages := encoder.Build()
+			require.Len(t, messages, 1)
+
+			decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+			require.NoError(t, err)
+
+			err = decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+			require.NoError(t, err)
+
+			messageType, hasNext, err := decoder.HasNext()
+			require.NoError(t, err)
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeRow, messageType)
+
+			decoded, err := decoder.NextDMLEvent()
+			require.NoError(t, err)
+
+			if enableTiDBExtension {
+				require.Equal(t, event.CommitTs, decoded.GetCommitTs())
+			}
+
+			change, ok := decoded.GetNextRow()
+			require.True(t, ok)
+
+			common.CompareRow(t, event.Event, event.TableInfo, change, decoded.TableInfo)
+		}
+	}
+}
+
+func TestFloatTypes(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(
+    	id int primary key auto_increment,
+	    a float, b float(10, 3), c float(10), 
+	    d double, e double(20, 3))`)
+
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d,e) values (1.23, 4.56, 7.89, 10.11, 12.13)`)
+	require.NotNil(t, dmlEvent)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	tableInfo := helper.GetTableInfo(job)
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       1,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
+	require.NoError(t, err)
+
+	m := encoder.Build()[0]
+
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = decoder.AddKeyValue(m.Key, m.Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	event, err := decoder.NextDMLEvent()
+	require.NoError(t, err)
+	change, ok := event.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
+}
+
+func TestTimeTypes(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(id int primary key auto_increment, a timestamp, b datetime, c date, d time)`)
+
+	dmlEvent := helper.DML2Event("test", "t",
+		`insert into test.t(a,b,c,d) values ("2020-01-01 12:00:00", "2020-01-01 12:00:00", "2020-01-01", "12:00:00")`)
+	require.NotNil(t, dmlEvent)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	tableInfo := helper.GetTableInfo(job)
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       1,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
+	require.NoError(t, err)
+
+	m := encoder.Build()[0]
+
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = decoder.AddKeyValue(m.Key, m.Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	event, err := decoder.NextDMLEvent()
+	require.NoError(t, err)
+	change, ok := event.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
+}
+
+func TestStringTypes(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(
+    	id int primary key auto_increment, a char(10) , b varchar(10), c binary(10), d varbinary(10))`)
+
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d) values ("char","varchar","binary","varbinary")`)
+	require.NotNil(t, dmlEvent)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	tableInfo := helper.GetTableInfo(job)
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       1,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
+	require.NoError(t, err)
+
+	m := encoder.Build()[0]
+
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = decoder.AddKeyValue(m.Key, m.Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	event, err := decoder.NextDMLEvent()
+	require.NoError(t, err)
+	change, ok := event.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
+}
+
+func TestBlobTypes(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(
+    	id int primary key auto_increment,
+		a tinyblob, b blob, c mediumblob, d longblob)`)
+
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d) values (0x010201,0x010202,0x010203,0x010204)`)
+	require.NotNil(t, dmlEvent)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	tableInfo := helper.GetTableInfo(job)
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       1,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
+	require.NoError(t, err)
+
+	m := encoder.Build()[0]
+
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = decoder.AddKeyValue(m.Key, m.Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	event, err := decoder.NextDMLEvent()
+	require.NoError(t, err)
+	change, ok := event.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
+}
+
+func TestTextTypes(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(
+    	id int primary key auto_increment,
+		a tinytext, b text, c mediumtext, d longtext)`)
+
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d) values ("tinytext","text","mediumtext","longtext")`)
+	require.NotNil(t, dmlEvent)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	tableInfo := helper.GetTableInfo(job)
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       1,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
+	require.NoError(t, err)
+
+	m := encoder.Build()[0]
+
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = decoder.AddKeyValue(m.Key, m.Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	event, err := decoder.NextDMLEvent()
+	require.NoError(t, err)
+	change, ok := event.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
+}
+
+func TestOtherTypes(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(
+    	id int primary key auto_increment, 
+    	a bool, b bool, c year,
+		d bit(10), e json, 
+		f decimal(10,2), 
+		g enum('a','b','c'), h set('a','b','c'))`)
+	tableInfo := helper.GetTableInfo(job)
+
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a, b, c, d, e, f, g, h) values (
+   		true, false, 2000, 
+	    0b0101010101, '{"key1": "value1"}', 
+	    153.123, 
+	    'a', 'a,b')`)
+
+	require.NotNil(t, dmlEvent)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       1,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+	codecConfig.ContentCompatible = true
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", rowEvent)
+	require.NoError(t, err)
+
+	m := encoder.Build()[0]
+
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = decoder.AddKeyValue(m.Key, m.Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	event, err := decoder.NextDMLEvent()
+	require.NoError(t, err)
+	change, ok := event.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
 
 func TestEncodeCheckpoint(t *testing.T) {
@@ -470,9 +872,7 @@ func TestDMLEvent(t *testing.T) {
 	helper.Tk().MustExec("use test")
 
 	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
-
 	tableInfo := helper.GetTableInfo(job)
-	protocolConfig := common.NewConfig(config.ProtocolOpen)
 
 	// Insert
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 123)`)
@@ -482,18 +882,11 @@ func TestDMLEvent(t *testing.T) {
 
 	insertRowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
-		CommitTs:       1,
+		CommitTs:       dmlEvent.GetCommitTs(),
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 		Callback:       func() {},
 	}
-
-	key, value, length, err := encodeRowChangedEvent(insertRowEvent, protocolConfig, false, "")
-	require.NoError(t, err)
-
-	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(key))
-	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1},"b":{"t":3,"f":65,"v":123}}}`, string(value))
-	require.Equal(t, len(string(key))+len(string(value))+common.MaxRecordOverhead+16+8, length)
 
 	// Update
 	dmlEvent = helper.DML2Event("test", "t", `update test.t set b = 456 where a = 1`)
@@ -504,38 +897,57 @@ func TestDMLEvent(t *testing.T) {
 
 	updateRowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
-		CommitTs:       2,
+		CommitTs:       dmlEvent.GetCommitTs(),
 		Event:          updateRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 		Callback:       func() {},
 	}
 
-	key, value, _, err = encodeRowChangedEvent(updateRowEvent, protocolConfig, false, "")
+	deleteRow := updateRow
+	deleteRow.PreRow = updateRow.Row
+	deleteRow.Row = chunk.Row{}
+	require.True(t, ok)
+
+	deleteEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       dmlEvent.GetCommitTs(),
+		Event:          deleteRow,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	require.Equal(t, `{"ts":2,"scm":"test","tbl":"t","t":1}`, string(key))
-	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1},"b":{"t":3,"f":65,"v":456}},"p":{"a":{"t":1,"h":true,"f":11,"v":1},"b":{"t":3,"f":65,"v":123}}}`, string(value))
-
-	// delete
-	{
-		deleteRow := updateRow
-		deleteRow.PreRow = updateRow.Row
-		deleteRow.Row = chunk.Row{}
-		require.True(t, ok)
-
-		deleteEvent := &commonEvent.RowEvent{
-			TableInfo:      tableInfo,
-			CommitTs:       3,
-			Event:          deleteRow,
-			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {},
-		}
-
-		key, value, _, err = encodeRowChangedEvent(deleteEvent, protocolConfig, false, "")
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+	for _, origin := range []*commonEvent.RowEvent{
+		insertRowEvent,
+		updateRowEvent,
+		deleteEvent,
+	} {
+		err = encoder.AppendRowChangedEvent(ctx, "", origin)
 		require.NoError(t, err)
 
-		require.Equal(t, `{"ts":3,"scm":"test","tbl":"t","t":1}`, string(key))
-		require.Equal(t, `{"d":{"a":{"t":1,"h":true,"f":11,"v":1},"b":{"t":3,"f":65,"v":456}}}`, string(value))
+		m := encoder.Build()[0]
+
+		err = decoder.AddKeyValue(m.Key, m.Value)
+		require.NoError(t, err)
+
+		messageType, hasNext, err := decoder.HasNext()
+		require.NoError(t, err)
+		require.True(t, hasNext)
+		require.Equal(t, common.MessageTypeRow, messageType)
+
+		decoded, err := decoder.NextDMLEvent()
+		require.NoError(t, err)
+		change, ok := decoded.GetNextRow()
+		require.True(t, ok)
+
+		common.CompareRow(t, origin.Event, origin.TableInfo, change, decoded.TableInfo)
 	}
 }
 
@@ -545,33 +957,52 @@ func TestOnlyOutputUpdatedEvent(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 
-	protocolConfig := common.NewConfig(config.ProtocolOpen)
-	protocolConfig.OnlyOutputUpdatedColumns = true
+	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int, c decimal(10,2), d json, e char(10), f binary(10), g blob)`)
+	event := helper.DML2Event("test", "t", `insert into test.t values (1, 123, 123.12, '{"key1": "value1"}',"Alice",0x0102030405060708090A,0x4944330300000000)`)
+	eventNew := helper.DML2Event("test", "t", `update test.t set b = 456,c = 456.45 where a = 1`)
+	tableInfo := helper.GetTableInfo(job)
 
-	{
-		job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int, c decimal(10,2), d json, e char(10), f binary(10), g blob)`)
-		event := helper.DML2Event("test", "t", `insert into test.t values (1, 123, 123.12, '{"key1": "value1"}',"Alice",0x0102030405060708090A,0x4944330300000000)`)
-		eventNew := helper.DML2Event("test", "t", `update test.t set b = 456,c = 456.45 where a = 1`)
-		tableInfo := helper.GetTableInfo(job)
+	preRow, _ := event.GetNextRow()
+	row, _ := eventNew.GetNextRow()
+	row.PreRow = preRow.Row
 
-		preRow, _ := event.GetNextRow()
-		row, _ := eventNew.GetNextRow()
-		row.PreRow = preRow.Row
-
-		updateRowEvent := &commonEvent.RowEvent{
-			TableInfo:      tableInfo,
-			CommitTs:       1,
-			Event:          row,
-			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-			Callback:       func() {},
-		}
-
-		_, value, _, err := encodeRowChangedEvent(updateRowEvent, protocolConfig, false, "")
-		require.NoError(t, err)
-
-		require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1},"b":{"t":3,"f":65,"v":456},"c":{"t":246,"f":65,"v":"456.45"},"d":{"t":245,"f":65,"v":"{\"key1\": \"value1\"}"},"e":{"t":254,"f":64,"v":"Alice"},"f":{"t":254,"f":65,"v":"\\x01\\x02\\x03\\x04\\x05\\x06\\a\\b\\t\\n"},"g":{"t":252,"f":65,"v":"SUQzAwAAAAA="}},"p":{"b":{"t":3,"f":65,"v":123},"c":{"t":246,"f":65,"v":"123.12"}}}`, string(value))
-
+	updateRowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       1,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
 	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+	codecConfig.OnlyOutputUpdatedColumns = true
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", updateRowEvent)
+	require.NoError(t, err)
+
+	m := encoder.Build()[0]
+
+	err = decoder.AddKeyValue(m.Key, m.Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decoded, err := decoder.NextDMLEvent()
+	require.NoError(t, err)
+	change, ok := decoded.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, updateRowEvent.Event, updateRowEvent.TableInfo, change, decoded.TableInfo)
 }
 
 func TestHandleOnlyEvent(t *testing.T) {
@@ -583,8 +1014,6 @@ func TestHandleOnlyEvent(t *testing.T) {
 	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
 
 	tableInfo := helper.GetTableInfo(job)
-	protocolConfig := common.NewConfig(config.ProtocolOpen)
-
 	// Insert
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 123)`)
 	require.NotNil(t, dmlEvent)
@@ -599,43 +1028,32 @@ func TestHandleOnlyEvent(t *testing.T) {
 		Callback:       func() {},
 	}
 
-	key, value, _, err := encodeRowChangedEvent(insertRowEvent, protocolConfig, true, "")
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1,"ohk":true}`, string(key))
-	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1}}}`, string(value))
-}
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
 
-// TODO: Add E2E test for double/float nan and inf
-// Test all type, column selector, callback, handle only features.
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	require.NoError(t, err)
 
-// Test column Type: TinyInt, Tinyint(null), Bool, Bool(null), SmallInt, SmallInt(null), Int, Int(null), Float, Float(null), Double, Double(null),
-// Timestamp, Timestamp(null), BigInt, BigInt(null), MediumInt, MediumInt(null), Date, Date(null), Time, Time(null), Datetime, Datetime(null), Year, Year(null),
-// Varchar, Varchar(null), VarBinary, VarBinary(null), Bit, Bit(null), Json, Json(null), Decimal, Decimal(null), Enum, Enum(null), Set, Set(null), TinyText, TinyText(null), TinyBlob, TinyBlob(null), MediumText, MediumText(null), MediumBlob, MediumBlob(null),LongText, LongText(null),LongBlob, LongBlob(null), Text, Text(null), Blob, Blob(null), char, char(null), binary, binary(null)
-func TestBasicType(t *testing.T) {
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
+	m := encoder.Build()[0]
 
-	helper.Tk().MustExec("use test")
+	err = decoder.AddKeyValue(m.Key, m.Value)
+	require.NoError(t, err)
 
-	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b tinyint, c bool, d bool, e smallint, f smallint, g int, h int, i float, j float, k double, l double, m timestamp, n timestamp, o bigint, p bigint, q mediumint, r mediumint, s date, t date, u time, v time, w datetime, x datetime, y year, z year, aa varchar(10), ab varchar(10), ac varbinary(10), ad varbinary(10), ae bit(10), af bit(10), ag json, ah json, ai decimal(10,2), aj decimal(10,2), ak enum('a','b','c'), al enum('a','b','c'), am set('a','b','c'), an set('a','b','c'), ao tinytext, ap tinytext, aq tinyblob, ar tinyblob, as1 mediumtext, at mediumtext, au mediumblob, av mediumblob, aw longtext, ax longtext, ay longblob, az longblob, ba text, bb text, bc blob, bd blob, be char(10), bf char(10), bg binary(10), bh binary(10))`)
-	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,c,e,g,i,k,m,o,q,s,u,w,y,aa,ac,ae,ag,ai,ak,am,ao,aq,as1,au,aw,ay,ba,bc,be,bg) values (1, true, -1, 123, 153.123,153.123,"1973-12-30 15:30:00",123,123,"2000-01-01","23:59:59","2015-12-20 23:58:58",1970,"测试",0x0102030405060708090A,81,'{"key1": "value1"}', 129012.12, 'a', 'b', "5rWL6K+VdGV4dA==", 0x89504E470D0A1A0A,"5rWL6K+VdGV4dA==",0x4944330300000000,"5rWL6K+VdGV4dA==",0x504B0304140000000800,"5rWL6K+VdGV4dA==",0x255044462D312E34,"Alice",0x0102030405060708090A)`)
-	require.NotNil(t, dmlEvent)
-	row, ok := dmlEvent.GetNextRow()
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decoded, err := decoder.NextDMLEvent()
+	require.NoError(t, err)
+	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
-	tableInfo := helper.GetTableInfo(job)
 
-	rowEvent := &commonEvent.RowEvent{
-		TableInfo:      tableInfo,
-		CommitTs:       1,
-		Event:          row,
-		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {},
-	}
-
-	protocolConfig := common.NewConfig(config.ProtocolOpen)
-	key, value, _, err := encodeRowChangedEvent(rowEvent, protocolConfig, false, "")
-	require.NoError(t, err)
-	require.Equal(t, `{"ts":1,"scm":"test","tbl":"t","t":1}`, string(key))
-	require.Equal(t, `{"u":{"a":{"t":1,"h":true,"f":11,"v":1},"b":{"t":1,"f":65,"v":null},"c":{"t":1,"f":65,"v":1},"d":{"t":1,"f":65,"v":null},"e":{"t":2,"f":65,"v":-1},"f":{"t":2,"f":65,"v":null},"g":{"t":3,"f":65,"v":123},"h":{"t":3,"f":65,"v":null},"i":{"t":4,"f":65,"v":153.123},"j":{"t":4,"f":65,"v":null},"k":{"t":5,"f":65,"v":153.123},"l":{"t":5,"f":65,"v":null},"m":{"t":7,"f":65,"v":"1973-12-30 15:30:00"},"n":{"t":7,"f":65,"v":null},"o":{"t":8,"f":65,"v":123},"p":{"t":8,"f":65,"v":null},"q":{"t":9,"f":65,"v":123},"r":{"t":9,"f":65,"v":null},"s":{"t":10,"f":65,"v":"2000-01-01"},"t":{"t":10,"f":65,"v":null},"u":{"t":11,"f":65,"v":"23:59:59"},"v":{"t":11,"f":65,"v":null},"w":{"t":12,"f":65,"v":"2015-12-20 23:58:58"},"x":{"t":12,"f":65,"v":null},"y":{"t":13,"f":193,"v":1970},"z":{"t":13,"f":193,"v":null},"aa":{"t":15,"f":64,"v":"测试"},"ab":{"t":15,"f":64,"v":null},"ac":{"t":15,"f":65,"v":"\\x01\\x02\\x03\\x04\\x05\\x06\\a\\b\\t\\n"},"ad":{"t":15,"f":65,"v":null},"ae":{"t":16,"f":193,"v":81},"af":{"t":16,"f":193,"v":null},"ag":{"t":245,"f":65,"v":"{\"key1\": \"value1\"}"},"ah":{"t":245,"f":65,"v":null},"ai":{"t":246,"f":65,"v":"129012.12"},"aj":{"t":246,"f":65,"v":null},"ak":{"t":247,"f":64,"v":1},"al":{"t":247,"f":64,"v":null},"am":{"t":248,"f":64,"v":2},"an":{"t":248,"f":64,"v":null},"ao":{"t":249,"f":64,"v":"NXJXTDZLK1ZkR1Y0ZEE9PQ=="},"ap":{"t":249,"f":64,"v":null},"aq":{"t":249,"f":65,"v":"iVBORw0KGgo="},"ar":{"t":249,"f":65,"v":null},"as1":{"t":250,"f":64,"v":"NXJXTDZLK1ZkR1Y0ZEE9PQ=="},"at":{"t":250,"f":64,"v":null},"au":{"t":250,"f":65,"v":"SUQzAwAAAAA="},"av":{"t":250,"f":65,"v":null},"aw":{"t":251,"f":64,"v":"NXJXTDZLK1ZkR1Y0ZEE9PQ=="},"ax":{"t":251,"f":64,"v":null},"ay":{"t":251,"f":65,"v":"UEsDBBQAAAAIAA=="},"az":{"t":251,"f":65,"v":null},"ba":{"t":252,"f":64,"v":"NXJXTDZLK1ZkR1Y0ZEE9PQ=="},"bb":{"t":252,"f":64,"v":null},"bc":{"t":252,"f":65,"v":"JVBERi0xLjQ="},"bd":{"t":252,"f":65,"v":null},"be":{"t":254,"f":64,"v":"Alice"},"bf":{"t":254,"f":64,"v":null},"bg":{"t":254,"f":65,"v":"\\x01\\x02\\x03\\x04\\x05\\x06\\a\\b\\t\\n"},"bh":{"t":254,"f":65,"v":null}}}`, string(value))
+	common.CompareRow(t, insertRowEvent.Event, insertRowEvent.TableInfo, change, decoded.TableInfo)
 }
