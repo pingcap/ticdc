@@ -18,10 +18,9 @@ import (
 	"encoding/json"
 
 	"github.com/linkedin/goavro/v2"
-	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	ticommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/cdc/model"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
 //go:embed message.json
@@ -32,35 +31,35 @@ type marshaller interface {
 	MarshalCheckpoint(ts uint64) ([]byte, error)
 
 	// MarshalDDLEvent marshals the DDL event into bytes.
-	MarshalDDLEvent(event *model.DDLEvent) ([]byte, error)
+	MarshalDDLEvent(event *commonEvent.DDLEvent) ([]byte, error)
 
 	// MarshalRowChangedEvent marshals the row changed event into bytes.
-	MarshalRowChangedEvent(event *common.RowChangedEvent,
+	MarshalRowChangedEvent(event *commonEvent.RowEvent,
 		handleKeyOnly bool, claimCheckFileName string) ([]byte, error)
 
 	// Unmarshal the bytes into the given value.
 	Unmarshal(data []byte, v any) error
 }
 
-func newMarshaller(config *ticommon.Config) (marshaller, error) {
+func newMarshaller(config *common.Config) (marshaller, error) {
 	var (
 		result marshaller
 		err    error
 	)
 	switch config.EncodingFormat {
-	case ticommon.EncodingFormatJSON:
+	case common.EncodingFormatJSON:
 		result = newJSONMarshaller(config)
-	case ticommon.EncodingFormatAvro:
+	case common.EncodingFormatAvro:
 		result, err = newAvroMarshaller(config, string(avroSchemaBytes))
 	}
 	return result, errors.Trace(err)
 }
 
 type JSONMarshaller struct {
-	config *ticommon.Config
+	config *common.Config
 }
 
-func newJSONMarshaller(config *ticommon.Config) *JSONMarshaller {
+func newJSONMarshaller(config *common.Config) *JSONMarshaller {
 	return &JSONMarshaller{
 		config: config,
 	}
@@ -74,7 +73,7 @@ func (m *JSONMarshaller) MarshalCheckpoint(ts uint64) ([]byte, error) {
 }
 
 // MarshalDDLEvent implement the marshaller interface
-func (m *JSONMarshaller) MarshalDDLEvent(event *model.DDLEvent) ([]byte, error) {
+func (m *JSONMarshaller) MarshalDDLEvent(event *commonEvent.DDLEvent) ([]byte, error) {
 	var msg *message
 	if event.IsBootstrap {
 		msg = newBootstrapMessage(event.TableInfo)
@@ -87,7 +86,7 @@ func (m *JSONMarshaller) MarshalDDLEvent(event *model.DDLEvent) ([]byte, error) 
 
 // MarshalRowChangedEvent implement the marshaller interface
 func (m *JSONMarshaller) MarshalRowChangedEvent(
-	event *common.RowChangedEvent,
+	event *commonEvent.RowEvent,
 	handleKeyOnly bool, claimCheckFileName string,
 ) ([]byte, error) {
 	msg := m.newDMLMessage(event, handleKeyOnly, claimCheckFileName)
@@ -102,10 +101,10 @@ func (m *JSONMarshaller) Unmarshal(data []byte, v any) error {
 
 type avroMarshaller struct {
 	codec  *goavro.Codec
-	config *ticommon.Config
+	config *common.Config
 }
 
-func newAvroMarshaller(config *ticommon.Config, schema string) (*avroMarshaller, error) {
+func newAvroMarshaller(config *common.Config, schema string) (*avroMarshaller, error) {
 	codec, err := goavro.NewCodec(schema)
 	return &avroMarshaller{
 		codec:  codec,
@@ -121,7 +120,7 @@ func (m *avroMarshaller) MarshalCheckpoint(ts uint64) ([]byte, error) {
 }
 
 // MarshalDDLEvent implement the marshaller interface
-func (m *avroMarshaller) MarshalDDLEvent(event *model.DDLEvent) ([]byte, error) {
+func (m *avroMarshaller) MarshalDDLEvent(event *commonEvent.DDLEvent) ([]byte, error) {
 	var msg map[string]interface{}
 	if event.IsBootstrap {
 		msg = newBootstrapMessageMap(event.TableInfo)
@@ -134,7 +133,7 @@ func (m *avroMarshaller) MarshalDDLEvent(event *model.DDLEvent) ([]byte, error) 
 
 // MarshalRowChangedEvent implement the marshaller interface
 func (m *avroMarshaller) MarshalRowChangedEvent(
-	event *common.RowChangedEvent,
+	event *commonEvent.RowEvent,
 	handleKeyOnly bool, claimCheckFileName string,
 ) ([]byte, error) {
 	msg := m.newDMLMessageMap(event, handleKeyOnly, claimCheckFileName)
