@@ -36,12 +36,11 @@ func AppendRow2Chunk(data map[string]any, columns []*model.ColumnInfo, chk *chun
 }
 
 func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Chunk) {
-	mysqlType := ft.GetType()
 	if raw == nil {
 		chk.AppendNull(idx)
 		return
 	}
-	switch mysqlType {
+	switch ft.GetType() {
 	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
 		if mysql.HasUnsignedFlag(ft.GetFlag()) {
 			chk.AppendUint64(idx, raw.(uint64))
