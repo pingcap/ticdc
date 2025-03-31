@@ -34,7 +34,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/sink/codec"
 	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
@@ -162,7 +161,7 @@ func (b *BatchDecoder) HasNext() (common.MessageType, bool, error) {
 // NextResolvedEvent implements the RowEventDecoder interface
 func (b *BatchDecoder) NextResolvedEvent() (uint64, error) {
 	if b.nextKey.Type != common.MessageTypeResolved {
-		return 0, cerror.ErrOpenProtocolCodecInvalidData.GenWithStack("not found resolved event message")
+		return 0, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found resolved event message")
 	}
 	resolvedTs := b.nextKey.Ts
 	b.nextKey = nil
@@ -179,7 +178,7 @@ type messageDDL struct {
 // NextDDLEvent implements the RowEventDecoder interface
 func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	if b.nextKey.Type != common.MessageTypeDDL {
-		return nil, cerror.ErrOpenProtocolCodecInvalidData.GenWithStack("not found ddl event message")
+		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found ddl event message")
 	}
 
 	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
@@ -187,8 +186,7 @@ func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 
 	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
-		return nil, cerror.ErrOpenProtocolCodecInvalidData.
-			GenWithStack("decompress DDL event failed")
+		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("decompress DDL event failed")
 	}
 
 	var m messageDDL
@@ -272,15 +270,36 @@ func (b *BatchDecoder) assembleHandleKeyOnlyEvent(
 	//	commitTs = handleKeyOnlyEvent.CommitTs
 	//)
 	//
+	//conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.TableInfo.GetColumns()))
+	//rowChange, ok := handleKeyOnlyEvent.GetNextRow()
+	//if !ok {
+	//	log.Panic("cannot found the handle key value")
+	//}
+	//for idx, col := range handleKeyOnlyEvent.TableInfo.GetColumns() {
+	//	colName := handleKeyOnlyEvent.TableInfo.ForceGetColumnName(col.ID)
+	//	conditions[colName] = rowChange.Row.GetDatum(idx, &col.FieldType).String()
+	//}
+
+	//switch handleKeyOnlyEvent.RowTypes[0] {
+	//case commonEvent.RowTypeInsert:
+	//	holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
+	//	columns := newColumns(holder)
+	//
+	//case commonEvent.RowTypeDelete:
+	//case commonEvent.RowTypeUpdate:
+	//default:
+	//	log.Panic("unknown event type")
+	//}
+
 	//tableInfo := handleKeyOnlyEvent.TableInfo
 	//if handleKeyOnlyEvent.IsInsert() {
-	//	conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.Columns))
-	//	for _, col := range handleKeyOnlyEvent.Columns {
-	//		colName := tableInfo.ForceGetColumnName(col.ColumnID)
-	//		conditions[colName] = col.Value
-	//	}
-	//	holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-	//	columns := b.buildColumns(holder, conditions)
+	//	//conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.Columns))
+	//	//for _, col := range handleKeyOnlyEvent.Columns {
+	//	//	colName := tableInfo.ForceGetColumnName(col.ColumnID)
+	//	//	conditions[colName] = col.Value
+	//	//}
+	//	//holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
+	//	//columns := b.buildColumns(holder, conditions)
 	//	indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(columns)
 	//	handleKeyOnlyEvent.TableInfo = model.BuildTableInfo(schema, table, columns, indexColumns)
 	//	handleKeyOnlyEvent.Columns = model.Columns2ColumnDatas(columns, handleKeyOnlyEvent.TableInfo)
