@@ -328,16 +328,16 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	columns := tableInfo.GetColumns()
 	switch msg.eventType() {
 	case canal.EventType_DELETE:
-		data := msg.getData()
+		data := formatAllColumnsValue(msg.getData(), columns)
 		appendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
 	case canal.EventType_INSERT:
-		data := msg.getData()
+		data := formatAllColumnsValue(msg.getData(), columns)
 		appendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
 	case canal.EventType_UPDATE:
-		previous := msg.getOld()
-		data := msg.getData()
+		previous := formatAllColumnsValue(msg.getOld(), columns)
+		data := formatAllColumnsValue(msg.getData(), columns)
 		for k, v := range data {
 			if _, ok := previous[k]; !ok {
 				previous[k] = v
@@ -404,6 +404,17 @@ func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEv
 	return result
 }
 
+func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {
+	for _, col := range columns {
+		raw, ok := data[col.Name.O]
+		if !ok {
+			continue
+		}
+		data[col.Name.O] = formatValue(raw, col.FieldType)
+	}
+	return data
+}
+
 func formatValue(value any, ft types.FieldType) any {
 	if value == nil {
 		return nil
@@ -418,7 +429,7 @@ func formatValue(value any, ft types.FieldType) any {
 		if err != nil {
 			log.Panic("invalid column value, please report a bug", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		return result
+		return []byte(result)
 	}
 	switch ft.GetType() {
 	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
@@ -445,7 +456,7 @@ func formatValue(value any, ft types.FieldType) any {
 		if err != nil {
 			log.Panic("invalid column value for float", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		return result
+		return float32(result)
 	case mysql.TypeDouble:
 		result, err := strconv.ParseFloat(rawValue, 64)
 		if err != nil {
@@ -580,10 +591,9 @@ func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Ch
 	}
 }
 
-func appendRow2Chunk(data map[string]interface{}, columns []*timodel.ColumnInfo, chk *chunk.Chunk) {
+func appendRow2Chunk(data map[string]any, columns []*timodel.ColumnInfo, chk *chunk.Chunk) {
 	for idx, col := range columns {
-		raw := data[col.Name.O]
-		value := formatValue(raw, col.FieldType)
+		value := data[col.Name.O]
 		appendCol2Chunk(idx, value, col.FieldType, chk)
 	}
 }
