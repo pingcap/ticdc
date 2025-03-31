@@ -19,7 +19,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -508,18 +507,15 @@ func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Ch
 		return
 	}
 	switch ft.GetType() {
+	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeLonglong, mysql.TypeInt24:
+		log.Panic("how to handle int types?", zap.Any("raw", raw))
 	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
-		str := raw.(string)
-		var err error
-		if mysql.HasBinaryFlag(ft.GetFlag()) {
-			str, err = strconv.Unquote("\"" + str + "\"")
-			if err != nil {
-				log.Panic("invalid column value, please report a bug", zap.Any("value", raw), zap.Error(err))
-			}
-		}
-		chk.AppendBytes(idx, []byte(str))
+		chk.AppendBytes(idx, raw.([]byte))
+	case mysql.TypeTinyBlob, mysql.TypeMediumBlob,
+		mysql.TypeLongBlob, mysql.TypeBlob:
+		log.Panic("how to handle blob type?", zap.Any("raw", raw))
 	case mysql.TypeFloat:
-		chk.AppendFloat32(idx, float32(raw.(float64)))
+		chk.AppendFloat32(idx, raw.(float32))
 	case mysql.TypeDouble:
 		chk.AppendFloat64(idx, raw.(float64))
 	case mysql.TypeYear:
@@ -530,7 +526,7 @@ func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Ch
 			log.Panic("invalid column value for enum, please report a bug",
 				zap.Any("value", raw), zap.Error(err))
 		}
-		log.Info("how to handle enum ?", zap.Any("value", val))
+		log.Panic("how to handle enum?", zap.Any("value", val))
 		var enum tiTypes.Enum
 		chk.AppendEnum(idx, enum)
 	case mysql.TypeSet:
@@ -539,7 +535,7 @@ func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Ch
 			log.Panic("invalid column value for enum, please report a bug",
 				zap.Any("value", raw), zap.Error(err))
 		}
-		log.Info("how to handle set	?", zap.Any("value", val))
+		log.Panic("how to handle set?", zap.Any("value", val))
 		var setValue tiTypes.Set
 		chk.AppendSet(idx, setValue)
 	default:

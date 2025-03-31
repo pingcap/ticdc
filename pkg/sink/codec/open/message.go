@@ -59,20 +59,20 @@ type column struct {
 
 // formatColumn formats a codec column.
 func formatColumn(c column) column {
+	var err error
 	switch c.Type {
 	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
 		str := c.Value.(string)
-		var err error
 		if c.Flag.IsBinary() {
 			str, err = strconv.Unquote("\"" + str + "\"")
 			if err != nil {
 				log.Panic("invalid column value, please report a bug", zap.Any("value", str), zap.Error(err))
 			}
 		}
+		c.Value = []byte(str)
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob,
 		mysql.TypeLongBlob, mysql.TypeBlob:
 		if s, ok := c.Value.(string); ok {
-			var err error
 			c.Value, err = base64.StdEncoding.DecodeString(s)
 			if err != nil {
 				log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
@@ -83,19 +83,15 @@ func formatColumn(c column) column {
 		if !ok {
 			log.Panic("float / double not json.Number, please report a bug", zap.Any("value", c.Value))
 		}
-		f64, err := s.Float64()
+		c.Value, err = s.Float64()
 		if err != nil {
 			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
 		}
 		if c.Type == mysql.TypeFloat {
-			c.Value = float32(f64)
-		} else {
-			c.Value = f64
-
+			c.Value = float32(c.Value.(float64))
 		}
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeLonglong, mysql.TypeInt24:
 		if s, ok := c.Value.(json.Number); ok {
-			var err error
 			if c.Flag.IsUnsigned() {
 				c.Value, err = strconv.ParseUint(s.String(), 10, 64)
 			} else {
@@ -104,6 +100,7 @@ func formatColumn(c column) column {
 			if err != nil {
 				log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
 			}
+			// is it possible be the float64?
 		} else if f, ok := c.Value.(float64); ok {
 			if c.Flag.IsUnsigned() {
 				c.Value = uint64(f)
@@ -112,7 +109,7 @@ func formatColumn(c column) column {
 			}
 		}
 	case mysql.TypeYear:
-		log.Info("how to handle year? convert to uint64	", zap.Any("value", c.Value))
+		log.Panic("how to handle year? convert to uint64	", zap.Any("value", c.Value))
 	case mysql.TypeBit:
 		if s, ok := c.Value.(json.Number); ok {
 			intNum, err := s.Int64()
@@ -121,6 +118,10 @@ func formatColumn(c column) column {
 			}
 			c.Value = uint64(intNum)
 		}
+	case mysql.TypeEnum:
+		log.Panic("how to handle enum? convert")
+	case mysql.TypeSet:
+		log.Panic("how to handle set? convert")
 	}
 	return c
 }
