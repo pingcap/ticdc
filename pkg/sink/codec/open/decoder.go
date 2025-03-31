@@ -493,6 +493,11 @@ func (b *BatchDecoder) assembleDMLEvent(key *messageKey, value *messageRow) *com
 	} else if len(value.Update) != 0 && len(value.PreColumns) != 0 {
 		previous := collectAllColumnsValue(value.PreColumns, columns)
 		data := collectAllColumnsValue(value.Update, columns)
+		for k, v := range data {
+			if _, ok := previous[k]; !ok {
+				previous[k] = v
+			}
+		}
 		common.AppendRow2Chunk(previous, columns, chk)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)

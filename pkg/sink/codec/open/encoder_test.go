@@ -708,7 +708,7 @@ func TestMessageTooLarge(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrMessageTooLarge)
 }
 
-func TestLargeMessageWithHandleKeyOnly(t *testing.T) {
+func TestLargeMessageWithHandleEnableHandleKeyOnly(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
@@ -730,7 +730,7 @@ func TestLargeMessageWithHandleKeyOnly(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(150)
+	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(167)
 	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
 	encoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
@@ -760,7 +760,15 @@ func TestLargeMessageWithHandleKeyOnly(t *testing.T) {
 	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
 
-	common.CompareRow(t, insertRowEvent.Event, insertRowEvent.TableInfo, change, decoded.TableInfo)
+	require.Len(t, decoded.TableInfo.GetColumns(), 1)
+	require.Equal(t, "a", decoded.TableInfo.GetColumns()[0].Name.O)
+
+	originColID := insertRowEvent.TableInfo.ForceGetColumnIDByName("a")
+	originColOffset := insertRowEvent.TableInfo.MustGetColumnOffsetByID(originColID)
+	expected := insertRowEvent.GetRows().GetDatumRow(insertRowEvent.TableInfo.GetFieldSlice())[originColOffset]
+
+	obtained := change.Row.GetDatumRow(decoded.TableInfo.GetFieldSlice())
+	require.Equal(t, expected, obtained[0])
 }
 
 func TestLargeMessageWithoutHandle(t *testing.T) {
