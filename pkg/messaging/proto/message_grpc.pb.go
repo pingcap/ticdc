@@ -19,148 +19,98 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	MessageCenter_SendEvents_FullMethodName   = "/proto.MessageCenter/sendEvents"
-	MessageCenter_SendCommands_FullMethodName = "/proto.MessageCenter/sendCommands"
+	MessageService_StreamMessages_FullMethodName = "/proto.MessageService/streamMessages"
 )
 
-// MessageCenterClient is the client API for MessageCenter service.
+// MessageServiceClient is the client API for MessageService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type MessageCenterClient interface {
-	// The clients call this method to build a event channel from client to server.
-	SendEvents(ctx context.Context, in *Message, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Message], error)
-	SendCommands(ctx context.Context, in *Message, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Message], error)
+type MessageServiceClient interface {
+	// Bidirectional streaming RPC for both events and commands
+	StreamMessages(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[Message, Message], error)
 }
 
-type messageCenterClient struct {
+type messageServiceClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewMessageCenterClient(cc grpc.ClientConnInterface) MessageCenterClient {
-	return &messageCenterClient{cc}
+func NewMessageServiceClient(cc grpc.ClientConnInterface) MessageServiceClient {
+	return &messageServiceClient{cc}
 }
 
-func (c *messageCenterClient) SendEvents(ctx context.Context, in *Message, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Message], error) {
+func (c *messageServiceClient) StreamMessages(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[Message, Message], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &MessageCenter_ServiceDesc.Streams[0], MessageCenter_SendEvents_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &MessageService_ServiceDesc.Streams[0], MessageService_StreamMessages_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	x := &grpc.GenericClientStream[Message, Message]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type MessageCenter_SendEventsClient = grpc.ServerStreamingClient[Message]
+type MessageService_StreamMessagesClient = grpc.BidiStreamingClient[Message, Message]
 
-func (c *messageCenterClient) SendCommands(ctx context.Context, in *Message, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Message], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &MessageCenter_ServiceDesc.Streams[1], MessageCenter_SendCommands_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[Message, Message]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type MessageCenter_SendCommandsClient = grpc.ServerStreamingClient[Message]
-
-// MessageCenterServer is the server API for MessageCenter service.
-// All implementations must embed UnimplementedMessageCenterServer
+// MessageServiceServer is the server API for MessageService service.
+// All implementations must embed UnimplementedMessageServiceServer
 // for forward compatibility.
-type MessageCenterServer interface {
-	// The clients call this method to build a event channel from client to server.
-	SendEvents(*Message, grpc.ServerStreamingServer[Message]) error
-	SendCommands(*Message, grpc.ServerStreamingServer[Message]) error
-	mustEmbedUnimplementedMessageCenterServer()
+type MessageServiceServer interface {
+	// Bidirectional streaming RPC for both events and commands
+	StreamMessages(grpc.BidiStreamingServer[Message, Message]) error
+	mustEmbedUnimplementedMessageServiceServer()
 }
 
-// UnimplementedMessageCenterServer must be embedded to have
+// UnimplementedMessageServiceServer must be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedMessageCenterServer struct{}
+type UnimplementedMessageServiceServer struct{}
 
-func (UnimplementedMessageCenterServer) SendEvents(*Message, grpc.ServerStreamingServer[Message]) error {
-	return status.Errorf(codes.Unimplemented, "method SendEvents not implemented")
+func (UnimplementedMessageServiceServer) StreamMessages(grpc.BidiStreamingServer[Message, Message]) error {
+	return status.Errorf(codes.Unimplemented, "method StreamMessages not implemented")
 }
-func (UnimplementedMessageCenterServer) SendCommands(*Message, grpc.ServerStreamingServer[Message]) error {
-	return status.Errorf(codes.Unimplemented, "method SendCommands not implemented")
-}
-func (UnimplementedMessageCenterServer) mustEmbedUnimplementedMessageCenterServer() {}
-func (UnimplementedMessageCenterServer) testEmbeddedByValue()                       {}
+func (UnimplementedMessageServiceServer) mustEmbedUnimplementedMessageServiceServer() {}
+func (UnimplementedMessageServiceServer) testEmbeddedByValue()                        {}
 
-// UnsafeMessageCenterServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to MessageCenterServer will
+// UnsafeMessageServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to MessageServiceServer will
 // result in compilation errors.
-type UnsafeMessageCenterServer interface {
-	mustEmbedUnimplementedMessageCenterServer()
+type UnsafeMessageServiceServer interface {
+	mustEmbedUnimplementedMessageServiceServer()
 }
 
-func RegisterMessageCenterServer(s grpc.ServiceRegistrar, srv MessageCenterServer) {
-	// If the following call pancis, it indicates UnimplementedMessageCenterServer was
+func RegisterMessageServiceServer(s grpc.ServiceRegistrar, srv MessageServiceServer) {
+	// If the following call pancis, it indicates UnimplementedMessageServiceServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&MessageCenter_ServiceDesc, srv)
+	s.RegisterService(&MessageService_ServiceDesc, srv)
 }
 
-func _MessageCenter_SendEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(Message)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(MessageCenterServer).SendEvents(m, &grpc.GenericServerStream[Message, Message]{ServerStream: stream})
+func _MessageService_StreamMessages_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(MessageServiceServer).StreamMessages(&grpc.GenericServerStream[Message, Message]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type MessageCenter_SendEventsServer = grpc.ServerStreamingServer[Message]
+type MessageService_StreamMessagesServer = grpc.BidiStreamingServer[Message, Message]
 
-func _MessageCenter_SendCommands_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(Message)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(MessageCenterServer).SendCommands(m, &grpc.GenericServerStream[Message, Message]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type MessageCenter_SendCommandsServer = grpc.ServerStreamingServer[Message]
-
-// MessageCenter_ServiceDesc is the grpc.ServiceDesc for MessageCenter service.
+// MessageService_ServiceDesc is the grpc.ServiceDesc for MessageService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var MessageCenter_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "proto.MessageCenter",
-	HandlerType: (*MessageCenterServer)(nil),
+var MessageService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "proto.MessageService",
+	HandlerType: (*MessageServiceServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
-			StreamName:    "sendEvents",
-			Handler:       _MessageCenter_SendEvents_Handler,
+			StreamName:    "streamMessages",
+			Handler:       _MessageService_StreamMessages_Handler,
 			ServerStreams: true,
-		},
-		{
-			StreamName:    "sendCommands",
-			Handler:       _MessageCenter_SendCommands_Handler,
-			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "pkg/messaging/proto/message.proto",

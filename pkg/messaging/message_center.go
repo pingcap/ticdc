@@ -15,6 +15,7 @@ package messaging
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -30,6 +31,10 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+)
+
+const (
+	messageCenterCheckInterval = time.Second * 1
 )
 
 // MessageCenter is the interface to send and receive messages to/from other targets.
@@ -61,12 +66,9 @@ type MessageReceiver interface {
 // gRPC generates two different interfaces, MessageCenter_SendEventsServer
 // and MessageCenter_SendCommandsServer.
 // We use these two interfaces to unite them, to simplify the code.
-type grpcReceiver interface {
-	Recv() (*proto.Message, error)
-}
-
-type grpcSender interface {
+type grpcStream interface {
 	Send(*proto.Message) error
+	Recv() (*proto.Message, error)
 }
 
 // messageCenter is the core of the messaging system.
@@ -91,6 +93,12 @@ type messageCenter struct {
 		sync.RWMutex
 		m map[node.ID]*remoteMessageTarget
 	}
+
+	remoteNodeInfos struct {
+		sync.RWMutex
+		m map[node.ID]*node.Info
+	}
+	notifyCh chan struct{}
 
 	grpcServer *grpc.Server
 	router     *router
@@ -121,6 +129,7 @@ func NewMessageCenter(
 		receiveEventCh: receiveEventCh,
 		receiveCmdCh:   receiveCmdCh,
 		router:         newRouter(),
+		notifyCh:       make(chan struct{}, 1),
 	}
 	mc.remoteTargets.m = make(map[node.ID]*remoteMessageTarget)
 
@@ -152,7 +161,35 @@ func (mc *messageCenter) Run(ctx context.Context) {
 		return nil
 	})
 
+	mc.g.Go(func() error {
+		mc.checkRemoteTarget(ctx)
+		return nil
+	})
+
 	log.Info("Start running message center", zap.Stringer("id", mc.id))
+}
+
+// checkRemoteTarget checks the remote targets and reset the connection if there is an error.
+func (mc *messageCenter) checkRemoteTarget(ctx context.Context) {
+	ticker := time.NewTicker(messageCenterCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			mc.remoteTargets.RLock()
+			for _, target := range mc.remoteTargets.m {
+				if err := target.getErr(); err != nil {
+					log.Warn("remote target error, reset the connection", zap.Stringer("remoteID", target.targetId), zap.String("remoteAddr", target.targetAddr), zap.Error(err))
+					target.resetConnect()
+				}
+			}
+			mc.remoteTargets.RUnlock()
+		case <-mc.notifyCh:
+			mc.handleNodeChanges()
+		}
+	}
 }
 
 func (mc *messageCenter) RegisterHandler(topic string, handler MessageHandler) {
@@ -164,6 +201,28 @@ func (mc *messageCenter) DeRegisterHandler(topic string) {
 }
 
 func (mc *messageCenter) OnNodeChanges(activeNode map[node.ID]*node.Info) {
+	mc.remoteNodeInfos.Lock()
+	defer mc.remoteNodeInfos.Unlock()
+	mc.remoteNodeInfos.m = make(map[node.ID]*node.Info)
+	for id, node := range activeNode {
+		mc.remoteNodeInfos.m[id] = node
+	}
+
+	select {
+	case mc.notifyCh <- struct{}{}:
+	default:
+	}
+}
+
+func (mc *messageCenter) handleNodeChanges() {
+	activeNode := make(map[node.ID]*node.Info)
+
+	mc.remoteNodeInfos.RLock()
+	for id, node := range mc.remoteNodeInfos.m {
+		activeNode[id] = node
+	}
+	mc.remoteNodeInfos.RUnlock()
+
 	allTarget := make(map[node.ID]bool)
 	allTarget[mc.id] = true
 	mc.remoteTargets.RLock()
@@ -263,14 +322,6 @@ func (mc *messageCenter) SendCommand(msg *TargetMessage) error {
 	return target.sendCommand(msg)
 }
 
-func (mc *messageCenter) ReceiveEvent() (*TargetMessage, error) {
-	return <-mc.receiveEventCh, nil
-}
-
-func (mc *messageCenter) ReceiveCmd() (*TargetMessage, error) {
-	return <-mc.receiveCmdCh, nil
-}
-
 // Close stops the grpc server and stops all the connections to the remote targets.
 func (mc *messageCenter) Close() {
 	log.Info("message center is closing", zap.Stringer("id", mc.id))
@@ -351,27 +402,16 @@ func (mc *messageCenter) updateMetrics(ctx context.Context) {
 // It handles the gRPC requests from the clients,
 // and then calls the methods in MessageCenter struct to handle the requests.
 type grpcServer struct {
-	proto.UnimplementedMessageCenterServer
+	proto.UnimplementedMessageServiceServer
 	messageCenter *messageCenter
 }
 
-func NewMessageCenterServer(mc MessageCenter) proto.MessageCenterServer {
+func NewMessageCenterServer(mc MessageCenter) proto.MessageServiceServer {
 	return &grpcServer{messageCenter: mc.(*messageCenter)}
 }
 
-// SendEvents implements the gRPC service MessageCenter.SendEvents
-func (s *grpcServer) SendEvents(msg *proto.Message, stream proto.MessageCenter_SendEventsServer) error {
-	metricsStreamGauge := metrics.MessagingStreamGauge.WithLabelValues(msg.GetFrom())
-	metricsStreamGauge.Inc()
-	defer metricsStreamGauge.Dec()
-	return s.handleConnect(msg, stream, true)
-}
-
-// SendCommands implements the gRPC service MessageCenter.SendCommands
-func (s *grpcServer) SendCommands(msg *proto.Message, stream proto.MessageCenter_SendCommandsServer) error {
-	metricsStreamGauge := metrics.MessagingStreamGauge.WithLabelValues(msg.GetFrom())
-	metricsStreamGauge.Inc()
-	return s.handleConnect(msg, stream, false)
+func (s *grpcServer) StreamMessages(stream proto.MessageService_StreamMessagesServer) error {
+	return s.handleConnect(stream)
 }
 
 func (s *grpcServer) id() node.ID {
@@ -380,18 +420,36 @@ func (s *grpcServer) id() node.ID {
 
 // handleConnect registers the client as a target in the message center.
 // So the message center can receive messages from the client.
-func (s *grpcServer) handleConnect(msg *proto.Message, stream grpcSender, isEvent bool) error {
-	// The first message is an empty message without payload, to identify the client server id.
-	to := node.ID(msg.To)
-	if to != s.id() {
-		err := apperror.AppError{Type: apperror.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %s not found", to)}
-		log.Error("Target not found", zap.Error(err))
+func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesServer) error {
+	// The first message is an handshake message.
+	msg, err := stream.Recv()
+	if err != nil {
 		return err
 	}
+
+	if msg.Type != int32(TypeMessageHandShake) {
+		log.Panic("Received unexpected message type, should be handshake",
+			zap.Stringer("local", s.messageCenter.id),
+			zap.String("remote", msg.From),
+			zap.Int32("type", msg.Type))
+	}
+
+	handshake := &HandshakeMessage{}
+	if err := handshake.Unmarshal(msg.Payload[0]); err != nil {
+		log.Panic("failed to unmarshal handshake message", zap.Error(err))
+	}
+
+	to := node.ID(msg.To)
+	if to != s.id() {
+		err := apperror.AppError{Type: apperror.ErrorTypeTargetMismatch, Reason: fmt.Sprintf("The receiver %s not match with the message center id %s", to, s.id())}
+		log.Error("Target mismatch", zap.Error(err))
+		return err
+	}
+
 	targetId := node.ID(msg.From)
 
 	s.messageCenter.remoteTargets.RLock()
-	remoteTarget, ok := s.messageCenter.remoteTargets.m[targetId]
+	target, ok := s.messageCenter.remoteTargets.m[targetId]
 	s.messageCenter.remoteTargets.RUnlock()
 
 	if !ok {
@@ -400,14 +458,26 @@ func (s *grpcServer) handleConnect(msg *proto.Message, stream grpcSender, isEven
 		return err
 	}
 
-	log.Info("Start to sent message to remote target",
-		zap.Any("messageCenterID", s.messageCenter.id),
-		zap.String("remote", msg.From),
-		zap.Bool("isEvent", isEvent))
+	log.Info("Start to receive messages from remote target",
+		zap.String("streamType", handshake.StreamType),
+		zap.Any("localID", s.messageCenter.id),
+		zap.String("localAddr", target.targetAddr),
+		zap.Stringer("remoteID", targetId),
+		zap.String("remoteAddr", target.targetAddr))
 
-	if isEvent {
-		return remoteTarget.runEventSendStream(stream)
-	} else {
-		return remoteTarget.runCommandSendStream(stream)
-	}
+	return target.handleIncomingStream(stream, handshake)
+}
+
+type HandshakeMessage struct {
+	Version    byte
+	Timestamp  int64
+	StreamType string
+}
+
+func (h *HandshakeMessage) Marshal() ([]byte, error) {
+	return json.Marshal(h)
+}
+
+func (h *HandshakeMessage) Unmarshal(data []byte) error {
+	return json.Unmarshal(data, h)
 }

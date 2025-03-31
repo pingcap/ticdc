@@ -50,7 +50,7 @@ func NewMessageCenterForTest(t *testing.T) (*messageCenter, string, func()) {
 	mc := NewMessageCenter(ctx, id, mockEpoch, mcConfig, nil)
 	mockEpoch++
 	mcs := NewMessageCenterServer(mc)
-	proto.RegisterMessageCenterServer(grpcServer, mcs)
+	proto.RegisterMessageServiceServer(grpcServer, mcs)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
