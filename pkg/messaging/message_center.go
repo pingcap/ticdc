@@ -47,7 +47,6 @@ type MessageCenter interface {
 // The method in the interface should be thread-safe and non-blocking.
 // If the message cannot be sent, the method will return an `ErrorTypeMessageCongested` error.
 type MessageSender interface {
-	// TODO: Make these methods support timeout later.
 	SendEvent(msg *TargetMessage) error
 	SendCommand(cmd *TargetMessage) error
 	IsReadyToSend(target node.ID) bool
@@ -82,10 +81,7 @@ type grpcSender interface {
 // We might use multiple channels later.
 type messageCenter struct {
 	// The server id of the message center
-	id node.ID
-	// The current epoch of the message center,
-	// when every time the message center is restarted, the epoch will be increased by 1.
-	epoch    uint64
+	id       node.ID
 	cfg      *config.MessageCenterConfig
 	security *security.Credential
 	// The local target, which is the message center itself.
@@ -119,7 +115,6 @@ func NewMessageCenter(
 
 	mc := &messageCenter{
 		id:             id,
-		epoch:          epoch,
 		cfg:            cfg,
 		security:       security,
 		localTarget:    newLocalMessageTarget(id, receiveEventCh, receiveCmdCh),
@@ -179,7 +174,7 @@ func (mc *messageCenter) OnNodeChanges(activeNode map[node.ID]*node.Info) {
 
 	for id, node := range activeNode {
 		if _, ok := allTarget[id]; !ok {
-			mc.addTarget(node.ID, node.Epoch, node.AdvertiseAddr)
+			mc.addTarget(node.ID, node.AdvertiseAddr)
 		}
 	}
 	for id := range allTarget {
@@ -191,14 +186,14 @@ func (mc *messageCenter) OnNodeChanges(activeNode map[node.ID]*node.Info) {
 
 // AddTarget is called when a new remote target is discovered,
 // to add the target to the message center.
-func (mc *messageCenter) addTarget(id node.ID, epoch uint64, addr string) {
+func (mc *messageCenter) addTarget(id node.ID, addr string) {
 	// If the target is the message center itself, we don't need to add it.
 	if id == mc.id {
-		log.Info("Add local target", zap.Stringer("id", id), zap.Any("epoch", epoch), zap.Any("addr", addr))
+		log.Info("Add local target", zap.Stringer("id", id), zap.Any("addr", addr))
 		return
 	}
-	log.Info("Add remote target", zap.Stringer("local", mc.id), zap.Stringer("remote", id), zap.Any("epoch", epoch), zap.Any("addr", addr))
-	rt := mc.touchRemoteTarget(id, epoch, addr)
+	log.Info("Add remote target", zap.Stringer("local", mc.id), zap.Stringer("remote", id), zap.Any("addr", addr))
+	rt := mc.touchRemoteTarget(id, addr)
 	rt.connect()
 }
 
@@ -298,7 +293,7 @@ func (mc *messageCenter) Close() {
 
 // touchRemoteTarget returns the remote target by the id,
 // if the target is not found, it will create a new one.
-func (mc *messageCenter) touchRemoteTarget(id node.ID, epoch uint64, addr string) *remoteMessageTarget {
+func (mc *messageCenter) touchRemoteTarget(id node.ID, addr string) *remoteMessageTarget {
 	mc.remoteTargets.Lock()
 	defer mc.remoteTargets.Unlock()
 
@@ -307,38 +302,30 @@ func (mc *messageCenter) touchRemoteTarget(id node.ID, epoch uint64, addr string
 		// If the target is not found, create a new one.
 		target = newRemoteMessageTarget(
 			mc.ctx,
-			mc.id, id, mc.epoch,
-			epoch, addr, mc.receiveEventCh,
+			mc.id, id,
+			addr, mc.receiveEventCh,
 			mc.receiveCmdCh, mc.cfg, mc.security)
 		mc.remoteTargets.m[id] = target
-		return target
-	}
-
-	// If the target already exists and the epoch is not old, return the target.
-	if target.Epoch() >= epoch {
-		log.Info("Remote target already exists", zap.Stringer("id", id))
 		return target
 	}
 
 	// If the target is old and the address is the same, update its epoch.
 	if target.targetAddr == addr {
 		log.Info("Remote target already exists, but the epoch is old, update the epoch", zap.Stringer("id", id))
-		target.targetEpoch.Store(epoch)
 		return target
 	}
 
 	// If the target is old and the address is different, close the old target and create a new one.
 	log.Info("Remote target changed, creating a new one",
 		zap.Stringer("id", id),
-		zap.Any("oldEpoch", target.Epoch()),
-		zap.Any("newEpoch", epoch),
 		zap.Any("oldAddr", target.targetAddr),
 		zap.Any("newAddr", addr))
+
 	target.close()
 	newTarget := newRemoteMessageTarget(
 		mc.ctx,
-		mc.id, id, mc.epoch,
-		epoch, addr, mc.receiveEventCh,
+		mc.id, id,
+		addr, mc.receiveEventCh,
 		mc.receiveCmdCh, mc.cfg, mc.security)
 	mc.remoteTargets.m[id] = newTarget
 	return newTarget
@@ -410,13 +397,6 @@ func (s *grpcServer) handleConnect(msg *proto.Message, stream grpcSender, isEven
 	if !ok {
 		log.Info("Remote target not found", zap.Any("messageCenter", s.messageCenter.id), zap.Any("remote", targetId))
 		err := &apperror.AppError{Type: apperror.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %s not found", targetId)}
-		return err
-	}
-
-	// The handshake message's epoch should be the same as the target's epoch.
-	if msg.Epoch != remoteTarget.Epoch() {
-		err := apperror.AppError{Type: apperror.ErrorTypeEpochMismatch, Reason: fmt.Sprintf("Target %s epoch mismatch, expect %d, got %d", targetId, remoteTarget.Epoch(), msg.Epoch)}
-		log.Error("Epoch mismatch", zap.Error(err))
 		return err
 	}
 

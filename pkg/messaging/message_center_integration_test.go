@@ -72,12 +72,12 @@ func setupMessageCenters(t *testing.T) (*messageCenter, *messageCenter, *message
 	mc2, mc2Addr, mc2Stop := NewMessageCenterForTest(t)
 	mc3, mc3Addr, mc3Stop := NewMessageCenterForTest(t)
 
-	mc1.addTarget(mc2.id, mc2.epoch, mc2Addr)
-	mc1.addTarget(mc3.id, mc3.epoch, mc3Addr)
-	mc2.addTarget(mc1.id, mc1.epoch, mc1Addr)
-	mc2.addTarget(mc3.id, mc3.epoch, mc3Addr)
-	mc3.addTarget(mc1.id, mc1.epoch, mc1Addr)
-	mc3.addTarget(mc2.id, mc2.epoch, mc2Addr)
+	mc1.addTarget(mc2.id, mc2Addr)
+	mc1.addTarget(mc3.id, mc3Addr)
+	mc2.addTarget(mc1.id, mc1Addr)
+	mc2.addTarget(mc3.id, mc3Addr)
+	mc3.addTarget(mc1.id, mc1Addr)
+	mc3.addTarget(mc2.id, mc2Addr)
 
 	cleanup := func() {
 		mc1Stop()

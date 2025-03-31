@@ -9,12 +9,10 @@ message CallerInfo{
 message Message {
     string from = 1;
     string to = 2;
-    uint64 epoch = 3;
-    uint64 seqnum = 4;
-    int32 type = 5;
+    int32 type = 3;
     // topic is the destination of the message, it is used to route the message to the correct handler.
-    string topic = 6;
-    repeated bytes payload = 7;
+    string topic = 4;
+    repeated bytes payload = 5;
 }
 
 message MessageSummary {

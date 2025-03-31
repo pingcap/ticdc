@@ -49,13 +49,11 @@ const (
 // Currently it spawns 2 goroutines for each remote target, and 2 goroutines for each local target,
 // and 1 goroutine to handle grpc stream error.
 type remoteMessageTarget struct {
-	messageCenterID    node.ID
-	messageCenterEpoch uint64
+	messageCenterID node.ID
 
-	targetEpoch atomic.Value
-	targetId    node.ID
-	targetAddr  string
-	security    *security.Credential
+	targetId   node.ID
+	targetAddr string
+	security   *security.Credential
 
 	// senderMu is used to protect the eventSender and commandSender.
 	// It is used to ensure that there is only one eventStream and commandStream for the target.
@@ -109,10 +107,6 @@ func (s *remoteMessageTarget) isReadyToSend() bool {
 	return s.eventSender.ready.Load() && s.commandSender.ready.Load()
 }
 
-func (s *remoteMessageTarget) Epoch() uint64 {
-	return s.targetEpoch.Load().(uint64)
-}
-
 func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 	if !s.eventSender.ready.Load() {
 		s.connectionNotfoundErrorCounter.Inc()
@@ -152,30 +146,28 @@ func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
 func newRemoteMessageTarget(
 	ctx context.Context,
 	localID, targetId node.ID,
-	localEpoch, targetEpoch uint64,
 	addr string,
 	recvEventCh, recvCmdCh chan *TargetMessage,
 	cfg *config.MessageCenterConfig,
 	security *security.Credential,
 ) *remoteMessageTarget {
-	log.Info("Create remote target", zap.Stringer("local", localID), zap.Stringer("remote", targetId), zap.Any("addr", addr), zap.Any("localEpoch", localEpoch), zap.Any("targetEpoch", targetEpoch))
+	log.Info("Create remote target", zap.Stringer("local", localID), zap.Stringer("remote", targetId), zap.Any("addr", addr))
 	ctx, cancel := context.WithCancel(ctx)
 	rt := &remoteMessageTarget{
-		messageCenterID:    localID,
-		messageCenterEpoch: localEpoch,
-		targetAddr:         addr,
-		targetId:           targetId,
-		security:           security,
-		eventSender:        &sendStreamWrapper{ready: atomic.Bool{}},
-		commandSender:      &sendStreamWrapper{ready: atomic.Bool{}},
-		ctx:                ctx,
-		cancel:             cancel,
-		sendEventCh:        make(chan *proto.Message, cfg.CacheChannelSize),
-		sendCmdCh:          make(chan *proto.Message, cfg.CacheChannelSize),
-		recvEventCh:        recvEventCh,
-		recvCmdCh:          recvCmdCh,
-		errCh:              make(chan AppError, 8),
-		wg:                 &sync.WaitGroup{},
+		messageCenterID: localID,
+		targetAddr:      addr,
+		targetId:        targetId,
+		security:        security,
+		eventSender:     &sendStreamWrapper{ready: atomic.Bool{}},
+		commandSender:   &sendStreamWrapper{ready: atomic.Bool{}},
+		ctx:             ctx,
+		cancel:          cancel,
+		sendEventCh:     make(chan *proto.Message, cfg.CacheChannelSize),
+		sendCmdCh:       make(chan *proto.Message, cfg.CacheChannelSize),
+		recvEventCh:     recvEventCh,
+		recvCmdCh:       recvCmdCh,
+		errCh:           make(chan AppError, 8),
+		wg:              &sync.WaitGroup{},
 
 		sendEventCounter:           metrics.MessagingSendMsgCounter.WithLabelValues(string(addr), "event"),
 		dropEventCounter:           metrics.MessagingDropMsgCounter.WithLabelValues(string(addr), "event"),
@@ -191,7 +183,6 @@ func newRemoteMessageTarget(
 		connectionNotfoundErrorCounter: metrics.MessagingErrorCounter.WithLabelValues(string(addr), "message", "connection_not_found"),
 		connectionFailedErrorCounter:   metrics.MessagingErrorCounter.WithLabelValues(string(addr), "message", "connection_failed"),
 	}
-	rt.targetEpoch.Store(targetEpoch)
 	rt.runHandleErr(ctx)
 	return rt
 }
@@ -275,10 +266,9 @@ func (s *remoteMessageTarget) connect() {
 
 	client := proto.NewMessageCenterClient(conn)
 	handshake := &proto.Message{
-		From:  string(s.messageCenterID),
-		To:    string(s.targetId),
-		Epoch: uint64(s.messageCenterEpoch),
-		Type:  int32(TypeMessageHandShake),
+		From: string(s.messageCenterID),
+		To:   string(s.targetId),
+		Type: int32(TypeMessageHandShake),
 	}
 
 	eventStream, err := client.SendEvents(s.ctx, handshake)
@@ -328,10 +318,9 @@ func (s *remoteMessageTarget) resetReceiveStream() {
 	if conn, ok := s.getConn(); ok {
 		client := proto.NewMessageCenterClient(conn)
 		handshake := &proto.Message{
-			From:  string(s.messageCenterID),
-			To:    string(s.targetId),
-			Epoch: uint64(s.messageCenterEpoch),
-			Type:  int32(TypeMessageHandShake),
+			From: string(s.messageCenterID),
+			To:   string(s.targetId),
+			Type: int32(TypeMessageHandShake),
 		}
 
 		s.client.Lock()
@@ -392,10 +381,9 @@ func (s *remoteMessageTarget) runEventSendStream(eventStream grpcSender) error {
 
 	// send a ack message to the remote target
 	ack := &proto.Message{
-		From:  string(s.messageCenterID),
-		To:    string(s.targetId),
-		Epoch: uint64(s.messageCenterEpoch),
-		Type:  int32(TypeMessageHandShake),
+		From: string(s.messageCenterID),
+		To:   string(s.targetId),
+		Type: int32(TypeMessageHandShake),
 	}
 	if err := eventStream.Send(ack); err != nil {
 		return err
@@ -462,12 +450,10 @@ func (s *remoteMessageTarget) runReceiveMessages(stream grpcReceiver, receiveCh 
 				continue
 			}
 			targetMsg := &TargetMessage{
-				From:     node.ID(message.From),
-				To:       node.ID(message.To),
-				Topic:    message.Topic,
-				Epoch:    message.Epoch,
-				Sequence: message.Seqnum,
-				Type:     mt,
+				From:  node.ID(message.From),
+				To:    node.ID(message.To),
+				Topic: message.Topic,
+				Type:  mt,
 			}
 			for _, payload := range message.Payload {
 				msg, err := decodeIOType(mt, payload)
@@ -500,7 +486,6 @@ func (s *remoteMessageTarget) newMessage(msg ...*TargetMessage) *proto.Message {
 	protoMsg := &proto.Message{
 		From:    string(s.messageCenterID),
 		To:      string(s.targetId),
-		Epoch:   uint64(s.messageCenterEpoch),
 		Topic:   string(msg[0].Topic),
 		Type:    int32(msg[0].Type),
 		Payload: msgBytes,
