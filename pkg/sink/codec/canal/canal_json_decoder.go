@@ -544,7 +544,7 @@ func formatValue(value any, ft types.FieldType) any {
 		return result
 	default:
 	}
-	log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.Any("rawValue", value))
+	log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.Any("rawValue", rawValue))
 	return nil
 }
 
