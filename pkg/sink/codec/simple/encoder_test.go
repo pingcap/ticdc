@@ -33,7 +33,6 @@ import (
 	mock_simple "github.com/pingcap/ticdc/pkg/sink/codec/simple/mock"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,12 +123,10 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 			require.NoError(t, err)
 
 			originCols := createTableDDL.TableInfo.GetColumns()
-			obtainedCols := decodedDDL.TableInfo.GetColumns()
 
 			for _, expected := range originCols {
-				name := createTableDDL.TableInfo.ForceGetColumnName(expected.ID)
-				actualID := decodedDDL.TableInfo.ForceGetColumnIDByName(name)
-				actual := obtainedCols[actualID]
+				actualID := decodedDDL.TableInfo.ForceGetColumnIDByName(expected.Name.O)
+				actual := decodedDDL.TableInfo.ForceGetColumnInfo(actualID)
 				require.Equal(t, expected.GetFlag(), actual.GetFlag())
 			}
 
@@ -216,13 +213,13 @@ func TestE2EPartitionTable(t *testing.T) {
 		FinishedTs: createPartitionTableJob.BinlogInfo.FinishedTS,
 	}
 
-	insertEvent := helper.DML2Event(`insert into test.t values (1, 1)`, "test", "t", "p0")
+	insertEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 1)`)
 	require.NotNil(t, insertEvent)
 
-	insertEvent1 := helper.DML2Event(`insert into test.t values (11, 11)`, "test", "t", "p1")
+	insertEvent1 := helper.DML2Event("test", "t", `insert into test.t values (11, 11)`)
 	require.NotNil(t, insertEvent1)
 
-	insertEvent2 := helper.DML2Event(`insert into test.t values (21, 21)`, "test", "t", "p2")
+	insertEvent2 := helper.DML2Event("test", "t", `insert into test.t values (21, 21)`)
 	require.NotNil(t, insertEvent2)
 
 	events := []*commonEvent.DMLEvent{insertEvent, insertEvent1, insertEvent2}
@@ -286,14 +283,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
-	dropDBJob := helper.DDL2Job(`DROP DATABASE IF EXISTS test`)
-	dropDBEvent := &commonEvent.DDLEvent{
-		SchemaID:   dropDBJob.SchemaID,
-		TableID:    dropDBJob.TableID,
-		Query:      dropDBJob.Query,
-		TableInfo:  helper.GetTableInfo(dropDBJob),
-		FinishedTs: dropDBJob.BinlogInfo.FinishedTS,
-	}
+	dropDBEvent := helper.DDL2Event(`DROP DATABASE IF EXISTS test`)
 	createDBDDLEvent := helper.DDL2Event(`CREATE DATABASE IF NOT EXISTS test`)
 	helper.Tk().MustExec("use test")
 
@@ -851,26 +841,13 @@ func TestEncodeDDLEvent(t *testing.T) {
 	defer helper.Close()
 
 	createTableSQL := `create table test.t(id int primary key, name varchar(255) not null, gender enum('male', 'female'), email varchar(255) null, key idx_name_email(name, email))`
-	createTableJob := helper.DDL2Job(createTableSQL)
-	createTableDDLEvent := &commonEvent.DDLEvent{
-		TableID:    createTableJob.TableID,
-		SchemaID:   createTableJob.SchemaID,
-		Query:      createTableJob.Query,
-		TableInfo:  helper.GetTableInfo(createTableJob),
-		FinishedTs: createTableJob.BinlogInfo.FinishedTS,
-	}
+	createTableDDLEvent := helper.DDL2Event(createTableSQL)
 
-	insertEvent := helper.DML2Event(`insert into test.t values (1, "jack", "male", "jack@abc.com")`, "test", "t")
+	insertEvent := helper.DML2Event("test", "t", `insert into test.t values (1, "jack", "male", "jack@abc.com")`)
 
-	renameTableJob := helper.DDL2Job(`rename table test.t to test.abc`)
-	renameTableDDLEvent := &commonEvent.DDLEvent{
-		TableID:    renameTableJob.TableID,
-		SchemaID:   renameTableJob.SchemaID,
-		Query:      renameTableJob.Query,
-		FinishedTs: renameTableJob.BinlogInfo.FinishedTS,
-	}
+	renameTableDDLEvent := helper.DDL2Event(`rename table test.t to test.abc`)
 
-	insertEvent2 := helper.DML2Event(`insert into test.abc values (2, "anna", "female", "anna@abc.com")`, "test", "abc")
+	insertEvent2 := helper.DML2Event("test", "t", `insert into test.abc values (2, "anna", "female", "anna@abc.com")`)
 	helper.Tk().MustExec("drop table test.abc")
 
 	ctx := context.Background()
@@ -1070,12 +1047,11 @@ func TestColumnFlags(t *testing.T) {
 		require.NoError(t, err)
 
 		originCols := createTableDDLEvent.TableInfo.GetColumns()
-		obtainedCols := decodedDDLEvent.TableInfo.GetColumns()
+		// obtainedCols := decodedDDLEvent.TableInfo.GetColumns()
 
 		for _, expected := range originCols {
-			name := createTableDDLEvent.TableInfo.ForceGetColumnName(expected.ID)
-			actualID := decodedDDLEvent.TableInfo.ForceGetColumnIDByName(name)
-			actual := obtainedCols[actualID]
+			actualID := decodedDDLEvent.TableInfo.ForceGetColumnIDByName(expected.Name.O)
+			actual := decodedDDLEvent.TableInfo.ForceGetColumnInfo(actualID)
 			require.Equal(t, expected.GetFlag(), actual.GetFlag())
 		}
 	}
@@ -1110,7 +1086,7 @@ func TestEncodeIntegerTypes(t *testing.T) {
 		-8388608, 0,
 		-2147483648, 0,
 		-9223372036854775808, 0)`
-	minValues := helper.DML2Event(sql, "test", "t")
+	minValues := helper.DML2Event("test", "t", sql)
 
 	sql = `insert into test.t values (
 		2,
@@ -1119,7 +1095,7 @@ func TestEncodeIntegerTypes(t *testing.T) {
  		8388607, 16777215,
  		2147483647, 4294967295,
  		9223372036854775807, 18446744073709551615)`
-	maxValues := helper.DML2Event(sql, "test", "t")
+	maxValues := helper.DML2Event("test", "t", sql)
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolSimple)
@@ -1202,7 +1178,7 @@ func TestEncoderOtherTypes(t *testing.T) {
 		  "key1": "value1",
 		  "key2": "value2"
 		}');`
-	event := helper.DML2Event(sql, "test", "t")
+	event := helper.DML2Event("test", "t", sql)
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolSimple)
@@ -1273,13 +1249,13 @@ func TestE2EPartitionTableDMLBeforeDDL(t *testing.T) {
 		partition p2 values less than MAXVALUE)`)
 	require.NotNil(t, createPartitionTableDDL)
 
-	insertEvent := helper.DML2Event(`insert into test.t values (1, 1)`, "test", "t", "p0")
+	insertEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 1)`)
 	require.NotNil(t, insertEvent)
 
-	insertEvent1 := helper.DML2Event(`insert into test.t values (11, 11)`, "test", "t", "p1")
+	insertEvent1 := helper.DML2Event("test", "t", `insert into test.t values (11, 11)`)
 	require.NotNil(t, insertEvent1)
 
-	insertEvent2 := helper.DML2Event(`insert into test.t values (21, 21)`, "test", "t", "p2")
+	insertEvent2 := helper.DML2Event("test", "t", `insert into test.t values (21, 21)`)
 	require.NotNil(t, insertEvent2)
 
 	events := []*commonEvent.DMLEvent{insertEvent, insertEvent1, insertEvent2}
@@ -1355,7 +1331,7 @@ func TestEncodeDMLBeforeDDL(t *testing.T) {
 	ddlEvent := helper.DDL2Event(sql)
 
 	sql = `insert into test.t values (1, 2)`
-	event := helper.DML2Event(sql, "test", "t")
+	event := helper.DML2Event("test", "t", sql)
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolSimple)
@@ -1429,7 +1405,7 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 	ddlEvent.IsBootstrap = true
 
 	sql = `insert into test.t values (1, "jack", 23, "jack@abc.com")`
-	dmlEvent := helper.DML2Event(sql, "test", "t")
+	dmlEvent := helper.DML2Event("test", "t", sql)
 
 	helper.Tk().MustExec("drop table test.t")
 
@@ -1856,7 +1832,7 @@ func TestDecoder(t *testing.T) {
 	messageType, hasNext, err := decoder.HasNext()
 	require.NoError(t, err)
 	require.False(t, hasNext)
-	require.Equal(t, model.MessageTypeUnknown, messageType)
+	require.Equal(t, common.MessageTypeUnknown, messageType)
 
 	ddl, err := decoder.NextDDLEvent()
 	require.ErrorIs(t, err, errors.ErrCodecDecode)
@@ -1909,5 +1885,5 @@ func TestMarshallerError(t *testing.T) {
 	messageType, hasNext, err := dec.HasNext()
 	require.ErrorIs(t, err, errors.ErrDecodeFailed)
 	require.False(t, hasNext)
-	require.Equal(t, model.MessageTypeUnknown, messageType)
+	require.Equal(t, common.MessageTypeUnknown, messageType)
 }
