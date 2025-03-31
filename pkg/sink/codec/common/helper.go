@@ -21,13 +21,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-sql-driver/mysql"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	pMySQL "github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"go.uber.org/zap"
 )
@@ -36,8 +36,8 @@ import (
 func GetMySQLType(columnInfo *model.ColumnInfo, fullType bool) string {
 	if !fullType {
 		result := types.TypeToStr(columnInfo.GetType(), columnInfo.GetCharset())
-		result = withUnsigned4MySQLType(result, pMySQL.HasUnsignedFlag(columnInfo.GetFlag()))
-		result = withZerofill4MySQLType(result, pMySQL.HasZerofillFlag(columnInfo.GetFlag()))
+		result = withUnsigned4MySQLType(result, mysql.HasUnsignedFlag(columnInfo.GetFlag()))
+		result = withZerofill4MySQLType(result, mysql.HasZerofillFlag(columnInfo.GetFlag()))
 		return result
 	}
 	return columnInfo.GetTypeDesc()
@@ -256,7 +256,7 @@ func queryRowChecksumAux(
 	query := fmt.Sprintf("set @@tidb_snapshot=%d", commitTs)
 	_, err := conn.ExecContext(ctx, query)
 	if err != nil {
-		mysqlErr, ok := errors.Cause(err).(*mysql.MySQLError)
+		mysqlErr, ok := errors.Cause(err).(*mysqlDriver.MySQLError)
 		if ok {
 			// Error 8055 (HY000): snapshot is older than GC safe point
 			if mysqlErr.Number == 8055 {
@@ -312,7 +312,7 @@ func MustSnapshotQuery(
 	query := fmt.Sprintf("set @@tidb_snapshot=%d", commitTs)
 	_, err = conn.ExecContext(ctx, query)
 	if err != nil {
-		mysqlErr, ok := errors.Cause(err).(*mysql.MySQLError)
+		mysqlErr, ok := errors.Cause(err).(*mysqlDriver.MySQLError)
 		if ok {
 			// Error 8055 (HY000): snapshot is older than GC safe point
 			if mysqlErr.Number == 8055 {

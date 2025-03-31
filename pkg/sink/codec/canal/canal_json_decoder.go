@@ -329,11 +329,11 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	switch msg.eventType() {
 	case canal.EventType_DELETE:
 		data := formatAllColumnsValue(msg.getData(), columns)
-		appendRow2Chunk(data, columns, chk)
+		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
 	case canal.EventType_INSERT:
 		data := formatAllColumnsValue(msg.getData(), columns)
-		appendRow2Chunk(data, columns, chk)
+		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
 	case canal.EventType_UPDATE:
 		previous := formatAllColumnsValue(msg.getOld(), columns)
@@ -343,8 +343,8 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 				previous[k] = v
 			}
 		}
-		appendRow2Chunk(previous, columns, chk)
-		appendRow2Chunk(data, columns, chk)
+		common.AppendRow2Chunk(previous, columns, chk)
+		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 	default:
@@ -546,56 +546,6 @@ func formatValue(value any, ft types.FieldType) any {
 	}
 	log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.Any("rawValue", value))
 	return nil
-}
-
-func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Chunk) {
-	mysqlType := ft.GetType()
-	if raw == nil {
-		chk.AppendNull(idx)
-		return
-	}
-	switch mysqlType {
-	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
-		if mysql.HasUnsignedFlag(ft.GetFlag()) {
-			chk.AppendUint64(idx, raw.(uint64))
-			return
-		}
-		chk.AppendInt64(idx, raw.(int64))
-	case mysql.TypeYear:
-		chk.AppendInt64(idx, raw.(int64))
-	case mysql.TypeFloat:
-		chk.AppendFloat32(idx, raw.(float32))
-	case mysql.TypeDouble:
-		chk.AppendFloat64(idx, raw.(float64))
-	case mysql.TypeVarString, mysql.TypeVarchar, mysql.TypeString,
-		mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
-		chk.AppendBytes(idx, raw.([]byte))
-	case mysql.TypeNewDecimal:
-		chk.AppendMyDecimal(idx, raw.(*tiTypes.MyDecimal))
-	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
-		chk.AppendTime(idx, raw.(tiTypes.Time))
-	case mysql.TypeDuration:
-		chk.AppendDuration(idx, raw.(tiTypes.Duration))
-	case mysql.TypeEnum:
-		chk.AppendEnum(idx, raw.(tiTypes.Enum))
-	case mysql.TypeSet:
-		chk.AppendSet(idx, raw.(tiTypes.Set))
-	case mysql.TypeBit:
-		chk.AppendBytes(idx, raw.(tiTypes.BinaryLiteral))
-	case mysql.TypeJSON:
-		chk.AppendJSON(idx, raw.(tiTypes.BinaryJSON))
-	case mysql.TypeTiDBVectorFloat32:
-		chk.AppendVectorFloat32(idx, raw.(tiTypes.VectorFloat32))
-	default:
-		log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.Any("raw", raw))
-	}
-}
-
-func appendRow2Chunk(data map[string]any, columns []*timodel.ColumnInfo, chk *chunk.Chunk) {
-	for idx, col := range columns {
-		value := data[col.Name.O]
-		appendCol2Chunk(idx, value, col.FieldType, chk)
-	}
 }
 
 func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
