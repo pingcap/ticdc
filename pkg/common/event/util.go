@@ -30,9 +30,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
-	// NOTE: Do not remove the `test_driver` import.
-	// For details, refer to: https://github.com/pingcap/parser/issues/43
-	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
 	"github.com/pingcap/tidb/pkg/session"
 	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/pingcap/tidb/pkg/testkit"
@@ -40,6 +37,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
+
+	// NOTE: Do not remove the `test_driver` import.
+	// For details, refer to: https://github.com/pingcap/parser/issues/43
+	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
 )
 
 // EventTestHelper is a test helper for generating test events
@@ -162,6 +163,17 @@ func (s *EventTestHelper) DDL2Jobs(ddl string, jobCnt int) []*timodel.Job {
 		s.ApplyJob(job)
 	}
 	return jobs
+}
+
+func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
+	job := s.DDL2Job(ddl)
+	return &DDLEvent{
+		SchemaID:   job.SchemaID,
+		TableID:    job.TableID,
+		Query:      job.Query,
+		TableInfo:  s.GetTableInfo(job),
+		FinishedTs: job.BinlogInfo.FinishedTS,
+	}
 }
 
 // DML2Event execute the dml(s) and return the corresponding DMLEvent.
