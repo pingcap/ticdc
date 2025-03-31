@@ -44,8 +44,8 @@ type BatchDecoder struct {
 	keyBytes   []byte
 	valueBytes []byte
 
-	nextKey   *messageKey
-	nextEvent *commonEvent.DMLEvent
+	nextKey *messageKey
+	nextRow *messageRow
 
 	storage storage.ExternalStorage
 
@@ -151,9 +151,8 @@ func (b *BatchDecoder) HasNext() (common.MessageType, bool, error) {
 			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
 			zap.Any("value", value), zap.Error(err))
 	}
-	rowMsg := new(messageRow)
-	rowMsg.decode(value)
-	b.nextEvent = b.assembleDMLEvent(b.nextKey, rowMsg)
+	b.nextRow = new(messageRow)
+	b.nextRow.decode(value)
 
 	return common.MessageTypeRow, true, nil
 }
@@ -218,13 +217,16 @@ func (b *BatchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 		return b.assembleEventFromClaimCheckStorage(ctx)
 	}
 
-	event := b.nextEvent
+	//b.nextEvent = b.assembleDMLEvent(b.nextKey, rowMsg)
 	if b.nextKey.OnlyHandleKey {
-		event = b.assembleHandleKeyOnlyEvent(ctx, event)
+		return b.assembleHandleKeyOnlyEvent(ctx)
 	}
 
+	result := b.assembleDMLEvent()
+
 	b.nextKey = nil
-	return event, nil
+	b.nextRow = nil
+	return result, nil
 }
 
 func (b *BatchDecoder) buildColumns(
@@ -261,9 +263,8 @@ func (b *BatchDecoder) buildColumns(
 	return columns
 }
 
-func (b *BatchDecoder) assembleHandleKeyOnlyEvent(
-	ctx context.Context, handleKeyOnlyEvent *commonEvent.DMLEvent,
-) *commonEvent.DMLEvent {
+func (b *BatchDecoder) assembleHandleKeyOnlyEvent(ctx context.Context) (*commonEvent.DMLEvent, error) {
+	// todo: interface query db condition from the nextKey and nextRow
 	//var (
 	//	schema   = handleKeyOnlyEvent.TableInfo.GetSchemaName()
 	//	table    = handleKeyOnlyEvent.TableInfo.GetTableName()
@@ -336,7 +337,7 @@ func (b *BatchDecoder) assembleHandleKeyOnlyEvent(
 	//	handleKeyOnlyEvent.PreColumns = model.Columns2ColumnDatas(preColumns, handleKeyOnlyEvent.TableInfo)
 	//}
 
-	return handleKeyOnlyEvent
+	return b.assembleDMLEvent(), nil
 }
 
 func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (*commonEvent.DMLEvent, error) {
@@ -372,7 +373,7 @@ func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 
 	rowMsg := new(messageRow)
 	rowMsg.decode(value)
-	event := b.assembleDMLEvent(msgKey, rowMsg)
+	event := b.assembleDMLEvent()
 
 	return event, nil
 }
@@ -490,7 +491,13 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 	return result
 }
 
-func (b *BatchDecoder) assembleDMLEvent(key *messageKey, value *messageRow) *commonEvent.DMLEvent {
+func (b *BatchDecoder) assembleDMLEvent() *commonEvent.DMLEvent {
+	key := b.nextKey
+	value := b.nextRow
+
+	b.nextKey = nil
+	b.nextRow = nil
+
 	tableInfo := b.queryTableInfo(key, value)
 	result := new(commonEvent.DMLEvent)
 	result.Length++
