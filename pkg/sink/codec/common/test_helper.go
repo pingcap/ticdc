@@ -91,7 +91,11 @@ func CompareRow(
 		for idx, col := range originTableInfo.GetColumns() {
 			colID := obtainedTableInfo.ForceGetColumnIDByName(col.Name.O)
 			offset := obtainedTableInfo.MustGetColumnOffsetByID(colID)
-			require.Equal(t, a[idx], b[offset])
+			if col.GetType() == mysql.TypeNewDecimal {
+				expected := a[idx].String()
+				actual := b[offset].String()
+				require.Equal(t, expected, actual)
+			}
 		}
 	}
 
@@ -102,7 +106,11 @@ func CompareRow(
 		for idx, col := range originTableInfo.GetColumns() {
 			colID := obtainedTableInfo.ForceGetColumnIDByName(col.Name.O)
 			offset := obtainedTableInfo.MustGetColumnOffsetByID(colID)
-			require.Equal(t, a[idx], b[offset])
+			if col.GetType() == mysql.TypeNewDecimal {
+				expected := a[idx].String()
+				actual := b[offset].String()
+				require.Equal(t, expected, actual)
+			}
 		}
 	}
 }

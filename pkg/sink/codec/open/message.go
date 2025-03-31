@@ -133,33 +133,32 @@ func formatColumn(c column, ft types.FieldType) column {
 			log.Panic("invalid column value for duration", zap.Any("value", c.Value), zap.Error(err))
 		}
 	case mysql.TypeBit:
-		if s, ok := c.Value.(json.Number); ok {
-			intNum, err := s.Int64()
-			if err != nil {
-				log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
-			}
-			c.Value = uint64(intNum)
+		intVal, err := c.Value.(json.Number).Int64()
+		if err != nil {
+			log.Panic("invalid column value for the bit type", zap.Any("value", c.Value), zap.Error(err))
 		}
+		// todo: shall we get the flen to make it compatible to the MySQL Sink?
+		// byteSize := (ft.GetFlen() + 7) >> 3
+		c.Value = tiTypes.NewBinaryLiteralFromUint(uint64(intVal), -1)
 	case mysql.TypeEnum:
-		a, err := c.Value.(json.Number).Int64()
+		var enumValue int64
+		enumValue, err = c.Value.(json.Number).Int64()
 		if err != nil {
 			log.Panic("invalid column value for enum", zap.Any("value", c.Value), zap.Error(err))
 		}
-		c.Value, err = tiTypes.ParseEnumValue(ft.GetElems(), uint64(a))
-		if err != nil {
-			log.Panic("parse enum value failed", zap.Any("value", c.Value),
-				zap.Any("enumValue", uint64(a)), zap.Error(err))
+		// only enum's value accessed by the MySQL Sink, and lack the elements, so let's make a compromise.
+		c.Value = tiTypes.Enum{
+			Value: uint64(enumValue),
 		}
 	case mysql.TypeSet:
-		var setValue uint64
-		setValue, err = strconv.ParseUint(c.Value.(string), 10, 64)
+		var setValue int64
+		setValue, err = c.Value.(json.Number).Int64()
 		if err != nil {
 			log.Panic("invalid column value for set", zap.Any("value", c.Value), zap.Error(err))
 		}
-		c.Value, err = tiTypes.ParseSetValue(ft.GetElems(), setValue)
-		if err != nil {
-			log.Panic("parse set value failed", zap.Any("value", c.Value),
-				zap.Any("setValue", setValue), zap.Error(err))
+		// only set's value accessed by the MySQL Sink, and lack the elements, so let's make a compromise.
+		c.Value = tiTypes.Set{
+			Value: uint64(setValue),
 		}
 	case mysql.TypeJSON:
 		c.Value, err = tiTypes.ParseBinaryJSONFromString(c.Value.(string))
@@ -172,15 +171,16 @@ func formatColumn(c column, ft types.FieldType) column {
 		if err != nil {
 			log.Panic("invalid column value for decimal", zap.Any("value", c.Value), zap.Error(err))
 		}
-		// workaround the decimal `digitInt` field incorrect problem.
-		bin, err := dec.ToBin(ft.GetFlen(), ft.GetDecimal())
-		if err != nil {
-			log.Panic("convert decimal to binary failed", zap.Any("value", c.Value), zap.Error(err))
-		}
-		_, err = dec.FromBin(bin, ft.GetFlen(), ft.GetDecimal())
-		if err != nil {
-			log.Panic("convert binary to decimal failed", zap.Any("value", c.Value), zap.Error(err))
-		}
+		//dec.GetDigitsFrac()
+		//// workaround the decimal `digitInt` field incorrect problem.
+		//bin, err := dec.ToBin(ft.GetFlen(), ft.GetDecimal())
+		//if err != nil {
+		//	log.Panic("convert decimal to binary failed", zap.Any("value", c.Value), zap.Error(err))
+		//}
+		//_, err = dec.FromBin(bin, ft.GetFlen(), ft.GetDecimal())
+		//if err != nil {
+		//	log.Panic("convert binary to decimal failed", zap.Any("value", c.Value), zap.Error(err))
+		//}
 		c.Value = dec
 	case mysql.TypeTiDBVectorFloat32:
 		c.Value, err = tiTypes.ParseVectorFloat32(c.Value.(string))

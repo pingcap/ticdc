@@ -454,7 +454,8 @@ func TestEncodeCheckpoint(t *testing.T) {
 	encoder, err := NewBatchEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	m, err := encoder.EncodeCheckpointEvent(12345678)
+	checkpoint := uint64(12345678)
+	m, err := encoder.EncodeCheckpointEvent(checkpoint)
 	require.NoError(t, err)
 
 	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
@@ -468,10 +469,10 @@ func TestEncodeCheckpoint(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, messageType, common.MessageTypeResolved)
 
-	checkpoint, err := decoder.NextResolvedEvent()
+	obtained, err := decoder.NextResolvedEvent()
 	require.NoError(t, err)
 
-	require.Equal(t, 12345678, checkpoint)
+	require.Equal(t, checkpoint, obtained)
 }
 
 func TestCreateTableDDL(t *testing.T) {
@@ -708,12 +709,6 @@ func TestMessageTooLarge(t *testing.T) {
 }
 
 func TestLargeMessageWithHandleKeyOnly(t *testing.T) {
-	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(150)
-	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
-	encoder, err := NewBatchEncoder(ctx, codecConfig)
-	require.NoError(t, err)
-
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
@@ -733,6 +728,12 @@ func TestLargeMessageWithHandleKeyOnly(t *testing.T) {
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 		Callback:       func() {},
 	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen).WithMaxMessageBytes(150)
+	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.NoError(t, err)
