@@ -23,6 +23,8 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
+	tiTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/zap"
 )
 
@@ -58,7 +60,7 @@ type column struct {
 }
 
 // formatColumn formats a codec column.
-func formatColumn(c column) column {
+func formatColumn(c column, ft types.FieldType) column {
 	var err error
 	switch c.Type {
 	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
@@ -109,7 +111,27 @@ func formatColumn(c column) column {
 			}
 		}
 	case mysql.TypeYear:
-		log.Panic("how to handle year? convert to uint64	", zap.Any("value", c.Value))
+		c.Value, err = c.Value.(json.Number).Int64()
+		if err != nil {
+			log.Panic("invalid column value for year", zap.Any("value", c.Value), zap.Error(err))
+		}
+	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
+		c.Value, err = tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, c.Value.(string), ft.GetType(), ft.GetDecimal())
+		if err != nil {
+			log.Panic("invalid column value for date / datetime / timestamp", zap.Any("value", c.Value), zap.Error(err))
+		}
+	// todo: shall we also convert timezone for the mysql.TypeTimestamp ?
+	//if mysqlType == mysql.TypeTimestamp && decoder.loc != nil && !t.IsZero() {
+	//	err = t.ConvertTimeZone(time.UTC, decoder.loc)
+	//	if err != nil {
+	//		log.Panic("convert timestamp to local timezone failed", zap.Any("rawValue", rawValue), zap.Error(err))
+	//	}
+	//}
+	case mysql.TypeDuration:
+		c.Value, _, err = tiTypes.ParseDuration(tiTypes.DefaultStmtNoWarningContext, c.Value.(string), ft.GetDecimal())
+		if err != nil {
+			log.Panic("invalid column value for duration", zap.Any("value", c.Value), zap.Error(err))
+		}
 	case mysql.TypeBit:
 		if s, ok := c.Value.(json.Number); ok {
 			intNum, err := s.Int64()
@@ -119,9 +141,54 @@ func formatColumn(c column) column {
 			c.Value = uint64(intNum)
 		}
 	case mysql.TypeEnum:
-		log.Panic("how to handle enum? convert")
+		a, err := c.Value.(json.Number).Int64()
+		if err != nil {
+			log.Panic("invalid column value for enum", zap.Any("value", c.Value), zap.Error(err))
+		}
+		c.Value, err = tiTypes.ParseEnumValue(ft.GetElems(), uint64(a))
+		if err != nil {
+			log.Panic("parse enum value failed", zap.Any("value", c.Value),
+				zap.Any("enumValue", uint64(a)), zap.Error(err))
+		}
 	case mysql.TypeSet:
-		log.Panic("how to handle set? convert")
+		var setValue uint64
+		setValue, err = strconv.ParseUint(c.Value.(string), 10, 64)
+		if err != nil {
+			log.Panic("invalid column value for set", zap.Any("value", c.Value), zap.Error(err))
+		}
+		c.Value, err = tiTypes.ParseSetValue(ft.GetElems(), setValue)
+		if err != nil {
+			log.Panic("parse set value failed", zap.Any("value", c.Value),
+				zap.Any("setValue", setValue), zap.Error(err))
+		}
+	case mysql.TypeJSON:
+		c.Value, err = tiTypes.ParseBinaryJSONFromString(c.Value.(string))
+		if err != nil {
+			log.Panic("invalid column value for json", zap.Any("value", c.Value), zap.Error(err))
+		}
+	case mysql.TypeNewDecimal:
+		dec := new(tiTypes.MyDecimal)
+		err = dec.FromString([]byte(c.Value.(string)))
+		if err != nil {
+			log.Panic("invalid column value for decimal", zap.Any("value", c.Value), zap.Error(err))
+		}
+		// workaround the decimal `digitInt` field incorrect problem.
+		bin, err := dec.ToBin(ft.GetFlen(), ft.GetDecimal())
+		if err != nil {
+			log.Panic("convert decimal to binary failed", zap.Any("value", c.Value), zap.Error(err))
+		}
+		_, err = dec.FromBin(bin, ft.GetFlen(), ft.GetDecimal())
+		if err != nil {
+			log.Panic("convert binary to decimal failed", zap.Any("value", c.Value), zap.Error(err))
+		}
+		c.Value = dec
+	case mysql.TypeTiDBVectorFloat32:
+		c.Value, err = tiTypes.ParseVectorFloat32(c.Value.(string))
+		if err != nil {
+			log.Panic("invalid column value for vector float32", zap.Any("value", c.Value), zap.Error(err))
+		}
+	default:
+		log.Panic("unknown data type found", zap.Any("type", c.Type), zap.Any("value", c.Value))
 	}
 	return c
 }
@@ -138,14 +205,5 @@ func (m *messageRow) decode(data []byte) {
 	err := decoder.Decode(m)
 	if err != nil {
 		log.Panic("decode message row failed", zap.Any("data", data), zap.Error(err))
-	}
-	for name, col := range m.Update {
-		m.Update[name] = formatColumn(col)
-	}
-	for name, col := range m.Delete {
-		m.Delete[name] = formatColumn(col)
-	}
-	for name, col := range m.PreColumns {
-		m.PreColumns[name] = formatColumn(col)
 	}
 }

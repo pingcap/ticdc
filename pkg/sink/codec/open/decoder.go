@@ -82,6 +82,7 @@ func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (co
 		config:           config,
 		storage:          externalStorage,
 		upstreamTiDB:     db,
+		tableInfoCache:   make(map[tableKey]*commonType.TableInfo),
 		tableIDAllocator: common.NewFakeTableIDAllocator(),
 	}, nil
 }
@@ -400,11 +401,6 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		col.ID = nextColumnID
 		col.Name = pmodel.NewCIStr(name)
 		col.FieldType = *types.NewFieldType(raw.Type)
-		if raw.Flag.IsUnsigned() {
-			col.AddFlag(mysql.BinaryFlag)
-			col.SetCharset("binary")
-			col.SetCollate("binary")
-		}
 		if raw.Flag.IsPrimaryKey() {
 			col.AddFlag(mysql.PriKeyFlag)
 			col.AddFlag(mysql.UniqueKeyFlag)
@@ -413,26 +409,40 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		if raw.Flag.IsUnsigned() {
 			col.AddFlag(mysql.UnsignedFlag)
 		}
-		//if strings.HasPrefix(mysqlType, "char") ||
-		//	strings.HasPrefix(mysqlType, "varchar") ||
-		//	strings.Contains(mysqlType, "text") ||
-		//	strings.Contains(mysqlType, "enum") ||
-		//	strings.Contains(mysqlType, "set") {
-		//	col.SetCharset("utf8mb4")
-		//	col.SetCollate("utf8mb4_bin")
-		//}
+		if raw.Flag.IsBinary() {
+			col.AddFlag(mysql.BinaryFlag)
+		}
+
+		switch col.GetType() {
+		case mysql.TypeVarchar, mysql.TypeString,
+			mysql.TypeTinyBlob, mysql.TypeBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
+			if mysql.HasBinaryFlag(col.GetFlag()) {
+				col.AddFlag(mysql.BinaryFlag)
+				col.SetCharset("binary")
+				col.SetCollate("binary")
+			} else {
+				col.SetCharset("utf8mb4")
+				col.SetCollate("utf8mb4_bin")
+			}
+		case mysql.TypeDuration:
+			// todo: how to find the correct decimal for the duration type ?
+			_, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(col.GetType())
+			col.FieldType.SetDecimal(defaultDecimal)
+		case mysql.TypeEnum, mysql.TypeSet:
+			col.SetCharset("utf8mb4")
+			col.SetCollate("utf8mb4_bin")
+			elements := common.ExtractElements("")
+			col.SetElems(elements)
+		case mysql.TypeNewDecimal:
+			defaultFlen, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(col.GetType())
+			col.FieldType.SetFlen(defaultFlen)
+			col.FieldType.SetDecimal(defaultDecimal)
+		}
+
 		//flen, decimal := common.ExtractFlenDecimal(mysqlType)
 		//col.FieldType.SetFlen(flen)
 		//col.FieldType.SetDecimal(decimal)
-		//switch basicType {
-		//case mysql.TypeEnum, mysql.TypeSet:
-		//	elements := common.ExtractElements(mysqlType)
-		//	col.SetElems(elements)
-		//case mysql.TypeDuration:
-		//	decimal = common.ExtractDecimal(mysqlType)
-		//	col.FieldType.SetDecimal(decimal)
-		//default:
-		//}
+
 		nextColumnID++
 		result = append(result, col)
 	}
@@ -504,7 +514,7 @@ func collectAllColumnsValue(data map[string]column, columns []*timodel.ColumnInf
 		if !ok {
 			continue
 		}
-		result[col.Name.O] = raw.Value
+		result[col.Name.O] = formatColumn(raw, col.FieldType).Value
 	}
 	return result
 }
