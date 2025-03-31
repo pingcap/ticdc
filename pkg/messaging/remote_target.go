@@ -35,8 +35,8 @@ import (
 
 const (
 	reconnectInterval = 2 * time.Second
-	msgTypeEvent      = "event"
-	msgTypeCommand    = "command"
+	streamTypeEvent   = "event"
+	streamTypeCommand = "command"
 
 	eventRecvCh   = "eventRecvCh"
 	commandRecvCh = "commandRecvCh"
@@ -207,8 +207,8 @@ func newRemoteMessageTarget(
 
 	// initialize streams placeholder
 	rt.streams.m = make(map[string]grpcStream)
-	rt.streams.m[msgTypeEvent] = nil
-	rt.streams.m[msgTypeCommand] = nil
+	rt.streams.m[streamTypeEvent] = nil
+	rt.streams.m[streamTypeCommand] = nil
 
 	return rt
 }
@@ -276,7 +276,10 @@ func (s *remoteMessageTarget) connect() error {
 	s.streams.Lock()
 	for streamType, stream := range s.streams.m {
 		if stream != nil {
-			continue
+			log.Panic("Stream already exists",
+				zap.Any("messageCenterID", s.messageCenterID),
+				zap.Stringer("remote", s.targetId),
+				zap.String("streamType", streamType))
 		}
 
 		stream, err := client.StreamMessages(s.ctx)
@@ -291,14 +294,27 @@ func (s *remoteMessageTarget) connect() error {
 			}
 		}
 
-		// Send handshake message to identify this node
-		handshake := &proto.Message{
-			From: string(s.messageCenterID),
-			To:   string(s.targetId),
-			Type: int32(TypeMessageHandShake),
+		handshake := &HandshakeMessage{
+			Version:    1,
+			Timestamp:  time.Now().Unix(),
+			StreamType: streamType,
 		}
 
-		if err := stream.Send(handshake); err != nil {
+		hsBytes, err := handshake.Marshal()
+		if err != nil {
+			log.Error("Failed to marshal handshake message", zap.Error(err))
+			return AppError{Type: ErrorTypeMessageSendFailed, Reason: err.Error()}
+		}
+
+		// Send handshake message to identify this node
+		msg := &proto.Message{
+			From:    string(s.messageCenterID),
+			To:      string(s.targetId),
+			Type:    int32(TypeMessageHandShake),
+			Payload: [][]byte{hsBytes},
+		}
+
+		if err := stream.Send(msg); err != nil {
 			log.Info("Failed to send handshake",
 				zap.Any("messageCenterID", s.messageCenterID),
 				zap.Stringer("remote", s.targetId),
@@ -317,7 +333,6 @@ func (s *remoteMessageTarget) connect() error {
 	// Start goroutines for sending messages
 	for streamType := range s.streams.m {
 		s.runSendMessages(streamType)
-		s.runReceiveMessages(streamType)
 	}
 
 	log.Info("Connected to remote target",
@@ -408,7 +423,7 @@ func (s *remoteMessageTarget) runSendMessages(streamType string) {
 			}
 
 			sendCh := s.sendEventCh
-			if streamType == msgTypeCommand {
+			if streamType == streamTypeCommand {
 				sendCh = s.sendCmdCh
 			}
 
@@ -453,16 +468,28 @@ func (s *remoteMessageTarget) runReceiveMessages(streamType string) error {
 		s.streams.Unlock()
 
 		recvCh := s.recvEventCh
-		if streamType == msgTypeCommand {
+		if streamType == streamTypeCommand {
 			recvCh = s.recvCmdCh
 		}
 
-		if stream == nil {
-			// Wait for stream to be established
-			time.Sleep(100 * time.Millisecond)
-			continue
+		// Process the received message
+		if err := s.handleReceivedMessage(stream, recvCh); err != nil {
+			s.streams.Lock()
+			defer s.streams.Unlock()
+			s.streams.m[streamType] = nil
+			return err
 		}
+	}
+}
 
+// Process a received message
+func (s *remoteMessageTarget) handleReceivedMessage(stream grpcStream, ch chan *TargetMessage) error {
+	for {
+		select {
+		case <-s.ctx.Done():
+			return fmt.Errorf("target context done")
+		default:
+		}
 		message, err := stream.Recv()
 		if err != nil {
 			log.Error("Error receiving message",
@@ -471,41 +498,36 @@ func (s *remoteMessageTarget) runReceiveMessages(streamType string) error {
 				zap.String("localAddr", s.targetAddr),
 				zap.Stringer("remoteID", s.targetId),
 				zap.String("remoteAddr", s.targetAddr))
-			s.streams.Lock()
-			defer s.streams.Unlock()
-			s.streams.m[streamType] = nil
 			err := AppError{Type: ErrorTypeMessageReceiveFailed, Reason: errors.Trace(err).Error()}
 			return fmt.Errorf("failed to receive message: %s", err)
 		}
-		// Process the received message
-		s.handleReceivedMessage(message, recvCh)
-	}
-}
 
-// Process a received message
-func (s *remoteMessageTarget) handleReceivedMessage(message *proto.Message, ch chan *TargetMessage) {
-	mt := IOType(message.Type)
+		mt := IOType(message.Type)
 
-	targetMsg := &TargetMessage{
-		From:  node.ID(message.From),
-		To:    node.ID(message.To),
-		Topic: message.Topic,
-		Type:  mt,
-	}
-
-	for _, payload := range message.Payload {
-		msg, err := decodeIOType(mt, payload)
-		if err != nil {
-			log.Error("Failed to decode message",
-				zap.Error(err),
-				zap.Stringer("local", s.messageCenterID),
-				zap.Stringer("remote", s.targetId))
-			continue
+		targetMsg := &TargetMessage{
+			From:  node.ID(message.From),
+			To:    node.ID(message.To),
+			Topic: message.Topic,
+			Type:  mt,
 		}
-		targetMsg.Message = append(targetMsg.Message, msg)
-	}
 
-	ch <- targetMsg
+		log.Info("fizz: Received message",
+			zap.Any("message", message))
+
+		for _, payload := range message.Payload {
+			msg, err := decodeIOType(mt, payload)
+			if err != nil {
+				log.Error("Failed to decode message",
+					zap.Error(err),
+					zap.Stringer("local", s.messageCenterID),
+					zap.Stringer("remote", s.targetId))
+				continue
+			}
+			targetMsg.Message = append(targetMsg.Message, msg)
+		}
+
+		ch <- targetMsg
+	}
 }
 
 // Create a new protocol message from target messages
@@ -555,10 +577,7 @@ func (s *remoteMessageTarget) closeConn() {
 	}
 
 	s.streams.Lock()
-	for streamType, stream := range s.streams.m {
-		if stream == nil {
-			continue
-		}
+	for streamType := range s.streams.m {
 		s.streams.m[streamType] = nil
 	}
 	s.streams.Unlock()

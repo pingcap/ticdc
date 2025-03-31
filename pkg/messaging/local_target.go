@@ -29,7 +29,7 @@ type localMessageTarget struct {
 func (s *localMessageTarget) sendEvent(msg *TargetMessage) error {
 	err := s.sendMsgToChan(s.recvEventCh, msg)
 	if err != nil {
-		s.recordCongestedMessageError(msgTypeEvent)
+		s.recordCongestedMessageError(streamTypeEvent)
 	} else {
 		s.sendEventCounter.Inc()
 	}
@@ -39,7 +39,7 @@ func (s *localMessageTarget) sendEvent(msg *TargetMessage) error {
 func (s *localMessageTarget) sendCommand(msg *TargetMessage) error {
 	err := s.sendMsgToChan(s.recvCmdCh, msg)
 	if err != nil {
-		s.recordCongestedMessageError(msgTypeCommand)
+		s.recordCongestedMessageError(streamTypeCommand)
 	} else {
 		s.sendCmdCounter.Inc()
 	}
