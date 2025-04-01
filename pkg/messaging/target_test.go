@@ -30,7 +30,7 @@ func newRemoteMessageTargetForTest() *remoteMessageTarget {
 	ctx := context.Background()
 	cfg := config.NewDefaultMessageCenterConfig()
 	receivedMsgCh := make(chan *TargetMessage, 1)
-	rt := newRemoteMessageTarget(ctx, localId, remoteId, "", receivedMsgCh, receivedMsgCh, cfg, nil)
+	rt := newRemoteMessageTarget(ctx, localId, remoteId, "", "", receivedMsgCh, receivedMsgCh, cfg, nil)
 	return rt
 }
 

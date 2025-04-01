@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/tiflow/pkg/security"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 )
 
@@ -49,6 +50,7 @@ const (
 // It handles bidirectional message streaming for both events and commands.
 type remoteMessageTarget struct {
 	messageCenterID node.ID
+	localAddr       string
 	targetId        node.ID
 	targetAddr      string
 	security        *security.Credential
@@ -72,9 +74,9 @@ type remoteMessageTarget struct {
 	recvEventCh chan *TargetMessage
 	recvCmdCh   chan *TargetMessage
 
-	errCh chan AppError
+	errCh chan error
 
-	wg     *sync.WaitGroup
+	eg     *errgroup.Group
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -89,9 +91,7 @@ type remoteMessageTarget struct {
 	recvCmdCounter           prometheus.Counter
 	congestedCmdErrorCounter prometheus.Counter
 
-	receivedFailedErrorCounter     prometheus.Counter
-	connectionNotfoundErrorCounter prometheus.Counter
-	connectionFailedErrorCounter   prometheus.Counter
+	errorCounter prometheus.Counter
 
 	// Whether this node should initiate the connection
 	shouldInitiate bool
@@ -112,7 +112,7 @@ func (s *remoteMessageTarget) isReadyToSend() bool {
 // Send an event message to the remote target
 func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 	if !s.isReadyToSend() {
-		s.connectionNotfoundErrorCounter.Inc()
+		s.errorCounter.Inc()
 		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream not ready, target: %s, addr: %s", s.targetId, s.targetAddr)}
 	}
 
@@ -121,7 +121,7 @@ func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 
 	select {
 	case <-s.ctx.Done():
-		s.connectionNotfoundErrorCounter.Inc()
+		s.errorCounter.Inc()
 		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has been closed, target: %s, addr: %s", s.targetId, s.targetAddr)}
 	case s.sendEventCh <- protoMsg:
 		s.sendEventCounter.Add(float64(len(msg)))
@@ -135,7 +135,7 @@ func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 // Send a command message to the remote target
 func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
 	if !s.isReadyToSend() {
-		s.connectionNotfoundErrorCounter.Inc()
+		s.errorCounter.Inc()
 		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream not ready, target: %s, addr: %s", s.targetId, s.targetAddr)}
 	}
 
@@ -144,7 +144,7 @@ func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
 
 	select {
 	case <-s.ctx.Done():
-		s.connectionNotfoundErrorCounter.Inc()
+		s.errorCounter.Inc()
 		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has been closed, target: %s, addr: %s", s.targetId, s.targetAddr)}
 	case s.sendCmdCh <- protoMsg:
 		s.sendCmdCounter.Add(float64(len(msg)))
@@ -159,24 +159,27 @@ func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
 func newRemoteMessageTarget(
 	ctx context.Context,
 	localID, targetId node.ID,
-	addr string,
+	localAddr, targetAddr string,
 	recvEventCh, recvCmdCh chan *TargetMessage,
 	cfg *config.MessageCenterConfig,
 	security *security.Credential,
 ) *remoteMessageTarget {
 	log.Info("Create remote target",
 		zap.Stringer("local", localID),
+		zap.String("localAddr", localAddr),
 		zap.Stringer("remote", targetId),
-		zap.Any("addr", addr))
+		zap.String("remoteAddr", targetAddr))
 
 	ctx, cancel := context.WithCancel(ctx)
 
-	// Determine if this node should initiate the connection based on node ID
-	shouldInitiate := localID < targetId
+	// Determine if this node should initiate the connection based on node address
+	// If the local address is less than the target address, this node should initiate the connection.
+	shouldInitiate := localAddr < targetAddr
 
 	rt := &remoteMessageTarget{
 		messageCenterID: localID,
-		targetAddr:      addr,
+		localAddr:       localAddr,
+		targetAddr:      targetAddr,
 		targetId:        targetId,
 		security:        security,
 		ctx:             ctx,
@@ -185,30 +188,30 @@ func newRemoteMessageTarget(
 		sendCmdCh:       make(chan *proto.Message, cfg.CacheChannelSize),
 		recvEventCh:     recvEventCh,
 		recvCmdCh:       recvCmdCh,
-		wg:              &sync.WaitGroup{},
+		eg:              &errgroup.Group{},
 		shouldInitiate:  shouldInitiate,
-		errCh:           make(chan AppError, 8),
+		errCh:           make(chan error, 32),
 
 		// Initialize metrics
-		sendEventCounter:           metrics.MessagingSendMsgCounter.WithLabelValues(string(addr), "event"),
-		dropEventCounter:           metrics.MessagingDropMsgCounter.WithLabelValues(string(addr), "event"),
-		recvEventCounter:           metrics.MessagingReceiveMsgCounter.WithLabelValues(string(addr), "event"),
-		congestedEventErrorCounter: metrics.MessagingErrorCounter.WithLabelValues(string(addr), "event", "message_congested"),
+		sendEventCounter:           metrics.MessagingSendMsgCounter.WithLabelValues("event"),
+		dropEventCounter:           metrics.MessagingDropMsgCounter.WithLabelValues("event"),
+		recvEventCounter:           metrics.MessagingReceiveMsgCounter.WithLabelValues("event"),
+		congestedEventErrorCounter: metrics.MessagingErrorCounter.WithLabelValues("event", "message_congested"),
 
-		sendCmdCounter:           metrics.MessagingSendMsgCounter.WithLabelValues(string(addr), "command"),
-		dropCmdCounter:           metrics.MessagingDropMsgCounter.WithLabelValues(string(addr), "command"),
-		recvCmdCounter:           metrics.MessagingReceiveMsgCounter.WithLabelValues(string(addr), "command"),
-		congestedCmdErrorCounter: metrics.MessagingErrorCounter.WithLabelValues(string(addr), "command", "message_congested"),
+		sendCmdCounter:           metrics.MessagingSendMsgCounter.WithLabelValues("command"),
+		dropCmdCounter:           metrics.MessagingDropMsgCounter.WithLabelValues("command"),
+		recvCmdCounter:           metrics.MessagingReceiveMsgCounter.WithLabelValues("command"),
+		congestedCmdErrorCounter: metrics.MessagingErrorCounter.WithLabelValues("command", "message_congested"),
 
-		receivedFailedErrorCounter:     metrics.MessagingErrorCounter.WithLabelValues(string(addr), "message", "message_received_failed"),
-		connectionNotfoundErrorCounter: metrics.MessagingErrorCounter.WithLabelValues(string(addr), "message", "connection_not_found"),
-		connectionFailedErrorCounter:   metrics.MessagingErrorCounter.WithLabelValues(string(addr), "message", "connection_failed"),
+		errorCounter: metrics.MessagingErrorCounter.WithLabelValues("message", "error"),
 	}
 
 	// initialize streams placeholder
 	rt.streams.m = make(map[string]grpcStream)
 	rt.streams.m[streamTypeEvent] = nil
 	rt.streams.m[streamTypeCommand] = nil
+
+	rt.connect()
 
 	return rt
 }
@@ -222,7 +225,7 @@ func (s *remoteMessageTarget) close() {
 
 	s.closeConn()
 	s.cancel()
-	s.wg.Wait()
+	s.eg.Wait()
 
 	log.Info("Close remote target done",
 		zap.Any("messageCenterID", s.messageCenterID),
@@ -230,14 +233,13 @@ func (s *remoteMessageTarget) close() {
 }
 
 // Collect and report errors
-func (s *remoteMessageTarget) collectErr(err AppError) {
-	switch err.Type {
-	case ErrorTypeMessageReceiveFailed:
-		s.receivedFailedErrorCounter.Inc()
-	case ErrorTypeConnectionFailed:
-		s.connectionFailedErrorCounter.Inc()
+func (s *remoteMessageTarget) collectErr(err error) {
+	s.errorCounter.Inc()
+	select {
+	case s.errCh <- err:
+	default:
+		log.Error("Failed to collect error, channel is full", zap.Error(err))
 	}
-	s.errCh <- err
 }
 
 // Connect to the remote target
@@ -247,10 +249,6 @@ func (s *remoteMessageTarget) connect() error {
 		log.Info("Not initiating connection as remote has smaller ID",
 			zap.Stringer("local", s.messageCenterID),
 			zap.Stringer("remote", s.targetId))
-		return nil
-	}
-
-	if _, ok := s.getConn(); ok {
 		return nil
 	}
 
@@ -288,6 +286,8 @@ func (s *remoteMessageTarget) connect() error {
 				zap.Any("messageCenterID", s.messageCenterID),
 				zap.Stringer("remote", s.targetId),
 				zap.Error(err))
+
+			s.streams.Unlock()
 			return AppError{
 				Type:   ErrorTypeConnectionFailed,
 				Reason: fmt.Sprintf("Cannot open bidirectional grpc stream, error: %s", err.Error()),
@@ -303,6 +303,7 @@ func (s *remoteMessageTarget) connect() error {
 		hsBytes, err := handshake.Marshal()
 		if err != nil {
 			log.Error("Failed to marshal handshake message", zap.Error(err))
+			s.streams.Unlock()
 			return AppError{Type: ErrorTypeMessageSendFailed, Reason: err.Error()}
 		}
 
@@ -319,6 +320,8 @@ func (s *remoteMessageTarget) connect() error {
 				zap.Any("messageCenterID", s.messageCenterID),
 				zap.Stringer("remote", s.targetId),
 				zap.Error(err))
+
+			s.streams.Unlock()
 			return AppError{
 				Type:   ErrorTypeMessageSendFailed,
 				Reason: fmt.Sprintf("Failed to send handshake, error: %s", err.Error()),
@@ -326,13 +329,12 @@ func (s *remoteMessageTarget) connect() error {
 		}
 		s.streams.m[streamType] = stream
 	}
-
 	s.streams.Unlock()
 	s.setConn(conn)
 
 	// Start goroutines for sending messages
 	for streamType := range s.streams.m {
-		s.runSendMessages(streamType)
+		s.run(streamType)
 	}
 
 	log.Info("Connected to remote target",
@@ -351,7 +353,7 @@ func (s *remoteMessageTarget) resetConnect() {
 		return
 	}
 
-	log.Info("reconnect to remote target",
+	log.Info("start to reset connection to remote target",
 		zap.Any("messageCenterID", s.messageCenterID),
 		zap.Any("remote", s.targetId))
 
@@ -367,9 +369,12 @@ LOOP:
 			break LOOP
 		}
 	}
-
 	// Reconnect
 	s.connect()
+
+	log.Info("reset connection to remote target done",
+		zap.Any("messageCenterID", s.messageCenterID),
+		zap.Any("remote", s.targetId))
 }
 
 // Handle an incoming stream connection from a remote node, it will block until remote cancel the stream.
@@ -387,71 +392,96 @@ func (s *remoteMessageTarget) handleIncomingStream(stream proto.MessageService_S
 	s.streams.Unlock()
 
 	// Start goroutines for sending and receiving messages
-	return s.runReceiveMessages(handshake.StreamType)
+	s.run(handshake.StreamType)
+	// Block until the there is an error or the context is done
+	return s.eg.Wait()
+}
+
+// run spawn two goroutines to handle message sending and receiving
+func (s *remoteMessageTarget) run(streamType string) {
+	s.eg.Go(func() error {
+		return s.runReceiveMessages(streamType)
+	})
+	s.eg.Go(func() error {
+		return s.runSendMessages(streamType)
+	})
+
+	log.Info("Start running target to process messages",
+		zap.Stringer("local", s.messageCenterID),
+		zap.String("localAddr", s.targetAddr),
+		zap.Stringer("remote", s.targetId),
+		zap.String("remoteAddr", s.targetAddr),
+		zap.String("streamType", streamType))
 }
 
 // Run goroutine to handle message sending
-func (s *remoteMessageTarget) runSendMessages(streamType string) {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		for {
-			if !s.isReadyToSend() {
-				// If stream is not ready, wait and check again
-				select {
-				case <-s.ctx.Done():
-					return
-				case <-time.After(500 * time.Millisecond):
-					log.Warn("remote target stream is not ready, wait and check again",
-						zap.Stringer("local", s.messageCenterID),
-						zap.String("localAddr", s.targetAddr),
-						zap.Stringer("remote", s.targetId),
-						zap.String("remoteAddr", s.targetAddr))
-					continue
-				}
-			}
+func (s *remoteMessageTarget) runSendMessages(streamType string) (err error) {
 
-			// Get the stream (it might have changed due to reconnection)
-			s.streams.Lock()
-			stream := s.streams.m[streamType]
-			s.streams.Unlock()
+	defer func() {
+		if err != nil {
+			s.collectErr(err)
+		}
+	}()
 
-			if stream == nil {
-				// Wait for stream to be established
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-
-			sendCh := s.sendEventCh
-			if streamType == streamTypeCommand {
-				sendCh = s.sendCmdCh
-			}
-
+	for {
+		if !s.isReadyToSend() {
+			// If stream is not ready, wait and check again
 			select {
 			case <-s.ctx.Done():
-				return
+				return s.ctx.Err()
+			case <-time.After(500 * time.Millisecond):
+				log.Warn("remote target stream is not ready, wait and check again",
+					zap.Stringer("local", s.messageCenterID),
+					zap.String("localAddr", s.targetAddr),
+					zap.Stringer("remote", s.targetId),
+					zap.String("remoteAddr", s.targetAddr))
+				continue
+			}
+		}
+
+		// Get the stream (it might have changed due to reconnection)
+		s.streams.Lock()
+		stream := s.streams.m[streamType]
+		s.streams.Unlock()
+
+		sendCh := s.sendEventCh
+		if streamType == streamTypeCommand {
+			sendCh = s.sendCmdCh
+		}
+		for {
+			select {
+			case <-s.ctx.Done():
+				return s.ctx.Err()
 			case msg := <-sendCh:
 				if err := stream.Send(msg); err != nil {
 					log.Error("Error sending message",
 						zap.Error(err),
 						zap.Stringer("local", s.messageCenterID),
 						zap.Stringer("remote", s.targetId))
-					s.collectErr(AppError{Type: ErrorTypeMessageSendFailed, Reason: err.Error()})
-					return
+					err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
+					return err
 				}
+				log.Info("fizz: send message",
+					zap.Any("message", msg))
 			}
 		}
-	}()
+	}
 }
 
 // Run goroutine to handle message receiving
-func (s *remoteMessageTarget) runReceiveMessages(streamType string) error {
+func (s *remoteMessageTarget) runReceiveMessages(streamType string) (err error) {
+	defer func() {
+		if err != nil {
+			s.collectErr(err)
+		}
+	}()
+
 	for {
 		if !s.isReadyToSend() {
 			// If stream is not ready, wait and check again
 			select {
 			case <-s.ctx.Done():
-				return fmt.Errorf("target context done")
+				return s.ctx.Err()
 			case <-time.After(500 * time.Millisecond):
 				log.Warn("remote target stream is not ready, wait and check again",
 					zap.Stringer("local", s.messageCenterID),
@@ -487,7 +517,7 @@ func (s *remoteMessageTarget) handleReceivedMessage(stream grpcStream, ch chan *
 	for {
 		select {
 		case <-s.ctx.Done():
-			return fmt.Errorf("target context done")
+			return s.ctx.Err()
 		default:
 		}
 		message, err := stream.Recv()
@@ -498,8 +528,8 @@ func (s *remoteMessageTarget) handleReceivedMessage(stream grpcStream, ch chan *
 				zap.String("localAddr", s.targetAddr),
 				zap.Stringer("remoteID", s.targetId),
 				zap.String("remoteAddr", s.targetAddr))
-			err := AppError{Type: ErrorTypeMessageReceiveFailed, Reason: errors.Trace(err).Error()}
-			return fmt.Errorf("failed to receive message: %s", err)
+			err = AppError{Type: ErrorTypeMessageReceiveFailed, Reason: errors.Trace(err).Error()}
+			return err
 		}
 
 		mt := IOType(message.Type)

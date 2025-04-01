@@ -84,6 +84,7 @@ type grpcStream interface {
 type messageCenter struct {
 	// The server id of the message center
 	id       node.ID
+	addr     string
 	cfg      *config.MessageCenterConfig
 	security *security.Credential
 	// The local target, which is the message center itself.
@@ -94,11 +95,8 @@ type messageCenter struct {
 		m map[node.ID]*remoteMessageTarget
 	}
 
-	remoteNodeInfos struct {
-		sync.RWMutex
-		m map[node.ID]*node.Info
-	}
-	notifyCh chan struct{}
+	remoteNodeInfos map[node.ID]*node.Info
+	notifyCh        chan map[node.ID]*node.Info
 
 	grpcServer *grpc.Server
 	router     *router
@@ -114,7 +112,6 @@ type messageCenter struct {
 func NewMessageCenter(
 	ctx context.Context,
 	id node.ID,
-	epoch uint64,
 	cfg *config.MessageCenterConfig,
 	security *security.Credential,
 ) *messageCenter {
@@ -123,18 +120,19 @@ func NewMessageCenter(
 
 	mc := &messageCenter{
 		id:             id,
+		addr:           cfg.Addr,
 		cfg:            cfg,
 		security:       security,
 		localTarget:    newLocalMessageTarget(id, receiveEventCh, receiveCmdCh),
 		receiveEventCh: receiveEventCh,
 		receiveCmdCh:   receiveCmdCh,
 		router:         newRouter(),
-		notifyCh:       make(chan struct{}, 1),
+		notifyCh:       make(chan map[node.ID]*node.Info, 128),
 	}
 	mc.remoteTargets.m = make(map[node.ID]*remoteMessageTarget)
 
 	log.Info("create message center success.",
-		zap.Stringer("id", id), zap.Any("epoch", epoch))
+		zap.Stringer("id", id), zap.String("addr", cfg.Addr))
 	return mc
 }
 
@@ -186,8 +184,8 @@ func (mc *messageCenter) checkRemoteTarget(ctx context.Context) {
 				}
 			}
 			mc.remoteTargets.RUnlock()
-		case <-mc.notifyCh:
-			mc.handleNodeChanges()
+		case activeNode := <-mc.notifyCh:
+			mc.handleNodeChanges(activeNode)
 		}
 	}
 }
@@ -201,43 +199,36 @@ func (mc *messageCenter) DeRegisterHandler(topic string) {
 }
 
 func (mc *messageCenter) OnNodeChanges(activeNode map[node.ID]*node.Info) {
-	mc.remoteNodeInfos.Lock()
-	defer mc.remoteNodeInfos.Unlock()
-	mc.remoteNodeInfos.m = make(map[node.ID]*node.Info)
-	for id, node := range activeNode {
-		mc.remoteNodeInfos.m[id] = node
-	}
-
-	select {
-	case mc.notifyCh <- struct{}{}:
-	default:
-	}
+	mc.notifyCh <- activeNode
+	log.Info("notify node changes", zap.Any("activeNode", activeNode))
 }
 
-func (mc *messageCenter) handleNodeChanges() {
-	activeNode := make(map[node.ID]*node.Info)
-
-	mc.remoteNodeInfos.RLock()
-	for id, node := range mc.remoteNodeInfos.m {
-		activeNode[id] = node
+func (mc *messageCenter) handleNodeChanges(activeNode map[node.ID]*node.Info) {
+	infosMap := make(map[node.ID]*node.Info)
+	for id, node := range activeNode {
+		infosMap[id] = node
 	}
-	mc.remoteNodeInfos.RUnlock()
+	mc.remoteNodeInfos = infosMap
 
-	allTarget := make(map[node.ID]bool)
-	allTarget[mc.id] = true
+	currentTargets := make(map[node.ID]bool)
+	currentTargets[mc.id] = true
+
 	mc.remoteTargets.RLock()
 	for id := range mc.remoteTargets.m {
-		allTarget[id] = true
+		currentTargets[id] = true
 	}
 	mc.remoteTargets.RUnlock()
 
-	for id, node := range activeNode {
-		if _, ok := allTarget[id]; !ok {
+	// Add the new targets that are not in the currentTargets
+	for id, node := range infosMap {
+		if _, ok := currentTargets[id]; !ok {
 			mc.addTarget(node.ID, node.AdvertiseAddr)
 		}
 	}
-	for id := range allTarget {
-		if _, ok := activeNode[id]; !ok {
+
+	// Remove the targets that are not in the activeNode
+	for id := range currentTargets {
+		if _, ok := infosMap[id]; !ok {
 			mc.removeTarget(id)
 		}
 	}
@@ -248,12 +239,11 @@ func (mc *messageCenter) handleNodeChanges() {
 func (mc *messageCenter) addTarget(id node.ID, addr string) {
 	// If the target is the message center itself, we don't need to add it.
 	if id == mc.id {
-		log.Info("Add local target", zap.Stringer("id", id), zap.Any("addr", addr))
+		log.Warn("Add a local target, ignore it", zap.Stringer("id", id), zap.Any("addr", addr))
 		return
 	}
+	mc.touchRemoteTarget(id, addr)
 	log.Info("Add remote target", zap.Stringer("local", mc.id), zap.Stringer("remote", id), zap.Any("addr", addr))
-	rt := mc.touchRemoteTarget(id, addr)
-	rt.connect()
 }
 
 func (mc *messageCenter) removeTarget(id node.ID) {
@@ -344,42 +334,45 @@ func (mc *messageCenter) Close() {
 
 // touchRemoteTarget returns the remote target by the id,
 // if the target is not found, it will create a new one.
-func (mc *messageCenter) touchRemoteTarget(id node.ID, addr string) *remoteMessageTarget {
-	mc.remoteTargets.Lock()
-	defer mc.remoteTargets.Unlock()
-
+func (mc *messageCenter) touchRemoteTarget(id node.ID, targetAddr string) {
+	mc.remoteTargets.RLock()
 	target, ok := mc.remoteTargets.m[id]
+	mc.remoteTargets.RUnlock()
+
 	if !ok {
 		// If the target is not found, create a new one.
 		target = newRemoteMessageTarget(
 			mc.ctx,
 			mc.id, id,
-			addr, mc.receiveEventCh,
-			mc.receiveCmdCh, mc.cfg, mc.security)
+			mc.addr, targetAddr,
+			mc.receiveEventCh,
+			mc.receiveCmdCh,
+			mc.cfg,
+			mc.security)
+		mc.remoteTargets.Lock()
 		mc.remoteTargets.m[id] = target
-		return target
+		mc.remoteTargets.Unlock()
 	}
 
-	// If the target is old and the address is the same, update its epoch.
-	if target.targetAddr == addr {
-		log.Info("Remote target already exists, but the epoch is old, update the epoch", zap.Stringer("id", id))
-		return target
-	}
-
-	// If the target is old and the address is different, close the old target and create a new one.
 	log.Info("Remote target changed, creating a new one",
 		zap.Stringer("id", id),
 		zap.Any("oldAddr", target.targetAddr),
-		zap.Any("newAddr", addr))
+		zap.Any("newAddr", targetAddr))
 
 	target.close()
 	newTarget := newRemoteMessageTarget(
 		mc.ctx,
 		mc.id, id,
-		addr, mc.receiveEventCh,
-		mc.receiveCmdCh, mc.cfg, mc.security)
+		mc.addr, targetAddr,
+		mc.receiveEventCh,
+		mc.receiveCmdCh,
+		mc.cfg,
+		mc.security)
+
+	mc.remoteTargets.Lock()
 	mc.remoteTargets.m[id] = newTarget
-	return newTarget
+	mc.remoteTargets.Unlock()
+
 }
 
 func (mc *messageCenter) updateMetrics(ctx context.Context) {
@@ -430,6 +423,7 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 	if msg.Type != int32(TypeMessageHandShake) {
 		log.Panic("Received unexpected message type, should be handshake",
 			zap.Stringer("local", s.messageCenter.id),
+			zap.String("localAddr", s.messageCenter.addr),
 			zap.String("remote", msg.From),
 			zap.Int32("type", msg.Type))
 	}
@@ -461,7 +455,7 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 	log.Info("Start to receive messages from remote target",
 		zap.String("streamType", handshake.StreamType),
 		zap.Any("localID", s.messageCenter.id),
-		zap.String("localAddr", target.targetAddr),
+		zap.String("localAddr", target.localAddr),
 		zap.Stringer("remoteID", targetId),
 		zap.String("remoteAddr", target.targetAddr))
 
