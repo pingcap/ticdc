@@ -87,7 +87,7 @@ const (
 	defaultHasVectorType = false
 )
 
-type MysqlConfig struct {
+type Config struct {
 	sinkURI                *url.URL
 	WorkerCount            int
 	MaxTxnRow              int
@@ -133,8 +133,8 @@ type MysqlConfig struct {
 }
 
 // NewConfig returns the default mysql backend config.
-func NewMysqlConfig() *MysqlConfig {
-	return &MysqlConfig{
+func NewMysqlConfig() *Config {
+	return &Config{
 		WorkerCount:            DefaultWorkerCount,
 		MaxTxnRow:              DefaultMaxTxnRow,
 		MaxMultiUpdateRowCount: defaultMaxMultiUpdateRowCount,
@@ -153,7 +153,7 @@ func NewMysqlConfig() *MysqlConfig {
 	}
 }
 
-func (c *MysqlConfig) Apply(
+func (c *Config) Apply(
 	sinkURI *url.URL,
 	changefeedID common.ChangeFeedID,
 	cfg *config.ChangefeedConfig,
@@ -227,7 +227,7 @@ func (c *MysqlConfig) Apply(
 	return nil
 }
 
-func NewMySQLConfig(changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*MysqlConfig, error) {
+func NewMySQLConfig(changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*Config, error) {
 	cfg := NewMysqlConfig()
 	err := cfg.Apply(sinkURI, changefeedID, config)
 	if err != nil {
@@ -236,7 +236,7 @@ func NewMySQLConfig(changefeedID common.ChangeFeedID, sinkURI *url.URL, config *
 	return cfg, nil
 }
 
-func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*MysqlConfig, *sql.DB, error) {
+func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*Config, *sql.DB, error) {
 	log.Info("create db connection", zap.String("sinkURI", sinkURI.String()))
 	// create db connection
 	cfg, err := NewMySQLConfig(changefeedID, sinkURI, config)

@@ -42,7 +42,7 @@ const (
 type Writer struct {
 	ctx          context.Context
 	db           *sql.DB
-	cfg          *MysqlConfig
+	cfg          *Config
 	ChangefeedID common.ChangeFeedID
 
 	syncPointTableInit     bool
@@ -68,10 +68,10 @@ type Writer struct {
 	blockerTicker *time.Ticker
 }
 
-func NewMysqlWriter(
+func NewWriter(
 	ctx context.Context,
 	db *sql.DB,
-	cfg *MysqlConfig,
+	cfg *Config,
 	changefeedID common.ChangeFeedID,
 	statistics *metrics.Statistics,
 	needFormatVectorType bool,

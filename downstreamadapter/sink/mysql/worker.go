@@ -33,9 +33,9 @@ import (
 type dmlWorker struct {
 	changefeedID common.ChangeFeedID
 
-	eventChan   <-chan *commonEvent.DMLEvent
-	mysqlWriter *mysql.Writer
-	id          int
+	eventChan <-chan *commonEvent.DMLEvent
+	writer    *mysql.Writer
+	id        int
 
 	maxRows int
 }
@@ -43,7 +43,7 @@ type dmlWorker struct {
 func NewMysqlDMLWorker(
 	ctx context.Context,
 	db *sql.DB,
-	config *mysql.MysqlConfig,
+	config *mysql.Config,
 	id int,
 	changefeedID common.ChangeFeedID,
 	statistics *metrics.Statistics,
@@ -51,7 +51,7 @@ func NewMysqlDMLWorker(
 	eventChan <-chan *commonEvent.DMLEvent,
 ) *dmlWorker {
 	return &dmlWorker{
-		mysqlWriter:  mysql.NewMysqlWriter(ctx, db, config, changefeedID, statistics, formatVectorType),
+		writer:       mysql.NewWriter(ctx, db, config, changefeedID, statistics, formatVectorType),
 		id:           id,
 		maxRows:      config.MaxTxnRow,
 		eventChan:    eventChan,
@@ -115,7 +115,7 @@ func (w *dmlWorker) Run(ctx context.Context) error {
 				}
 			}
 			start := time.Now()
-			err := w.mysqlWriter.Flush(events)
+			err := w.writer.Flush(events)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -132,7 +132,7 @@ func (w *dmlWorker) Run(ctx context.Context) error {
 }
 
 func (w *dmlWorker) Close() {
-	w.mysqlWriter.Close()
+	w.writer.Close()
 }
 
 // func (w *dmlWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
@@ -142,29 +142,29 @@ func (w *dmlWorker) Close() {
 // ddlWorker is use to flush the ddl event and sync point eventdownstream
 type ddlWorker struct {
 	changefeedID common.ChangeFeedID
-	mysqlWriter  *mysql.Writer
+	writer       *mysql.Writer
 }
 
 func NewMysqlDDLWorker(
 	ctx context.Context,
 	db *sql.DB,
-	config *mysql.MysqlConfig,
+	config *mysql.Config,
 	changefeedID common.ChangeFeedID,
 	statistics *metrics.Statistics,
 	formatVectorType bool,
 ) *ddlWorker {
 	return &ddlWorker{
 		changefeedID: changefeedID,
-		mysqlWriter:  mysql.NewMysqlWriter(ctx, db, config, changefeedID, statistics, formatVectorType),
+		writer:       mysql.NewWriter(ctx, db, config, changefeedID, statistics, formatVectorType),
 	}
 }
 
 func (w *ddlWorker) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
-	w.mysqlWriter.SetTableSchemaStore(tableSchemaStore)
+	w.writer.SetTableSchemaStore(tableSchemaStore)
 }
 
 func (w *ddlWorker) GetStartTsList(tableIds []int64, startTsList []int64) ([]int64, []bool, error) {
-	ddlTsList, isSyncpointList, err := w.mysqlWriter.GetStartTsList(tableIds)
+	ddlTsList, isSyncpointList, err := w.writer.GetStartTsList(tableIds)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -182,12 +182,12 @@ func (w *ddlWorker) GetStartTsList(tableIds []int64, startTsList []int64) ([]int
 func (w *ddlWorker) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
-		err := w.mysqlWriter.FlushDDLEvent(event.(*commonEvent.DDLEvent))
+		err := w.writer.FlushDDLEvent(event.(*commonEvent.DDLEvent))
 		if err != nil {
 			return errors.Trace(err)
 		}
 	case commonEvent.TypeSyncPointEvent:
-		err := w.mysqlWriter.FlushSyncPointEvent(event.(*commonEvent.SyncPointEvent))
+		err := w.writer.FlushSyncPointEvent(event.(*commonEvent.SyncPointEvent))
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -201,9 +201,9 @@ func (w *ddlWorker) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (w *ddlWorker) RemoveDDLTsItem() error {
-	return w.mysqlWriter.RemoveDDLTsItem()
+	return w.writer.RemoveDDLTsItem()
 }
 
 func (w *ddlWorker) Close() {
-	w.mysqlWriter.Close()
+	w.writer.Close()
 }
