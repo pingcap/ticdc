@@ -55,7 +55,7 @@ func ConflictKeys(event *commonEvent.DMLEvent) ([]uint64, error) {
 		}
 	}
 
-	event.FinishGetRow()
+	event.Rewind()
 
 	keys := make([]uint64, 0, len(hashRes))
 	for key := range hashRes {

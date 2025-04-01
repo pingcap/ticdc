@@ -151,7 +151,7 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 		for {
 			row, ok := event.GetNextRow()
 			if !ok {
-				event.FinishGetRow()
+				event.Rewind()
 				break
 			}
 			rowChangeWithKeys := RowChangeWithKeys{RowChange: &row}
@@ -304,7 +304,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 		for {
 			row, ok := event.GetNextRow()
 			if !ok {
-				event.FinishGetRow()
+				event.Rewind()
 				break
 			}
 			switch row.RowType {
@@ -320,7 +320,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 					} else {
 						if !compareKeys(hashToKeyMap[hashValue], keyValue) {
 							log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
-							event.FinishGetRow() // reset event
+							event.Rewind() // reset event
 							// use normal sql instead
 							return w.generateNormalSQLs(events)
 						}
@@ -339,7 +339,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 					} else {
 						if !compareKeys(hashToKeyMap[hashValue], keyValue) {
 							log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
-							event.FinishGetRow() // reset event
+							event.Rewind() // reset event
 							// use normal sql instead
 							return w.generateNormalSQLs(events)
 						}
@@ -357,7 +357,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 				} else {
 					if !compareKeys(hashToKeyMap[hashValue], keyValue) {
 						log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
-						event.FinishGetRow() // reset event
+						event.Rewind() // reset event
 						// use normal sql instead
 						return w.generateNormalSQLs(events)
 					}
@@ -373,7 +373,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 				} else {
 					if !compareKeys(hashToKeyMap[hashValue], keyValue) {
 						log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
-						event.FinishGetRow() // reset event
+						event.Rewind() // reset event
 						// use normal sql instead
 						return w.generateNormalSQLs(events)
 					}
