@@ -282,5 +282,5 @@ func (c *BankUpdateWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 UPDATE update_bank%d 
 SET small_col = %d 
 WHERE id >= %d AND id <= %d
-`, opts.Table, newValue, startID, endID)
+`, opts.TableIndex, newValue, startID, endID)
 }

@@ -51,6 +51,7 @@ type DispatcherRequest struct {
 	ActionType eventpb.ActionType
 	StartTs    uint64
 	OnlyUse    bool
+	BDRMode    bool
 }
 
 type DispatcherRequestWithTarget struct {
@@ -161,9 +162,9 @@ func (c *EventCollector) Run(ctx context.Context) {
 }
 
 func (c *EventCollector) Close() {
+	log.Info("event collector is closing")
 	c.cancel()
 	c.ds.Close()
-
 	c.changefeedIDMap.Range(func(key, value any) bool {
 		cfID := value.(common.ChangeFeedID)
 		// Remove metrics for the changefeed.
@@ -184,7 +185,7 @@ func (c *EventCollector) Close() {
 	log.Info("event collector is closed")
 }
 
-func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64) {
+func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64, bdrMode bool) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
@@ -210,6 +211,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 		Dispatcher: target,
 		StartTs:    target.GetStartTs(),
 		ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
+		BDRMode:    bdrMode,
 	})
 
 	c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
@@ -337,6 +339,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 			TableSpan: req.Dispatcher.GetTableSpan(),
 			StartTs:   req.StartTs,
 			OnlyReuse: req.OnlyUse,
+			BdrMode:   req.BDRMode,
 		},
 	}
 

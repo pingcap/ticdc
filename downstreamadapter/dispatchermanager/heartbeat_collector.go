@@ -133,6 +133,9 @@ func (c *HeartBeatCollector) RemoveEventDispatcherManager(m *EventDispatcherMana
 }
 
 func (c *HeartBeatCollector) RemoveCheckpointTsMessage(changefeedID common.ChangeFeedID) error {
+	if c.checkpointTsMessageDynamicStream == nil {
+		return nil
+	}
 	err := c.checkpointTsMessageDynamicStream.RemovePath(changefeedID.Id)
 	return errors.Trace(err)
 }
@@ -212,6 +215,7 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 }
 
 func (c *HeartBeatCollector) Close() {
+	log.Info("heartbeat collector is closing")
 	c.mc.DeRegisterHandler(messaging.HeartbeatCollectorTopic)
 	c.cancel()
 	c.wg.Wait()

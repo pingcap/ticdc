@@ -79,13 +79,17 @@ type DDLEvent struct {
 	// the database name for the ddl job in the information_schema.ddl_jobs table(just ddl job.dbName)
 	DBNameInDDLJob string `msg:"db_name_in_ddl_job"`
 
-	TiDBOnly bool `json:"tidb_only"`
+	TiDBOnly bool   `json:"tidb_only"`
+	BDRMode  string `json:"bdr_mode"`
+
 	// Call when event flush is completed
 	PostTxnFlushed []func() `json:"-"`
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
 	eventSize int64 `json:"-"`
 
 	Err error `json:"-"`
+	// for simple protocol
+	IsBootstrap bool `msg:"-"`
 }
 
 func (d *DDLEvent) GetType() int {

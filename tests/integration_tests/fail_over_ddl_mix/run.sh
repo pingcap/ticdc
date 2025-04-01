@@ -34,7 +34,7 @@ function prepare() {
 
 	TOPIC_NAME="ticdc-failover-ddl-test-mix-$RANDOM"
 	SINK_URI="mysql://root@127.0.0.1:3306/"
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
+	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
 }
 
 function create_tables() {
@@ -148,9 +148,9 @@ function kill_server() {
 			if [ -z "$cdc_pid_1" ]; then
 				continue
 			fi
-			kill -9 $cdc_pid_1
+			kill_cdc_pid $cdc_pid_1
 
-			sleep 5
+			sleep 15
 			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-$count" --addr "127.0.0.1:8300"
 			;;
 		1)
@@ -158,9 +158,9 @@ function kill_server() {
 			if [ -z "$cdc_pid_2" ]; then
 				continue
 			fi
-			kill -9 $cdc_pid_2
+			kill_cdc_pid $cdc_pid_2
 
-			sleep 5
+			sleep 15
 			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-$count" --addr "127.0.0.1:8301"
 			;;
 		esac

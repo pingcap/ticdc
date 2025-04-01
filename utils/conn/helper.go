@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/tiflow/pkg/security"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
+	"google.golang.org/grpc/keepalive"
 )
 
 // A Conn is a grpc client connection.
@@ -57,6 +58,11 @@ func Connect(target string, credential *security.Credential) (*grpc.ClientConn, 
 				MaxDelay:   3 * time.Second,
 			},
 			MinConnectTimeout: 3 * time.Second,
+		}),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                20 * time.Second,
+			Timeout:             30 * time.Second,
+			PermitWithoutStream: true,
 		}),
 	}
 

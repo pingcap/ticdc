@@ -15,19 +15,13 @@ package main
 
 import (
 	"os"
-	"slices"
-	"strings"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/cdc/cli"
 	"github.com/pingcap/ticdc/cmd/cdc/server"
 	"github.com/pingcap/ticdc/cmd/cdc/version"
-	"github.com/pingcap/ticdc/cmd/util"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/tidb/pkg/util/collate"
-	tiflowCmd "github.com/pingcap/tiflow/pkg/cmd"
+	tiflowRedo "github.com/pingcap/tiflow/pkg/cmd/redo"
 	"github.com/spf13/cobra"
-	"go.uber.org/zap"
 )
 
 // NewCmd creates the root command.
@@ -42,68 +36,6 @@ func NewCmd() *cobra.Command {
 	}
 }
 
-func addNewArchCommandTo(cmd *cobra.Command) {
-	cmd.AddCommand(server.NewCmdServer())
-	cmd.AddCommand(cli.NewCmdCli())
-	cmd.AddCommand(version.NewCmdVersion())
-}
-
-func isNewArchEnabledByConfig(serverConfigFilePath string) bool {
-	cfg := config.GetDefaultServerConfig()
-	if len(serverConfigFilePath) > 0 {
-		// strict decode config file, but ignore debug item
-		if err := util.StrictDecodeFile(serverConfigFilePath, "TiCDC server", cfg, config.DebugConfigurationItem); err != nil {
-			log.Error("failed to parse server configuration, please check the config file for errors and try again.", zap.Error(err))
-			return false
-		}
-	}
-
-	return cfg.Newarch
-}
-
-// Utility to remove a flag from os.Args
-func removeFlagFromArgs(flag string) []string {
-	result := []string{os.Args[0]} // keep the command name
-	for i := 1; i < len(os.Args); i++ {
-		if os.Args[i] != flag {
-			result = append(result, os.Args[i])
-		}
-	}
-	return result
-}
-
-func parseConfigFlagFromOSArgs() string {
-	var serverConfigFilePath string
-	for i, arg := range os.Args[1:] {
-		if strings.HasPrefix(arg, "--config=") {
-			serverConfigFilePath = strings.SplitN(arg, "=", 2)[1]
-		} else if arg == "--config" && i+2 < len(os.Args) {
-			serverConfigFilePath = os.Args[i+2]
-		}
-	}
-
-	// If the command is `cdc cli changefeed`, means it's not a server config file.
-	if slices.Contains(os.Args, "cli") && slices.Contains(os.Args, "changefeed") {
-		serverConfigFilePath = ""
-	}
-
-	return serverConfigFilePath
-}
-
-func parseNewarchFlagFromOSArgs() bool {
-	newarch := false
-	for _, arg := range os.Args[1:] {
-		if arg == "--newarch" {
-			newarch = true
-			os.Args = removeFlagFromArgs("--newarch")
-		} else if arg == "-x" {
-			newarch = true
-			os.Args = removeFlagFromArgs("-x")
-		}
-	}
-	return newarch
-}
-
 // Run runs the root command.
 func main() {
 	cmd := NewCmd()
@@ -111,20 +43,10 @@ func main() {
 	cmd.SetOut(os.Stdout)
 	cmd.SetErr(os.Stderr)
 
-	newarch := false
-	var serverConfigFilePath string
-	cmd.PersistentFlags().BoolVarP(&newarch, "newarch", "x", false, "Run the new architecture of TiCDC (experimental feature)")
-	cmd.ParseFlags(os.Args[1:])
-
-	// Double check to aviod some corner cases
-	serverConfigFilePath = parseConfigFlagFromOSArgs()
-	newarch = parseNewarchFlagFromOSArgs() || (os.Getenv("TICDC_NEWARCH") == "true")
-
-	if newarch || isNewArchEnabledByConfig(serverConfigFilePath) {
-		addNewArchCommandTo(cmd)
-	} else {
-		tiflowCmd.AddTiCDCCommandTo(cmd)
-	}
+	cmd.AddCommand(server.NewCmdServer())
+	cmd.AddCommand(cli.NewCmdCli())
+	cmd.AddCommand(version.NewCmdVersion())
+	cmd.AddCommand(tiflowRedo.NewCmdRedo())
 
 	setNewCollationEnabled()
 	if err := cmd.Execute(); err != nil {

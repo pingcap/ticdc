@@ -365,7 +365,10 @@ func needSwitchDB(event *commonEvent.DDLEvent) bool {
 	return true
 }
 
-func SetWriteSource(cfg *MysqlConfig, txn *sql.Tx) error {
+// SetWriteSource sets write source for the transaction.
+// When this variable is set to a value other than 0, data written in this session is considered to be written by TiCDC.
+// DDLs executed in a PRIMARY cluster can be replicated to a SECONDARY cluster by TiCDC.
+func SetWriteSource(ctx context.Context, cfg *MysqlConfig, txn *sql.Tx) error {
 	// we only set write source when donwstream is TiDB and write source is existed.
 	if !cfg.IsWriteSourceExisted {
 		return nil
@@ -374,7 +377,7 @@ func SetWriteSource(cfg *MysqlConfig, txn *sql.Tx) error {
 	// We should always try to set this variable, and ignore the error if
 	// downstream does not support this variable, it is by design.
 	query := fmt.Sprintf("SET SESSION %s = %d", "tidb_cdc_write_source", cfg.SourceID)
-	_, err := txn.ExecContext(context.Background(), query)
+	_, err := txn.ExecContext(ctx, query)
 	if err != nil {
 		if mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError); ok &&
 			mysqlErr.Number == mysql.ErrUnknownSystemVariable {

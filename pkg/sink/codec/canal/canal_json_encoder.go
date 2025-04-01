@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"go.uber.org/zap"
-	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
 )
 
@@ -205,8 +204,8 @@ func newJSONMessageForDML(
 		out.String("")
 	}
 
-	valueMap := make(map[int64]string, 0)         // colId -> value
-	javaTypeMap := make(map[int64]JavaSQLType, 0) // colId -> javaType
+	valueMap := make(map[int64]string, columnLen)         // colId -> value
+	javaTypeMap := make(map[int64]JavaSQLType, columnLen) // colId -> javaType
 
 	row := e.GetRows()
 	if e.IsDelete() {
@@ -358,12 +357,10 @@ func eventTypeString(e *commonEvent.RowEvent) string {
 
 // JSONRowEventEncoder encodes row event in JSON format
 type JSONRowEventEncoder struct {
-	messages     []*common.Message
-	bytesDecoder *encoding.Decoder
+	messages []*common.Message
 
 	claimCheck *claimcheck.ClaimCheck
-
-	config *common.Config
+	config     *common.Config
 }
 
 // NewJSONRowEventEncoder creates a new JSONRowEventEncoder
@@ -373,10 +370,9 @@ func NewJSONRowEventEncoder(ctx context.Context, config *common.Config) (common.
 		return nil, errors.Trace(err)
 	}
 	return &JSONRowEventEncoder{
-		messages:     make([]*common.Message, 0, 1),
-		bytesDecoder: charmap.ISO8859_1.NewDecoder(),
-		config:       config,
-		claimCheck:   claimCheck,
+		messages:   make([]*common.Message, 0, 1),
+		config:     config,
+		claimCheck: claimCheck,
 	}, nil
 }
 

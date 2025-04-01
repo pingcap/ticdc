@@ -851,7 +851,13 @@ func updateDDLHistoryForDropPartition(args updateDDLHistoryFuncArgs) []uint64 {
 func updateDDLHistoryForCreateView(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	for tableID := range args.tableMap {
-		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
+		if partitionInfo, ok := args.partitionMap[tableID]; ok {
+			for id := range partitionInfo {
+				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, id)
+			}
+		} else {
+			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
+		}
 	}
 	return args.tableTriggerDDLHistory
 }
@@ -1016,9 +1022,7 @@ func updateSchemaMetadataForNewTableDDL(args updateSchemaMetadataFuncArgs) {
 	}
 	if isPartitionTable(args.event.TableInfo) {
 		partitionInfo := make(BasicPartitionInfo)
-		for _, id := range getAllPartitionIDs(args.event.TableInfo) {
-			partitionInfo[id] = nil
-		}
+		partitionInfo.AddPartitionIDs(getAllPartitionIDs(args.event.TableInfo)...)
 		args.partitionMap[tableID] = partitionInfo
 	}
 }
@@ -1049,9 +1053,7 @@ func updateSchemaMetadataForTruncateTable(args updateSchemaMetadataFuncArgs) {
 	if isPartitionTable(args.event.TableInfo) {
 		delete(args.partitionMap, oldTableID)
 		partitionInfo := make(BasicPartitionInfo)
-		for _, id := range getAllPartitionIDs(args.event.TableInfo) {
-			partitionInfo[id] = nil
-		}
+		partitionInfo.AddPartitionIDs(getAllPartitionIDs(args.event.TableInfo)...)
 		args.partitionMap[newTableID] = partitionInfo
 	}
 }
@@ -1142,9 +1144,7 @@ func updateSchemaMetadataForCreateTables(args updateSchemaMetadataFuncArgs) {
 		}
 		if isPartitionTable(info) {
 			partitionInfo := make(BasicPartitionInfo)
-			for _, id := range getAllPartitionIDs(info) {
-				partitionInfo[id] = nil
-			}
+			partitionInfo.AddPartitionIDs((getAllPartitionIDs(info))...)
 			args.partitionMap[info.ID] = partitionInfo
 		}
 	}
@@ -1154,13 +1154,9 @@ func updateSchemaMetadataForReorganizePartition(args updateSchemaMetadataFuncArg
 	tableID := args.event.TableID
 	physicalIDs := getAllPartitionIDs(args.event.TableInfo)
 	droppedIDs := getDroppedIDs(args.event.PrevPartitions, physicalIDs)
-	for _, id := range droppedIDs {
-		delete(args.partitionMap[tableID], id)
-	}
+	args.partitionMap[tableID].RemovePartitionIDs(droppedIDs...)
 	newCreatedIDs := getCreatedIDs(args.event.PrevPartitions, physicalIDs)
-	for _, id := range newCreatedIDs {
-		args.partitionMap[tableID][id] = nil
-	}
+	args.partitionMap[tableID].AddPartitionIDs(newCreatedIDs...)
 }
 
 func updateSchemaMetadataForAlterTablePartitioning(args updateSchemaMetadataFuncArgs) {
@@ -1178,9 +1174,7 @@ func updateSchemaMetadataForAlterTablePartitioning(args updateSchemaMetadataFunc
 		Name:     args.event.TableName,
 	}
 	args.partitionMap[newTableID] = make(BasicPartitionInfo)
-	for _, id := range getAllPartitionIDs(args.event.TableInfo) {
-		args.partitionMap[newTableID][id] = nil
-	}
+	args.partitionMap[newTableID].AddPartitionIDs(getAllPartitionIDs(args.event.TableInfo)...)
 }
 
 func updateSchemaMetadataForRemovePartitioning(args updateSchemaMetadataFuncArgs) {
@@ -1525,6 +1519,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 		TableInfo:  wrapTableInfo,
 		FinishedTs: rawEvent.FinishedTs,
 		TiDBOnly:   tiDBOnly,
+		BDRMode:    rawEvent.BDRRole,
 
 		TableNameInDDLJob: rawEvent.TableNameInDDLJob,
 		DBNameInDDLJob:    rawEvent.DBNameInDDLJob,
@@ -1657,9 +1652,23 @@ func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFi
 	if !ok {
 		return ddlEvent, false
 	}
-	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
-		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{rawEvent.TableID},
+
+	// the event is related to the partition table
+	if rawEvent.TableInfo.Partition != nil {
+		partitionTableIDs := make([]int64, 0)
+		for _, partition := range rawEvent.TableInfo.Partition.Definitions {
+			partitionTableIDs = append(partitionTableIDs, partition.ID)
+		}
+
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      partitionTableIDs,
+		}
+	} else {
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.TableID},
+		}
 	}
 	return ddlEvent, true
 }
@@ -1669,9 +1678,22 @@ func buildDDLEventForNormalDDLOnSingleTableForTiDB(rawEvent *PersistedDDLEvent, 
 	if !ok {
 		return ddlEvent, false
 	}
-	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
-		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{rawEvent.TableID},
+	// the event is related to the partition table
+	if rawEvent.TableInfo.Partition != nil {
+		partitionTableIDs := make([]int64, 0)
+		for _, partition := range rawEvent.TableInfo.Partition.Definitions {
+			partitionTableIDs = append(partitionTableIDs, partition.ID)
+		}
+
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      partitionTableIDs,
+		}
+	} else {
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.TableID},
+		}
 	}
 	return ddlEvent, true
 }
@@ -2225,8 +2247,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 }
 
 func buildDDLEventForAlterTablePartitioning(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool) {
-	// TODO: only tidb?
-	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithTiDBOnly)
+	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if !ok {
 		return ddlEvent, false
 	}
@@ -2257,8 +2278,7 @@ func buildDDLEventForAlterTablePartitioning(rawEvent *PersistedDDLEvent, tableFi
 }
 
 func buildDDLEventForRemovePartitioning(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool) {
-	// TODO: only tidb?
-	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithTiDBOnly)
+	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if !ok {
 		return ddlEvent, false
 	}

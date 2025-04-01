@@ -283,6 +283,7 @@ func (m *mockEventStore) RegisterDispatcher(
 	startTS common.Ts,
 	notifier eventstore.ResolvedTsNotifier,
 	onlyReuse bool,
+	bdrMode bool,
 ) (bool, error) {
 	log.Info("subscribe table span", zap.Any("span", span), zap.Uint64("startTs", uint64(startTS)))
 	spanStats := &mockSpanStats{
@@ -469,6 +470,7 @@ type mockDispatcherInfo struct {
 	startTs    uint64
 	actionType eventpb.ActionType
 	filter     filter.Filter
+	bdrMode    bool
 }
 
 func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
@@ -546,6 +548,10 @@ func (m *mockDispatcherInfo) GetFilter() filter.Filter {
 }
 
 func (m *mockDispatcherInfo) IsOnlyReuse() bool {
+	return false
+}
+
+func (m *mockDispatcherInfo) GetBdrMode() bool {
 	return false
 }
 
