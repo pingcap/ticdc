@@ -14,7 +14,7 @@
 package conflictdetector
 
 import (
-	"sync"
+	"context"
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -39,10 +39,7 @@ type ConflictDetector struct {
 	// nextCacheID is used to dispatch transactions round-robin.
 	nextCacheID atomic.Int64
 
-	closeCh chan struct{}
-
 	notifiedNodes *chann.DrainableChann[func()]
-	wg            sync.WaitGroup
 }
 
 // New creates a new ConflictDetector.
@@ -52,30 +49,22 @@ func New(
 	ret := &ConflictDetector{
 		resolvedTxnCaches: make([]txnCache, opt.Count),
 		slots:             NewSlots(numSlots),
-		closeCh:           make(chan struct{}),
 		notifiedNodes:     chann.NewAutoDrainChann[func()](),
 	}
 	for i := 0; i < opt.Count; i++ {
 		ret.resolvedTxnCaches[i] = newTxnCache(opt)
 	}
-
-	ret.wg.Add(1)
-	go func() {
-		defer ret.wg.Done()
-		ret.runBackgroundTasks()
-	}()
-
 	return ret
 }
 
-func (d *ConflictDetector) runBackgroundTasks() {
+func (d *ConflictDetector) Run(ctx context.Context) error {
 	defer func() {
 		d.notifiedNodes.CloseAndDrain()
 	}()
 	for {
 		select {
-		case <-d.closeCh:
-			return
+		case <-ctx.Done():
+			return ctx.Err()
 		case notifyCallback := <-d.notifiedNodes.Out():
 			if notifyCallback != nil {
 				notifyCallback()
@@ -108,11 +97,6 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) error {
 	d.slots.Add(node)
 
 	return nil
-}
-
-// Close closes the ConflictDetector.
-func (d *ConflictDetector) Close() {
-	close(d.closeCh)
 }
 
 // sendToCache should not call txn.Callback if it returns an error.

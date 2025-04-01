@@ -113,6 +113,9 @@ func newMysqlSinkWithDBAndConfig(
 
 func (s *Sink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		return s.conflictDetector.Run(ctx)
+	})
 	for _, w := range s.dmlWorker {
 		g.Go(func() error {
 			return w.Run(ctx)
