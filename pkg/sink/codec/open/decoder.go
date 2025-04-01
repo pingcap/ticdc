@@ -33,8 +33,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/sink/codec"
 	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
@@ -217,9 +215,8 @@ func (b *BatchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 		return b.assembleEventFromClaimCheckStorage(ctx)
 	}
 
-	// b.nextEvent = b.assembleDMLEvent(b.nextKey, rowMsg)
 	if b.nextKey.OnlyHandleKey {
-		return b.assembleHandleKeyOnlyEvent(ctx)
+		return b.assembleHandleKeyOnlyDMLEvent(ctx), nil
 	}
 
 	result := b.assembleDMLEvent()
@@ -229,11 +226,11 @@ func (b *BatchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	return result, nil
 }
 
-func (b *BatchDecoder) buildColumns(
+func buildColumns(
 	holder *common.ColumnsHolder, handleKeyColumns map[string]interface{},
-) []*model.Column {
+) map[string]column {
 	columnsCount := holder.Length()
-	columns := make([]*model.Column, 0, columnsCount)
+	result := make(map[string]column, columnsCount)
 	for i := 0; i < columnsCount; i++ {
 		columnType := holder.Types[i]
 		name := columnType.Name()
@@ -249,95 +246,57 @@ func (b *BatchDecoder) buildColumns(
 			value = common.MustBinaryLiteralToInt(value.([]uint8))
 		}
 
-		column := &model.Column{
-			Name:  name,
+		flag := commonType.ColumnFlagType(0)
+		if _, ok := handleKeyColumns[name]; ok {
+			flag.SetIsPrimaryKey()
+			flag.SetIsHandleKey()
+		}
+
+		col := column{
 			Type:  mysqlType,
 			Value: value,
+			Flag:  commonType.ColumnFlagType(0),
 		}
-
-		if _, ok := handleKeyColumns[name]; ok {
-			column.Flag = model.PrimaryKeyFlag | model.HandleKeyFlag
-		}
-		columns = append(columns, column)
+		result[name] = col
 	}
-	return columns
+	return result
 }
 
-func (b *BatchDecoder) assembleHandleKeyOnlyEvent(ctx context.Context) (*commonEvent.DMLEvent, error) {
-	// todo: interface query db condition from the nextKey and nextRow
-	//var (
-	//	schema   = handleKeyOnlyEvent.TableInfo.GetSchemaName()
-	//	table    = handleKeyOnlyEvent.TableInfo.GetTableName()
-	//	commitTs = handleKeyOnlyEvent.CommitTs
-	//)
-	//
-	//conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.TableInfo.GetColumns()))
-	//rowChange, ok := handleKeyOnlyEvent.GetNextRow()
-	//if !ok {
-	//	log.Panic("cannot found the handle key value")
-	//}
-	//for idx, col := range handleKeyOnlyEvent.TableInfo.GetColumns() {
-	//	colName := handleKeyOnlyEvent.TableInfo.ForceGetColumnName(col.ID)
-	//	conditions[colName] = rowChange.Row.GetDatum(idx, &col.FieldType).String()
-	//}
-
-	//switch handleKeyOnlyEvent.RowTypes[0] {
-	//case commonEvent.RowTypeInsert:
-	//	holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-	//	columns := newColumns(holder)
-	//
-	//case commonEvent.RowTypeDelete:
-	//case commonEvent.RowTypeUpdate:
-	//default:
-	//	log.Panic("unknown event type")
-	//}
-
-	//tableInfo := handleKeyOnlyEvent.TableInfo
-	//if handleKeyOnlyEvent.IsInsert() {
-	//	//conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.Columns))
-	//	//for _, col := range handleKeyOnlyEvent.Columns {
-	//	//	colName := tableInfo.ForceGetColumnName(col.ColumnID)
-	//	//	conditions[colName] = col.Value
-	//	//}
-	//	//holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-	//	//columns := b.buildColumns(holder, conditions)
-	//	indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(columns)
-	//	handleKeyOnlyEvent.TableInfo = model.BuildTableInfo(schema, table, columns, indexColumns)
-	//	handleKeyOnlyEvent.Columns = model.Columns2ColumnDatas(columns, handleKeyOnlyEvent.TableInfo)
-	//} else if handleKeyOnlyEvent.IsDelete() {
-	//	conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.PreColumns))
-	//	for _, col := range handleKeyOnlyEvent.PreColumns {
-	//		colName := tableInfo.ForceGetColumnName(col.ColumnID)
-	//		conditions[colName] = col.Value
-	//	}
-	//	holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-	//	preColumns := b.buildColumns(holder, conditions)
-	//	indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(preColumns)
-	//	handleKeyOnlyEvent.TableInfo = model.BuildTableInfo(schema, table, preColumns, indexColumns)
-	//	handleKeyOnlyEvent.PreColumns = model.Columns2ColumnDatas(preColumns, handleKeyOnlyEvent.TableInfo)
-	//} else if handleKeyOnlyEvent.IsUpdate() {
-	//	conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.Columns))
-	//	for _, col := range handleKeyOnlyEvent.Columns {
-	//		colName := tableInfo.ForceGetColumnName(col.ColumnID)
-	//		conditions[colName] = col.Value
-	//	}
-	//	holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-	//	columns := b.buildColumns(holder, conditions)
-	//	indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(columns)
-	//	handleKeyOnlyEvent.TableInfo = model.BuildTableInfo(schema, table, columns, indexColumns)
-	//	handleKeyOnlyEvent.Columns = model.Columns2ColumnDatas(columns, handleKeyOnlyEvent.TableInfo)
-	//
-	//	conditions = make(map[string]interface{}, len(handleKeyOnlyEvent.PreColumns))
-	//	for _, col := range handleKeyOnlyEvent.PreColumns {
-	//		colName := tableInfo.ForceGetColumnName(col.ColumnID)
-	//		conditions[colName] = col.Value
-	//	}
-	//	holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-	//	preColumns := b.buildColumns(holder, conditions)
-	//	handleKeyOnlyEvent.PreColumns = model.Columns2ColumnDatas(preColumns, handleKeyOnlyEvent.TableInfo)
-	//}
-
-	return b.assembleDMLEvent(), nil
+func (b *BatchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context) *commonEvent.DMLEvent {
+	key := b.nextKey
+	row := b.nextRow
+	var (
+		schema   = key.Schema
+		table    = key.Table
+		commitTs = key.Ts
+	)
+	conditions := make(map[string]interface{}, 1)
+	if len(row.Delete) != 0 {
+		for name, col := range row.Delete {
+			conditions[name] = col.Value
+		}
+		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
+		columns := buildColumns(holder, conditions)
+		b.nextRow.Delete = columns
+	} else if len(row.PreColumns) != 0 {
+		for name, col := range row.PreColumns {
+			conditions[name] = col.Value
+		}
+		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
+		b.nextRow.PreColumns = buildColumns(holder, conditions)
+		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
+		b.nextRow.Update = buildColumns(holder, conditions)
+	} else if len(row.Update) != 0 {
+		for name, col := range row.Update {
+			conditions[name] = col.Value
+		}
+		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
+		b.nextRow.Update = buildColumns(holder, conditions)
+	} else {
+		log.Panic("unknown event type")
+	}
+	b.nextKey.OnlyHandleKey = false
+	return b.assembleDMLEvent()
 }
 
 func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (*commonEvent.DMLEvent, error) {
@@ -353,7 +312,7 @@ func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 	}
 
 	version := binary.BigEndian.Uint64(claimCheckM.Key[:8])
-	if version != codec.BatchVersion1 {
+	if version != batchVersion1 {
 		return nil, errors.ErrOpenProtocolCodecInvalidData.
 			GenWithStack("unexpected key format version")
 	}
