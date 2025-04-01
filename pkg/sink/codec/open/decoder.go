@@ -414,18 +414,7 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 			col.SetCollate("utf8mb4_bin")
 			elements := common.ExtractElements("")
 			col.SetElems(elements)
-		case mysql.TypeNewDecimal:
-			defaultFlen, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(col.GetType())
-			col.FieldType.SetFlen(defaultFlen)
-			col.FieldType.SetDecimal(defaultDecimal)
-		case mysql.TypeBit:
-			log.Warn("how to handle bit, set flen and decimal?")
 		}
-
-		// flen, decimal := common.ExtractFlenDecimal(mysqlType)
-		// col.FieldType.SetFlen(flen)
-		// col.FieldType.SetDecimal(decimal)
-
 		nextColumnID++
 		result = append(result, col)
 	}
