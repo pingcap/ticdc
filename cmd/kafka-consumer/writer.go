@@ -173,7 +173,7 @@ func (w *writer) popDDL() {
 	}
 }
 
-func (w *writer) getMinWatermark() uint64 {
+func (w *writer) getGlobalWatermark() uint64 {
 	result := uint64(math.MaxUint64)
 	for _, p := range w.progresses {
 		watermark := p.loadWatermark()
@@ -199,44 +199,50 @@ func (w *writer) forEachPartition(fn func(p *partitionProgress)) {
 
 // Write will synchronously write data downstream
 func (w *writer) flush(ctx context.Context, messageType common.MessageType) bool {
-	watermark := w.getMinWatermark()
-	var todoDDL *commonEvent.DDLEvent
-	for {
-		todoDDL = w.getFrontDDL()
-		// watermark is the min value for all partitions,
-		// the DDL only executed by the first partition, other partitions may be slow
-		// so that the watermark can be smaller than the DDL's commitTs,
-		// which means some DML events may not be consumed yet, so cannot execute the DDL right now.
-		if todoDDL == nil || todoDDL.GetCommitTs() > watermark {
-			break
-		}
-		// flush DMLs
-		//w.forEachPartition(func(sink *partitionProgress) {
-		//	syncFlushRowChangedEvents(ctx, sink, todoDDL.CommitTs)
-		//})
-		// DDL can be executed, do it first.
-		if err := w.mysqlSink.WriteBlockEvent(todoDDL); err != nil {
-			log.Panic("write DDL event failed", zap.Error(err),
-				zap.String("DDL", todoDDL.Query), zap.Uint64("commitTs", todoDDL.GetCommitTs()))
-		}
-		w.popDDL()
+	switch messageType {
+	case common.MessageTypeResolved:
+		watermark := w.getGlobalWatermark()
+
+	case common.MessageTypeDDL:
 	}
+	//watermark := w.getGlobalWatermark()
+	//var todoDDL *commonEvent.DDLEvent
+	//for {
+	//	todoDDL = w.getFrontDDL()
+	//	// watermark is the min value for all partitions,
+	//	// the DDL only executed by the first partition, other partitions may be slow
+	//	// so that the watermark can be smaller than the DDL's commitTs,
+	//	// which means some DML events may not be consumed yet, so cannot execute the DDL right now.
+	//	if todoDDL == nil || todoDDL.GetCommitTs() > watermark {
+	//		break
+	//	}
+	//	// flush DMLs
+	//	//w.forEachPartition(func(sink *partitionProgress) {
+	//	//	syncFlushRowChangedEvents(ctx, sink, todoDDL.CommitTs)
+	//	//})
+	//	// DDL can be executed, do it first.
+	//	if err := w.mysqlSink.WriteBlockEvent(todoDDL); err != nil {
+	//		log.Panic("write DDL event failed", zap.Error(err),
+	//			zap.String("DDL", todoDDL.Query), zap.Uint64("commitTs", todoDDL.GetCommitTs()))
+	//	}
+	//	w.popDDL()
+	//}
 
 	//if messageType == common.MessageTypeResolved {
-	//	w.forEachPartition(func(sink *partitionProgress) {
-	//		syncFlushRowChangedEvents(ctx, sink, watermark)
-	//	})
+	w.forEachPartition(func(sink *partitionProgress) {
+		syncFlushRowChangedEvents(ctx, sink, watermark)
+	})
 	//}
 
 	// The DDL events will only execute in partition0
-	if messageType == common.MessageTypeDDL && todoDDL != nil {
-		log.Info("DDL event will be flushed in the future",
-			zap.Uint64("watermark", watermark),
-			zap.Uint64("CommitTs", todoDDL.GetCommitTs()),
-			zap.String("Query", todoDDL.Query))
-		return false
-	}
-	return true
+	//if messageType == common.MessageTypeDDL && todoDDL != nil {
+	//	log.Info("DDL event will be flushed in the future",
+	//		zap.Uint64("watermark", watermark),
+	//		zap.Uint64("CommitTs", todoDDL.GetCommitTs()),
+	//		zap.String("Query", todoDDL.Query))
+	//	return false
+	//}
+	//return true
 }
 
 // WriteMessage is to decode kafka message to event.
@@ -364,7 +370,9 @@ func (w *writer) resolveRowChangedEvents(progress *partitionProgress, newWaterma
 			continue
 		}
 		for _, e := range events {
-			w.mysqlSink.AddDMLEvent(e)
+			if err := w.mysqlSink.AddDMLEvent(e); err != nil {
+				log.Panic("add DML event to the mysql sink failed", zap.Error(err))
+			}
 		}
 	}
 }
@@ -439,29 +447,29 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 	group.Append(dml, offset)
 }
 
-//func syncFlushRowChangedEvents(ctx context.Context, progress *partitionProgress, watermark uint64) {
-//	resolvedTs := model.NewResolvedTs(watermark)
-//	for {
-//		select {
-//		case <-ctx.Done():
-//			log.Warn("sync flush row changed event canceled", zap.Error(ctx.Err()))
-//			return
-//		default:
-//		}
-//		flushedResolvedTs := true
-//		for _, tableSink := range progress.tableSinkMap {
-//			if err := tableSink.UpdateResolvedTs(resolvedTs); err != nil {
-//				log.Panic("Failed to update resolved ts", zap.Error(err))
-//			}
-//			if tableSink.GetCheckpointTs().Less(resolvedTs) {
-//				flushedResolvedTs = false
-//			}
-//		}
-//		if flushedResolvedTs {
-//			return
-//		}
-//	}
-//}
+func syncFlushRowChangedEvents(ctx context.Context, progress *partitionProgress, watermark uint64) {
+	resolvedTs := model.NewResolvedTs(watermark)
+	for {
+		select {
+		case <-ctx.Done():
+			log.Warn("sync flush row changed event canceled", zap.Error(ctx.Err()))
+			return
+		default:
+		}
+		flushedResolvedTs := true
+		for _, tableSink := range progress.tableSinkMap {
+			if err := tableSink.UpdateResolvedTs(resolvedTs); err != nil {
+				log.Panic("Failed to update resolved ts", zap.Error(err))
+			}
+			if tableSink.GetCheckpointTs().Less(resolvedTs) {
+				flushedResolvedTs = false
+			}
+		}
+		if flushedResolvedTs {
+			return
+		}
+	}
+}
 
 func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
 	db, err := sql.Open("mysql", dsn)
