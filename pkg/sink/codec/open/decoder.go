@@ -17,8 +17,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"encoding/json"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -28,22 +28,21 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/br/pkg/storage"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
-	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink/codec"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
 
-// BatchDecoder decodes the byte of a batch into the original messages.
 type BatchDecoder struct {
 	keyBytes   []byte
 	valueBytes []byte
 
-	nextKey   *messageKey
-	nextEvent *commonEvent.DMLEvent
+	nextKey *messageKey
+	nextRow *messageRow
 
 	storage storage.ExternalStorage
 
@@ -51,6 +50,7 @@ type BatchDecoder struct {
 
 	upstreamTiDB *sql.DB
 
+	tableInfoCache   map[tableKey]*commonType.TableInfo
 	tableIDAllocator *common.FakeTableIDAllocator
 }
 
@@ -64,19 +64,21 @@ func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (co
 		storageURI := config.LargeMessageHandle.ClaimCheckStorageURI
 		externalStorage, err = util.GetExternalStorage(ctx, storageURI, nil, util.NewS3Retryer(10, 10*time.Second, 10*time.Second))
 		if err != nil {
-			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+			return nil, err
 		}
 	}
 
-	if config.LargeMessageHandle.HandleKeyOnly() && db == nil {
-		return nil, errors.ErrCodecDecode.
-			GenWithStack("handle-key-only is enabled, but upstream TiDB is not provided")
+	if config.LargeMessageHandle.HandleKeyOnly() {
+		if db == nil {
+			log.Warn("handle-key-only is enabled, but upstream TiDB is not provided")
+		}
 	}
 
 	return &BatchDecoder{
 		config:           config,
 		storage:          externalStorage,
 		upstreamTiDB:     db,
+		tableInfoCache:   make(map[tableKey]*commonType.TableInfo),
 		tableIDAllocator: common.NewFakeTableIDAllocator(),
 	}, nil
 }
@@ -88,13 +90,12 @@ func (b *BatchDecoder) AddKeyValue(key, value []byte) error {
 			GenWithStack("decoder key and value not nil")
 	}
 	version := binary.BigEndian.Uint64(key[:8])
-	key = key[8:]
 	if version != batchVersion1 {
 		return errors.ErrOpenProtocolCodecInvalidData.
 			GenWithStack("unexpected key format version")
 	}
 
-	b.keyBytes = key
+	b.keyBytes = key[8:]
 	b.valueBytes = value
 	return nil
 }
@@ -115,18 +116,14 @@ func (b *BatchDecoder) hasNext() bool {
 	return false
 }
 
-func (b *BatchDecoder) decodeNextKey() error {
+func (b *BatchDecoder) decodeNextKey() {
 	keyLen := binary.BigEndian.Uint64(b.keyBytes[:8])
 	key := b.keyBytes[8 : keyLen+8]
 	msgKey := new(messageKey)
-	err := msgKey.Decode(key)
-	if err != nil {
-		return errors.Trace(err)
-	}
+	msgKey.Decode(key)
 	b.nextKey = msgKey
 
 	b.keyBytes = b.keyBytes[keyLen+8:]
-	return nil
 }
 
 // HasNext implements the RowEventDecoder interface
@@ -134,34 +131,33 @@ func (b *BatchDecoder) HasNext() (common.MessageType, bool, error) {
 	if !b.hasNext() {
 		return 0, false, nil
 	}
-	if err := b.decodeNextKey(); err != nil {
-		return 0, false, err
+	b.decodeNextKey()
+
+	switch b.nextKey.Type {
+	case common.MessageTypeResolved, common.MessageTypeDDL:
+		return b.nextKey.Type, true, nil
+	default:
 	}
+	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
+	value := b.valueBytes[8 : valueLen+8]
+	b.valueBytes = b.valueBytes[valueLen+8:]
 
-	if b.nextKey.Type == common.MessageTypeRow {
-		valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
-		value := b.valueBytes[8 : valueLen+8]
-		b.valueBytes = b.valueBytes[valueLen+8:]
-
-		rowMsg := new(messageRow)
-		value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
-		if err != nil {
-			return common.MessageTypeUnknown, false, cerror.ErrOpenProtocolCodecInvalidData.
-				GenWithStack("decompress data failed")
-		}
-		if err = rowMsg.decode(value); err != nil {
-			return b.nextKey.Type, false, errors.Trace(err)
-		}
-		b.nextEvent = b.msgToRowChange(b.nextKey, rowMsg)
+	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
+	if err != nil {
+		log.Panic("decompress failed",
+			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value), zap.Error(err))
 	}
+	b.nextRow = new(messageRow)
+	b.nextRow.decode(value)
 
-	return b.nextKey.Type, true, nil
+	return common.MessageTypeRow, true, nil
 }
 
 // NextResolvedEvent implements the RowEventDecoder interface
 func (b *BatchDecoder) NextResolvedEvent() (uint64, error) {
 	if b.nextKey.Type != common.MessageTypeResolved {
-		return 0, cerror.ErrOpenProtocolCodecInvalidData.GenWithStack("not found resolved event message")
+		return 0, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found resolved event message")
 	}
 	resolvedTs := b.nextKey.Ts
 	b.nextKey = nil
@@ -170,10 +166,15 @@ func (b *BatchDecoder) NextResolvedEvent() (uint64, error) {
 	return resolvedTs, nil
 }
 
+type messageDDL struct {
+	Query string             `json:"q"`
+	Type  timodel.ActionType `json:"t"`
+}
+
 // NextDDLEvent implements the RowEventDecoder interface
 func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	if b.nextKey.Type != common.MessageTypeDDL {
-		return nil, cerror.ErrOpenProtocolCodecInvalidData.GenWithStack("not found ddl event message")
+		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found ddl event message")
 	}
 
 	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
@@ -181,13 +182,13 @@ func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 
 	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
-		return nil, cerror.ErrOpenProtocolCodecInvalidData.
-			GenWithStack("decompress DDL event failed")
+		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("decompress DDL event failed")
 	}
 
-	m := new(messageDDL)
-	if err = m.decode(value); err != nil {
-		return nil, errors.Trace(err)
+	var m messageDDL
+	err = json.Unmarshal(value, &m)
+	if err != nil {
+		log.Panic("decode message DDL failed", zap.Any("data", value), zap.Error(err))
 	}
 
 	result := new(commonEvent.DDLEvent)
@@ -201,7 +202,7 @@ func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	return result, nil
 }
 
-// NextRowChangedEvent implements the RowEventDecoder interface
+// NextDMLEvent implements the RowEventDecoder interface
 func (b *BatchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	if b.nextKey.Type != common.MessageTypeRow {
 		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found row event message")
@@ -213,20 +214,22 @@ func (b *BatchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 		return b.assembleEventFromClaimCheckStorage(ctx)
 	}
 
-	event := b.nextEvent
-	if b.nextKey.OnlyHandleKey {
-		event = b.assembleHandleKeyOnlyEvent(ctx, event)
+	if b.nextKey.OnlyHandleKey && b.upstreamTiDB != nil {
+		return b.assembleHandleKeyOnlyDMLEvent(ctx), nil
 	}
 
+	result := b.assembleDMLEvent()
+
 	b.nextKey = nil
-	return event, nil
+	b.nextRow = nil
+	return result, nil
 }
 
-func (b *BatchDecoder) buildColumns(
+func buildColumns(
 	holder *common.ColumnsHolder, handleKeyColumns map[string]interface{},
-) []*model.Column {
+) map[string]column {
 	columnsCount := holder.Length()
-	columns := make([]*model.Column, 0, columnsCount)
+	result := make(map[string]column, columnsCount)
 	for i := 0; i < columnsCount; i++ {
 		columnType := holder.Types[i]
 		name := columnType.Name()
@@ -242,75 +245,57 @@ func (b *BatchDecoder) buildColumns(
 			value = common.MustBinaryLiteralToInt(value.([]uint8))
 		}
 
-		column := &model.Column{
-			Name:  name,
+		flag := commonType.ColumnFlagType(0)
+		if _, ok := handleKeyColumns[name]; ok {
+			flag.SetIsPrimaryKey()
+			flag.SetIsHandleKey()
+		}
+
+		col := column{
 			Type:  mysqlType,
 			Value: value,
+			Flag:  commonType.ColumnFlagType(0),
 		}
-
-		if _, ok := handleKeyColumns[name]; ok {
-			column.Flag = model.PrimaryKeyFlag | model.HandleKeyFlag
-		}
-		columns = append(columns, column)
+		result[name] = col
 	}
-	return columns
+	return result
 }
 
-func (b *BatchDecoder) assembleHandleKeyOnlyEvent(
-	ctx context.Context, handleKeyOnlyEvent *commonEvent.DMLEvent,
-) *commonEvent.DMLEvent {
+func (b *BatchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context) *commonEvent.DMLEvent {
+	key := b.nextKey
+	row := b.nextRow
 	var (
-		schema   = handleKeyOnlyEvent.TableInfo.GetSchemaName()
-		table    = handleKeyOnlyEvent.TableInfo.GetTableName()
-		commitTs = handleKeyOnlyEvent.CommitTs
+		schema   = key.Schema
+		table    = key.Table
+		commitTs = key.Ts
 	)
-
-	tableInfo := handleKeyOnlyEvent.TableInfo
-	if handleKeyOnlyEvent.IsInsert() {
-		conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.Columns))
-		for _, col := range handleKeyOnlyEvent.Columns {
-			colName := tableInfo.ForceGetColumnName(col.ColumnID)
-			conditions[colName] = col.Value
-		}
-		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		columns := b.buildColumns(holder, conditions)
-		indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(columns)
-		handleKeyOnlyEvent.TableInfo = model.BuildTableInfo(schema, table, columns, indexColumns)
-		handleKeyOnlyEvent.Columns = model.Columns2ColumnDatas(columns, handleKeyOnlyEvent.TableInfo)
-	} else if handleKeyOnlyEvent.IsDelete() {
-		conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.PreColumns))
-		for _, col := range handleKeyOnlyEvent.PreColumns {
-			colName := tableInfo.ForceGetColumnName(col.ColumnID)
-			conditions[colName] = col.Value
+	conditions := make(map[string]interface{}, 1)
+	if len(row.Delete) != 0 {
+		for name, col := range row.Delete {
+			conditions[name] = col.Value
 		}
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		preColumns := b.buildColumns(holder, conditions)
-		indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(preColumns)
-		handleKeyOnlyEvent.TableInfo = model.BuildTableInfo(schema, table, preColumns, indexColumns)
-		handleKeyOnlyEvent.PreColumns = model.Columns2ColumnDatas(preColumns, handleKeyOnlyEvent.TableInfo)
-	} else if handleKeyOnlyEvent.IsUpdate() {
-		conditions := make(map[string]interface{}, len(handleKeyOnlyEvent.Columns))
-		for _, col := range handleKeyOnlyEvent.Columns {
-			colName := tableInfo.ForceGetColumnName(col.ColumnID)
-			conditions[colName] = col.Value
+		columns := buildColumns(holder, conditions)
+		b.nextRow.Delete = columns
+	} else if len(row.PreColumns) != 0 {
+		for name, col := range row.PreColumns {
+			conditions[name] = col.Value
+		}
+		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
+		b.nextRow.PreColumns = buildColumns(holder, conditions)
+		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
+		b.nextRow.Update = buildColumns(holder, conditions)
+	} else if len(row.Update) != 0 {
+		for name, col := range row.Update {
+			conditions[name] = col.Value
 		}
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		columns := b.buildColumns(holder, conditions)
-		indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(columns)
-		handleKeyOnlyEvent.TableInfo = model.BuildTableInfo(schema, table, columns, indexColumns)
-		handleKeyOnlyEvent.Columns = model.Columns2ColumnDatas(columns, handleKeyOnlyEvent.TableInfo)
-
-		conditions = make(map[string]interface{}, len(handleKeyOnlyEvent.PreColumns))
-		for _, col := range handleKeyOnlyEvent.PreColumns {
-			colName := tableInfo.ForceGetColumnName(col.ColumnID)
-			conditions[colName] = col.Value
-		}
-		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		preColumns := b.buildColumns(holder, conditions)
-		handleKeyOnlyEvent.PreColumns = model.Columns2ColumnDatas(preColumns, handleKeyOnlyEvent.TableInfo)
+		b.nextRow.Update = buildColumns(holder, conditions)
+	} else {
+		log.Panic("unknown event type")
 	}
-
-	return handleKeyOnlyEvent
+	b.nextKey.OnlyHandleKey = false
+	return b.assembleDMLEvent()
 }
 
 func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (*commonEvent.DMLEvent, error) {
@@ -326,7 +311,7 @@ func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 	}
 
 	version := binary.BigEndian.Uint64(claimCheckM.Key[:8])
-	if version != codec.BatchVersion1 {
+	if version != batchVersion1 {
 		return nil, errors.ErrOpenProtocolCodecInvalidData.
 			GenWithStack("unexpected key format version")
 	}
@@ -335,9 +320,7 @@ func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 	keyLen := binary.BigEndian.Uint64(key[:8])
 	key = key[8 : keyLen+8]
 	msgKey := new(messageKey)
-	if err = msgKey.Decode(key); err != nil {
-		return nil, errors.Trace(err)
-	}
+	msgKey.Decode(key)
 
 	valueLen := binary.BigEndian.Uint64(claimCheckM.Value[:8])
 	value := claimCheckM.Value[8 : valueLen+8]
@@ -347,56 +330,173 @@ func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 	}
 
 	rowMsg := new(messageRow)
-	if err = rowMsg.decode(value); err != nil {
-		return nil, errors.Trace(err)
-	}
+	rowMsg.decode(value)
 
-	event := b.msgToRowChange(msgKey, rowMsg)
+	b.nextKey = msgKey
+	b.nextRow = rowMsg
 
-	return event, nil
+	return b.assembleDMLEvent(), nil
 }
 
-func (b *BatchDecoder) msgToRowChange(key *messageKey, value *messageRow) *commonEvent.DMLEvent {
-	e := new(commonEvent.DMLEvent)
-	// TODO: we lost the startTs from kafka message
-	// startTs-based txn filter is out of work
-	e.CommitTs = key.Ts
+type tableKey struct {
+	schema string
+	table  string
+}
 
-	if len(value.Delete) != 0 {
-		preCols := codecColumns2RowChangeColumns(value.Delete)
-		indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(preCols)
-		e.TableInfo = model.BuildTableInfo(key.Schema, key.Table, preCols, indexColumns)
-		e.PreColumns = model.Columns2ColumnDatas(preCols, e.TableInfo)
-	} else {
-		cols := codecColumns2RowChangeColumns(value.Update)
-		preCols := codecColumns2RowChangeColumns(value.PreColumns)
-		indexColumns := model.GetHandleAndUniqueIndexOffsets4Test(cols)
-		e.TableInfo = model.BuildTableInfo(key.Schema, key.Table, cols, indexColumns)
-		e.Columns = model.Columns2ColumnDatas(cols, e.TableInfo)
-		e.PreColumns = model.Columns2ColumnDatas(preCols, e.TableInfo)
+func (b *BatchDecoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+	cacheKey := tableKey{
+		schema: key.Schema,
+		table:  key.Table,
 	}
+	tableInfo, ok := b.tableInfoCache[cacheKey]
+	if !ok {
+		tableInfo = b.newTableInfo(key, value)
+		b.tableInfoCache[cacheKey] = tableInfo
+	}
+	return tableInfo
+}
 
-	// TODO: we lost the tableID from kafka message
+func (b *BatchDecoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+	tableInfo := new(timodel.TableInfo)
+	tableInfo.ID = b.tableIDAllocator.AllocateTableID(key.Schema, key.Table)
+	tableInfo.Name = pmodel.NewCIStr(key.Table)
+
+	var rawColumns map[string]column
+	if value.Update != nil {
+		rawColumns = value.Update
+	} else if value.Delete != nil {
+		rawColumns = value.Delete
+	}
+	columns := newTiColumns(rawColumns)
+	tableInfo.Columns = columns
+	tableInfo.Indices = newTiIndices(columns)
+	return commonType.NewTableInfo4Decoder(key.Schema, tableInfo)
+}
+
+func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
+	result := make([]*timodel.ColumnInfo, 0)
+	var nextColumnID int64
+	for name, raw := range rawColumns {
+		col := new(timodel.ColumnInfo)
+		col.ID = nextColumnID
+		col.Name = pmodel.NewCIStr(name)
+		col.FieldType = *types.NewFieldType(raw.Type)
+		if raw.Flag.IsPrimaryKey() {
+			col.AddFlag(mysql.PriKeyFlag)
+			col.AddFlag(mysql.UniqueKeyFlag)
+			col.AddFlag(mysql.NotNullFlag)
+		}
+		if raw.Flag.IsUnsigned() {
+			col.AddFlag(mysql.UnsignedFlag)
+		}
+		if raw.Flag.IsBinary() {
+			col.AddFlag(mysql.BinaryFlag)
+		}
+
+		switch col.GetType() {
+		case mysql.TypeVarchar, mysql.TypeString,
+			mysql.TypeTinyBlob, mysql.TypeBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
+			if mysql.HasBinaryFlag(col.GetFlag()) {
+				col.AddFlag(mysql.BinaryFlag)
+				col.SetCharset("binary")
+				col.SetCollate("binary")
+			} else {
+				col.SetCharset("utf8mb4")
+				col.SetCollate("utf8mb4_bin")
+			}
+		case mysql.TypeDuration:
+			// todo: how to find the correct decimal for the duration type ?
+			_, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(col.GetType())
+			col.FieldType.SetDecimal(defaultDecimal)
+		case mysql.TypeEnum, mysql.TypeSet:
+			col.SetCharset("utf8mb4")
+			col.SetCollate("utf8mb4_bin")
+			elements := common.ExtractElements("")
+			col.SetElems(elements)
+		}
+		nextColumnID++
+		result = append(result, col)
+	}
+	return result
+}
+
+func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
+	indexColumns := make([]*timodel.IndexColumn, 0)
+	for idx, col := range columns {
+		if mysql.HasPriKeyFlag(col.GetFlag()) {
+			indexColumns = append(indexColumns, &timodel.IndexColumn{
+				Name:   col.Name,
+				Offset: idx,
+			})
+		}
+	}
+	indexInfo := &timodel.IndexInfo{
+		ID:      1,
+		Name:    pmodel.NewCIStr("primary"),
+		Columns: indexColumns,
+		Primary: true,
+	}
+	result := []*timodel.IndexInfo{indexInfo}
+	return result
+}
+
+func (b *BatchDecoder) assembleDMLEvent() *commonEvent.DMLEvent {
+	key := b.nextKey
+	value := b.nextRow
+
+	b.nextKey = nil
+	b.nextRow = nil
+
+	tableInfo := b.queryTableInfo(key, value)
+	result := new(commonEvent.DMLEvent)
+	result.Length++
+	result.StartTs = key.Ts
+	result.ApproximateSize = 0
+	result.TableInfo = tableInfo
+	result.CommitTs = key.Ts
 	if key.Partition != nil {
-		e.PhysicalTableID = *key.Partition
-		e.TableInfo.TableName.IsPartition = true
-	} else {
-		e.PhysicalTableID = b.tableIDAllocator.AllocateTableID(key.Schema, key.Table)
+		result.PhysicalTableID = *key.Partition
+		result.TableInfo.TableName.IsPartition = true
 	}
-	return e
+
+	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
+	columns := tableInfo.GetColumns()
+	if len(value.Delete) != 0 {
+		data := collectAllColumnsValue(value.Delete, columns)
+		common.AppendRow2Chunk(data, columns, chk)
+		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
+	} else if len(value.Update) != 0 && len(value.PreColumns) != 0 {
+		previous := collectAllColumnsValue(value.PreColumns, columns)
+		data := collectAllColumnsValue(value.Update, columns)
+		for k, v := range data {
+			if _, ok := previous[k]; !ok {
+				previous[k] = v
+			}
+		}
+		common.AppendRow2Chunk(previous, columns, chk)
+		common.AppendRow2Chunk(data, columns, chk)
+		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
+		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
+	} else if len(value.Update) != 0 {
+		data := collectAllColumnsValue(value.Update, columns)
+		common.AppendRow2Chunk(data, columns, chk)
+		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
+	} else {
+		log.Panic("unknown event type")
+	}
+
+	result.Rows = chk
+	return result
 }
 
-func codecColumns2RowChangeColumns(cols map[string]column) []*commonType.Column {
-	if len(cols) == 0 {
-		return nil
+func collectAllColumnsValue(data map[string]column, columns []*timodel.ColumnInfo) map[string]any {
+	result := make(map[string]any, len(data))
+	for _, col := range columns {
+		raw, ok := data[col.Name.O]
+		if !ok {
+			continue
+		}
+		result[col.Name.O] = formatColumn(raw, col.FieldType).Value
 	}
-	columns := make([]*commonType.Column, 0, len(cols))
-	for name, col := range cols {
-		c := col.toRowChangeColumn(name)
-		columns = append(columns, c)
-	}
-	sort.Slice(columns, func(i, j int) bool {
-		return columns[i].Name < columns[j].Name
-	})
-	return columns
+	return result
 }

@@ -64,12 +64,12 @@ type remoteMessageTarget struct {
 	commandSender *sendStreamWrapper
 
 	// For receiving events and commands
-	conn struct {
+	client struct {
 		sync.RWMutex
-		c *grpc.ClientConn
+		c                 *grpc.ClientConn
+		eventRecvStream   grpcReceiver
+		commandRecvStream grpcReceiver
 	}
-	eventRecvStream   grpcReceiver
-	commandRecvStream grpcReceiver
 
 	// We push the events and commands to remote send streams.
 	// The send streams are created when the target is added to the message center.
@@ -116,36 +116,36 @@ func (s *remoteMessageTarget) Epoch() uint64 {
 func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 	if !s.eventSender.ready.Load() {
 		s.connectionNotfoundErrorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has not been initialized, target: %s", s.targetId)}
+		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has not been initialized, target: %s, addr: %s", s.targetId, s.targetAddr)}
 	}
 	select {
 	case <-s.ctx.Done():
 		s.connectionNotfoundErrorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has been closed, target: %s", s.targetId)}
+		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has been closed, target: %s, addr: %s", s.targetId, s.targetAddr)}
 	case s.sendEventCh <- s.newMessage(msg...):
 		s.sendEventCounter.Add(float64(len(msg)))
 		return nil
 	default:
 		s.congestedEventErrorCounter.Inc()
-		return AppError{Type: ErrorTypeMessageCongested, Reason: fmt.Sprintf("Send event message is congested, target: %s", s.targetId)}
+		return AppError{Type: ErrorTypeMessageCongested, Reason: fmt.Sprintf("Send event message is congested, target: %s, addr: %s", s.targetId, s.targetAddr)}
 	}
 }
 
 func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
 	if !s.commandSender.ready.Load() {
 		s.connectionNotfoundErrorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has not been initialized, target: %s", s.targetId)}
+		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has not been initialized, target: %s, addr: %s", s.targetId, s.targetAddr)}
 	}
 	select {
 	case <-s.ctx.Done():
 		s.connectionNotfoundErrorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has been closed, target: %s", s.targetId)}
+		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has been closed, target: %s, addr: %s", s.targetId, s.targetAddr)}
 	case s.sendCmdCh <- s.newMessage(msg...):
 		s.sendCmdCounter.Add(float64(len(msg)))
 		return nil
 	default:
 		s.congestedCmdErrorCounter.Inc()
-		return AppError{Type: ErrorTypeMessageCongested, Reason: fmt.Sprintf("Send command message is congested, target: %s", s.targetId)}
+		return AppError{Type: ErrorTypeMessageCongested, Reason: fmt.Sprintf("Send command message is congested, target: %s, addr: %s", s.targetId, s.targetAddr)}
 	}
 }
 
@@ -219,15 +219,23 @@ func (s *remoteMessageTarget) runHandleErr(ctx context.Context) {
 				return
 			case err := <-s.errCh:
 				switch err.Type {
-				case ErrorTypeMessageReceiveFailed, ErrorTypeConnectionFailed:
-					log.Warn("received message from remote failed, will be reconnect",
-						zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))
+				case ErrorTypeMessageReceiveFailed:
+					log.Warn("received message from remote failed, will reset receive stream",
+						zap.Any("messageCenterID", s.messageCenterID),
+						zap.Any("remote", s.targetId),
+						zap.Error(err))
+					time.Sleep(reconnectInterval)
+					s.resetReceiveStream()
+				case ErrorTypeConnectionFailed:
+					log.Warn("connection failed, will reset connection",
+						zap.Any("messageCenterID", s.messageCenterID),
+						zap.Any("remote", s.targetId),
+						zap.Error(err))
 					time.Sleep(reconnectInterval)
 					s.resetConnect()
 				default:
 					log.Error("Error in remoteMessageTarget, error:", zap.Error(err))
 				}
-
 			}
 		}
 	}()
@@ -254,7 +262,10 @@ func (s *remoteMessageTarget) connect() {
 	conn, err := conn.Connect(string(s.targetAddr), s.security)
 	if err != nil {
 		log.Info("Cannot create grpc client",
-			zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))
+			zap.Any("messageCenterID", s.messageCenterID),
+			zap.Any("remote", s.targetId),
+			zap.Error(err))
+
 		s.collectErr(AppError{
 			Type:   ErrorTypeConnectionFailed,
 			Reason: fmt.Sprintf("Cannot create grpc client on address %s, error: %s", s.targetAddr, err.Error()),
@@ -293,8 +304,8 @@ func (s *remoteMessageTarget) connect() {
 	}
 
 	s.setConn(conn)
-	s.eventRecvStream = eventStream
-	s.commandRecvStream = commandStream
+	s.client.eventRecvStream = eventStream
+	s.client.commandRecvStream = commandStream
 	s.runReceiveMessages(eventStream, s.recvEventCh)
 	s.runReceiveMessages(commandStream, s.recvCmdCh)
 	log.Info("Connected to remote target",
@@ -303,14 +314,59 @@ func (s *remoteMessageTarget) connect() {
 		zap.Any("remoteAddr", s.targetAddr))
 }
 
+func (s *remoteMessageTarget) resetReceiveStream() {
+	log.Info("reset receive stream",
+		zap.Any("messageCenterID", s.messageCenterID),
+		zap.Any("remote", s.targetId))
+
+	s.client.Lock()
+	s.client.eventRecvStream = nil
+	s.client.commandRecvStream = nil
+	s.client.Unlock()
+
+	// reset the receive stream
+	if conn, ok := s.getConn(); ok {
+		client := proto.NewMessageCenterClient(conn)
+		handshake := &proto.Message{
+			From:  string(s.messageCenterID),
+			To:    string(s.targetId),
+			Epoch: uint64(s.messageCenterEpoch),
+			Type:  int32(TypeMessageHandShake),
+		}
+
+		s.client.Lock()
+		eventStream, err := client.SendEvents(s.ctx, handshake)
+		if err != nil {
+			log.Error("failed to send events",
+				zap.Any("messageCenterID", s.messageCenterID),
+				zap.Any("remote", s.targetId),
+				zap.Error(err))
+		} else {
+			s.client.eventRecvStream = eventStream
+			s.runReceiveMessages(eventStream, s.recvEventCh)
+		}
+
+		if commandStream, err := client.SendCommands(s.ctx, handshake); err != nil {
+			log.Error("failed to send commands handshake",
+				zap.Any("messageCenterID", s.messageCenterID),
+				zap.Any("remote", s.targetId),
+				zap.Error(err))
+		} else {
+			s.client.commandRecvStream = commandStream
+			s.runReceiveMessages(commandStream, s.recvCmdCh)
+		}
+		s.client.Unlock()
+	}
+}
+
 func (s *remoteMessageTarget) resetConnect() {
 	log.Info("reconnect to remote target",
 		zap.Any("messageCenterID", s.messageCenterID),
 		zap.Any("remote", s.targetId))
 	// Close the old streams
 	s.closeConn()
-	s.eventRecvStream = nil
-	s.commandRecvStream = nil
+	s.client.eventRecvStream = nil
+	s.client.commandRecvStream = nil
 	// Clear the error channel
 LOOP:
 	for {
@@ -334,11 +390,18 @@ func (s *remoteMessageTarget) runEventSendStream(eventStream grpcSender) error {
 	s.eventSender.ready.Store(true)
 	s.senderMu.Unlock()
 
-	err := s.runSendMessages(s.ctx, s.eventSender.stream, s.sendEventCh)
-	log.Info("Event send stream closed",
-		zap.Any("messageCenterID", s.messageCenterID), zap.Any("remote", s.targetId), zap.Error(err))
-	s.eventSender.ready.Store(false)
-	return err
+	// send a ack message to the remote target
+	ack := &proto.Message{
+		From:  string(s.messageCenterID),
+		To:    string(s.targetId),
+		Epoch: uint64(s.messageCenterEpoch),
+		Type:  int32(TypeMessageHandShake),
+	}
+	if err := eventStream.Send(ack); err != nil {
+		return err
+	}
+
+	return s.runSendMessages(s.ctx, s.eventSender.stream, s.sendEventCh)
 }
 
 func (s *remoteMessageTarget) runCommandSendStream(commandStream grpcSender) error {
@@ -446,15 +509,15 @@ func (s *remoteMessageTarget) newMessage(msg ...*TargetMessage) *proto.Message {
 }
 
 func (s *remoteMessageTarget) getConn() (*grpc.ClientConn, bool) {
-	s.conn.RLock()
-	defer s.conn.RUnlock()
-	return s.conn.c, s.conn.c != nil
+	s.client.RLock()
+	defer s.client.RUnlock()
+	return s.client.c, s.client.c != nil
 }
 
 func (s *remoteMessageTarget) setConn(conn *grpc.ClientConn) {
-	s.conn.Lock()
-	defer s.conn.Unlock()
-	s.conn.c = conn
+	s.client.Lock()
+	defer s.client.Unlock()
+	s.client.c = conn
 }
 
 func (s *remoteMessageTarget) closeConn() {

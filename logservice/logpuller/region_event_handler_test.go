@@ -81,6 +81,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 		span,
 		&tikv.RPCContext{},
 		subSpan,
+		false,
 	)
 	region.lockedRangeState = &regionlock.LockedRangeState{}
 	state := newRegionFeedState(region, 1)

@@ -24,7 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	"go.uber.org/zap"
 )
 
@@ -38,8 +38,8 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncod
 		return canal.NewJSONRowEventEncoder(ctx, cfg)
 	// case config.ProtocolDebezium:
 	// 	return debezium.NewBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID), nil
-	// case config.ProtocolSimple:
-	// 	return simple.NewEncoder(ctx, cfg)
+	case config.ProtocolSimple:
+		return simple.NewEncoder(ctx, cfg)
 	default:
 		return nil, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(cfg.Protocol)
 	}
@@ -68,7 +68,7 @@ func NewEventDecoder(ctx context.Context, codecConfig *common.Config, upstreamTi
 		log.Panic("Protocol not supported", zap.Any("Protocol", codecConfig.Protocol))
 	}
 	if err != nil {
-		return nil, cerror.Trace(err)
+		return nil, errors.Trace(err)
 	}
 	return decoder, err
 }
