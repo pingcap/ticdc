@@ -332,9 +332,11 @@ func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 
 	rowMsg := new(messageRow)
 	rowMsg.decode(value)
-	event := b.assembleDMLEvent()
 
-	return event, nil
+	b.nextKey = msgKey
+	b.nextRow = rowMsg
+
+	return b.assembleDMLEvent(), nil
 }
 
 type tableKey struct {
