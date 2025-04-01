@@ -481,7 +481,7 @@ func (w *MysqlWriter) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, 
 		if err != nil {
 			return queryList, argsList, errors.Trace(err)
 		}
-		
+
 		if query != "" {
 			queryList = append(queryList, query)
 			argsList = append(argsList, args)

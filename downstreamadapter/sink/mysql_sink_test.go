@@ -16,15 +16,15 @@ package sink
 import (
 	"context"
 	"errors"
-	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/sink/mysql"
-	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"github.com/stretchr/testify/require"
 )
 

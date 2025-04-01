@@ -16,7 +16,6 @@ package sink
 import (
 	"context"
 	"database/sql"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"net/url"
 	"sync/atomic"
 
@@ -26,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
@@ -44,9 +44,8 @@ const (
 type MysqlSink struct {
 	changefeedID common.ChangeFeedID
 
-	ddlWorker   *worker.MysqlDDLWorker
-	dmlWorker   []*worker.MysqlDMLWorker
-	workerCount int
+	ddlWorker *worker.MysqlDDLWorker
+	dmlWorker []*worker.MysqlDMLWorker
 
 	db         *sql.DB
 	statistics *metrics.Statistics
@@ -97,7 +96,6 @@ func newMysqlSinkWithDBAndConfig(
 		changefeedID: changefeedID,
 		db:           db,
 		dmlWorker:    make([]*worker.MysqlDMLWorker, workerCount),
-		workerCount:  workerCount,
 		statistics:   stat,
 		conflictDetector: conflictdetector.NewConflictDetector(DefaultConflictDetectorSlots, conflictdetector.TxnCacheOption{
 			Count:         workerCount,
@@ -116,10 +114,9 @@ func newMysqlSinkWithDBAndConfig(
 
 func (s *MysqlSink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
-	for i := 0; i < s.workerCount; i++ {
-		i := i // capture loop variable
+	for _, w := range s.dmlWorker {
 		g.Go(func() error {
-			return s.dmlWorker[i].Run(ctx)
+			return w.Run(ctx)
 		})
 	}
 	err := g.Wait()
@@ -196,8 +193,8 @@ func (s *MysqlSink) Close(removeChangefeed bool) {
 				zap.Any("changefeed", s.changefeedID.String()), zap.Error(err))
 		}
 	}
-	for i := 0; i < s.workerCount; i++ {
-		s.dmlWorker[i].Close()
+	for _, w := range s.dmlWorker {
+		w.Close()
 	}
 
 	s.ddlWorker.Close()
