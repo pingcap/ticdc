@@ -347,14 +347,6 @@ func (ti *TableInfo) GetIndices() []*model.IndexInfo {
 	return ti.columnSchema.Indices
 }
 
-func (ti *TableInfo) MustGetColumnOffsetByID(id int64) int {
-	offset, ok := ti.columnSchema.ColumnsOffset[id]
-	if !ok {
-		log.Panic("invalid column id", zap.Int64("columnID", id))
-	}
-	return offset
-}
-
 func (ti *TableInfo) GetIndexColumnsOffset() [][]int {
 	return ti.columnSchema.IndexColumnsOffset
 }
@@ -439,6 +431,14 @@ func (ti *TableInfo) ForceGetColumnIDByName(name string) int64 {
 		log.Panic("invalid column name", zap.String("column", name))
 	}
 	return colID
+}
+
+func (ti *TableInfo) MustGetColumnOffsetByID(id int64) int {
+	offset, ok := ti.columnSchema.ColumnsOffset[id]
+	if !ok {
+		log.Panic("invalid column id", zap.Int64("columnID", id))
+	}
+	return offset
 }
 
 // GetSchemaName returns the schema name of the table

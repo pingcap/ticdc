@@ -27,7 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/util"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/zap"
@@ -86,7 +86,7 @@ func VerifyChecksum(event *commonEvent.RowChangedEvent, db *sql.DB) error {
 
 // calculate the checksum, caller should make sure all columns is ordered by the column's id.
 // by follow: https://github.com/pingcap/tidb/blob/e3417913f58cdd5a136259b902bf177eaf3aa637/util/rowcodec/common.go#L294
-func calculateChecksum(columns []*common.Column, columnInfo []*timodel.ColumnInfo) (uint32, error) {
+func calculateChecksum(columns []*common.Column, columnInfo []*model.ColumnInfo) (uint32, error) {
 	var (
 		checksum uint32
 		err      error
