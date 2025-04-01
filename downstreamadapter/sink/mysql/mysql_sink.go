@@ -17,7 +17,6 @@ import (
 	"context"
 	"database/sql"
 	"net/url"
-	"sync/atomic"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/conflictdetector"
@@ -28,13 +27,14 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
 const (
-	// DefaultConflictDetectorSlots indicates the default slot count of conflict detector. TODO:check this
-	DefaultConflictDetectorSlots uint64 = 16 * 1024
+	// defaultConflictDetectorSlots indicates the default slot count of conflict detector. TODO:check this
+	defaultConflictDetectorSlots uint64 = 16 * 1024
 )
 
 // Sink is responsible for writing data to mysql downstream.
@@ -50,7 +50,8 @@ type Sink struct {
 
 	conflictDetector *conflictdetector.ConflictDetector
 
-	isNormal uint32 // if sink is normal, isNormal is 1, otherwise is 0
+	// isNormal indicate whether the sink is in the normal state.
+	isNormal *atomic.Bool
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -95,12 +96,12 @@ func newMysqlSinkWithDBAndConfig(
 		db:           db,
 		dmlWorker:    make([]*dmlWorker, workerCount),
 		statistics:   stat,
-		conflictDetector: conflictdetector.NewConflictDetector(DefaultConflictDetectorSlots, conflictdetector.TxnCacheOption{
+		conflictDetector: conflictdetector.NewConflictDetector(defaultConflictDetectorSlots, conflictdetector.TxnCacheOption{
 			Count:         workerCount,
 			Size:          1024,
 			BlockStrategy: conflictdetector.BlockStrategyWaitEmpty,
 		}),
-		isNormal: 1,
+		isNormal: atomic.NewBool(true),
 	}
 	formatVectorType := mysql.ShouldFormatVectorType(db, cfg)
 	for i := 0; i < workerCount; i++ {
@@ -118,13 +119,12 @@ func (s *Sink) Run(ctx context.Context) error {
 		})
 	}
 	err := g.Wait()
-	atomic.StoreUint32(&s.isNormal, 0)
+	s.isNormal.Store(false)
 	return errors.Trace(err)
 }
 
 func (s *Sink) IsNormal() bool {
-	value := atomic.LoadUint32(&s.isNormal) == 1
-	return value
+	return s.isNormal.Load()
 }
 
 func (s *Sink) SinkType() common.SinkType {
@@ -151,7 +151,7 @@ func (s *Sink) PassBlockEvent(event commonEvent.BlockEvent) {
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	err := s.ddlWorker.WriteBlockEvent(event)
 	if err != nil {
-		atomic.StoreUint32(&s.isNormal, 0)
+		s.isNormal.Store(false)
 		return err
 	}
 	return nil
@@ -168,7 +168,7 @@ func (s *Sink) GetStartTsList(
 		// means we just need to remove the ddl ts item for this changefeed, and return startTsList directly.
 		err := s.ddlWorker.RemoveDDLTsItem()
 		if err != nil {
-			atomic.StoreUint32(&s.isNormal, 0)
+			s.isNormal.Store(false)
 			return nil, nil, err
 		}
 		isSyncpointList := make([]bool, len(startTsList))
@@ -177,7 +177,7 @@ func (s *Sink) GetStartTsList(
 
 	startTsList, isSyncpointList, err := s.ddlWorker.GetStartTsList(tableIds, startTsList)
 	if err != nil {
-		atomic.StoreUint32(&s.isNormal, 0)
+		s.isNormal.Store(false)
 		return nil, nil, err
 	}
 	return startTsList, isSyncpointList, nil
