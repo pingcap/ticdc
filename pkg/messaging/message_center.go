@@ -64,14 +64,6 @@ type MessageReceiver interface {
 	DeRegisterHandler(topic string)
 }
 
-// gRPC generates two different interfaces, MessageCenter_SendEventsServer
-// and MessageCenter_SendCommandsServer.
-// We use these two interfaces to unite them, to simplify the code.
-type grpcStream interface {
-	Send(*proto.Message) error
-	Recv() (*proto.Message, error)
-}
-
 // messageCenter is the core of the messaging system.
 // It hosts a local grpc server to receive messages (events and commands) from other targets (server).
 // It hosts streaming channels to each other targets to send messages.

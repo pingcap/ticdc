@@ -352,7 +352,6 @@ func (s *remoteMessageTarget) resetConnect() {
 	if !s.shouldInitiate {
 		return
 	}
-
 	log.Info("start to reset connection to remote target",
 		zap.Stringer("localID", s.messageCenterID),
 		zap.String("localAddr", s.localAddr),
