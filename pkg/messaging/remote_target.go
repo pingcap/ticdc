@@ -418,7 +418,6 @@ func (s *remoteMessageTarget) run(streamType string) {
 
 // Run goroutine to handle message sending
 func (s *remoteMessageTarget) runSendMessages(streamType string) (err error) {
-
 	defer func() {
 		if err != nil {
 			s.collectErr(err)

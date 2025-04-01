@@ -464,7 +464,6 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 		}
 		return true
 	}), retry.WithMaxTries(10))
-
 	if err != nil {
 		log.Error("Failed to get remote target", zap.Error(err))
 		return err
