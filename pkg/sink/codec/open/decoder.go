@@ -215,7 +215,7 @@ func (b *BatchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 		return b.assembleEventFromClaimCheckStorage(ctx)
 	}
 
-	if b.nextKey.OnlyHandleKey {
+	if b.nextKey.OnlyHandleKey && b.upstreamTiDB != nil {
 		return b.assembleHandleKeyOnlyDMLEvent(ctx), nil
 	}
 
