@@ -84,11 +84,11 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		} else {
 			err = m.rawKVToChunkV2(raw.OldValue, tableInfo, chk, recordID)
 		}
+		if err != nil {
+			return 0, errors.Trace(err)
+		}
+		count++
 	}
-	if err != nil {
-		return 0, errors.Trace(err)
-	}
-	count++
 
 	if len(raw.Value) != 0 {
 		if !rowcodec.IsNewFormat(raw.Value) {
@@ -96,11 +96,11 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		} else {
 			err = m.rawKVToChunkV2(raw.Value, tableInfo, chk, recordID)
 		}
+		if err != nil {
+			return 0, errors.Trace(err)
+		}
+		count++
 	}
-	if err != nil {
-		return 0, errors.Trace(err)
-	}
-	count++
 	return count, nil
 }
 
