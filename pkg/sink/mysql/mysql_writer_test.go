@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestMysqlWriter(t *testing.T) (*MysqlWriter, *sql.DB, sqlmock.Sqlmock) {
+func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	db, mock := newTestMockDB(t)
 
 	ctx := context.Background()
@@ -47,7 +47,7 @@ func newTestMysqlWriter(t *testing.T) (*MysqlWriter, *sql.DB, sqlmock.Sqlmock) {
 	return writer, db, mock
 }
 
-func newTestMysqlWriterForTiDB(t *testing.T) (*MysqlWriter, *sql.DB, sqlmock.Sqlmock) {
+func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	db, mock := newTestMockDB(t)
 
 	ctx := context.Background()

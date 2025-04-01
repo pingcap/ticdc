@@ -66,7 +66,7 @@ func (r *ColumnsPartitionGenerator) GeneratePartitionIndexAndKey(row *commonEven
 
 	for idx := 0; idx < len(r.Columns); idx++ {
 		colInfo := tableInfo.GetColumns()[offsets[idx]]
-		value, err := common.ExtractColVal(&rowData, colInfo, idx)
+		value, err := common.ExtractColVal(&rowData, colInfo.FieldType, idx)
 		if err != nil {
 			// FIXME:
 			log.Panic("ExtractColVal failed", zap.Error(err))

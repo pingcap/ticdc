@@ -45,7 +45,7 @@ import (
 // Thus, we try to flush ddl ts pre first before the ddl event is sent to downstream,
 // and after send the ddl ts, we update the ddl ts item to finished.
 // It can maximum guarantee we use the correct startTs.
-func (w *MysqlWriter) FlushDDLTsPre(event commonEvent.BlockEvent) error {
+func (w *Writer) FlushDDLTsPre(event commonEvent.BlockEvent) error {
 	err := w.createDDLTsTableIfNotExist()
 	if err != nil {
 		return err
@@ -54,7 +54,7 @@ func (w *MysqlWriter) FlushDDLTsPre(event commonEvent.BlockEvent) error {
 	return errors.Trace(err)
 }
 
-func (w *MysqlWriter) FlushDDLTs(event commonEvent.BlockEvent) error {
+func (w *Writer) FlushDDLTs(event commonEvent.BlockEvent) error {
 	err := w.createDDLTsTableIfNotExist()
 	if err != nil {
 		return err
@@ -63,7 +63,7 @@ func (w *MysqlWriter) FlushDDLTs(event commonEvent.BlockEvent) error {
 	return errors.Trace(err)
 }
 
-func (w *MysqlWriter) SendDDLTsPre(event commonEvent.BlockEvent) error {
+func (w *Writer) SendDDLTsPre(event commonEvent.BlockEvent) error {
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "ddl ts table: begin Tx fail;"))
@@ -121,7 +121,7 @@ func (w *MysqlWriter) SendDDLTsPre(event commonEvent.BlockEvent) error {
 	return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "failed to write ddl ts table; Commit Fail;"))
 }
 
-func (w *MysqlWriter) SendDDLTs(event commonEvent.BlockEvent) error {
+func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "ddl ts table: begin Tx fail;"))
@@ -283,7 +283,7 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 //     (we use related table to find the ddl job -- take `truncate table` as an example, the ddl job used the table truncated, but not the new table)
 //     2.2.2.1 if the latest ddl job time is larger than the createdAt, startTs = ddlTs
 //     2.2.2.2 else startTs = ddlTs - 1
-func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
+func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	retStartTsList := make([]int64, len(tableIDs))
 	tableIdIdxMap := make(map[int64]int, 0)
 	isSyncpoints := make([]bool, len(tableIDs))
@@ -384,7 +384,7 @@ func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID stri
 
 var queryDDLJobs = `SELECT CREATE_TIME FROM information_schema.ddl_jobs WHERE DB_NAME = '%s' AND TABLE_NAME = '%s' order by CREATE_TIME desc limit 1;`
 
-func (w *MysqlWriter) queryDDLJobs(dbNameInDDLJob, tableNameInDDLJob string) (time.Time, bool) {
+func (w *Writer) queryDDLJobs(dbNameInDDLJob, tableNameInDDLJob string) (time.Time, bool) {
 	if dbNameInDDLJob == "" && tableNameInDDLJob == "" {
 		log.Info("tableNameInDDLJob and dbNameInDDLJob both are nil")
 		return time.Time{}, false
@@ -421,7 +421,7 @@ func (w *MysqlWriter) queryDDLJobs(dbNameInDDLJob, tableNameInDDLJob string) (ti
 	return time.Time{}, false
 }
 
-func (w *MysqlWriter) RemoveDDLTsItem() error {
+func (w *Writer) RemoveDDLTsItem() error {
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "select ddl ts table: begin Tx fail;"))
@@ -467,7 +467,7 @@ func (w *MysqlWriter) RemoveDDLTsItem() error {
 	return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
 }
 
-func (w *MysqlWriter) isDDLExecuted(tableID int64, ddlTs uint64) (bool, error) {
+func (w *Writer) isDDLExecuted(tableID int64, ddlTs uint64) (bool, error) {
 	changefeedID := w.ChangefeedID.String()
 	ticdcClusterID := config.GetGlobalServerConfig().ClusterID
 
@@ -505,7 +505,7 @@ func (w *MysqlWriter) isDDLExecuted(tableID int64, ddlTs uint64) (bool, error) {
 	return false, nil
 }
 
-func (w *MysqlWriter) createTable(dbName string, tableName string, createTableQuery string) error {
+func (w *Writer) createTable(dbName string, tableName string, createTableQuery string) error {
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: begin Tx fail;", tableName)))
@@ -553,7 +553,7 @@ func (w *MysqlWriter) createTable(dbName string, tableName string, createTableQu
 	return nil
 }
 
-func (w *MysqlWriter) createDDLTsTable() error {
+func (w *Writer) createDDLTsTable() error {
 	database := filter.TiCDCSystemSchema
 	query := `CREATE TABLE IF NOT EXISTS %s
 	(
@@ -574,7 +574,7 @@ func (w *MysqlWriter) createDDLTsTable() error {
 	return w.createTable(database, filter.DDLTsTable, query)
 }
 
-func (w *MysqlWriter) createDDLTsTableIfNotExist() error {
+func (w *Writer) createDDLTsTableIfNotExist() error {
 	if !w.ddlTsTableInit {
 		// create checkpoint ts table if not exist
 		err := w.createDDLTsTable()

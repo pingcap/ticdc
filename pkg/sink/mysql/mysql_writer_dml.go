@@ -47,7 +47,7 @@ import (
 //     Otherwise,
 //     if there is only one rows of the whole group, we generate the sqls for the row.
 //     Otherwise, we batch all the event rows for the same dispatcherID to a single delete / update/ insert query(in order)
-func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
+func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 	// Step 1: group the events by dispatcher id
@@ -127,7 +127,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 //
 // For these all changes to row, we will continue to compare from the beginnning to the end, until there is no change.
 // Then we can generate the final sql of delete/update/insert.
-func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
 	inSafeMode := !w.cfg.SafeMode && events[0].CommitTs > events[0].ReplicatingTs
 
 	if inSafeMode {
@@ -137,7 +137,7 @@ func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string
 	}
 }
 
-func (w *MysqlWriter) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
 	inSafeMode := true
 	tableInfo := events[0].TableInfo
 	type RowChangeWithKeys struct {
@@ -292,7 +292,7 @@ func (w *MysqlWriter) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent)
 	return w.batchSingleTxnDmls(finalRowLists, tableInfo, inSafeMode)
 }
 
-func (w *MysqlWriter) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
 	inSafeMode := false
 	tableInfo := events[0].TableInfo
 	// step 1. divide update row to delete row and insert row, and set into map based on the key hash
@@ -413,7 +413,7 @@ func (w *MysqlWriter) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEven
 	return w.batchSingleTxnDmls(rowsList, tableInfo, inSafeMode)
 }
 
-func (w *MysqlWriter) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
 	var (
 		queries []string
 		args    [][]interface{}
@@ -433,7 +433,7 @@ func (w *MysqlWriter) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]stri
 	return queries, args, nil
 }
 
-func (w *MysqlWriter) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
 	var (
 		queryList []string
 		argsList  [][]interface{}
@@ -490,7 +490,7 @@ func (w *MysqlWriter) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, 
 	return queryList, argsList, nil
 }
 
-func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
+func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	if len(dmls.sqls) != len(dmls.values) {
 		return cerror.ErrUnexpected.FastGenByArgs(fmt.Sprintf("unexpected number of sqls and values, sqls is %s, values is %s", dmls.sqls, dmls.values))
 	}
@@ -571,7 +571,7 @@ func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		retry.WithIsRetryableErr(isRetryableDMLError))
 }
 
-func (w *MysqlWriter) sequenceExecute(
+func (w *Writer) sequenceExecute(
 	dmls *preparedDMLs, tx *sql.Tx, writeTimeout time.Duration,
 ) error {
 	for i, query := range dmls.sqls {
@@ -617,7 +617,7 @@ func (w *MysqlWriter) sequenceExecute(
 }
 
 // execute SQLs in the multi statements way.
-func (w *MysqlWriter) multiStmtExecute(
+func (w *Writer) multiStmtExecute(
 	dmls *preparedDMLs, tx *sql.Tx, writeTimeout time.Duration,
 ) error {
 	var multiStmtArgs []any
@@ -665,7 +665,7 @@ func logDMLTxnErr(
 	return errors.WithMessage(err, fmt.Sprintf("Failed query info: %s; ", query))
 }
 
-func (w *MysqlWriter) batchSingleTxnDmls(
+func (w *Writer) batchSingleTxnDmls(
 	rows []*commonEvent.RowChange,
 	tableInfo *common.TableInfo,
 	translateToInsert bool,
@@ -724,7 +724,7 @@ func (w *MysqlWriter) batchSingleTxnDmls(
 	return
 }
 
-func (w *MysqlWriter) groupRowsByType(
+func (w *Writer) groupRowsByType(
 	rows []*commonEvent.RowChange,
 	tableInfo *common.TableInfo,
 ) (insertRows, updateRows, deleteRows [][]*sqlmodel.RowChange, err error) {
@@ -817,7 +817,7 @@ func (w *MysqlWriter) groupRowsByType(
 	return
 }
 
-func (w *MysqlWriter) genUpdateSQL(rows ...*sqlmodel.RowChange) ([]string, [][]interface{}) {
+func (w *Writer) genUpdateSQL(rows ...*sqlmodel.RowChange) ([]string, [][]interface{}) {
 	size := 0
 	for _, r := range rows {
 		size += int(r.GetApproximateDataSize())

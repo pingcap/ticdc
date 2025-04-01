@@ -58,7 +58,7 @@ func genKeyList(row *chunk.Row, colIdx []int, tableInfo *common.TableInfo) ([]by
 			return nil, nil
 		}
 
-		value, err := common.ExtractColVal(row, columnInfos[i], i)
+		value, err := common.ExtractColVal(row, columnInfos[i].FieldType, i)
 		if err != nil {
 			return nil, err
 		}

@@ -38,13 +38,13 @@ const (
 	DefaultConflictDetectorSlots uint64 = 16 * 1024
 )
 
-// MysqlSink is responsible for writing data to mysql downstream.
+// Sink is responsible for writing data to mysql downstream.
 // Including DDL and DML.
-type MysqlSink struct {
+type Sink struct {
 	changefeedID common.ChangeFeedID
 
-	ddlWorker *MysqlDDLWorker
-	dmlWorker []*MysqlDMLWorker
+	ddlWorker *ddlWorker
+	dmlWorker []*dmlWorker
 
 	db         *sql.DB
 	statistics *metrics.Statistics
@@ -54,9 +54,9 @@ type MysqlSink struct {
 	isNormal uint32 // if sink is normal, isNormal is 1, otherwise is 0
 }
 
-// verifyMySQLSink is used to verify the sink uri and config is valid
+// Verify is used to verify the sink uri and config is valid
 // Currently, we verify by create a real mysql connection.
-func verifyMySQLSink(
+func Verify(
 	ctx context.Context,
 	uri *url.URL,
 	config *config.ChangefeedConfig,
@@ -70,12 +70,12 @@ func verifyMySQLSink(
 	return nil
 }
 
-func newMySQLSink(
+func New(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
-) (*MysqlSink, error) {
+) (*Sink, error) {
 	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
@@ -89,12 +89,12 @@ func newMysqlSinkWithDBAndConfig(
 	workerCount int,
 	cfg *mysql.MysqlConfig,
 	db *sql.DB,
-) *MysqlSink {
+) *Sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
-	mysqlSink := &MysqlSink{
+	mysqlSink := &Sink{
 		changefeedID: changefeedID,
 		db:           db,
-		dmlWorker:    make([]*MysqlDMLWorker, workerCount),
+		dmlWorker:    make([]*dmlWorker, workerCount),
 		statistics:   stat,
 		conflictDetector: conflictdetector.NewConflictDetector(DefaultConflictDetectorSlots, conflictdetector.TxnCacheOption{
 			Count:         workerCount,
@@ -111,7 +111,7 @@ func newMysqlSinkWithDBAndConfig(
 	return mysqlSink
 }
 
-func (s *MysqlSink) Run(ctx context.Context) error {
+func (s *Sink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	for _, w := range s.dmlWorker {
 		g.Go(func() error {
@@ -123,20 +123,20 @@ func (s *MysqlSink) Run(ctx context.Context) error {
 	return errors.Trace(err)
 }
 
-func (s *MysqlSink) IsNormal() bool {
+func (s *Sink) IsNormal() bool {
 	value := atomic.LoadUint32(&s.isNormal) == 1
 	return value
 }
 
-func (s *MysqlSink) SinkType() common.SinkType {
+func (s *Sink) SinkType() common.SinkType {
 	return common.MysqlSinkType
 }
 
-func (s *MysqlSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *Sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *MysqlSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
+func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) error {
 	return s.conflictDetector.Add(event)
 
 	// // We use low value of dispatcherID to divide different tables into different workers.
@@ -145,11 +145,11 @@ func (s *MysqlSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
 	// s.dmlWorker[index].AddDMLEvent(event)
 }
 
-func (s *MysqlSink) PassBlockEvent(event commonEvent.BlockEvent) {
+func (s *Sink) PassBlockEvent(event commonEvent.BlockEvent) {
 	event.PostFlush()
 }
 
-func (s *MysqlSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
+func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	err := s.ddlWorker.WriteBlockEvent(event)
 	if err != nil {
 		atomic.StoreUint32(&s.isNormal, 0)
@@ -158,9 +158,9 @@ func (s *MysqlSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *MysqlSink) AddCheckpointTs(_ uint64) {}
+func (s *Sink) AddCheckpointTs(_ uint64) {}
 
-func (s *MysqlSink) GetStartTsList(
+func (s *Sink) GetStartTsList(
 	tableIds []int64,
 	startTsList []int64,
 	removeDDLTs bool,
@@ -184,7 +184,7 @@ func (s *MysqlSink) GetStartTsList(
 	return startTsList, isSyncpointList, nil
 }
 
-func (s *MysqlSink) Close(removeChangefeed bool) {
+func (s *Sink) Close(removeChangefeed bool) {
 	// when remove the changefeed, we need to remove the ddl ts item in the ddl worker
 	if removeChangefeed {
 		if err := s.ddlWorker.RemoveDDLTsItem(); err != nil {
