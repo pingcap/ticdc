@@ -49,7 +49,7 @@ func (g *eventsGroup) Append(row *commonEvent.DMLEvent, offset kafka.Offset) {
 	log.Info("DML event received",
 		zap.Int32("partition", g.partition),
 		zap.Any("offset", offset),
-		zap.Uint64("commitTs", row.CommitTs),
+		zap.Uint64("commitTs", row.GetCommitTs()),
 		zap.Uint64("highWatermark", g.highWatermark),
 		zap.Int64("tableID", row.GetTableID()),
 		zap.String("schema", row.TableInfo.GetSchemaName()),
