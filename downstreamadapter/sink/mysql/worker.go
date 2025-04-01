@@ -40,7 +40,7 @@ type dmlWorker struct {
 	maxRows int
 }
 
-func NewMysqlDMLWorker(
+func newDMLWorker(
 	ctx context.Context,
 	db *sql.DB,
 	config *mysql.Config,
@@ -145,7 +145,7 @@ type ddlWorker struct {
 	writer       *mysql.Writer
 }
 
-func NewMysqlDDLWorker(
+func newDDLWorker(
 	ctx context.Context,
 	db *sql.DB,
 	config *mysql.Config,

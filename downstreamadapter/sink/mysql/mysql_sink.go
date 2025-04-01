@@ -91,7 +91,7 @@ func newMysqlSinkWithDBAndConfig(
 	db *sql.DB,
 ) *Sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
-	mysqlSink := &Sink{
+	result := &Sink{
 		changefeedID: changefeedID,
 		db:           db,
 		dmlWorker:    make([]*dmlWorker, workerCount),
@@ -105,10 +105,10 @@ func newMysqlSinkWithDBAndConfig(
 	}
 	formatVectorType := mysql.ShouldFormatVectorType(db, cfg)
 	for i := 0; i < workerCount; i++ {
-		mysqlSink.dmlWorker[i] = NewMysqlDMLWorker(ctx, db, cfg, i, changefeedID, stat, formatVectorType, mysqlSink.conflictDetector.GetOutChByCacheID(int64(i)))
+		result.dmlWorker[i] = newDMLWorker(ctx, db, cfg, i, changefeedID, stat, formatVectorType, result.conflictDetector.GetOutChByCacheID(int64(i)))
 	}
-	mysqlSink.ddlWorker = NewMysqlDDLWorker(ctx, db, cfg, changefeedID, stat, formatVectorType)
-	return mysqlSink
+	result.ddlWorker = newDDLWorker(ctx, db, cfg, changefeedID, stat, formatVectorType)
+	return result
 }
 
 func (s *Sink) Run(ctx context.Context) error {
