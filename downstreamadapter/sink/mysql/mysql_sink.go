@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tiflow/pkg/causality"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -99,7 +98,7 @@ func newMysqlSinkWithDBAndConfig(
 		conflictDetector: conflictdetector.NewConflictDetector(DefaultConflictDetectorSlots, conflictdetector.TxnCacheOption{
 			Count:         workerCount,
 			Size:          1024,
-			BlockStrategy: causality.BlockStrategyWaitEmpty,
+			BlockStrategy: conflictdetector.BlockStrategyWaitEmpty,
 		}),
 		isNormal: 1,
 	}

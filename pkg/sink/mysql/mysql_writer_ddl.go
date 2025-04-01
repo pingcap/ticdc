@@ -342,7 +342,7 @@ func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(tableID int64) error {
 		case <-w.ctx.Done():
 			return nil
 		case <-ticker.C:
-			running, err := w.doQueryAsyncDDL(tableID, query)
+			running, err = w.doQueryAsyncDDL(tableID, query)
 			if err != nil {
 				return err
 			}
