@@ -37,7 +37,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type BatchDecoder struct {
+type batchDecoder struct {
 	keyBytes   []byte
 	valueBytes []byte
 
@@ -74,7 +74,7 @@ func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (co
 		}
 	}
 
-	return &BatchDecoder{
+	return &batchDecoder{
 		config:           config,
 		storage:          externalStorage,
 		upstreamTiDB:     db,
@@ -84,7 +84,7 @@ func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (co
 }
 
 // AddKeyValue implements the RowEventDecoder interface
-func (b *BatchDecoder) AddKeyValue(key, value []byte) error {
+func (b *batchDecoder) AddKeyValue(key, value []byte) error {
 	if len(b.keyBytes) != 0 || len(b.valueBytes) != 0 {
 		return errors.ErrOpenProtocolCodecInvalidData.
 			GenWithStack("decoder key and value not nil")
@@ -100,7 +100,7 @@ func (b *BatchDecoder) AddKeyValue(key, value []byte) error {
 	return nil
 }
 
-func (b *BatchDecoder) hasNext() bool {
+func (b *batchDecoder) hasNext() bool {
 	keyLen := len(b.keyBytes)
 	valueLen := len(b.valueBytes)
 
@@ -116,7 +116,7 @@ func (b *BatchDecoder) hasNext() bool {
 	return false
 }
 
-func (b *BatchDecoder) decodeNextKey() {
+func (b *batchDecoder) decodeNextKey() {
 	keyLen := binary.BigEndian.Uint64(b.keyBytes[:8])
 	key := b.keyBytes[8 : keyLen+8]
 	msgKey := new(messageKey)
@@ -127,7 +127,7 @@ func (b *BatchDecoder) decodeNextKey() {
 }
 
 // HasNext implements the RowEventDecoder interface
-func (b *BatchDecoder) HasNext() (common.MessageType, bool, error) {
+func (b *batchDecoder) HasNext() (common.MessageType, bool, error) {
 	if !b.hasNext() {
 		return 0, false, nil
 	}
@@ -155,7 +155,7 @@ func (b *BatchDecoder) HasNext() (common.MessageType, bool, error) {
 }
 
 // NextResolvedEvent implements the RowEventDecoder interface
-func (b *BatchDecoder) NextResolvedEvent() (uint64, error) {
+func (b *batchDecoder) NextResolvedEvent() (uint64, error) {
 	if b.nextKey.Type != common.MessageTypeResolved {
 		return 0, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found resolved event message")
 	}
@@ -172,7 +172,7 @@ type messageDDL struct {
 }
 
 // NextDDLEvent implements the RowEventDecoder interface
-func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
+func (b *batchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	if b.nextKey.Type != common.MessageTypeDDL {
 		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found ddl event message")
 	}
@@ -203,7 +203,7 @@ func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 }
 
 // NextDMLEvent implements the RowEventDecoder interface
-func (b *BatchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+func (b *batchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	if b.nextKey.Type != common.MessageTypeRow {
 		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found row event message")
 	}
@@ -261,7 +261,7 @@ func buildColumns(
 	return result
 }
 
-func (b *BatchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context) *commonEvent.DMLEvent {
+func (b *batchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context) *commonEvent.DMLEvent {
 	key := b.nextKey
 	row := b.nextRow
 	var (
@@ -298,7 +298,7 @@ func (b *BatchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context) *commo
 	return b.assembleDMLEvent()
 }
 
-func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (*commonEvent.DMLEvent, error) {
+func (b *batchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (*commonEvent.DMLEvent, error) {
 	_, claimCheckFileName := filepath.Split(b.nextKey.ClaimCheckLocation)
 	b.nextKey = nil
 	data, err := b.storage.ReadFile(ctx, claimCheckFileName)
@@ -343,7 +343,7 @@ type tableKey struct {
 	table  string
 }
 
-func (b *BatchDecoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+func (b *batchDecoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
 	cacheKey := tableKey{
 		schema: key.Schema,
 		table:  key.Table,
@@ -356,7 +356,7 @@ func (b *BatchDecoder) queryTableInfo(key *messageKey, value *messageRow) *commo
 	return tableInfo
 }
 
-func (b *BatchDecoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+func (b *batchDecoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = b.tableIDAllocator.AllocateTableID(key.Schema, key.Table)
 	tableInfo.Name = pmodel.NewCIStr(key.Table)
@@ -440,7 +440,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 	return result
 }
 
-func (b *BatchDecoder) assembleDMLEvent() *commonEvent.DMLEvent {
+func (b *batchDecoder) assembleDMLEvent() *commonEvent.DMLEvent {
 	key := b.nextKey
 	value := b.nextRow
 
