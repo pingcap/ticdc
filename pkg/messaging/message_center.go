@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/tiflow/pkg/security"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -338,7 +339,6 @@ func (mc *messageCenter) touchRemoteTarget(id node.ID, targetAddr string) {
 	mc.remoteTargets.RLock()
 	target, ok := mc.remoteTargets.m[id]
 	mc.remoteTargets.RUnlock()
-
 	if !ok {
 		// If the target is not found, create a new one.
 		target = newRemoteMessageTarget(
@@ -352,6 +352,7 @@ func (mc *messageCenter) touchRemoteTarget(id node.ID, targetAddr string) {
 		mc.remoteTargets.Lock()
 		mc.remoteTargets.m[id] = target
 		mc.remoteTargets.Unlock()
+		return
 	}
 
 	log.Info("Remote target changed, creating a new one",
@@ -372,7 +373,6 @@ func (mc *messageCenter) touchRemoteTarget(id node.ID, targetAddr string) {
 	mc.remoteTargets.Lock()
 	mc.remoteTargets.m[id] = newTarget
 	mc.remoteTargets.Unlock()
-
 }
 
 func (mc *messageCenter) updateMetrics(ctx context.Context) {
@@ -441,14 +441,32 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 	}
 
 	targetId := node.ID(msg.From)
+	var target *remoteMessageTarget
+	var ok bool
 
-	s.messageCenter.remoteTargets.RLock()
-	target, ok := s.messageCenter.remoteTargets.m[targetId]
-	s.messageCenter.remoteTargets.RUnlock()
+	// Wait a while for the node to be discovered
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	err = retry.Do(ctx, func() error {
+		s.messageCenter.remoteTargets.RLock()
+		target, ok = s.messageCenter.remoteTargets.m[targetId]
+		s.messageCenter.remoteTargets.RUnlock()
 
-	if !ok {
-		log.Info("Remote target not found", zap.Any("messageCenter", s.messageCenter.id), zap.Any("remote", targetId))
-		err := &apperror.AppError{Type: apperror.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %s not found", targetId)}
+		if !ok {
+			log.Info("Remote target not found", zap.Any("messageCenter", s.messageCenter.id), zap.Any("remote", targetId))
+			err := &apperror.AppError{Type: apperror.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %s not found", targetId)}
+			return err
+		}
+		return nil
+	}, retry.WithIsRetryableErr(func(err error) bool {
+		if err == context.DeadlineExceeded {
+			return false
+		}
+		return true
+	}), retry.WithMaxTries(10))
+
+	if err != nil {
+		log.Error("Failed to get remote target", zap.Error(err))
 		return err
 	}
 

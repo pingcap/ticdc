@@ -165,9 +165,9 @@ func newRemoteMessageTarget(
 	security *security.Credential,
 ) *remoteMessageTarget {
 	log.Info("Create remote target",
-		zap.Stringer("local", localID),
+		zap.Stringer("localID", localID),
 		zap.String("localAddr", localAddr),
-		zap.Stringer("remote", targetId),
+		zap.Stringer("remoteID", targetId),
 		zap.String("remoteAddr", targetAddr))
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -338,9 +338,9 @@ func (s *remoteMessageTarget) connect() error {
 	}
 
 	log.Info("Connected to remote target",
-		zap.Stringer("messageCenterID", s.messageCenterID),
-		zap.String("messageCenterAddr", s.targetAddr),
-		zap.Stringer("remote", s.targetId),
+		zap.Stringer("localID", s.messageCenterID),
+		zap.String("localAddr", s.localAddr),
+		zap.Stringer("remoteID", s.targetId),
 		zap.String("remoteAddr", s.targetAddr))
 
 	return nil
@@ -354,8 +354,10 @@ func (s *remoteMessageTarget) resetConnect() {
 	}
 
 	log.Info("start to reset connection to remote target",
-		zap.Any("messageCenterID", s.messageCenterID),
-		zap.Any("remote", s.targetId))
+		zap.Stringer("localID", s.messageCenterID),
+		zap.String("localAddr", s.localAddr),
+		zap.Stringer("remoteID", s.targetId),
+		zap.String("remoteAddr", s.targetAddr))
 
 	// Close the old connection
 	s.closeConn()
@@ -407,9 +409,9 @@ func (s *remoteMessageTarget) run(streamType string) {
 	})
 
 	log.Info("Start running target to process messages",
-		zap.Stringer("local", s.messageCenterID),
-		zap.String("localAddr", s.targetAddr),
-		zap.Stringer("remote", s.targetId),
+		zap.Stringer("localID", s.messageCenterID),
+		zap.String("localAddr", s.localAddr),
+		zap.Stringer("remoteID", s.targetId),
 		zap.String("remoteAddr", s.targetAddr),
 		zap.String("streamType", streamType))
 }
@@ -431,9 +433,9 @@ func (s *remoteMessageTarget) runSendMessages(streamType string) (err error) {
 				return s.ctx.Err()
 			case <-time.After(500 * time.Millisecond):
 				log.Warn("remote target stream is not ready, wait and check again",
-					zap.Stringer("local", s.messageCenterID),
-					zap.String("localAddr", s.targetAddr),
-					zap.Stringer("remote", s.targetId),
+					zap.Stringer("localID", s.messageCenterID),
+					zap.String("localAddr", s.localAddr),
+					zap.Stringer("remoteID", s.targetId),
 					zap.String("remoteAddr", s.targetAddr))
 				continue
 			}
@@ -456,8 +458,10 @@ func (s *remoteMessageTarget) runSendMessages(streamType string) (err error) {
 				if err := stream.Send(msg); err != nil {
 					log.Error("Error sending message",
 						zap.Error(err),
-						zap.Stringer("local", s.messageCenterID),
-						zap.Stringer("remote", s.targetId))
+						zap.Stringer("localID", s.messageCenterID),
+						zap.String("localAddr", s.localAddr),
+						zap.Stringer("remoteID", s.targetId),
+						zap.String("remoteAddr", s.targetAddr))
 					err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
 					return err
 				}
@@ -484,9 +488,9 @@ func (s *remoteMessageTarget) runReceiveMessages(streamType string) (err error) 
 				return s.ctx.Err()
 			case <-time.After(500 * time.Millisecond):
 				log.Warn("remote target stream is not ready, wait and check again",
-					zap.Stringer("local", s.messageCenterID),
-					zap.String("localAddr", s.targetAddr),
-					zap.Stringer("remote", s.targetId),
+					zap.Stringer("localID", s.messageCenterID),
+					zap.String("localAddr", s.localAddr),
+					zap.Stringer("remoteID", s.targetId),
 					zap.String("remoteAddr", s.targetAddr))
 				continue
 			}
@@ -525,7 +529,7 @@ func (s *remoteMessageTarget) handleReceivedMessage(stream grpcStream, ch chan *
 			log.Error("Error receiving message",
 				zap.Error(err),
 				zap.Stringer("localID", s.messageCenterID),
-				zap.String("localAddr", s.targetAddr),
+				zap.String("localAddr", s.localAddr),
 				zap.Stringer("remoteID", s.targetId),
 				zap.String("remoteAddr", s.targetAddr))
 			err = AppError{Type: ErrorTypeMessageReceiveFailed, Reason: errors.Trace(err).Error()}
@@ -549,8 +553,10 @@ func (s *remoteMessageTarget) handleReceivedMessage(stream grpcStream, ch chan *
 			if err != nil {
 				log.Error("Failed to decode message",
 					zap.Error(err),
-					zap.Stringer("local", s.messageCenterID),
-					zap.Stringer("remote", s.targetId))
+					zap.Stringer("localID", s.messageCenterID),
+					zap.String("localAddr", s.localAddr),
+					zap.Stringer("remoteID", s.targetId),
+					zap.String("remoteAddr", s.targetAddr))
 				continue
 			}
 			targetMsg.Message = append(targetMsg.Message, msg)
@@ -570,7 +576,11 @@ func (s *remoteMessageTarget) newMessage(msg ...*TargetMessage) *proto.Message {
 			if err != nil {
 				log.Panic("marshal message failed ",
 					zap.Any("msg", im),
-					zap.Error(err))
+					zap.Error(err),
+					zap.Stringer("localID", s.messageCenterID),
+					zap.String("localAddr", s.localAddr),
+					zap.Stringer("remoteID", s.targetId),
+					zap.String("remoteAddr", s.targetAddr))
 			}
 			msgBytes = append(msgBytes, buf)
 		}
