@@ -110,6 +110,9 @@ func ExtractFlenDecimal(mysqlType string) (int, int) {
 func ExtractElements(mysqlType string) []string {
 	start := strings.Index(mysqlType, "(")
 	end := strings.LastIndex(mysqlType, ")")
+	if start == -1 || end == -1 {
+		return nil
+	}
 	parts := strings.Split(mysqlType[start+1:end], ",")
 	elements := make([]string, 0, len(parts))
 	for _, part := range parts {
