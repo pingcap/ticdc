@@ -70,10 +70,7 @@ func main() {
 	}
 	version.LogVersionInfo("kafka consumer")
 
-	err = consumerOption.Adjust(upstreamURIStr, configFile)
-	if err != nil {
-		log.Panic("adjust consumer option failed", zap.Error(err))
-	}
+	consumerOption.Adjust(upstreamURIStr, configFile)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	g, ctx := errgroup.WithContext(ctx)
@@ -84,9 +81,9 @@ func main() {
 		})
 	}
 
-	consumer := newConsumer(ctx, consumerOption)
+	cons := newConsumer(ctx, consumerOption)
 	g.Go(func() error {
-		return consumer.Consume(ctx)
+		return cons.Run(ctx)
 	})
 
 	g.Go(func() error {

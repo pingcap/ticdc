@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	putil "github.com/pingcap/ticdc/pkg/util"
@@ -30,23 +29,24 @@ import (
 )
 
 type option struct {
-	address      []string
-	version      string
-	topic        string
-	partitionNum int32
-	groupID      string
+	// reader options
+	address       []string
+	topic         string
+	groupID       string
+	ca, cert, key string
 
+	// writer options
+	protocol        config.Protocol
+	partitionNum    int32
 	maxMessageBytes int
 	maxBatchSize    int
-
-	protocol config.Protocol
 
 	codecConfig *common.Config
 	sinkConfig  *config.SinkConfig
 
-	timezone      string
-	ca, cert, key string
+	timezone string
 
+	// downstreamURI specifies the URI for the downstream MySQL
 	downstreamURI string
 
 	// avro schema registry uri should be set if the encoding protocol is avro
@@ -58,14 +58,13 @@ type option struct {
 
 func newOption() *option {
 	return &option{
-		version:         "2.4.0",
 		maxMessageBytes: math.MaxInt64,
 		maxBatchSize:    math.MaxInt64,
 	}
 }
 
 // Adjust the consumer option by the upstream uri passed in parameters.
-func (o *option) Adjust(upstreamURIStr string, configFile string) error {
+func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	upstreamURI, err := url.Parse(upstreamURIStr)
 	if err != nil {
 		log.Panic("invalid upstream-uri", zap.Error(err))
@@ -76,16 +75,12 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) error {
 			zap.String("upstreamURI", upstreamURIStr))
 	}
 
-	s := upstreamURI.Query().Get("version")
-	if s != "" {
-		o.version = s
-	}
 	o.topic = strings.TrimFunc(upstreamURI.Path, func(r rune) bool {
 		return r == '/'
 	})
 	o.address = strings.Split(upstreamURI.Host, ",")
 
-	s = upstreamURI.Query().Get("partition-num")
+	s := upstreamURI.Query().Get("partition-num")
 	if s != "" {
 		c, err := strconv.ParseInt(s, 10, 32)
 		if err != nil {
@@ -126,23 +121,24 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) error {
 	if configFile != "" {
 		err = util.StrictDecodeFile(configFile, "kafka consumer", replicaConfig)
 		if err != nil {
-			return errors.Trace(err)
+			log.Panic("decode config file failed", zap.String("configFile", configFile), zap.Error(err))
 		}
 		if _, err = filter.VerifyTableRules(replicaConfig.Filter); err != nil {
-			return errors.Trace(err)
+			log.Panic("verify table rules failed", zap.Error(err))
 		}
 	}
 	// the TiDB source ID should never be set to 0
 	replicaConfig.Sink.TiDBSourceID = 1
 	replicaConfig.Sink.Protocol = putil.AddressOf(protocol.String())
+	o.sinkConfig = replicaConfig.Sink
 
 	o.codecConfig = common.NewConfig(protocol)
 	if err = o.codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
-		return errors.Trace(err)
+		log.Panic("codec config apply failed", zap.Error(err))
 	}
 	tz, err := putil.GetTimezone(o.timezone)
 	if err != nil {
-		return errors.Trace(err)
+		log.Panic("parse timezone failed", zap.Error(err))
 	}
 	o.codecConfig.TimeZone = tz
 
@@ -151,15 +147,13 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) error {
 	}
 
 	log.Info("consumer option adjusted",
-		zap.String("configFile", configFile),
 		zap.String("address", strings.Join(o.address, ",")),
-		zap.String("version", o.version),
 		zap.String("topic", o.topic),
 		zap.Int32("partitionNum", o.partitionNum),
 		zap.String("groupID", o.groupID),
 		zap.Int("maxMessageBytes", o.maxMessageBytes),
 		zap.Int("maxBatchSize", o.maxBatchSize),
+		zap.String("configFile", configFile),
 		zap.String("upstreamURI", upstreamURI.String()),
 		zap.String("downstreamURI", o.downstreamURI))
-	return nil
 }

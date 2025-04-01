@@ -155,8 +155,8 @@ func (c *consumer) readMessage(ctx context.Context) error {
 	}
 }
 
-// Consume will read message from Kafka.
-func (c *consumer) Consume(ctx context.Context) error {
+// Run the consumer, read data and write to the downstream target.
+func (c *consumer) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return c.writer.run(ctx)
