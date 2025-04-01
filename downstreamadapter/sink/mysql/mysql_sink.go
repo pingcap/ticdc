@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sink
+package mysql
 
 import (
 	"context"
@@ -21,7 +21,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/conflictdetector"
-	"github.com/pingcap/ticdc/downstreamadapter/worker"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -44,8 +43,8 @@ const (
 type MysqlSink struct {
 	changefeedID common.ChangeFeedID
 
-	ddlWorker *worker.MysqlDDLWorker
-	dmlWorker []*worker.MysqlDMLWorker
+	ddlWorker *MysqlDDLWorker
+	dmlWorker []*MysqlDMLWorker
 
 	db         *sql.DB
 	statistics *metrics.Statistics
@@ -95,7 +94,7 @@ func newMysqlSinkWithDBAndConfig(
 	mysqlSink := &MysqlSink{
 		changefeedID: changefeedID,
 		db:           db,
-		dmlWorker:    make([]*worker.MysqlDMLWorker, workerCount),
+		dmlWorker:    make([]*MysqlDMLWorker, workerCount),
 		statistics:   stat,
 		conflictDetector: conflictdetector.NewConflictDetector(DefaultConflictDetectorSlots, conflictdetector.TxnCacheOption{
 			Count:         workerCount,
@@ -106,9 +105,9 @@ func newMysqlSinkWithDBAndConfig(
 	}
 	formatVectorType := mysql.ShouldFormatVectorType(db, cfg)
 	for i := 0; i < workerCount; i++ {
-		mysqlSink.dmlWorker[i] = worker.NewMysqlDMLWorker(ctx, db, cfg, i, changefeedID, stat, formatVectorType, mysqlSink.conflictDetector.GetOutChByCacheID(int64(i)))
+		mysqlSink.dmlWorker[i] = NewMysqlDMLWorker(ctx, db, cfg, i, changefeedID, stat, formatVectorType, mysqlSink.conflictDetector.GetOutChByCacheID(int64(i)))
 	}
-	mysqlSink.ddlWorker = worker.NewMysqlDDLWorker(ctx, db, cfg, changefeedID, stat, formatVectorType)
+	mysqlSink.ddlWorker = NewMysqlDDLWorker(ctx, db, cfg, changefeedID, stat, formatVectorType)
 	return mysqlSink
 }
 

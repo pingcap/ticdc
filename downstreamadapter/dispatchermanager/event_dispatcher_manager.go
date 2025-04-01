@@ -15,6 +15,7 @@ package dispatchermanager
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -469,7 +470,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 	startTsIsSyncpointList := make([]bool, len(startTsList))
 	var err error
 	if e.sink.SinkType() == common.MysqlSinkType {
-		newStartTsList, startTsIsSyncpointList, err = e.sink.(*sink.MysqlSink).GetStartTsList(tableIds, startTsList, removeDDLTs)
+		newStartTsList, startTsIsSyncpointList, err = e.sink.(*mysql.MysqlSink).GetStartTsList(tableIds, startTsList, removeDDLTs)
 		if err != nil {
 			return errors.Trace(err)
 		}

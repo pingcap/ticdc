@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sink
+package mysql
 
 import (
 	"context"
@@ -27,8 +27,6 @@ import (
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"github.com/stretchr/testify/require"
 )
-
-var count atomic.Int64
 
 func MysqlSinkForTest() (*MysqlSink, sqlmock.Sqlmock) {
 	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
@@ -49,7 +47,7 @@ func MysqlSinkForTest() (*MysqlSink, sqlmock.Sqlmock) {
 func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
 
-	count.Store(0)
+	var count atomic.Int64
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -147,7 +145,7 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 // whether the sink state is correct
 func TestMysqlSinkMeetsDMLError(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
-	count.Store(0)
+	var count atomic.Int64
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -185,7 +183,7 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 func TestMysqlSinkMeetsDDLError(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
 
-	count.Store(0)
+	var count atomic.Int64
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
