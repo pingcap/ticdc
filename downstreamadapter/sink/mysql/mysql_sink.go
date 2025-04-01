@@ -96,7 +96,7 @@ func newMysqlSinkWithDBAndConfig(
 		db:           db,
 		dmlWorker:    make([]*dmlWorker, workerCount),
 		statistics:   stat,
-		conflictDetector: conflictdetector.NewConflictDetector(defaultConflictDetectorSlots, conflictdetector.TxnCacheOption{
+		conflictDetector: conflictdetector.New(defaultConflictDetectorSlots, conflictdetector.TxnCacheOption{
 			Count:         workerCount,
 			Size:          1024,
 			BlockStrategy: conflictdetector.BlockStrategyWaitEmpty,

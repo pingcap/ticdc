@@ -34,8 +34,7 @@ type ConflictDetector struct {
 
 	// slots are used to find all unfinished transactions
 	// conflicting with an incoming transactions.
-	slots    *Slots
-	numSlots uint64
+	slots *Slots
 
 	// nextCacheID is used to dispatch transactions round-robin.
 	nextCacheID atomic.Int64
@@ -46,14 +45,13 @@ type ConflictDetector struct {
 	wg            sync.WaitGroup
 }
 
-// NewConflictDetector creates a new ConflictDetector.
-func NewConflictDetector(
+// New creates a new ConflictDetector.
+func New(
 	numSlots uint64, opt TxnCacheOption,
 ) *ConflictDetector {
 	ret := &ConflictDetector{
 		resolvedTxnCaches: make([]txnCache, opt.Count),
 		slots:             NewSlots(numSlots),
-		numSlots:          numSlots,
 		closeCh:           make(chan struct{}),
 		notifiedNodes:     chann.NewAutoDrainChann[func()](),
 	}
