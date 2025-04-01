@@ -217,7 +217,7 @@ func (b *BatchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 		return b.assembleEventFromClaimCheckStorage(ctx)
 	}
 
-	//b.nextEvent = b.assembleDMLEvent(b.nextKey, rowMsg)
+	// b.nextEvent = b.assembleDMLEvent(b.nextKey, rowMsg)
 	if b.nextKey.OnlyHandleKey {
 		return b.assembleHandleKeyOnlyEvent(ctx)
 	}

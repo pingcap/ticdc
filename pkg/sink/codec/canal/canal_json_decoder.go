@@ -35,7 +35,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/types"
 	tiTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"github.com/pingcap/tiflow/pkg/util"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
@@ -166,7 +165,7 @@ func (b *canalJSONDecoder) HasNext() (common.MessageType, bool, error) {
 	return b.msg.messageType(), true, nil
 }
 
-func (b *canalJSONDecoder) assembleClaimCheckRowChangedEvent(
+func (b *canalJSONDecoder) assembleClaimCheckDMLEvent(
 	ctx context.Context, claimCheckLocation string,
 ) (*commonEvent.DMLEvent, error) {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
@@ -197,7 +196,7 @@ func (b *canalJSONDecoder) assembleClaimCheckRowChangedEvent(
 	return b.NextDMLEvent()
 }
 
-func (b *canalJSONDecoder) buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string, error) {
+func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string, error) {
 	columnsCount := holder.Length()
 	data := make(map[string]interface{}, columnsCount)
 	mysqlTypeMap := make(map[string]string, columnsCount)
@@ -228,7 +227,7 @@ func (b *canalJSONDecoder) buildData(holder *common.ColumnsHolder) (map[string]i
 	return data, mysqlTypeMap, nil
 }
 
-func (b *canalJSONDecoder) assembleHandleKeyOnlyRowChangedEvent(
+func (b *canalJSONDecoder) assembleHandleKeyOnlyDMLEvent(
 	ctx context.Context, message *canalJSONMessageWithTiDBExtension,
 ) (*commonEvent.DMLEvent, error) {
 	var (
@@ -256,7 +255,7 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyRowChangedEvent(
 	switch eventType {
 	case "INSERT":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		data, mysqlType, err := b.buildData(holder)
+		data, mysqlType, err := buildData(holder)
 		if err != nil {
 			return nil, err
 		}
@@ -264,7 +263,7 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyRowChangedEvent(
 		result.Data = []map[string]interface{}{data}
 	case "UPDATE":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		data, mysqlType, err := b.buildData(holder)
+		data, mysqlType, err := buildData(holder)
 		if err != nil {
 			return nil, err
 		}
@@ -272,14 +271,14 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyRowChangedEvent(
 		result.Data = []map[string]interface{}{data}
 
 		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		old, _, err := b.buildData(holder)
+		old, _, err := buildData(holder)
 		if err != nil {
 			return nil, err
 		}
 		result.Old = []map[string]interface{}{old}
 	case "DELETE":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		data, mysqlType, err := b.buildData(holder)
+		data, mysqlType, err := buildData(holder)
 		if err != nil {
 			return nil, err
 		}
@@ -302,10 +301,10 @@ func (b *canalJSONDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	if withExtension {
 		ctx := context.Background()
 		if message.Extensions.OnlyHandleKey && b.upstreamTiDB != nil {
-			return b.assembleHandleKeyOnlyRowChangedEvent(ctx, message)
+			return b.assembleHandleKeyOnlyDMLEvent(ctx, message)
 		}
 		if message.Extensions.ClaimCheckLocation != "" {
-			return b.assembleClaimCheckRowChangedEvent(ctx, message.Extensions.ClaimCheckLocation)
+			return b.assembleClaimCheckDMLEvent(ctx, message.Extensions.ClaimCheckLocation)
 		}
 	}
 
@@ -584,7 +583,7 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 		col.Name = pmodel.NewCIStr(name)
 		basicType := common.ExtractBasicMySQLType(mysqlType)
 		col.FieldType = *types.NewFieldType(basicType)
-		if utils.IsBinaryMySQLType(mysqlType) {
+		if common.IsBinaryMySQLType(mysqlType) {
 			col.AddFlag(mysql.BinaryFlag)
 			col.SetCharset("binary")
 			col.SetCollate("binary")
