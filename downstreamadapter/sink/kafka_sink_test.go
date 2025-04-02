@@ -147,8 +147,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	err = sink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	err = sink.AddDMLEvent(dmlEvent)
-	require.NoError(t, err)
+	sink.AddDMLEvent(dmlEvent)
 
 	time.Sleep(1 * time.Second)
 
