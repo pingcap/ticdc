@@ -526,14 +526,6 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 
 		seq := e.dispatcherMap.Set(id, d)
 		d.SetSeq(seq)
-		// e.statusesChan <- TableSpanStatusWithSeq{
-		// 	TableSpanStatus: &heartbeatpb.TableSpanStatus{
-		// 		ID:              id.ToPB(),
-		// 		ComponentStatus: heartbeatpb.ComponentState_Working,
-		// 	},
-		// 	StartTs: uint64(newStartTsList[idx]),
-		// 	Seq:     seq,
-		// }
 
 		if d.IsTableTriggerEventDispatcher() {
 			e.metricTableTriggerEventDispatcherCount.Inc()
@@ -775,7 +767,7 @@ func (e *EventDispatcherManager) removeDispatcher(id common.DispatcherID) {
 		if dispatcherItem.GetRemovingStatus() {
 			return
 		}
-		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
+		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
 
 		// for non-mysql class sink, only the event dispatcher manager with table trigger event dispatcher need to receive the checkpointTs message.
 		if dispatcherItem.IsTableTriggerEventDispatcher() && e.sink.SinkType() != common.MysqlSinkType {

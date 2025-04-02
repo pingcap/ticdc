@@ -113,6 +113,7 @@ func (s *basicScheduler[T, S, R]) Execute() time.Time {
 
 func (s *basicScheduler[T, S, R]) schedule(id replica.GroupID, availableSize int) (scheduled int) {
 	if id == replica.DefaultGroupID {
+		// default 的话，就按照目标是每个节点总的 dispatcher 数目量一致来处理
 		absent := s.db.GetAbsentByGroup(id, availableSize)
 		// 如果是非 default 组，看一下每个节点有几个 absent 任务， k - absent 任务就是能安排的量
 		nodeSize := s.db.GetTaskSizePerNodeByGroup(id)
@@ -131,6 +132,7 @@ func (s *basicScheduler[T, S, R]) schedule(id replica.GroupID, availableSize int
 		s.absent = absent[:0]
 		return
 	}
+	// 非 default 的话，就按照目标是每个节点总的 scheding 数目维持一致来处理
 	scheduled = 0
 	absent := s.db.GetAbsentByGroup(id, availableSize)
 	nodeSize := s.db.GetScheduleTaskSizePerNodeByGroup(id)
