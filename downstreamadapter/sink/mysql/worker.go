@@ -19,14 +19,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
-	"github.com/pingcap/ticdc/pkg/sink/util"
-	"go.uber.org/zap"
 )
 
 // dmlWorker is used to flush the dml event downstream
@@ -58,10 +55,6 @@ func newDMLWorker(
 		changefeedID: changefeedID,
 	}
 }
-
-// func (w *dmlWorker) GetEventChan() <-chan *commonEvent.DMLEvent {
-// 	return w.eventChan
-// }
 
 func (w *dmlWorker) Run(ctx context.Context) error {
 	namespace := w.changefeedID.Namespace()
@@ -132,78 +125,5 @@ func (w *dmlWorker) Run(ctx context.Context) error {
 }
 
 func (w *dmlWorker) Close() {
-	w.writer.Close()
-}
-
-// func (w *dmlWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
-// 	w.eventChan <- event
-// }
-
-// ddlWorker is use to flush the ddl event and sync point eventdownstream
-type ddlWorker struct {
-	changefeedID common.ChangeFeedID
-	writer       *mysql.Writer
-}
-
-func newDDLWorker(
-	ctx context.Context,
-	db *sql.DB,
-	config *mysql.Config,
-	changefeedID common.ChangeFeedID,
-	statistics *metrics.Statistics,
-	formatVectorType bool,
-) *ddlWorker {
-	return &ddlWorker{
-		changefeedID: changefeedID,
-		writer:       mysql.NewWriter(ctx, db, config, changefeedID, statistics, formatVectorType),
-	}
-}
-
-func (w *ddlWorker) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
-	w.writer.SetTableSchemaStore(tableSchemaStore)
-}
-
-func (w *ddlWorker) GetStartTsList(tableIds []int64, startTsList []int64) ([]int64, []bool, error) {
-	ddlTsList, isSyncpointList, err := w.writer.GetStartTsList(tableIds)
-	if err != nil {
-		return nil, nil, err
-	}
-	resTs := make([]int64, len(ddlTsList))
-	for idx, ddlTs := range ddlTsList {
-		if startTsList[idx] > ddlTs {
-			isSyncpointList[idx] = false
-		}
-		resTs[idx] = max(ddlTs, startTsList[idx])
-	}
-
-	return resTs, isSyncpointList, nil
-}
-
-func (w *ddlWorker) WriteBlockEvent(event commonEvent.BlockEvent) error {
-	switch event.GetType() {
-	case commonEvent.TypeDDLEvent:
-		err := w.writer.FlushDDLEvent(event.(*commonEvent.DDLEvent))
-		if err != nil {
-			return errors.Trace(err)
-		}
-	case commonEvent.TypeSyncPointEvent:
-		err := w.writer.FlushSyncPointEvent(event.(*commonEvent.SyncPointEvent))
-		if err != nil {
-			return errors.Trace(err)
-		}
-	default:
-		log.Error("unknown event type",
-			zap.String("namespace", w.changefeedID.Namespace()),
-			zap.String("changefeed", w.changefeedID.Name()),
-			zap.Any("event", event))
-	}
-	return nil
-}
-
-func (w *ddlWorker) RemoveDDLTsItem() error {
-	return w.writer.RemoveDDLTsItem()
-}
-
-func (w *ddlWorker) Close() {
 	w.writer.Close()
 }

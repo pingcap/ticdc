@@ -16,10 +16,10 @@ package mysql
 import (
 	"context"
 	"database/sql"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	"net/url"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -42,8 +42,9 @@ const (
 type Sink struct {
 	changefeedID common.ChangeFeedID
 
-	ddlWorker *ddlWorker
 	dmlWorker []*dmlWorker
+
+	ddlWriter *mysql.Writer
 
 	db         *sql.DB
 	statistics *metrics.Statistics
@@ -107,7 +108,7 @@ func newMysqlSinkWithDBAndConfig(
 	for i := 0; i < workerCount; i++ {
 		result.dmlWorker[i] = newDMLWorker(ctx, db, cfg, i, changefeedID, stat, formatVectorType, result.conflictDetector.GetOutChByCacheID(int64(i)))
 	}
-	result.ddlWorker = newDDLWorker(ctx, db, cfg, changefeedID, stat, formatVectorType)
+	result.ddlWriter = mysql.NewWriter(ctx, db, cfg, changefeedID, stat, formatVectorType)
 	return result
 }
 
@@ -135,7 +136,7 @@ func (s *Sink) SinkType() common.SinkType {
 }
 
 func (s *Sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
-	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
+	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
@@ -151,10 +152,21 @@ func (s *Sink) PassBlockEvent(event commonEvent.BlockEvent) {
 }
 
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
-	err := s.ddlWorker.WriteBlockEvent(event)
+	var err error
+	switch event.GetType() {
+	case commonEvent.TypeDDLEvent:
+		err = s.ddlWriter.FlushDDLEvent(event.(*commonEvent.DDLEvent))
+	case commonEvent.TypeSyncPointEvent:
+		err = s.ddlWriter.FlushSyncPointEvent(event.(*commonEvent.SyncPointEvent))
+	default:
+		log.Error("unknown event type",
+			zap.String("namespace", s.changefeedID.Namespace()),
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Any("event", event))
+	}
 	if err != nil {
 		s.isNormal.Store(false)
-		return err
+		return errors.Trace(err)
 	}
 	return nil
 }
@@ -168,7 +180,7 @@ func (s *Sink) GetStartTsList(
 ) ([]int64, []bool, error) {
 	if removeDDLTs {
 		// means we just need to remove the ddl ts item for this changefeed, and return startTsList directly.
-		err := s.ddlWorker.RemoveDDLTsItem()
+		err := s.ddlWriter.RemoveDDLTsItem()
 		if err != nil {
 			s.isNormal.Store(false)
 			return nil, nil, err
@@ -177,18 +189,25 @@ func (s *Sink) GetStartTsList(
 		return startTsList, isSyncpointList, nil
 	}
 
-	startTsList, isSyncpointList, err := s.ddlWorker.GetStartTsList(tableIds, startTsList)
+	ddlTsList, isSyncpointList, err := s.ddlWriter.GetStartTsList(tableIds)
 	if err != nil {
 		s.isNormal.Store(false)
 		return nil, nil, err
 	}
-	return startTsList, isSyncpointList, nil
+	resTs := make([]int64, len(ddlTsList))
+	for idx, ddlTs := range ddlTsList {
+		if startTsList[idx] > ddlTs {
+			isSyncpointList[idx] = false
+		}
+		resTs[idx] = max(ddlTs, startTsList[idx])
+	}
+	return resTs, isSyncpointList, nil
 }
 
 func (s *Sink) Close(removeChangefeed bool) {
 	// when remove the changefeed, we need to remove the ddl ts item in the ddl worker
 	if removeChangefeed {
-		if err := s.ddlWorker.RemoveDDLTsItem(); err != nil {
+		if err := s.ddlWriter.RemoveDDLTsItem(); err != nil {
 			log.Warn("close mysql sink, remove changefeed meet error",
 				zap.Any("changefeed", s.changefeedID.String()), zap.Error(err))
 		}
@@ -197,7 +216,7 @@ func (s *Sink) Close(removeChangefeed bool) {
 		w.Close()
 	}
 
-	s.ddlWorker.Close()
+	s.ddlWriter.Close()
 
 	if err := s.db.Close(); err != nil {
 		log.Warn("close mysql sink db meet error",
