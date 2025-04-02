@@ -200,10 +200,7 @@ func (w *MysqlWriter) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) err
 }
 
 func (w *MysqlWriter) Flush(events []*commonEvent.DMLEvent) error {
-	dmls, err := w.prepareDMLs(events)
-	if err != nil {
-		return errors.Trace(err)
-	}
+	dmls := w.prepareDMLs(events)
 	defer dmlsPool.Put(dmls) // Return dmls to pool after use
 
 	if dmls.rowCount == 0 {
@@ -211,12 +208,12 @@ func (w *MysqlWriter) Flush(events []*commonEvent.DMLEvent) error {
 	}
 
 	if !w.cfg.DryRun {
-		if err = w.execDMLWithMaxRetries(dmls); err != nil {
+		if err := w.execDMLWithMaxRetries(dmls); err != nil {
 			return errors.Trace(err)
 		}
 	} else {
 		w.tryDryRunBlock()
-		if err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
+		if err := w.statistics.RecordBatchExecution(func() (int, int64, error) {
 			return dmls.rowCount, dmls.approximateSize, nil
 		}); err != nil {
 			return errors.Trace(err)

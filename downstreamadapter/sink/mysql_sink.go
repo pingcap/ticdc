@@ -142,9 +142,8 @@ func (s *MysqlSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore)
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *MysqlSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
-	return s.conflictDetector.Add(event)
-
+func (s *MysqlSink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	s.conflictDetector.Add(event)
 	// // We use low value of dispatcherID to divide different tables into different workers.
 	// // And ensure the same table always goes to the same worker.
 	// index := event.GetDispatcherID().GetLow() % uint64(s.workerCount)

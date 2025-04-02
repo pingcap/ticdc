@@ -18,7 +18,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"go.uber.org/zap"
 )
 
 //go:generate msgp
@@ -211,10 +210,7 @@ func (r RedoDMLEvent) IsUpdate() bool {
 }
 
 func parseColumnValue(row *chunk.Row, column *model.ColumnInfo, i int) RedoColumnValue {
-	v, err := common.ExtractColVal(row, column, i)
-	if err != nil {
-		log.Panic("ExtractColVal fail", zap.Error(err))
-	}
+	v := common.ExtractColVal(row, column, i)
 	rrv := RedoColumnValue{Value: v}
 	switch t := rrv.Value.(type) {
 	case []byte:

@@ -146,9 +146,8 @@ func (s *CloudStorageSink) IsNormal() bool {
 	return atomic.LoadUint32(&s.isNormal) == 1
 }
 
-func (s *CloudStorageSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
+func (s *CloudStorageSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmlWorker.AddDMLEvent(event)
-	return nil
 }
 
 func (s *CloudStorageSink) PassBlockEvent(event commonEvent.BlockEvent) {
