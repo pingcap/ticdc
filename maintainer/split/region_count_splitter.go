@@ -38,9 +38,10 @@ func newRegionCountSplitter(
 	changefeedID common.ChangeFeedID, regionCache RegionCache, regionThreshold int,
 ) *regionCountSplitter {
 	return &regionCountSplitter{
-		changefeedID:    changefeedID,
-		regionCache:     regionCache,
-		regionThreshold: regionThreshold,
+		changefeedID:       changefeedID,
+		regionCache:        regionCache,
+		regionThreshold:    regionThreshold,
+		regionCountPerSpan: 100,
 	}
 }
 
