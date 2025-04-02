@@ -102,16 +102,8 @@ func genKeyList(
 		if columnInfos[i] == nil || tableInfo.GetColumnFlags()[columnInfos[i].ID].IsGeneratedColumn() {
 			return nil
 		}
-
-<<<<<<< Updated upstream
-		value, err := common.ExtractColVal(row, columnInfos[i], i)
-		if err != nil {
-			return nil, err
-		}
-=======
 		ft := columnInfos[i].FieldType
 		value := common.ExtractColVal(row, ft, i)
->>>>>>> Stashed changes
 		// if a column value is null, we can ignore this index
 		if value == nil {
 			return nil

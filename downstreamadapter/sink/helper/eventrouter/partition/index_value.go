@@ -62,11 +62,7 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonE
 				continue
 			}
 			if tableInfo.GetColumnFlags()[col.ID].IsHandleKey() {
-				value, err := common.ExtractColVal(&rowData, col, idx)
-				if err != nil {
-					// FIXME:
-					log.Panic("ExtractColVal failed", zap.Error(err))
-				}
+				value := common.ExtractColVal(&rowData, col.FieldType, idx)
 				r.hasher.Write([]byte(col.Name.O), []byte(model.ColumnValueString(value)))
 			}
 		}
@@ -81,11 +77,7 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonE
 		}
 		for idx := 0; idx < len(names); idx++ {
 			colInfo := tableInfo.GetColumns()[offsets[idx]]
-			value, err := common.ExtractColVal(&rowData, colInfo, idx)
-			if err != nil {
-				// FIXME:
-				log.Panic("ExtractColVal failed", zap.Error(err))
-			}
+			value := common.ExtractColVal(&rowData, colInfo.FieldType, idx)
 			if value == nil {
 				continue
 			}

@@ -18,7 +18,6 @@ import (
 	"hash/fnv"
 	"strings"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -31,13 +30,10 @@ func compareKeys(firstKey, secondKey []byte) bool {
 	return bytes.Equal(firstKey, secondKey)
 }
 
-func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte, error) {
+func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte) {
 	idxCol := tableInfo.GetPKIndexOffset()
 	// log.Info("genKeyAndHash", zap.Any("idxCol", idxCol), zap.Any("iIdx", iIdx))
-	key, err := genKeyList(row, idxCol, tableInfo)
-	if err != nil {
-		return 0, nil, errors.Trace(err)
-	}
+	key := genKeyList(row, idxCol, tableInfo)
 	if len(key) == 0 {
 		log.Panic("the table has no primary key", zap.Any("tableinfo", tableInfo))
 	}
@@ -47,24 +43,21 @@ func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte,
 		log.Panic("transaction key hash fail")
 	}
 
-	return uint64(hasher.Sum32()), key, nil
+	return uint64(hasher.Sum32()), key
 }
 
-func genKeyList(row *chunk.Row, colIdx []int, tableInfo *common.TableInfo) ([]byte, error) {
+func genKeyList(row *chunk.Row, colIdx []int, tableInfo *common.TableInfo) []byte {
 	var key []byte
 	columnInfos := tableInfo.GetColumns()
 	for _, i := range colIdx {
 		if columnInfos[i] == nil {
-			return nil, nil
+			return nil
 		}
 
-		value, err := common.ExtractColVal(row, columnInfos[i], i)
-		if err != nil {
-			return nil, err
-		}
+		value := common.ExtractColVal(row, columnInfos[i].FieldType, i)
 		// if a column value is null, we can ignore this index
 		if value == nil {
-			return nil, nil
+			return nil
 		}
 
 		val := model.ColumnValueString(value)
@@ -76,9 +69,9 @@ func genKeyList(row *chunk.Row, colIdx []int, tableInfo *common.TableInfo) ([]by
 		key = append(key, 0)
 	}
 	if len(key) == 0 {
-		return nil, nil
+		return nil
 	}
-	return key, nil
+	return key
 }
 
 func columnNeeds2LowerCase(mysqlType byte, collation string) bool {
