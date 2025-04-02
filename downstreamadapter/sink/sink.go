@@ -29,7 +29,7 @@ type Sink interface {
 	SinkType() common.SinkType
 	IsNormal() bool
 
-	AddDMLEvent(event *commonEvent.DMLEvent) error
+	AddDMLEvent(event *commonEvent.DMLEvent)
 	WriteBlockEvent(event commonEvent.BlockEvent) error
 	PassBlockEvent(event commonEvent.BlockEvent)
 	AddCheckpointTs(ts uint64)
