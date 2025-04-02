@@ -80,6 +80,7 @@ func (s *balanceScheduler[T, S, R]) Execute() time.Time {
 		return now.Add(s.checkBalanceInterval)
 	})
 
+	// TODO: 这个后续要优化掉，拆表的 basic 调度不应该影响普通表的调度，但不着急先不改。
 	if s.operatorController.OperatorSize() > 0 || s.db.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance
 		return now.Add(s.checkBalanceInterval)
@@ -100,6 +101,10 @@ func (s *balanceScheduler[T, S, R]) Execute() time.Time {
 func (s *balanceScheduler[T, S, R]) schedulerGroup(nodes map[node.ID]*node.Info) int {
 	availableSize, totalMoved := s.batchSize, 0
 	for _, group := range s.db.GetGroups() {
+		// 先不调度任何拆表的组
+		if group == replica.DefaultGroupID {
+			continue
+		}
 		// fast path, check the balance status
 		moveSize := CheckBalanceStatus(s.db.GetTaskSizePerNodeByGroup(group), nodes)
 		if moveSize <= 0 {
@@ -135,7 +140,11 @@ func (s *balanceScheduler[T, S, R]) schedulerGlobal(nodes map[node.ID]*node.Info
 	// complexity note: len(nodes) * len(groups)
 	totalTasks := 0
 	sizePerNode := make(map[node.ID]int, len(nodes))
-	for _, nodeTasks := range groupNodetasks {
+	for groupID, nodeTasks := range groupNodetasks {
+		// TODO: not balance the split table now.
+		if groupID != replica.DefaultGroupID {
+			continue
+		}
 		for id, task := range nodeTasks {
 			if task != zero {
 				totalTasks++
@@ -153,7 +162,10 @@ func (s *balanceScheduler[T, S, R]) schedulerGlobal(nodes map[node.ID]*node.Info
 	}
 
 	moved := 0
-	for _, nodeTasks := range groupNodetasks {
+	for groupID, nodeTasks := range groupNodetasks {
+		if groupID != replica.DefaultGroupID {
+			continue
+		}
 		availableNodes, victims, nextVictim := []node.ID{}, []node.ID{}, 0
 		for id, task := range nodeTasks {
 			if task != zero && sizePerNode[id] > lowerLimitPerNode {

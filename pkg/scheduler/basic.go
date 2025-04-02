@@ -24,6 +24,8 @@ import (
 	"github.com/pingcap/ticdc/utils/heap"
 )
 
+const schedulingTaskCountPerNode = 6
+
 // basicScheduler generates operators for the spans, and push them to the operator controller
 // it generates add operator for the absent spans, and move operator for the unbalanced replicating spans
 // currently, it only supports balance the spans by size
@@ -58,9 +60,14 @@ func NewBasicScheduler[T replica.ReplicationID, S replica.ReplicationStatus, R r
 }
 
 // Execute periodically execute the operator
+// 区分 split table 和 非 split table
 func (s *basicScheduler[T, S, R]) Execute() time.Time {
 	availableSize := s.batchSize - s.operatorController.OperatorSize()
-	if s.db.GetAbsentSize() <= 0 || availableSize <= 0 {
+
+	totalAbsentSize := s.db.GetAbsentSize()
+	defaultGroupAbsentSize := s.db.GetAbsentSizeForGroup(replica.DefaultGroupID)
+
+	if totalAbsentSize <= 0 || availableSize <= 0 {
 		// can not schedule more operators, skip
 		return time.Now().Add(time.Millisecond * 500)
 	}
@@ -69,31 +76,114 @@ func (s *basicScheduler[T, S, R]) Execute() time.Time {
 		return time.Now().Add(time.Millisecond * 100)
 	}
 
-	for _, id := range s.db.GetGroups() {
-		availableSize -= s.schedule(id, availableSize)
-		if availableSize <= 0 {
-			break
+	// 分配一下 availableSize 的使用， 首先 non-default 的总开销不能大于 batchSize / 2，避免把常规表饿死
+	// 每个节点对一个 split 表的空间设为 k（比如10个），有空余了才会花掉一点。
+	// 可以先做个暴力的分发，一人一半，如果 前面的没这么多需要用的，后面最大额度也就是 batchSize / 2
+
+	if defaultGroupAbsentSize == totalAbsentSize {
+		// only have absent replicas in the default group
+		s.schedule(replica.DefaultGroupID, availableSize)
+	} else if defaultGroupAbsentSize == 0 {
+		// only have absent replicas in non-default group
+		maxAvailableSize := max(availableSize, s.batchSize/2)
+		for _, id := range s.db.GetGroups() {
+			if id == replica.DefaultGroupID {
+				continue
+			}
+			maxAvailableSize -= s.schedule(id, maxAvailableSize)
+			if maxAvailableSize <= 0 {
+				break
+			}
+		}
+	} else {
+		availableSizeForNonDefault := min(min(max(availableSize/2, availableSize-defaultGroupAbsentSize), totalAbsentSize-defaultGroupAbsentSize), s.batchSize/2)
+		availableSizeForDefault := min(defaultGroupAbsentSize, availableSize-defaultGroupAbsentSize)
+		for _, id := range s.db.GetGroups() {
+			if id == replica.DefaultGroupID {
+				s.schedule(id, availableSizeForDefault)
+			}
+			availableSizeForNonDefault -= s.schedule(id, availableSize)
+			if availableSizeForNonDefault <= 0 {
+				break
+			}
 		}
 	}
 	return time.Now().Add(time.Millisecond * 500)
 }
 
 func (s *basicScheduler[T, S, R]) schedule(id replica.GroupID, availableSize int) (scheduled int) {
+	if id == replica.DefaultGroupID {
+		absent := s.db.GetAbsentByGroup(id, availableSize)
+		// 如果是非 default 组，看一下每个节点有几个 absent 任务， k - absent 任务就是能安排的量
+		nodeSize := s.db.GetTaskSizePerNodeByGroup(id)
+		// add the absent node to the node size map
+		for id := range s.nodeManager.GetAliveNodes() {
+			if _, ok := nodeSize[id]; !ok {
+				nodeSize[id] = 0
+			}
+		}
+		// what happens if the some node removed when scheduling?
+		BasicSchedule(availableSize, absent, nodeSize, func(replication R, id node.ID) bool {
+			op := s.newAddOperator(replication, id)
+			return s.operatorController.AddOperator(op)
+		})
+		scheduled = len(absent)
+		s.absent = absent[:0]
+		return
+	}
+	scheduled = 0
 	absent := s.db.GetAbsentByGroup(id, availableSize)
-	nodeSize := s.db.GetTaskSizePerNodeByGroup(id)
-	// add the absent node to the node size map
+	nodeSize := s.db.GetScheduleTaskSizePerNodeByGroup(id)
+	spaceCount := 0
 	for id := range s.nodeManager.GetAliveNodes() {
 		if _, ok := nodeSize[id]; !ok {
 			nodeSize[id] = 0
 		}
+		spaceCount += schedulingTaskCountPerNode - nodeSize[id]
 	}
-	// what happens if the some node removed when scheduling?
-	BasicSchedule(availableSize, absent, nodeSize, func(replication R, id node.ID) bool {
-		op := s.newAddOperator(replication, id)
-		return s.operatorController.AddOperator(op)
-	})
-	scheduled = len(absent)
-	s.absent = absent[:0]
+
+	if spaceCount <= len(absent) {
+		// 给每个node 安排 schedulingTaskCountPerNode - nodeSize[id]
+		for id, size := range nodeSize {
+			taskList := absent[:schedulingTaskCountPerNode-size]
+			count := 0
+			for idx, task := range taskList {
+				count = idx
+				op := s.newAddOperator(task, id)
+				if !s.operatorController.AddOperator(op) {
+					count -= 1
+					break
+				} else {
+					scheduled += 1
+				}
+			}
+			absent = absent[count+1:]
+		}
+	} else {
+		// 那就尽可能给每个节点均匀一点
+		updated := false
+		for len(absent) != 0 {
+			for id, size := range nodeSize {
+				if len(absent) == 0 {
+					return
+				}
+				if size < schedulingTaskCountPerNode {
+					op := s.newAddOperator(absent[0], id)
+					if !s.operatorController.AddOperator(op) {
+						continue
+					} else {
+						absent = absent[1:]
+						nodeSize[id] += 1
+						updated = true
+						scheduled += 1
+					}
+				}
+			}
+			if !updated {
+				break
+			}
+		}
+	}
 	return
 }
 
