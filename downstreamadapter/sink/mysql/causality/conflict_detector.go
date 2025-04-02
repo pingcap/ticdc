@@ -101,6 +101,6 @@ func (d *ConflictDetector) sendToCache(event *commonEvent.DMLEvent, id int64) bo
 
 // GetOutChByCacheID returns the output channel by cacheID.
 // Note txns in single cache should be executed sequentially.
-func (d *ConflictDetector) GetOutChByCacheID(id int64) <-chan *commonEvent.DMLEvent {
+func (d *ConflictDetector) GetOutChByCacheID(id int) <-chan *commonEvent.DMLEvent {
 	return d.resolvedTxnCaches[id].out()
 }

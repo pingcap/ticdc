@@ -17,6 +17,8 @@ import (
 	"context"
 	"database/sql"
 	"net/url"
+	"strconv"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
@@ -42,8 +44,7 @@ const (
 type Sink struct {
 	changefeedID common.ChangeFeedID
 
-	dmlWorker []*dmlWorker
-
+	dmlWriter []*mysql.Writer
 	ddlWriter *mysql.Writer
 
 	db         *sql.DB
@@ -52,7 +53,8 @@ type Sink struct {
 	conflictDetector *causality.ConflictDetector
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal *atomic.Bool
+	isNormal   *atomic.Bool
+	maxTxnRows int
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -95,18 +97,19 @@ func newMysqlSinkWithDBAndConfig(
 	result := &Sink{
 		changefeedID: changefeedID,
 		db:           db,
-		dmlWorker:    make([]*dmlWorker, workerCount),
+		dmlWriter:    make([]*mysql.Writer, workerCount),
 		statistics:   stat,
 		conflictDetector: causality.New(defaultConflictDetectorSlots, causality.TxnCacheOption{
 			Count:         workerCount,
 			Size:          1024,
 			BlockStrategy: causality.BlockStrategyWaitEmpty,
 		}),
-		isNormal: atomic.NewBool(true),
+		isNormal:   atomic.NewBool(true),
+		maxTxnRows: cfg.MaxTxnRow,
 	}
 	formatVectorType := mysql.ShouldFormatVectorType(db, cfg)
 	for i := 0; i < workerCount; i++ {
-		result.dmlWorker[i] = newDMLWorker(ctx, db, cfg, i, changefeedID, stat, formatVectorType, result.conflictDetector.GetOutChByCacheID(int64(i)))
+		result.dmlWriter[i] = mysql.NewWriter(ctx, db, cfg, changefeedID, stat, formatVectorType)
 	}
 	result.ddlWriter = mysql.NewWriter(ctx, db, cfg, changefeedID, stat, formatVectorType)
 	return result
@@ -117,14 +120,85 @@ func (s *Sink) Run(ctx context.Context) error {
 	g.Go(func() error {
 		return s.conflictDetector.Run(ctx)
 	})
-	for _, w := range s.dmlWorker {
+	for idx := range s.dmlWriter {
 		g.Go(func() error {
-			return w.Run(ctx)
+			return s.runDMLWriter(ctx, idx)
 		})
 	}
 	err := g.Wait()
 	s.isNormal.Store(false)
 	return errors.Trace(err)
+}
+
+func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
+	namespace := s.changefeedID.Namespace()
+	changefeed := s.changefeedID.Name()
+
+	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
+	workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
+	workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
+
+	defer func() {
+		metrics.WorkerFlushDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
+		metrics.WorkerTotalDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
+		metrics.WorkerHandledRows.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
+	}()
+
+	inputCh := s.conflictDetector.GetOutChByCacheID(idx)
+	writer := s.dmlWriter[idx]
+
+	totalStart := time.Now()
+	events := make([]*commonEvent.DMLEvent, 0)
+	rows := 0
+	for {
+		needFlush := false
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case txnEvent := <-inputCh:
+			events = append(events, txnEvent)
+			rows += int(txnEvent.Len())
+			if rows > s.maxTxnRows {
+				needFlush = true
+			}
+			if !needFlush {
+				delay := time.NewTimer(10 * time.Millisecond)
+				for !needFlush {
+					select {
+					case txnEvent = <-inputCh:
+						workerHandledRows.Add(float64(txnEvent.Len()))
+						events = append(events, txnEvent)
+						rows += int(txnEvent.Len())
+						if rows > s.maxTxnRows {
+							needFlush = true
+						}
+					case <-delay.C:
+						needFlush = true
+					}
+				}
+				// Release resources promptly
+				if !delay.Stop() {
+					select {
+					case <-delay.C:
+					default:
+					}
+				}
+			}
+			start := time.Now()
+			err := writer.Flush(events)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			workerFlushDuration.Observe(time.Since(start).Seconds())
+			// we record total time to calculate the worker busy ratio.
+			// so we record the total time after flushing, to unified statistics on
+			// flush time and total time
+			workerTotalDuration.Observe(time.Since(totalStart).Seconds())
+			totalStart = time.Now()
+			events = events[:0]
+			rows = 0
+		}
+	}
 }
 
 func (s *Sink) IsNormal() bool {
@@ -212,11 +286,10 @@ func (s *Sink) Close(removeChangefeed bool) {
 				zap.Any("changefeed", s.changefeedID.String()), zap.Error(err))
 		}
 	}
-	for _, w := range s.dmlWorker {
+	s.ddlWriter.Close()
+	for _, w := range s.dmlWriter {
 		w.Close()
 	}
-
-	s.ddlWriter.Close()
 
 	if err := s.db.Close(); err != nil {
 		log.Warn("close mysql sink db meet error",
