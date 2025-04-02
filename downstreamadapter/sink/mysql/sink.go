@@ -16,10 +16,10 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql/causality"
 	"net/url"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/conflictdetector"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -48,7 +48,7 @@ type Sink struct {
 	db         *sql.DB
 	statistics *metrics.Statistics
 
-	conflictDetector *conflictdetector.ConflictDetector
+	conflictDetector *causality.ConflictDetector
 
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
@@ -96,10 +96,10 @@ func newMysqlSinkWithDBAndConfig(
 		db:           db,
 		dmlWorker:    make([]*dmlWorker, workerCount),
 		statistics:   stat,
-		conflictDetector: conflictdetector.New(defaultConflictDetectorSlots, conflictdetector.TxnCacheOption{
+		conflictDetector: causality.New(defaultConflictDetectorSlots, causality.TxnCacheOption{
 			Count:         workerCount,
 			Size:          1024,
-			BlockStrategy: conflictdetector.BlockStrategyWaitEmpty,
+			BlockStrategy: causality.BlockStrategyWaitEmpty,
 		}),
 		isNormal: atomic.NewBool(true),
 	}
