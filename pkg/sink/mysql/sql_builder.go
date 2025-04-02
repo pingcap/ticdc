@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -71,13 +70,10 @@ func buildInsert(
 	tableInfo *common.TableInfo,
 	row commonEvent.RowChange,
 	translateToInsert bool,
-) (string, []interface{}, error) {
-	args, err := getArgs(&row.Row, tableInfo, false)
-	if err != nil {
-		return "", nil, errors.Trace(err)
-	}
+) (string, []interface{}) {
+	args := getArgs(&row.Row, tableInfo, false)
 	if len(args) == 0 {
-		return "", nil, nil
+		return "", nil
 	}
 
 	var sql string
@@ -91,24 +87,21 @@ func buildInsert(
 		log.Panic("PreInsertSQL should not be empty")
 	}
 
-	return sql, args, nil
+	return sql, args
 }
 
 // prepareDelete builds a parametric DELETE statement as following
 // sql: `DELETE FROM `test`.`t` WHERE x = ? AND y >= ? LIMIT 1`
-func buildDelete(tableInfo *common.TableInfo, row commonEvent.RowChange, forceReplicate bool) (string, []interface{}, error) {
+func buildDelete(tableInfo *common.TableInfo, row commonEvent.RowChange, forceReplicate bool) (string, []interface{}) {
 	var builder strings.Builder
 	quoteTable := tableInfo.TableName.QuoteString()
 	builder.WriteString("DELETE FROM ")
 	builder.WriteString(quoteTable)
 	builder.WriteString(" WHERE ")
 
-	colNames, whereArgs, err := whereSlice(&row.PreRow, tableInfo, forceReplicate)
-	if err != nil {
-		return "", nil, errors.Trace(err)
-	}
+	colNames, whereArgs := whereSlice(&row.PreRow, tableInfo, forceReplicate)
 	if len(whereArgs) == 0 {
-		return "", nil, nil
+		return "", nil
 	}
 	args := make([]interface{}, 0, len(whereArgs))
 	for i := 0; i < len(colNames); i++ {
@@ -126,30 +119,24 @@ func buildDelete(tableInfo *common.TableInfo, row commonEvent.RowChange, forceRe
 	}
 	builder.WriteString(" LIMIT 1")
 	sql := builder.String()
-	return sql, args, nil
+	return sql, args
 }
 
-func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceReplicate bool) (string, []interface{}, error) {
+func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceReplicate bool) (string, []interface{}) {
 	var builder strings.Builder
 	if tableInfo.GetPreUpdateSQL() == "" {
 		log.Panic("PreUpdateSQL should not be empty")
 	}
 	builder.WriteString(tableInfo.GetPreUpdateSQL())
 
-	args, err := getArgs(&row.Row, tableInfo, false)
-	if err != nil {
-		return "", nil, errors.Trace(err)
-	}
+	args := getArgs(&row.Row, tableInfo, false)
 	if len(args) == 0 {
-		return "", nil, nil
+		return "", nil
 	}
 
-	whereColNames, whereArgs, err := whereSlice(&row.PreRow, tableInfo, forceReplicate)
-	if err != nil {
-		return "", nil, errors.Trace(err)
-	}
+	whereColNames, whereArgs := whereSlice(&row.PreRow, tableInfo, forceReplicate)
 	if len(whereArgs) == 0 {
-		return "", nil, nil
+		return "", nil
 	}
 
 	builder.WriteString(" WHERE ")
@@ -169,26 +156,23 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceRe
 
 	builder.WriteString(" LIMIT 1")
 	sql := builder.String()
-	return sql, args, nil
+	return sql, args
 }
 
-func getArgs(row *chunk.Row, tableInfo *common.TableInfo, enableGeneratedColumn bool) ([]interface{}, error) {
+func getArgs(row *chunk.Row, tableInfo *common.TableInfo, enableGeneratedColumn bool) []interface{} {
 	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
 	for i, col := range tableInfo.GetColumns() {
 		if col == nil || (tableInfo.GetColumnFlags()[col.ID].IsGeneratedColumn() && !enableGeneratedColumn) {
 			continue
 		}
-		v, err := common.ExtractColVal(row, col.FieldType, i)
-		if err != nil {
-			return nil, err
-		}
+		v := common.ExtractColVal(row, col, i)
 		args = append(args, v)
 	}
-	return args, nil
+	return args
 }
 
 // whereSlice returns the column names and values for the WHERE clause
-func whereSlice(row *chunk.Row, tableInfo *common.TableInfo, forceReplicate bool) ([]string, []interface{}, error) {
+func whereSlice(row *chunk.Row, tableInfo *common.TableInfo, forceReplicate bool) ([]string, []interface{}) {
 	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
 	colNames := make([]string, 0, len(tableInfo.GetColumns()))
 	// Try to use unique key values when available
@@ -197,10 +181,7 @@ func whereSlice(row *chunk.Row, tableInfo *common.TableInfo, forceReplicate bool
 			continue
 		}
 		colNames = append(colNames, col.Name.O)
-		v, err := common.ExtractColVal(row, col.FieldType, i)
-		if err != nil {
-			return nil, nil, errors.Trace(err)
-		}
+		v := common.ExtractColVal(row, col, i)
 		args = append(args, v)
 	}
 
@@ -208,12 +189,9 @@ func whereSlice(row *chunk.Row, tableInfo *common.TableInfo, forceReplicate bool
 	if len(colNames) == 0 && forceReplicate {
 		for i, col := range tableInfo.GetColumns() {
 			colNames = append(colNames, col.Name.O)
-			v, err := common.ExtractColVal(row, col.FieldType, i)
-			if err != nil {
-				return nil, nil, errors.Trace(err)
-			}
+			v := common.ExtractColVal(row, col, i)
 			args = append(args, v)
 		}
 	}
-	return colNames, args, nil
+	return colNames, args
 }

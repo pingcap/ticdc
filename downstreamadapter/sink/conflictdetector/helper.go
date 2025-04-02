@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tiflow/cdc/model"
@@ -29,9 +28,9 @@ import (
 )
 
 // ConflictKeys implements causality.txnEvent interface.
-func ConflictKeys(event *commonEvent.DMLEvent) ([]uint64, error) {
+func ConflictKeys(event *commonEvent.DMLEvent) []uint64 {
 	if event.Len() == 0 {
-		return nil, nil
+		return nil
 	}
 
 	hashRes := make(map[uint64]struct{}, event.Len())
@@ -42,10 +41,7 @@ func ConflictKeys(event *commonEvent.DMLEvent) ([]uint64, error) {
 		if !ok {
 			break
 		}
-		keys, err := genRowKeys(row, event.TableInfo, event.DispatcherID)
-		if err != nil {
-			return nil, errors.Trace(err)
-		}
+		keys := genRowKeys(row, event.TableInfo, event.DispatcherID)
 		for _, key := range keys {
 			if n, err := hasher.Write(key); n != len(key) || err != nil {
 				log.Panic("transaction key hash fail")
@@ -61,18 +57,15 @@ func ConflictKeys(event *commonEvent.DMLEvent) ([]uint64, error) {
 	for key := range hashRes {
 		keys = append(keys, key)
 	}
-	return keys, nil
+	return keys
 }
 
-func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatcherID common.DispatcherID) ([][]byte, error) {
+func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatcherID common.DispatcherID) [][]byte {
 	var keys [][]byte
 
 	if !row.Row.IsEmpty() {
 		for iIdx, idxCol := range tableInfo.GetIndexColumnsOffset() {
-			key, err := genKeyList(&row.Row, iIdx, idxCol, dispatcherID, tableInfo)
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
+			key := genKeyList(&row.Row, iIdx, idxCol, dispatcherID, tableInfo)
 			if len(key) == 0 {
 				continue
 			}
@@ -81,10 +74,7 @@ func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatch
 	}
 	if !row.PreRow.IsEmpty() {
 		for iIdx, idxCol := range tableInfo.GetIndexColumnsOffset() {
-			key, err := genKeyList(&row.PreRow, iIdx, idxCol, dispatcherID, tableInfo)
-			if err != nil {
-				return nil, errors.Trace(err)
-			}
+			key := genKeyList(&row.PreRow, iIdx, idxCol, dispatcherID, tableInfo)
 			if len(key) == 0 {
 				continue
 			}
@@ -99,28 +89,23 @@ func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatch
 		binary.BigEndian.PutUint64(tableKey, uint64(dispatcherID.GetLow()))
 		keys = [][]byte{tableKey}
 	}
-	return keys, nil
+	return keys
 }
 
 func genKeyList(
 	row *chunk.Row, iIdx int, colIdx []int, dispatcherID common.DispatcherID, tableInfo *common.TableInfo,
-) ([]byte, error) {
+) []byte {
 	var key []byte
 	columnInfos := tableInfo.GetColumns()
 	for _, i := range colIdx {
 		// If the index contain generated column, we can't use this key to detect conflict with other DML,
 		if columnInfos[i] == nil || tableInfo.GetColumnFlags()[columnInfos[i].ID].IsGeneratedColumn() {
-			return nil, nil
+			return nil
 		}
-
-		ft := columnInfos[i].FieldType
-		value, err := common.ExtractColVal(row, ft, i)
-		if err != nil {
-			return nil, err
-		}
+		value := common.ExtractColVal(row, columnInfos[i], i)
 		// if a column value is null, we can ignore this index
 		if value == nil {
-			return nil, nil
+			return nil
 		}
 
 		val := model.ColumnValueString(value)
@@ -132,13 +117,13 @@ func genKeyList(
 		key = append(key, 0)
 	}
 	if len(key) == 0 {
-		return nil, nil
+		return nil
 	}
 	tableKey := make([]byte, 16)
 	binary.BigEndian.PutUint64(tableKey[:8], uint64(iIdx))
 	binary.BigEndian.PutUint64(tableKey[8:], dispatcherID.GetLow())
 	key = append(key, tableKey...)
-	return key, nil
+	return key
 }
 
 func columnNeeds2LowerCase(mysqlType byte, collation string) bool {

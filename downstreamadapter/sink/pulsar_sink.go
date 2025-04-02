@@ -125,9 +125,8 @@ func (s *PulsarSink) IsNormal() bool {
 	return atomic.LoadUint32(&s.isNormal) == 1
 }
 
-func (s *PulsarSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
+func (s *PulsarSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmlWorker.AddDMLEvent(event)
-	return nil
 }
 
 func (s *PulsarSink) PassBlockEvent(event commonEvent.BlockEvent) {
