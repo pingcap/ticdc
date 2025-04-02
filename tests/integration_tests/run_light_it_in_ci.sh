@@ -49,7 +49,7 @@ mysql_groups=(
 	# G09
 	'cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
 	# G10
-	'changefeed_error fail_over_ddl_K'
+	'changefeed_error bdr_mode fail_over_ddl_K'
 	# G11
 	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12

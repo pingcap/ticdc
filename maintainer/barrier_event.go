@@ -230,7 +230,7 @@ func (be *BarrierEvent) scheduleBlockEvent() {
 		}
 	}
 	for _, add := range be.newTables {
-		log.Info(" add new table",
+		log.Info("add new table",
 			zap.Uint64("commitTs", be.commitTs),
 			zap.String("changefeed", be.cfID.Name()),
 			zap.Int64("schema", add.SchemaID),

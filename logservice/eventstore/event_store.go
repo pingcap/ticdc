@@ -69,6 +69,7 @@ type EventStore interface {
 		startTS uint64,
 		notifier ResolvedTsNotifier,
 		onlyReuse bool,
+		bdrMode bool,
 	) (bool, error)
 
 	UnregisterDispatcher(dispatcherID common.DispatcherID) error
@@ -331,6 +332,7 @@ func (e *eventStore) RegisterDispatcher(
 	startTs uint64,
 	notifier ResolvedTsNotifier,
 	onlyReuse bool,
+	bdrMode bool,
 ) (bool, error) {
 	log.Info("register dispatcher",
 		zap.Stringer("dispatcherID", dispatcherID),
@@ -457,7 +459,7 @@ func (e *eventStore) RegisterDispatcher(
 		}
 	}
 	// Note: don't hold any lock when call Subscribe
-	e.subClient.Subscribe(stat.subID, *tableSpan, startTs, consumeKVEvents, advanceResolvedTs, 600)
+	e.subClient.Subscribe(stat.subID, *tableSpan, startTs, consumeKVEvents, advanceResolvedTs, 600, bdrMode)
 	metrics.EventStoreSubscriptionGauge.Inc()
 	return true, nil
 }

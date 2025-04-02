@@ -216,6 +216,10 @@ func (r RegisterDispatcherRequest) IsOnlyReuse() bool {
 	return r.OnlyReuse
 }
 
+func (r RegisterDispatcherRequest) GetBdrMode() bool {
+	return r.BdrMode
+}
+
 type IOTypeT interface {
 	Unmarshal(data []byte) error
 	Marshal() (data []byte, err error)

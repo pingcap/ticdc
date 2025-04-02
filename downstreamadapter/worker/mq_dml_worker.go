@@ -167,11 +167,12 @@ func (w *MQDMLWorker) calculateKeyPartitions(ctx context.Context) error {
 						TotalPartition: partitionNum,
 					},
 					RowEvent: commonEvent.RowEvent{
-						TableInfo:      event.TableInfo,
-						CommitTs:       event.CommitTs,
-						Event:          row,
-						Callback:       rowCallback,
-						ColumnSelector: selector,
+						PhysicalTableID: event.PhysicalTableID,
+						TableInfo:       event.TableInfo,
+						CommitTs:        event.CommitTs,
+						Event:           row,
+						Callback:        rowCallback,
+						ColumnSelector:  selector,
 					},
 				}
 				w.addMQRowEvent(mqEvent)

@@ -35,7 +35,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/types"
 	tiTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"github.com/pingcap/tiflow/pkg/util"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
@@ -166,7 +165,7 @@ func (b *canalJSONDecoder) HasNext() (common.MessageType, bool, error) {
 	return b.msg.messageType(), true, nil
 }
 
-func (b *canalJSONDecoder) assembleClaimCheckRowChangedEvent(
+func (b *canalJSONDecoder) assembleClaimCheckDMLEvent(
 	ctx context.Context, claimCheckLocation string,
 ) (*commonEvent.DMLEvent, error) {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
@@ -197,7 +196,7 @@ func (b *canalJSONDecoder) assembleClaimCheckRowChangedEvent(
 	return b.NextDMLEvent()
 }
 
-func (b *canalJSONDecoder) buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string, error) {
+func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string, error) {
 	columnsCount := holder.Length()
 	data := make(map[string]interface{}, columnsCount)
 	mysqlTypeMap := make(map[string]string, columnsCount)
@@ -228,7 +227,7 @@ func (b *canalJSONDecoder) buildData(holder *common.ColumnsHolder) (map[string]i
 	return data, mysqlTypeMap, nil
 }
 
-func (b *canalJSONDecoder) assembleHandleKeyOnlyRowChangedEvent(
+func (b *canalJSONDecoder) assembleHandleKeyOnlyDMLEvent(
 	ctx context.Context, message *canalJSONMessageWithTiDBExtension,
 ) (*commonEvent.DMLEvent, error) {
 	var (
@@ -256,7 +255,7 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyRowChangedEvent(
 	switch eventType {
 	case "INSERT":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		data, mysqlType, err := b.buildData(holder)
+		data, mysqlType, err := buildData(holder)
 		if err != nil {
 			return nil, err
 		}
@@ -264,7 +263,7 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyRowChangedEvent(
 		result.Data = []map[string]interface{}{data}
 	case "UPDATE":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		data, mysqlType, err := b.buildData(holder)
+		data, mysqlType, err := buildData(holder)
 		if err != nil {
 			return nil, err
 		}
@@ -272,14 +271,14 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyRowChangedEvent(
 		result.Data = []map[string]interface{}{data}
 
 		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		old, _, err := b.buildData(holder)
+		old, _, err := buildData(holder)
 		if err != nil {
 			return nil, err
 		}
 		result.Old = []map[string]interface{}{old}
 	case "DELETE":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		data, mysqlType, err := b.buildData(holder)
+		data, mysqlType, err := buildData(holder)
 		if err != nil {
 			return nil, err
 		}
@@ -302,10 +301,10 @@ func (b *canalJSONDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	if withExtension {
 		ctx := context.Background()
 		if message.Extensions.OnlyHandleKey && b.upstreamTiDB != nil {
-			return b.assembleHandleKeyOnlyRowChangedEvent(ctx, message)
+			return b.assembleHandleKeyOnlyDMLEvent(ctx, message)
 		}
 		if message.Extensions.ClaimCheckLocation != "" {
-			return b.assembleClaimCheckRowChangedEvent(ctx, message.Extensions.ClaimCheckLocation)
+			return b.assembleClaimCheckDMLEvent(ctx, message.Extensions.ClaimCheckLocation)
 		}
 	}
 
@@ -328,23 +327,23 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	columns := tableInfo.GetColumns()
 	switch msg.eventType() {
 	case canal.EventType_DELETE:
-		data := msg.getData()
-		appendRow2Chunk(data, columns, chk)
+		data := formatAllColumnsValue(msg.getData(), columns)
+		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
 	case canal.EventType_INSERT:
-		data := msg.getData()
-		appendRow2Chunk(data, columns, chk)
+		data := formatAllColumnsValue(msg.getData(), columns)
+		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
 	case canal.EventType_UPDATE:
-		previous := msg.getOld()
-		data := msg.getData()
+		previous := formatAllColumnsValue(msg.getOld(), columns)
+		data := formatAllColumnsValue(msg.getData(), columns)
 		for k, v := range data {
 			if _, ok := previous[k]; !ok {
 				previous[k] = v
 			}
 		}
-		appendRow2Chunk(previous, columns, chk)
-		appendRow2Chunk(data, columns, chk)
+		common.AppendRow2Chunk(previous, columns, chk)
+		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 	default:
@@ -404,79 +403,86 @@ func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEv
 	return result
 }
 
-func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Chunk) {
-	mysqlType := ft.GetType()
-	if raw == nil {
-		chk.AppendNull(idx)
-		return
+func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {
+	for _, col := range columns {
+		raw, ok := data[col.Name.O]
+		if !ok {
+			continue
+		}
+		data[col.Name.O] = formatValue(raw, col.FieldType)
 	}
+	return data
+}
 
-	rawValue, ok := raw.(string)
+func formatValue(value any, ft types.FieldType) any {
+	if value == nil {
+		return nil
+	}
+	rawValue, ok := value.(string)
 	if !ok {
 		log.Panic("canal-json encoded message should have type in `string`")
 	}
 	if mysql.HasBinaryFlag(ft.GetFlag()) {
 		// when encoding the `JavaSQLTypeBLOB`, use `ISO8859_1` decoder, now reverse it back.
-		encoded, err := charmap.ISO8859_1.NewEncoder().String(rawValue)
+		result, err := charmap.ISO8859_1.NewEncoder().String(rawValue)
 		if err != nil {
 			log.Panic("invalid column value, please report a bug", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		rawValue = encoded
+		return []byte(result)
 	}
-	switch mysqlType {
+	switch ft.GetType() {
 	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
 		if mysql.HasUnsignedFlag(ft.GetFlag()) {
-			value, err := strconv.ParseUint(rawValue, 10, 64)
+			data, err := strconv.ParseUint(rawValue, 10, 64)
 			if err != nil {
 				log.Panic("invalid column value for unsigned integer", zap.Any("rawValue", rawValue), zap.Error(err))
 			}
-			chk.AppendUint64(idx, value)
-			return
+			return data
 		}
-		value, err := strconv.ParseInt(rawValue, 10, 64)
+		data, err := strconv.ParseInt(rawValue, 10, 64)
 		if err != nil {
 			log.Panic("invalid column value for integer", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		chk.AppendInt64(idx, value)
+		return data
 	case mysql.TypeYear:
-		value, err := strconv.ParseInt(rawValue, 10, 64)
+		result, err := strconv.ParseInt(rawValue, 10, 64)
 		if err != nil {
 			log.Panic("invalid column value for year", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		chk.AppendInt64(idx, value)
+		return result
 	case mysql.TypeFloat:
-		value, err := strconv.ParseFloat(rawValue, 32)
+		result, err := strconv.ParseFloat(rawValue, 32)
 		if err != nil {
 			log.Panic("invalid column value for float", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		chk.AppendFloat32(idx, float32(value))
+		return float32(result)
 	case mysql.TypeDouble:
-		value, err := strconv.ParseFloat(rawValue, 64)
+		result, err := strconv.ParseFloat(rawValue, 64)
 		if err != nil {
 			log.Panic("invalid column value for double", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		chk.AppendFloat64(idx, value)
+		return result
 	case mysql.TypeVarString, mysql.TypeVarchar, mysql.TypeString,
 		mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
-		chk.AppendBytes(idx, []byte(rawValue))
+		return []byte(rawValue)
 	case mysql.TypeNewDecimal:
-		value := new(tiTypes.MyDecimal)
-		err := value.FromString([]byte(rawValue))
+		result := new(tiTypes.MyDecimal)
+		err := result.FromString([]byte(rawValue))
 		if err != nil {
 			log.Panic("invalid column value for decimal", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
 		// workaround the decimal `digitInt` field incorrect problem.
-		bin, err := value.ToBin(ft.GetFlen(), ft.GetDecimal())
+		bin, err := result.ToBin(ft.GetFlen(), ft.GetDecimal())
 		if err != nil {
 			log.Panic("convert decimal to binary failed", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		_, err = value.FromBin(bin, ft.GetFlen(), ft.GetDecimal())
+		_, err = result.FromBin(bin, ft.GetFlen(), ft.GetDecimal())
 		if err != nil {
 			log.Panic("convert binary to decimal failed", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		chk.AppendMyDecimal(idx, value)
+		return result
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
-		t, err := tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, rawValue, ft.GetType(), ft.GetDecimal())
+		result, err := tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, rawValue, ft.GetType(), ft.GetDecimal())
 		if err != nil {
 			log.Panic("invalid column value for time", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
@@ -487,64 +493,58 @@ func appendCol2Chunk(idx int, raw interface{}, ft types.FieldType, chk *chunk.Ch
 		//		log.Panic("convert timestamp to local timezone failed", zap.Any("rawValue", rawValue), zap.Error(err))
 		//	}
 		//}
-		chk.AppendTime(idx, t)
+		return result
 	case mysql.TypeDuration:
-		dur, _, err := tiTypes.ParseDuration(tiTypes.DefaultStmtNoWarningContext, rawValue, ft.GetDecimal())
+		result, _, err := tiTypes.ParseDuration(tiTypes.DefaultStmtNoWarningContext, rawValue, ft.GetDecimal())
 		if err != nil {
 			log.Panic("invalid column value for duration", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		chk.AppendDuration(idx, dur)
+		return result
 	case mysql.TypeEnum:
 		enumValue, err := strconv.ParseUint(rawValue, 10, 64)
 		if err != nil {
 			log.Panic("invalid column value for enum", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		enum, err := tiTypes.ParseEnumValue(ft.GetElems(), enumValue)
+		result, err := tiTypes.ParseEnumValue(ft.GetElems(), enumValue)
 		if err != nil {
 			log.Panic("parse enum value failed", zap.Any("rawValue", rawValue),
 				zap.Any("enumValue", enumValue), zap.Error(err))
 		}
-		chk.AppendEnum(idx, enum)
+		return result
 	case mysql.TypeSet:
-		value, err := strconv.ParseUint(rawValue, 10, 64)
+		setValue, err := strconv.ParseUint(rawValue, 10, 64)
 		if err != nil {
 			log.Panic("invalid column value for set", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		setValue, err := tiTypes.ParseSetValue(ft.GetElems(), value)
+		result, err := tiTypes.ParseSetValue(ft.GetElems(), setValue)
 		if err != nil {
 			log.Panic("parse set value failed", zap.Any("rawValue", rawValue),
 				zap.Any("setValue", setValue), zap.Error(err))
 		}
-		chk.AppendSet(idx, setValue)
+		return result
 	case mysql.TypeBit:
-		value, err := strconv.ParseUint(rawValue, 10, 64)
+		data, err := strconv.ParseUint(rawValue, 10, 64)
 		if err != nil {
 			log.Panic("invalid column value for bit", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
 		byteSize := (ft.GetFlen() + 7) >> 3
-		chk.AppendBytes(idx, tiTypes.NewBinaryLiteralFromUint(value, byteSize))
+		return tiTypes.NewBinaryLiteralFromUint(data, byteSize)
 	case mysql.TypeJSON:
-		bj, err := tiTypes.ParseBinaryJSONFromString(rawValue)
+		result, err := tiTypes.ParseBinaryJSONFromString(rawValue)
 		if err != nil {
 			log.Panic("invalid column value for json", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		chk.AppendJSON(idx, bj)
+		return result
 	case mysql.TypeTiDBVectorFloat32:
-		value, err := tiTypes.ParseVectorFloat32(rawValue)
+		result, err := tiTypes.ParseVectorFloat32(rawValue)
 		if err != nil {
 			log.Panic("cannot parse vector32 value from string", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		chk.AppendVectorFloat32(idx, value)
+		return result
 	default:
-		log.Panic("unknown column type", zap.Any("mysqlType", mysqlType), zap.Any("rawValue", rawValue))
 	}
-}
-
-func appendRow2Chunk(data map[string]interface{}, columns []*timodel.ColumnInfo, chk *chunk.Chunk) {
-	for idx, col := range columns {
-		raw := data[col.Name.O]
-		appendCol2Chunk(idx, raw, col.FieldType, chk)
-	}
+	log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.Any("rawValue", rawValue))
+	return nil
 }
 
 func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
@@ -583,7 +583,7 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 		col.Name = pmodel.NewCIStr(name)
 		basicType := common.ExtractBasicMySQLType(mysqlType)
 		col.FieldType = *types.NewFieldType(basicType)
-		if utils.IsBinaryMySQLType(mysqlType) {
+		if common.IsBinaryMySQLType(mysqlType) {
 			col.AddFlag(mysql.BinaryFlag)
 			col.SetCharset("binary")
 			col.SetCollate("binary")

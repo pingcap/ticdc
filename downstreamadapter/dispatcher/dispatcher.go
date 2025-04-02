@@ -29,6 +29,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/spanz"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
@@ -144,6 +145,8 @@ type Dispatcher struct {
 	// such as error of flush ddl events
 	// errCh is shared in the eventDispatcherManager
 	errCh chan error
+
+	bdrMode bool
 }
 
 func NewDispatcher(
@@ -160,6 +163,7 @@ func NewDispatcher(
 	filterConfig *eventpb.FilterConfig,
 	currentPdTs uint64,
 	errCh chan error,
+	bdrMode bool,
 ) *Dispatcher {
 	dispatcher := &Dispatcher{
 		changefeedID:          changefeedID,
@@ -181,6 +185,7 @@ func NewDispatcher(
 		resendTaskMap:         newResendTaskMap(),
 		creationPDTs:          currentPdTs,
 		errCh:                 errCh,
+		bdrMode:               bdrMode,
 	}
 
 	dispatcher.addToStatusDynamicStream()
@@ -365,6 +370,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			block = true
 			ddl := event.(*commonEvent.DDLEvent)
+
 			// Some DDL have some problem to sync to downstream, such as rename table with inappropriate filter
 			// such as https://docs.pingcap.com/zh/tidb/stable/ticdc-ddl#rename-table-%E7%B1%BB%E5%9E%8B%E7%9A%84-ddl-%E6%B3%A8%E6%84%8F%E4%BA%8B%E9%A1%B9
 			// so we need report the error to maintainer.
@@ -493,17 +499,24 @@ func (d *Dispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 // 2. If the event is a multi-table DDL / sync point Event, it will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
 func (d *Dispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	if !d.shouldBlock(event) {
-		err := d.AddBlockEventToSink(event)
-		if err != nil {
-			select {
-			case d.errCh <- err:
-			default:
-				log.Error("error channel is full, discard error",
-					zap.Stringer("changefeedID", d.changefeedID),
-					zap.Stringer("dispatcherID", d.id),
-					zap.Error(err))
+		ddl, ok := event.(*commonEvent.DDLEvent)
+		// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
+		// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
+		if ok && d.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
+			d.PassBlockEventToSink(event)
+		} else {
+			err := d.AddBlockEventToSink(event)
+			if err != nil {
+				select {
+				case d.errCh <- err:
+				default:
+					log.Error("error channel is full, discard error",
+						zap.Stringer("changefeedID", d.changefeedID),
+						zap.Stringer("dispatcherID", d.id),
+						zap.Error(err))
+				}
+				return
 			}
-			return
 		}
 		if event.GetNeedAddedTables() != nil || event.GetNeedDroppedTables() != nil {
 			message := &heartbeatpb.TableSpanBlockStatus{
