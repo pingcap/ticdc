@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -29,11 +30,11 @@ import (
 var EmptyBytes = make([]byte, 0)
 
 // ExtractColVal returns the value in the row
-func ExtractColVal(row *chunk.Row, ft types.FieldType, idx int) interface{} {
+func ExtractColVal(row *chunk.Row, col *model.ColumnInfo, idx int) interface{} {
 	if row.IsNull(idx) {
 		return nil
 	}
-	switch ft.GetType() {
+	switch col.GetType() {
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeNewDate, mysql.TypeTimestamp:
 		return row.GetTime(idx).String()
 	case mysql.TypeDuration:
@@ -50,7 +51,7 @@ func ExtractColVal(row *chunk.Row, ft types.FieldType, idx int) interface{} {
 	case mysql.TypeEnum, mysql.TypeSet:
 		return row.GetEnum(idx).Value
 	case mysql.TypeBit:
-		d := row.GetDatum(idx, &ft)
+		d := row.GetDatum(idx, &col.FieldType)
 		dp := &d
 		// Encode bits as integers to avoid pingcap/tidb#10988 (which also affects MySQL itself)
 		result, err := dp.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
@@ -68,7 +69,7 @@ func ExtractColVal(row *chunk.Row, ft types.FieldType, idx int) interface{} {
 		// representation. Because if we use the byte array respresentation, the go-sql-driver
 		// will automatically set `_binary` charset for that column, which is not expected.
 		// See https://github.com/go-sql-driver/mysql/blob/ce134bfc/connection.go#L267
-		if ft.GetCharset() != "" && ft.GetCharset() != charset.CharsetBin {
+		if col.GetCharset() != "" && col.GetCharset() != charset.CharsetBin {
 			if len(b) == 0 {
 				return ""
 			}
@@ -95,7 +96,7 @@ func ExtractColVal(row *chunk.Row, ft types.FieldType, idx int) interface{} {
 		b := row.GetVectorFloat32(idx).String()
 		return b
 	default:
-		d := row.GetDatum(idx, &ft)
+		d := row.GetDatum(idx, &col.FieldType)
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
 		// Make specified convert upper if you need
 		// Go sql support type ref to: https://github.com/golang/go/blob/go1.17.4/src/database/sql/driver/types.go#L236

@@ -210,7 +210,7 @@ func (r RedoDMLEvent) IsUpdate() bool {
 }
 
 func parseColumnValue(row *chunk.Row, column *model.ColumnInfo, i int) RedoColumnValue {
-	v := common.ExtractColVal(row, column.FieldType, i)
+	v := common.ExtractColVal(row, column, i)
 	rrv := RedoColumnValue{Value: v}
 	switch t := rrv.Value.(type) {
 	case []byte:

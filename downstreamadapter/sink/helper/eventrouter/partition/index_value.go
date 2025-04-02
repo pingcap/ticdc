@@ -62,7 +62,7 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonE
 				continue
 			}
 			if tableInfo.GetColumnFlags()[col.ID].IsHandleKey() {
-				value := common.ExtractColVal(&rowData, col.FieldType, idx)
+				value := common.ExtractColVal(&rowData, col, idx)
 				r.hasher.Write([]byte(col.Name.O), []byte(model.ColumnValueString(value)))
 			}
 		}
@@ -77,7 +77,7 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonE
 		}
 		for idx := 0; idx < len(names); idx++ {
 			colInfo := tableInfo.GetColumns()[offsets[idx]]
-			value := common.ExtractColVal(&rowData, colInfo.FieldType, idx)
+			value := common.ExtractColVal(&rowData, colInfo, idx)
 			if value == nil {
 				continue
 			}

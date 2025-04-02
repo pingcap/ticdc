@@ -165,7 +165,7 @@ func getArgs(row *chunk.Row, tableInfo *common.TableInfo, enableGeneratedColumn 
 		if col == nil || (tableInfo.GetColumnFlags()[col.ID].IsGeneratedColumn() && !enableGeneratedColumn) {
 			continue
 		}
-		v := common.ExtractColVal(row, col.FieldType, i)
+		v := common.ExtractColVal(row, col, i)
 		args = append(args, v)
 	}
 	return args
@@ -181,7 +181,7 @@ func whereSlice(row *chunk.Row, tableInfo *common.TableInfo, forceReplicate bool
 			continue
 		}
 		colNames = append(colNames, col.Name.O)
-		v := common.ExtractColVal(row, col.FieldType, i)
+		v := common.ExtractColVal(row, col, i)
 		args = append(args, v)
 	}
 
@@ -189,7 +189,7 @@ func whereSlice(row *chunk.Row, tableInfo *common.TableInfo, forceReplicate bool
 	if len(colNames) == 0 && forceReplicate {
 		for i, col := range tableInfo.GetColumns() {
 			colNames = append(colNames, col.Name.O)
-			v := common.ExtractColVal(row, col.FieldType, i)
+			v := common.ExtractColVal(row, col, i)
 			args = append(args, v)
 		}
 	}
