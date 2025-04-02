@@ -361,13 +361,8 @@ func (ti *TableInfo) OffsetsByNames(names []string) ([]int, bool) {
 	return result, true
 }
 
-func (ti *TableInfo) HasHandleKey() bool {
-	for _, col := range ti.columnSchema.Columns {
-		if ti.IsHandleKey(col.ID) {
-			return true
-		}
-	}
-	return false
+func (ti *TableInfo) HasPrimaryKey() bool {
+	return ti.columnSchema.GetPkColInfo() != nil
 }
 
 func (ti *TableInfo) GetPkColInfo() *model.ColumnInfo {
