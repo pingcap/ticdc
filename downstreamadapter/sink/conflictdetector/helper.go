@@ -109,7 +109,7 @@ func genKeyList(
 	columnInfos := tableInfo.GetColumns()
 	for _, i := range colIdx {
 		// If the index contain generated column, we can't use this key to detect conflict with other DML,
-		if columnInfos[i] == nil || (columnInfos[i].GetFlag()&mysql.GeneratedColumnFlag) > 0 {
+		if columnInfos[i] == nil || columnInfos[i].IsGenerated() {
 			return nil, nil
 		}
 

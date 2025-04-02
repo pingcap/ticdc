@@ -749,7 +749,7 @@ func (s *columnSchema) getColumnList(isUpdate bool) (int, string) {
 	var b strings.Builder
 	nonGeneratedColumnCount := 0
 	for i, col := range s.Columns {
-		if col == nil || (col.GetFlag()&mysql.GeneratedColumnFlag) > 0 {
+		if col == nil || col.IsGenerated() {
 			continue
 		}
 		nonGeneratedColumnCount++
