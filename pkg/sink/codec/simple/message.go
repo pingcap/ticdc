@@ -364,7 +364,7 @@ func (a *JSONMarshaller) formatColumns(
 			continue
 		}
 		if colInfo != nil {
-			if onlyHandleKey && !tableInfo.ForceGetColumnFlagType(colInfo.ID).IsPrimaryKey() {
+			if onlyHandleKey && !tableInfo.IsHandleKey(colInfo.ID) {
 				continue
 			}
 			value := encodeValue(row, i, &colInfo.FieldType, a.config.TimeZone.String())

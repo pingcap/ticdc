@@ -227,7 +227,7 @@ func (b *BatchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 }
 
 func buildColumns(
-	holder *common.ColumnsHolder, handleKeyColumns map[string]interface{},
+	holder *common.ColumnsHolder, handleKeyColumns map[string]column,
 ) map[string]column {
 	columnsCount := holder.Length()
 	result := make(map[string]column, columnsCount)
@@ -246,16 +246,12 @@ func buildColumns(
 			value = common.MustBinaryLiteralToInt(value.([]uint8))
 		}
 
-		flag := commonType.ColumnFlagType(0)
-		if _, ok := handleKeyColumns[name]; ok {
-			flag.SetIsPrimaryKey()
-			flag.SetIsHandleKey()
-		}
-
 		col := column{
 			Type:  mysqlType,
 			Value: value,
-			Flag:  commonType.ColumnFlagType(0),
+		}
+		if _, ok := handleKeyColumns[name]; ok {
+			col.Flag = mysql.PriKeyFlag
 		}
 		result[name] = col
 	}
@@ -276,22 +272,22 @@ func (b *BatchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context) *commo
 			conditions[name] = col.Value
 		}
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		columns := buildColumns(holder, conditions)
+		columns := buildColumns(holder, row.Delete)
 		b.nextRow.Delete = columns
 	} else if len(row.PreColumns) != 0 {
 		for name, col := range row.PreColumns {
 			conditions[name] = col.Value
 		}
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		b.nextRow.PreColumns = buildColumns(holder, conditions)
+		b.nextRow.PreColumns = buildColumns(holder, row.PreColumns)
 		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		b.nextRow.Update = buildColumns(holder, conditions)
+		b.nextRow.Update = buildColumns(holder, row.PreColumns)
 	} else if len(row.Update) != 0 {
 		for name, col := range row.Update {
 			conditions[name] = col.Value
 		}
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		b.nextRow.Update = buildColumns(holder, conditions)
+		b.nextRow.Update = buildColumns(holder, row.Update)
 	} else {
 		log.Panic("unknown event type")
 	}
@@ -382,15 +378,16 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		col.ID = nextColumnID
 		col.Name = pmodel.NewCIStr(name)
 		col.FieldType = *types.NewFieldType(raw.Type)
-		if raw.Flag.IsPrimaryKey() {
+
+		if mysql.HasPriKeyFlag(raw.Flag) {
 			col.AddFlag(mysql.PriKeyFlag)
 			col.AddFlag(mysql.UniqueKeyFlag)
 			col.AddFlag(mysql.NotNullFlag)
 		}
-		if raw.Flag.IsUnsigned() {
+		if mysql.HasUnsignedFlag(raw.Flag) {
 			col.AddFlag(mysql.UnsignedFlag)
 		}
-		if raw.Flag.IsBinary() {
+		if mysql.HasBinaryFlag(raw.Flag) {
 			col.AddFlag(mysql.BinaryFlag)
 		}
 

@@ -368,7 +368,7 @@ func (a *avroMarshaller) collectColumns(
 			if !columnSelector.Select(colInfo) {
 				continue
 			}
-			if onlyHandleKey && !tableInfo.ForceGetColumnFlagType(colInfo.ID).IsPrimaryKey() {
+			if onlyHandleKey && !tableInfo.IsHandleKey(colInfo.ID) {
 				continue
 			}
 			value, avroType := a.encodeValue4Avro(row, i, &colInfo.FieldType)
