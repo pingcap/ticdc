@@ -665,11 +665,15 @@ func formatValue(value any, ft types.FieldType) any {
 	case mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob,
 		mysql.TypeVarchar, mysql.TypeVarString, mysql.TypeString:
 		value = []byte(value.(string))
-	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong, mysql.TypeLonglong:
+	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong, mysql.TypeLonglong,
+		mysql.TypeYear:
 		var v int64
 		switch val := value.(type) {
-		case int64:
-			v = val
+		case string:
+			v, err = strconv.ParseInt(val, 10, 64)
+			if err != nil {
+				log.Panic("cannot parse int64 value from string", zap.Any("value", value), zap.Error(err))
+			}
 		case float64:
 			v = int64(val)
 		}
@@ -678,8 +682,6 @@ func formatValue(value any, ft types.FieldType) any {
 		} else {
 			value = v
 		}
-	case mysql.TypeYear:
-		value = int64(value.(float64))
 	case mysql.TypeFloat:
 		value = float32(value.(float64))
 	case mysql.TypeDouble:
