@@ -166,8 +166,8 @@ func writeColumnFieldValue(
 	tableInfo *commonType.TableInfo,
 ) {
 	colType := col.GetType()
-	flag := *tableInfo.GetColumnFlags()[col.ID]
-	whereHandle := flag.IsHandleKey()
+	flag := col.GetFlag()
+	whereHandle := tableInfo.IsHandleKey(col.ID)
 
 	writer.WriteIntField("t", int(colType))
 	if whereHandle {
@@ -203,7 +203,7 @@ func writeColumnFieldValue(
 		if len(value) == 0 {
 			writer.WriteNullField("v")
 		} else {
-			if flag.IsBinary() {
+			if mysql.HasBinaryFlag(flag) {
 				str := string(value)
 				str = strconv.Quote(str)
 				str = str[1 : len(str)-1]
@@ -255,7 +255,6 @@ func writeColumnFieldValue(
 		value := d.GetValue()
 		writer.WriteAnyField("v", value)
 	}
-	return
 }
 
 func writeColumnFieldValues(
@@ -271,7 +270,7 @@ func writeColumnFieldValues(
 
 	for idx, col := range colInfo {
 		if selector.Select(col) {
-			if onlyHandleKeyColumns && !tableInfo.GetColumnFlags()[col.ID].IsHandleKey() {
+			if onlyHandleKeyColumns && !tableInfo.IsHandleKey(col.ID) {
 				continue
 			}
 			flag = true
@@ -300,7 +299,7 @@ func writeUpdatedColumnFieldValues(
 
 	for idx, col := range colInfo {
 		if selector.Select(col) {
-			if onlyHandleKeyColumns && !tableInfo.GetColumnFlags()[col.ID].IsHandleKey() {
+			if onlyHandleKeyColumns && !tableInfo.IsHandleKey(col.ID) {
 				continue
 			}
 			writeColumnFieldValueIfUpdated(jWriter, col, preRow, row, idx, tableInfo)
@@ -317,8 +316,8 @@ func writeColumnFieldValueIfUpdated(
 	tableInfo *commonType.TableInfo,
 ) {
 	colType := col.GetType()
-	flag := *tableInfo.GetColumnFlags()[col.ID]
-	whereHandle := flag.IsHandleKey()
+	flag := col.GetFlag()
+	whereHandle := tableInfo.IsHandleKey(col.ID)
 
 	writeFunc := func(writeColumnValue func()) {
 		writer.WriteObjectField(col.Name.O, func() {
@@ -375,7 +374,7 @@ func writeColumnFieldValueIfUpdated(
 			if len(preRowValue) == 0 {
 				writeFunc(func() { writer.WriteNullField("v") })
 			} else {
-				if flag.IsBinary() {
+				if mysql.HasBinaryFlag(flag) {
 					str := string(preRowValue)
 					str = strconv.Quote(str)
 					str = str[1 : len(str)-1]

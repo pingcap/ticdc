@@ -20,7 +20,6 @@ import (
 	"strconv"
 
 	"github.com/pingcap/log"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
@@ -54,9 +53,9 @@ func (m *messageKey) Decode(data []byte) {
 type column struct {
 	Type byte `json:"t"`
 	// Deprecated: please use Flag instead.
-	WhereHandle *bool                     `json:"h,omitempty"`
-	Flag        commonType.ColumnFlagType `json:"f"`
-	Value       any                       `json:"v"`
+	WhereHandle *bool `json:"h,omitempty"`
+	Flag        uint  `json:"f"`
+	Value       any   `json:"v"`
 }
 
 // formatColumn formats a codec column.
@@ -65,7 +64,7 @@ func formatColumn(c column, ft types.FieldType) column {
 	switch c.Type {
 	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
 		str := c.Value.(string)
-		if c.Flag.IsBinary() {
+		if mysql.HasBinaryFlag(c.Flag) {
 			str, err = strconv.Unquote("\"" + str + "\"")
 			if err != nil {
 				log.Panic("invalid column value, please report a bug", zap.Any("value", str), zap.Error(err))
@@ -94,7 +93,7 @@ func formatColumn(c column, ft types.FieldType) column {
 		}
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeLonglong, mysql.TypeInt24:
 		if s, ok := c.Value.(json.Number); ok {
-			if c.Flag.IsUnsigned() {
+			if mysql.HasUnsignedFlag(c.Flag) {
 				c.Value, err = strconv.ParseUint(s.String(), 10, 64)
 			} else {
 				c.Value, err = strconv.ParseInt(s.String(), 10, 64)
@@ -104,7 +103,7 @@ func formatColumn(c column, ft types.FieldType) column {
 			}
 			// is it possible be the float64?
 		} else if f, ok := c.Value.(float64); ok {
-			if c.Flag.IsUnsigned() {
+			if mysql.HasUnsignedFlag(c.Flag) {
 				c.Value = uint64(f)
 			} else {
 				c.Value = int64(f)

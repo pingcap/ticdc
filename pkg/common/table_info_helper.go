@@ -348,19 +348,11 @@ type columnSchema struct {
 	// Column name -> ColumnID
 	NameToColID map[string]int64 `json:"name_to_col_id"`
 
-	HasUniqueColumn bool `json:"has_unique_column"`
-
 	// ColumnID -> offset in RowChangedEvents.Columns.
 	RowColumnsOffset map[int64]int `json:"row_columns_offset"`
 
-	ColumnsFlag map[int64]*ColumnFlagType `json:"columns_flag"`
-
-	// the mounter will choose this index to output delete events
-	// special value:
-	// HandleIndexPKIsHandle(-1) : pk is handle
-	// HandleIndexTableIneligible(-2) : the table is not eligible
-	HandleIndexID int64 `json:"handle_index_id"`
-
+	// store handle key column ids
+	handleKeyIDs map[int64]struct{}
 	// IndexColumnsOffset store the offset of the columns in row changed events for
 	// unique index and primary key
 	// The reason why we need this is that the Indexes in TableInfo
@@ -435,13 +427,11 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		PKIsHandle:       tableInfo.PKIsHandle,
 		IsCommonHandle:   tableInfo.IsCommonHandle,
 		UpdateTS:         tableInfo.UpdateTS,
-		HasUniqueColumn:  false,
 		ColumnsOffset:    make(map[int64]int, len(tableInfo.Columns)),
 		NameToColID:      make(map[string]int64, len(tableInfo.Columns)),
 		RowColumnsOffset: make(map[int64]int, len(tableInfo.Columns)),
-		ColumnsFlag:      make(map[int64]*ColumnFlagType, len(tableInfo.Columns)),
+		handleKeyIDs:     make(map[int64]struct{}),
 		HandleColID:      []int64{-1},
-		HandleIndexID:    HandleIndexTableIneligible,
 		RowColInfos:      make([]rowcodec.ColInfo, len(tableInfo.Columns)),
 		RowColFieldTps:   make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
 		PKIndexOffset:    make([]int, 0),
@@ -460,13 +450,12 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 			pkIsHandle = (tableInfo.PKIsHandle && mysql.HasPriKeyFlag(col.GetFlag())) || col.ID == model.ExtraHandleID
 			if pkIsHandle {
 				// pk is handle
+				colSchema.handleKeyIDs[col.ID] = struct{}{}
 				colSchema.HandleColID = []int64{col.ID}
-				colSchema.HandleIndexID = HandleIndexPKIsHandle
-				colSchema.HasUniqueColumn = true
 				colSchema.IndexColumnsOffset = append(colSchema.IndexColumnsOffset, []int{colSchema.RowColumnsOffset[col.ID]})
 				colSchema.PKIndexOffset = []int{colSchema.RowColumnsOffset[col.ID]}
 			} else if tableInfo.IsCommonHandle {
-				colSchema.HandleIndexID = HandleIndexPKIsHandle
+				colSchema.handleKeyIDs[col.ID] = struct{}{}
 				colSchema.HandleColID = colSchema.HandleColID[:0]
 				pkIdx := tables.FindPrimaryIndex(tableInfo)
 				for _, pkCol := range pkIdx.Columns {
@@ -487,31 +476,9 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		colSchema.RowColFieldTpsSlice = append(colSchema.RowColFieldTpsSlice, colSchema.RowColInfos[i].Ft)
 	}
 
-	for _, idx := range colSchema.Indices {
-		if colSchema.IsIndexUniqueAndNotNull(idx) {
-			colSchema.HasUniqueColumn = true
-		}
-		if idx.Primary || idx.Unique {
-			indexColOffset := make([]int, 0, len(idx.Columns))
-			for _, idxCol := range idx.Columns {
-				colInfo := colSchema.Columns[idxCol.Offset]
-				if IsColCDCVisible(colInfo) {
-					indexColOffset = append(indexColOffset, colSchema.RowColumnsOffset[colInfo.ID])
-				}
-			}
-			if len(indexColOffset) > 0 {
-				colSchema.IndexColumnsOffset = append(colSchema.IndexColumnsOffset, indexColOffset)
-				if idx.Primary {
-					colSchema.PKIndexOffset = indexColOffset
-				}
-			}
-		}
-	}
 	colSchema.initRowColInfosWithoutVirtualCols()
-	colSchema.findHandleIndex(tableInfo.Name.O)
-	colSchema.initColumnsFlag()
-
 	colSchema.InitPreSQLs(tableInfo.Name.O)
+	colSchema.initIndex(tableInfo.Name.O)
 	return colSchema
 }
 
@@ -610,112 +577,75 @@ func (s *columnSchema) initRowColInfosWithoutVirtualCols() {
 	s.RowColInfosWithoutVirtualCols = &colInfos
 }
 
-func (s *columnSchema) findHandleIndex(tableName string) {
-	if s.HandleIndexID == HandleIndexPKIsHandle {
-		// pk is handle
+// The handleKey is chosen by the following rules in the order:
+// 1. if the table has primary key, it's the handle key.
+// 2. If the table has not null unique key, it's the handle key.
+// 3. If the table has no primary key and no not null unique key, it has no handleKey.
+func (s *columnSchema) initIndex(tableName string) {
+	handleIndexOffset := -1
+	hasPrimary := len(s.handleKeyIDs) != 0
+	for i, idx := range s.Indices {
+		if idx.Primary {
+			// append index
+			indexColOffset := make([]int, 0, len(idx.Columns))
+			for _, idxCol := range idx.Columns {
+				colInfo := s.Columns[idxCol.Offset]
+				if IsColCDCVisible(colInfo) {
+					indexColOffset = append(indexColOffset, s.RowColumnsOffset[colInfo.ID])
+				}
+			}
+			if len(indexColOffset) > 0 {
+				s.IndexColumnsOffset = append(s.IndexColumnsOffset, indexColOffset)
+				s.PKIndexOffset = indexColOffset
+			}
+			// check handle key with primary key
+			if !hasPrimary {
+				for _, col := range idx.Columns {
+					s.handleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
+				}
+				hasPrimary = true
+			}
+		} else if idx.Unique {
+			hasNotNullUK := true
+			// append index
+			indexColOffset := make([]int, 0, len(idx.Columns))
+			for _, idxCol := range idx.Columns {
+				colInfo := s.Columns[idxCol.Offset]
+				if IsColCDCVisible(colInfo) {
+					indexColOffset = append(indexColOffset, s.RowColumnsOffset[colInfo.ID])
+				} else {
+					hasNotNullUK = false
+				}
+				if !mysql.HasNotNullFlag(colInfo.GetFlag()) {
+					hasNotNullUK = false
+				}
+			}
+			if len(indexColOffset) > 0 {
+				s.IndexColumnsOffset = append(s.IndexColumnsOffset, indexColOffset)
+			}
+			// check handle key with not null unique key
+			if hasPrimary || !hasNotNullUK {
+				continue
+			}
+			if handleIndexOffset < 0 {
+				handleIndexOffset = i
+			} else {
+				if len(s.Indices[handleIndexOffset].Columns) > len(s.Indices[i].Columns) ||
+					(len(s.Indices[handleIndexOffset].Columns) == len(s.Indices[i].Columns) &&
+						s.Indices[handleIndexOffset].ID > s.Indices[i].ID) {
+					handleIndexOffset = i
+				}
+			}
+		}
+	}
+	if handleIndexOffset < 0 {
+		log.Info("not find handle index", zap.String("table", tableName), zap.Any("handleKeyIDs", s.handleKeyIDs))
 		return
 	}
-	handleIndexOffset := -1
-	for i, idx := range s.Indices {
-		if !s.IsIndexUniqueAndNotNull(idx) {
-			continue
-		}
-		if idx.Primary {
-			handleIndexOffset = i
-			break
-		}
-		if handleIndexOffset < 0 {
-			handleIndexOffset = i
-		} else {
-			if len(s.Indices[handleIndexOffset].Columns) > len(s.Indices[i].Columns) ||
-				(len(s.Indices[handleIndexOffset].Columns) == len(s.Indices[i].Columns) &&
-					s.Indices[handleIndexOffset].ID > s.Indices[i].ID) {
-				handleIndexOffset = i
-			}
-		}
+	selectCols := s.Indices[handleIndexOffset].Columns
+	for _, col := range selectCols {
+		s.handleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
 	}
-	if handleIndexOffset >= 0 {
-		log.Info("find handle index", zap.String("table", tableName), zap.String("index", s.Indices[handleIndexOffset].Name.O))
-		s.HandleIndexID = s.Indices[handleIndexOffset].ID
-	}
-}
-
-func (s *columnSchema) initColumnsFlag() {
-	for _, colInfo := range s.Columns {
-		var flag ColumnFlagType
-		if colInfo.GetCharset() == "binary" {
-			flag.SetIsBinary()
-		}
-		if colInfo.IsGenerated() {
-			flag.SetIsGeneratedColumn()
-		}
-		if mysql.HasPriKeyFlag(colInfo.GetFlag()) {
-			flag.SetIsPrimaryKey()
-			if s.HandleIndexID == HandleIndexPKIsHandle {
-				flag.SetIsHandleKey()
-			}
-		}
-		if mysql.HasUniKeyFlag(colInfo.GetFlag()) {
-			flag.SetIsUniqueKey()
-		}
-		if !mysql.HasNotNullFlag(colInfo.GetFlag()) {
-			flag.SetIsNullable()
-		}
-		if mysql.HasMultipleKeyFlag(colInfo.GetFlag()) {
-			flag.SetIsMultipleKey()
-		}
-		if mysql.HasUnsignedFlag(colInfo.GetFlag()) {
-			flag.SetIsUnsigned()
-		}
-		s.ColumnsFlag[colInfo.ID] = &flag
-	}
-
-	// In TiDB, just as in MySQL, only the first column of an index can be marked as "multiple key" or "unique key",
-	// and only the first column of a unique index may be marked as "unique key".
-	// See https://dev.mysql.com/doc/refman/5.7/en/show-columns.html.
-	// Yet if an index has multiple columns, we would like to easily determine that all those columns are indexed,
-	// which is crucial for the completeness of the information we pass to the downstream.
-	// Therefore, instead of using the MySQL standard,
-	// we made our own decision to mark all columns in an index with the appropriate flag(s).
-	for _, idxInfo := range s.Indices {
-		for _, idxCol := range idxInfo.Columns {
-			colInfo := s.Columns[idxCol.Offset]
-			flag := s.ColumnsFlag[colInfo.ID]
-			if idxInfo.Primary {
-				flag.SetIsPrimaryKey()
-			} else if idxInfo.Unique {
-				flag.SetIsUniqueKey()
-			}
-			if len(idxInfo.Columns) > 1 {
-				flag.SetIsMultipleKey()
-			}
-			if idxInfo.ID == s.HandleIndexID && s.HandleIndexID >= 0 {
-				flag.SetIsHandleKey()
-			}
-			s.ColumnsFlag[colInfo.ID] = flag
-		}
-	}
-}
-
-// IsIndexUnique returns whether the index is unique and all columns are not null
-func (s *columnSchema) IsIndexUniqueAndNotNull(indexInfo *model.IndexInfo) bool {
-	if indexInfo.Primary {
-		return true
-	}
-	if indexInfo.Unique {
-		for _, col := range indexInfo.Columns {
-			colInfo := s.Columns[col.Offset]
-			if !mysql.HasNotNullFlag(colInfo.GetFlag()) {
-				return false
-			}
-			// this column is a virtual generated column
-			if colInfo.IsGenerated() && !colInfo.GeneratedStored {
-				return false
-			}
-		}
-		return true
-	}
-	return false
 }
 
 // TryGetCommonPkColumnIds get the IDs of primary key column if the table has common handle.
@@ -819,7 +749,7 @@ func (s *columnSchema) getColumnList(isUpdate bool) (int, string) {
 	var b strings.Builder
 	nonGeneratedColumnCount := 0
 	for i, col := range s.Columns {
-		if col == nil || s.ColumnsFlag[col.ID].IsGeneratedColumn() {
+		if col == nil || col.IsGenerated() {
 			continue
 		}
 		nonGeneratedColumnCount++
@@ -844,10 +774,8 @@ func (s *columnSchema) getColumnSchemaWithoutVirtualColumns() *columnSchema {
 		UpdateTS:                      s.UpdateTS,
 		ColumnsOffset:                 s.ColumnsOffset,
 		NameToColID:                   s.NameToColID,
-		HasUniqueColumn:               s.HasUniqueColumn,
 		RowColumnsOffset:              s.RowColumnsOffset,
-		ColumnsFlag:                   s.ColumnsFlag,
-		HandleIndexID:                 s.HandleIndexID,
+		handleKeyIDs:                  s.handleKeyIDs,
 		IndexColumnsOffset:            s.IndexColumnsOffset,
 		RowColInfos:                   s.RowColInfos,
 		RowColFieldTps:                s.RowColFieldTps,
