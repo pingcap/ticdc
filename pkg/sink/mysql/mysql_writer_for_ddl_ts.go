@@ -51,7 +51,7 @@ func (w *Writer) FlushDDLTsPre(event commonEvent.BlockEvent) error {
 		return err
 	}
 	err = w.SendDDLTsPre(event)
-	return errors.Trace(err)
+	return err
 }
 
 func (w *Writer) FlushDDLTs(event commonEvent.BlockEvent) error {
@@ -60,7 +60,7 @@ func (w *Writer) FlushDDLTs(event commonEvent.BlockEvent) error {
 		return err
 	}
 	err = w.SendDDLTs(event)
-	return errors.Trace(err)
+	return err
 }
 
 func (w *Writer) SendDDLTsPre(event commonEvent.BlockEvent) error {
@@ -575,13 +575,13 @@ func (w *Writer) createDDLTsTable() error {
 }
 
 func (w *Writer) createDDLTsTableIfNotExist() error {
-	if !w.ddlTsTableInit {
-		// create checkpoint ts table if not exist
-		err := w.createDDLTsTable()
-		if err != nil {
-			return err
-		}
-		w.ddlTsTableInit = true
+	if w.ddlTsTableInit {
+		return nil
+	}
+	// create checkpoint ts table if not exist
+	err := w.createDDLTsTable()
+	if err != nil {
+		return err
 	}
 	return nil
 }

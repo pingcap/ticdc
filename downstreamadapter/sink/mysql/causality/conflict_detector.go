@@ -17,6 +17,7 @@ import (
 	"context"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 )
@@ -62,7 +63,7 @@ func (d *ConflictDetector) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return errors.Trace(ctx.Err())
 		case notifyCallback := <-d.notifiedNodes.Out():
 			if notifyCallback != nil {
 				notifyCallback()

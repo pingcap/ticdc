@@ -79,7 +79,7 @@ func New(
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
 ) (*Sink, error) {
-	cfg, db, err := mysql.NewMysqlmaConfigAndDB(ctx, changefeedID, sinkURI, config)
+	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +126,7 @@ func (s *Sink) Run(ctx context.Context) error {
 	}
 	err := g.Wait()
 	s.isNormal.Store(false)
-	return errors.Trace(err)
+	return err
 }
 
 func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
