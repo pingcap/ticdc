@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"golang.org/x/sync/errgroup"
 )
 
 func getPartitionNum(o *option) (int32, error) {
@@ -42,7 +43,7 @@ func getPartitionNum(o *option) (int32, error) {
 	defer admin.Close()
 
 	timeout := 3000
-	for i := 0; i <= o.retryTime; i++ {
+	for i := 0; i <= 30; i++ {
 		resp, err := admin.GetMetadata(&o.topic, false, timeout)
 		if err != nil {
 			if err.(kafka.Error).Code() == kafka.ErrTransport {
@@ -100,8 +101,10 @@ func newConsumer(ctx context.Context, o *option) *consumer {
 		_ = configMap.SetKey("ssl.key.location", o.key)
 		_ = configMap.SetKey("ssl.certificate.location", o.cert)
 	}
-	if level, err := zapcore.ParseLevel(o.logLevel); err == nil && level.String() == "debug" {
-		configMap.SetKey("debug", "all")
+	if level, err := zapcore.ParseLevel(logLevel); err == nil && level == zapcore.DebugLevel {
+		if err = configMap.SetKey("debug", "all"); err != nil {
+			log.Error("set kafka debug log failed", zap.Error(err))
+		}
 	}
 	client, err := kafka.NewConsumer(configMap)
 	if err != nil {
@@ -117,18 +120,17 @@ func newConsumer(ctx context.Context, o *option) *consumer {
 	}
 }
 
-// Consume will read message from Kafka.
-func (c *consumer) Consume(ctx context.Context) {
+func (c *consumer) readMessage(ctx context.Context) error {
 	defer func() {
 		if err := c.client.Close(); err != nil {
-			log.Panic("close kafka consumer failed", zap.Error(err))
+			log.Warn("close kafka consumer failed", zap.Error(err))
 		}
 	}()
 	for {
 		select {
 		case <-ctx.Done():
 			log.Info("consumer exist: context cancelled")
-			return
+			return errors.Trace(ctx.Err())
 		default:
 		}
 		msg, err := c.client.ReadMessage(-1)
@@ -140,7 +142,6 @@ func (c *consumer) Consume(ctx context.Context) {
 		if !needCommit {
 			continue
 		}
-
 		topicPartition, err := c.client.CommitMessage(msg)
 		if err != nil {
 			log.Error("commit message failed, just continue",
@@ -152,4 +153,16 @@ func (c *consumer) Consume(ctx context.Context) {
 			zap.String("topic", topicPartition[0].String()), zap.Int32("partition", topicPartition[0].Partition),
 			zap.Any("offset", topicPartition[0].Offset))
 	}
+}
+
+// Run the consumer, read data and write to the downstream target.
+func (c *consumer) Run(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		return c.writer.run(ctx)
+	})
+	g.Go(func() error {
+		return c.readMessage(ctx)
+	})
+	return g.Wait()
 }
