@@ -137,12 +137,6 @@ func toEventFilterRulePB(rule *config.EventFilterRule) *eventpb.EventFilterRule 
 	return eventFilterPB
 }
 
-type TableSpanStatusWithSeq struct {
-	*heartbeatpb.TableSpanStatus
-	StartTs uint64
-	Seq     uint64
-}
-
 type Watermark struct {
 	mutex sync.Mutex
 	*heartbeatpb.Watermark
