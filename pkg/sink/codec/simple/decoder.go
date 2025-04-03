@@ -644,8 +644,17 @@ func formatValue(value any, ft types.FieldType) any {
 	var err error
 	switch ft.GetType() {
 	case mysql.TypeBit:
-		// byteSize := (ft.GetFlen() + 7) >> 3
-		value = types.NewBinaryLiteralFromUint(uint64(value.(float64)), -1)
+		var v uint64
+		switch val := value.(type) {
+		case float64:
+			v = uint64(val)
+		case string:
+			v, err = strconv.ParseUint(val, 10, 64)
+			if err != nil {
+				log.Panic("invalid column value for bit", zap.Any("value", value), zap.Error(err))
+			}
+		}
+		value = types.NewBinaryLiteralFromUint(v, -1)
 	case mysql.TypeTimestamp:
 		v := value.(map[string]interface{})["value"]
 		value, err = types.ParseTime(types.DefaultStmtNoWarningContext, v.(string), ft.GetType(), ft.GetDecimal())
@@ -653,12 +662,32 @@ func formatValue(value any, ft types.FieldType) any {
 			log.Panic("invalid column value for time", zap.Any("value", value), zap.Error(err))
 		}
 	case mysql.TypeEnum:
-		value, err = types.ParseEnumValue(ft.GetElems(), uint64(value.(int64)))
+		var v uint64
+		switch val := value.(type) {
+		case string:
+			v, err = strconv.ParseUint(val, 10, 64)
+			if err != nil {
+				log.Panic("invalid column value for enum", zap.Any("value", value), zap.Error(err))
+			}
+		case int64:
+			v = uint64(val)
+		}
+		value, err = types.ParseEnumValue(ft.GetElems(), v)
 		if err != nil {
 			log.Panic("invalid column value for enum", zap.Any("value", value), zap.Error(err))
 		}
 	case mysql.TypeSet:
-		value, err = types.ParseSetValue(ft.GetElems(), uint64(value.(int64)))
+		var v uint64
+		switch val := value.(type) {
+		case string:
+			v, err = strconv.ParseUint(val, 10, 64)
+			if err != nil {
+				log.Panic("invalid column value for set", zap.Any("value", value), zap.Error(err))
+			}
+		case int64:
+			v = uint64(val)
+		}
+		value, err = types.ParseSetValue(ft.GetElems(), v)
 		if err != nil {
 			log.Panic("invalid column value for set", zap.Any("value", value), zap.Error(err))
 		}
