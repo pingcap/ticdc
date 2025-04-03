@@ -285,7 +285,7 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 //     2.2.2.2 else startTs = ddlTs - 1
 func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	retStartTsList := make([]int64, len(tableIDs))
-	tableIdIdxMap := make(map[int64]int, 0)
+	tableIdIdxMap := make(map[int64]int, len(tableIDs))
 	isSyncpoints := make([]bool, len(tableIDs))
 	for i, tableID := range tableIDs {
 		tableIdIdxMap[tableID] = i
@@ -315,7 +315,7 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	var finished, isSyncpoint bool
 	var createdAtBytes []byte
 	for rows.Next() {
-		err := rows.Scan(&tableId, &tableNameInDDLJob, &dbNameInDDLJob, &ddlTs, &finished, &createdAtBytes, &isSyncpoint)
+		err = rows.Scan(&tableId, &tableNameInDDLJob, &dbNameInDDLJob, &ddlTs, &finished, &createdAtBytes, &isSyncpoint)
 		if err != nil {
 			return retStartTsList, isSyncpoints, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 		}
@@ -327,7 +327,7 @@ func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 				log.Panic("ddl ts table is not finished, but downstream is not tidb, FIX IT")
 			}
 
-			createdAt, err := time.Parse("2006-01-02 15:04:05", string(createdAtBytes))
+			createdAt, err := time.Parse(time.DateTime, string(createdAtBytes))
 			if err != nil {
 				log.Error("Failed to parse created_at", zap.Any("createdAtBytes", createdAtBytes), zap.Any("error", err))
 				retStartTsList[tableIdIdxMap[tableId]] = ddlTs - 1
@@ -405,7 +405,7 @@ func (w *Writer) queryDDLJobs(dbNameInDDLJob, tableNameInDDLJob string) (time.Ti
 	var createdTimeBytes []byte
 	var createdTime time.Time
 	for ddlJobRows.Next() {
-		err := ddlJobRows.Scan(&createdTimeBytes)
+		err = ddlJobRows.Scan(&createdTimeBytes)
 		if err != nil {
 			log.Error("failed to query ddl jobs", zap.Error(err))
 			return time.Time{}, false

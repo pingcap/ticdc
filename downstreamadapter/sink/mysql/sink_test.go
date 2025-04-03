@@ -33,11 +33,12 @@ func MysqlSinkForTest() (*Sink, sqlmock.Sqlmock) {
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	cfg := mysql.NewMysqlConfig()
+	cfg.WorkerCount = 1
 	cfg.DMLMaxRetry = 1
 	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink := newMysqlSinkWithDBAndConfig(ctx, changefeedID, 1, cfg, db)
+	sink := newMysqlSinkWithDBAndConfig(ctx, changefeedID, cfg, db)
 	go sink.Run(ctx)
 
 	return sink, mock

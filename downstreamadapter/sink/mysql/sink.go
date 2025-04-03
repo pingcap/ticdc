@@ -79,17 +79,16 @@ func New(
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
 ) (*Sink, error) {
-	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
+	cfg, db, err := mysql.NewMysqlmaConfigAndDB(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
 	}
-	return newMysqlSinkWithDBAndConfig(ctx, changefeedID, cfg.WorkerCount, cfg, db), nil
+	return newMysqlSinkWithDBAndConfig(ctx, changefeedID, cfg, db), nil
 }
 
 func newMysqlSinkWithDBAndConfig(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
-	workerCount int,
 	cfg *mysql.Config,
 	db *sql.DB,
 ) *Sink {
@@ -97,10 +96,10 @@ func newMysqlSinkWithDBAndConfig(
 	result := &Sink{
 		changefeedID: changefeedID,
 		db:           db,
-		dmlWriter:    make([]*mysql.Writer, workerCount),
+		dmlWriter:    make([]*mysql.Writer, cfg.WorkerCount),
 		statistics:   stat,
 		conflictDetector: causality.New(defaultConflictDetectorSlots, causality.TxnCacheOption{
-			Count:         workerCount,
+			Count:         cfg.WorkerCount,
 			Size:          1024,
 			BlockStrategy: causality.BlockStrategyWaitEmpty,
 		}),
@@ -108,7 +107,7 @@ func newMysqlSinkWithDBAndConfig(
 		maxTxnRows: cfg.MaxTxnRow,
 	}
 	formatVectorType := mysql.ShouldFormatVectorType(db, cfg)
-	for i := 0; i < workerCount; i++ {
+	for i := 0; i < len(result.dmlWriter); i++ {
 		result.dmlWriter[i] = mysql.NewWriter(ctx, db, cfg, changefeedID, stat, formatVectorType)
 	}
 	result.ddlWriter = mysql.NewWriter(ctx, db, cfg, changefeedID, stat, formatVectorType)
@@ -268,14 +267,13 @@ func (s *Sink) GetStartTsList(
 		s.isNormal.Store(false)
 		return nil, nil, err
 	}
-	resTs := make([]int64, len(ddlTsList))
 	for idx, ddlTs := range ddlTsList {
 		if startTsList[idx] > ddlTs {
 			isSyncpointList[idx] = false
 		}
-		resTs[idx] = max(ddlTs, startTsList[idx])
+		startTsList[idx] = max(ddlTs, startTsList[idx])
 	}
-	return resTs, isSyncpointList, nil
+	return startTsList, isSyncpointList, nil
 }
 
 func (s *Sink) Close(removeChangefeed bool) {
