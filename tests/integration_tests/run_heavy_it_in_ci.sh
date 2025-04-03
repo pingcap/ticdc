@@ -18,15 +18,16 @@ group_num=${group#G}
 # The case "kafka_big_messages" should be added to the kafka group only, because it is a kafka-specific test case.
 # The case will not be executed on a sink type if it is not added to the corresponding group.
 #
-# For each sink type, we define 16 groups of tests. And 12 CPU cores will be allocated to run each group in CI pipelines.
+# For each sink type, we define 16 groups of tests.
 # When we add a case, we should keep the cost of each group as close as possible to reduce the waiting time of CI pipelines.
 # The number of groups should not be changed, which is 16.
 # But if we have to add a new group, the new group number should be updated in the CI pipeline configuration file:
-# For mysql: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_integration_test.groovy
-# For kafka: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_integration_kafka_test.groovy
-# For pulsar: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_integration_pulsar_test.groovy
-# For storage: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_integration_storage_test.groovy
+# For mysql: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_mysql_integration_heavy.groovy
+# For kafka: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_kafka_integration_heavy.groovy
+# For pulsar: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_pulsar_integration_heavy.groovy
+# For storage: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_storage_integration_heavy.groovy
 
+# 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
 	'generate_column many_pk_or_uk'
@@ -196,5 +197,8 @@ if [[ $group_num =~ ^[0-9]+$ ]] && [[ -n ${groups[10#${group_num}]} ]]; then
 	"${CUR}"/run.sh "${sink_type}" "${test_names}"
 else
 	echo "Error: invalid group name: ${group}"
-	exit 1
+	# For now, the CI pipeline will fail if the group is empty.
+	# So we comment out the exit command here.
+	# But if the groups are full of test cases, we should uncomment the exit command.
+	# exit 1
 fi
