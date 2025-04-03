@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -84,7 +85,18 @@ func NewEventTestHelper(t testing.TB) *EventTestHelper {
 func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 	key := toTableInfosKey(job.SchemaName, job.TableName)
 	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
-	info := common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo)
+	var tableInfo *timodel.TableInfo
+	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
+		tableInfo = job.BinlogInfo.TableInfo
+	} else {
+		// Just retrieve the schema name for a DDL job that does not contain TableInfo.
+		// Currently supported by cdc are: ActionCreateSchema, ActionDropSchema,
+		// and ActionModifySchemaCharsetAndCollate.
+		tableInfo = &timodel.TableInfo{
+			Version: uint16(job.BinlogInfo.FinishedTS),
+		}
+	}
+	info := common.WrapTableInfo(job.SchemaName, tableInfo)
 	info.InitPrivateFields()
 	s.tableInfos[key] = info
 }
@@ -170,6 +182,7 @@ func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 		SchemaID:   job.SchemaID,
 		TableID:    job.TableID,
 		Query:      job.Query,
+		Type:       byte(job.Type),
 		TableInfo:  s.GetTableInfo(job),
 		FinishedTs: job.BinlogInfo.FinishedTS,
 	}

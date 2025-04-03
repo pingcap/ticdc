@@ -30,12 +30,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/charset"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	ptypes "github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/pkg/sink/codec/utils"
 	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
@@ -382,8 +382,14 @@ func newTiColumnInfo(
 	col.SetFlen(column.DataType.Length)
 	col.SetDecimal(column.DataType.Decimal)
 	col.SetElems(column.DataType.Elements)
-	if utils.IsBinaryMySQLType(column.DataType.MySQLType) {
-		col.AddFlag(mysql.BinaryFlag)
+	if column.DataType.Charset == charset.CollationBin {
+		switch col.GetType() {
+		case mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeBlob, mysql.TypeLongBlob,
+			mysql.TypeDuration, mysql.TypeTimestamp, mysql.TypeDate, mysql.TypeNewDate, mysql.TypeDatetime,
+			mysql.TypeString, mysql.TypeVarchar,
+			mysql.TypeTiDBVectorFloat32, mysql.TypeJSON:
+			col.AddFlag(mysql.BinaryFlag)
+		}
 	}
 	if !column.Nullable {
 		col.AddFlag(mysql.NotNullFlag)
@@ -566,14 +572,16 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 	columns := tableInfo.GetColumns()
 	switch msg.Type {
 	case DMLTypeDelete:
-		common.AppendRow2Chunk(msg.Old, columns, chk)
+		data := formatAllColumnsValue(msg.Old, columns)
+		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
 	case DMLTypeInsert:
-		common.AppendRow2Chunk(msg.Data, columns, chk)
+		data := formatAllColumnsValue(msg.Data, columns)
+		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
 	case DMLTypeUpdate:
-		previous := msg.Old
-		data := msg.Data
+		previous := formatAllColumnsValue(msg.Old, columns)
+		data := formatAllColumnsValue(msg.Data, columns)
 		for k, v := range data {
 			if _, ok := previous[k]; !ok {
 				previous[k] = v
@@ -614,4 +622,97 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 	// }
 
 	return result, nil
+}
+
+func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {
+	for _, col := range columns {
+		raw, ok := data[col.Name.O]
+		if !ok {
+			continue
+		}
+		data[col.Name.O] = formatValue(raw, col.FieldType)
+	}
+	return data
+}
+
+func formatValue(value any, ft types.FieldType) any {
+	if value == nil {
+		return nil
+	}
+	var err error
+	switch ft.GetType() {
+	case mysql.TypeBit:
+		// byteSize := (ft.GetFlen() + 7) >> 3
+		value = types.NewBinaryLiteralFromUint(uint64(value.(float64)), -1)
+	case mysql.TypeTimestamp:
+		v := value.(map[string]interface{})["value"]
+		value, err = types.ParseTime(types.DefaultStmtNoWarningContext, v.(string), ft.GetType(), ft.GetDecimal())
+		if err != nil {
+			log.Panic("invalid column value for time", zap.Any("value", value), zap.Error(err))
+		}
+	case mysql.TypeEnum:
+		value, err = types.ParseEnumValue(ft.GetElems(), uint64(value.(int64)))
+		if err != nil {
+			log.Panic("invalid column value for enum", zap.Any("value", value), zap.Error(err))
+		}
+	case mysql.TypeSet:
+		value, err = types.ParseSetValue(ft.GetElems(), uint64(value.(int64)))
+		if err != nil {
+			log.Panic("invalid column value for set", zap.Any("value", value), zap.Error(err))
+		}
+	case mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob,
+		mysql.TypeVarchar, mysql.TypeVarString, mysql.TypeString:
+		value = []byte(value.(string))
+	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong, mysql.TypeLonglong:
+		v := value.(int64)
+		if mysql.HasUnsignedFlag(ft.GetFlag()) {
+			value = uint64(v)
+		} else {
+			value = v
+		}
+	case mysql.TypeYear:
+		value = int64(value.(float64))
+	case mysql.TypeFloat:
+		value = float32(value.(float64))
+	case mysql.TypeDouble:
+		value = value.(float64)
+	case mysql.TypeTiDBVectorFloat32:
+		value, err = types.ParseVectorFloat32(value.(string))
+		if err != nil {
+			log.Panic("cannot parse vector32 value from string", zap.Any("value", value), zap.Error(err))
+		}
+	case mysql.TypeJSON:
+		value, err = types.ParseBinaryJSONFromString(value.(string))
+		if err != nil {
+			log.Panic("invalid column value for json", zap.Any("value", value), zap.Error(err))
+		}
+	case mysql.TypeNewDecimal:
+		result := new(types.MyDecimal)
+		err = result.FromString([]byte(value.(string)))
+		if err != nil {
+			log.Panic("invalid column value for decimal", zap.Any("value", value), zap.Error(err))
+		}
+		// workaround the decimal `digitInt` field incorrect problem.
+		bin, err := result.ToBin(ft.GetFlen(), ft.GetDecimal())
+		if err != nil {
+			log.Panic("convert decimal to binary failed", zap.Any("value", value), zap.Error(err))
+		}
+		_, err = result.FromBin(bin, ft.GetFlen(), ft.GetDecimal())
+		if err != nil {
+			log.Panic("convert binary to decimal failed", zap.Any("value", value), zap.Error(err))
+		}
+		value = result
+	case mysql.TypeDuration:
+		value, _, err = types.ParseDuration(types.DefaultStmtNoWarningContext, value.(string), ft.GetDecimal())
+		if err != nil {
+			log.Panic("invalid column value for duration", zap.Any("value", value), zap.Error(err))
+		}
+	case mysql.TypeDate, mysql.TypeDatetime:
+		value, err = types.ParseTime(types.DefaultStmtNoWarningContext, value.(string), ft.GetType(), ft.GetDecimal())
+		if err != nil {
+			log.Panic("invalid column value for time", zap.Any("value", value), zap.Error(err))
+		}
+	default:
+	}
+	return value
 }
