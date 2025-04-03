@@ -87,7 +87,7 @@ func CheckIsTiDB(ctx context.Context, db *sql.DB) bool {
 }
 
 // GenBasicDSN generates a basic DSN from the given config.
-func GenBasicDSN(cfg *MysqlConfig) (*dmysql.Config, error) {
+func GenBasicDSN(cfg *Config) (*dmysql.Config, error) {
 	// dsn format of the driver:
 	// [username[:password]@][protocol[(address)]]/dbname[?param1=value1&...&paramN=valueN]
 	username := cfg.sinkURI.User.Username()
@@ -128,7 +128,7 @@ func GenBasicDSN(cfg *MysqlConfig) (*dmysql.Config, error) {
 	return dsn, nil
 }
 
-func setDryRunConfig(cfg *MysqlConfig) {
+func setDryRunConfig(cfg *Config) {
 	dryRun := cfg.sinkURI.Query().Get("dry-run")
 	if dryRun == "true" {
 		log.Info("dry-run mode is enabled, will not write data to downstream")
@@ -198,7 +198,7 @@ func checkTiDBVariable(db *sql.DB, variableName, defaultValue string) (string, e
 
 func generateDSNByConfig(
 	dsnCfg *dmysql.Config,
-	cfg *MysqlConfig,
+	cfg *Config,
 	testDB *sql.DB,
 ) (string, error) {
 	if dsnCfg.Params == nil {
@@ -296,7 +296,7 @@ func checkCharsetSupport(db *sql.DB, charsetName string) (bool, error) {
 }
 
 // return dsn
-func GenerateDSN(cfg *MysqlConfig) (string, error) {
+func GenerateDSN(cfg *Config) (string, error) {
 	dsn, err := GenBasicDSN(cfg)
 	if err != nil {
 		return "", err
@@ -368,7 +368,7 @@ func needSwitchDB(event *commonEvent.DDLEvent) bool {
 // SetWriteSource sets write source for the transaction.
 // When this variable is set to a value other than 0, data written in this session is considered to be written by TiCDC.
 // DDLs executed in a PRIMARY cluster can be replicated to a SECONDARY cluster by TiCDC.
-func SetWriteSource(ctx context.Context, cfg *MysqlConfig, txn *sql.Tx) error {
+func SetWriteSource(ctx context.Context, cfg *Config, txn *sql.Tx) error {
 	// we only set write source when donwstream is TiDB and write source is existed.
 	if !cfg.IsWriteSourceExisted {
 		return nil
@@ -389,7 +389,7 @@ func SetWriteSource(ctx context.Context, cfg *MysqlConfig, txn *sql.Tx) error {
 }
 
 // ShouldFormatVectorType return true if vector type should be converted to longtext.
-func ShouldFormatVectorType(db *sql.DB, cfg *MysqlConfig) bool {
+func ShouldFormatVectorType(db *sql.DB, cfg *Config) bool {
 	if !cfg.HasVectorType {
 		log.Warn("please set `has-vector-type` to be true if a column is vector type when the downstream is not TiDB or TiDB version less than specify version",
 			zap.Any("hasVectorType", cfg.HasVectorType), zap.Any("supportVectorVersion", defaultSupportVectorVersion))

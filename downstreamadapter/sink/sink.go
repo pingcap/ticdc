@@ -17,6 +17,7 @@ import (
 	"context"
 	"net/url"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -34,6 +35,7 @@ type Sink interface {
 	PassBlockEvent(event commonEvent.BlockEvent)
 	AddCheckpointTs(ts uint64)
 
+	GetStartTsList(tableIds []int64, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error)
 	SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore)
 	Close(removeChangefeed bool)
 	Run(ctx context.Context) error
@@ -47,7 +49,7 @@ func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID 
 	scheme := sink.GetScheme(sinkURI)
 	switch scheme {
 	case sink.MySQLScheme, sink.MySQLSSLScheme, sink.TiDBScheme, sink.TiDBSSLScheme:
-		return newMySQLSink(ctx, changefeedID, config, sinkURI)
+		return mysql.New(ctx, changefeedID, config, sinkURI)
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
 		return newKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.PulsarScheme, sink.PulsarSSLScheme, sink.PulsarHTTPScheme, sink.PulsarHTTPSScheme:
@@ -68,7 +70,7 @@ func VerifySink(ctx context.Context, config *config.ChangefeedConfig, changefeed
 	scheme := sink.GetScheme(sinkURI)
 	switch scheme {
 	case sink.MySQLScheme, sink.MySQLSSLScheme, sink.TiDBScheme, sink.TiDBSSLScheme:
-		return verifyMySQLSink(ctx, sinkURI, config)
+		return mysql.Verify(ctx, sinkURI, config)
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
 		return verifyKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.PulsarScheme, sink.PulsarSSLScheme, sink.PulsarHTTPScheme, sink.PulsarHTTPSScheme:

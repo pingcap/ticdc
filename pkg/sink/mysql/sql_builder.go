@@ -64,7 +64,7 @@ func (d *preparedDMLs) reset() {
 	d.approximateSize = 0
 }
 
-// prepareReplace builds a parametrics REPLACE statement as following
+// prepareReplace builds a parametric REPLACE statement as following
 // sql: `REPLACE INTO `test`.`t` VALUES (?,?,?)`
 func buildInsert(
 	tableInfo *common.TableInfo,

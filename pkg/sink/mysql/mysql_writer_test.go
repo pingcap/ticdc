@@ -31,34 +31,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestMysqlWriter(t *testing.T) (*MysqlWriter, *sql.DB, sqlmock.Sqlmock) {
+func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	db, mock := newTestMockDB(t)
 
 	ctx := context.Background()
-	cfg := &MysqlConfig{
+	cfg := &Config{
 		MaxAllowedPacket:   int64(variable.DefMaxAllowedPacket),
 		SyncPointRetention: 100 * time.Second,
 		MaxTxnRow:          256,
 	}
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
-	writer := NewMysqlWriter(ctx, db, cfg, changefeedID, statistics, false)
+	writer := NewWriter(ctx, db, cfg, changefeedID, statistics, false)
 
 	return writer, db, mock
 }
 
-func newTestMysqlWriterForTiDB(t *testing.T) (*MysqlWriter, *sql.DB, sqlmock.Sqlmock) {
+func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	db, mock := newTestMockDB(t)
 
 	ctx := context.Background()
-	cfg := &MysqlConfig{
+	cfg := &Config{
 		MaxAllowedPacket:   int64(variable.DefMaxAllowedPacket),
 		SyncPointRetention: 100 * time.Second,
 		IsTiDB:             true,
 	}
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
-	writer := NewMysqlWriter(ctx, db, cfg, changefeedID, statistics, false)
+	writer := NewWriter(ctx, db, cfg, changefeedID, statistics, false)
 
 	return writer, db, mock
 }

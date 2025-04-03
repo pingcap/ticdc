@@ -56,6 +56,10 @@ func (s *mockSink) AddCheckpointTs(ts uint64) {
 func (s *mockSink) SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore) {
 }
 
+func (s *mockSink) GetStartTsList(tableIds []int64, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error) {
+	return startTsList, make([]bool, len(startTsList)), nil
+}
+
 func (s *mockSink) Close(bool) {}
 
 func (s *mockSink) Run(context.Context) error {

@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -98,6 +99,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	sink, dmlProducer, ddlProducer, err := newKafkaSinkForTest()
 	require.NoError(t, err)
 
+	var count atomic.Int64
 	count.Store(0)
 
 	helper := commonEvent.NewEventTestHelper(t)

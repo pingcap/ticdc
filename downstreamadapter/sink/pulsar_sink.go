@@ -168,6 +168,10 @@ func (s *PulsarSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
 }
 
+func (s *PulsarSink) GetStartTsList(tableIds []int64, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error) {
+	return startTsList, make([]bool, len(startTsList)), nil
+}
+
 func (s *PulsarSink) Close(_ bool) {
 	s.ddlWorker.Close()
 	s.dmlWorker.Close()
