@@ -16,6 +16,7 @@ package simple
 import (
 	"encoding/base64"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/pingcap/log"
@@ -437,24 +438,22 @@ func encodeValue(
 	}
 	var value any
 	d := row.GetDatum(i, ft)
-	var err error
+	// var err error
 	switch ft.GetType() {
-	case mysql.TypeBit:
-		value, err = d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
-		if err != nil {
-			log.Panic("parse bit to int failed", zap.Any("name", value), zap.Error(err))
-		}
+	// case mysql.TypeBit:
+	// 	value, err = d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
+	// 	if err != nil {
+	// 		log.Panic("parse bit to int failed", zap.Any("name", value), zap.Error(err))
+	// 	}
 	case mysql.TypeTimestamp:
 		return map[string]string{
 			"location": location,
 			"value":    d.GetMysqlTime().String(),
 		}
 	case mysql.TypeEnum:
-		value = d.GetMysqlEnum().Value
+		value = strconv.FormatUint(d.GetMysqlEnum().Value, 10)
 	case mysql.TypeSet:
-		value = d.GetMysqlSet().Value
-	case mysql.TypeTiDBVectorFloat32:
-		value = d.GetVectorFloat32().String()
+		value = strconv.FormatUint(d.GetMysqlSet().Value, 10)
 	case mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob,
 		mysql.TypeVarchar, mysql.TypeVarString, mysql.TypeString:
 		if mysql.HasBinaryFlag(ft.GetFlag()) {
@@ -462,6 +461,13 @@ func encodeValue(
 		} else {
 			value = d.GetString()
 		}
+	// case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong, mysql.TypeLonglong,
+	// 	mysql.TypeYear:
+	// 	value = d.GetInt64()
+	// case mysql.TypeDouble, mysql.TypeFloat:
+	// 	value = d.GetFloat64()
+	// case mysql.TypeTiDBVectorFloat32:
+	// 	value = d.GetVectorFloat32().String()
 	default:
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
 		// Make specified convert upper if you need
