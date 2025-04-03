@@ -88,8 +88,12 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 		// Try sending this txn to related cache as soon as all dependencies are resolved.
 		return d.sendToCache(event, cacheID)
 	}
-	node.RandCacheID = func() int64 { return d.nextCacheID.Add(1) % int64(len(d.resolvedTxnCaches)) }
-	node.OnNotified = func(callback func()) { d.notifiedNodes.In() <- callback }
+	node.RandCacheID = func() int64 {
+		return d.nextCacheID.Add(1) % int64(len(d.resolvedTxnCaches))
+	}
+	node.OnNotified = func(callback func()) {
+		d.notifiedNodes.In() <- callback
+	}
 	d.slots.Add(node)
 }
 
