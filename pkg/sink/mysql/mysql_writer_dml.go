@@ -74,7 +74,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	)
 	for _, eventsInGroup := range eventsGroup {
 		tableInfo := eventsInGroup[0].TableInfo
-		if !tableInfo.HasHandleKey() || tableInfo.HasVirtualColumns() {
+		if !tableInfo.HasPrimaryKey() || tableInfo.HasVirtualColumns() {
 			// check if the table has a handle key or has a virtual column
 			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 		} else if len(eventsInGroup) == 1 && eventsInGroup[0].Len() == 1 {

@@ -99,7 +99,7 @@ func genKeyList(
 	columnInfos := tableInfo.GetColumns()
 	for _, i := range colIdx {
 		// If the index contain generated column, we can't use this key to detect conflict with other DML,
-		if columnInfos[i] == nil || tableInfo.GetColumnFlags()[columnInfos[i].ID].IsGeneratedColumn() {
+		if columnInfos[i] == nil || columnInfos[i].IsGenerated() {
 			return nil
 		}
 		value := common.ExtractColVal(row, columnInfos[i], i)

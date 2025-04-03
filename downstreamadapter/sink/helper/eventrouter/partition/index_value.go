@@ -61,7 +61,7 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonE
 			if col == nil {
 				continue
 			}
-			if tableInfo.GetColumnFlags()[col.ID].IsHandleKey() {
+			if tableInfo.IsHandleKey(col.ID) {
 				value := common.ExtractColVal(&rowData, col, idx)
 				r.hasher.Write([]byte(col.Name.O), []byte(model.ColumnValueString(value)))
 			}

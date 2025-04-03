@@ -16,6 +16,7 @@ package event
 import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	timodel "github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/integrity"
@@ -126,7 +127,7 @@ func (e *RowEvent) PrimaryKeyColumnNames() []string {
 	tableInfo := e.TableInfo
 	columns := e.TableInfo.GetColumns()
 	for _, col := range columns {
-		if col != nil && tableInfo.ForceGetColumnFlagType(col.ID).IsPrimaryKey() {
+		if col != nil && mysql.HasPriKeyFlag(col.GetFlag()) {
 			result = append(result, tableInfo.ForceGetColumnName(col.ID))
 		}
 	}

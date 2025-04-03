@@ -68,9 +68,6 @@ func genKeyList(row *chunk.Row, colIdx []int, tableInfo *common.TableInfo) []byt
 		key = append(key, []byte(val)...)
 		key = append(key, 0)
 	}
-	if len(key) == 0 {
-		return nil
-	}
 	return key
 }
 
