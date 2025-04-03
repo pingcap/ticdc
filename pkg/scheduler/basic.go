@@ -60,7 +60,7 @@ func NewBasicScheduler[T replica.ReplicationID, S replica.ReplicationStatus, R r
 }
 
 // Execute periodically execute the operator
-// 区分 split table 和 非 split table
+// 把 maintainer 的调度和 dispatcher的分开
 func (s *basicScheduler[T, S, R]) Execute() time.Time {
 	availableSize := s.batchSize - s.operatorController.OperatorSize()
 
