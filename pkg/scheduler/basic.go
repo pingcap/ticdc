@@ -147,19 +147,21 @@ func (s *basicScheduler[T, S, R]) schedule(id replica.GroupID, availableSize int
 	if spaceCount <= len(absent) {
 		// 给每个node 安排 schedulingTaskCountPerNode - nodeSize[id]
 		for id, size := range nodeSize {
-			taskList := absent[:schedulingTaskCountPerNode-size]
-			count := 0
-			for idx, task := range taskList {
-				count = idx
-				op := s.newAddOperator(task, id)
-				if !s.operatorController.AddOperator(op) {
-					count -= 1
-					break
-				} else {
-					scheduled += 1
+			if schedulingTaskCountPerNode-size > 0 {
+				taskList := absent[:schedulingTaskCountPerNode-size]
+				count := 0
+				for idx, task := range taskList {
+					count = idx
+					op := s.newAddOperator(task, id)
+					if !s.operatorController.AddOperator(op) {
+						count -= 1
+						break
+					} else {
+						scheduled += 1
+					}
 				}
+				absent = absent[count+1:]
 			}
-			absent = absent[count+1:]
 		}
 	} else {
 		// 那就尽可能给每个节点均匀一点
