@@ -83,7 +83,7 @@ func NewEventTestHelper(t testing.TB) *EventTestHelper {
 }
 
 func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
-	key := toTableInfosKey(job.SchemaName, job.TableName)
+	key := toTableInfosKey(job.SchemaName, job.BinlogInfo.TableInfo.Name.O)
 	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
 	var tableInfo *timodel.TableInfo
 	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
@@ -102,7 +102,7 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 }
 
 func (s *EventTestHelper) GetTableInfo(job *timodel.Job) *common.TableInfo {
-	key := toTableInfosKey(job.SchemaName, job.TableName)
+	key := toTableInfosKey(job.SchemaName, job.BinlogInfo.TableInfo.Name.O)
 	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
 	return s.tableInfos[key]
 }
@@ -181,6 +181,8 @@ func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 	return &DDLEvent{
 		SchemaID:   job.SchemaID,
 		TableID:    job.TableID,
+		SchemaName: job.SchemaName,
+		TableName:  job.BinlogInfo.TableInfo.Name.O,
 		Query:      job.Query,
 		Type:       byte(job.Type),
 		TableInfo:  s.GetTableInfo(job),

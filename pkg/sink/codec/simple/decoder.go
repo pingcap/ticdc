@@ -277,7 +277,7 @@ func (d *Decoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	d.msg = nil
 
 	d.memo.Write(ddl.TableInfo)
-	d.memo.Write(ddl.MultipleTableInfos[0])
+	d.memo.Write(ddl.MultipleTableInfos[1])
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
 		d.msg = ele.Value.(*message)
@@ -635,6 +635,8 @@ func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) m
 	return data
 }
 
+// formatValue formats the value according to the field type
+// support avro and json
 func formatValue(value any, ft types.FieldType) any {
 	if value == nil {
 		return nil
@@ -664,7 +666,13 @@ func formatValue(value any, ft types.FieldType) any {
 		mysql.TypeVarchar, mysql.TypeVarString, mysql.TypeString:
 		value = []byte(value.(string))
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong, mysql.TypeLonglong:
-		v := value.(int64)
+		var v int64
+		switch val := value.(type) {
+		case int64:
+			v = val
+		case float64:
+			v = int64(val)
+		}
 		if mysql.HasUnsignedFlag(ft.GetFlag()) {
 			value = uint64(v)
 		} else {

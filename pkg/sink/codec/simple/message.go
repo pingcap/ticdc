@@ -462,17 +462,10 @@ func encodeValue(
 		} else {
 			value = d.GetString()
 		}
-	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong, mysql.TypeLonglong:
-		if mysql.HasUnsignedFlag(ft.GetFlag()) {
-			value = d.GetUint64()
-		} else {
-			value = d.GetInt64()
-		}
-	case mysql.TypeYear:
+	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong, mysql.TypeLonglong,
+		mysql.TypeYear:
 		value = d.GetInt64()
-	case mysql.TypeFloat:
-		value = d.GetFloat32()
-	case mysql.TypeDouble:
+	case mysql.TypeDouble, mysql.TypeFloat:
 		value = d.GetFloat64()
 	default:
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
