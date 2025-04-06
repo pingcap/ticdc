@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
-
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -83,8 +82,6 @@ func NewEventTestHelper(t testing.TB) *EventTestHelper {
 }
 
 func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
-	key := toTableInfosKey(job.SchemaName, job.BinlogInfo.TableInfo.Name.O)
-	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
 	var tableInfo *timodel.TableInfo
 	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
 		tableInfo = job.BinlogInfo.TableInfo
@@ -98,11 +95,17 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 	}
 	info := common.WrapTableInfo(job.SchemaName, tableInfo)
 	info.InitPrivateFields()
+	key := toTableInfosKey(info.GetSchemaName(), info.GetTableName())
+	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
 	s.tableInfos[key] = info
 }
 
 func (s *EventTestHelper) GetTableInfo(job *timodel.Job) *common.TableInfo {
-	key := toTableInfosKey(job.SchemaName, job.BinlogInfo.TableInfo.Name.O)
+	table := ""
+	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
+		table = job.BinlogInfo.TableInfo.Name.O
+	}
+	key := toTableInfosKey(job.SchemaName, table)
 	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
 	return s.tableInfos[key]
 }
@@ -178,14 +181,15 @@ func (s *EventTestHelper) DDL2Jobs(ddl string, jobCnt int) []*timodel.Job {
 
 func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 	job := s.DDL2Job(ddl)
+	info := s.GetTableInfo(job)
 	return &DDLEvent{
 		SchemaID:   job.SchemaID,
-		TableID:    job.TableID,
-		SchemaName: job.SchemaName,
-		TableName:  job.BinlogInfo.TableInfo.Name.O,
+		TableID:    info.TableName.TableID,
+		SchemaName: info.GetSchemaName(),
+		TableName:  info.GetTableName(),
 		Query:      job.Query,
 		Type:       byte(job.Type),
-		TableInfo:  s.GetTableInfo(job),
+		TableInfo:  info,
 		FinishedTs: job.BinlogInfo.FinishedTS,
 	}
 }
