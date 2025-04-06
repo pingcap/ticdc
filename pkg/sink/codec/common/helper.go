@@ -17,7 +17,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 
@@ -28,7 +27,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/parser/types"
+	ptypes "github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/zap"
 )
 
@@ -68,11 +68,11 @@ func IsBinaryMySQLType(mysqlType string) bool {
 func ExtractBasicMySQLType(mysqlType string) byte {
 	for i := 0; i < len(mysqlType); i++ {
 		if mysqlType[i] == '(' || mysqlType[i] == ' ' {
-			return types.StrToType(mysqlType[:i])
+			return ptypes.StrToType(mysqlType[:i])
 		}
 	}
 
-	return types.StrToType(mysqlType)
+	return ptypes.StrToType(mysqlType)
 }
 
 func IsUnsignedFlag(mysqlType string) bool {
@@ -369,39 +369,12 @@ func MustSnapshotQuery(
 }
 
 // MustBinaryLiteralToInt convert bytes into uint64,
-// by follow https://github.com/pingcap/tidb/blob/e3417913f58cdd5a136259b902bf177eaf3aa637/types/binary_literal.go#L105
 func MustBinaryLiteralToInt(bytes []byte) uint64 {
-	bytes = trimLeadingZeroBytes(bytes)
-	length := len(bytes)
-
-	if length > 8 {
+	val, err := types.BinaryLiteral(bytes).ToInt(types.DefaultStmtNoWarningContext)
+	if err != nil {
 		log.Panic("invalid bit value found", zap.ByteString("value", bytes))
-		return math.MaxUint64
-	}
-
-	if length == 0 {
-		return 0
-	}
-
-	// Note: the byte-order is BigEndian.
-	val := uint64(bytes[0])
-	for i := 1; i < length; i++ {
-		val = (val << 8) | uint64(bytes[i])
 	}
 	return val
-}
-
-func trimLeadingZeroBytes(bytes []byte) []byte {
-	if len(bytes) == 0 {
-		return bytes
-	}
-	pos, posMax := 0, len(bytes)-1
-	for ; pos < posMax; pos++ {
-		if bytes[pos] != 0 {
-			break
-		}
-	}
-	return bytes[pos:]
 }
 
 // FakeTableIDAllocator is a fake table id allocator
