@@ -644,15 +644,9 @@ func formatValue(value any, ft types.FieldType) any {
 	var err error
 	switch ft.GetType() {
 	case mysql.TypeBit:
-		var v uint64
-		switch val := value.(type) {
-		case float64:
-			v = uint64(val)
-		case string:
-			v, err = strconv.ParseUint(val, 10, 64)
-			if err != nil {
-				log.Panic("invalid column value for bit", zap.Any("value", value), zap.Error(err))
-			}
+		v, err := strconv.ParseUint(value.(string), 10, 64)
+		if err != nil {
+			log.Panic("invalid column value for bit", zap.Any("value", value), zap.Error(err))
 		}
 		value = types.NewBinaryLiteralFromUint(v, -1)
 	case mysql.TypeTimestamp:
@@ -693,9 +687,32 @@ func formatValue(value any, ft types.FieldType) any {
 		}
 	case mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob,
 		mysql.TypeVarchar, mysql.TypeVarString, mysql.TypeString:
-		value = []byte(value.(string))
-	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong, mysql.TypeLonglong,
-		mysql.TypeYear:
+		switch val := value.(type) {
+		case string:
+			if mysql.HasBinaryFlag(ft.GetFlag()) {
+				value, err = base64.StdEncoding.DecodeString(val)
+				if err != nil {
+					log.Panic("invalid column value for binary char", zap.Any("value", value), zap.Error(err))
+				}
+			} else {
+				value = []byte(val)
+			}
+		}
+	case mysql.TypeLonglong:
+		switch val := value.(type) {
+		case map[string]interface{}:
+			value = uint64(val["value"].(int64))
+		case string:
+			if mysql.HasUnsignedFlag(ft.GetFlag()) {
+				value, err = strconv.ParseUint(val, 10, 64)
+			} else {
+				value, err = strconv.ParseInt(val, 10, 64)
+			}
+			if err != nil {
+				log.Panic("cannot parse int64 value from string", zap.Any("value", value), zap.Error(err))
+			}
+		}
+	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong:
 		var v int64
 		switch val := value.(type) {
 		case string:
@@ -703,18 +720,38 @@ func formatValue(value any, ft types.FieldType) any {
 			if err != nil {
 				log.Panic("cannot parse int64 value from string", zap.Any("value", value), zap.Error(err))
 			}
-		case float64:
-			v = int64(val)
 		}
 		if mysql.HasUnsignedFlag(ft.GetFlag()) {
 			value = uint64(v)
 		} else {
 			value = v
 		}
+	case mysql.TypeYear:
+		switch val := value.(type) {
+		case string:
+			value, err = strconv.ParseInt(val, 10, 64)
+			if err != nil {
+				log.Panic("cannot parse int64 value from string", zap.Any("value", value), zap.Error(err))
+			}
+		}
 	case mysql.TypeFloat:
-		value = float32(value.(float64))
+		switch val := value.(type) {
+		case string:
+			var v float64
+			v, err = strconv.ParseFloat(val, 32)
+			if err != nil {
+				log.Panic("cannot parse float32 value from string", zap.Any("value", value), zap.Error(err))
+			}
+			value = float32(v)
+		}
 	case mysql.TypeDouble:
-		value = value.(float64)
+		switch val := value.(type) {
+		case string:
+			value, err = strconv.ParseFloat(val, 64)
+			if err != nil {
+				log.Panic("cannot parse float64 value from string", zap.Any("value", value), zap.Error(err))
+			}
+		}
 	case mysql.TypeTiDBVectorFloat32:
 		value, err = types.ParseVectorFloat32(value.(string))
 		if err != nil {

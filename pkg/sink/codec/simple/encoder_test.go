@@ -1036,7 +1036,6 @@ func TestColumnFlags(t *testing.T) {
 		require.NoError(t, err)
 
 		originCols := createTableDDLEvent.TableInfo.GetColumns()
-		// obtainedCols := decodedDDLEvent.TableInfo.GetColumns()
 
 		for _, expected := range originCols {
 			actualID := decodedDDLEvent.TableInfo.ForceGetColumnIDByName(expected.Name.O)
@@ -1093,6 +1092,8 @@ func TestEncodeIntegerTypes(t *testing.T) {
 		common.EncodingFormatAvro,
 		common.EncodingFormatJSON,
 	} {
+		minValues.FinishGetRow()
+		maxValues.FinishGetRow()
 		codecConfig.EncodingFormat = format
 		enc, err := NewEncoder(ctx, codecConfig)
 		require.NoError(t, err)
@@ -1175,6 +1176,7 @@ func TestEncoderOtherTypes(t *testing.T) {
 		common.EncodingFormatAvro,
 		common.EncodingFormatJSON,
 	} {
+		event.FinishGetRow()
 		codecConfig.EncodingFormat = format
 		enc, err := NewEncoder(ctx, codecConfig)
 		require.NoError(t, err)
@@ -1265,7 +1267,9 @@ func TestE2EPartitionTableDMLBeforeDDL(t *testing.T) {
 
 		codecConfig.EncodingFormat = format
 		for _, event := range events {
-
+			insertEvent.FinishGetRow()
+			insertEvent1.FinishGetRow()
+			insertEvent2.FinishGetRow()
 			row, ok := event.GetNextRow()
 			require.True(t, ok)
 			err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
@@ -1410,6 +1414,7 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 			compression.Snappy,
 			compression.LZ4,
 		} {
+			dmlEvent.FinishGetRow()
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
 			enc, err := NewEncoder(ctx, codecConfig)
 			require.NoError(t, err)
@@ -1470,7 +1475,7 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 			require.Equal(t, decodedRow.CommitTs, dmlEvent.CommitTs)
 			require.Equal(t, decodedRow.TableInfo.GetSchemaName(), dmlEvent.TableInfo.GetSchemaName())
 			require.Equal(t, decodedRow.TableInfo.GetTableName(), dmlEvent.TableInfo.GetTableName())
-			require.Nil(t, decode.PreRow)
+			require.True(t, decode.PreRow.IsEmpty())
 		}
 	}
 }
