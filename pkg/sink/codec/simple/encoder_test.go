@@ -479,12 +479,11 @@ func TestEncodeDDLSequence(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
-			// FIXME: support set default value
-			// for _, col := range event.TableInfo.GetColumns() {
-			// 	if col.Name.O == "payload" {
-			// 		require.Equal(t, "a", col.DefaultValue)
-			// 	}
-			// }
+			for _, col := range event.TableInfo.GetColumns() {
+				if col.Name.O == "payload" {
+					require.Equal(t, "a", col.DefaultValue)
+				}
+			}
 
 			m, err = enc.EncodeDDLEvent(dropDefaultDDLEvent)
 			require.NoError(t, err)
@@ -590,19 +589,18 @@ func TestEncodeDDLSequence(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, 2, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
-			// FIXME: support rename index
-			// hasNewIndex := false
-			// noOldIndex := true
-			// for _, index := range event.TableInfo.GetIndices() {
-			// 	if index.Name.O == "new_idx_a" {
-			// 		hasNewIndex = true
-			// 	}
-			// 	if index.Name.O == "idx_a" {
-			// 		noOldIndex = false
-			// 	}
-			// }
-			// require.True(t, hasNewIndex)
-			// require.True(t, noOldIndex)
+			hasNewIndex := false
+			noOldIndex := true
+			for _, index := range event.TableInfo.GetIndices() {
+				if index.Name.O == "new_idx_a" {
+					hasNewIndex = true
+				}
+				if index.Name.O == "idx_a" {
+					noOldIndex = false
+				}
+			}
+			require.True(t, hasNewIndex)
+			require.True(t, noOldIndex)
 
 			m, err = enc.EncodeDDLEvent(indexVisibilityDDLEvent)
 			require.NoError(t, err)

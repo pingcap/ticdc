@@ -410,7 +410,17 @@ func newTiColumnInfo(
 				if index.Primary {
 					col.AddFlag(mysql.PriKeyFlag)
 				} else if index.Unique {
-					col.AddFlag(mysql.UniqueKeyFlag)
+					if index.Columns[0] == name {
+						// Only the first column can be set
+						// if unique index has multi columns,
+						// the flag should be MultipleKeyFlag.
+						// See https://dev.mysql.com/doc/refman/5.7/en/show-columns.html
+						if len(index.Columns) > 1 {
+							col.AddFlag(mysql.MultipleKeyFlag)
+						} else {
+							col.AddFlag(mysql.UniqueKeyFlag)
+						}
+					}
 				} else {
 					col.AddFlag(mysql.MultipleKeyFlag)
 				}
