@@ -1815,7 +1815,6 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 				require.True(t, ok)
 
 				common.CompareRow(t, event.Event, event.TableInfo, deocde, decodedRow.TableInfo)
-
 			}
 		}
 	}

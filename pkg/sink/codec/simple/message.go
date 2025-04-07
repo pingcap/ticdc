@@ -446,7 +446,7 @@ func encodeValue(
 		}
 		value = strconv.FormatUint(v, 10)
 	case mysql.TypeTimestamp:
-		value = map[string]string{
+		value = map[string]interface{}{
 			"location": location,
 			"value":    d.GetMysqlTime().String(),
 		}
