@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -449,16 +448,6 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessage) {
 	m.sendMessages([]*messaging.TargetMessage{
 		messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, msg),
-	})
-}
-
-func (m *Maintainer) sendBootstrapDDLEvent(msg *event.DDLEvent) {
-	m.sendMessages([]*messaging.TargetMessage{
-		messaging.NewSingleTargetMessage(
-			m.selfNode.ID,
-			messaging.EventCollectorTopic,
-			msg,
-		),
 	})
 }
 
