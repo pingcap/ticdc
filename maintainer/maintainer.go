@@ -23,18 +23,23 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -47,6 +52,22 @@ import (
 const (
 	periodEventInterval = time.Millisecond * 200
 )
+
+type bootstrapState int32
+
+const (
+	bootstrapNotStarted bootstrapState = iota
+	bootstrapInProgress
+	bootstrapFinished
+)
+
+func storeBootstrapState(addr bootstrapState, state bootstrapState) {
+	atomic.NewInt32((int32)(addr)).Store(int32(state))
+}
+
+func loadBootstrapState(addr bootstrapState) bootstrapState {
+	return bootstrapState(atomic.NewInt32((int32)(addr)).Load())
+}
 
 // Maintainer is response for handle changefeed replication tasks. Maintainer should:
 // 1. schedule tables to dispatcher manager
@@ -136,6 +157,8 @@ type Maintainer struct {
 		m map[node.ID]*heartbeatpb.RunningError
 	}
 
+	bootstrapState bootstrapState
+
 	cancelUpdateMetrics            context.CancelFunc
 	changefeedCheckpointTsGauge    prometheus.Gauge
 	changefeedCheckpointTsLagGauge prometheus.Gauge
@@ -191,6 +214,8 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		checkpointTsByCapture: make(map[node.ID]heartbeatpb.Watermark),
 		newChangefeed:         newChangefeed,
 
+		bootstrapState: bootstrapFinished,
+
 		changefeedCheckpointTsGauge:    metrics.ChangefeedCheckpointTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		changefeedCheckpointTsLagGauge: metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
 		changefeedResolvedTsGauge:      metrics.ChangefeedResolvedTsGauge.WithLabelValues(cfID.Namespace(), cfID.Name()),
@@ -213,6 +238,9 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		m.id.Name(),
 		m.createBootstrapMessageFactory(),
 	)
+	if putil.GetOrZero(cfg.Config.Sink.SendAllBootstrapAtStart) {
+		m.bootstrapState = bootstrapNotStarted
+	}
 
 	metrics.MaintainerGauge.WithLabelValues(cfID.Namespace(), cfID.Name()).Inc()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -250,11 +278,81 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	return m
 }
 
+func (m *Maintainer) isBootstrapped() bool {
+	return loadBootstrapState(m.bootstrapState) == bootstrapFinished
+}
+
+// return true if bootstrapped
+func (m *Maintainer) trySendBootstrap() bool {
+	bootstrap := loadBootstrapState(m.bootstrapState)
+	switch bootstrap {
+	case bootstrapFinished:
+		return true
+	case bootstrapInProgress:
+		return false
+	case bootstrapNotStarted:
+	}
+	storeBootstrapState(m.bootstrapState, bootstrapInProgress)
+	start := time.Now()
+
+	// Use a empty timezone because table filter does not need it.
+	f, err := filter.NewFilter(m.config.Config.Filter, "", m.config.Config.CaseSensitive, m.config.Config.ForceReplicate)
+	if err != nil {
+		log.Error("create filter failed when sending bootstrap",
+			zap.String("changefeed", m.id.Name()),
+			zap.Error(err))
+		return false
+	}
+	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
+	tables, err := schemaStore.GetAllPhysicalTables(m.startCheckpointTs, f)
+	currentTables := make([]*common.TableInfo, 0, len(tables))
+	for i := 0; i < len(tables); i++ {
+		tableInfo, err := schemaStore.GetTableInfo(tables[i].TableID, m.startCheckpointTs)
+		if err != nil {
+			log.Warn("get table info failed when sending bootstrap, just ignore",
+				zap.String("changefeed", m.id.Name()),
+				zap.Error(err))
+			continue
+		}
+		currentTables = append(currentTables, tableInfo)
+	}
+
+	if err != nil {
+		log.Error("load table from scheme store failed when sending bootstrap",
+			zap.String("changefeed", m.id.Name()),
+			zap.Error(err))
+		return false
+	}
+	go func() {
+		log.Info("start to send bootstrap messages",
+			zap.Stringer("changefeed", m.id),
+			zap.Int("tables", len(currentTables)))
+		for _, table := range currentTables {
+			if table.IsView() {
+				continue
+			}
+			ddlEvent := codec.NewBootstrapDDLEvent(table)
+			m.sendBootstrapDDLEvent(ddlEvent)
+		}
+		storeBootstrapState(m.bootstrapState, bootstrapFinished)
+		log.Info("send bootstrap messages finished",
+			zap.Stringer("changefeed", m.id),
+			zap.Int("tables", len(currentTables)),
+			zap.Duration("cost", time.Since(start)))
+	}()
+	return m.isBootstrapped()
+}
+
 // HandleEvent implements the event-driven process mode
 // it's the entrance of the Maintainer, it handles all types of Events
 // note: the EventPeriod is a special event that submitted when initializing maintainer
 // , and it will be re-submitted at the end of onPeriodTask
 func (m *Maintainer) HandleEvent(event *Event) bool {
+	// before bootstrap finished, cannot send any event.
+	ok := m.trySendBootstrap()
+	if !ok {
+		return false
+	}
 	start := time.Now()
 	defer func() {
 		duration := time.Since(start)
@@ -448,6 +546,16 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessage) {
 	m.sendMessages([]*messaging.TargetMessage{
 		messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, msg),
+	})
+}
+
+func (m *Maintainer) sendBootstrapDDLEvent(msg *event.DDLEvent) {
+	m.sendMessages([]*messaging.TargetMessage{
+		messaging.NewSingleTargetMessage(
+			m.selfNode.ID,
+			messaging.EventCollectorTopic,
+			msg,
+		),
 	})
 }
 
