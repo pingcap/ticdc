@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/spanz"
@@ -799,6 +800,10 @@ func (d *Dispatcher) GetEventSizePerSecond() float32 {
 
 func (d *Dispatcher) HandleCheckpointTs(checkpointTs uint64) {
 	d.sink.AddCheckpointTs(checkpointTs)
+}
+
+func (d *Dispatcher) EmitBootstrap(e *event.DDLEvent) error {
+	return d.sink.WriteBlockEvent(e)
 }
 
 func (d *Dispatcher) IsTableTriggerEventDispatcher() bool {

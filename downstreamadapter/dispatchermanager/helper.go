@@ -445,3 +445,19 @@ func (h *CheckpointTsMessageHandler) GetType(event CheckpointTsMessage) dynstrea
 	return dynstream.DefaultEventType
 }
 func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) {}
+
+type bootstrapState int32
+
+const (
+	bootstrapNotStarted bootstrapState = iota
+	bootstrapInProgress
+	bootstrapFinished
+)
+
+func storeBootstrapState(addr *bootstrapState, state bootstrapState) {
+	atomic.StoreInt32((*int32)(addr), int32(state))
+}
+
+func loadBootstrapState(addr *bootstrapState) bootstrapState {
+	return bootstrapState(atomic.LoadInt32((*int32)(addr)))
+}
