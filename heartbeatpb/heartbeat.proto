@@ -250,6 +250,7 @@ enum ComponentState {
     Working = 0;
     Stopped = 1;
     Removed = 2;
+    Initializing = 3;
 }
 
 message RunningError {
