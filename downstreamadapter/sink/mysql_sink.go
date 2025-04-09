@@ -91,7 +91,7 @@ func newMysqlSinkWithDBAndConfig(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	workerCount int,
-	cfg *mysql.MysqlConfig,
+	cfg *mysql.Config,
 	db *sql.DB,
 ) *MysqlSink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")

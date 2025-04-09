@@ -34,7 +34,7 @@ type MysqlDMLWorker struct {
 	changefeedID common.ChangeFeedID
 
 	eventChan   <-chan *commonEvent.DMLEvent
-	mysqlWriter *mysql.MysqlWriter
+	mysqlWriter *mysql.Writer
 	id          int
 
 	maxRows int
@@ -43,7 +43,7 @@ type MysqlDMLWorker struct {
 func NewMysqlDMLWorker(
 	ctx context.Context,
 	db *sql.DB,
-	config *mysql.MysqlConfig,
+	config *mysql.Config,
 	id int,
 	changefeedID common.ChangeFeedID,
 	statistics *metrics.Statistics,
@@ -142,13 +142,13 @@ func (w *MysqlDMLWorker) Close() {
 // MysqlDDLWorker is use to flush the ddl event and sync point eventdownstream
 type MysqlDDLWorker struct {
 	changefeedID common.ChangeFeedID
-	mysqlWriter  *mysql.MysqlWriter
+	mysqlWriter  *mysql.Writer
 }
 
 func NewMysqlDDLWorker(
 	ctx context.Context,
 	db *sql.DB,
-	config *mysql.MysqlConfig,
+	config *mysql.Config,
 	changefeedID common.ChangeFeedID,
 	statistics *metrics.Statistics,
 	formatVectorType bool,

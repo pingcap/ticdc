@@ -51,7 +51,7 @@ func ConflictKeys(event *commonEvent.DMLEvent) []uint64 {
 		}
 	}
 
-	event.FinishGetRow()
+	event.Rewind()
 
 	keys := make([]uint64, 0, len(hashRes))
 	for key := range hashRes {
@@ -121,7 +121,7 @@ func genKeyList(
 	}
 	tableKey := make([]byte, 16)
 	binary.BigEndian.PutUint64(tableKey[:8], uint64(iIdx))
-	binary.BigEndian.PutUint64(tableKey[8:], uint64(dispatcherID.GetLow()))
+	binary.BigEndian.PutUint64(tableKey[8:], dispatcherID.GetLow())
 	key = append(key, tableKey...)
 	return key
 }
