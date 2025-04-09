@@ -53,7 +53,7 @@ func genKeyList(row *chunk.Row, colIdx []int64, tableInfo *common.TableInfo) []b
 		if !ok || info == nil {
 			return nil
 		}
-		i, ok1 := tableInfo.GetColumnsOffset()[colID]
+		i, ok1 := tableInfo.GetRowColumnsOffset()[colID]
 		if !ok1 {
 			log.Warn("can't find column offset", zap.Int64("colID", colID), zap.String("colName", info.Name.O))
 			return nil

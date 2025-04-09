@@ -355,6 +355,8 @@ type columnSchema struct {
 	ColumnsOffset map[int64]int `json:"columns_offset"`
 	// Column name -> ColumnID
 	NameToColID map[string]int64 `json:"name_to_col_id"`
+	// ColumnID -> offset in RowChangedEvents.Columns.
+	RowColumnsOffset map[int64]int `json:"row_columns_offset"`
 
 	// store handle key column ids
 	handleKeyIDs map[int64]struct{}
@@ -364,12 +366,6 @@ type columnSchema struct {
 	// will not contain the PK if it is create in statement like:
 	// create table t (a int primary key, b int unique key);
 	// Every element in first dimension is a index, and the second dimension is the columns offset
-	// for example:
-	// table has 3 columns: a, b, c
-	// pk: a
-	// index1: a, b
-	// index2: a, c
-	// indexColumnsOffset: [[0], [0, 1], [0, 2]]
 	IndexColumns [][]int64 `json:"index_columns"`
 
 	// PKIndex store the colID of the columns in row changed events for primary key
@@ -442,12 +438,15 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		PKIndex:        make([]int64, 0),
 	}
 
+	rowColumnsCurrentOffset := 0
 	colSchema.VirtualColumnCount = 0
 	for i, col := range colSchema.Columns {
 		colSchema.ColumnsOffset[col.ID] = i
 		pkIsHandle := false
 		if IsColCDCVisible(col) {
 			colSchema.NameToColID[col.Name.O] = col.ID
+			colSchema.RowColumnsOffset[col.ID] = rowColumnsCurrentOffset
+			rowColumnsCurrentOffset++
 			pkIsHandle = (tableInfo.PKIsHandle && mysql.HasPriKeyFlag(col.GetFlag())) || col.ID == model.ExtraHandleID
 			if pkIsHandle {
 				// pk is handle

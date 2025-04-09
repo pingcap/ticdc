@@ -163,8 +163,9 @@ func (ti *TableInfo) GetIndices() []*model.IndexInfo {
 	return ti.columnSchema.Indices
 }
 
-func (ti *TableInfo) GetColumnsOffset() map[int64]int {
-	return ti.columnSchema.ColumnsOffset
+// GetRowColumnsOffset return offset with visible column
+func (ti *TableInfo) GetRowColumnsOffset() map[int64]int {
+	return ti.columnSchema.RowColumnsOffset
 }
 
 func (ti *TableInfo) GetIndexColumns() [][]int64 {
