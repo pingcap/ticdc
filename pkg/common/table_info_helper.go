@@ -423,19 +423,20 @@ func newColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
 // we only want user to get columnSchema by GetOrSetColumnSchema or Clone method.
 func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 	colSchema := &columnSchema{
-		Digest:         digest,
-		Columns:        tableInfo.Columns,
-		Indices:        tableInfo.Indices,
-		PKIsHandle:     tableInfo.PKIsHandle,
-		IsCommonHandle: tableInfo.IsCommonHandle,
-		UpdateTS:       tableInfo.UpdateTS,
-		ColumnsOffset:  make(map[int64]int, len(tableInfo.Columns)),
-		NameToColID:    make(map[string]int64, len(tableInfo.Columns)),
-		handleKeyIDs:   make(map[int64]struct{}),
-		HandleColID:    []int64{-1},
-		RowColInfos:    make([]rowcodec.ColInfo, len(tableInfo.Columns)),
-		RowColFieldTps: make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
-		PKIndex:        make([]int64, 0),
+		Digest:           digest,
+		Columns:          tableInfo.Columns,
+		Indices:          tableInfo.Indices,
+		PKIsHandle:       tableInfo.PKIsHandle,
+		IsCommonHandle:   tableInfo.IsCommonHandle,
+		UpdateTS:         tableInfo.UpdateTS,
+		ColumnsOffset:    make(map[int64]int, len(tableInfo.Columns)),
+		NameToColID:      make(map[string]int64, len(tableInfo.Columns)),
+		RowColumnsOffset: make(map[int64]int, len(tableInfo.Columns)),
+		handleKeyIDs:     make(map[int64]struct{}),
+		HandleColID:      []int64{-1},
+		RowColInfos:      make([]rowcodec.ColInfo, len(tableInfo.Columns)),
+		RowColFieldTps:   make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
+		PKIndex:          make([]int64, 0),
 	}
 
 	rowColumnsCurrentOffset := 0
@@ -774,6 +775,7 @@ func (s *columnSchema) getColumnSchemaWithoutVirtualColumns() *columnSchema {
 		UpdateTS:                      s.UpdateTS,
 		ColumnsOffset:                 s.ColumnsOffset,
 		NameToColID:                   s.NameToColID,
+		RowColumnsOffset:              s.RowColumnsOffset,
 		handleKeyIDs:                  s.handleKeyIDs,
 		IndexColumns:                  s.IndexColumns,
 		RowColInfos:                   s.RowColInfos,
