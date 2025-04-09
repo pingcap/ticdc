@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
+	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"

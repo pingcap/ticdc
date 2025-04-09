@@ -16,13 +16,12 @@ package scheduler
 import (
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/node"
+	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/pingcap/ticdc/utils/heap"
 )
 
 // basicScheduler generates operators for the spans, and push them to the operator controller
@@ -84,45 +83,11 @@ func (s *basicScheduler) schedule(id pkgreplica.GroupID, availableSize int) (sch
 		}
 	}
 
-	s.basicSchedule(availableSize, absentReplications, nodeSize)
+	pkgScheduler.BasicSchedule(availableSize, absentReplications, nodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
+		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.replicationDB, replication, id))
+	})
 	scheduled = len(absentReplications)
-}
-
-// basicSchedule schedules the absent tasks to the available nodes
-func (s *basicScheduler) basicSchedule(
-	availableSize int,
-	absentReplications []*replica.SpanReplication,
-	nodeTasks map[node.ID]int,
-) {
-	if len(nodeTasks) == 0 {
-		log.Warn("scheduler: no node available, skip")
-		return
-	}
-	// TODO:change priorityQueue
-	minPriorityQueue := priorityQueue{
-		h:    heap.NewHeap[*item](),
-		less: func(a, b int) bool { return a < b },
-	}
-	for key, size := range nodeTasks {
-		minPriorityQueue.InitItem(key, size, nil)
-	}
-
-	taskSize := 0
-	for _, replication := range absentReplications {
-		item, _ := minPriorityQueue.PeekTop()
-		// the operator is pushed successfully
-		op := s.operatorController.NewAddOperator(replication, item.Node)
-		ret := s.operatorController.AddOperator(op)
-		if ret {
-			// update the task size priority queue
-			item.Load++
-			taskSize++
-		}
-		if taskSize >= availableSize {
-			break
-		}
-		minPriorityQueue.AddOrUpdate(item)
-	}
+	return
 }
 
 func (s *basicScheduler) Name() string {

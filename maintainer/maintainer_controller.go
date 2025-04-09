@@ -47,7 +47,7 @@ import (
 type Controller struct {
 	bootstrapped bool
 
-	schedulerController *scheduler.Controller
+	schedulerController *pkgscheduler.Controller
 	operatorController  *operator.Controller
 	replicationDB       *replica.ReplicationDB
 	messageCenter       messaging.MessageCenter

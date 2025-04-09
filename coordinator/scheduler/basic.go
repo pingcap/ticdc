@@ -16,13 +16,12 @@ package scheduler
 import (
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/pkg/node"
+	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/pingcap/ticdc/utils/heap"
 )
 
 // basicScheduler generates operators for the spans, and push them to the operator controller
@@ -81,44 +80,9 @@ func (s *basicScheduler) doBasicSchedule(availableSize int) {
 		}
 	}
 
-	s.basicSchedule(availableSize, absentChangefeeds, nodeSize)
-}
-
-// basicSchedule schedules the absent tasks to the available nodes
-func (s *basicScheduler) basicSchedule(
-	availableSize int,
-	absentChangefeeds []*changefeed.Changefeed,
-	nodeTasks map[node.ID]int,
-) {
-	if len(nodeTasks) == 0 {
-		log.Warn("scheduler: no node available, skip")
-		return
-	}
-	// TODO:change priorityQueue
-	minPriorityQueue := priorityQueue{
-		h:    heap.NewHeap[*item](),
-		less: func(a, b int) bool { return a < b },
-	}
-	for key, size := range nodeTasks {
-		minPriorityQueue.InitItem(key, size, nil)
-	}
-
-	taskSize := 0
-	for _, cf := range absentChangefeeds {
-		item, _ := minPriorityQueue.PeekTop()
-		// the operator is pushed successfully
-		op := s.operatorController.NewAddMaintainerOperator(cf, item.Node)
-		ret := s.operatorController.AddOperator(op)
-		if ret {
-			// update the task size priority queue
-			item.Load++
-			taskSize++
-		}
-		if taskSize >= availableSize {
-			break
-		}
-		minPriorityQueue.AddOrUpdate(item)
-	}
+	pkgScheduler.BasicSchedule(availableSize, absentChangefeeds, nodeSize, func(cf *changefeed.Changefeed, nodeID node.ID) bool {
+		return s.operatorController.AddOperator(operator.NewAddMaintainerOperator(s.changefeedDB, cf, nodeID))
+	})
 }
 
 func (s *basicScheduler) Name() string {

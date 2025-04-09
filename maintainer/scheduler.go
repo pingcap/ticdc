@@ -51,7 +51,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 		),
 	}
 	if splitter != nil {
-		schedulers[pkgscheduler.SplitScheduler] = newSplitScheduler(
+		schedulers[pkgscheduler.SplitScheduler] = scheduler.NewSplitScheduler(
 			changefeedID,
 			batchSize,
 			splitter,
