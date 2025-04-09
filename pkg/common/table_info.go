@@ -163,10 +163,6 @@ func (ti *TableInfo) GetIndices() []*model.IndexInfo {
 	return ti.columnSchema.Indices
 }
 
-func (ti *TableInfo) GetColumnsOffset() map[int64]int {
-	return ti.columnSchema.ColumnsOffset
-}
-
 func (ti *TableInfo) GetIndexColumnsOffset() [][]int {
 	return ti.columnSchema.IndexColumnsOffset
 }
@@ -249,7 +245,6 @@ func (ti *TableInfo) ForceGetColumnIDByName(name string) int64 {
 	return colID
 }
 
-// MustGetColumnOffsetByID return the column offset by the column ID
 func (ti *TableInfo) MustGetColumnOffsetByID(id int64) int {
 	offset, ok := ti.columnSchema.ColumnsOffset[id]
 	if !ok {
@@ -393,7 +388,7 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 }
 
 func newTableInfo(schema, table string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
-	ti := &TableInfo{
+	return &TableInfo{
 		TableName: TableName{
 			Schema:      schema,
 			Table:       table,
@@ -403,7 +398,6 @@ func newTableInfo(schema, table string, tableID int64, isPartition bool, columnS
 		},
 		columnSchema: columnSchema,
 	}
-	return ti
 }
 
 func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
