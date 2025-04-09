@@ -100,7 +100,6 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	require.NoError(t, err)
 
 	var count atomic.Int64
-	count.Store(0)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
