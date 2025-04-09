@@ -175,8 +175,8 @@ func (ti *TableInfo) PKIsHandle() bool {
 	return ti.columnSchema.PKIsHandle
 }
 
-func (ti *TableInfo) GetPKIndexOffset() []int {
-	return ti.columnSchema.PKIndexOffset
+func (ti *TableInfo) GetPKIndex() []int64 {
+	return ti.columnSchema.PKIndex
 }
 
 func (ti *TableInfo) UpdateTS() uint64 {
