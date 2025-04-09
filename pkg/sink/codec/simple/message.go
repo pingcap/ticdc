@@ -16,6 +16,7 @@ package simple
 import (
 	"encoding/base64"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/pingcap/log"
@@ -416,9 +417,9 @@ func (a *avroMarshaller) encodeValue4Avro(row *chunk.Row, i int, ft *types.Field
 	case mysql.TypeBit:
 		v, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("unexpected type for avro value", zap.Error(err))
+			log.Panic("invalid column value for bit", zap.Any("value", d.GetValue()), zap.Error(err))
 		}
-		return int64(v), "long"
+		return strconv.FormatUint(v, 10), "string"
 	case mysql.TypeJSON:
 		return d.GetMysqlJSON().String(), "string"
 	default:
@@ -437,24 +438,22 @@ func encodeValue(
 	}
 	var value any
 	d := row.GetDatum(i, ft)
-	var err error
 	switch ft.GetType() {
 	case mysql.TypeBit:
-		value, err = d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
+		v, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("parse bit to int failed", zap.Any("name", value), zap.Error(err))
+			log.Panic("invalid column value for bit", zap.Any("value", value), zap.Error(err))
 		}
+		value = strconv.FormatUint(v, 10)
 	case mysql.TypeTimestamp:
-		return map[string]string{
+		value = map[string]interface{}{
 			"location": location,
 			"value":    d.GetMysqlTime().String(),
 		}
 	case mysql.TypeEnum:
-		value = d.GetMysqlEnum().Value
+		value = strconv.FormatUint(d.GetMysqlEnum().Value, 10)
 	case mysql.TypeSet:
-		value = d.GetMysqlSet().Value
-	case mysql.TypeTiDBVectorFloat32:
-		value = d.GetVectorFloat32().String()
+		value = strconv.FormatUint(d.GetMysqlSet().Value, 10)
 	case mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob,
 		mysql.TypeVarchar, mysql.TypeVarString, mysql.TypeString:
 		if mysql.HasBinaryFlag(ft.GetFlag()) {
