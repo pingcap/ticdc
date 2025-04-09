@@ -16,8 +16,8 @@ package scheduler
 import (
 	"math/rand"
 
+	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/utils/heap"
 )
 
@@ -42,15 +42,15 @@ func randomizeWorkload(random *rand.Rand, input int) int {
 	return (input << randomPartBitSize) | randomPart
 }
 
-type priorityQueue[T replica.ReplicationID, R replica.Replication[T]] struct {
-	h    *heap.Heap[*item[T, R]]
+type priorityQueue struct {
+	h    *heap.Heap[*item]
 	less func(a, b int) bool
 
 	rand *rand.Rand
 }
 
-func (q *priorityQueue[T, R]) InitItem(node node.ID, load int, tasks []R) {
-	q.AddOrUpdate(&item[T, R]{
+func (q *priorityQueue) InitItem(node node.ID, load int, tasks []*changefeed.Changefeed) {
+	q.AddOrUpdate(&item{
 		Node:  node,
 		Tasks: tasks,
 		Load:  load,
@@ -58,20 +58,20 @@ func (q *priorityQueue[T, R]) InitItem(node node.ID, load int, tasks []R) {
 	})
 }
 
-func (q *priorityQueue[T, R]) AddOrUpdate(item *item[T, R]) {
+func (q *priorityQueue) AddOrUpdate(item *item) {
 	item.randomizeWorkload = randomizeWorkload(q.rand, item.Load)
 	q.h.AddOrUpdate(item)
 }
 
-func (q *priorityQueue[T, R]) PeekTop() (*item[T, R], bool) {
+func (q *priorityQueue) PeekTop() (*item, bool) {
 	return q.h.PeekTop()
 }
 
 // item is an item in the priority queue, use the Load field as the priority
-type item[T replica.ReplicationID, R replica.Replication[T]] struct {
+type item struct {
 	// for internal usage
 	Node  node.ID
-	Tasks []R
+	Tasks []*changefeed.Changefeed
 	Load  int
 
 	// for heap adjustment usage
@@ -80,14 +80,14 @@ type item[T replica.ReplicationID, R replica.Replication[T]] struct {
 	less              func(randomizeWorkloadA, randomizeWorkloadB int) bool
 }
 
-func (i *item[T, R]) SetHeapIndex(idx int) {
+func (i *item) SetHeapIndex(idx int) {
 	i.index = idx
 }
 
-func (i *item[T, R]) GetHeapIndex() int {
+func (i *item) GetHeapIndex() int {
 	return i.index
 }
 
-func (i *item[T, R]) LessThan(t *item[T, R]) bool {
+func (i *item) LessThan(t *item) bool {
 	return i.less(i.randomizeWorkload, t.randomizeWorkload)
 }
