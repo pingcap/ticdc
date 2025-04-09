@@ -551,7 +551,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 		if d.IsTableTriggerEventDispatcher() {
 			ok := e.HandleBootstrap()
 			if !ok {
-
+				log.Error("send bootstrap at start failed")
 			}
 		}
 
