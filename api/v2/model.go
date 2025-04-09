@@ -954,7 +954,6 @@ type SinkConfig struct {
 	DateSeparator                    *string             `json:"date_separator,omitempty"`
 	EnablePartitionSeparator         *bool               `json:"enable_partition_separator,omitempty"`
 	FileIndexWidth                   *int                `json:"file_index_width,omitempty"`
-	EnableKafkaSinkV2                *bool               `json:"enable_kafka_sink_v2,omitempty"`
 	OnlyOutputUpdatedColumns         *bool               `json:"only_output_updated_columns,omitempty"`
 	DeleteOnlyOutputHandleKeyColumns *bool               `json:"delete_only_output_handle_key_columns"`
 	ContentCompatible                *bool               `json:"content_compatible"`
