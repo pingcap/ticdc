@@ -48,13 +48,12 @@ func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte)
 
 func genKeyList(row *chunk.Row, colIdx []int64, tableInfo *common.TableInfo) []byte {
 	var key []byte
-	offset := tableInfo.GetColumnsOffset()
 	for _, colID := range colIdx {
 		info, ok := tableInfo.GetColumnInfo(colID)
 		if !ok || info == nil {
 			return nil
 		}
-		i, ok1 := offset[colID]
+		i, ok1 := tableInfo.GetColumnsOffset()[colID]
 		if !ok1 {
 			log.Warn("can't find column offset", zap.Int64("colID", colID), zap.String("colName", info.Name.O))
 			return nil
