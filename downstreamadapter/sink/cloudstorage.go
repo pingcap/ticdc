@@ -189,7 +189,7 @@ func (s *CloudStorageSink) SetTableSchemaStore(tableSchemaStore *util.TableSchem
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *CloudStorageSink) GetStartTsList(tableIds []int64, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error) {
+func (s *CloudStorageSink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
 	return startTsList, make([]bool, len(startTsList)), nil
 }
 

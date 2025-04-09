@@ -40,10 +40,6 @@ func (s *BlackHoleSink) SinkType() common.SinkType {
 	return common.BlackHoleSinkType
 }
 
-func (s *BlackHoleSink) GetStartTsList(tableIds []int64, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error) {
-	return startTsList, make([]bool, len(startTsList)), nil
-}
-
 func (s *BlackHoleSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 }
 
@@ -82,7 +78,11 @@ func (s *BlackHoleSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *BlackHoleSink) AddCheckpointTs(ts uint64) {
+func (s *BlackHoleSink) AddCheckpointTs(_ uint64) {
+}
+
+func (s *BlackHoleSink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
+	return startTsList, make([]bool, len(startTsList)), nil
 }
 
 func (s *BlackHoleSink) Close(_ bool) {}

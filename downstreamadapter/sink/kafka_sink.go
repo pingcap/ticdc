@@ -190,7 +190,7 @@ func (s *KafkaSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore)
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *KafkaSink) GetStartTsList(tableIds []int64, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error) {
+func (s *KafkaSink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
 	return startTsList, make([]bool, len(startTsList)), nil
 }
 
