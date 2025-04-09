@@ -39,7 +39,7 @@ func TestNewChangefeed(t *testing.T) {
 	require.Equal(t, cfID, cf.ID)
 	require.Equal(t, info, cf.GetInfo())
 	require.Equal(t, checkpointTs, cf.GetLastSavedCheckPointTs())
-	require.True(t, cf.IsMQSink())
+	require.True(t, cf.NeedCheckpointTsMessage())
 }
 
 func TestChangefeed_GetSetInfo(t *testing.T) {
@@ -100,7 +100,7 @@ func TestChangefeed_IsMQSink(t *testing.T) {
 	}
 	cf := NewChangefeed(cfID, info, 100, true)
 
-	require.True(t, cf.IsMQSink())
+	require.True(t, cf.NeedCheckpointTsMessage())
 }
 
 func TestChangefeed_GetSetLastSavedCheckPointTs(t *testing.T) {

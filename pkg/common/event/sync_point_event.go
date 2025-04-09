@@ -20,11 +20,14 @@ import (
 )
 
 // Implement Event / FlushEvent / BlockEvent interface
+// CommitTsList contains the commit ts of sync point.
+// If a period of time has no other dml and ddl, commitTsList may contains multiple commit ts in order.
+// Otherwise, the commitTsList only contains one commit ts.
 type SyncPointEvent struct {
 	// State is the state of sender when sending this event.
 	State          EventSenderState    `json:"state"`
 	DispatcherID   common.DispatcherID `json:"dispatcher_id"`
-	CommitTs       uint64              `json:"commit_ts"`
+	CommitTsList   []uint64            `json:"commit_ts_list"`
 	PostTxnFlushed []func()            `msg:"-"`
 }
 
@@ -36,16 +39,20 @@ func (e *SyncPointEvent) GetDispatcherID() common.DispatcherID {
 	return e.DispatcherID
 }
 
+func (e *SyncPointEvent) GetCommitTsList() []common.Ts {
+	return e.CommitTsList
+}
+
 func (e *SyncPointEvent) GetCommitTs() common.Ts {
-	return e.CommitTs
+	return e.CommitTsList[0]
 }
 
 func (e *SyncPointEvent) GetStartTs() common.Ts {
-	return e.CommitTs
+	return e.CommitTsList[0]
 }
 
 func (e *SyncPointEvent) GetSize() int64 {
-	return int64(e.State.GetSize() + e.DispatcherID.GetSize() + 8)
+	return int64(e.State.GetSize() + e.DispatcherID.GetSize() + 8*len(e.CommitTsList))
 }
 
 func (e *SyncPointEvent) IsPaused() bool {

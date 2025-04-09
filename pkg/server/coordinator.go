@@ -27,7 +27,7 @@ import (
 // 4. manager gc safe point
 // 5. response for open API call
 type Coordinator interface {
-	AsyncStop()
+	Stop()
 	// Run handles messages
 	Run(ctx context.Context) error
 	// ListChangefeeds returns all changefeeds

@@ -18,6 +18,8 @@ import (
 
 	"github.com/pingcap/tidb/pkg/meta/model"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +27,7 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 	tests := []struct {
 		name           string
 		columns        []*model.ColumnInfo
-		columnsFlag    map[int64]*ColumnFlagType
+		columnsFlag    map[int]uint
 		isUpdate       bool
 		wantCount      int
 		wantColumnList string
@@ -33,14 +35,14 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "normal columns without update",
 			columns: []*model.ColumnInfo{
-				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1},
-				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2},
-				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3},
+				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
+				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
 			},
-			columnsFlag: map[int64]*ColumnFlagType{
-				1: NewColumnFlagType(PrimaryKeyFlag),
-				2: NewColumnFlagType(UniqueKeyFlag),
-				3: NewColumnFlagType(NullableFlag),
+			columnsFlag: map[int]uint{
+				1: mysql.PriKeyFlag,
+				2: mysql.UniqueKeyFlag,
+				3: mysql.NotNullFlag,
 			},
 			isUpdate:       false,
 			wantCount:      3,
@@ -49,14 +51,14 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "normal columns with update",
 			columns: []*model.ColumnInfo{
-				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1},
-				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2},
-				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3},
+				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
+				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
 			},
-			columnsFlag: map[int64]*ColumnFlagType{
-				1: NewColumnFlagType(PrimaryKeyFlag),
-				2: NewColumnFlagType(UniqueKeyFlag),
-				3: NewColumnFlagType(NullableFlag),
+			columnsFlag: map[int]uint{
+				1: mysql.PriKeyFlag,
+				2: mysql.UniqueKeyFlag,
+				3: mysql.NotNullFlag,
 			},
 			isUpdate:       true,
 			wantCount:      3,
@@ -65,14 +67,14 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "with generated columns",
 			columns: []*model.ColumnInfo{
-				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1},
-				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2},
-				{Name: pmodel.CIStr{O: "full_name", L: "full_name"}, ID: 3}, // generated column
+				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: pmodel.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
+				{Name: pmodel.CIStr{O: "full_name", L: "full_name"}, ID: 3, FieldType: types.FieldType{}}, // generated column
 			},
-			columnsFlag: map[int64]*ColumnFlagType{
-				1: NewColumnFlagType(PrimaryKeyFlag),
-				2: NewColumnFlagType(UniqueKeyFlag),
-				3: NewColumnFlagType(GeneratedColumnFlag),
+			columnsFlag: map[int]uint{
+				1: mysql.PriKeyFlag,
+				2: mysql.UniqueKeyFlag,
+				3: mysql.GeneratedColumnFlag,
 			},
 			isUpdate:       false,
 			wantCount:      2,
@@ -81,13 +83,14 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "with nil column",
 			columns: []*model.ColumnInfo{
-				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1},
+				{Name: pmodel.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
 				nil,
-				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3},
+				{Name: pmodel.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
 			},
-			columnsFlag: map[int64]*ColumnFlagType{
-				1: NewColumnFlagType(PrimaryKeyFlag),
-				3: NewColumnFlagType(NullableFlag),
+			columnsFlag: map[int]uint{
+				1: mysql.PriKeyFlag,
+				2: 0,
+				3: mysql.NotNullFlag,
 			},
 			isUpdate:       false,
 			wantCount:      2,
@@ -97,9 +100,13 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			for idx, col := range tt.columns {
+				if col != nil {
+					col.SetFlag(tt.columnsFlag[idx+1])
+				}
+			}
 			s := &columnSchema{
-				Columns:     tt.columns,
-				ColumnsFlag: tt.columnsFlag,
+				Columns: tt.columns,
 			}
 			gotCount, gotColumnList := s.getColumnList(tt.isUpdate)
 			require.Equal(t, tt.wantCount, gotCount)

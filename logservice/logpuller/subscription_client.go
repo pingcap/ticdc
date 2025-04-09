@@ -96,6 +96,7 @@ type resolveLockTask struct {
 type rangeTask struct {
 	span           heartbeatpb.TableSpan
 	subscribedSpan *subscribedSpan
+	filterLoop     bool
 }
 
 const kvEventsCacheMaxSize = 32
@@ -164,10 +165,9 @@ type sharedClientMetrics struct {
 // SubscriptionClient is used to subscribe events of table ranges from TiKV.
 // All exported Methods are thread-safe.
 type SubscriptionClient struct {
-	config     *SubscriptionClientConfig
-	metrics    sharedClientMetrics
-	clusterID  uint64
-	filterLoop bool
+	config    *SubscriptionClientConfig
+	metrics   sharedClientMetrics
+	clusterID uint64
 
 	pd           pd.Client
 	regionCache  *tikv.RegionCache
@@ -212,8 +212,7 @@ func NewSubscriptionClient(
 	credential *security.Credential,
 ) *SubscriptionClient {
 	subClient := &SubscriptionClient{
-		config:     config,
-		filterLoop: false, // FIXME
+		config: config,
 
 		pd:           pd,
 		regionCache:  regionCache,
@@ -230,8 +229,11 @@ func NewSubscriptionClient(
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
 	option := dynstream.NewOption()
+	// Note: it is max batch size of the kv sent from tikv(not committed rows)
 	option.BatchCount = 1024
-	option.UseBuffer = false
+	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
+	// 	ds.handleLoop fetch events from `ch` -> regionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
+	option.UseBuffer = true
 	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
 		func(subID SubscriptionID) uint64 { return uint64(subID) },
@@ -261,24 +263,36 @@ func (s *SubscriptionClient) initMetrics() {
 }
 
 func (s *SubscriptionClient) updateMetrics(ctx context.Context) error {
-	ticker1 := time.NewTicker(10 * time.Second)
-	ticker2 := time.NewTicker(5 * time.Millisecond)
-	defer ticker1.Stop()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker1.C:
+		case <-ticker.C:
 			resolvedTsLag := s.GetResolvedTsLag()
 			if resolvedTsLag > 0 {
 				metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
 			}
-		case <-ticker2.C:
 			dsMetrics := s.ds.GetMetrics()
 			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
 			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
-			metricEventStoreDSAddPathNum.Set(float64(dsMetrics.AddPath))
-			metricEventStoreDSRemovePathNum.Set(float64(dsMetrics.RemovePath))
+			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 1 {
+				log.Panic("subscription client should have only one area")
+			}
+			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 0 {
+				areaMetric := dsMetrics.MemoryControl.AreaMemoryMetrics[0]
+				metrics.DynamicStreamMemoryUsage.WithLabelValues(
+					"log-puller",
+					"max",
+					"default",
+				).Set(float64(areaMetric.MaxMemory()))
+				metrics.DynamicStreamMemoryUsage.WithLabelValues(
+					"log-puller",
+					"used",
+					"default",
+				).Set(float64(areaMetric.MemoryUsage()))
+			}
 		}
 	}
 }
@@ -295,6 +309,7 @@ func (s *SubscriptionClient) Subscribe(
 	consumeKVEvents func(raw []common.RawKVEntry, wakeCallback func()) bool,
 	advanceResolvedTs func(ts uint64),
 	advanceInterval int64,
+	bdrMode bool,
 ) {
 	if span.TableID == 0 {
 		log.Panic("subscription client subscribe with zero TableID")
@@ -314,10 +329,10 @@ func (s *SubscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(2*1024*1024*1024, dynstream.MemoryControlAlgorithmV1) // 2GB
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(4*1024*1024*1024, dynstream.MemoryControlAlgorithmV1) // 4GB
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
-	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt}
+	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: bdrMode}
 }
 
 // Unsubscribe the given table span. All covered regions will be deregistered asynchronously.
@@ -439,14 +454,26 @@ func (s *SubscriptionClient) onTableDrained(rt *subscribedSpan) {
 	log.Info("subscription client stop span is finished",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
+	err := s.ds.RemovePath(rt.subID)
+	if err != nil {
+		log.Warn("subscription client remove path failed",
+			zap.Uint64("subscriptionID", uint64(rt.subID)),
+			zap.Error(err))
+	}
 	s.totalSpans.Lock()
 	defer s.totalSpans.Unlock()
-	s.ds.RemovePath(rt.subID)
 	delete(s.totalSpans.spanMap, rt.subID)
 }
 
 // Note: don't block the caller, otherwise there may be deadlock
 func (s *SubscriptionClient) onRegionFail(errInfo regionErrorInfo) {
+	// unlock the range early to prevent blocking the range.
+	if errInfo.subscribedSpan.rangeLock.UnlockRange(
+		errInfo.span.StartKey, errInfo.span.EndKey,
+		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
+		s.onTableDrained(errInfo.subscribedSpan)
+		return
+	}
 	s.errCache.add(errInfo)
 }
 
@@ -554,7 +581,9 @@ func (s *SubscriptionClient) handleRangeTasks(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case task := <-s.rangeTaskCh:
-			g.Go(func() error { return s.divideSpanAndScheduleRegionRequests(ctx, task.span, task.subscribedSpan) })
+			g.Go(func() error {
+				return s.divideSpanAndScheduleRegionRequests(ctx, task.span, task.subscribedSpan, task.filterLoop)
+			})
 		}
 	}
 }
@@ -568,6 +597,7 @@ func (s *SubscriptionClient) divideSpanAndScheduleRegionRequests(
 	ctx context.Context,
 	span heartbeatpb.TableSpan,
 	subscribedSpan *subscribedSpan,
+	filterLoop bool,
 ) error {
 	// Limit the number of regions loaded at a time to make the load more stable.
 	limit := 1024
@@ -628,7 +658,7 @@ func (s *SubscriptionClient) divideSpanAndScheduleRegionRequests(
 			}
 
 			verID := tikv.NewRegionVerID(regionMeta.Id, regionMeta.RegionEpoch.ConfVer, regionMeta.RegionEpoch.Version)
-			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan)
+			regionInfo := newRegionInfo(verID, intersectSpan, nil, subscribedSpan, filterLoop)
 
 			// Schedule a region request to subscribe the region.
 			s.scheduleRegionRequest(ctx, regionInfo)
@@ -662,7 +692,7 @@ func (s *SubscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 		}
 	case regionlock.LockRangeStatusStale:
 		for _, r := range lockRangeResult.RetryRanges {
-			s.scheduleRangeRequest(ctx, r, region.subscribedSpan)
+			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop)
 		}
 	default:
 		return
@@ -672,10 +702,11 @@ func (s *SubscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 func (s *SubscriptionClient) scheduleRangeRequest(
 	ctx context.Context, span heartbeatpb.TableSpan,
 	subscribedSpan *subscribedSpan,
+	filterLoop bool,
 ) {
 	select {
 	case <-ctx.Done():
-	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: subscribedSpan}:
+	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: subscribedSpan, filterLoop: filterLoop}:
 	}
 }
 
@@ -693,13 +724,6 @@ func (s *SubscriptionClient) handleErrors(ctx context.Context) error {
 }
 
 func (s *SubscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
-	if errInfo.subscribedSpan.rangeLock.UnlockRange(
-		errInfo.span.StartKey, errInfo.span.EndKey,
-		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
-		s.onTableDrained(errInfo.subscribedSpan)
-		return nil
-	}
-
 	err := errors.Cause(errInfo.err)
 	switch eerr := err.(type) {
 	case *eventError:
@@ -716,12 +740,12 @@ func (s *SubscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
-			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan)
+			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop)
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
-			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan)
+			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop)
 			return nil
 		}
 		if innerErr.GetServerIsBusy() != nil {
@@ -749,13 +773,16 @@ func (s *SubscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
-		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan)
+		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop)
 		return nil
 	case *sendRequestToStoreErr:
 		metricStoreSendRequestErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo)
+		return nil
+	case *requestCancelledErr:
+		// the corresponding subscription has been unsubscribed, just ignore.
 		return nil
 	default:
 		// TODO(qupeng): for some errors it's better to just deregister the region from TiKVs.
@@ -886,7 +913,7 @@ func (s *SubscriptionClient) logSlowRegions(ctx context.Context) error {
 			ckptTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
 			if attr.SlowestRegion.Initialized {
 				if currTime.Sub(ckptTime) > 2*resolveLockMinInterval {
-					log.Info("subscription client finds a initialized slow region",
+					log.Debug("subscription client finds a initialized slow region",
 						zap.Uint64("subscriptionID", uint64(subscriptionID)),
 						zap.Any("slowRegion", attr.SlowestRegion))
 				}

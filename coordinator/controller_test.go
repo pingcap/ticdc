@@ -125,11 +125,11 @@ func TestUpdateChangefeed(t *testing.T) {
 
 	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
 	require.NotNil(t, controller.UpdateChangefeed(context.Background(), newConfig))
-	require.Equal(t, false, changefeedDB.GetByID(cfID).IsMQSink())
+	require.Equal(t, false, changefeedDB.GetByID(cfID).NeedCheckpointTsMessage())
 
 	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 	require.Nil(t, controller.UpdateChangefeed(context.Background(), newConfig))
-	require.Equal(t, true, changefeedDB.GetByID(cfID).IsMQSink())
+	require.Equal(t, true, changefeedDB.GetByID(cfID).NeedCheckpointTsMessage())
 	require.Equal(t, 1, changefeedDB.GetStoppedSize())
 }
 

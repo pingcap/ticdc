@@ -511,17 +511,19 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 	// Note: if a ddl involve multiple tables, job.TableID is different with job.BinlogInfo.TableInfo.ID
 	// and usually job.BinlogInfo.TableInfo.ID will be the newly created IDs.
 	event := PersistedDDLEvent{
-		ID:             job.ID,
-		Type:           byte(job.Type),
-		SchemaID:       job.SchemaID,
-		TableID:        job.TableID,
-		Query:          query,
-		SchemaVersion:  job.BinlogInfo.SchemaVersion,
-		DBInfo:         job.BinlogInfo.DBInfo,
-		TableInfo:      job.BinlogInfo.TableInfo,
-		FinishedTs:     job.BinlogInfo.FinishedTS,
-		BDRRole:        job.BDRRole,
-		CDCWriteSource: job.CDCWriteSource,
+		ID:                job.ID,
+		Type:              byte(job.Type),
+		TableNameInDDLJob: job.TableName,
+		DBNameInDDLJob:    job.SchemaName,
+		SchemaID:          job.SchemaID,
+		TableID:           job.TableID,
+		Query:             query,
+		SchemaVersion:     job.BinlogInfo.SchemaVersion,
+		DBInfo:            job.BinlogInfo.DBInfo,
+		TableInfo:         job.BinlogInfo.TableInfo,
+		FinishedTs:        job.BinlogInfo.FinishedTS,
+		BDRRole:           job.BDRRole,
+		CDCWriteSource:    job.CDCWriteSource,
 	}
 	return event
 }
@@ -849,7 +851,13 @@ func updateDDLHistoryForDropPartition(args updateDDLHistoryFuncArgs) []uint64 {
 func updateDDLHistoryForCreateView(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	for tableID := range args.tableMap {
-		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
+		if partitionInfo, ok := args.partitionMap[tableID]; ok {
+			for id := range partitionInfo {
+				args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, id)
+			}
+		} else {
+			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, tableID)
+		}
 	}
 	return args.tableTriggerDDLHistory
 }
@@ -1014,9 +1022,7 @@ func updateSchemaMetadataForNewTableDDL(args updateSchemaMetadataFuncArgs) {
 	}
 	if isPartitionTable(args.event.TableInfo) {
 		partitionInfo := make(BasicPartitionInfo)
-		for _, id := range getAllPartitionIDs(args.event.TableInfo) {
-			partitionInfo[id] = nil
-		}
+		partitionInfo.AddPartitionIDs(getAllPartitionIDs(args.event.TableInfo)...)
 		args.partitionMap[tableID] = partitionInfo
 	}
 }
@@ -1047,9 +1053,7 @@ func updateSchemaMetadataForTruncateTable(args updateSchemaMetadataFuncArgs) {
 	if isPartitionTable(args.event.TableInfo) {
 		delete(args.partitionMap, oldTableID)
 		partitionInfo := make(BasicPartitionInfo)
-		for _, id := range getAllPartitionIDs(args.event.TableInfo) {
-			partitionInfo[id] = nil
-		}
+		partitionInfo.AddPartitionIDs(getAllPartitionIDs(args.event.TableInfo)...)
 		args.partitionMap[newTableID] = partitionInfo
 	}
 }
@@ -1140,9 +1144,7 @@ func updateSchemaMetadataForCreateTables(args updateSchemaMetadataFuncArgs) {
 		}
 		if isPartitionTable(info) {
 			partitionInfo := make(BasicPartitionInfo)
-			for _, id := range getAllPartitionIDs(info) {
-				partitionInfo[id] = nil
-			}
+			partitionInfo.AddPartitionIDs((getAllPartitionIDs(info))...)
 			args.partitionMap[info.ID] = partitionInfo
 		}
 	}
@@ -1152,13 +1154,9 @@ func updateSchemaMetadataForReorganizePartition(args updateSchemaMetadataFuncArg
 	tableID := args.event.TableID
 	physicalIDs := getAllPartitionIDs(args.event.TableInfo)
 	droppedIDs := getDroppedIDs(args.event.PrevPartitions, physicalIDs)
-	for _, id := range droppedIDs {
-		delete(args.partitionMap[tableID], id)
-	}
+	args.partitionMap[tableID].RemovePartitionIDs(droppedIDs...)
 	newCreatedIDs := getCreatedIDs(args.event.PrevPartitions, physicalIDs)
-	for _, id := range newCreatedIDs {
-		args.partitionMap[tableID][id] = nil
-	}
+	args.partitionMap[tableID].AddPartitionIDs(newCreatedIDs...)
 }
 
 func updateSchemaMetadataForAlterTablePartitioning(args updateSchemaMetadataFuncArgs) {
@@ -1176,9 +1174,7 @@ func updateSchemaMetadataForAlterTablePartitioning(args updateSchemaMetadataFunc
 		Name:     args.event.TableName,
 	}
 	args.partitionMap[newTableID] = make(BasicPartitionInfo)
-	for _, id := range getAllPartitionIDs(args.event.TableInfo) {
-		args.partitionMap[newTableID][id] = nil
-	}
+	args.partitionMap[newTableID].AddPartitionIDs(getAllPartitionIDs(args.event.TableInfo)...)
 }
 
 func updateSchemaMetadataForRemovePartitioning(args updateSchemaMetadataFuncArgs) {
@@ -1299,46 +1295,47 @@ func extractTableInfoFuncForSingleTableDDL(event *PersistedDDLEvent, tableID int
 	if isPartitionTable(event.TableInfo) {
 		for _, partitionID := range getAllPartitionIDs(event.TableInfo) {
 			if tableID == partitionID {
-				return common.WrapTableInfo(event.SchemaID, event.SchemaName, event.TableInfo), false
+				return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 			}
 		}
 	} else {
 		if tableID == event.TableID {
-			return common.WrapTableInfo(event.SchemaID, event.SchemaName, event.TableInfo), false
+			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 		}
 	}
-	log.Panic("should not reach here", zap.Any("event", event), zap.Int64("tableID", tableID))
+	log.Panic("should not reach here",
+		zap.Any("type", event.Type),
+		zap.String("query", event.Query),
+		zap.Int64("tableID", tableID))
 	return nil, false
 }
 
 func extractTableInfoFuncForExchangeTablePartition(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
 	if tableID == event.TableID {
 		// old normal table id, return the table info of the partition table
-		return common.WrapTableInfo(event.ExtraSchemaID, event.ExtraSchemaName, event.TableInfo), false
-	} else {
-		physicalIDs := getAllPartitionIDs(event.TableInfo)
-		droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
-		if len(droppedIDs) != 1 {
-			log.Panic("exchange table partition should only drop one partition",
-				zap.Int64s("droppedIDs", droppedIDs))
-		}
-		if tableID != droppedIDs[0] {
-			log.Panic("should not reach here", zap.Int64("tableID", tableID), zap.Int64("expectedPartitionID", droppedIDs[0]))
-		}
-		if event.ExtraTableInfo == nil {
-			log.Panic("cannot find extra table info", zap.Int64("tableID", tableID))
-		}
-		// old partition id, return the table info of the normal table
-		columnSchema := event.ExtraTableInfo.ShadowCopyColumnSchema()
-		tableInfo := common.NewTableInfo(
-			event.SchemaID,
-			event.SchemaName,
-			pmodel.NewCIStr(event.TableName).O,
-			tableID,
-			false,
-			columnSchema)
-		return tableInfo, false
+		return common.WrapTableInfo(event.ExtraSchemaName, event.TableInfo), false
 	}
+	physicalIDs := getAllPartitionIDs(event.TableInfo)
+	droppedIDs := getDroppedIDs(event.PrevPartitions, physicalIDs)
+	if len(droppedIDs) != 1 {
+		log.Panic("exchange table partition should only drop one partition",
+			zap.Int64s("droppedIDs", droppedIDs))
+	}
+	if tableID != droppedIDs[0] {
+		log.Panic("should not reach here", zap.Int64("tableID", tableID), zap.Int64("expectedPartitionID", droppedIDs[0]))
+	}
+	if event.ExtraTableInfo == nil {
+		log.Panic("cannot find extra table info", zap.Int64("tableID", tableID))
+	}
+	// old partition id, return the table info of the normal table
+	columnSchema := event.ExtraTableInfo.ShadowCopyColumnSchema()
+	tableInfo := common.NewTableInfo(
+		event.SchemaName,
+		pmodel.NewCIStr(event.TableName).O,
+		tableID,
+		false,
+		columnSchema)
+	return tableInfo, false
 }
 
 func extractTableInfoFuncIgnore(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
@@ -1346,10 +1343,21 @@ func extractTableInfoFuncIgnore(event *PersistedDDLEvent, tableID int64) (*commo
 }
 
 func extractTableInfoFuncForDropTable(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
-	if event.TableID == tableID {
-		return nil, true
+	if isPartitionTable(event.TableInfo) {
+		for _, partitionID := range getAllPartitionIDs(event.TableInfo) {
+			if tableID == partitionID {
+				return nil, true
+			}
+		}
+	} else {
+		if event.TableID == tableID {
+			return nil, true
+		}
 	}
-	log.Panic("should not reach here", zap.Int64("tableID", tableID))
+	log.Panic("should not reach here",
+		zap.Bool("isPartitionTable", isPartitionTable(event.TableInfo)),
+		zap.Int64("eventTableID", event.TableID),
+		zap.Int64("tableID", tableID))
 	return nil, false
 }
 
@@ -1357,16 +1365,16 @@ func extractTableInfoFuncForTruncateTable(event *PersistedDDLEvent, tableID int6
 	if isPartitionTable(event.TableInfo) {
 		for _, partitionID := range getAllPartitionIDs(event.TableInfo) {
 			if tableID == partitionID {
-				return common.WrapTableInfo(event.SchemaID, event.SchemaName, event.TableInfo), false
+				return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 			}
 		}
 		return nil, true
-	} else {
-		if tableID == event.ExtraTableID {
-			return common.WrapTableInfo(event.SchemaID, event.SchemaName, event.TableInfo), false
-		} else if tableID == event.TableID {
-			return nil, true
-		}
+	}
+	if tableID == event.ExtraTableID {
+		return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
+	}
+	if tableID == event.TableID {
+		return nil, true
 	}
 	log.Panic("should not reach here", zap.Int64("tableID", tableID))
 	return nil, false
@@ -1376,7 +1384,7 @@ func extractTableInfoFuncForAddPartition(event *PersistedDDLEvent, tableID int64
 	newCreatedIDs := getCreatedIDs(event.PrevPartitions, getAllPartitionIDs(event.TableInfo))
 	for _, partition := range newCreatedIDs {
 		if tableID == partition {
-			return common.WrapTableInfo(event.SchemaID, event.SchemaName, event.TableInfo), false
+			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 		}
 	}
 	return nil, false
@@ -1403,7 +1411,7 @@ func extractTableInfoFuncForTruncateAndReorganizePartition(event *PersistedDDLEv
 	newCreatedIDs := getCreatedIDs(event.PrevPartitions, physicalIDs)
 	for _, partition := range newCreatedIDs {
 		if tableID == partition {
-			return common.WrapTableInfo(event.SchemaID, event.SchemaName, event.TableInfo), false
+			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 		}
 	}
 	return nil, false
@@ -1414,12 +1422,12 @@ func extractTableInfoFuncForRenameTables(event *PersistedDDLEvent, tableID int64
 		if isPartitionTable(tableInfo) {
 			for _, partitionID := range getAllPartitionIDs(tableInfo) {
 				if tableID == partitionID {
-					return common.WrapTableInfo(event.SchemaIDs[i], event.SchemaNames[i], tableInfo), false
+					return common.WrapTableInfo(event.SchemaNames[i], tableInfo), false
 				}
 			}
 		} else {
 			if tableID == tableInfo.ID {
-				return common.WrapTableInfo(event.SchemaIDs[i], event.SchemaNames[i], tableInfo), false
+				return common.WrapTableInfo(event.SchemaNames[i], tableInfo), false
 			}
 		}
 	}
@@ -1432,12 +1440,12 @@ func extractTableInfoFuncForCreateTables(event *PersistedDDLEvent, tableID int64
 		if isPartitionTable(tableInfo) {
 			for _, partitionID := range getAllPartitionIDs(tableInfo) {
 				if tableID == partitionID {
-					return common.WrapTableInfo(event.SchemaID, event.SchemaName, tableInfo), false
+					return common.WrapTableInfo(event.SchemaName, tableInfo), false
 				}
 			}
 		} else {
 			if tableID == tableInfo.ID {
-				return common.WrapTableInfo(event.SchemaID, event.SchemaName, tableInfo), false
+				return common.WrapTableInfo(event.SchemaName, tableInfo), false
 			}
 		}
 	}
@@ -1459,7 +1467,7 @@ func extractTableInfoFuncForAlterTablePartitioning(event *PersistedDDLEvent, tab
 	}
 	for _, partitionID := range getAllPartitionIDs(event.TableInfo) {
 		if tableID == partitionID {
-			return common.WrapTableInfo(event.SchemaID, event.SchemaName, event.TableInfo), false
+			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 		}
 	}
 	log.Panic("should not reach here", zap.Int64("tableID", tableID))
@@ -1468,12 +1476,11 @@ func extractTableInfoFuncForAlterTablePartitioning(event *PersistedDDLEvent, tab
 
 func extractTableInfoFuncForRemovePartitioning(event *PersistedDDLEvent, tableID int64) (*common.TableInfo, bool) {
 	if event.TableID == tableID {
-		return common.WrapTableInfo(event.SchemaID, event.SchemaName, event.TableInfo), false
-	} else {
-		for _, partitionID := range event.PrevPartitions {
-			if tableID == partitionID {
-				return nil, true
-			}
+		return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
+	}
+	for _, partitionID := range event.PrevPartitions {
+		if tableID == partitionID {
+			return nil, true
 		}
 	}
 	log.Panic("should not reach here", zap.Int64("tableID", tableID))
@@ -1491,16 +1498,13 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 	// TODO: ShouldDiscardDDL is used for old architecture, should be removed later
 	if tableFilter != nil && rawEvent.SchemaName != "" && rawEvent.TableName != "" {
 		filtered = tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.SchemaName, rawEvent.TableName, rawEvent.TableInfo)
-		// if the ddl invovles another table name, only set filtered to true when all of them should be filtered
+		// if the ddl involve another table name, only set filtered to true when all of them should be filtered
 		if rawEvent.ExtraSchemaName != "" && rawEvent.ExtraTableName != "" {
 			filtered = filtered && tableFilter.ShouldDiscardDDL(model.ActionType(rawEvent.Type), rawEvent.ExtraSchemaName, rawEvent.ExtraTableName, rawEvent.TableInfo)
 		}
 	}
 	if rawEvent.TableInfo != nil {
-		wrapTableInfo = common.WrapTableInfo(
-			rawEvent.SchemaID,
-			rawEvent.SchemaName,
-			rawEvent.TableInfo)
+		wrapTableInfo = common.WrapTableInfo(rawEvent.SchemaName, rawEvent.TableInfo)
 	}
 
 	return commonEvent.DDLEvent{
@@ -1515,6 +1519,10 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 		TableInfo:  wrapTableInfo,
 		FinishedTs: rawEvent.FinishedTs,
 		TiDBOnly:   tiDBOnly,
+		BDRMode:    rawEvent.BDRRole,
+
+		TableNameInDDLJob: rawEvent.TableNameInDDLJob,
+		DBNameInDDLJob:    rawEvent.DBNameInDDLJob,
 	}, !filtered
 }
 
@@ -1644,9 +1652,23 @@ func buildDDLEventForNormalDDLOnSingleTable(rawEvent *PersistedDDLEvent, tableFi
 	if !ok {
 		return ddlEvent, false
 	}
-	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
-		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{rawEvent.TableID},
+
+	// the event is related to the partition table
+	if rawEvent.TableInfo.Partition != nil {
+		partitionTableIDs := make([]int64, 0)
+		for _, partition := range rawEvent.TableInfo.Partition.Definitions {
+			partitionTableIDs = append(partitionTableIDs, partition.ID)
+		}
+
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      partitionTableIDs,
+		}
+	} else {
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.TableID},
+		}
 	}
 	return ddlEvent, true
 }
@@ -1656,9 +1678,22 @@ func buildDDLEventForNormalDDLOnSingleTableForTiDB(rawEvent *PersistedDDLEvent, 
 	if !ok {
 		return ddlEvent, false
 	}
-	ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
-		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{rawEvent.TableID},
+	// the event is related to the partition table
+	if rawEvent.TableInfo.Partition != nil {
+		partitionTableIDs := make([]int64, 0)
+		for _, partition := range rawEvent.TableInfo.Partition.Definitions {
+			partitionTableIDs = append(partitionTableIDs, partition.ID)
+		}
+
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      partitionTableIDs,
+		}
+	} else {
+		ddlEvent.BlockedTables = &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{rawEvent.TableID},
+		}
 	}
 	return ddlEvent, true
 }
@@ -2005,7 +2040,7 @@ func buildDDLEventForExchangeTablePartition(rawEvent *PersistedDDLEvent, tableFi
 		log.Fatal("should not happen")
 	}
 	ddlEvent.MultipleTableInfos = []*common.TableInfo{
-		common.WrapTableInfo(rawEvent.SchemaID, rawEvent.SchemaName, rawEvent.TableInfo),
+		common.WrapTableInfo(rawEvent.SchemaName, rawEvent.TableInfo),
 		rawEvent.ExtraTableInfo,
 	}
 	return ddlEvent, true
@@ -2039,7 +2074,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 			if !ignorePrevTable {
 				resultQuerys = append(resultQuerys, querys[i])
-				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaID, rawEvent.SchemaNames[i], tableInfo))
+				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, allPhysicalIDs...)
 				if !ignoreCurrentTable {
 					// check whether schema change
@@ -2082,7 +2117,7 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		} else {
 			if !ignorePrevTable {
 				resultQuerys = append(resultQuerys, querys[i])
-				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaID, rawEvent.SchemaNames[i], tableInfo))
+				tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaNames[i], tableInfo))
 				ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, tableInfo.ID)
 				if !ignoreCurrentTable {
 					if rawEvent.ExtraSchemaIDs[i] != rawEvent.SchemaIDs[i] {
@@ -2198,7 +2233,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			TableName:  info.Name.O,
 		})
 		resultQuerys = append(resultQuerys, querys[i])
-		tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaID, rawEvent.SchemaName, info))
+		tableInfos = append(tableInfos, common.WrapTableInfo(rawEvent.SchemaName, info))
 	}
 	ddlEvent.TableNameChange = &commonEvent.TableNameChange{
 		AddName: addName,
@@ -2212,8 +2247,7 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 }
 
 func buildDDLEventForAlterTablePartitioning(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool) {
-	// TODO: only tidb?
-	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithTiDBOnly)
+	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if !ok {
 		return ddlEvent, false
 	}
@@ -2244,8 +2278,7 @@ func buildDDLEventForAlterTablePartitioning(rawEvent *PersistedDDLEvent, tableFi
 }
 
 func buildDDLEventForRemovePartitioning(rawEvent *PersistedDDLEvent, tableFilter filter.Filter) (commonEvent.DDLEvent, bool) {
-	// TODO: only tidb?
-	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithTiDBOnly)
+	ddlEvent, ok := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if !ok {
 		return ddlEvent, false
 	}

@@ -1,0 +1,71 @@
+#!/bin/bash
+
+# do_retry - A script to retry another command with configurable attempts and delay
+#
+# Usage: do_retry <max_attempts> <delay_seconds> <command> [arguments...]
+#
+# Parameters:
+#   - max_attempts: Maximum number of retry attempts (integer > 0)
+#   - delay_seconds: Delay between retries in seconds (integer >= 0)
+#   - command: The command to execute and retry if failed
+#   - arguments: Any additional arguments to pass to the command
+#
+# Example:
+#   do_retry 3 5 ./my_script.sh arg1 arg2
+#   (This will try to run "./my_script.sh arg1 arg2" up to 3 times with 5 second delay between attempts)
+
+# Check if enough arguments are provided
+if [ $# -lt 3 ]; then
+	echo "Error: Insufficient arguments"
+	echo "Usage: do_retry <max_attempts> <delay_seconds> <command> [arguments...]"
+	exit 1
+fi
+
+# Extract parameters
+max_attempts=$1
+delay_seconds=$2
+shift 2 # Remove the first two arguments, leaving command and its arguments
+
+# Validate max_attempts is a positive integer
+if ! [[ "$max_attempts" =~ ^[1-9][0-9]*$ ]]; then
+	echo "Error: max_attempts must be a positive integer"
+	exit 1
+fi
+
+# Validate delay_seconds is a non-negative integer
+if ! [[ "$delay_seconds" =~ ^[0-9]+$ ]]; then
+	echo "Error: delay_seconds must be a non-negative integer"
+	exit 1
+fi
+
+command_to_run="$@"
+attempt=1
+
+# Main retry loop
+while [ $attempt -le $max_attempts ]; do
+	echo "Attempt $attempt of $max_attempts: $command_to_run"
+
+	# Execute the command and capture its exit code
+	eval "$command_to_run"
+	exit_code=$?
+
+	# If command succeeded, exit with success
+	if [ $exit_code -eq 0 ]; then
+		echo "Command succeeded on attempt $attempt"
+		exit 0
+	fi
+
+	# Command failed, prepare for retry if attempts remain
+	attempt=$((attempt + 1))
+
+	if [ $attempt -le $max_attempts ]; then
+		echo "Command failed with exit code $exit_code. Retrying in $delay_seconds seconds..."
+		sleep $delay_seconds
+	else
+		echo "Command failed with exit code $exit_code after $max_attempts attempts. Giving up."
+	fi
+done
+
+# If we got here, all attempts failed
+echo "All retry attempts failed"
+exit $exit_code # Return the exit code from the last attempt

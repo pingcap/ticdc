@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/spanz"
+	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/cdc/sink/ddlsink"
@@ -354,7 +355,7 @@ func NewConsumer(ctx context.Context, o *ConsumerOption) (*Consumer, error) {
 	c := new(Consumer)
 	c.option = o
 
-	tz, err := util.GetTimezone(o.timezone)
+	tz, err := putil.GetTimezone(o.timezone)
 	if err != nil {
 		return nil, errors.Annotate(err, "can not load timezone")
 	}

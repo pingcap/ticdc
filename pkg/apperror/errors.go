@@ -41,6 +41,11 @@ var (
 		errors.RFCCodeText("CDC:ErrTableIsNotFounded"),
 	)
 
+	ErrTableNotSupportMove = errors.Normalize(
+		"table is not supported to move",
+		errors.RFCCodeText("CDC:ErrTableNotSupportMove"),
+	)
+
 	ErrMaintainerNotFounded = errors.Normalize(
 		"maintainer is not found",
 		errors.RFCCodeText("CDC:ErrMaintainerNotFounded"),

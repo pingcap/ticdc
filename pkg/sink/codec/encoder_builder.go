@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
+	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 )
 
 func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncoder, error) {
@@ -34,8 +35,8 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncod
 		return canal.NewJSONRowEventEncoder(ctx, cfg)
 	// case config.ProtocolDebezium:
 	// 	return debezium.NewBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID), nil
-	// case config.ProtocolSimple:
-	// 	return simple.NewEncoder(ctx, cfg)
+	case config.ProtocolSimple:
+		return simple.NewEncoder(ctx, cfg)
 	default:
 		return nil, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(cfg.Protocol)
 	}

@@ -14,6 +14,7 @@
 package schemastore
 
 import (
+	"context"
 	"math"
 	"sync"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/meta"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
@@ -35,9 +37,14 @@ import (
 var (
 	once         sync.Once
 	ddlTableInfo *event.DDLTableInfo
+	// ddl puller should never filter any DDL jobs even if
+	// the changefeed is in BDR mode, because the DDL jobs should
+	// be filtered before they are sent to the sink
+	ddlPullerFilterLoop = false
 )
 
 type ddlJobFetcher struct {
+	ctx               context.Context
 	resolvedTsTracker struct {
 		sync.Mutex
 		resolvedTsItemMap map[logpuller.SubscriptionID]*resolvedTsItem
@@ -53,6 +60,7 @@ type ddlJobFetcher struct {
 }
 
 func newDDLJobFetcher(
+	ctx context.Context,
 	subClient *logpuller.SubscriptionClient,
 	kvStorage kv.Storage,
 	startTs uint64,
@@ -60,6 +68,7 @@ func newDDLJobFetcher(
 	advanceResolvedTs func(resolvedTS uint64),
 ) *ddlJobFetcher {
 	ddlJobFetcher := &ddlJobFetcher{
+		ctx:               ctx,
 		cacheDDLEvent:     cacheDDLEvent,
 		advanceResolvedTs: advanceResolvedTs,
 		kvStorage:         kvStorage,
@@ -77,7 +86,7 @@ func newDDLJobFetcher(
 		advanceSubSpanResolvedTs := func(ts uint64) {
 			ddlJobFetcher.tryAdvanceResolvedTs(subID, ts)
 		}
-		subClient.Subscribe(subID, span, startTs, ddlJobFetcher.input, advanceSubSpanResolvedTs, 0)
+		subClient.Subscribe(subID, span, startTs, ddlJobFetcher.input, advanceSubSpanResolvedTs, 0, ddlPullerFilterLoop)
 	}
 
 	return ddlJobFetcher
@@ -135,7 +144,7 @@ func (p *ddlJobFetcher) unmarshalDDL(rawKV *common.RawKVEntry) (*model.Job, erro
 	}
 	if !event.IsLegacyFormatJob(rawKV) {
 		once.Do(func() {
-			if err := initDDLTableInfo(p.kvStorage); err != nil {
+			if err := initDDLTableInfo(p.ctx, p.kvStorage); err != nil {
 				log.Fatal("init ddl table info failed", zap.Error(err))
 			}
 		})
@@ -144,12 +153,18 @@ func (p *ddlJobFetcher) unmarshalDDL(rawKV *common.RawKVEntry) (*model.Job, erro
 	return event.ParseDDLJob(rawKV, ddlTableInfo)
 }
 
-func initDDLTableInfo(kvStorage kv.Storage) error {
+// getSnapshotMeta returns tidb meta information
+func getSnapshotMeta(tiStore kv.Storage, ts uint64) meta.Reader {
+	snapshot := tiStore.GetSnapshot(kv.NewVersion(ts))
+	return meta.NewReader(snapshot)
+}
+
+func initDDLTableInfo(ctx context.Context, kvStorage kv.Storage) error {
 	version, err := kvStorage.CurrentVersion(kv.GlobalTxnScope)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	snap := logpuller.GetSnapshotMeta(kvStorage, version.Ver)
+	snap := getSnapshotMeta(kvStorage, version.Ver)
 
 	dbInfos, err := snap.ListDatabases()
 	if err != nil {
@@ -161,7 +176,7 @@ func initDDLTableInfo(kvStorage kv.Storage) error {
 		return errors.Trace(err)
 	}
 
-	tbls, err := snap.ListTables(db.ID)
+	tbls, err := snap.ListTables(ctx, db.ID)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -178,7 +193,7 @@ func initDDLTableInfo(kvStorage kv.Storage) error {
 	}
 
 	ddlTableInfo = &event.DDLTableInfo{}
-	ddlTableInfo.DDLJobTable = common.WrapTableInfo(db.ID, db.Name.L, tableInfo)
+	ddlTableInfo.DDLJobTable = common.WrapTableInfo(db.Name.L, tableInfo)
 	ddlTableInfo.JobMetaColumnIDinJobTable = col.ID
 
 	// for tidb_ddl_history
@@ -192,7 +207,7 @@ func initDDLTableInfo(kvStorage kv.Storage) error {
 		return errors.Trace(err)
 	}
 
-	ddlTableInfo.DDLHistoryTable = common.WrapTableInfo(db.ID, db.Name.L, historyTableInfo)
+	ddlTableInfo.DDLHistoryTable = common.WrapTableInfo(db.Name.L, historyTableInfo)
 	ddlTableInfo.JobMetaColumnIDinHistoryTable = historyTableCol.ID
 
 	return nil

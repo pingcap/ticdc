@@ -159,7 +159,7 @@ func (oc *Controller) pushStopChangefeedOperator(cfID common.ChangeFeedID, nodeI
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
 		old.OP.PostFinish()
-		old.Removed = true
+		old.IsRemoved = true
 		delete(oc.operators, old.OP.ID())
 	}
 	oc.pushOperator(op)
@@ -238,7 +238,7 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.ChangeFee
 		return nil, false
 	}
 	item := heap.Pop(&oc.runningQueue).(*operator.OperatorWithTime[common.ChangeFeedID, *heartbeatpb.MaintainerStatus])
-	if item.Removed {
+	if item.IsRemoved {
 		return nil, true
 	}
 	op := item.OP
@@ -246,10 +246,10 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.ChangeFee
 	// always call the PostFinish method to ensure the operator is cleaned up by itself.
 	if op.IsFinished() {
 		op.PostFinish()
-		item.Removed = true
+		item.IsRemoved = true
 		delete(oc.operators, opID)
 		metrics.CoordinatorFinishedOperatorCount.WithLabelValues(op.Type()).Inc()
-		metrics.CoordinatorOperatorDuration.WithLabelValues(op.Type()).Observe(time.Since(item.EnqueueTime).Seconds())
+		metrics.CoordinatorOperatorDuration.WithLabelValues(op.Type()).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
 			zap.String("role", oc.role),
 			zap.String("operator", opID.String()),
@@ -257,12 +257,12 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.ChangeFee
 		return nil, true
 	}
 	now := time.Now()
-	if now.Before(item.Time) {
+	if now.Before(item.NotifyAt) {
 		heap.Push(&oc.runningQueue, item)
 		return nil, false
 	}
 	// pushes with new notify time.
-	item.Time = time.Now().Add(time.Millisecond * 500)
+	item.NotifyAt = time.Now().Add(time.Millisecond * 500)
 	heap.Push(&oc.runningQueue, item)
 	return op, true
 }

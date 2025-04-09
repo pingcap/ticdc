@@ -170,7 +170,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 		case tsCh <- ts:
 		}
 	}
-	client.Subscribe(subID, span, 1, consumeKVEvents, advanceResolvedTs, 0)
+	client.Subscribe(subID, span, 1, consumeKVEvents, advanceResolvedTs, 0, false)
 
 	eventsCh1 <- mockInitializedEvent(11, uint64(subID))
 	targetTs := oracle.GoTimeToTS(pdClock.CurrentTime())

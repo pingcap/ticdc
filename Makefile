@@ -3,6 +3,7 @@
 .PHONY: clean fmt check tidy \
 	generate-protobuf generate_mock \
 	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
+	prepare_test_binaries \
 	unit_test_in_verify_ci integration_test_build integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
 
 
@@ -112,7 +113,7 @@ P=3
 
 # The following packages are used in unit tests.
 # Add new packages here if you want to include them in unit tests.
-UT_PACKAGES_DISPATCHER := ./pkg/sink/mysql/... ./pkg/sink/util/... ./downstreamadapter/sink/... ./downstreamadapter/dispatcher/... ./downstreamadapter/worker/... ./pkg/sink/codec/open/... ./pkg/sink/codec/canal/...
+UT_PACKAGES_DISPATCHER := ./pkg/sink/cloudstorage/... ./pkg/sink/mysql/... ./pkg/sink/util/... ./downstreamadapter/sink/... ./downstreamadapter/dispatcher/... ./downstreamadapter/worker/... ./downstreamadapter/worker/writer/... ./pkg/sink/codec/open/... ./pkg/sink/codec/csv/... ./pkg/sink/codec/canal/... ./pkg/sink/codec/simple/...
 UT_PACKAGES_MAINTAINER := ./maintainer/...
 UT_PACKAGES_COORDINATOR := ./coordinator/...
 UT_PACKAGES_LOGSERVICE := ./logservice/...
@@ -140,6 +141,9 @@ storage_consumer:
 pulsar_consumer:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_pulsar_consumer ./cmd/pulsar-consumer/main.go
 
+oauth2_server:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/oauth2-server ./cmd/oauth2-server/main.go
+
 filter_helper:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_filter_helper ./cmd/filter-helper/main.go
 
@@ -154,6 +158,9 @@ fmt: tools/bin/gofumports tools/bin/shfmt tools/bin/gci
 	scripts/check-log-style.sh
 	@make check-diff-line-width
 
+prepare_test_binaries:
+	./tests/scripts/download-integration-test-binaries.sh "$(branch)" "$(community)" "$(ver)" "$(os)" "$(arch)"
+
 check_third_party_binary:
 	@which bin/tidb-server
 	@which bin/tikv-server
@@ -167,7 +174,7 @@ check_third_party_binary:
 	@which bin/minio
 	@which bin/bin/schema-registry-start
 
-integration_test_build: check_failpoint_ctl
+integration_test_build: check_failpoint_ctl storage_consumer kafka_consumer pulsar_consumer oauth2_server
 	$(FAILPOINT_ENABLE)
 	$(GOTEST) -ldflags '$(LDFLAGS)' -c -cover -covermode=atomic \
 		-coverpkg=github.com/pingcap/ticdc/... \
@@ -187,16 +194,16 @@ check_failpoint_ctl: tools/bin/failpoint-ctl
 
 integration_test: integration_test_mysql
 
-integration_test_mysql:
-	tests/integration_tests/run.sh mysql "$(CASE)" "$(NEWARCH)" "$(START_AT)"
+integration_test_mysql: check_third_party_binary
+	tests/integration_tests/run.sh mysql "$(CASE)" "$(START_AT)"
 
 integration_test_kafka: check_third_party_binary
 	tests/integration_tests/run.sh kafka "$(CASE)" "$(START_AT)"
 
-integration_test_storage:
+integration_test_storage: check_third_party_binary
 	tests/integration_tests/run.sh storage "$(CASE)" "$(START_AT)"
 
-integration_test_pulsar:
+integration_test_pulsar: check_third_party_binary
 	tests/integration_tests/run.sh pulsar "$(CASE)" "$(START_AT)"
 
 unit_test: check_failpoint_ctl generate-protobuf

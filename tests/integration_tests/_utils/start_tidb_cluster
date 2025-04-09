@@ -13,6 +13,8 @@ tikv_config=
 retry_times=3
 multiple_upstream_pd="false"
 
+LOG_DIR=
+
 while [[ ${1} ]]; do
 	case "${1}" in
 	--workdir)

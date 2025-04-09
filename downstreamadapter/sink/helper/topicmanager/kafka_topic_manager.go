@@ -221,7 +221,7 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 		// make sure the topic is visible.
 		meta, err := m.admin.GetTopicsMeta(ctx, topics, false)
 		if err != nil {
-			log.Warn(" topic not found, retry it",
+			log.Warn("topic not found, retry it",
 				zap.String("namespace", m.changefeedID.Namespace()),
 				zap.String("changefeed", m.changefeedID.Name()),
 				zap.Error(err),

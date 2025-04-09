@@ -16,7 +16,7 @@ package config
 import (
 	"strings"
 
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 const (
@@ -73,7 +73,7 @@ func ParseSinkProtocolFromString(protocol string) (Protocol, error) {
 	case "simple":
 		return ProtocolSimple, nil
 	default:
-		return ProtocolUnknown, cerror.ErrSinkUnknownProtocol.GenWithStackByArgs(protocol)
+		return ProtocolUnknown, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(protocol)
 	}
 }
 

@@ -98,7 +98,8 @@ func (e *TableDeletedError) Error() string {
 	return "table deleted"
 }
 
-// return the table info with the largest version <= ts
+// if ts < deleteVersion, return the table info with the largest version <= ts
+// if ts >= deleteVersion, return nil table info and TableDeletedError
 func (v *versionedTableInfoStore) getTableInfo(ts uint64) (*common.TableInfo, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()

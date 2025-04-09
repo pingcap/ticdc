@@ -31,8 +31,9 @@ const (
 var DefaultEndian = binary.LittleEndian
 
 type (
-	Ts      = uint64
-	TableID = int64
+	Ts        = uint64
+	TableID   = int64
+	CaptureID = string
 )
 
 type CoordinatorID string
@@ -268,6 +269,7 @@ type SinkType int
 const (
 	MysqlSinkType SinkType = iota
 	KafkaSinkType
+	PulsarSinkType
 	CloudStorageSinkType
 	BlackHoleSinkType
 )
