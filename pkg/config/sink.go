@@ -152,10 +152,6 @@ type SinkConfig struct {
 	// FileIndexWidth is only available when the downstream is Storage
 	FileIndexWidth *int `toml:"file-index-digit,omitempty" json:"file-index-digit,omitempty"`
 
-	// EnableKafkaSinkV2 enabled then the kafka-go sink will be used.
-	// It is only available when the downstream is MQ.
-	EnableKafkaSinkV2 *bool `toml:"enable-kafka-sink-v2" json:"enable-kafka-sink-v2,omitempty"`
-
 	// OnlyOutputUpdatedColumns is only available when the downstream is MQ.
 	OnlyOutputUpdatedColumns *bool `toml:"only-output-updated-columns" json:"only-output-updated-columns,omitempty"`
 
