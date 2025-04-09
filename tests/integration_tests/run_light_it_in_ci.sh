@@ -18,15 +18,18 @@ group_num=${group#G}
 # The case "kafka_big_messages" should be added to the kafka group only, because it is a kafka-specific test case.
 # The case will not be executed on a sink type if it is not added to the corresponding group.
 #
-# For each sink type, we define 16 groups of tests. And 4 CPU cores will be allocated to run each group in CI pipelines.
+# For each sink type, we define 16 groups of tests.
 # When we add a case, we should keep the cost of each group as close as possible to reduce the waiting time of CI pipelines.
 # The number of groups should not be changed, which is 16.
 # But if we have to add a new group, the new group number should be updated in the CI pipeline configuration file:
-# For mysql: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_integration_test.groovy
-# For kafka: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_integration_kafka_test.groovy
-# For pulsar: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_integration_pulsar_test.groovy
-# For storage: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_integration_storage_test.groovy
+# For mysql: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_mysql_integration_light.groovy
+# For kafka: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_kafka_integration_light.groovy
+# For pulsar: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_pulsar_integration_light.groovy
+# For storage: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_storage_integration_light.groovy
 
+# Resource allocation for mysql light integration tests in CI pipelines:
+# https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_mysql_integration_light.yaml
+# 4 CPU, 16 Gi memory.
 mysql_groups=(
 	# G00
 	'charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
@@ -62,52 +65,58 @@ mysql_groups=(
 	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint'
 )
 
+# Resource allocation for kafka light integration tests in CI pipelines:
+# https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_kafka_integration_light.yaml
+# 6 CPU, 16 Gi memory.
 kafka_groups=(
 	# G00
-	''
+	'canal_json_basic'
 	# G01
-	''
+	'canal_json_claim_check'
 	# G02
-	''
+	'canal_json_content_compatible'
 	# G03
-	''
+	'canal_json_handle_key_only'
 	# G04
-	''
+	'canal_json_storage_basic'
 	# G05
-	''
+	'open_protocol_claim_check'
 	# G06
-	''
+	'open_protocol_handle_key_only'
 	# G07
-	''
+	'kafka_big_messages'
 	# G08
-	''
+	'kafka_big_messages_v2'
 	# G09
-	''
+	'kafka_compression'
 	# G10
-	''
+	'kafka_messages'
 	# G11
-	''
+	'mq_sink_dispatcher'
 	# G12
-	''
+	'multi_topics'
 	# G13
-	''
+	'multi_topics_v2'
 	# G14
 	''
 	# G15
 	''
 )
 
+# Resource allocation for pulsar light integration tests in CI pipelines:
+# https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_pulsar_integration_light.yaml
+# 6 CPU, 32 Gi memory.
 pulsar_groups=(
 	# G00
-	''
+	'canal_json_basic'
 	# G01
-	''
+	'canal_json_claim_check'
 	# G02
-	''
+	'canal_json_content_compatible'
 	# G03
-	''
+	'canal_json_handle_key_only'
 	# G04
-	''
+	'canal_json_storage_basic'
 	# G05
 	''
 	# G06
@@ -132,15 +141,18 @@ pulsar_groups=(
 	''
 )
 
+# Resource allocation for storage light integration tests in CI pipelines:
+# https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_storage_integration_light.yaml
+# 6 CPU, 16 Gi memory.
 storage_groups=(
 	# G00
-	''
+	'lossy_ddl'
 	# G01
-	''
+	'storage_cleanup'
 	# G02
-	''
+	'csv_storage_basic'
 	# G03
-	''
+	'csv_storage_multi_tables_ddl'
 	# G04
 	''
 	# G05
@@ -195,6 +207,9 @@ if [[ $group_num =~ ^[0-9]+$ ]] && [[ -n ${groups[10#${group_num}]} ]]; then
 	export TICDC_NEWARCH=true
 	"${CUR}"/run.sh "${sink_type}" "${test_names}"
 else
-	echo "Error: invalid group name: ${group}"
-	exit 1
+	echo "Warnning: invalid group name: ${group}, or this group is empty."
+	# For now, the CI pipeline will fail if the group is empty.
+	# So we comment out the exit command here.
+	# But if the groups are full of test cases, we should uncomment the exit command.
+	# exit 1
 fi

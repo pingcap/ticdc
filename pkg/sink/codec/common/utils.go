@@ -17,12 +17,13 @@ import (
 	"database/sql/driver"
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
 
 // NewLargeEvent4Test creates large events for test
-func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowChange, *commonEvent.RowChange, *commonEvent.RowChange) {
+func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEvent, *commonEvent.RowEvent, *commonEvent.RowEvent) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -144,13 +145,34 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowCh
 
 	insert, ok := dmlEvent.GetNextRow()
 	require.Equal(t, ok, true)
-	update := &commonEvent.RowChange{
+	insertEvent := &commonEvent.RowEvent{
+		PhysicalTableID: dmlEvent.PhysicalTableID,
+		CommitTs:        dmlEvent.CommitTs,
+		TableInfo:       dmlEvent.TableInfo,
+		Event:           insert,
+		ColumnSelector:  columnselector.NewDefaultColumnSelector(),
+	}
+	update := commonEvent.RowChange{
 		PreRow: insert.Row,
 		Row:    insert.Row,
 	}
-	delete := &commonEvent.RowChange{
+	updateEvent := &commonEvent.RowEvent{
+		PhysicalTableID: dmlEvent.PhysicalTableID,
+		CommitTs:        dmlEvent.CommitTs,
+		TableInfo:       dmlEvent.TableInfo,
+		Event:           update,
+		ColumnSelector:  columnselector.NewDefaultColumnSelector(),
+	}
+	delete := commonEvent.RowChange{
 		PreRow: insert.Row,
 		Row:    insert.PreRow,
+	}
+	deleteEvent := &commonEvent.RowEvent{
+		PhysicalTableID: dmlEvent.PhysicalTableID,
+		CommitTs:        dmlEvent.CommitTs,
+		TableInfo:       dmlEvent.TableInfo,
+		Event:           delete,
+		ColumnSelector:  columnselector.NewDefaultColumnSelector(),
 	}
 
 	ddlEvent := &commonEvent.DDLEvent{
@@ -158,13 +180,14 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowCh
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
 		FinishedTs: 1,
+		TableInfo:  helper.GetTableInfo(job),
 		BlockedTables: &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{0},
 		},
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 	}
-	return ddlEvent, &insert, update, delete
+	return ddlEvent, insertEvent, updateEvent, deleteEvent
 }
 
 // LargeColumnKeyValues returns the key values of large columns

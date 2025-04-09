@@ -98,6 +98,8 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 		// ID
 		binary.BigEndian.PutUint64(buf, uint64(idx.ID))
 		sha256Hasher.Write(buf)
+		// name
+		sha256Hasher.Write([]byte(idx.Name.O))
 		// columns offset
 		binary.BigEndian.PutUint64(buf, uint64(len(idx.Columns)))
 		sha256Hasher.Write(buf)
@@ -171,6 +173,9 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 		if col.ID != columns[i].ID {
 			return false
 		}
+		if col.GetDefaultValue() != columns[i].GetDefaultValue() {
+			return false
+		}
 	}
 
 	if len(s.Indices) != len(indices) {
@@ -179,6 +184,9 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 
 	for i, idx := range s.Indices {
 		if idx.ID != indices[i].ID {
+			return false
+		}
+		if !idx.Name.Equals(indices[i].Name) {
 			return false
 		}
 		if len(idx.Columns) != len(indices[i].Columns) {

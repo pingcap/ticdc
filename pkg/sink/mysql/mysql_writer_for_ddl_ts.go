@@ -583,5 +583,6 @@ func (w *Writer) createDDLTsTableIfNotExist() error {
 	if err != nil {
 		return err
 	}
+	w.ddlTsTableInit = true
 	return nil
 }

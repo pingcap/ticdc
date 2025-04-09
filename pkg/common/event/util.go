@@ -82,15 +82,30 @@ func NewEventTestHelper(t testing.TB) *EventTestHelper {
 }
 
 func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
-	key := toTableInfosKey(job.SchemaName, job.TableName)
-	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
-	info := common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo)
+	var tableInfo *timodel.TableInfo
+	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
+		tableInfo = job.BinlogInfo.TableInfo
+	} else {
+		// Just retrieve the schema name for a DDL job that does not contain TableInfo.
+		// Currently supported by cdc are: ActionCreateSchema, ActionDropSchema,
+		// and ActionModifySchemaCharsetAndCollate.
+		tableInfo = &timodel.TableInfo{
+			Version: uint16(job.BinlogInfo.FinishedTS),
+		}
+	}
+	info := common.WrapTableInfo(job.SchemaName, tableInfo)
 	info.InitPrivateFields()
+	key := toTableInfosKey(info.GetSchemaName(), info.GetTableName())
+	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
 	s.tableInfos[key] = info
 }
 
 func (s *EventTestHelper) GetTableInfo(job *timodel.Job) *common.TableInfo {
-	key := toTableInfosKey(job.SchemaName, job.TableName)
+	table := ""
+	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
+		table = job.BinlogInfo.TableInfo.Name.O
+	}
+	key := toTableInfosKey(job.SchemaName, table)
 	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
 	return s.tableInfos[key]
 }
@@ -162,6 +177,21 @@ func (s *EventTestHelper) DDL2Jobs(ddl string, jobCnt int) []*timodel.Job {
 		s.ApplyJob(job)
 	}
 	return jobs
+}
+
+func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
+	job := s.DDL2Job(ddl)
+	info := s.GetTableInfo(job)
+	return &DDLEvent{
+		SchemaID:   job.SchemaID,
+		TableID:    info.TableName.TableID,
+		SchemaName: info.GetSchemaName(),
+		TableName:  info.GetTableName(),
+		Query:      job.Query,
+		Type:       byte(job.Type),
+		TableInfo:  info,
+		FinishedTs: job.BinlogInfo.FinishedTS,
+	}
 }
 
 // DML2Event execute the dml(s) and return the corresponding DMLEvent.

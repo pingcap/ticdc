@@ -161,9 +161,7 @@ func (t *DMLEvent) AddPostFlushFunc(f func()) {
 	t.PostTxnFlushed = append(t.PostTxnFlushed, f)
 }
 
-// The function if called after call all the GetNextRow to get all rows.
-// It will reset the offset to 0
-// So that the next GetNextRow will return the first row
+// Rewind reset the offset to 0, So that the next GetNextRow will return the first row
 func (t *DMLEvent) Rewind() {
 	t.offset = 0
 }
