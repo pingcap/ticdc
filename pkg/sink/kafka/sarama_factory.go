@@ -15,6 +15,7 @@ package kafka
 
 import (
 	"context"
+	"go.uber.org/atomic"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -101,6 +102,7 @@ func (f *saramaFactory) SyncProducer() (SyncProducer, error) {
 		id:       f.changefeedID,
 		client:   client,
 		producer: p,
+		closed:   atomic.NewBool(false),
 	}, nil
 }
 

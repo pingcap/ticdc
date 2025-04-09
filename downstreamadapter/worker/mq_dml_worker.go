@@ -15,12 +15,12 @@ package worker
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
-	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -59,7 +59,7 @@ type MQDMLWorker struct {
 	encoderGroup codec.EncoderGroup
 
 	// producer is used to send the messages to the MQ broker.
-	producer producer.DMLProducer
+	producer kafka.AsyncProducer
 
 	// statistics is used to record DML metrics.
 	statistics *metrics.Statistics
@@ -69,7 +69,7 @@ type MQDMLWorker struct {
 func NewMQDMLWorker(
 	id common.ChangeFeedID,
 	protocol config.Protocol,
-	producer producer.DMLProducer,
+	producer kafka.AsyncProducer,
 	encoderGroup codec.EncoderGroup,
 	columnSelector *columnselector.ColumnSelectors,
 	eventRouter *eventrouter.EventRouter,
@@ -93,7 +93,7 @@ func NewMQDMLWorker(
 func (w *MQDMLWorker) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		return w.producer.Run(ctx)
+		return w.producer.AsyncRunCallback(ctx)
 	})
 
 	g.Go(func() error {
@@ -343,7 +343,7 @@ func (w *MQDMLWorker) sendMessages(ctx context.Context) error {
 				start := time.Now()
 				if err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
-					if err = w.producer.AsyncSendMessage(
+					if err = w.producer.AsyncSend(
 						ctx,
 						future.Key.Topic,
 						future.Key.Partition,

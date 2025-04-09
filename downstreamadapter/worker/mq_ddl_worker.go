@@ -15,12 +15,12 @@ package worker
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
-	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -44,8 +44,7 @@ type MQDDLWorker struct {
 	// It is also responsible for creating topics.
 	topicManager topicmanager.TopicManager
 
-	// producer is used to send the messages to the MQ broker.
-	producer producer.DDLProducer
+	producer kafka.SyncProducer
 
 	tableSchemaStore *util.TableSchemaStore
 
@@ -77,7 +76,7 @@ func getDDLDispatchRule(protocol config.Protocol) DDLDispatchRule {
 func NewMQDDLWorker(
 	id commonType.ChangeFeedID,
 	protocol config.Protocol,
-	producer producer.DDLProducer,
+	producer kafka.SyncProducer,
 	encoder common.EventEncoder,
 	eventRouter *eventrouter.EventRouter,
 	topicManager topicmanager.TopicManager,
@@ -124,11 +123,11 @@ func (w *MQDDLWorker) WriteBlockEvent(ctx context.Context, event *event.DDLEvent
 		}
 		if w.partitionRule == PartitionAll {
 			err = w.statistics.RecordDDLExecution(func() error {
-				return w.producer.SyncBroadcastMessage(ctx, topic, partitionNum, message)
+				return w.producer.SendMessages(ctx, topic, partitionNum, message)
 			})
 		} else {
 			err = w.statistics.RecordDDLExecution(func() error {
-				return w.producer.SyncSendMessage(ctx, topic, 0, message)
+				return w.producer.SendMessage(ctx, topic, 0, message)
 			})
 		}
 		if err != nil {
@@ -187,7 +186,7 @@ func (w *MQDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) error {
 				}
 				log.Debug("Emit checkpointTs to default topic",
 					zap.String("topic", topic), zap.Uint64("checkpointTs", ts), zap.Any("partitionNum", partitionNum))
-				err = w.producer.SyncBroadcastMessage(ctx, topic, partitionNum, msg)
+				err = w.producer.SendMessages(ctx, topic, partitionNum, msg)
 				if err != nil {
 					return errors.Trace(err)
 				}
@@ -198,7 +197,7 @@ func (w *MQDDLWorker) encodeAndSendCheckpointEvents(ctx context.Context) error {
 					if err != nil {
 						return errors.Trace(err)
 					}
-					err = w.producer.SyncBroadcastMessage(ctx, topic, partitionNum, msg)
+					err = w.producer.SendMessages(ctx, topic, partitionNum, msg)
 					if err != nil {
 						return errors.Trace(err)
 					}

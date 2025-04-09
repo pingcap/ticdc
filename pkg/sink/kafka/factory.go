@@ -15,6 +15,7 @@ package kafka
 
 import (
 	"context"
+	"go.uber.org/atomic"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -83,8 +84,8 @@ type AsyncProducer interface {
 
 type saramaSyncProducer struct {
 	id       commonType.ChangeFeedID
-	client   sarama.Client
 	producer sarama.SyncProducer
+	closed   *atomic.Bool
 }
 
 func (p *saramaSyncProducer) SendMessage(
@@ -92,18 +93,24 @@ func (p *saramaSyncProducer) SendMessage(
 	topic string, partitionNum int32,
 	message *common.Message,
 ) error {
+	if p.closed.Load() {
+		return cerror.ErrKafkaProducerClosed.GenWithStackByArgs()
+	}
 	_, _, err := p.producer.SendMessage(&sarama.ProducerMessage{
 		Topic:     topic,
 		Key:       sarama.ByteEncoder(message.Key),
 		Value:     sarama.ByteEncoder(message.Value),
 		Partition: partitionNum,
 	})
-	return err
+	return cerror.WrapError(cerror.ErrKafkaSendMessage, err)
 }
 
 func (p *saramaSyncProducer) SendMessages(
 	_ context.Context, topic string, partitionNum int32, message *common.Message,
 ) error {
+	if p.closed.Load() {
+		return cerror.ErrKafkaProducerClosed.GenWithStackByArgs()
+	}
 	msgs := make([]*sarama.ProducerMessage, partitionNum)
 	for i := 0; i < int(partitionNum); i++ {
 		msgs[i] = &sarama.ProducerMessage{
@@ -113,49 +120,32 @@ func (p *saramaSyncProducer) SendMessages(
 			Partition: int32(i),
 		}
 	}
-	return p.producer.SendMessages(msgs)
+	err := p.producer.SendMessages(msgs)
+	return cerror.WrapError(cerror.ErrKafkaSendMessage, err)
 }
 
 func (p *saramaSyncProducer) Close() {
-	go func() {
-		// We need to close it asynchronously. Otherwise, we might get stuck
-		// with an unhealthy(i.e. Network jitter, isolation) state of Kafka.
-		// Factory has a background thread to fetch and update the metadata.
-		// If we close the client synchronously, we might get stuck.
-		// Safety:
-		// * If the kafka cluster is running well, it will be closed as soon as possible.
-		// * If there is a problem with the kafka cluster,
-		//   no data will be lost because this is a synchronous client.
-		// * There is a risk of goroutine leakage, but it is acceptable and our main
-		//   goal is not to get stuck with the owner tick.
-		start := time.Now()
-		if err := p.client.Close(); err != nil {
-			log.Warn("Close Kafka DDL client with error",
-				zap.String("namespace", p.id.Namespace()),
-				zap.String("changefeed", p.id.Name()),
-				zap.Duration("duration", time.Since(start)),
-				zap.Error(err))
-		} else {
-			log.Info("Kafka DDL client closed",
-				zap.String("namespace", p.id.Namespace()),
-				zap.String("changefeed", p.id.Name()),
-				zap.Duration("duration", time.Since(start)))
-		}
-		start = time.Now()
-		err := p.producer.Close()
-		if err != nil {
-			log.Error("Close Kafka DDL producer with error",
-				zap.String("namespace", p.id.Namespace()),
-				zap.String("changefeed", p.id.Name()),
-				zap.Duration("duration", time.Since(start)),
-				zap.Error(err))
-		} else {
-			log.Info("Kafka DDL producer closed",
-				zap.String("namespace", p.id.Namespace()),
-				zap.String("changefeed", p.id.Name()),
-				zap.Duration("duration", time.Since(start)))
-		}
-	}()
+	if p.closed.Load() {
+		log.Warn("kafka DDL producer already closed",
+			zap.String("namespace", p.id.Namespace()),
+			zap.String("changefeed", p.id.Name()))
+		return
+	}
+	p.closed.Store(true)
+	start := time.Now()
+	err := p.producer.Close()
+	if err != nil {
+		log.Error("Close Kafka DDL producer with error",
+			zap.String("namespace", p.id.Namespace()),
+			zap.String("changefeed", p.id.Name()),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(err))
+	} else {
+		log.Info("Kafka DDL producer closed",
+			zap.String("namespace", p.id.Namespace()),
+			zap.String("changefeed", p.id.Name()),
+			zap.Duration("duration", time.Since(start)))
+	}
 }
 
 type saramaAsyncProducer struct {
