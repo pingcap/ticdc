@@ -146,8 +146,8 @@ func newDMLProducers(
 	return p, nil
 }
 
-// AsyncSendMessage  Async send one message
-func (p *dmlProducers) AsyncSendMessage(
+// asyncSendMessage  Async send one message
+func (p *dmlProducers) asyncSendMessage(
 	ctx context.Context, topic string,
 	partition int32, message *common.Message,
 ) error {
@@ -220,24 +220,17 @@ func (p *dmlProducers) AsyncSendMessage(
 func (p *dmlProducers) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		return p.producer.Run(ctx)
-	})
-
-	g.Go(func() error {
 		return p.calculateKeyPartitions(ctx)
 	})
-
 	g.Go(func() error {
 		return p.encoderGroup.Run(ctx)
 	})
-
 	g.Go(func() error {
 		if p.protocol.IsBatchEncode() {
 			return p.batchEncodeRun(ctx)
 		}
 		return p.nonBatchEncodeRun(ctx)
 	})
-
 	g.Go(func() error {
 		return p.sendMessages(ctx)
 	})
@@ -466,7 +459,7 @@ func (p *dmlProducers) sendMessages(ctx context.Context) error {
 				start := time.Now()
 				if err = p.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
-					if err = p.producer.AsyncSendMessage(
+					if err = p.asyncSendMessage(
 						ctx,
 						future.Key.Topic,
 						future.Key.Partition,
