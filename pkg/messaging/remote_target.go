@@ -55,10 +55,7 @@ type remoteMessageTarget struct {
 	targetAddr      string
 	security        *security.Credential
 
-	streams struct {
-		sync.RWMutex
-		m map[string]grpcStream
-	}
+	streams sync.Map // string(streamType) -> *streamWrapper
 
 	// GRPC client connection to the remote target
 	conn struct {
@@ -99,14 +96,14 @@ type remoteMessageTarget struct {
 
 // Check if this target is ready to send messages
 func (s *remoteMessageTarget) isReadyToSend() bool {
-	s.streams.RLock()
-	defer s.streams.RUnlock()
-	for _, stream := range s.streams.m {
-		if stream == nil {
-			return false
+	ready := true
+	s.streams.Range(func(key, value interface{}) bool {
+		if value == nil {
+			ready = false
 		}
-	}
-	return true
+		return true
+	})
+	return ready
 }
 
 // Send an event message to the remote target
@@ -207,9 +204,8 @@ func newRemoteMessageTarget(
 	}
 
 	// initialize streams placeholder
-	rt.streams.m = make(map[string]grpcStream)
-	rt.streams.m[streamTypeEvent] = nil
-	rt.streams.m[streamTypeCommand] = nil
+	rt.streams.Store(streamTypeEvent, nil)
+	rt.streams.Store(streamTypeCommand, nil)
 
 	rt.connect()
 
@@ -270,28 +266,30 @@ func (s *remoteMessageTarget) connect() error {
 	}
 
 	client := proto.NewMessageServiceClient(conn)
+	err = nil
 
-	s.streams.Lock()
-	for streamType, stream := range s.streams.m {
-		if stream != nil {
+	s.streams.Range(func(key, value interface{}) bool {
+		streamType := key.(string)
+		stream, ok := value.(grpcStream)
+		if ok && stream != nil {
 			log.Panic("Stream already exists",
 				zap.Any("messageCenterID", s.messageCenterID),
 				zap.Stringer("remote", s.targetId),
 				zap.String("streamType", streamType))
 		}
 
-		stream, err := client.StreamMessages(s.ctx)
+		gs, err := client.StreamMessages(s.ctx)
 		if err != nil {
 			log.Info("Cannot establish bidirectional grpc stream",
 				zap.Any("messageCenterID", s.messageCenterID),
 				zap.Stringer("remote", s.targetId),
 				zap.Error(err))
 
-			s.streams.Unlock()
-			return AppError{
+			err = AppError{
 				Type:   ErrorTypeConnectionFailed,
 				Reason: fmt.Sprintf("Cannot open bidirectional grpc stream, error: %s", err.Error()),
 			}
+			return false
 		}
 
 		handshake := &HandshakeMessage{
@@ -303,8 +301,8 @@ func (s *remoteMessageTarget) connect() error {
 		hsBytes, err := handshake.Marshal()
 		if err != nil {
 			log.Error("Failed to marshal handshake message", zap.Error(err))
-			s.streams.Unlock()
-			return AppError{Type: ErrorTypeMessageSendFailed, Reason: err.Error()}
+			err = AppError{Type: ErrorTypeMessageSendFailed, Reason: err.Error()}
+			return false
 		}
 
 		// Send handshake message to identify this node
@@ -315,27 +313,28 @@ func (s *remoteMessageTarget) connect() error {
 			Payload: [][]byte{hsBytes},
 		}
 
-		if err := stream.Send(msg); err != nil {
+		if err := gs.Send(msg); err != nil {
 			log.Info("Failed to send handshake",
 				zap.Any("messageCenterID", s.messageCenterID),
 				zap.Stringer("remote", s.targetId),
 				zap.Error(err))
-
-			s.streams.Unlock()
-			return AppError{
+			err = AppError{
 				Type:   ErrorTypeMessageSendFailed,
 				Reason: fmt.Sprintf("Failed to send handshake, error: %s", err.Error()),
 			}
+			return false
 		}
-		s.streams.m[streamType] = stream
-	}
-	s.streams.Unlock()
+		s.streams.Store(streamType, gs)
+		return true
+	})
 	s.setConn(conn)
 
 	// Start goroutines for sending messages
-	for streamType := range s.streams.m {
+	s.streams.Range(func(key, value interface{}) bool {
+		streamType := key.(string)
 		s.run(streamType)
-	}
+		return true
+	})
 
 	log.Info("Connected to remote target",
 		zap.Stringer("localID", s.messageCenterID),
@@ -388,10 +387,7 @@ func (s *remoteMessageTarget) handleIncomingStream(stream proto.MessageService_S
 		return fmt.Errorf("connection policy violation: local node should initiate connection")
 	}
 
-	s.streams.Lock()
-	s.streams.m[handshake.StreamType] = stream
-	s.streams.Unlock()
-
+	s.streams.Store(handshake.StreamType, stream)
 	// Start goroutines for sending and receiving messages
 	s.run(handshake.StreamType)
 	// Block until the there is an error or the context is done
@@ -440,9 +436,17 @@ func (s *remoteMessageTarget) runSendMessages(streamType string) (err error) {
 		}
 
 		// Get the stream (it might have changed due to reconnection)
-		s.streams.Lock()
-		stream := s.streams.m[streamType]
-		s.streams.Unlock()
+		stream, _ := s.streams.Load(streamType)
+		if stream == nil {
+			log.Warn("Stream is nil, wait and check again",
+				zap.Stringer("localID", s.messageCenterID),
+				zap.String("localAddr", s.localAddr),
+				zap.Stringer("remoteID", s.targetId),
+				zap.String("remoteAddr", s.targetAddr))
+			continue
+		}
+
+		gs := stream.(grpcStream)
 
 		sendCh := s.sendEventCh
 		if streamType == streamTypeCommand {
@@ -453,7 +457,7 @@ func (s *remoteMessageTarget) runSendMessages(streamType string) (err error) {
 			case <-s.ctx.Done():
 				return s.ctx.Err()
 			case msg := <-sendCh:
-				if err := stream.Send(msg); err != nil {
+				if err := gs.Send(msg); err != nil {
 					log.Error("Error sending message",
 						zap.Error(err),
 						zap.Stringer("localID", s.messageCenterID),
@@ -463,8 +467,7 @@ func (s *remoteMessageTarget) runSendMessages(streamType string) (err error) {
 					err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
 					return err
 				}
-				log.Info("fizz: send message",
-					zap.Any("message", msg))
+				log.Info("fizz Sending message", zap.Any("message", msg))
 			}
 		}
 	}
@@ -495,9 +498,17 @@ func (s *remoteMessageTarget) runReceiveMessages(streamType string) (err error) 
 		}
 
 		// Get the stream (it might have changed due to reconnection)
-		s.streams.Lock()
-		stream := s.streams.m[streamType]
-		s.streams.Unlock()
+		stream, _ := s.streams.Load(streamType)
+		if stream == nil {
+			log.Warn("Stream is nil, wait and check again",
+				zap.Stringer("localID", s.messageCenterID),
+				zap.String("localAddr", s.localAddr),
+				zap.Stringer("remoteID", s.targetId),
+				zap.String("remoteAddr", s.targetAddr))
+			continue
+		}
+
+		gs := stream.(grpcStream)
 
 		recvCh := s.recvEventCh
 		if streamType == streamTypeCommand {
@@ -505,10 +516,7 @@ func (s *remoteMessageTarget) runReceiveMessages(streamType string) (err error) 
 		}
 
 		// Process the received message
-		if err := s.handleReceivedMessage(stream, recvCh); err != nil {
-			s.streams.Lock()
-			defer s.streams.Unlock()
-			s.streams.m[streamType] = nil
+		if err := s.handleReceivedMessage(gs, recvCh); err != nil {
 			return err
 		}
 	}
@@ -543,8 +551,7 @@ func (s *remoteMessageTarget) handleReceivedMessage(stream grpcStream, ch chan *
 			Type:  mt,
 		}
 
-		log.Info("fizz: Received message",
-			zap.Any("message", message))
+		log.Info("fizz: Received message", zap.Any("message", message))
 
 		for _, payload := range message.Payload {
 			msg, err := decodeIOType(mt, payload)
@@ -569,7 +576,7 @@ func (s *remoteMessageTarget) newMessage(msg ...*TargetMessage) *proto.Message {
 	msgBytes := make([][]byte, 0, len(msg))
 	for _, tm := range msg {
 		for _, im := range tm.Message {
-			// TODO: use a buffer pool to reduce the memory allocation.
+			// Use buffer for marshaling
 			buf, err := im.Marshal()
 			if err != nil {
 				log.Panic("marshal message failed ",
@@ -614,11 +621,10 @@ func (s *remoteMessageTarget) closeConn() {
 		s.setConn(nil)
 	}
 
-	s.streams.Lock()
-	for streamType := range s.streams.m {
-		s.streams.m[streamType] = nil
-	}
-	s.streams.Unlock()
+	s.streams.Range(func(key, value interface{}) bool {
+		s.streams.Store(key, nil)
+		return true
+	})
 }
 
 func (s *remoteMessageTarget) getErr() error {
