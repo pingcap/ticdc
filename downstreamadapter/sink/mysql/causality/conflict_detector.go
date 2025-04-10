@@ -11,12 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package conflictdetector
+package causality
 
 import (
-	"sync"
+	"context"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 )
@@ -32,50 +33,37 @@ type ConflictDetector struct {
 
 	// slots are used to find all unfinished transactions
 	// conflicting with an incoming transactions.
-	slots    *Slots
-	numSlots uint64
+	slots *Slots
 
 	// nextCacheID is used to dispatch transactions round-robin.
 	nextCacheID atomic.Int64
 
-	closeCh chan struct{}
-
 	notifiedNodes *chann.DrainableChann[func()]
-	wg            sync.WaitGroup
 }
 
-// NewConflictDetector creates a new ConflictDetector.
-func NewConflictDetector(
+// New creates a new ConflictDetector.
+func New(
 	numSlots uint64, opt TxnCacheOption,
 ) *ConflictDetector {
 	ret := &ConflictDetector{
 		resolvedTxnCaches: make([]txnCache, opt.Count),
 		slots:             NewSlots(numSlots),
-		numSlots:          numSlots,
-		closeCh:           make(chan struct{}),
 		notifiedNodes:     chann.NewAutoDrainChann[func()](),
 	}
 	for i := 0; i < opt.Count; i++ {
 		ret.resolvedTxnCaches[i] = newTxnCache(opt)
 	}
-
-	ret.wg.Add(1)
-	go func() {
-		defer ret.wg.Done()
-		ret.runBackgroundTasks()
-	}()
-
 	return ret
 }
 
-func (d *ConflictDetector) runBackgroundTasks() {
+func (d *ConflictDetector) Run(ctx context.Context) error {
 	defer func() {
 		d.notifiedNodes.CloseAndDrain()
 	}()
 	for {
 		select {
-		case <-d.closeCh:
-			return
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
 		case notifyCallback := <-d.notifiedNodes.Out():
 			if notifyCallback != nil {
 				notifyCallback()
@@ -100,14 +88,13 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 		// Try sending this txn to related cache as soon as all dependencies are resolved.
 		return d.sendToCache(event, cacheID)
 	}
-	node.RandCacheID = func() int64 { return d.nextCacheID.Add(1) % int64(len(d.resolvedTxnCaches)) }
-	node.OnNotified = func(callback func()) { d.notifiedNodes.In() <- callback }
+	node.RandCacheID = func() int64 {
+		return d.nextCacheID.Add(1) % int64(len(d.resolvedTxnCaches))
+	}
+	node.OnNotified = func(callback func()) {
+		d.notifiedNodes.In() <- callback
+	}
 	d.slots.Add(node)
-}
-
-// Close closes the ConflictDetector.
-func (d *ConflictDetector) Close() {
-	close(d.closeCh)
 }
 
 // sendToCache should not call txn.Callback if it returns an error.
@@ -119,6 +106,6 @@ func (d *ConflictDetector) sendToCache(event *commonEvent.DMLEvent, id int64) bo
 
 // GetOutChByCacheID returns the output channel by cacheID.
 // Note txns in single cache should be executed sequentially.
-func (d *ConflictDetector) GetOutChByCacheID(id int64) <-chan *commonEvent.DMLEvent {
+func (d *ConflictDetector) GetOutChByCacheID(id int) <-chan *commonEvent.DMLEvent {
 	return d.resolvedTxnCaches[id].out()
 }

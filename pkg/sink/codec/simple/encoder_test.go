@@ -859,8 +859,8 @@ func TestEncodeDDLEvent(t *testing.T) {
 			compression.Snappy,
 			compression.LZ4,
 		} {
-			insertEvent.FinishGetRow()
-			insertEvent2.FinishGetRow()
+			insertEvent.Rewind()
+			insertEvent2.Rewind()
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
 			enc, err := NewEncoder(ctx, codecConfig)
 			require.NoError(t, err)
@@ -1095,8 +1095,8 @@ func TestEncodeIntegerTypes(t *testing.T) {
 		common.EncodingFormatAvro,
 		common.EncodingFormatJSON,
 	} {
-		minValues.FinishGetRow()
-		maxValues.FinishGetRow()
+		minValues.Rewind()
+		maxValues.Rewind()
 		codecConfig.EncodingFormat = format
 		enc, err := NewEncoder(ctx, codecConfig)
 		require.NoError(t, err)
@@ -1179,7 +1179,7 @@ func TestEncoderOtherTypes(t *testing.T) {
 		common.EncodingFormatAvro,
 		common.EncodingFormatJSON,
 	} {
-		event.FinishGetRow()
+		event.Rewind()
 		codecConfig.EncodingFormat = format
 		enc, err := NewEncoder(ctx, codecConfig)
 		require.NoError(t, err)
@@ -1271,9 +1271,9 @@ func TestEncoderOtherTypes(t *testing.T) {
 
 // 		codecConfig.EncodingFormat = format
 // 		for _, event := range events {
-// 			insertEvent.FinishGetRow()
-// 			insertEvent1.FinishGetRow()
-// 			insertEvent2.FinishGetRow()
+// 			insertEvent.Rewind()
+// 			insertEvent1.Rewind()
+// 			insertEvent2.Rewind()
 // 			row, ok := event.GetNextRow()
 // 			require.True(t, ok)
 // 			err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
@@ -1418,7 +1418,7 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 			compression.Snappy,
 			compression.LZ4,
 		} {
-			dmlEvent.FinishGetRow()
+			dmlEvent.Rewind()
 			codecConfig.LargeMessageHandle.LargeMessageHandleCompression = compressionType
 			enc, err := NewEncoder(ctx, codecConfig)
 			require.NoError(t, err)

@@ -189,6 +189,10 @@ func (s *CloudStorageSink) SetTableSchemaStore(tableSchemaStore *util.TableSchem
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
 }
 
+func (s *CloudStorageSink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
+	return startTsList, make([]bool, len(startTsList)), nil
+}
+
 func (s *CloudStorageSink) Close(_ bool) {
 	s.dmlWorker.Close()
 	s.ddlWorker.Close()
