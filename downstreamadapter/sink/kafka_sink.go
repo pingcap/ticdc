@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
 	"github.com/pingcap/ticdc/downstreamadapter/worker"
-	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -88,11 +87,10 @@ func newKafkaSink(
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
-	dmlProducer := producer.NewKafkaDMLProducer(changefeedID, asyncProducer)
 	dmlWorker := worker.NewMQDMLWorker(
 		changefeedID,
 		protocol,
-		dmlProducer,
+		asyncProducer,
 		kafkaComponent.EncoderGroup,
 		kafkaComponent.ColumnSelector,
 		kafkaComponent.EventRouter,
@@ -103,11 +101,10 @@ func newKafkaSink(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	ddlProducer := producer.NewKafkaDDLProducer(ctx, changefeedID, syncProducer)
 	ddlWorker := worker.NewMQDDLWorker(
 		changefeedID,
 		protocol,
-		ddlProducer,
+		syncProducer,
 		kafkaComponent.Encoder,
 		kafkaComponent.EventRouter,
 		kafkaComponent.TopicManager,
