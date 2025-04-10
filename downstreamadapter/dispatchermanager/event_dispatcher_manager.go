@@ -856,7 +856,7 @@ func (e *EventDispatcherManager) GetAllDispatchers(schemaID int64) []common.Disp
 
 func (e *EventDispatcherManager) HandleBootstrap() bool {
 	if e.tableTriggerEventDispatcher == nil {
-		log.Error("tableTriggerEventDispatcher is nil")
+		log.Warn("tableTriggerEventDispatcher is nil, can't send bootstrap")
 		return false
 	}
 	bootstrap := loadBootstrapState(&e.bootstrapState)
@@ -872,7 +872,7 @@ func (e *EventDispatcherManager) HandleBootstrap() bool {
 	// Use a empty timezone because table filter does not need it.
 	f, err := filter.NewFilter(e.config.Filter, "", e.config.CaseSensitive, e.config.ForceReplicate)
 	if err != nil {
-		// err
+		log.Error("parse filter failed", zap.Error(err))
 		return false
 	}
 	d := e.tableTriggerEventDispatcher
