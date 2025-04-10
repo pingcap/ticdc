@@ -20,20 +20,15 @@ import (
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	lru "github.com/hashicorp/golang-lru"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tiflow/cdc/model"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -50,9 +45,6 @@ const (
 // dmlProducers is used to send messages to pulsar.
 type dmlProducers struct {
 	changefeedID commonType.ChangeFeedID
-	// We hold the client to make close operation faster.
-	// Please see the comment of Close().
-	client pulsar.Client
 	// producers is used to send messages to pulsar.
 	// One topic only use one producer , so we want to have many topics but use less memory,
 	// lru is a good idea to solve this question.
@@ -70,28 +62,19 @@ type dmlProducers struct {
 	// Only used in test.
 	failpointCh chan error
 
-	pConfig   *config.PulsarConfig
 	eventChan chan *commonEvent.DMLEvent
 	rowChan   chan *commonEvent.MQRowEvent
 
+	protocol   config.Protocol
+	comp       component
 	statistics *metrics.Statistics
-
-	encoderGroup codec.EncoderGroup
-	protocol     config.Protocol
-
-	// eventRouter used to route events to the right topic and partition.
-	eventRouter *eventrouter.EventRouter
-	// topicManager used to manage topics.
-	// It is also responsible for creating topics.
-	topicManager topicmanager.TopicManager
-
-	columnSelector *columnselector.ColumnSelectors
 }
 
 // newDMLProducers creates a new pulsar producer.
 func newDMLProducers(
 	changefeedID commonType.ChangeFeedID,
-	client pulsar.Client,
+	comp component,
+	statistics *metrics.Statistics,
 	sinkConfig *config.SinkConfig,
 	failpointCh chan error,
 ) (*dmlProducers, error) {
@@ -100,23 +83,14 @@ func newDMLProducers(
 		zap.String("changefeed", changefeedID.ID().String()))
 	start := time.Now()
 
-	var pulsarConfig *config.PulsarConfig
-	if sinkConfig.PulsarConfig == nil {
-		log.Error("new pulsar DML producer fail,sink:pulsar config is empty")
-		return nil, cerror.ErrPulsarInvalidConfig.
-			GenWithStackByArgs("pulsar config is empty")
-	}
-
-	pulsarConfig = sinkConfig.PulsarConfig
-	defaultTopicName := pulsarConfig.GetDefaultTopicName()
-	defaultProducer, err := newProducer(pulsarConfig, client, defaultTopicName)
+	defaultTopicName := comp.Config.GetDefaultTopicName()
+	defaultProducer, err := newProducer(comp.Config, comp.client, defaultTopicName)
 	if err != nil {
-		go client.Close()
-		return nil, cerror.WrapError(cerror.ErrPulsarNewProducer, err)
+		return nil, errors.WrapError(errors.ErrPulsarNewProducer, err)
 	}
 	producerCacheSize := config.DefaultPulsarProducerCacheSize
-	if pulsarConfig != nil && pulsarConfig.PulsarProducerCacheSize != nil {
-		producerCacheSize = int(*pulsarConfig.PulsarProducerCacheSize)
+	if comp.Config != nil && comp.Config.PulsarProducerCacheSize != nil {
+		producerCacheSize = int(*comp.Config.PulsarProducerCacheSize)
 	}
 
 	producers, err := lru.NewWithEvict(producerCacheSize, func(key interface{}, value interface{}) {
@@ -127,17 +101,18 @@ func newDMLProducers(
 		}
 	})
 	if err != nil {
-		go client.Close()
-		return nil, cerror.WrapError(cerror.ErrPulsarNewProducer, err)
+		return nil, errors.WrapError(errors.ErrPulsarNewProducer, err)
 	}
 
 	producers.Add(defaultTopicName, defaultProducer)
 
 	p := &dmlProducers{
 		changefeedID: changefeedID,
-		client:       client,
+		eventChan:    make(chan *commonEvent.DMLEvent, 32),
+		rowChan:      make(chan *commonEvent.MQRowEvent, 32),
+		comp:         comp,
+		statistics:   statistics,
 		producers:    producers,
-		pConfig:      pulsarConfig,
 		closed:       false,
 		failpointCh:  failpointCh,
 	}
@@ -148,8 +123,7 @@ func newDMLProducers(
 
 // asyncSendMessage  Async send one message
 func (p *dmlProducers) asyncSendMessage(
-	ctx context.Context, topic string,
-	partition int32, message *common.Message,
+	ctx context.Context, topic string, message *common.Message,
 ) error {
 	// wrapperSchemaAndTopic(message)
 
@@ -160,7 +134,7 @@ func (p *dmlProducers) asyncSendMessage(
 
 	// If producers are closed, we should skip the message and return an error.
 	if p.closed {
-		return cerror.ErrPulsarProducerClosed.GenWithStackByArgs()
+		return errors.ErrPulsarProducerClosed.GenWithStackByArgs()
 	}
 	failpoint.Inject("PulsarSinkAsyncSendError", func() {
 		// simulate sending message to input channel successfully but flushing
@@ -186,7 +160,7 @@ func (p *dmlProducers) asyncSendMessage(
 		func(id pulsar.MessageID, m *pulsar.ProducerMessage, err error) {
 			// fail
 			if err != nil {
-				e := cerror.WrapError(cerror.ErrPulsarAsyncSendMessage, err)
+				e := errors.WrapError(errors.ErrPulsarAsyncSendMessage, err)
 				log.Error("Pulsar DML producer async send error",
 					zap.String("namespace", p.changefeedID.Namespace()),
 					zap.String("changefeed", p.changefeedID.ID().String()),
@@ -223,7 +197,7 @@ func (p *dmlProducers) Run(ctx context.Context) error {
 		return p.calculateKeyPartitions(ctx)
 	})
 	g.Go(func() error {
-		return p.encoderGroup.Run(ctx)
+		return p.comp.EncoderGroup.Run(ctx)
 	})
 	g.Go(func() error {
 		if p.protocol.IsBatchEncode() {
@@ -243,16 +217,16 @@ func (p *dmlProducers) calculateKeyPartitions(ctx context.Context) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case event := <-p.eventChan:
-			topic := p.eventRouter.GetTopicForRowChange(event.TableInfo)
-			partitionNum, err := p.topicManager.GetPartitionNum(ctx, topic)
+			topic := p.comp.EventRouter.GetTopicForRowChange(event.TableInfo)
+			partitionNum, err := p.comp.TopicManager.GetPartitionNum(ctx, topic)
 			if err != nil {
 				return errors.Trace(err)
 			}
 
 			schema := event.TableInfo.GetSchemaName()
 			table := event.TableInfo.GetTableName()
-			partitionGenerator := p.eventRouter.GetPartitionGenerator(schema, table)
-			selector := p.columnSelector.GetSelector(schema, table)
+			partitionGenerator := p.comp.EventRouter.GetPartitionGenerator(schema, table)
+			selector := p.comp.ColumnSelector.GetSelector(schema, table)
 			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
 				var calledCount atomic.Uint64
 				// The callback of the last row will trigger the callback of the txn.
@@ -345,7 +319,7 @@ func (p *dmlProducers) batchEncodeRun(ctx context.Context) error {
 		// Group messages by its TopicPartitionKey before adding them to the encoder group.
 		groupedMsgs := p.group(msgs)
 		for key, msg := range groupedMsgs {
-			if err = p.encoderGroup.AddEvents(ctx, key, msg...); err != nil {
+			if err = p.comp.EncoderGroup.AddEvents(ctx, key, msg...); err != nil {
 				return errors.Trace(err)
 			}
 		}
@@ -428,7 +402,7 @@ func (p *dmlProducers) nonBatchEncodeRun(ctx context.Context) error {
 					zap.String("changefeed", p.changefeedID.Name()))
 				return nil
 			}
-			if err := p.encoderGroup.AddEvents(ctx, event.Key, &event.RowEvent); err != nil {
+			if err := p.comp.EncoderGroup.AddEvents(ctx, event.Key, &event.RowEvent); err != nil {
 				return errors.Trace(err)
 			}
 		}
@@ -440,7 +414,7 @@ func (p *dmlProducers) sendMessages(ctx context.Context) error {
 	defer metrics.WorkerSendMessageDuration.DeleteLabelValues(p.changefeedID.Namespace(), p.changefeedID.Name())
 
 	var err error
-	outCh := p.encoderGroup.Output()
+	outCh := p.comp.EncoderGroup.Output()
 	for {
 		select {
 		case <-ctx.Done():
@@ -459,11 +433,7 @@ func (p *dmlProducers) sendMessages(ctx context.Context) error {
 				start := time.Now()
 				if err = p.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
-					if err = p.asyncSendMessage(
-						ctx,
-						future.Key.Topic,
-						future.Key.Partition,
-						message); err != nil {
+					if err = p.asyncSendMessage(ctx, future.Key.Topic, message); err != nil {
 						return 0, 0, err
 					}
 					return message.GetRowsCount(), int64(message.Length()), nil
@@ -500,7 +470,6 @@ func (p *dmlProducers) Close() { // We have to hold the lock to synchronize clos
 			zap.String("namespace", p.changefeedID.Namespace()),
 			zap.String("changefeed", p.changefeedID.ID().String()), zap.String("topic", topicName))
 	}
-	p.client.Close()
 }
 
 func (p *dmlProducers) getProducer(topic string) (pulsar.Producer, bool) {
@@ -524,7 +493,7 @@ func (p *dmlProducers) getProducerByTopic(topicName string) (producer pulsar.Pro
 	}
 
 	if !ok { // create a new producer for the topicName
-		producer, err = newProducer(p.pConfig, p.client, topicName)
+		producer, err = newProducer(p.comp.Config, p.comp.client, topicName)
 		if err != nil {
 			return nil, err
 		}

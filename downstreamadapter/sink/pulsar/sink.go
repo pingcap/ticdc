@@ -16,16 +16,15 @@ package pulsar
 import (
 	"context"
 	"net/url"
-	"sync/atomic"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -33,17 +32,14 @@ import (
 type sink struct {
 	changefeedID common.ChangeFeedID
 
-	protocol config.Protocol
-
 	dmlProducer *dmlProducers
 	ddlProducer *ddlProducers
 
-	topicManager topicmanager.TopicManager
-	statistics   *metrics.Statistics
+	comp       component
+	statistics *metrics.Statistics
 
-	// isNormal means the sink does not meet error.
-	// if sink is normal, isNormal is 1, otherwise is 0
-	isNormal uint32
+	// isNormal indicate whether the sink is in the normal state.
+	isNormal *atomic.Bool
 	ctx      context.Context
 }
 
@@ -52,29 +48,32 @@ func (s *sink) SinkType() common.SinkType {
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
-	components, _, err := newPulsarSinkComponent(ctx, changefeedID, uri, sinkConfig)
-	if components.TopicManager != nil {
-		components.TopicManager.Close()
-	}
+	comp, _, err := newPulsarSinkComponent(ctx, changefeedID, uri, sinkConfig)
+	comp.close()
 	return err
 }
 
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
 ) (*sink, error) {
-	pulsarComponent, protocol, err := newPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
+	comp, protocol, err := newPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	statistics := metrics.NewStatistics(changefeedID, "sink")
+	defer func() {
+		if err != nil {
+			comp.close()
+		}
+	}()
 
 	failpointCh := make(chan error, 1)
-	dmlProducer, err := newDMLProducers(changefeedID, pulsarComponent.Factory, sinkConfig, failpointCh)
+	statistics := metrics.NewStatistics(changefeedID, "sink")
+	dmlProducer, err := newDMLProducers(changefeedID, comp, statistics, sinkConfig, failpointCh)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	ddlProducer, err := newDDLProducers(changefeedID, pulsarComponent.Config, pulsarComponent.Factory, sinkConfig)
+	ddlProducer, err := newDDLProducers(changefeedID, comp, statistics, protocol, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -83,9 +82,8 @@ func New(
 		changefeedID: changefeedID,
 		dmlProducer:  dmlProducer,
 		ddlProducer:  ddlProducer,
-		topicManager: pulsarComponent.TopicManager,
 		statistics:   statistics,
-		protocol:     protocol,
+		isNormal:     atomic.NewBool(true),
 		ctx:          ctx,
 	}, nil
 }
@@ -99,12 +97,12 @@ func (s *sink) Run(ctx context.Context) error {
 		return s.ddlProducer.Run(ctx)
 	})
 	err := g.Wait()
-	atomic.StoreUint32(&s.isNormal, 0)
+	s.isNormal.Store(false)
 	return errors.Trace(err)
 }
 
 func (s *sink) IsNormal() bool {
-	return atomic.LoadUint32(&s.isNormal) == 1
+	return s.isNormal.Load()
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
@@ -125,7 +123,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		}
 		err := s.ddlProducer.WriteBlockEvent(s.ctx, v)
 		if err != nil {
-			atomic.StoreUint32(&s.isNormal, 0)
+			s.isNormal.Store(false)
 			return errors.Trace(err)
 		}
 	case *commonEvent.SyncPointEvent:
@@ -157,6 +155,6 @@ func (s *sink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, 
 func (s *sink) Close(_ bool) {
 	s.ddlProducer.Close()
 	s.dmlProducer.Close()
-	s.topicManager.Close()
+	s.comp.close()
 	s.statistics.Close()
 }

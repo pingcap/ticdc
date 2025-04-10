@@ -22,9 +22,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/client"
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/pingcap/tiflow/pkg/errors"
 )
 
 // DDLDispatchRule is the dispatch rule for DDL event.
@@ -37,6 +36,15 @@ const (
 	// PartitionAll means the DDL event will be broadcast to all the partitions.
 	PartitionAll
 )
+
+func GetDDLDispatchRule(protocol config.Protocol) DDLDispatchRule {
+	switch protocol {
+	case config.ProtocolCanal, config.ProtocolCanalJSON:
+		return PartitionZero
+	default:
+	}
+	return PartitionAll
+}
 
 // GetExternalStorageFromURI creates a new storage.ExternalStorage from a uri.
 func GetExternalStorageFromURI(
@@ -108,7 +116,7 @@ func GetTopic(sinkURI *url.URL) (string, error) {
 		return r == '/'
 	})
 	if topic == "" {
-		return "", cerror.ErrKafkaInvalidConfig.GenWithStack("no topic is specified in sink-uri")
+		return "", errors.ErrKafkaInvalidConfig.GenWithStack("no topic is specified in sink-uri")
 	}
 	return topic, nil
 }
@@ -117,7 +125,7 @@ func GetTopic(sinkURI *url.URL) (string, error) {
 func GetProtocol(protocolStr string) (config.Protocol, error) {
 	protocol, err := config.ParseSinkProtocolFromString(protocolStr)
 	if err != nil {
-		return protocol, cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
+		return protocol, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
 
 	return protocol, nil

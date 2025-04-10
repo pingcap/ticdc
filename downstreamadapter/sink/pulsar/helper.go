@@ -26,7 +26,16 @@ type component struct {
 	ColumnSelector *columnselector.ColumnSelectors
 	EventRouter    *eventrouter.EventRouter
 	TopicManager   topicmanager.TopicManager
-	Factory        pulsarClient.Client
+	client         pulsarClient.Client
+}
+
+func (c component) close() {
+	if c.TopicManager != nil {
+		c.TopicManager.Close()
+	}
+	if c.client != nil {
+		go c.client.Close()
+	}
 }
 
 func newPulsarSinkComponent(
@@ -64,7 +73,7 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.Factory, err = factoryCreator(pulsarComponent.Config, changefeedID, sinkConfig)
+	pulsarComponent.client, err = factoryCreator(pulsarComponent.Config, changefeedID, sinkConfig)
 	if err != nil {
 		return pulsarComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -74,7 +83,7 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.TopicManager, err = topicmanager.GetPulsarTopicManagerAndTryCreateTopic(ctx, pulsarComponent.Config, topic, pulsarComponent.Factory)
+	pulsarComponent.TopicManager, err = topicmanager.GetPulsarTopicManagerAndTryCreateTopic(ctx, pulsarComponent.Config, topic, pulsarComponent.client)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}

@@ -19,11 +19,9 @@ import (
 	"time"
 
 	"github.com/apache/pulsar-client-go/pulsar"
-	lru "github.com/hashicorp/golang-lru"
+	"github.com/hashicorp/golang-lru"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -36,42 +34,34 @@ import (
 
 // ddlProducers is a producer for pulsar
 type ddlProducers struct {
-	client           pulsar.Client
-	pConfig          *config.PulsarConfig
+	changefeedID     commonType.ChangeFeedID
 	defaultTopicName string
 	// support multiple topics
 	producers      *lru.Cache
 	producersMutex sync.RWMutex
-	changefeedID   commonType.ChangeFeedID
 
 	checkpointTsChan chan uint64
-	encoder          common.EventEncoder
 
-	// eventRouter used to route events to the right topic and partition.
-	eventRouter *eventrouter.EventRouter
-	// topicManager used to manage topics.
-	// It is also responsible for creating topics.
-	topicManager topicmanager.TopicManager
-
-	statistics *metrics.Statistics
-
-	tableSchemaStore *util.TableSchemaStore
 	partitionRule    helper.DDLDispatchRule
+	statistics       *metrics.Statistics
+	tableSchemaStore *util.TableSchemaStore
+	comp             component
 }
 
 // newDDLProducers creates a pulsar producer
 func newDDLProducers(
 	changefeedID commonType.ChangeFeedID,
-	pConfig *config.PulsarConfig,
-	client pulsar.Client,
+	comp component,
+	statistics *metrics.Statistics,
+	protocol config.Protocol,
 	sinkConfig *config.SinkConfig,
 ) (*ddlProducers, error) {
-	topicName, err := helper.GetTopic(pConfig.SinkURI)
+	topicName, err := helper.GetTopic(comp.Config.SinkURI)
 	if err != nil {
 		return nil, err
 	}
 
-	defaultProducer, err := newProducer(pConfig, client, topicName)
+	defaultProducer, err := newProducer(comp.Config, comp.client, topicName)
 	if err != nil {
 		return nil, err
 	}
@@ -94,11 +84,13 @@ func newDDLProducers(
 
 	producers.Add(topicName, defaultProducer)
 	return &ddlProducers{
-		client:           client,
-		pConfig:          pConfig,
 		producers:        producers,
 		defaultTopicName: topicName,
 		changefeedID:     changefeedID,
+		comp:             comp,
+		statistics:       statistics,
+		partitionRule:    helper.GetDDLDispatchRule(protocol),
+		checkpointTsChan: make(chan uint64, 16),
 	}, nil
 }
 
@@ -164,7 +156,7 @@ func (p *ddlProducers) getProducerByTopic(topicName string) (producer pulsar.Pro
 	}
 
 	if !ok { // create a new producer for the topicName
-		producer, err = newProducer(p.pConfig, p.client, topicName)
+		producer, err = newProducer(p.comp.Config, p.comp.client, topicName)
 		if err != nil {
 			return nil, err
 		}
@@ -180,7 +172,6 @@ func (p *ddlProducers) Close() {
 
 	p.producersMutex.Lock()
 	defer p.producersMutex.Unlock()
-	p.client.Close()
 	for _, topic := range keys {
 		p.producers.Remove(topic) // callback func will be called
 	}
@@ -212,7 +203,7 @@ func (p *ddlProducers) Run(ctx context.Context) error {
 			}
 
 			start := time.Now()
-			msg, err = p.encoder.EncodeCheckpointEvent(ts)
+			msg, err = p.comp.Encoder.EncodeCheckpointEvent(ts)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -225,8 +216,8 @@ func (p *ddlProducers) Run(ctx context.Context) error {
 			// we need to send checkpoint ts to the default topic.
 			// This will be compatible with the old behavior.
 			if len(tableNames) == 0 {
-				topic := p.eventRouter.GetDefaultTopic()
-				partitionNum, err = p.topicManager.GetPartitionNum(ctx, topic)
+				topic := p.comp.EventRouter.GetDefaultTopic()
+				partitionNum, err = p.comp.TopicManager.GetPartitionNum(ctx, topic)
 				if err != nil {
 					return errors.Trace(err)
 				}
@@ -237,9 +228,9 @@ func (p *ddlProducers) Run(ctx context.Context) error {
 					return errors.Trace(err)
 				}
 			} else {
-				topics := p.eventRouter.GetActiveTopics(tableNames)
+				topics := p.comp.EventRouter.GetActiveTopics(tableNames)
 				for _, topic := range topics {
-					partitionNum, err = p.topicManager.GetPartitionNum(ctx, topic)
+					partitionNum, err = p.comp.TopicManager.GetPartitionNum(ctx, topic)
 					if err != nil {
 						return errors.Trace(err)
 					}
@@ -266,16 +257,16 @@ func (p *ddlProducers) AddCheckpoint(ts uint64) {
 
 func (p *ddlProducers) WriteBlockEvent(ctx context.Context, event *commonEvent.DDLEvent) error {
 	for _, e := range event.GetEvents() {
-		message, err := p.encoder.EncodeDDLEvent(e)
+		message, err := p.comp.Encoder.EncodeDDLEvent(e)
 		if err != nil {
 			return errors.Trace(err)
 		}
-		topic := p.eventRouter.GetTopicForDDL(e)
+		topic := p.comp.EventRouter.GetTopicForDDL(e)
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
 		// If it is not called here and kafka has `auto.create.topics.enable` turned on,
 		// then the auto-created topic will not be created as configured by ticdc.
-		partitionNum, err := p.topicManager.GetPartitionNum(ctx, topic)
+		partitionNum, err := p.comp.TopicManager.GetPartitionNum(ctx, topic)
 		if err != nil {
 			return errors.Trace(err)
 		}
