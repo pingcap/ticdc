@@ -843,9 +843,18 @@ func (d *Dispatcher) EmitBootstrap() bool {
 	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
 	currentTables := make([]*common.TableInfo, 0, len(tables))
 	for i := 0; i < len(tables); i++ {
+		err := schemaStore.RegisterTable(tables[i], ts)
+		if err != nil {
+			log.Warn("register table to schemaStore failed",
+				zap.Int64("tableID", tables[i]),
+				zap.Uint64("startTs", ts),
+				zap.Error(err),
+			)
+			continue
+		}
 		tableInfo, err := schemaStore.GetTableInfo(tables[i], ts)
 		if err != nil {
-			log.Warn("get table info failed when sending bootstrap, just ignore",
+			log.Warn("get table info failed, just ignore",
 				zap.Stringer("changefeed", d.changefeedID),
 				zap.Error(err))
 			continue
