@@ -714,6 +714,10 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		return nil
 	}
 
+	if util.GetOrZero(s.EnableKafkaSinkV2) {
+		log.Warn("enable-kafka-sink-v2 is deprecated, still use the default kafka sink")
+	}
+
 	protocol, _ := ParseSinkProtocolFromString(util.GetOrZero(s.Protocol))
 
 	if s.KafkaConfig != nil && s.KafkaConfig.LargeMessageHandle != nil {
