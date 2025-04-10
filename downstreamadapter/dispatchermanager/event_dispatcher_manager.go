@@ -28,17 +28,14 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
@@ -108,8 +105,6 @@ type EventDispatcherManager struct {
 
 	latestWatermark Watermark
 
-	bootstrapState bootstrapState
-
 	// collect the error in all the dispatchers and sink module
 	// when we get the error, we will report the error to the maintainer
 	errCh chan error
@@ -165,7 +160,6 @@ func NewEventDispatcherManager(
 		filterConfig:                           filterCfg,
 		schemaIDToDispatchers:                  dispatcher.NewSchemaIDToDispatchers(),
 		latestWatermark:                        NewWatermark(0),
-		bootstrapState:                         bootstrapFinished,
 		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
 		metricCreateDispatcherDuration:         metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
@@ -186,9 +180,6 @@ func NewEventDispatcherManager(
 			SyncPointInterval:  cfConfig.SyncPointInterval,
 			SyncPointRetention: cfConfig.SyncPointRetention,
 		}
-	}
-	if util.GetOrZero(cfConfig.SinkConfig.SendAllBootstrapAtStart) {
-		manager.bootstrapState = bootstrapNotStarted
 	}
 
 	var err error
@@ -503,6 +494,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			e.filterConfig,
 			pdTsList[idx],
 			e.errCh,
+			e.config,
 			e.config.BDRMode)
 
 		if e.heartBeatTask == nil {
@@ -510,6 +502,9 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 		}
 
 		if d.IsTableTriggerEventDispatcher() {
+			if util.GetOrZero(e.config.SinkConfig.SendAllBootstrapAtStart) {
+				d.BootstrapState = dispatcher.BootstrapNotStarted
+			}
 			e.tableTriggerEventDispatcher = d
 		} else {
 			e.schemaIDToDispatchers.Set(schemaIds[idx], id)
@@ -530,15 +525,13 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 		}
 
 		if d.IsTableTriggerEventDispatcher() {
+			// ok := e.HandleBootstrap()
+			// if !ok {
+			// 	log.Error("send bootstrap at start failed")
+			// }
 			e.metricTableTriggerEventDispatcherCount.Inc()
 		} else {
 			e.metricEventDispatcherCount.Inc()
-		}
-		if d.IsTableTriggerEventDispatcher() {
-			ok := e.HandleBootstrap()
-			if !ok {
-				log.Error("send bootstrap at start failed")
-			}
 		}
 
 		log.Info("new dispatcher created",
@@ -852,71 +845,4 @@ func (e *EventDispatcherManager) GetAllDispatchers(schemaID int64) []common.Disp
 		dispatcherIDs = append(dispatcherIDs, e.tableTriggerEventDispatcher.GetId())
 	}
 	return dispatcherIDs
-}
-
-func (e *EventDispatcherManager) HandleBootstrap() bool {
-	if e.tableTriggerEventDispatcher == nil {
-		log.Warn("tableTriggerEventDispatcher is nil, can't send bootstrap")
-		return false
-	}
-	bootstrap := loadBootstrapState(&e.bootstrapState)
-	switch bootstrap {
-	case bootstrapFinished:
-		return true
-	case bootstrapInProgress:
-		return false
-	case bootstrapNotStarted:
-	}
-	storeBootstrapState(&e.bootstrapState, bootstrapInProgress)
-	start := time.Now()
-	// Use a empty timezone because table filter does not need it.
-	f, err := filter.NewFilter(e.config.Filter, "", e.config.CaseSensitive, e.config.ForceReplicate)
-	if err != nil {
-		log.Error("parse filter failed", zap.Error(err))
-		return false
-	}
-	d := e.tableTriggerEventDispatcher
-	ts := d.GetCheckpointTs()
-	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
-	tables, err := schemaStore.GetAllPhysicalTables(ts, f)
-	currentTables := make([]*common.TableInfo, 0, len(tables))
-	for i := 0; i < len(tables); i++ {
-		tableInfo, err := schemaStore.GetTableInfo(tables[i].TableID, ts)
-		if err != nil {
-			log.Warn("get table info failed when sending bootstrap, just ignore",
-				zap.Stringer("changefeed", e.changefeedID),
-				zap.Error(err))
-			continue
-		}
-		currentTables = append(currentTables, tableInfo)
-	}
-
-	go func() {
-		log.Info("start to send bootstrap messages",
-			zap.Stringer("changefeed", e.changefeedID),
-			zap.Int("tables", len(currentTables)))
-		for idx, table := range currentTables {
-			if table.IsView() {
-				continue
-			}
-			ddlEvent := codec.NewBootstrapDDLEvent(table)
-			err := d.EmitBootstrap(ddlEvent)
-			if err != nil {
-				log.Error("send bootstrap message failed",
-					zap.Stringer("changefeed", e.changefeedID),
-					zap.Int("tables", len(currentTables)),
-					zap.Int("emitted", idx+1),
-					zap.Duration("duration", time.Since(start)),
-					zap.Error(err))
-				return
-			}
-		}
-		storeBootstrapState(&e.bootstrapState, bootstrapFinished)
-		// storeBootstrapState
-		log.Info("send bootstrap messages finished",
-			zap.Stringer("changefeed", e.changefeedID),
-			zap.Int("tables", len(currentTables)),
-			zap.Duration("cost", time.Since(start)))
-	}()
-	return loadBootstrapState(&e.bootstrapState) == bootstrapFinished
 }

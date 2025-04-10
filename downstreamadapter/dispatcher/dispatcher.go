@@ -24,13 +24,18 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/event"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -148,6 +153,9 @@ type Dispatcher struct {
 	errCh chan error
 
 	bdrMode bool
+
+	config         *config.ChangefeedConfig
+	BootstrapState bootstrapState
 }
 
 func NewDispatcher(
@@ -164,6 +172,7 @@ func NewDispatcher(
 	filterConfig *eventpb.FilterConfig,
 	currentPdTs uint64,
 	errCh chan error,
+	config *config.ChangefeedConfig,
 	bdrMode bool,
 ) *Dispatcher {
 	dispatcher := &Dispatcher{
@@ -186,7 +195,9 @@ func NewDispatcher(
 		resendTaskMap:         newResendTaskMap(),
 		creationPDTs:          currentPdTs,
 		errCh:                 errCh,
+		config:                config,
 		bdrMode:               bdrMode,
+		BootstrapState:        BootstrapFinished,
 	}
 
 	dispatcher.addToStatusDynamicStream()
@@ -307,6 +318,18 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 // by setting them with different event types in DispatcherEventsHandler.GetType
 // When we handle events, we don't have any previous events still in sink.
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
+	// before bootstrap finished, cannot send any event.
+	ok := d.EmitBootstrap()
+	if !ok {
+		select {
+		case d.errCh <- errors.ErrExecDDLFailed:
+		default:
+			log.Error("error channel is full, discard error",
+				zap.Stringer("changefeedID", d.changefeedID),
+				zap.Stringer("dispatcherID", d.id))
+		}
+		return
+	}
 	// Only return false when all events are resolvedTs Event.
 	block = false
 	// Dispatcher is ready, handle the events
@@ -802,8 +825,74 @@ func (d *Dispatcher) HandleCheckpointTs(checkpointTs uint64) {
 	d.sink.AddCheckpointTs(checkpointTs)
 }
 
-func (d *Dispatcher) EmitBootstrap(e *event.DDLEvent) error {
-	return d.sink.WriteBlockEvent(e)
+func (d *Dispatcher) EmitBootstrap() bool {
+	if !d.IsTableTriggerEventDispatcher() {
+		return true
+	}
+	bootstrap := loadBootstrapState(&d.BootstrapState)
+	switch bootstrap {
+	case BootstrapFinished:
+		return true
+	case BootstrapInProgress:
+		return false
+	case BootstrapNotStarted:
+	}
+	storeBootstrapState(&d.BootstrapState, BootstrapInProgress)
+	start := time.Now()
+	// Use a empty timezone because table filter does not need it.
+	f, err := filter.NewFilter(d.config.Filter, "", d.config.CaseSensitive, d.config.ForceReplicate)
+	if err != nil {
+		log.Error("parse filter failed", zap.Error(err))
+		return false
+	}
+
+	// ts := d.GetCheckpointTs()
+	ts := d.GetStartTs()
+	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
+	tables, err := schemaStore.GetAllPhysicalTables(ts, f)
+	log.Error("schemastore.SchemaStore", zap.Any("ts", ts), zap.Any("startTs", d.startTs), zap.Any("", d.tableProgress.Empty()), zap.Any("tables", tables))
+	if err != nil {
+		log.Error("get all tables failed", zap.Error(err))
+	}
+	currentTables := make([]*common.TableInfo, 0, len(tables))
+	for i := 0; i < len(tables); i++ {
+		tableInfo, err := schemaStore.GetTableInfo(tables[i].TableID, ts)
+		if err != nil {
+			log.Warn("get table info failed when sending bootstrap, just ignore",
+				zap.Stringer("changefeed", d.changefeedID),
+				zap.Error(err))
+			continue
+		}
+		currentTables = append(currentTables, tableInfo)
+	}
+
+	go func() {
+		log.Info("start to send bootstrap messages",
+			zap.Stringer("changefeed", d.changefeedID),
+			zap.Int("tables", len(currentTables)))
+		for idx, table := range currentTables {
+			if table.IsView() {
+				continue
+			}
+			ddlEvent := codec.NewBootstrapDDLEvent(table)
+			err := d.sink.WriteBlockEvent(ddlEvent)
+			if err != nil {
+				log.Error("send bootstrap message failed",
+					zap.Stringer("changefeed", d.changefeedID),
+					zap.Int("tables", len(currentTables)),
+					zap.Int("emitted", idx+1),
+					zap.Duration("duration", time.Since(start)),
+					zap.Error(err))
+				return
+			}
+		}
+		storeBootstrapState(&d.BootstrapState, BootstrapFinished)
+		log.Info("send bootstrap messages finished",
+			zap.Stringer("changefeed", d.changefeedID),
+			zap.Int("tables", len(currentTables)),
+			zap.Duration("cost", time.Since(start)))
+	}()
+	return loadBootstrapState(&d.BootstrapState) == BootstrapFinished
 }
 
 func (d *Dispatcher) IsTableTriggerEventDispatcher() bool {
