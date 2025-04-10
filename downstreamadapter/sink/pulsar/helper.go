@@ -2,9 +2,11 @@ package pulsar
 
 import (
 	"context"
+	"net/url"
+
 	pulsarClient "github.com/apache/pulsar-client-go/pulsar"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
-	sink2 "github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
@@ -16,7 +18,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/br/pkg/utils"
 	"github.com/pingcap/tiflow/pkg/sink"
-	"net/url"
 )
 
 type PulsarComponent struct {
@@ -36,7 +37,7 @@ func getPulsarSinkComponentWithFactory(ctx context.Context,
 	factoryCreator pulsar.FactoryCreator,
 ) (PulsarComponent, config.Protocol, error) {
 	pulsarComponent := PulsarComponent{}
-	protocol, err := sink2.GetProtocol(utils.GetOrZero(sinkConfig.Protocol))
+	protocol, err := helper.GetProtocol(utils.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return pulsarComponent, config.ProtocolUnknown, errors.Trace(err)
 	}
@@ -51,7 +52,7 @@ func getPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 
-	topic, err := sink2.GetTopic(sinkURI)
+	topic, err := helper.GetTopic(sinkURI)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}

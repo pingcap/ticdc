@@ -15,16 +15,17 @@ package pulsar
 
 import (
 	"context"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"net/url"
 	"sync/atomic"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -152,7 +153,7 @@ func (s *PulsarSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 			v.PostFlush()
 			return nil
 		}
-		err := s.dmlProducer.WriteBlockEvent(s.ctx, v)
+		err := s.ddlProducer.WriteBlockEvent(s.ctx, v)
 		if err != nil {
 			atomic.StoreUint32(&s.isNormal, 0)
 			return errors.Trace(err)

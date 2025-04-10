@@ -27,6 +27,17 @@ import (
 	"github.com/pingcap/tiflow/pkg/errors"
 )
 
+// DDLDispatchRule is the dispatch rule for DDL event.
+type DDLDispatchRule int
+
+const (
+	// PartitionZero means the DDL event will be dispatched to partition 0.
+	// NOTICE: Only for canal and canal-json protocol.
+	PartitionZero DDLDispatchRule = iota
+	// PartitionAll means the DDL event will be broadcast to all the partitions.
+	PartitionAll
+)
+
 // GetExternalStorageFromURI creates a new storage.ExternalStorage from a uri.
 func GetExternalStorageFromURI(
 	ctx context.Context, uri string,

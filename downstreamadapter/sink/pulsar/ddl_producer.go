@@ -15,19 +15,20 @@ package pulsar
 
 import (
 	"context"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
-	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"sync"
 	"time"
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
@@ -52,7 +53,10 @@ type pulsarDDLProducers struct {
 	// It is also responsible for creating topics.
 	topicManager topicmanager.TopicManager
 
+	statistics *metrics.Statistics
+
 	tableSchemaStore *util.TableSchemaStore
+	partitionRule    helper.DDLDispatchRule
 }
 
 // NewPulsarDDLProducer creates a pulsar producer
@@ -228,7 +232,7 @@ func (p *pulsarDDLProducers) Run(ctx context.Context) error {
 				}
 				log.Debug("Emit checkpointTs to default topic",
 					zap.String("topic", topic), zap.Uint64("checkpointTs", ts), zap.Any("partitionNum", partitionNum))
-				err = p.producer.SendMessages(ctx, topic, partitionNum, msg)
+				err = p.SyncBroadcastMessage(ctx, topic, partitionNum, msg)
 				if err != nil {
 					return errors.Trace(err)
 				}
@@ -239,7 +243,7 @@ func (p *pulsarDDLProducers) Run(ctx context.Context) error {
 					if err != nil {
 						return errors.Trace(err)
 					}
-					err = p.SendMessages(ctx, topic, partitionNum, msg)
+					err = p.SyncBroadcastMessage(ctx, topic, partitionNum, msg)
 					if err != nil {
 						return errors.Trace(err)
 					}
@@ -250,6 +254,48 @@ func (p *pulsarDDLProducers) Run(ctx context.Context) error {
 			checkpointTsMessageDuration.Observe(time.Since(start).Seconds())
 		}
 	}
+}
+
+func (p *pulsarDDLProducers) SetTableSchemaStore(store *util.TableSchemaStore) {
+	p.tableSchemaStore = store
+}
+
+func (p *pulsarDDLProducers) AddCheckpoint(ts uint64) {
+	p.checkpointTsChan <- ts
+}
+
+func (p *pulsarDDLProducers) WriteBlockEvent(ctx context.Context, event *commonEvent.DDLEvent) error {
+	for _, e := range event.GetEvents() {
+		message, err := p.encoder.EncodeDDLEvent(e)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		topic := p.eventRouter.GetTopicForDDL(e)
+		// Notice: We must call GetPartitionNum here,
+		// which will be responsible for automatically creating topics when they don't exist.
+		// If it is not called here and kafka has `auto.create.topics.enable` turned on,
+		// then the auto-created topic will not be created as configured by ticdc.
+		partitionNum, err := p.topicManager.GetPartitionNum(ctx, topic)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if p.partitionRule == helper.PartitionAll {
+			err = p.statistics.RecordDDLExecution(func() error {
+				return p.SyncBroadcastMessage(ctx, topic, partitionNum, message)
+			})
+		} else {
+			err = p.statistics.RecordDDLExecution(func() error {
+				return p.SyncSendMessage(ctx, topic, 0, message)
+			})
+		}
+		if err != nil {
+			return errors.Trace(err)
+		}
+	}
+	log.Info("MQ ddl worker send block event", zap.Any("event", event))
+	// after flush all the ddl event, we call the callback function.
+	event.PostFlush()
+	return nil
 }
 
 // wrapperSchemaAndTopic wrapper schema and topic

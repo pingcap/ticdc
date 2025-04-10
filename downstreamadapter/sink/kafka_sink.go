@@ -15,11 +15,11 @@ package sink
 
 import (
 	"context"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"net/url"
 	"sync/atomic"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"github.com/pingcap/ticdc/downstreamadapter/worker"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"

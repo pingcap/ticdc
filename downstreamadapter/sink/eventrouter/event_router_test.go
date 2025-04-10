@@ -14,10 +14,10 @@
 package eventrouter
 
 import (
-	partition2 "github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/topic"
 	"testing"
 
+	partition2 "github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/topic"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"

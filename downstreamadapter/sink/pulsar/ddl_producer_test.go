@@ -15,9 +15,9 @@ package pulsar
 
 import (
 	"context"
-	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	"testing"
 
+	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"

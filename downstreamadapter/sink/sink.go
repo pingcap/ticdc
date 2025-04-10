@@ -15,10 +15,10 @@ package sink
 
 import (
 	"context"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/pulsar"
 	"net/url"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/pulsar"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
