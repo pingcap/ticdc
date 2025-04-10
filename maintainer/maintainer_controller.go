@@ -92,6 +92,9 @@ func NewController(changefeedID common.ChangeFeedID,
 	oc := operator.NewOperatorController(changefeedID, mc, replicaSetDB, nodeManager, batchSize)
 
 	var schedulerCfg *config.ChangefeedSchedulerConfig
+	if cfConfig != nil {
+		schedulerCfg = cfConfig.Scheduler
+	}
 	sc := NewScheduleController(
 		changefeedID, batchSize, oc, replicaSetDB, nodeManager, balanceInterval, splitter, schedulerCfg,
 	)
