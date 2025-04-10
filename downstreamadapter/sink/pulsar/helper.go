@@ -16,8 +16,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tidb/br/pkg/utils"
-	"github.com/pingcap/tiflow/pkg/sink"
+	putil "github.com/pingcap/ticdc/pkg/util"
 )
 
 type component struct {
@@ -55,7 +54,7 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 	factoryCreator pulsar.FactoryCreator,
 ) (component, config.Protocol, error) {
 	pulsarComponent := component{}
-	protocol, err := helper.GetProtocol(utils.GetOrZero(sinkConfig.Protocol))
+	protocol, err := helper.GetProtocol(putil.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return pulsarComponent, config.ProtocolUnknown, errors.Trace(err)
 	}
@@ -80,7 +79,7 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	scheme := sink.GetScheme(sinkURI)
+	scheme := helper.GetScheme(sinkURI)
 	pulsarComponent.EventRouter, err = eventrouter.NewEventRouter(sinkConfig, protocol, topic, scheme)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)

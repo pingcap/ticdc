@@ -34,8 +34,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// pulsarDDLProducers is a producer for pulsar
-type pulsarDDLProducers struct {
+// ddlProducers is a producer for pulsar
+type ddlProducers struct {
 	client           pulsar.Client
 	pConfig          *config.PulsarConfig
 	defaultTopicName string
@@ -59,13 +59,13 @@ type pulsarDDLProducers struct {
 	partitionRule    helper.DDLDispatchRule
 }
 
-// NewPulsarDDLProducer creates a pulsar producer
-func NewPulsarDDLProducer(
+// newDDLProducers creates a pulsar producer
+func newDDLProducers(
 	changefeedID commonType.ChangeFeedID,
 	pConfig *config.PulsarConfig,
 	client pulsar.Client,
 	sinkConfig *config.SinkConfig,
-) (*pulsarDDLProducers, error) {
+) (*ddlProducers, error) {
 	topicName, err := helper.GetTopic(pConfig.SinkURI)
 	if err != nil {
 		return nil, err
@@ -93,7 +93,7 @@ func NewPulsarDDLProducer(
 	}
 
 	producers.Add(topicName, defaultProducer)
-	return &pulsarDDLProducers{
+	return &ddlProducers{
 		client:           client,
 		pConfig:          pConfig,
 		producers:        producers,
@@ -104,7 +104,7 @@ func NewPulsarDDLProducer(
 
 // SyncBroadcastMessage pulsar consume all partitions
 // totalPartitionsNum is not used
-func (p *pulsarDDLProducers) SyncBroadcastMessage(ctx context.Context, topic string,
+func (p *ddlProducers) SyncBroadcastMessage(ctx context.Context, topic string,
 	totalPartitionsNum int32, message *common.Message,
 ) error {
 	// call SyncSendMessage
@@ -114,7 +114,7 @@ func (p *pulsarDDLProducers) SyncBroadcastMessage(ctx context.Context, topic str
 
 // SyncSendMessage sends a message
 // partitionNum is not used, pulsar consume all partitions
-func (p *pulsarDDLProducers) SyncSendMessage(ctx context.Context, topic string,
+func (p *ddlProducers) SyncSendMessage(ctx context.Context, topic string,
 	partitionNum int32, message *common.Message,
 ) error {
 	// TODO
@@ -138,14 +138,14 @@ func (p *pulsarDDLProducers) SyncSendMessage(ctx context.Context, topic string,
 		return err
 	}
 
-	log.Debug("pulsarDDLProducers SyncSendMessage success",
+	log.Debug("ddlProducers SyncSendMessage success",
 		zap.Any("mID", mID), zap.String("topic", topic))
 
 	// mq.IncPublishedDDLSuccess(topic, p.id.ID().String(), message)
 	return nil
 }
 
-func (p *pulsarDDLProducers) getProducer(topic string) (pulsar.Producer, bool) {
+func (p *ddlProducers) getProducer(topic string) (pulsar.Producer, bool) {
 	target, ok := p.producers.Get(topic)
 	if ok {
 		producer, ok := target.(pulsar.Producer)
@@ -157,7 +157,7 @@ func (p *pulsarDDLProducers) getProducer(topic string) (pulsar.Producer, bool) {
 }
 
 // getProducerByTopic get producer by topicName
-func (p *pulsarDDLProducers) getProducerByTopic(topicName string) (producer pulsar.Producer, err error) {
+func (p *ddlProducers) getProducerByTopic(topicName string) (producer pulsar.Producer, err error) {
 	getProducer, ok := p.getProducer(topicName)
 	if ok && getProducer != nil {
 		return getProducer, nil
@@ -175,7 +175,7 @@ func (p *pulsarDDLProducers) getProducerByTopic(topicName string) (producer puls
 }
 
 // Close close all producers
-func (p *pulsarDDLProducers) Close() {
+func (p *ddlProducers) Close() {
 	keys := p.producers.Keys()
 
 	p.producersMutex.Lock()
@@ -186,7 +186,7 @@ func (p *pulsarDDLProducers) Close() {
 	}
 }
 
-func (p *pulsarDDLProducers) Run(ctx context.Context) error {
+func (p *ddlProducers) Run(ctx context.Context) error {
 	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(p.changefeedID.Namespace(), p.changefeedID.Name())
 	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(p.changefeedID.Namespace(), p.changefeedID.Name())
 
@@ -256,15 +256,15 @@ func (p *pulsarDDLProducers) Run(ctx context.Context) error {
 	}
 }
 
-func (p *pulsarDDLProducers) SetTableSchemaStore(store *util.TableSchemaStore) {
+func (p *ddlProducers) SetTableSchemaStore(store *util.TableSchemaStore) {
 	p.tableSchemaStore = store
 }
 
-func (p *pulsarDDLProducers) AddCheckpoint(ts uint64) {
+func (p *ddlProducers) AddCheckpoint(ts uint64) {
 	p.checkpointTsChan <- ts
 }
 
-func (p *pulsarDDLProducers) WriteBlockEvent(ctx context.Context, event *commonEvent.DDLEvent) error {
+func (p *ddlProducers) WriteBlockEvent(ctx context.Context, event *commonEvent.DDLEvent) error {
 	for _, e := range event.GetEvents() {
 		message, err := p.encoder.EncodeDDLEvent(e)
 		if err != nil {

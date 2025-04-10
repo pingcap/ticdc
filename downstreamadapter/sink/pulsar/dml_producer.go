@@ -47,8 +47,8 @@ const (
 	batchInterval = 15 * time.Millisecond
 )
 
-// pulsarDMLProducer is used to send messages to pulsar.
-type pulsarDMLProducer struct {
+// dmlProducers is used to send messages to pulsar.
+type dmlProducers struct {
 	changefeedID commonType.ChangeFeedID
 	// We hold the client to make close operation faster.
 	// Please see the comment of Close().
@@ -88,13 +88,13 @@ type pulsarDMLProducer struct {
 	columnSelector *columnselector.ColumnSelectors
 }
 
-// NewPulsarDMLProducer creates a new pulsar producer.
-func NewPulsarDMLProducer(
+// newDMLProducers creates a new pulsar producer.
+func newDMLProducers(
 	changefeedID commonType.ChangeFeedID,
 	client pulsar.Client,
 	sinkConfig *config.SinkConfig,
 	failpointCh chan error,
-) (*pulsarDMLProducer, error) {
+) (*dmlProducers, error) {
 	log.Info("Creating pulsar DML producer ...",
 		zap.String("namespace", changefeedID.Namespace()),
 		zap.String("changefeed", changefeedID.ID().String()))
@@ -133,7 +133,7 @@ func NewPulsarDMLProducer(
 
 	producers.Add(defaultTopicName, defaultProducer)
 
-	p := &pulsarDMLProducer{
+	p := &dmlProducers{
 		changefeedID: changefeedID,
 		client:       client,
 		producers:    producers,
@@ -147,7 +147,7 @@ func NewPulsarDMLProducer(
 }
 
 // AsyncSendMessage  Async send one message
-func (p *pulsarDMLProducer) AsyncSendMessage(
+func (p *dmlProducers) AsyncSendMessage(
 	ctx context.Context, topic string,
 	partition int32, message *common.Message,
 ) error {
@@ -217,7 +217,7 @@ func (p *pulsarDMLProducer) AsyncSendMessage(
 	return nil
 }
 
-func (p *pulsarDMLProducer) Run(ctx context.Context) error {
+func (p *dmlProducers) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return p.producer.Run(ctx)
@@ -244,7 +244,7 @@ func (p *pulsarDMLProducer) Run(ctx context.Context) error {
 	return g.Wait()
 }
 
-func (p *pulsarDMLProducer) calculateKeyPartitions(ctx context.Context) error {
+func (p *dmlProducers) calculateKeyPartitions(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -308,12 +308,12 @@ func (p *pulsarDMLProducer) calculateKeyPartitions(ctx context.Context) error {
 	}
 }
 
-func (p *pulsarDMLProducer) addMQRowEvent(event *commonEvent.MQRowEvent) {
+func (p *dmlProducers) addMQRowEvent(event *commonEvent.MQRowEvent) {
 	p.rowChan <- event
 }
 
 // batchEncodeRun collect messages into batch and add them to the encoder group.
-func (p *pulsarDMLProducer) batchEncodeRun(ctx context.Context) error {
+func (p *dmlProducers) batchEncodeRun(ctx context.Context) error {
 	log.Info("MQ sink batch worker started",
 		zap.String("namespace", p.changefeedID.Namespace()),
 		zap.String("changefeed", p.changefeedID.Name()),
@@ -362,7 +362,7 @@ func (p *pulsarDMLProducer) batchEncodeRun(ctx context.Context) error {
 // batch collects a batch of messages from w.msgChan into buffer.
 // It returns the number of messages collected.
 // Note: It will block until at least one message is received.
-func (p *pulsarDMLProducer) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) (int, error) {
+func (p *dmlProducers) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) (int, error) {
 	msgCount := 0
 	maxBatchSize := len(buffer)
 	// We need to receive at least one message or be interrupted,
@@ -406,7 +406,7 @@ func (p *pulsarDMLProducer) batch(ctx context.Context, buffer []*commonEvent.MQR
 }
 
 // group groups messages by its key.
-func (p *pulsarDMLProducer) group(msgs []*commonEvent.MQRowEvent) map[model.TopicPartitionKey][]*commonEvent.RowEvent {
+func (p *dmlProducers) group(msgs []*commonEvent.MQRowEvent) map[model.TopicPartitionKey][]*commonEvent.RowEvent {
 	groupedMsgs := make(map[model.TopicPartitionKey][]*commonEvent.RowEvent)
 	for _, msg := range msgs {
 		if _, ok := groupedMsgs[msg.Key]; !ok {
@@ -418,7 +418,7 @@ func (p *pulsarDMLProducer) group(msgs []*commonEvent.MQRowEvent) map[model.Topi
 }
 
 // nonBatchEncodeRun add events to the encoder group immediately.
-func (p *pulsarDMLProducer) nonBatchEncodeRun(ctx context.Context) error {
+func (p *dmlProducers) nonBatchEncodeRun(ctx context.Context) error {
 	log.Info("MQ sink non batch worker started",
 		zap.String("namespace", p.changefeedID.Namespace()),
 		zap.String("changefeed", p.changefeedID.Name()),
@@ -442,7 +442,7 @@ func (p *pulsarDMLProducer) nonBatchEncodeRun(ctx context.Context) error {
 	}
 }
 
-func (p *pulsarDMLProducer) sendMessages(ctx context.Context) error {
+func (p *dmlProducers) sendMessages(ctx context.Context) error {
 	metricSendMessageDuration := metrics.WorkerSendMessageDuration.WithLabelValues(p.changefeedID.Namespace(), p.changefeedID.Name())
 	defer metrics.WorkerSendMessageDuration.DeleteLabelValues(p.changefeedID.Namespace(), p.changefeedID.Name())
 
@@ -483,7 +483,7 @@ func (p *pulsarDMLProducer) sendMessages(ctx context.Context) error {
 	}
 }
 
-func (p *pulsarDMLProducer) Close() { // We have to hold the lock to synchronize closing with writing.
+func (p *dmlProducers) Close() { // We have to hold the lock to synchronize closing with writing.
 	p.closedMu.Lock()
 	defer p.closedMu.Unlock()
 	// If the producer has already been closed, we should skip this close operation.
@@ -510,7 +510,7 @@ func (p *pulsarDMLProducer) Close() { // We have to hold the lock to synchronize
 	p.client.Close()
 }
 
-func (p *pulsarDMLProducer) getProducer(topic string) (pulsar.Producer, bool) {
+func (p *dmlProducers) getProducer(topic string) (pulsar.Producer, bool) {
 	target, ok := p.producers.Get(topic)
 	if ok {
 		producer, ok := target.(pulsar.Producer)
@@ -523,8 +523,8 @@ func (p *pulsarDMLProducer) getProducer(topic string) (pulsar.Producer, bool) {
 
 // getProducerByTopic get producer by topicName,
 // if not exist, it will create a producer with topicName, and set in LRU cache
-// more meta info at pulsarDMLProducer's producers
-func (p *pulsarDMLProducer) getProducerByTopic(topicName string) (producer pulsar.Producer, err error) {
+// more meta info at dmlProducers's producers
+func (p *dmlProducers) getProducerByTopic(topicName string) (producer pulsar.Producer, err error) {
 	getProducer, ok := p.getProducer(topicName)
 	if ok && getProducer != nil {
 		return getProducer, nil
@@ -541,7 +541,7 @@ func (p *pulsarDMLProducer) getProducerByTopic(topicName string) (producer pulsa
 	return producer, nil
 }
 
-func (p *pulsarDMLProducer) AddDMLEvent(event *commonEvent.DMLEvent) {
+func (p *dmlProducers) AddDMLEvent(event *commonEvent.DMLEvent) {
 	p.eventChan <- event
 }
 

@@ -30,7 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newPulsarSinkForTest(t *testing.T) (*PulsarSink, producer.DMLProducer, producer.DDLProducer, error) {
+func newPulsarSinkForTest(t *testing.T) (*sink, producer.DMLProducer, producer.DDLProducer, error) {
 	sinkURL := "pulsar://127.0.0.1:6650/persistent://public/default/test?" +
 		"protocol=canal-json&pulsar-version=v2.10.0&enable-tidb-extension=true&" +
 		"authentication-token=eyJhbcGcixxxxxxxxxxxxxx"
@@ -47,7 +47,7 @@ func newPulsarSinkForTest(t *testing.T) (*PulsarSink, producer.DMLProducer, prod
 	pulsarComponent, protocol, err := worker.GetPulsarSinkComponentForTest(ctx, changefeedID, sinkURI, replicaConfig.Sink)
 	require.NoError(t, err)
 
-	statistics := metrics.NewStatistics(changefeedID, "PulsarSink")
+	statistics := metrics.NewStatistics(changefeedID, "sink")
 
 	dmlMockProducer := producer.NewMockPulsarDMLProducer()
 	dmlWorker := worker.NewMQDMLWorker(
@@ -70,7 +70,7 @@ func newPulsarSinkForTest(t *testing.T) (*PulsarSink, producer.DMLProducer, prod
 		pulsarComponent.TopicManager,
 		statistics)
 
-	sink := &PulsarSink{
+	sink := &sink{
 		changefeedID: changefeedID,
 		dmlWorker:    dmlWorker,
 		ddlWorker:    ddlWorker,

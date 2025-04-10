@@ -30,13 +30,13 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type PulsarSink struct {
+type sink struct {
 	changefeedID common.ChangeFeedID
 
 	protocol config.Protocol
 
-	dmlProducer *pulsarDMLProducer
-	ddlProducer *pulsarDDLProducers
+	dmlProducer *dmlProducers
+	ddlProducer *ddlProducers
 
 	topicManager topicmanager.TopicManager
 	statistics   *metrics.Statistics
@@ -47,7 +47,7 @@ type PulsarSink struct {
 	ctx      context.Context
 }
 
-func (s *PulsarSink) SinkType() common.SinkType {
+func (s *sink) SinkType() common.SinkType {
 	return common.PulsarSinkType
 }
 
@@ -61,44 +61,25 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
-) (*PulsarSink, error) {
+) (*sink, error) {
 	pulsarComponent, protocol, err := newPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	statistics := metrics.NewStatistics(changefeedID, "PulsarSink")
+	statistics := metrics.NewStatistics(changefeedID, "sink")
 
 	failpointCh := make(chan error, 1)
-	dmlProducer, err := NewPulsarDMLProducer(changefeedID, pulsarComponent.Factory, sinkConfig, failpointCh)
+	dmlProducer, err := newDMLProducers(changefeedID, pulsarComponent.Factory, sinkConfig, failpointCh)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	//dmlWorker := worker.NewMQDMLWorker(
-	//	changefeedID,
-	//	protocol,
-	//	dmlProducer,
-	//	pulsarComponent.EncoderGroup,
-	//	pulsarComponent.ColumnSelector,
-	//	pulsarComponent.EventRouter,
-	//	pulsarComponent.TopicManager,
-	//	statistics,
-	//)
 
-	ddlProducer, err := NewPulsarDDLProducer(changefeedID, pulsarComponent.Config, pulsarComponent.Factory, sinkConfig)
+	ddlProducer, err := newDDLProducers(changefeedID, pulsarComponent.Config, pulsarComponent.Factory, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	//ddlWorker := worker.NewMQDDLWorker(
-	//	changefeedID,
-	//	protocol,
-	//	ddlProducer,
-	//	pulsarComponent.Encoder,
-	//	pulsarComponent.EventRouter,
-	//	pulsarComponent.TopicManager,
-	//	statistics,
-	//)
 
-	sink := &PulsarSink{
+	return &sink{
 		changefeedID: changefeedID,
 		dmlProducer:  dmlProducer,
 		ddlProducer:  ddlProducer,
@@ -106,11 +87,10 @@ func New(
 		statistics:   statistics,
 		protocol:     protocol,
 		ctx:          ctx,
-	}
-	return sink, nil
+	}, nil
 }
 
-func (s *PulsarSink) Run(ctx context.Context) error {
+func (s *sink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return s.dmlProducer.Run(ctx)
@@ -123,19 +103,19 @@ func (s *PulsarSink) Run(ctx context.Context) error {
 	return errors.Trace(err)
 }
 
-func (s *PulsarSink) IsNormal() bool {
+func (s *sink) IsNormal() bool {
 	return atomic.LoadUint32(&s.isNormal) == 1
 }
 
-func (s *PulsarSink) AddDMLEvent(event *commonEvent.DMLEvent) {
+func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmlProducer.AddDMLEvent(event)
 }
 
-func (s *PulsarSink) PassBlockEvent(event commonEvent.BlockEvent) {
+func (s *sink) PassBlockEvent(event commonEvent.BlockEvent) {
 	event.PostFlush()
 }
 
-func (s *PulsarSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
+func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch v := event.(type) {
 	case *commonEvent.DDLEvent:
 		if v.TiDBOnly {
@@ -149,12 +129,12 @@ func (s *PulsarSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 			return errors.Trace(err)
 		}
 	case *commonEvent.SyncPointEvent:
-		log.Error("PulsarSink doesn't support Sync Point Event",
+		log.Error("sink doesn't support Sync Point Event",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("event", event))
 	default:
-		log.Error("PulsarSink doesn't support this type of block event",
+		log.Error("sink doesn't support this type of block event",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("eventType", event.GetType()))
@@ -162,19 +142,19 @@ func (s *PulsarSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *PulsarSink) AddCheckpointTs(ts uint64) {
+func (s *sink) AddCheckpointTs(ts uint64) {
 	s.ddlProducer.AddCheckpoint(ts)
 }
 
-func (s *PulsarSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	s.ddlProducer.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *PulsarSink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
+func (s *sink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
 	return startTsList, make([]bool, len(startTsList)), nil
 }
 
-func (s *PulsarSink) Close(_ bool) {
+func (s *sink) Close(_ bool) {
 	s.ddlProducer.Close()
 	s.dmlProducer.Close()
 	s.topicManager.Close()

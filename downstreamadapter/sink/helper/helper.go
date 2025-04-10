@@ -139,3 +139,8 @@ func GetFileExtension(protocol config.Protocol) string {
 		return ".unknown"
 	}
 }
+
+// GetScheme returns the scheme of the url.
+func GetScheme(url *url.URL) string {
+	return strings.ToLower(url.Scheme)
+}
