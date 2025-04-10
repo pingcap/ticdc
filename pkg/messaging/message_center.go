@@ -316,7 +316,7 @@ func (mc *messageCenter) SendCommand(msg *TargetMessage) error {
 
 // Close stops the grpc server and stops all the connections to the remote targets.
 func (mc *messageCenter) Close() {
-	log.Info("message center is closing", zap.Stringer("id", mc.id))
+	log.Info("message center is closing", zap.Stringer("id", mc.id), zap.String("addr", mc.addr))
 	mc.remoteTargets.RLock()
 	defer mc.remoteTargets.RUnlock()
 

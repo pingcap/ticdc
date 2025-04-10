@@ -90,8 +90,10 @@ type remoteMessageTarget struct {
 
 	errorCounter prometheus.Counter
 
-	// Whether this node should initiate the connection
-	shouldInitiate bool
+	// Whether this node is the initiator of the connection
+	// If true, it will initiate the connection to the remote target
+	// If false, it will wait for the remote target to initiate the connection
+	isInitiator bool
 }
 
 // Check if this target is ready to send messages
@@ -190,7 +192,7 @@ func newRemoteMessageTarget(
 		recvEventCh:     recvEventCh,
 		recvCmdCh:       recvCmdCh,
 		eg:              &errgroup.Group{},
-		shouldInitiate:  shouldInitiate,
+		isInitiator:     shouldInitiate,
 		errCh:           make(chan error, 32),
 
 		// Initialize metrics
@@ -226,7 +228,12 @@ func (s *remoteMessageTarget) close() {
 
 	s.closeConn()
 	s.cancel()
-	s.eg.Wait()
+
+	// If this node is the initiator, wait for all the streams to be closed.
+	// If this node is not the initiator, we just close the connection and return, the remote target will handle the cleanup.
+	if s.isInitiator {
+		s.eg.Wait()
+	}
 
 	log.Info("Close remote target done",
 		zap.Stringer("localID", s.messageCenterID),
@@ -248,7 +255,7 @@ func (s *remoteMessageTarget) collectErr(err error) {
 // Connect to the remote target
 func (s *remoteMessageTarget) connect() error {
 	// Only the node with the smaller ID should initiate the connection
-	if !s.shouldInitiate {
+	if !s.isInitiator {
 		log.Info("Not initiating connection as remote has smaller ID",
 			zap.Stringer("localID", s.messageCenterID),
 			zap.String("localAddr", s.localAddr),
@@ -366,7 +373,7 @@ func (s *remoteMessageTarget) connect() error {
 // Reset the connection to the remote target
 func (s *remoteMessageTarget) resetConnect() {
 	// Only reconnect if this node should initiate connections
-	if !s.shouldInitiate {
+	if !s.isInitiator {
 		return
 	}
 	log.Info("start to reset connection to remote target",
@@ -400,7 +407,7 @@ LOOP:
 // Handle an incoming stream connection from a remote node, it will block until remote cancel the stream.
 func (s *remoteMessageTarget) handleIncomingStream(stream proto.MessageService_StreamMessagesServer, handshake *HandshakeMessage) error {
 	// Only accept incoming connections if this node should not initiate
-	if s.shouldInitiate {
+	if s.isInitiator {
 		log.Warn("Received unexpected connection from node with higher ID",
 			zap.Stringer("localID", s.messageCenterID),
 			zap.String("localAddr", s.localAddr),
@@ -439,6 +446,13 @@ func (s *remoteMessageTarget) runSendMessages(streamType string) (err error) {
 		if err != nil {
 			s.collectErr(err)
 		}
+		log.Info("exit runSendMessages",
+			zap.Stringer("localID", s.messageCenterID),
+			zap.String("localAddr", s.localAddr),
+			zap.Stringer("remoteID", s.targetId),
+			zap.String("remoteAddr", s.targetAddr),
+			zap.String("streamType", streamType),
+			zap.Error(err))
 	}()
 
 	for {
@@ -489,7 +503,6 @@ func (s *remoteMessageTarget) runSendMessages(streamType string) (err error) {
 					err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
 					return err
 				}
-				log.Info("fizz Sending message", zap.Any("message", msg))
 			}
 		}
 	}
@@ -501,6 +514,13 @@ func (s *remoteMessageTarget) runReceiveMessages(streamType string) (err error) 
 		if err != nil {
 			s.collectErr(err)
 		}
+		log.Info("exit runReceiveMessages",
+			zap.Stringer("localID", s.messageCenterID),
+			zap.String("localAddr", s.localAddr),
+			zap.Stringer("remoteID", s.targetId),
+			zap.String("remoteAddr", s.targetAddr),
+			zap.String("streamType", streamType),
+			zap.Error(err))
 	}()
 
 	for {
@@ -572,8 +592,6 @@ func (s *remoteMessageTarget) handleReceivedMessage(stream grpcStream, ch chan *
 			Topic: message.Topic,
 			Type:  mt,
 		}
-
-		log.Info("fizz: Received message", zap.Any("message", message))
 
 		for _, payload := range message.Payload {
 			msg, err := decodeIOType(mt, payload)
