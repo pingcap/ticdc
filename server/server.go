@@ -183,8 +183,7 @@ func (c *server) setPreServices(ctx context.Context) error {
 	appctx.SetService(appctx.DefaultPDClock, c.PDClock)
 	c.preServices = append(c.preServices, c.PDClock)
 	// Set MessageCenter to Global Context
-	mcCfg := config.NewDefaultMessageCenterConfig()
-	mcCfg.Addr = c.info.AdvertiseAddr
+	mcCfg := config.NewDefaultMessageCenterConfig(c.info.AdvertiseAddr)
 	messageCenter := messaging.NewMessageCenter(ctx, c.info.ID, mcCfg, c.security)
 	messageCenter.Run(ctx)
 	appctx.SetService(appctx.MessageCenter, messageCenter)

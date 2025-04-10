@@ -238,7 +238,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[info.ID] = info
 	mc := messaging.NewMessageCenter(ctx,
-		info.ID, config.NewDefaultMessageCenterConfig(), nil)
+		info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()
 
@@ -303,7 +303,8 @@ func TestScaleNode(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[info.ID] = info
-	mc1 := messaging.NewMessageCenter(ctx, info.ID, config.NewDefaultMessageCenterConfig(), nil)
+	cfg := config.NewDefaultMessageCenterConfig(info.AdvertiseAddr)
+	mc1 := messaging.NewMessageCenter(ctx, info.ID, cfg, nil)
 	mc1.Run(ctx)
 	defer mc1.Close()
 
@@ -346,12 +347,12 @@ func TestScaleNode(t *testing.T) {
 
 	// add two nodes
 	info2 := node.NewInfo("127.0.0.1:28400", "")
-	mc2 := messaging.NewMessageCenter(ctx, info2.ID, config.NewDefaultMessageCenterConfig(), nil)
+	mc2 := messaging.NewMessageCenter(ctx, info2.ID, config.NewDefaultMessageCenterConfig(info2.AdvertiseAddr), nil)
 	mc2.Run(ctx)
 	defer mc2.Close()
 	startMaintainerNode(ctx, info2, mc2, nodeManager)
 	info3 := node.NewInfo("127.0.0.1:28500", "")
-	mc3 := messaging.NewMessageCenter(ctx, info3.ID, config.NewDefaultMessageCenterConfig(), nil)
+	mc3 := messaging.NewMessageCenter(ctx, info3.ID, config.NewDefaultMessageCenterConfig(info3.AdvertiseAddr), nil)
 	mc3.Run(ctx)
 	defer mc3.Close()
 	startMaintainerNode(ctx, info3, mc3, nodeManager)
@@ -398,7 +399,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[info.ID] = info
 
-	mc1 := messaging.NewMessageCenter(ctx, info.ID, config.NewDefaultMessageCenterConfig(), nil)
+	mc1 := messaging.NewMessageCenter(ctx, info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
 	mc1.Run(ctx)
 	defer mc1.Close()
 
@@ -491,7 +492,7 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	nodeManager.GetAliveNodes()[info.ID] = info
 
 	// Initialize message center
-	mc := messaging.NewMessageCenter(ctx, info.ID, config.NewDefaultMessageCenterConfig(), nil)
+	mc := messaging.NewMessageCenter(ctx, info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)

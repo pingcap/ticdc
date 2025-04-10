@@ -25,8 +25,9 @@ type MessageCenterConfig struct {
 	CacheChannelSize int
 }
 
-func NewDefaultMessageCenterConfig() *MessageCenterConfig {
+func NewDefaultMessageCenterConfig(addr string) *MessageCenterConfig {
 	return &MessageCenterConfig{
+		Addr:             addr,
 		CacheChannelSize: defaultCacheSize,
 	}
 }

@@ -110,7 +110,7 @@ func (s *remoteMessageTarget) isReadyToSend() bool {
 func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 	if !s.isReadyToSend() {
 		s.errorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream not ready, target: %s, addr: %s", s.targetId, s.targetAddr)}
+		return AppError{Type: ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream not ready", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	}
 
 	// Create message with EVENT type
@@ -119,13 +119,13 @@ func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 	select {
 	case <-s.ctx.Done():
 		s.errorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has been closed, target: %s, addr: %s", s.targetId, s.targetAddr)}
+		return AppError{Type: ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream has been closed", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	case s.sendEventCh <- protoMsg:
 		s.sendEventCounter.Add(float64(len(msg)))
 		return nil
 	default:
 		s.congestedEventErrorCounter.Inc()
-		return AppError{Type: ErrorTypeMessageCongested, Reason: fmt.Sprintf("Send event message is congested, target: %s, addr: %s", s.targetId, s.targetAddr)}
+		return AppError{Type: ErrorTypeMessageCongested, Reason: genSendErrorMsg("Send event message is congested", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	}
 }
 
@@ -133,7 +133,7 @@ func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
 	if !s.isReadyToSend() {
 		s.errorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream not ready, target: %s, addr: %s", s.targetId, s.targetAddr)}
+		return AppError{Type: ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream not ready", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	}
 
 	// Create message with COMMAND type
@@ -142,14 +142,18 @@ func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
 	select {
 	case <-s.ctx.Done():
 		s.errorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: fmt.Sprintf("Stream has been closed, target: %s, addr: %s", s.targetId, s.targetAddr)}
+		return AppError{Type: ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream has been closed", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	case s.sendCmdCh <- protoMsg:
 		s.sendCmdCounter.Add(float64(len(msg)))
 		return nil
 	default:
 		s.congestedCmdErrorCounter.Inc()
-		return AppError{Type: ErrorTypeMessageCongested, Reason: fmt.Sprintf("Send command message is congested, target: %s, addr: %s", s.targetId, s.targetAddr)}
+		return AppError{Type: ErrorTypeMessageCongested, Reason: genSendErrorMsg("Send command message is congested", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	}
+}
+
+func genSendErrorMsg(reason string, localID, localAddr, targetID, targetAddr string) string {
+	return fmt.Sprintf("%s, local: %s, localAddr: %s, target: %s, targetAddr: %s", reason, localID, localAddr, targetID, targetAddr)
 }
 
 // Create a new remote message target
@@ -215,17 +219,20 @@ func newRemoteMessageTarget(
 // Close the target and clean up resources
 func (s *remoteMessageTarget) close() {
 	log.Info("Closing remote target",
-		zap.Any("messageCenterID", s.messageCenterID),
-		zap.Any("remote", s.targetId),
-		zap.Any("addr", s.targetAddr))
+		zap.Stringer("localID", s.messageCenterID),
+		zap.String("localAddr", s.localAddr),
+		zap.Stringer("remoteID", s.targetId),
+		zap.String("remoteAddr", s.targetAddr))
 
 	s.closeConn()
 	s.cancel()
 	s.eg.Wait()
 
 	log.Info("Close remote target done",
-		zap.Any("messageCenterID", s.messageCenterID),
-		zap.Any("remote", s.targetId))
+		zap.Stringer("localID", s.messageCenterID),
+		zap.String("localAddr", s.localAddr),
+		zap.Stringer("remoteID", s.targetId),
+		zap.String("remoteAddr", s.targetAddr))
 }
 
 // Collect and report errors
@@ -243,20 +250,25 @@ func (s *remoteMessageTarget) connect() error {
 	// Only the node with the smaller ID should initiate the connection
 	if !s.shouldInitiate {
 		log.Info("Not initiating connection as remote has smaller ID",
-			zap.Stringer("local", s.messageCenterID),
-			zap.Stringer("remote", s.targetId))
+			zap.Stringer("localID", s.messageCenterID),
+			zap.String("localAddr", s.localAddr),
+			zap.Stringer("remoteID", s.targetId),
+			zap.String("remoteAddr", s.targetAddr))
 		return nil
 	}
 
 	log.Info("Initiating connection to remote target",
-		zap.Stringer("local", s.messageCenterID),
-		zap.Stringer("remote", s.targetId))
+		zap.Stringer("localID", s.messageCenterID),
+		zap.String("localAddr", s.localAddr),
+		zap.Stringer("remoteID", s.targetId),
+		zap.String("remoteAddr", s.targetAddr))
 
 	conn, err := conn.Connect(string(s.targetAddr), s.security)
 	if err != nil {
 		log.Info("Cannot create grpc client",
-			zap.Any("messageCenterID", s.messageCenterID),
-			zap.Any("remote", s.targetId),
+			zap.Any("localID", s.messageCenterID),
+			zap.Any("localAddr", s.localAddr),
+			zap.Any("remoteID", s.targetId),
 			zap.Error(err))
 
 		return AppError{
@@ -273,16 +285,20 @@ func (s *remoteMessageTarget) connect() error {
 		stream, ok := value.(grpcStream)
 		if ok && stream != nil {
 			log.Panic("Stream already exists",
-				zap.Any("messageCenterID", s.messageCenterID),
-				zap.Stringer("remote", s.targetId),
+				zap.Any("localID", s.messageCenterID),
+				zap.String("localAddr", s.localAddr),
+				zap.Any("remoteID", s.targetId),
+				zap.String("remoteAddr", s.targetAddr),
 				zap.String("streamType", streamType))
 		}
 
 		gs, err := client.StreamMessages(s.ctx)
 		if err != nil {
 			log.Info("Cannot establish bidirectional grpc stream",
-				zap.Any("messageCenterID", s.messageCenterID),
-				zap.Stringer("remote", s.targetId),
+				zap.Any("localID", s.messageCenterID),
+				zap.String("localAddr", s.localAddr),
+				zap.Any("remoteID", s.targetId),
+				zap.String("remoteAddr", s.targetAddr),
 				zap.Error(err))
 
 			err = AppError{
@@ -315,8 +331,10 @@ func (s *remoteMessageTarget) connect() error {
 
 		if err := gs.Send(msg); err != nil {
 			log.Info("Failed to send handshake",
-				zap.Any("messageCenterID", s.messageCenterID),
-				zap.Stringer("remote", s.targetId),
+				zap.Any("localID", s.messageCenterID),
+				zap.String("localAddr", s.localAddr),
+				zap.Any("remoteID", s.targetId),
+				zap.String("remoteAddr", s.targetAddr),
 				zap.Error(err))
 			err = AppError{
 				Type:   ErrorTypeMessageSendFailed,
@@ -373,8 +391,10 @@ LOOP:
 	s.connect()
 
 	log.Info("reset connection to remote target done",
-		zap.Any("messageCenterID", s.messageCenterID),
-		zap.Any("remote", s.targetId))
+		zap.Any("localID", s.messageCenterID),
+		zap.String("localAddr", s.localAddr),
+		zap.Any("remoteID", s.targetId),
+		zap.String("remoteAddr", s.targetAddr))
 }
 
 // Handle an incoming stream connection from a remote node, it will block until remote cancel the stream.
@@ -382,8 +402,10 @@ func (s *remoteMessageTarget) handleIncomingStream(stream proto.MessageService_S
 	// Only accept incoming connections if this node should not initiate
 	if s.shouldInitiate {
 		log.Warn("Received unexpected connection from node with higher ID",
-			zap.Stringer("local", s.messageCenterID),
-			zap.Stringer("remote", s.targetId))
+			zap.Stringer("localID", s.messageCenterID),
+			zap.String("localAddr", s.localAddr),
+			zap.Stringer("remoteID", s.targetId),
+			zap.String("remoteAddr", s.targetAddr))
 		return fmt.Errorf("connection policy violation: local node should initiate connection")
 	}
 
@@ -403,7 +425,7 @@ func (s *remoteMessageTarget) run(streamType string) {
 		return s.runSendMessages(streamType)
 	})
 
-	log.Info("Start running target to process messages",
+	log.Info("Start running remote target to process messages",
 		zap.Stringer("localID", s.messageCenterID),
 		zap.String("localAddr", s.localAddr),
 		zap.Stringer("remoteID", s.targetId),

@@ -45,7 +45,7 @@ func NewMessageCenterForTest(t *testing.T) (*messageCenter, string, func()) {
 	grpcServer := grpc.NewServer(opts...)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	mcConfig := config.NewDefaultMessageCenterConfig()
+	mcConfig := config.NewDefaultMessageCenterConfig(addr)
 	id := node.NewID()
 	mc := NewMessageCenter(ctx, id, mcConfig, nil)
 	mcs := NewMessageCenterServer(mc)
