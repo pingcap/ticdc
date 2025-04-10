@@ -157,7 +157,7 @@ func (mc *messageCenter) Run(ctx context.Context) {
 		return nil
 	})
 
-	log.Info("Start running message center", zap.Stringer("id", mc.id))
+	log.Info("Start running message center", zap.Stringer("id", mc.id), zap.String("addr", mc.addr))
 }
 
 // checkRemoteTarget checks the remote targets and reset the connection if there is an error.
@@ -172,7 +172,12 @@ func (mc *messageCenter) checkRemoteTarget(ctx context.Context) {
 			mc.remoteTargets.RLock()
 			for _, target := range mc.remoteTargets.m {
 				if err := target.getErr(); err != nil {
-					log.Warn("remote target error, reset the connection", zap.Stringer("remoteID", target.targetId), zap.String("remoteAddr", target.targetAddr), zap.Error(err))
+					log.Warn("remote target error, reset the connection",
+						zap.Stringer("localID", mc.id),
+						zap.String("localAddr", mc.addr),
+						zap.Stringer("remoteID", target.targetId),
+						zap.String("remoteAddr", target.targetAddr),
+						zap.Error(err))
 					target.resetConnect()
 				}
 			}
@@ -232,18 +237,22 @@ func (mc *messageCenter) handleNodeChanges(activeNode map[node.ID]*node.Info) {
 func (mc *messageCenter) addTarget(id node.ID, addr string) {
 	// If the target is the message center itself, we don't need to add it.
 	if id == mc.id {
-		log.Warn("Add a local target, ignore it", zap.Stringer("id", id), zap.Any("addr", addr))
+		log.Warn("Add a local target, ignore it", zap.Stringer("id", id), zap.String("addr", addr))
 		return
 	}
 	mc.touchRemoteTarget(id, addr)
-	log.Info("Add remote target", zap.Stringer("local", mc.id), zap.Stringer("remote", id), zap.Any("addr", addr))
+	log.Info("Add remote target", zap.Stringer("localID", mc.id), zap.Stringer("remoteID", id), zap.String("remoteAddr", addr))
 }
 
 func (mc *messageCenter) removeTarget(id node.ID) {
 	mc.remoteTargets.Lock()
 	defer mc.remoteTargets.Unlock()
 	if target, ok := mc.remoteTargets.m[id]; ok {
-		log.Info("remove remote target from message center", zap.Stringer("local", mc.id), zap.Stringer("remote", id))
+		log.Info("remove remote target from message center",
+			zap.Stringer("localID", mc.id),
+			zap.String("localAddr", mc.addr),
+			zap.Stringer("remoteID", id),
+			zap.String("remoteAddr", target.targetAddr))
 		target.close()
 		delete(mc.remoteTargets.m, id)
 	}
@@ -348,9 +357,11 @@ func (mc *messageCenter) touchRemoteTarget(id node.ID, targetAddr string) {
 	}
 
 	log.Info("Remote target changed, creating a new one",
-		zap.Stringer("id", id),
-		zap.Any("oldAddr", target.targetAddr),
-		zap.Any("newAddr", targetAddr))
+		zap.Stringer("localID", mc.id),
+		zap.String("localAddr", mc.addr),
+		zap.Stringer("remoteID", id),
+		zap.String("oldAddr", target.targetAddr),
+		zap.String("newAddr", targetAddr))
 
 	target.close()
 	newTarget := newRemoteMessageTarget(
@@ -414,9 +425,9 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 
 	if msg.Type != int32(TypeMessageHandShake) {
 		log.Panic("Received unexpected message type, should be handshake",
-			zap.Stringer("local", s.messageCenter.id),
+			zap.Stringer("localID", s.messageCenter.id),
 			zap.String("localAddr", s.messageCenter.addr),
-			zap.String("remote", msg.From),
+			zap.String("remoteID", msg.From),
 			zap.Int32("type", msg.Type))
 	}
 
@@ -445,7 +456,11 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 		s.messageCenter.remoteTargets.RUnlock()
 
 		if !ok {
-			log.Info("Remote target not found", zap.Any("messageCenter", s.messageCenter.id), zap.Any("remote", targetId))
+			log.Info("Remote target not found",
+				zap.Stringer("localID", s.messageCenter.id),
+				zap.String("localAddr", s.messageCenter.addr),
+				zap.Stringer("remoteID", targetId),
+				zap.String("remoteAddr", target.targetAddr))
 			err := &apperror.AppError{Type: apperror.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %s not found", targetId)}
 			return err
 		}
@@ -463,8 +478,8 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 
 	log.Info("Start to receive messages from remote target",
 		zap.String("streamType", handshake.StreamType),
-		zap.Any("localID", s.messageCenter.id),
-		zap.String("localAddr", target.localAddr),
+		zap.Stringer("localID", s.messageCenter.id),
+		zap.String("localAddr", s.messageCenter.addr),
 		zap.Stringer("remoteID", targetId),
 		zap.String("remoteAddr", target.targetAddr))
 
