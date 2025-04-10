@@ -15,7 +15,6 @@ package kafka
 
 import (
 	"context"
-	"go.uber.org/atomic"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -85,7 +84,7 @@ type AsyncProducer interface {
 type saramaSyncProducer struct {
 	id       commonType.ChangeFeedID
 	producer sarama.SyncProducer
-	closed   *atomic.Bool
+	closed   bool
 }
 
 func (p *saramaSyncProducer) SendMessage(
@@ -93,7 +92,7 @@ func (p *saramaSyncProducer) SendMessage(
 	topic string, partitionNum int32,
 	message *common.Message,
 ) error {
-	if p.closed.Load() {
+	if p.closed {
 		return cerror.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
 	_, _, err := p.producer.SendMessage(&sarama.ProducerMessage{
@@ -108,7 +107,7 @@ func (p *saramaSyncProducer) SendMessage(
 func (p *saramaSyncProducer) SendMessages(
 	_ context.Context, topic string, partitionNum int32, message *common.Message,
 ) error {
-	if p.closed.Load() {
+	if p.closed {
 		return cerror.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
 	msgs := make([]*sarama.ProducerMessage, partitionNum)
@@ -125,13 +124,13 @@ func (p *saramaSyncProducer) SendMessages(
 }
 
 func (p *saramaSyncProducer) Close() {
-	if p.closed.Load() {
+	if p.closed {
 		log.Warn("kafka DDL producer already closed",
 			zap.String("namespace", p.id.Namespace()),
 			zap.String("changefeed", p.id.Name()))
 		return
 	}
-	p.closed.Store(true)
+	p.closed = true
 	start := time.Now()
 	err := p.producer.Close()
 	if err != nil {
@@ -140,12 +139,12 @@ func (p *saramaSyncProducer) Close() {
 			zap.String("changefeed", p.id.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
-	} else {
-		log.Info("Kafka DDL producer closed",
-			zap.String("namespace", p.id.Namespace()),
-			zap.String("changefeed", p.id.Name()),
-			zap.Duration("duration", time.Since(start)))
+		return
 	}
+	log.Info("Kafka DDL producer closed",
+		zap.String("namespace", p.id.Namespace()),
+		zap.String("changefeed", p.id.Name()),
+		zap.Duration("duration", time.Since(start)))
 }
 
 type saramaAsyncProducer struct {

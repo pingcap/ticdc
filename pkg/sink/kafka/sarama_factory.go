@@ -15,7 +15,6 @@ package kafka
 
 import (
 	"context"
-	"go.uber.org/atomic"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -89,20 +88,15 @@ func (f *saramaFactory) AdminClient() (ClusterAdminClient, error) {
 // SyncProducer returns a Sync Producer,
 // it should be the caller's responsibility to close the producer
 func (f *saramaFactory) SyncProducer() (SyncProducer, error) {
-	client, err := sarama.NewClient(f.endpoints, f.config)
+	p, err := sarama.NewSyncProducer(f.endpoints, f.config)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	p, err := sarama.NewSyncProducerFromClient(client)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
 	return &saramaSyncProducer{
 		id:       f.changefeedID,
-		client:   client,
 		producer: p,
-		closed:   atomic.NewBool(false),
+		closed:   false,
 	}, nil
 }
 
