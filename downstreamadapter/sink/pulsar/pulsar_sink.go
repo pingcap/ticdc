@@ -11,17 +11,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sink
+package pulsar
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"net/url"
 	"sync/atomic"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
-	"github.com/pingcap/ticdc/downstreamadapter/worker"
-	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -35,8 +33,10 @@ import (
 type PulsarSink struct {
 	changefeedID common.ChangeFeedID
 
-	dmlWorker *worker.MQDMLWorker
-	ddlWorker *worker.MQDDLWorker
+	protocol config.Protocol
+
+	dmlProducer *pulsarDMLProducer
+	ddlProducer *pulsarDDLProducers
 
 	topicManager topicmanager.TopicManager
 	statistics   *metrics.Statistics
@@ -47,62 +47,73 @@ type PulsarSink struct {
 	ctx      context.Context
 }
 
+func GetPulsarSinkComponent(
+	ctx context.Context,
+	changefeedID common.ChangeFeedID,
+	sinkURI *url.URL,
+	sinkConfig *config.SinkConfig,
+) (PulsarComponent, config.Protocol, error) {
+	return getPulsarSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, pulsar.NewCreatorFactory)
+}
+
 func (s *PulsarSink) SinkType() common.SinkType {
 	return common.PulsarSinkType
 }
 
-func verifyPulsarSink(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
-	components, _, err := worker.GetPulsarSinkComponent(ctx, changefeedID, uri, sinkConfig)
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
+	components, _, err := GetPulsarSinkComponent(ctx, changefeedID, uri, sinkConfig)
 	if components.TopicManager != nil {
 		components.TopicManager.Close()
 	}
 	return err
 }
 
-func newPulsarSink(
+func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
 ) (*PulsarSink, error) {
-	pulsarComponent, protocol, err := worker.GetPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
+	pulsarComponent, protocol, err := GetPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 	statistics := metrics.NewStatistics(changefeedID, "PulsarSink")
 
 	failpointCh := make(chan error, 1)
-	dmlProducer, err := producer.NewPulsarDMLProducer(changefeedID, pulsarComponent.Factory, sinkConfig, failpointCh)
+	dmlProducer, err := NewPulsarDMLProducer(changefeedID, pulsarComponent.Factory, sinkConfig, failpointCh)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	dmlWorker := worker.NewMQDMLWorker(
-		changefeedID,
-		protocol,
-		dmlProducer,
-		pulsarComponent.EncoderGroup,
-		pulsarComponent.ColumnSelector,
-		pulsarComponent.EventRouter,
-		pulsarComponent.TopicManager,
-		statistics,
-	)
+	//dmlWorker := worker.NewMQDMLWorker(
+	//	changefeedID,
+	//	protocol,
+	//	dmlProducer,
+	//	pulsarComponent.EncoderGroup,
+	//	pulsarComponent.ColumnSelector,
+	//	pulsarComponent.EventRouter,
+	//	pulsarComponent.TopicManager,
+	//	statistics,
+	//)
 
-	ddlProducer, err := producer.NewPulsarDDLProducer(changefeedID, pulsarComponent.Config, pulsarComponent.Factory, sinkConfig)
+	ddlProducer, err := NewPulsarDDLProducer(changefeedID, pulsarComponent.Config, pulsarComponent.Factory, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	ddlWorker := worker.NewMQDDLWorker(
-		changefeedID,
-		protocol,
-		ddlProducer,
-		pulsarComponent.Encoder,
-		pulsarComponent.EventRouter,
-		pulsarComponent.TopicManager,
-		statistics,
-	)
+	//ddlWorker := worker.NewMQDDLWorker(
+	//	changefeedID,
+	//	protocol,
+	//	ddlProducer,
+	//	pulsarComponent.Encoder,
+	//	pulsarComponent.EventRouter,
+	//	pulsarComponent.TopicManager,
+	//	statistics,
+	//)
 
 	sink := &PulsarSink{
 		changefeedID: changefeedID,
-		dmlWorker:    dmlWorker,
-		ddlWorker:    ddlWorker,
+		dmlProducer:  dmlProducer,
+		ddlProducer:  ddlProducer,
 		topicManager: pulsarComponent.TopicManager,
+		statistics:   statistics,
+		protocol:     protocol,
 		ctx:          ctx,
 	}
 	return sink, nil
@@ -111,10 +122,10 @@ func newPulsarSink(
 func (s *PulsarSink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		return s.dmlWorker.Run(ctx)
+		return s.dmlProducer.Run(ctx)
 	})
 	g.Go(func() error {
-		return s.ddlWorker.Run(ctx)
+		return s.ddlProducer.Run(ctx)
 	})
 	err := g.Wait()
 	atomic.StoreUint32(&s.isNormal, 0)
@@ -126,7 +137,7 @@ func (s *PulsarSink) IsNormal() bool {
 }
 
 func (s *PulsarSink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.dmlWorker.AddDMLEvent(event)
+	s.dmlProducer.AddDMLEvent(event)
 }
 
 func (s *PulsarSink) PassBlockEvent(event commonEvent.BlockEvent) {
@@ -141,7 +152,7 @@ func (s *PulsarSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 			v.PostFlush()
 			return nil
 		}
-		err := s.ddlWorker.WriteBlockEvent(s.ctx, v)
+		err := s.dmlProducer.WriteBlockEvent(s.ctx, v)
 		if err != nil {
 			atomic.StoreUint32(&s.isNormal, 0)
 			return errors.Trace(err)
@@ -161,20 +172,20 @@ func (s *PulsarSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *PulsarSink) AddCheckpointTs(ts uint64) {
-	s.ddlWorker.AddCheckpoint(ts)
+	s.ddlProducer.AddCheckpoint(ts)
 }
 
 func (s *PulsarSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
-	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
+	s.ddlProducer.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *PulsarSink) GetStartTsList(tableIds []int64, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error) {
+func (s *PulsarSink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
 	return startTsList, make([]bool, len(startTsList)), nil
 }
 
 func (s *PulsarSink) Close(_ bool) {
-	s.ddlWorker.Close()
-	s.dmlWorker.Close()
+	s.ddlProducer.Close()
+	s.dmlProducer.Close()
 	s.topicManager.Close()
 	s.statistics.Close()
 }

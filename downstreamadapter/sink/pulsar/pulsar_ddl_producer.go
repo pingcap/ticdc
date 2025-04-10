@@ -11,11 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package producer
+package pulsar
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"sync"
+	"time"
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	lru "github.com/hashicorp/golang-lru"
@@ -23,7 +29,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/cdc/sink/util"
+	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 )
 
@@ -35,7 +41,18 @@ type pulsarDDLProducers struct {
 	// support multiple topics
 	producers      *lru.Cache
 	producersMutex sync.RWMutex
-	id             commonType.ChangeFeedID
+	changefeedID   commonType.ChangeFeedID
+
+	checkpointTsChan chan uint64
+	encoder          common.EventEncoder
+
+	// eventRouter used to route events to the right topic and partition.
+	eventRouter *eventrouter.EventRouter
+	// topicManager used to manage topics.
+	// It is also responsible for creating topics.
+	topicManager topicmanager.TopicManager
+
+	tableSchemaStore *util.TableSchemaStore
 }
 
 // NewPulsarDDLProducer creates a pulsar producer
@@ -45,7 +62,7 @@ func NewPulsarDDLProducer(
 	client pulsar.Client,
 	sinkConfig *config.SinkConfig,
 ) (*pulsarDDLProducers, error) {
-	topicName, err := util.GetTopic(pConfig.SinkURI)
+	topicName, err := helper.GetTopic(pConfig.SinkURI)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +94,7 @@ func NewPulsarDDLProducer(
 		pConfig:          pConfig,
 		producers:        producers,
 		defaultTopicName: topicName,
-		id:               changefeedID,
+		changefeedID:     changefeedID,
 	}, nil
 }
 
@@ -162,6 +179,76 @@ func (p *pulsarDDLProducers) Close() {
 	p.client.Close()
 	for _, topic := range keys {
 		p.producers.Remove(topic) // callback func will be called
+	}
+}
+
+func (p *pulsarDDLProducers) Run(ctx context.Context) error {
+	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(p.changefeedID.Namespace(), p.changefeedID.Name())
+	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(p.changefeedID.Namespace(), p.changefeedID.Name())
+
+	defer func() {
+		metrics.CheckpointTsMessageDuration.DeleteLabelValues(p.changefeedID.Namespace(), p.changefeedID.Name())
+		metrics.CheckpointTsMessageCount.DeleteLabelValues(p.changefeedID.Namespace(), p.changefeedID.Name())
+	}()
+	var (
+		msg          *common.Message
+		partitionNum int32
+		err          error
+	)
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case ts, ok := <-p.checkpointTsChan:
+			if !ok {
+				log.Warn("MQ sink flush worker channel closed",
+					zap.String("namespace", p.changefeedID.Namespace()),
+					zap.String("changefeed", p.changefeedID.Name()))
+				return nil
+			}
+
+			start := time.Now()
+			msg, err = p.encoder.EncodeCheckpointEvent(ts)
+			if err != nil {
+				return errors.Trace(err)
+			}
+
+			if msg == nil {
+				continue
+			}
+			tableNames := p.tableSchemaStore.GetAllTableNames(ts)
+			// NOTICE: When there are no tables to replicate,
+			// we need to send checkpoint ts to the default topic.
+			// This will be compatible with the old behavior.
+			if len(tableNames) == 0 {
+				topic := p.eventRouter.GetDefaultTopic()
+				partitionNum, err = p.topicManager.GetPartitionNum(ctx, topic)
+				if err != nil {
+					return errors.Trace(err)
+				}
+				log.Debug("Emit checkpointTs to default topic",
+					zap.String("topic", topic), zap.Uint64("checkpointTs", ts), zap.Any("partitionNum", partitionNum))
+				err = p.producer.SendMessages(ctx, topic, partitionNum, msg)
+				if err != nil {
+					return errors.Trace(err)
+				}
+			} else {
+				topics := p.eventRouter.GetActiveTopics(tableNames)
+				for _, topic := range topics {
+					partitionNum, err = p.topicManager.GetPartitionNum(ctx, topic)
+					if err != nil {
+						return errors.Trace(err)
+					}
+					err = p.SendMessages(ctx, topic, partitionNum, msg)
+					if err != nil {
+						return errors.Trace(err)
+					}
+				}
+			}
+
+			checkpointTsMessageCount.Inc()
+			checkpointTsMessageDuration.Observe(time.Since(start).Seconds())
+		}
 	}
 }
 

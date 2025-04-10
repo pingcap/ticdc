@@ -47,7 +47,7 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 		return nil, nil, nil, errors.Trace(err)
 	}
 	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	kafkaComponent, protocol, err := worker.GetKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig)
+	kafkaComponent, protocol, err := GetKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, nil, nil, errors.Trace(err)
 	}

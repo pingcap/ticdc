@@ -11,10 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package producer
+package pulsar
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	"testing"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -57,11 +58,11 @@ func TestPulsarSyncSendMessage(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		p := NewMockPulsarDDLProducer()
+		p := producer.NewMockPulsarDDLProducer()
 		err := p.SyncSendMessage(tt.args.ctx, tt.args.topic,
 			tt.args.partition, tt.args.message)
 		require.NoError(t, err)
-		require.Len(t, p.(*PulsarMockProducer).GetEvents(tt.args.topic), 1)
+		require.Len(t, p.(*producer.PulsarMockProducer).GetEvents(tt.args.topic), 1)
 
 		p.Close()
 
@@ -102,11 +103,11 @@ func TestPulsarSyncBroadcastMessage(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		p := NewMockPulsarDDLProducer()
+		p := producer.NewMockPulsarDDLProducer()
 		err := p.SyncSendMessage(tt.args.ctx, tt.args.topic,
 			tt.args.partition, tt.args.message)
 		require.NoError(t, err)
-		require.Len(t, p.(*PulsarMockProducer).GetEvents(tt.args.topic), 1)
+		require.Len(t, p.(*producer.PulsarMockProducer).GetEvents(tt.args.topic), 1)
 
 		p.Close()
 

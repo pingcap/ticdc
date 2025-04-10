@@ -16,6 +16,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"net/url"
 	"os"
 	"path"
@@ -23,7 +24,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"

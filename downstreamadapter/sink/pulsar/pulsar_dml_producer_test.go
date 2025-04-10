@@ -11,10 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package producer
+package pulsar
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -26,7 +27,7 @@ func TestPulsarSyncAsyncSendMessage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	p := NewMockPulsarDMLProducer()
+	p := producer.NewMockPulsarDMLProducer()
 	err := p.AsyncSendMessage(ctx, "test", 0, &common.Message{
 		Value:        []byte("this value for test input data"),
 		PartitionKey: str2Pointer("test_key"),

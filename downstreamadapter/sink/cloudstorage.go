@@ -15,6 +15,7 @@ package sink
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"math"
 	"net/url"
 	"strings"
@@ -22,7 +23,6 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/downstreamadapter/worker"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonType "github.com/pingcap/ticdc/pkg/common"

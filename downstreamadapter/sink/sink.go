@@ -15,14 +15,15 @@ package sink
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/pulsar"
 	"net/url"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
-	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tiflow/pkg/sink"
 )
 
@@ -36,7 +37,7 @@ type Sink interface {
 	AddCheckpointTs(ts uint64)
 
 	GetStartTsList(tableIds []int64, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error)
-	SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore)
+	SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore)
 	Close(removeChangefeed bool)
 	Run(ctx context.Context) error
 }
@@ -44,7 +45,7 @@ type Sink interface {
 func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
 	sinkURI, err := url.Parse(config.SinkURI)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrSinkURIInvalid, err)
+		return nil, errors.WrapError(errors.ErrSinkURIInvalid, err)
 	}
 	scheme := sink.GetScheme(sinkURI)
 	switch scheme {
@@ -53,19 +54,19 @@ func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID 
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
 		return newKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.PulsarScheme, sink.PulsarSSLScheme, sink.PulsarHTTPScheme, sink.PulsarHTTPSScheme:
-		return newPulsarSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+		return pulsar.New(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.S3Scheme, sink.FileScheme, sink.GCSScheme, sink.GSScheme, sink.AzblobScheme, sink.AzureScheme, sink.CloudStorageNoopScheme:
 		return newCloudStorageSink(ctx, changefeedID, sinkURI, config.SinkConfig, nil)
 	case sink.BlackHoleScheme:
 		return newBlackHoleSink()
 	}
-	return nil, cerror.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
+	return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
 }
 
 func VerifySink(ctx context.Context, config *config.ChangefeedConfig, changefeedID common.ChangeFeedID) error {
 	sinkURI, err := url.Parse(config.SinkURI)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrSinkURIInvalid, err)
+		return errors.WrapError(errors.ErrSinkURIInvalid, err)
 	}
 	scheme := sink.GetScheme(sinkURI)
 	switch scheme {
@@ -74,11 +75,11 @@ func VerifySink(ctx context.Context, config *config.ChangefeedConfig, changefeed
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
 		return verifyKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.PulsarScheme, sink.PulsarSSLScheme, sink.PulsarHTTPScheme, sink.PulsarHTTPSScheme:
-		return verifyPulsarSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+		return pulsar.Verify(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.S3Scheme, sink.FileScheme, sink.GCSScheme, sink.GSScheme, sink.AzblobScheme, sink.AzureScheme, sink.CloudStorageNoopScheme:
 		return verifyCloudStorageSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.BlackHoleScheme:
 		return nil
 	}
-	return cerror.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
+	return errors.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
 }

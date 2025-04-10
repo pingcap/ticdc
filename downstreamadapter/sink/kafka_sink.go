@@ -15,11 +15,11 @@ package sink
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"net/url"
 	"sync/atomic"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/topicmanager"
 	"github.com/pingcap/ticdc/downstreamadapter/worker"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -56,7 +56,7 @@ func (s *KafkaSink) SinkType() common.SinkType {
 }
 
 func verifyKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
-	components, _, err := worker.GetKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
+	components, _, err := GetKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
 	if components.AdminClient != nil {
 		components.AdminClient.Close()
 	}
@@ -69,7 +69,7 @@ func verifyKafkaSink(ctx context.Context, changefeedID common.ChangeFeedID, uri 
 func newKafkaSink(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
 ) (*KafkaSink, error) {
-	kafkaComponent, protocol, err := worker.GetKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
+	kafkaComponent, protocol, err := GetKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

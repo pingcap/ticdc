@@ -16,6 +16,7 @@ package cloudstorage
 import (
 	"context"
 	"fmt"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -23,7 +24,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
