@@ -29,8 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/spanz"
@@ -154,7 +152,6 @@ type Dispatcher struct {
 
 	bdrMode bool
 
-	config         *config.ChangefeedConfig
 	BootstrapState bootstrapState
 }
 
@@ -172,7 +169,6 @@ func NewDispatcher(
 	filterConfig *eventpb.FilterConfig,
 	currentPdTs uint64,
 	errCh chan error,
-	config *config.ChangefeedConfig,
 	bdrMode bool,
 ) *Dispatcher {
 	dispatcher := &Dispatcher{
@@ -195,7 +191,6 @@ func NewDispatcher(
 		resendTaskMap:         newResendTaskMap(),
 		creationPDTs:          currentPdTs,
 		errCh:                 errCh,
-		config:                config,
 		bdrMode:               bdrMode,
 		BootstrapState:        BootstrapFinished,
 	}
@@ -318,6 +313,8 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 // by setting them with different event types in DispatcherEventsHandler.GetType
 // When we handle events, we don't have any previous events still in sink.
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
+	// Only return false when all events are resolvedTs Event.
+	block = false
 	// before bootstrap finished, cannot send any event.
 	ok := d.EmitBootstrap()
 	if !ok {
@@ -330,8 +327,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 		}
 		return
 	}
-	// Only return false when all events are resolvedTs Event.
-	block = false
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		log.Debug("dispatcher receive all event",
@@ -829,6 +824,10 @@ func (d *Dispatcher) EmitBootstrap() bool {
 	if !d.IsTableTriggerEventDispatcher() {
 		return true
 	}
+	tables := d.tableSchemaStore.GetAllNormalTableIds()
+	if len(tables) == 0 {
+		return true
+	}
 	bootstrap := loadBootstrapState(&d.BootstrapState)
 	switch bootstrap {
 	case BootstrapFinished:
@@ -838,25 +837,13 @@ func (d *Dispatcher) EmitBootstrap() bool {
 	case BootstrapNotStarted:
 	}
 	storeBootstrapState(&d.BootstrapState, BootstrapInProgress)
-	start := time.Now()
-	// Use a empty timezone because table filter does not need it.
-	f, err := filter.NewFilter(d.config.Filter, "", d.config.CaseSensitive, d.config.ForceReplicate)
-	if err != nil {
-		log.Error("parse filter failed", zap.Error(err))
-		return false
-	}
 
-	// ts := d.GetCheckpointTs()
+	start := time.Now()
 	ts := d.GetStartTs()
 	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
-	tables, err := schemaStore.GetAllPhysicalTables(ts, f)
-	log.Error("schemastore.SchemaStore", zap.Any("ts", ts), zap.Any("startTs", d.startTs), zap.Any("", d.tableProgress.Empty()), zap.Any("tables", tables))
-	if err != nil {
-		log.Error("get all tables failed", zap.Error(err))
-	}
 	currentTables := make([]*common.TableInfo, 0, len(tables))
 	for i := 0; i < len(tables); i++ {
-		tableInfo, err := schemaStore.GetTableInfo(tables[i].TableID, ts)
+		tableInfo, err := schemaStore.GetTableInfo(tables[i], ts)
 		if err != nil {
 			log.Warn("get table info failed when sending bootstrap, just ignore",
 				zap.Stringer("changefeed", d.changefeedID),

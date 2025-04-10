@@ -96,6 +96,10 @@ func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonTy
 	} else {
 		tableSchemaStore = &TableSchemaStore{
 			sinkType: sinkType,
+			tableIDStore: &TableIDStore{
+				schemaIDToTableIDs: make(map[int64]map[int64]interface{}),
+				tableIDToSchemaID:  make(map[int64]int64),
+			},
 			tableNameStore: &TableNameStore{
 				existingTables:         make(map[string]map[string]*commonEvent.SchemaTableName),
 				latestTableNameChanges: &LatestTableNameChanges{m: make(map[uint64]*commonEvent.TableNameChange)},
@@ -103,9 +107,12 @@ func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonTy
 		}
 		for _, schema := range schemaInfo {
 			schemaName := schema.SchemaName
+			schemaID := schema.SchemaID
 			for _, table := range schema.Tables {
 				tableName := table.TableName
 				tableSchemaStore.tableNameStore.Add(schemaName, tableName)
+				tableID := table.TableID
+				tableSchemaStore.tableIDStore.Add(schemaID, tableID)
 			}
 		}
 

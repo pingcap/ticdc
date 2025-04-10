@@ -494,7 +494,6 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			e.filterConfig,
 			pdTsList[idx],
 			e.errCh,
-			e.config,
 			e.config.BDRMode)
 
 		if e.heartBeatTask == nil {
