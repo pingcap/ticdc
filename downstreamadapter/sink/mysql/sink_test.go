@@ -11,26 +11,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sink
+package mysql
 
 import (
+	"context"
 	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"github.com/stretchr/testify/require"
 )
 
-var count atomic.Int64
+func MysqlSinkForTest() (*Sink, sqlmock.Sqlmock) {
+	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	ctx := context.Background()
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	cfg := mysql.NewMysqlConfig()
+	cfg.WorkerCount = 1
+	cfg.DMLMaxRetry = 1
+	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
+	cfg.CachePrepStmts = false
+
+	sink := newMysqlSinkWithDBAndConfig(ctx, changefeedID, cfg, db)
+	go sink.Run(ctx)
+
+	return sink, mock
+}
 
 // Test callback and tableProgress works as expected after AddDMLEvent
 func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
 
-	count.Store(0)
+	var count atomic.Int64
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -128,7 +146,7 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 // whether the sink state is correct
 func TestMysqlSinkMeetsDMLError(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
-	count.Store(0)
+	var count atomic.Int64
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -166,7 +184,7 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 func TestMysqlSinkMeetsDDLError(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
 
-	count.Store(0)
+	var count atomic.Int64
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()

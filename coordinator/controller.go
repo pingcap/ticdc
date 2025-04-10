@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/operator"
+	coscheduler "github.com/pingcap/ticdc/coordinator/scheduler"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -110,22 +111,20 @@ func NewController(
 		version:      version,
 		bootstrapped: atomic.NewBool(false),
 		scheduler: scheduler.NewController(map[string]scheduler.Scheduler{
-			scheduler.BasicScheduler: scheduler.NewBasicScheduler(
+			scheduler.BasicScheduler: coscheduler.NewBasicScheduler(
 				selfNode.ID.String(),
 				batchSize,
 				oc,
 				changefeedDB,
 				nodeManager,
-				oc.NewAddMaintainerOperator,
 			),
-			scheduler.BalanceScheduler: scheduler.NewBalanceScheduler(
+			scheduler.BalanceScheduler: coscheduler.NewBalanceScheduler(
 				selfNode.ID.String(),
 				batchSize,
 				oc,
 				changefeedDB,
 				nodeManager,
 				balanceInterval,
-				oc.NewMoveMaintainerOperator,
 			),
 		}),
 		eventCh:             eventCh,

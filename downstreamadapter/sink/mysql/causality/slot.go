@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package conflictdetector
+package causality
 
 import (
 	"math"
@@ -123,7 +123,7 @@ func getSlot(hash, numSlots uint64) uint64 {
 
 // Sort and dedup hashes.
 // Sort hashes by `hash % numSlots` to avoid deadlock, and then dedup
-// hashes, so the same node will not check confict with the same hash
+// hashes, so the same node will not check conflict with the same hash
 // twice to prevent potential cyclic self dependency in the causality
 // dependency graph.
 func sortAndDedupHashes(hashes []uint64, numSlots uint64) []uint64 {
@@ -132,7 +132,9 @@ func sortAndDedupHashes(hashes []uint64, numSlots uint64) []uint64 {
 	}
 
 	// Sort hashes by `hash % numSlots` to avoid deadlock.
-	sort.Slice(hashes, func(i, j int) bool { return hashes[i]%numSlots < hashes[j]%numSlots })
+	sort.Slice(hashes, func(i, j int) bool {
+		return hashes[i]%numSlots < hashes[j]%numSlots
+	})
 
 	// Dedup hashes
 	last := hashes[0]

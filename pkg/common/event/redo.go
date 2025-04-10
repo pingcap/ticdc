@@ -98,9 +98,9 @@ const (
 
 // ToRedoLog converts row changed event to redo log
 func (r *DMLEvent) ToRedoLog() *RedoLog {
-	r.FinishGetRow()
+	r.Rewind()
 	row, valid := r.GetNextRow()
-	r.FinishGetRow()
+	r.Rewind()
 
 	redoLog := &RedoLog{
 		RedoRow: RedoDMLEvent{

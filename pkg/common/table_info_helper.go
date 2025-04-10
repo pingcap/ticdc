@@ -703,12 +703,12 @@ func (s *columnSchema) InitPreSQLs(tableName string) {
 		return
 	}
 	s.PreSQLs = make(map[int]string)
-	s.PreSQLs[preSQLInsert] = s.genPreSQLInsert(false, true)
-	s.PreSQLs[preSQLReplace] = s.genPreSQLInsert(true, true)
+	s.PreSQLs[preSQLInsert] = s.genPreSQLInsert(false)
+	s.PreSQLs[preSQLReplace] = s.genPreSQLInsert(true)
 	s.PreSQLs[preSQLUpdate] = s.genPreSQLUpdate()
 }
 
-func (s *columnSchema) genPreSQLInsert(isReplace bool, needPlaceHolder bool) string {
+func (s *columnSchema) genPreSQLInsert(isReplace bool) string {
 	var builder strings.Builder
 
 	if isReplace {
@@ -721,11 +721,10 @@ func (s *columnSchema) genPreSQLInsert(isReplace bool, needPlaceHolder bool) str
 	builder.WriteString(columnList)
 	builder.WriteString(") VALUES ")
 
-	if needPlaceHolder {
-		builder.WriteString("(")
-		builder.WriteString(placeHolder(nonGeneratedColumnCount))
-		builder.WriteString(")")
-	}
+	builder.WriteString("(")
+	builder.WriteString(placeHolder(nonGeneratedColumnCount))
+	builder.WriteString(")")
+
 	return builder.String()
 }
 
