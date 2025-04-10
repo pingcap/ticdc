@@ -68,7 +68,7 @@ type Writer struct {
 	blockerTicker *time.Ticker
 }
 
-func NewMysqlWriter(
+func NewWriter(
 	ctx context.Context,
 	db *sql.DB,
 	cfg *Config,
@@ -132,7 +132,7 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 
 		err := w.execDDLWithMaxRetries(event)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 
 		// We need to record ddl' ts after each ddl for each table in the downstream when sink is mysql-compatible.

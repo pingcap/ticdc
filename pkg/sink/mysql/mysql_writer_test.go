@@ -42,7 +42,7 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	}
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
-	writer := NewMysqlWriter(ctx, db, cfg, changefeedID, statistics, false)
+	writer := NewWriter(ctx, db, cfg, changefeedID, statistics, false)
 
 	return writer, db, mock
 }
@@ -58,7 +58,7 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	}
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
-	writer := NewMysqlWriter(ctx, db, cfg, changefeedID, statistics, false)
+	writer := NewWriter(ctx, db, cfg, changefeedID, statistics, false)
 
 	return writer, db, mock
 }

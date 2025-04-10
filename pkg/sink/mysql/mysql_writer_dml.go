@@ -413,21 +413,21 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 	var argsList [][]interface{}
 
 	inSafeMode := !w.cfg.SafeMode && event.CommitTs > event.ReplicatingTs
-
 	log.Debug("inSafeMode",
 		zap.Bool("inSafeMode", inSafeMode),
 		zap.Uint64("firstRowCommitTs", event.CommitTs),
 		zap.Uint64("firstRowReplicatingTs", event.ReplicatingTs),
 		zap.Bool("safeMode", w.cfg.SafeMode))
 
-	var query string
-	var args []interface{}
+	var (
+		query string
+		args  []interface{}
+	)
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
 			break
 		}
-
 		switch row.RowType {
 		case commonEvent.RowTypeUpdate:
 			if inSafeMode {

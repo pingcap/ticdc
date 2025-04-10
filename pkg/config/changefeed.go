@@ -307,7 +307,6 @@ func (info *ChangeFeedInfo) rmMQOnlyFields() {
 	info.Config.Sink.DispatchRules = nil
 	info.Config.Sink.SchemaRegistry = nil
 	info.Config.Sink.EncoderConcurrency = nil
-	info.Config.Sink.EnableKafkaSinkV2 = nil
 	info.Config.Sink.OnlyOutputUpdatedColumns = nil
 	info.Config.Sink.DeleteOnlyOutputHandleKeyColumns = nil
 	info.Config.Sink.ContentCompatible = nil

@@ -36,6 +36,7 @@ func (w *Writer) asyncExecAddIndexDDLIfTimeout(event *commonEvent.DDLEvent) erro
 	// only normal type may have ddl need to async exec
 	case commonEvent.InfluenceTypeNormal:
 		tableIDs = event.GetBlockedTables().TableIDs
+	default:
 	}
 
 	for _, tableID := range tableIDs {
@@ -239,7 +240,7 @@ func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 	}
 
 	for _, tableID := range relatedTableIDs {
-		// tableID 0 means table trigger, which can't not do async ddl
+		// tableID 0 means table trigger, which can't do async ddl
 		if tableID == 0 {
 			continue
 		}
@@ -276,7 +277,7 @@ func (w *Writer) waitTableAsyncDDLDone(tableID int64) {
 var checkRunningAddIndexSQL = `
 SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE_ID, STATE, QUERY
 FROM information_schema.ddl_jobs
-WHERE TABLE_ID = "%s"
+WHERE TABLE_ID = "%d"
     AND JOB_TYPE LIKE "add index%%"
     AND (STATE = "running" OR STATE = "queueing");
 `
@@ -342,7 +343,7 @@ func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(tableID int64) error {
 		case <-w.ctx.Done():
 			return nil
 		case <-ticker.C:
-			running, err := w.doQueryAsyncDDL(tableID, query)
+			running, err = w.doQueryAsyncDDL(tableID, query)
 			if err != nil {
 				return err
 			}
