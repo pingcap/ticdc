@@ -114,3 +114,36 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		})
 	}
 }
+
+func newFieldTypeWithFlag(flags ...uint) *types.FieldType {
+	ft := &types.FieldType{}
+	for _, flag := range flags {
+		ft.AddFlag(flag)
+	}
+	return ft
+}
+
+func TestColumnIndex(t *testing.T) {
+	columns := []*model.ColumnInfo{
+		{ID: 101, Name: pmodel.NewCIStr("a"), FieldType: *newFieldTypeWithFlag(mysql.PriKeyFlag)},
+		{ID: 102, Name: pmodel.NewCIStr("b"), FieldType: *newFieldTypeWithFlag(mysql.UniqueKeyFlag)},
+		{ID: 103, Name: pmodel.NewCIStr("c"), FieldType: *newFieldTypeWithFlag()},
+	}
+	tableInfo := WrapTableInfo("test", &model.TableInfo{
+		PKIsHandle: true,
+		Columns:    columns,
+	})
+	require.Equal(t, tableInfo.GetIndexColumns(), [][]int64{{101}})
+	require.Equal(t, tableInfo.GetPKIndex(), []int64{101})
+
+	indices := []*model.IndexInfo{
+		{ID: 1, Primary: true, Columns: []*model.IndexColumn{{Offset: 0}}},
+		{ID: 2, Unique: true, Columns: []*model.IndexColumn{{Offset: 1}, {Offset: 2}}},
+	}
+	tableInfo = WrapTableInfo("test", &model.TableInfo{
+		Columns: columns,
+		Indices: indices,
+	})
+	require.Equal(t, tableInfo.GetIndexColumns(), [][]int64{{101}, {102, 103}})
+	require.Equal(t, tableInfo.GetPKIndex(), []int64{101})
+}
