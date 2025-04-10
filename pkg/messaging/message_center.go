@@ -459,8 +459,7 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 			log.Info("Remote target not found",
 				zap.Stringer("localID", s.messageCenter.id),
 				zap.String("localAddr", s.messageCenter.addr),
-				zap.Stringer("remoteID", targetId),
-				zap.String("remoteAddr", target.targetAddr))
+				zap.Stringer("remoteID", targetId))
 			err := &apperror.AppError{Type: apperror.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %s not found", targetId)}
 			return err
 		}
