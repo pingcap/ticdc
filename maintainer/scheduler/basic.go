@@ -57,7 +57,7 @@ func NewBasicScheduler(
 	}
 
 	if schedulerCfg != nil {
-		scheduler.schedulingTaskCountPerNode = scheduler.schedulingTaskCountPerNode
+		scheduler.schedulingTaskCountPerNode = schedulerCfg.SchedulingTaskCountPerNode
 	}
 	return scheduler
 }
