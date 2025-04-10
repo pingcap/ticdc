@@ -18,15 +18,12 @@ import (
 
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 )
-
-// the max scheduling task count for each group in each node.
-// TODO: we need to select a good value
-const schedulingTaskCountPerNode = 6
 
 // basicScheduler generates operators for the spans, and push them to the operator controller
 // it generates add operator for the absent spans, and move operator for the unbalanced replicating spans
@@ -34,6 +31,9 @@ const schedulingTaskCountPerNode = 6
 type basicScheduler struct {
 	id        string
 	batchSize int
+	// the max scheduling task count for each group in each node.
+	// TODO: we need to select a good value
+	schedulingTaskCountPerNode int
 
 	operatorController *operator.Controller
 	replicationDB      *replica.ReplicationDB
@@ -45,14 +45,21 @@ func NewBasicScheduler(
 	oc *operator.Controller,
 	replicationDB *replica.ReplicationDB,
 	nodeManager *watcher.NodeManager,
+	schedulerCfg *config.ChangefeedSchedulerConfig,
 ) *basicScheduler {
-	return &basicScheduler{
-		id:                 id,
-		batchSize:          batchSize,
-		operatorController: oc,
-		replicationDB:      replicationDB,
-		nodeManager:        nodeManager,
+	scheduler := &basicScheduler{
+		id:                         id,
+		batchSize:                  batchSize,
+		operatorController:         oc,
+		replicationDB:              replicationDB,
+		nodeManager:                nodeManager,
+		schedulingTaskCountPerNode: 1,
 	}
+
+	if schedulerCfg != nil {
+		scheduler.schedulingTaskCountPerNode = scheduler.schedulingTaskCountPerNode
+	}
+	return scheduler
 }
 
 // Execute periodically execute the operator
@@ -85,15 +92,20 @@ func (s *basicScheduler) Execute() time.Time {
 
 func (s *basicScheduler) schedule(id pkgreplica.GroupID, availableSize int) (scheduled int) {
 	scheduleNodeSize := s.replicationDB.GetScheduleTaskSizePerNodeByGroup(id)
+
 	// calculate the space based on schedule count
 	size := 0
 	for id := range s.nodeManager.GetAliveNodes() {
 		if _, ok := scheduleNodeSize[id]; !ok {
 			scheduleNodeSize[id] = 0
 		}
-		size += schedulingTaskCountPerNode - scheduleNodeSize[id]
+		size += s.schedulingTaskCountPerNode - scheduleNodeSize[id]
 	}
 
+	if size == 0 {
+		// no available slot for new replication task
+		return
+	}
 	availableSize = min(availableSize, size)
 
 	absentReplications := s.replicationDB.GetAbsentByGroup(id, availableSize)

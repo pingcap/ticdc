@@ -71,13 +71,10 @@ func NewSplitter(
 	config *config.ChangefeedSchedulerConfig,
 ) *Splitter {
 	baseSpanNumberCoefficient = config.SplitNumberPerNode
-	if baseSpanNumberCoefficient <= 0 {
-		log.Panic("invalid SplitNumberPerNode, please set SplitNumberPerNode larger than 0", zap.Any("SplitNumberPerNode", baseSpanNumberCoefficient))
-	}
 	log.Info("baseSpanNumberCoefficient", zap.Any("ChangefeedID", changefeedID.Name()), zap.Any("baseSpanNumberCoefficient", baseSpanNumberCoefficient))
 	return &Splitter{
 		changefeedID:          changefeedID,
-		regionCounterSplitter: newRegionCountSplitter(changefeedID, regionCache, config.RegionThreshold),
+		regionCounterSplitter: newRegionCountSplitter(changefeedID, regionCache, config.RegionThreshold, config.RegionCountPerSpan),
 		writeKeySplitter:      newWriteSplitter(changefeedID, pdapi, config.WriteKeyThreshold),
 	}
 }

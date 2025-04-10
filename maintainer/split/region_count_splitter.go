@@ -25,8 +25,8 @@ import (
 )
 
 // regionCountSplitter is a splitter that splits spans by region count.
-// It is used to split spans when add new table when initialize the maintainer and enable enableTableAcrossNodesS
-// regionCountSplitter will split a table span into multiple spans, each span contains at most k regions.
+// It is used to split spans when add new table when initialize the maintainer and enable enableTableAcrossNodes
+// regionCountSplitter will split a table span into multiple spans, each span contains at most regionCountPerSpan regions.
 type regionCountSplitter struct {
 	changefeedID       common.ChangeFeedID
 	regionCache        RegionCache
@@ -35,13 +35,13 @@ type regionCountSplitter struct {
 }
 
 func newRegionCountSplitter(
-	changefeedID common.ChangeFeedID, regionCache RegionCache, regionThreshold int,
+	changefeedID common.ChangeFeedID, regionCache RegionCache, regionThreshold int, regionCountPerSpan int,
 ) *regionCountSplitter {
 	return &regionCountSplitter{
 		changefeedID:       changefeedID,
 		regionCache:        regionCache,
 		regionThreshold:    regionThreshold,
-		regionCountPerSpan: 100,
+		regionCountPerSpan: regionCountPerSpan,
 	}
 }
 

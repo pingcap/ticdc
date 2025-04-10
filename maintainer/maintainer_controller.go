@@ -90,8 +90,10 @@ func NewController(changefeedID common.ChangeFeedID,
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	oc := operator.NewOperatorController(changefeedID, mc, replicaSetDB, nodeManager, batchSize)
+
+	var schedulerCfg *config.ChangefeedSchedulerConfig
 	sc := NewScheduleController(
-		changefeedID, batchSize, oc, replicaSetDB, nodeManager, balanceInterval, splitter,
+		changefeedID, batchSize, oc, replicaSetDB, nodeManager, balanceInterval, splitter, schedulerCfg,
 	)
 
 	return &Controller{
