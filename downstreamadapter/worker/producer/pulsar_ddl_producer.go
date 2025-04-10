@@ -27,9 +27,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// Assert DDLEventSink implementation
-var _ DDLProducer = (*pulsarDDLProducers)(nil)
-
 // pulsarDDLProducers is a producer for pulsar
 type pulsarDDLProducers struct {
 	client           pulsar.Client
@@ -43,12 +40,11 @@ type pulsarDDLProducers struct {
 
 // NewPulsarDDLProducer creates a pulsar producer
 func NewPulsarDDLProducer(
-	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	pConfig *config.PulsarConfig,
 	client pulsar.Client,
 	sinkConfig *config.SinkConfig,
-) (DDLProducer, error) {
+) (*pulsarDDLProducers, error) {
 	topicName, err := util.GetTopic(pConfig.SinkURI)
 	if err != nil {
 		return nil, err

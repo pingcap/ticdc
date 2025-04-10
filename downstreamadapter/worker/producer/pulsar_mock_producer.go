@@ -21,11 +21,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
-var (
-	_ DDLProducer = (*PulsarMockProducer)(nil)
-	_ DMLProducer = (*PulsarMockProducer)(nil)
-)
-
 // PulsarMockProducer is a mock pulsar producer
 type PulsarMockProducer struct {
 	mu     sync.Mutex
@@ -33,14 +28,14 @@ type PulsarMockProducer struct {
 }
 
 // NewMockPulsarDDLProducer creates a pulsar producer for DDLProducer
-func NewMockPulsarDDLProducer() DDLProducer {
+func NewMockPulsarDDLProducer() *PulsarMockProducer {
 	return &PulsarMockProducer{
 		events: map[string][]*pulsar.ProducerMessage{},
 	}
 }
 
 // NewMockPulsarDMLProducer creates a pulsar producer for DMLProducer
-func NewMockPulsarDMLProducer() DMLProducer {
+func NewMockPulsarDMLProducer() *PulsarMockProducer {
 	return &PulsarMockProducer{
 		events: map[string][]*pulsar.ProducerMessage{},
 	}

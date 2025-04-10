@@ -30,8 +30,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var _ DMLProducer = (*pulsarDMLProducer)(nil)
-
 // pulsarDMLProducer is used to send messages to pulsar.
 type pulsarDMLProducer struct {
 	// id indicates which processor (changefeed) this sink belongs to.
@@ -61,12 +59,11 @@ type pulsarDMLProducer struct {
 
 // NewPulsarDMLProducer creates a new pulsar producer.
 func NewPulsarDMLProducer(
-	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	client pulsar.Client,
 	sinkConfig *config.SinkConfig,
 	failpointCh chan error,
-) (DMLProducer, error) {
+) (*pulsarDMLProducer, error) {
 	log.Info("Creating pulsar DML producer ...",
 		zap.String("namespace", changefeedID.Namespace()),
 		zap.String("changefeed", changefeedID.ID().String()))

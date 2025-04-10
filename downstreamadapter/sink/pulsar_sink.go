@@ -69,7 +69,7 @@ func newPulsarSink(
 	statistics := metrics.NewStatistics(changefeedID, "PulsarSink")
 
 	failpointCh := make(chan error, 1)
-	dmlProducer, err := producer.NewPulsarDMLProducer(ctx, changefeedID, pulsarComponent.Factory, sinkConfig, failpointCh)
+	dmlProducer, err := producer.NewPulsarDMLProducer(changefeedID, pulsarComponent.Factory, sinkConfig, failpointCh)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -84,7 +84,7 @@ func newPulsarSink(
 		statistics,
 	)
 
-	ddlProducer, err := producer.NewPulsarDDLProducer(ctx, changefeedID, pulsarComponent.Config, pulsarComponent.Factory, sinkConfig)
+	ddlProducer, err := producer.NewPulsarDDLProducer(changefeedID, pulsarComponent.Config, pulsarComponent.Factory, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
