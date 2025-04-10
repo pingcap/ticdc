@@ -15,10 +15,10 @@ package kafka
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/rcrowley/go-metrics"
@@ -90,7 +90,7 @@ func (f *saramaFactory) AdminClient() (ClusterAdminClient, error) {
 func (f *saramaFactory) SyncProducer() (SyncProducer, error) {
 	p, err := sarama.NewSyncProducer(f.endpoints, f.config)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 
 	return &saramaSyncProducer{
@@ -105,11 +105,11 @@ func (f *saramaFactory) SyncProducer() (SyncProducer, error) {
 func (f *saramaFactory) AsyncProducer(_ context.Context) (AsyncProducer, error) {
 	client, err := sarama.NewClient(f.endpoints, f.config)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 	p, err := sarama.NewAsyncProducerFromClient(client)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 	return &saramaAsyncProducer{
 		client:       client,

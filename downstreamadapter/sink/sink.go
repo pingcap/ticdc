@@ -15,6 +15,7 @@ package sink
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/kafka"
 	"net/url"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
@@ -52,7 +53,7 @@ func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID 
 	case sink.MySQLScheme, sink.MySQLSSLScheme, sink.TiDBScheme, sink.TiDBSSLScheme:
 		return mysql.New(ctx, changefeedID, config, sinkURI)
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
-		return newKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+		return kafka.New(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.PulsarScheme, sink.PulsarSSLScheme, sink.PulsarHTTPScheme, sink.PulsarHTTPSScheme:
 		return pulsar.New(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.S3Scheme, sink.FileScheme, sink.GCSScheme, sink.GSScheme, sink.AzblobScheme, sink.AzureScheme, sink.CloudStorageNoopScheme:
@@ -73,7 +74,7 @@ func VerifySink(ctx context.Context, config *config.ChangefeedConfig, changefeed
 	case sink.MySQLScheme, sink.MySQLSSLScheme, sink.TiDBScheme, sink.TiDBSSLScheme:
 		return mysql.Verify(ctx, sinkURI, config)
 	case sink.KafkaScheme, sink.KafkaSSLScheme:
-		return verifyKafkaSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+		return kafka.Verify(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.PulsarScheme, sink.PulsarSSLScheme, sink.PulsarHTTPScheme, sink.PulsarHTTPSScheme:
 		return pulsar.Verify(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.S3Scheme, sink.FileScheme, sink.GCSScheme, sink.GSScheme, sink.AzblobScheme, sink.AzureScheme, sink.CloudStorageNoopScheme:

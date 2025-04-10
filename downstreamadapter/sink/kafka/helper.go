@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sink
+package kafka
 
 import (
 	"context"
@@ -29,10 +29,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/br/pkg/utils"
-	"github.com/pingcap/tiflow/pkg/sink"
 )
 
-type KafkaComponent struct {
+type components struct {
 	EncoderGroup   codec.EncoderGroup
 	Encoder        common.EventEncoder
 	ColumnSelector *columnselector.ColumnSelectors
@@ -42,13 +41,22 @@ type KafkaComponent struct {
 	Factory        kafka.Factory
 }
 
-func getKafkaSinkComponentWithFactory(ctx context.Context,
+func (c components) close() {
+	if c.AdminClient != nil {
+		c.AdminClient.Close()
+	}
+	if c.TopicManager != nil {
+		c.TopicManager.Close()
+	}
+}
+
+func newKafkaSinkComponentWithFactory(ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
 	factoryCreator kafka.FactoryCreator,
-) (KafkaComponent, config.Protocol, error) {
-	kafkaComponent := KafkaComponent{}
+) (components, config.Protocol, error) {
+	kafkaComponent := components{}
 	protocol, err := helper.GetProtocol(utils.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return kafkaComponent, config.ProtocolUnknown, errors.Trace(err)
@@ -94,7 +102,7 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 		kafkaComponent.AdminClient,
 	)
 
-	scheme := sink.GetScheme(sinkURI)
+	scheme := helper.GetScheme(sinkURI)
 	kafkaComponent.EventRouter, err = eventrouter.NewEventRouter(sinkConfig, protocol, topic, scheme)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
@@ -122,21 +130,21 @@ func getKafkaSinkComponentWithFactory(ctx context.Context,
 	return kafkaComponent, protocol, nil
 }
 
-func GetKafkaSinkComponent(
+func newKafkaSinkComponent(
 	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
-) (KafkaComponent, config.Protocol, error) {
+) (components, config.Protocol, error) {
 	factoryCreator := kafka.NewSaramaFactory
-	return getKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, factoryCreator)
+	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, factoryCreator)
 }
 
-func GetKafkaSinkComponentForTest(
+func newKafkaSinkComponentForTest(
 	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
-) (KafkaComponent, config.Protocol, error) {
-	return getKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, kafka.NewMockFactory)
+) (components, config.Protocol, error) {
+	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, kafka.NewMockFactory)
 }

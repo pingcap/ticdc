@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sink
+package kafka
 
 import (
 	"context"
@@ -32,7 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProducer, error) {
+func newKafkaSinkForTest() (*sink, producer.DMLProducer, producer.DDLProducer, error) {
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	openProtocol := "open-protocol"
@@ -46,8 +46,8 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 	if err != nil {
 		return nil, nil, nil, errors.Trace(err)
 	}
-	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	kafkaComponent, protocol, err := GetKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig)
+	statistics := metrics.NewStatistics(changefeedID, "sink")
+	kafkaComponent, protocol, err := newKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, nil, nil, errors.Trace(err)
 	}
@@ -82,7 +82,7 @@ func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProduc
 		kafkaComponent.TopicManager,
 		statistics)
 
-	sink := &KafkaSink{
+	sink := &sink{
 		changefeedID:     changefeedID,
 		dmlWorker:        dmlWorker,
 		ddlWorker:        ddlWorker,
