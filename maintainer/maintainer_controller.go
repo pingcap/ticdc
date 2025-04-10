@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
-	"github.com/pingcap/ticdc/maintainer/scheduler"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -610,43 +609,4 @@ func getTableInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heart
 		tableInfo.TableName = table.TableName
 	}
 	return tableInfo
-}
-
-func newScheduleController(changefeedID common.ChangeFeedID,
-	batchSize int,
-	oc *operator.Controller,
-	db *replica.ReplicationDB,
-	nodeM *watcher.NodeManager,
-	balanceInterval time.Duration,
-	splitter *split.Splitter,
-) *pkgscheduler.Controller {
-	schedulers := map[string]pkgscheduler.Scheduler{
-		pkgscheduler.BasicScheduler: scheduler.NewBasicScheduler(
-			changefeedID.String(),
-			batchSize,
-			oc,
-			db,
-			nodeM,
-		),
-		pkgscheduler.BalanceScheduler: scheduler.NewBalanceScheduler(
-			changefeedID,
-			batchSize,
-			oc,
-			db,
-			nodeM,
-			balanceInterval,
-		),
-	}
-	if splitter != nil {
-		schedulers[pkgscheduler.SplitScheduler] = scheduler.NewSplitScheduler(
-			changefeedID,
-			batchSize,
-			splitter,
-			oc,
-			db,
-			nodeM,
-			balanceInterval,
-		)
-	}
-	return pkgscheduler.NewController(schedulers)
 }
