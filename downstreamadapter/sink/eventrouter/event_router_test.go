@@ -16,7 +16,7 @@ package eventrouter
 import (
 	"testing"
 
-	partition2 "github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/topic"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -83,7 +83,7 @@ func TestEventRouter(t *testing.T) {
 	partitionDispatcher := d.GetPartitionGenerator("test", "test")
 	topicDispatcher := d.matchTopicGenerator("test", "test")
 	require.IsType(t, &topic.StaticTopicGenerator{}, topicDispatcher)
-	require.IsType(t, &partition2.TablePartitionGenerator{}, partitionDispatcher)
+	require.IsType(t, &partition.TablePartitionGenerator{}, partitionDispatcher)
 
 	actual := topicDispatcher.Substitute("test", "test")
 	require.Equal(t, d.defaultTopic, actual)
@@ -96,49 +96,49 @@ func TestEventRouter(t *testing.T) {
 	partitionDispatcher = d.GetPartitionGenerator("sbs", "test")
 	topicDispatcher = d.matchTopicGenerator("sbs", "test")
 	require.IsType(t, &topic.StaticTopicGenerator{}, topicDispatcher)
-	require.IsType(t, &partition2.TablePartitionGenerator{}, partitionDispatcher)
+	require.IsType(t, &partition.TablePartitionGenerator{}, partitionDispatcher)
 
 	// match rule-0
 	partitionDispatcher = d.GetPartitionGenerator("test_default1", "test")
 	topicDispatcher = d.matchTopicGenerator("test_default1", "test")
 	require.IsType(t, &topic.StaticTopicGenerator{}, topicDispatcher)
-	require.IsType(t, &partition2.TablePartitionGenerator{}, partitionDispatcher)
+	require.IsType(t, &partition.TablePartitionGenerator{}, partitionDispatcher)
 
 	// match rule-1
 	partitionDispatcher = d.GetPartitionGenerator("test_default2", "test")
 	topicDispatcher = d.matchTopicGenerator("test_default2", "test")
 	require.IsType(t, &topic.StaticTopicGenerator{}, topicDispatcher)
-	require.IsType(t, &partition2.TablePartitionGenerator{}, partitionDispatcher)
+	require.IsType(t, &partition.TablePartitionGenerator{}, partitionDispatcher)
 
 	// match rule-2
 	partitionDispatcher = d.GetPartitionGenerator("test_table", "test")
 	topicDispatcher = d.matchTopicGenerator("test_table", "test")
 	require.IsType(t, &topic.DynamicTopicGenerator{}, topicDispatcher)
-	require.IsType(t, &partition2.TablePartitionGenerator{}, partitionDispatcher)
+	require.IsType(t, &partition.TablePartitionGenerator{}, partitionDispatcher)
 
 	// match rule-4
 	partitionDispatcher = d.GetPartitionGenerator("test_index_value", "test")
 	topicDispatcher = d.matchTopicGenerator("test_index_value", "test")
 	require.IsType(t, &topic.DynamicTopicGenerator{}, topicDispatcher)
-	require.IsType(t, &partition2.IndexValuePartitionGenerator{}, partitionDispatcher)
+	require.IsType(t, &partition.IndexValuePartitionGenerator{}, partitionDispatcher)
 
 	// match rule-4
 	partitionDispatcher = d.GetPartitionGenerator("test", "table1")
 	topicDispatcher = d.matchTopicGenerator("test", "table1")
 	require.IsType(t, &topic.DynamicTopicGenerator{}, topicDispatcher)
-	require.IsType(t, &partition2.IndexValuePartitionGenerator{}, partitionDispatcher)
+	require.IsType(t, &partition.IndexValuePartitionGenerator{}, partitionDispatcher)
 
 	// match rule-5
 	partitionDispatcher = d.GetPartitionGenerator("sbs", "table2")
 	topicDispatcher = d.matchTopicGenerator("sbs", "table2")
 	require.IsType(t, &topic.DynamicTopicGenerator{}, topicDispatcher)
-	require.IsType(t, &partition2.TsPartitionGenerator{}, partitionDispatcher)
+	require.IsType(t, &partition.TsPartitionGenerator{}, partitionDispatcher)
 
 	// match rule-6
 	partitionDispatcher = d.GetPartitionGenerator("hard_code_schema", "test")
 	topicDispatcher = d.matchTopicGenerator("hard_code_schema", "test")
 	require.IsType(t, &topic.StaticTopicGenerator{}, topicDispatcher)
-	require.IsType(t, &partition2.TablePartitionGenerator{}, partitionDispatcher)
+	require.IsType(t, &partition.TablePartitionGenerator{}, partitionDispatcher)
 }
 
 func TestGetActiveTopics(t *testing.T) {
