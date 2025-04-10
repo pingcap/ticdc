@@ -30,15 +30,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func GetPulsarSinkComponentForTest(
-	ctx context.Context,
-	changefeedID commonType.ChangeFeedID,
-	sinkURI *url.URL,
-	sinkConfig *config.SinkConfig,
-) (PulsarComponent, config.Protocol, error) {
-	return getPulsarSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, pulsar.NewMockCreatorFactory)
-}
-
 func newPulsarSinkForTest(t *testing.T) (*PulsarSink, producer.DMLProducer, producer.DDLProducer, error) {
 	sinkURL := "pulsar://127.0.0.1:6650/persistent://public/default/test?" +
 		"protocol=canal-json&pulsar-version=v2.10.0&enable-tidb-extension=true&" +

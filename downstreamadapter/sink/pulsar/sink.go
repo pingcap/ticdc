@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -48,21 +47,12 @@ type PulsarSink struct {
 	ctx      context.Context
 }
 
-func GetPulsarSinkComponent(
-	ctx context.Context,
-	changefeedID common.ChangeFeedID,
-	sinkURI *url.URL,
-	sinkConfig *config.SinkConfig,
-) (PulsarComponent, config.Protocol, error) {
-	return getPulsarSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, pulsar.NewCreatorFactory)
-}
-
 func (s *PulsarSink) SinkType() common.SinkType {
 	return common.PulsarSinkType
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
-	components, _, err := GetPulsarSinkComponent(ctx, changefeedID, uri, sinkConfig)
+	components, _, err := newPulsarSinkComponent(ctx, changefeedID, uri, sinkConfig)
 	if components.TopicManager != nil {
 		components.TopicManager.Close()
 	}
@@ -72,7 +62,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL,
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
 ) (*PulsarSink, error) {
-	pulsarComponent, protocol, err := GetPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
+	pulsarComponent, protocol, err := newPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

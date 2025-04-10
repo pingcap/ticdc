@@ -20,7 +20,7 @@ import (
 	"github.com/pingcap/tiflow/pkg/sink"
 )
 
-type PulsarComponent struct {
+type component struct {
 	Config         *config.PulsarConfig
 	EncoderGroup   codec.EncoderGroup
 	Encoder        common.EventEncoder
@@ -30,13 +30,31 @@ type PulsarComponent struct {
 	Factory        pulsarClient.Client
 }
 
-func getPulsarSinkComponentWithFactory(ctx context.Context,
+func newPulsarSinkComponent(
+	ctx context.Context,
+	changefeedID commonType.ChangeFeedID,
+	sinkURI *url.URL,
+	sinkConfig *config.SinkConfig,
+) (component, config.Protocol, error) {
+	return newPulsarSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, pulsar.NewCreatorFactory)
+}
+
+func newPulsarSinkComponentForTest(
+	ctx context.Context,
+	changefeedID commonType.ChangeFeedID,
+	sinkURI *url.URL,
+	sinkConfig *config.SinkConfig,
+) (component, config.Protocol, error) {
+	return newPulsarSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, pulsar.NewMockCreatorFactory)
+}
+
+func newPulsarSinkComponentWithFactory(ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
 	factoryCreator pulsar.FactoryCreator,
-) (PulsarComponent, config.Protocol, error) {
-	pulsarComponent := PulsarComponent{}
+) (component, config.Protocol, error) {
+	pulsarComponent := component{}
 	protocol, err := helper.GetProtocol(utils.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return pulsarComponent, config.ProtocolUnknown, errors.Trace(err)
