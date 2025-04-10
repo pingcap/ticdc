@@ -406,7 +406,6 @@ func TestScaleNode(t *testing.T) {
 	}, waitTime, time.Millisecond*5)
 
 	log.Info("pass scale node")
-
 }
 
 func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
