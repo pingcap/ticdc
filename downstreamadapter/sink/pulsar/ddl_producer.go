@@ -16,19 +16,15 @@ package pulsar
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/hashicorp/golang-lru"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 )
 
@@ -40,12 +36,8 @@ type ddlProducers struct {
 	producers      *lru.Cache
 	producersMutex sync.RWMutex
 
-	checkpointTsChan chan uint64
-
-	partitionRule    helper.DDLDispatchRule
-	statistics       *metrics.Statistics
-	tableSchemaStore *util.TableSchemaStore
-	comp             component
+	statistics *metrics.Statistics
+	comp       component
 }
 
 // newDDLProducers creates a pulsar producer
@@ -89,8 +81,6 @@ func newDDLProducers(
 		changefeedID:     changefeedID,
 		comp:             comp,
 		statistics:       statistics,
-		partitionRule:    helper.GetDDLDispatchRule(protocol),
-		checkpointTsChan: make(chan uint64, 16),
 	}, nil
 }
 
@@ -175,118 +165,6 @@ func (p *ddlProducers) Close() {
 	for _, topic := range keys {
 		p.producers.Remove(topic) // callback func will be called
 	}
-}
-
-func (p *ddlProducers) Run(ctx context.Context) error {
-	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(p.changefeedID.Namespace(), p.changefeedID.Name())
-	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(p.changefeedID.Namespace(), p.changefeedID.Name())
-
-	defer func() {
-		metrics.CheckpointTsMessageDuration.DeleteLabelValues(p.changefeedID.Namespace(), p.changefeedID.Name())
-		metrics.CheckpointTsMessageCount.DeleteLabelValues(p.changefeedID.Namespace(), p.changefeedID.Name())
-	}()
-	var (
-		msg          *common.Message
-		partitionNum int32
-		err          error
-	)
-	for {
-		select {
-		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
-		case ts, ok := <-p.checkpointTsChan:
-			if !ok {
-				log.Warn("MQ sink flush worker channel closed",
-					zap.String("namespace", p.changefeedID.Namespace()),
-					zap.String("changefeed", p.changefeedID.Name()))
-				return nil
-			}
-
-			start := time.Now()
-			msg, err = p.comp.Encoder.EncodeCheckpointEvent(ts)
-			if err != nil {
-				return errors.Trace(err)
-			}
-
-			if msg == nil {
-				continue
-			}
-			tableNames := p.tableSchemaStore.GetAllTableNames(ts)
-			// NOTICE: When there are no tables to replicate,
-			// we need to send checkpoint ts to the default topic.
-			// This will be compatible with the old behavior.
-			if len(tableNames) == 0 {
-				topic := p.comp.EventRouter.GetDefaultTopic()
-				partitionNum, err = p.comp.TopicManager.GetPartitionNum(ctx, topic)
-				if err != nil {
-					return errors.Trace(err)
-				}
-				log.Debug("Emit checkpointTs to default topic",
-					zap.String("topic", topic), zap.Uint64("checkpointTs", ts), zap.Any("partitionNum", partitionNum))
-				err = p.SyncBroadcastMessage(ctx, topic, partitionNum, msg)
-				if err != nil {
-					return errors.Trace(err)
-				}
-			} else {
-				topics := p.comp.EventRouter.GetActiveTopics(tableNames)
-				for _, topic := range topics {
-					partitionNum, err = p.comp.TopicManager.GetPartitionNum(ctx, topic)
-					if err != nil {
-						return errors.Trace(err)
-					}
-					err = p.SyncBroadcastMessage(ctx, topic, partitionNum, msg)
-					if err != nil {
-						return errors.Trace(err)
-					}
-				}
-			}
-
-			checkpointTsMessageCount.Inc()
-			checkpointTsMessageDuration.Observe(time.Since(start).Seconds())
-		}
-	}
-}
-
-func (p *ddlProducers) SetTableSchemaStore(store *util.TableSchemaStore) {
-	p.tableSchemaStore = store
-}
-
-func (p *ddlProducers) AddCheckpoint(ts uint64) {
-	p.checkpointTsChan <- ts
-}
-
-func (p *ddlProducers) WriteBlockEvent(ctx context.Context, event *commonEvent.DDLEvent) error {
-	for _, e := range event.GetEvents() {
-		message, err := p.comp.Encoder.EncodeDDLEvent(e)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		topic := p.comp.EventRouter.GetTopicForDDL(e)
-		// Notice: We must call GetPartitionNum here,
-		// which will be responsible for automatically creating topics when they don't exist.
-		// If it is not called here and kafka has `auto.create.topics.enable` turned on,
-		// then the auto-created topic will not be created as configured by ticdc.
-		partitionNum, err := p.comp.TopicManager.GetPartitionNum(ctx, topic)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		if p.partitionRule == helper.PartitionAll {
-			err = p.statistics.RecordDDLExecution(func() error {
-				return p.SyncBroadcastMessage(ctx, topic, partitionNum, message)
-			})
-		} else {
-			err = p.statistics.RecordDDLExecution(func() error {
-				return p.SyncSendMessage(ctx, topic, 0, message)
-			})
-		}
-		if err != nil {
-			return errors.Trace(err)
-		}
-	}
-	log.Info("MQ ddl worker send block event", zap.Any("event", event))
-	// after flush all the ddl event, we call the callback function.
-	event.PostFlush()
-	return nil
 }
 
 // wrapperSchemaAndTopic wrapper schema and topic

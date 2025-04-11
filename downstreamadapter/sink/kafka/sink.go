@@ -480,7 +480,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			return errors.Trace(ctx.Err())
 		case ts, ok := <-s.checkpointChan:
 			if !ok {
-				log.Warn("MQ sink flush worker channel closed",
+				log.Warn("kafka sink checkpoint channel closed",
 					zap.String("namespace", s.changefeedID.Namespace()),
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
