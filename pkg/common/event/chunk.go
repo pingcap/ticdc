@@ -34,7 +34,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// rawKVToChunkV2 is used to decode the new format of row data.
 func newChunkDecoderV2(tableInfo *common.TableInfo, tz *time.Location) *rowcodec.ChunkDecoder {
 	handleColIDs, _, reqCols := tableInfo.GetRowColInfos()
 	// This function is used to set the default value for the column that

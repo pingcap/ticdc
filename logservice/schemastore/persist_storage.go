@@ -53,6 +53,7 @@ type persistentStorage struct {
 
 	mu sync.RWMutex
 
+	BDRMode bool
 	// the current gcTs on disk
 	gcTs uint64
 

@@ -147,9 +147,8 @@ func (s *KafkaSink) IsNormal() bool {
 	return atomic.LoadUint32(&s.isNormal) == 1
 }
 
-func (s *KafkaSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
+func (s *KafkaSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmlWorker.AddDMLEvent(event)
-	return nil
 }
 
 func (s *KafkaSink) PassBlockEvent(event commonEvent.BlockEvent) {
@@ -189,6 +188,10 @@ func (s *KafkaSink) AddCheckpointTs(ts uint64) {
 
 func (s *KafkaSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
+}
+
+func (s *KafkaSink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
+	return startTsList, make([]bool, len(startTsList)), nil
 }
 
 func (s *KafkaSink) Close(_ bool) {

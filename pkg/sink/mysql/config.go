@@ -87,7 +87,7 @@ const (
 	defaultHasVectorType = false
 )
 
-type MysqlConfig struct {
+type Config struct {
 	sinkURI                *url.URL
 	WorkerCount            int
 	MaxTxnRow              int
@@ -133,8 +133,8 @@ type MysqlConfig struct {
 }
 
 // NewConfig returns the default mysql backend config.
-func NewMysqlConfig() *MysqlConfig {
-	return &MysqlConfig{
+func NewMysqlConfig() *Config {
+	return &Config{
 		WorkerCount:            DefaultWorkerCount,
 		MaxTxnRow:              DefaultMaxTxnRow,
 		MaxMultiUpdateRowCount: defaultMaxMultiUpdateRowCount,
@@ -153,10 +153,10 @@ func NewMysqlConfig() *MysqlConfig {
 	}
 }
 
-func (c *MysqlConfig) Apply(
+func (c *Config) Apply(
 	sinkURI *url.URL,
 	changefeedID common.ChangeFeedID,
-	config *config.ChangefeedConfig,
+	cfg *config.ChangefeedConfig,
 ) (err error) {
 	if sinkURI == nil {
 		log.Error("empty SinkURI")
@@ -189,7 +189,7 @@ func (c *MysqlConfig) Apply(
 	if err = getSafeMode(query, &c.SafeMode); err != nil {
 		return err
 	}
-	if err = getTimezone(config.TimeZone, query, &c.Timezone); err != nil {
+	if err = getTimezone(cfg.TimeZone, query, &c.Timezone); err != nil {
 		return err
 	}
 	if err = getDuration(query, "read-timeout", &c.ReadTimeout); err != nil {
@@ -209,13 +209,25 @@ func (c *MysqlConfig) Apply(
 	}
 
 	// c.EnableOldValue = config.EnableOldValue
-	c.ForceReplicate = config.ForceReplicate
-	c.SourceID = config.SinkConfig.TiDBSourceID
+	c.ForceReplicate = cfg.ForceReplicate
+	// Note: The TiDBSourceID should never be 0 here, but we have found that
+	// in some problematic cases, the TiDBSourceID is 0 since something went wrong in the
+	// configuration process. So we need to check it here again.
+	// We do this is because it can cause the data to be inconsistent if the TiDBSourceID is 0
+	// in BDR Mode cluster.
+	if cfg.SinkConfig.TiDBSourceID == 0 {
+		log.Error("The TiDB source ID should never be set to 0. Please report it as a bug. The default value will be used: 1.",
+			zap.Uint64("tidbSourceID", cfg.SinkConfig.TiDBSourceID))
+		c.SourceID = config.DefaultTiDBSourceID
+	} else {
+		c.SourceID = cfg.SinkConfig.TiDBSourceID
+		log.Info("TiDB source ID is set", zap.Uint64("sourceID", c.SourceID))
+	}
 
 	return nil
 }
 
-func NewMySQLConfig(changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*MysqlConfig, error) {
+func NewMySQLConfig(changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*Config, error) {
 	cfg := NewMysqlConfig()
 	err := cfg.Apply(sinkURI, changefeedID, config)
 	if err != nil {
@@ -224,7 +236,7 @@ func NewMySQLConfig(changefeedID common.ChangeFeedID, sinkURI *url.URL, config *
 	return cfg, nil
 }
 
-func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*MysqlConfig, *sql.DB, error) {
+func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*Config, *sql.DB, error) {
 	log.Info("create db connection", zap.String("sinkURI", sinkURI.String()))
 	// create db connection
 	cfg, err := NewMySQLConfig(changefeedID, sinkURI, config)

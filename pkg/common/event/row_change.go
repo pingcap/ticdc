@@ -17,6 +17,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/integrity"
@@ -86,11 +87,12 @@ type MQRowEvent struct {
 }
 
 type RowEvent struct {
-	TableInfo      *common.TableInfo
-	CommitTs       uint64
-	Event          RowChange
-	ColumnSelector columnselector.Selector
-	Callback       func()
+	PhysicalTableID int64
+	TableInfo       *common.TableInfo
+	CommitTs        uint64
+	Event           RowChange
+	ColumnSelector  columnselector.Selector
+	Callback        func()
 }
 
 func (e *RowEvent) IsDelete() bool {
@@ -113,6 +115,10 @@ func (e *RowEvent) GetPreRows() *chunk.Row {
 	return &e.Event.PreRow
 }
 
+func (t *RowEvent) GetTableID() int64 {
+	return t.PhysicalTableID
+}
+
 // PrimaryKeyColumnNames return all primary key's name
 // TODO: need a test for delete / insert / update event
 func (e *RowEvent) PrimaryKeyColumnNames() []string {
@@ -122,7 +128,7 @@ func (e *RowEvent) PrimaryKeyColumnNames() []string {
 	tableInfo := e.TableInfo
 	columns := e.TableInfo.GetColumns()
 	for _, col := range columns {
-		if col != nil && tableInfo.ForceGetColumnFlagType(col.ID).IsPrimaryKey() {
+		if col != nil && mysql.HasPriKeyFlag(col.GetFlag()) {
 			result = append(result, tableInfo.ForceGetColumnName(col.ID))
 		}
 	}
@@ -130,8 +136,8 @@ func (e *RowEvent) PrimaryKeyColumnNames() []string {
 }
 
 // PrimaryKeyColumn return all primary key's indexes and column infos
-func (e *RowEvent) PrimaryKeyColumn() ([]int, []*timodel.ColumnInfo) {
-	infos := make([]*timodel.ColumnInfo, 0)
+func (e *RowEvent) PrimaryKeyColumn() ([]int, []*model.ColumnInfo) {
+	infos := make([]*model.ColumnInfo, 0)
 	index := make([]int, 0)
 	tableInfo := e.TableInfo
 	columns := e.TableInfo.GetColumns()

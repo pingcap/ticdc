@@ -17,18 +17,18 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 
-	"github.com/go-sql-driver/mysql"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	pMySQL "github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	ptypes "github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/zap"
 )
 
@@ -36,8 +36,8 @@ import (
 func GetMySQLType(columnInfo *model.ColumnInfo, fullType bool) string {
 	if !fullType {
 		result := types.TypeToStr(columnInfo.GetType(), columnInfo.GetCharset())
-		result = withUnsigned4MySQLType(result, pMySQL.HasUnsignedFlag(columnInfo.GetFlag()))
-		result = withZerofill4MySQLType(result, pMySQL.HasZerofillFlag(columnInfo.GetFlag()))
+		result = withUnsigned4MySQLType(result, mysql.HasUnsignedFlag(columnInfo.GetFlag()))
+		result = withZerofill4MySQLType(result, mysql.HasZerofillFlag(columnInfo.GetFlag()))
 		return result
 	}
 	return columnInfo.GetTypeDesc()
@@ -68,11 +68,11 @@ func IsBinaryMySQLType(mysqlType string) bool {
 func ExtractBasicMySQLType(mysqlType string) byte {
 	for i := 0; i < len(mysqlType); i++ {
 		if mysqlType[i] == '(' || mysqlType[i] == ' ' {
-			return types.StrToType(mysqlType[:i])
+			return ptypes.StrToType(mysqlType[:i])
 		}
 	}
 
-	return types.StrToType(mysqlType)
+	return ptypes.StrToType(mysqlType)
 }
 
 func IsUnsignedFlag(mysqlType string) bool {
@@ -110,6 +110,9 @@ func ExtractFlenDecimal(mysqlType string) (int, int) {
 func ExtractElements(mysqlType string) []string {
 	start := strings.Index(mysqlType, "(")
 	end := strings.LastIndex(mysqlType, ")")
+	if start == -1 || end == -1 {
+		return nil
+	}
 	parts := strings.Split(mysqlType[start+1:end], ",")
 	elements := make([]string, 0, len(parts))
 	for _, part := range parts {
@@ -256,7 +259,7 @@ func queryRowChecksumAux(
 	query := fmt.Sprintf("set @@tidb_snapshot=%d", commitTs)
 	_, err := conn.ExecContext(ctx, query)
 	if err != nil {
-		mysqlErr, ok := errors.Cause(err).(*mysql.MySQLError)
+		mysqlErr, ok := errors.Cause(err).(*mysqlDriver.MySQLError)
 		if ok {
 			// Error 8055 (HY000): snapshot is older than GC safe point
 			if mysqlErr.Number == 8055 {
@@ -312,7 +315,7 @@ func MustSnapshotQuery(
 	query := fmt.Sprintf("set @@tidb_snapshot=%d", commitTs)
 	_, err = conn.ExecContext(ctx, query)
 	if err != nil {
-		mysqlErr, ok := errors.Cause(err).(*mysql.MySQLError)
+		mysqlErr, ok := errors.Cause(err).(*mysqlDriver.MySQLError)
 		if ok {
 			// Error 8055 (HY000): snapshot is older than GC safe point
 			if mysqlErr.Number == 8055 {
@@ -366,39 +369,12 @@ func MustSnapshotQuery(
 }
 
 // MustBinaryLiteralToInt convert bytes into uint64,
-// by follow https://github.com/pingcap/tidb/blob/e3417913f58cdd5a136259b902bf177eaf3aa637/types/binary_literal.go#L105
 func MustBinaryLiteralToInt(bytes []byte) uint64 {
-	bytes = trimLeadingZeroBytes(bytes)
-	length := len(bytes)
-
-	if length > 8 {
+	val, err := types.BinaryLiteral(bytes).ToInt(types.DefaultStmtNoWarningContext)
+	if err != nil {
 		log.Panic("invalid bit value found", zap.ByteString("value", bytes))
-		return math.MaxUint64
-	}
-
-	if length == 0 {
-		return 0
-	}
-
-	// Note: the byte-order is BigEndian.
-	val := uint64(bytes[0])
-	for i := 1; i < length; i++ {
-		val = (val << 8) | uint64(bytes[i])
 	}
 	return val
-}
-
-func trimLeadingZeroBytes(bytes []byte) []byte {
-	if len(bytes) == 0 {
-		return bytes
-	}
-	pos, posMax := 0, len(bytes)-1
-	for ; pos < posMax; pos++ {
-		if bytes[pos] != 0 {
-			break
-		}
-	}
-	return bytes[pos:]
 }
 
 // FakeTableIDAllocator is a fake table id allocator

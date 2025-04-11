@@ -24,38 +24,41 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"go.uber.org/zap"
 )
 
 var EmptyBytes = make([]byte, 0)
 
-// ExtractColVal returns the column value in the row
-func ExtractColVal(row *chunk.Row, col *model.ColumnInfo, idx int) (
-	value interface{}, err error,
-) {
+// ExtractColVal returns the value in the row
+func ExtractColVal(row *chunk.Row, col *model.ColumnInfo, idx int) interface{} {
 	if row.IsNull(idx) {
-		return nil, nil
+		return nil
 	}
 	switch col.GetType() {
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeNewDate, mysql.TypeTimestamp:
-		return row.GetTime(idx).String(), nil
+		return row.GetTime(idx).String()
 	case mysql.TypeDuration:
-		return row.GetDuration(idx, 0).String(), nil
+		return row.GetDuration(idx, 0).String()
 	case mysql.TypeJSON:
-		return row.GetJSON(idx).String(), nil
+		return row.GetJSON(idx).String()
 	case mysql.TypeNewDecimal:
 		d := row.GetMyDecimal(idx)
 		if d == nil {
 			// nil takes 0 byte.
-			return nil, nil
+			return nil
 		}
-		return d.String(), nil
+		return d.String()
 	case mysql.TypeEnum, mysql.TypeSet:
-		return row.GetEnum(idx).Value, nil
+		return row.GetEnum(idx).Value
 	case mysql.TypeBit:
 		d := row.GetDatum(idx, &col.FieldType)
 		dp := &d
 		// Encode bits as integers to avoid pingcap/tidb#10988 (which also affects MySQL itself)
-		return dp.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
+		result, err := dp.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
+		if err != nil {
+			log.Panic("extract bit value failed", zap.Any("bit", dp.GetBinaryLiteral()), zap.Error(err))
+		}
+		return result
 	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar,
 		mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
 		b := row.GetBytes(idx)
@@ -68,11 +71,11 @@ func ExtractColVal(row *chunk.Row, col *model.ColumnInfo, idx int) (
 		// See https://github.com/go-sql-driver/mysql/blob/ce134bfc/connection.go#L267
 		if col.GetCharset() != "" && col.GetCharset() != charset.CharsetBin {
 			if len(b) == 0 {
-				return "", nil
+				return ""
 			}
-			return unsafe.String(&b[0], len(b)), nil
+			return unsafe.String(&b[0], len(b))
 		}
-		return b, nil
+		return b
 	case mysql.TypeFloat:
 		b := row.GetFloat32(idx)
 		if math.IsNaN(float64(b)) || math.IsInf(float64(b), 1) || math.IsInf(float64(b), -1) {
@@ -80,7 +83,7 @@ func ExtractColVal(row *chunk.Row, col *model.ColumnInfo, idx int) (
 			log.Warn(warn)
 			b = 0
 		}
-		return b, nil
+		return b
 	case mysql.TypeDouble:
 		b := row.GetFloat64(idx)
 		if math.IsNaN(b) || math.IsInf(b, 1) || math.IsInf(b, -1) {
@@ -88,15 +91,15 @@ func ExtractColVal(row *chunk.Row, col *model.ColumnInfo, idx int) (
 			log.Warn(warn)
 			b = 0
 		}
-		return b, nil
+		return b
 	case mysql.TypeTiDBVectorFloat32:
 		b := row.GetVectorFloat32(idx).String()
-		return b, nil
+		return b
 	default:
 		d := row.GetDatum(idx, &col.FieldType)
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
 		// Make specified convert upper if you need
 		// Go sql support type ref to: https://github.com/golang/go/blob/go1.17.4/src/database/sql/driver/types.go#L236
-		return d.GetValue(), nil
+		return d.GetValue()
 	}
 }

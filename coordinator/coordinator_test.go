@@ -238,7 +238,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[info.ID] = info
 	mc := messaging.NewMessageCenter(ctx,
-		info.ID, 100, config.NewDefaultMessageCenterConfig(), nil)
+		info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()
 
@@ -303,9 +303,13 @@ func TestScaleNode(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[info.ID] = info
-	mc1 := messaging.NewMessageCenter(ctx, info.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	cfg := config.NewDefaultMessageCenterConfig(info.AdvertiseAddr)
+	mc1 := messaging.NewMessageCenter(ctx, info.ID, cfg, nil)
 	mc1.Run(ctx)
-	defer mc1.Close()
+	defer func() {
+		mc1.Close()
+		log.Info("close message center 1")
+	}()
 
 	appcontext.SetService(appcontext.MessageCenter, mc1)
 	startMaintainerNode(ctx, info, mc1, nodeManager)
@@ -346,15 +350,27 @@ func TestScaleNode(t *testing.T) {
 
 	// add two nodes
 	info2 := node.NewInfo("127.0.0.1:28400", "")
-	mc2 := messaging.NewMessageCenter(ctx, info2.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc2 := messaging.NewMessageCenter(ctx, info2.ID, config.NewDefaultMessageCenterConfig(info2.AdvertiseAddr), nil)
 	mc2.Run(ctx)
-	defer mc2.Close()
+	defer func() {
+		mc2.Close()
+		log.Info("close message center 2")
+	}()
 	startMaintainerNode(ctx, info2, mc2, nodeManager)
 	info3 := node.NewInfo("127.0.0.1:28500", "")
-	mc3 := messaging.NewMessageCenter(ctx, info3.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc3 := messaging.NewMessageCenter(ctx, info3.ID, config.NewDefaultMessageCenterConfig(info3.AdvertiseAddr), nil)
 	mc3.Run(ctx)
-	defer mc3.Close()
+	defer func() {
+		mc3.Close()
+		log.Info("close message center 3")
+	}()
+
 	startMaintainerNode(ctx, info3, mc3, nodeManager)
+
+	log.Info("Start maintainer node",
+		zap.Stringer("id", info3.ID),
+		zap.String("addr", info3.AdvertiseAddr))
+
 	// notify node changes
 	_, _ = nodeManager.Tick(ctx, &orchestrator.GlobalReactorState{
 		Captures: map[model.CaptureID]*model.CaptureInfo{
@@ -380,6 +396,7 @@ func TestScaleNode(t *testing.T) {
 			model.CaptureID(info2.ID): {ID: model.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
 		},
 	})
+
 	require.Eventually(t, func() bool {
 		return co.controller.changefeedDB.GetReplicatingSize() == changefeedNumber
 	}, waitTime, time.Millisecond*5)
@@ -387,6 +404,8 @@ func TestScaleNode(t *testing.T) {
 		return len(co.controller.changefeedDB.GetByNodeID(info.ID)) == 3 &&
 			len(co.controller.changefeedDB.GetByNodeID(info2.ID)) == 3
 	}, waitTime, time.Millisecond*5)
+
+	log.Info("pass scale node")
 }
 
 func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
@@ -398,7 +417,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[info.ID] = info
 
-	mc1 := messaging.NewMessageCenter(ctx, info.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc1 := messaging.NewMessageCenter(ctx, info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
 	mc1.Run(ctx)
 	defer mc1.Close()
 
@@ -491,7 +510,7 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	nodeManager.GetAliveNodes()[info.ID] = info
 
 	// Initialize message center
-	mc := messaging.NewMessageCenter(ctx, info.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc := messaging.NewMessageCenter(ctx, info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)
@@ -626,7 +645,7 @@ func startMaintainerNode(ctx context.Context,
 		var opts []grpc.ServerOption
 		grpcServer := grpc.NewServer(opts...)
 		mcs := messaging.NewMessageCenterServer(mc)
-		proto.RegisterMessageCenterServer(grpcServer, mcs)
+		proto.RegisterMessageServiceServer(grpcServer, mcs)
 		lis, err := net.Listen("tcp", node.AdvertiseAddr)
 		if err != nil {
 			panic(err)

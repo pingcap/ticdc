@@ -16,6 +16,7 @@ package sink
 import (
 	"context"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -85,7 +86,7 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	sink, dmlProducer, ddlProducer, err := newPulsarSinkForTest(t)
 	require.NoError(t, err)
 
-	count.Store(0)
+	var count atomic.Int64
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -134,8 +135,7 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	err = sink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	err = sink.AddDMLEvent(dmlEvent)
-	require.NoError(t, err)
+	sink.AddDMLEvent(dmlEvent)
 	time.Sleep(1 * time.Second)
 
 	sink.PassBlockEvent(ddlEvent2)

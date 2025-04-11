@@ -125,9 +125,8 @@ func (s *PulsarSink) IsNormal() bool {
 	return atomic.LoadUint32(&s.isNormal) == 1
 }
 
-func (s *PulsarSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
+func (s *PulsarSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmlWorker.AddDMLEvent(event)
-	return nil
 }
 
 func (s *PulsarSink) PassBlockEvent(event commonEvent.BlockEvent) {
@@ -167,6 +166,10 @@ func (s *PulsarSink) AddCheckpointTs(ts uint64) {
 
 func (s *PulsarSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
+}
+
+func (s *PulsarSink) GetStartTsList(tableIds []int64, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error) {
+	return startTsList, make([]bool, len(startTsList)), nil
 }
 
 func (s *PulsarSink) Close(_ bool) {

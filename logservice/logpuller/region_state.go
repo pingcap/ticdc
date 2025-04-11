@@ -43,6 +43,9 @@ type regionInfo struct {
 	subscribedSpan *subscribedSpan
 	// The state of the locked range of the region.
 	lockedRangeState *regionlock.LockedRangeState
+	// Whether to filter out the value write by cdc itself.
+	// It should be `true` in BDR mode
+	filterLoop bool
 }
 
 func (s *regionInfo) isStopped() bool {
@@ -55,12 +58,14 @@ func newRegionInfo(
 	span heartbeatpb.TableSpan,
 	rpcCtx *tikv.RPCContext,
 	subscribedSpan *subscribedSpan,
+	filterLoop bool,
 ) regionInfo {
 	return regionInfo{
 		verID:          verID,
 		span:           span,
 		rpcCtx:         rpcCtx,
 		subscribedSpan: subscribedSpan,
+		filterLoop:     filterLoop,
 	}
 }
 

@@ -419,7 +419,7 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 	}
 
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
-	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.config.MemoryQuota)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.config.MemoryQuota, e.config.BDRMode)
 
 	// when sink is not mysql-class, table trigger event dispatcher need to receive the checkpointTs message from maintainer.
 	if e.sink.SinkType() != common.MysqlSinkType {
@@ -465,24 +465,10 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 	// so we just return the startTs we get.
 	// Besides, we batch the creation for the dispatchers,
 	// mainly because we need to batch the query for startTs when sink is mysql-class to reduce the time cost.
-	var newStartTsList []int64
-	startTsIsSyncpointList := make([]bool, len(startTsList))
-	var err error
-	if e.sink.SinkType() == common.MysqlSinkType {
-		newStartTsList, startTsIsSyncpointList, err = e.sink.(*sink.MysqlSink).GetStartTsList(tableIds, startTsList, removeDDLTs)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		log.Info("calculate real startTs for dispatchers",
-			zap.Stringer("changefeedID", e.changefeedID),
-			zap.Any("receiveStartTs", startTsList),
-			zap.Any("realStartTs", newStartTsList),
-			zap.Bool("removeDDLTs", removeDDLTs),
-		)
-	} else {
-		newStartTsList = startTsList
+	newStartTsList, startTsIsSyncpointList, err := e.sink.GetStartTsList(tableIds, startTsList, removeDDLTs)
+	if err != nil {
+		return errors.Trace(err)
 	}
-
 	if e.latestWatermark.Get().CheckpointTs == 0 {
 		// If the checkpointTs is 0, means there is no dispatchers before. So we need to init it with the smallest startTs of these dispatchers
 		smallestStartTs := int64(math.MaxInt64)
@@ -506,7 +492,8 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			startTsIsSyncpointList[idx],
 			e.filterConfig,
 			pdTsList[idx],
-			e.errCh)
+			e.errCh,
+			e.config.BDRMode)
 
 		if e.heartBeatTask == nil {
 			e.heartBeatTask = newHeartBeatTask(e)
@@ -519,7 +506,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			// we don't register table trigger event dispatcher in event collector, when created.
 			// Table trigger event dispatcher is a special dispatcher,
 			// it need to wait get the initial table schema store from the maintainer, then will register to event collector to receive events.
-			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(d, e.config.MemoryQuota)
+			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(d, e.config.MemoryQuota, e.config.BDRMode)
 		}
 
 		seq := e.dispatcherMap.Set(id, d)

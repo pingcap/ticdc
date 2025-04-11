@@ -45,12 +45,11 @@ func NewMessageCenterForTest(t *testing.T) (*messageCenter, string, func()) {
 	grpcServer := grpc.NewServer(opts...)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	mcConfig := config.NewDefaultMessageCenterConfig()
+	mcConfig := config.NewDefaultMessageCenterConfig(addr)
 	id := node.NewID()
-	mc := NewMessageCenter(ctx, id, mockEpoch, mcConfig, nil)
-	mockEpoch++
+	mc := NewMessageCenter(ctx, id, mcConfig, nil)
 	mcs := NewMessageCenterServer(mc)
-	proto.RegisterMessageCenterServer(grpcServer, mcs)
+	proto.RegisterMessageServiceServer(grpcServer, mcs)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -72,12 +71,12 @@ func setupMessageCenters(t *testing.T) (*messageCenter, *messageCenter, *message
 	mc2, mc2Addr, mc2Stop := NewMessageCenterForTest(t)
 	mc3, mc3Addr, mc3Stop := NewMessageCenterForTest(t)
 
-	mc1.addTarget(mc2.id, mc2.epoch, mc2Addr)
-	mc1.addTarget(mc3.id, mc3.epoch, mc3Addr)
-	mc2.addTarget(mc1.id, mc1.epoch, mc1Addr)
-	mc2.addTarget(mc3.id, mc3.epoch, mc3Addr)
-	mc3.addTarget(mc1.id, mc1.epoch, mc1Addr)
-	mc3.addTarget(mc2.id, mc2.epoch, mc2Addr)
+	mc1.addTarget(mc2.id, mc2Addr)
+	mc1.addTarget(mc3.id, mc3Addr)
+	mc2.addTarget(mc1.id, mc1Addr)
+	mc2.addTarget(mc3.id, mc3Addr)
+	mc3.addTarget(mc1.id, mc1Addr)
+	mc3.addTarget(mc2.id, mc2Addr)
 
 	cleanup := func() {
 		mc1Stop()

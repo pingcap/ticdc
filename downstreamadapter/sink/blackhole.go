@@ -43,14 +43,13 @@ func (s *BlackHoleSink) SinkType() common.SinkType {
 func (s *BlackHoleSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 }
 
-func (s *BlackHoleSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
+func (s *BlackHoleSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	// NOTE: don't change the log, integration test `lossy_ddl` depends on it.
 	// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L23
 	log.Debug("BlackHoleSink: WriteEvents", zap.Any("dml", event))
 	for _, callback := range event.PostTxnFlushed {
 		callback()
 	}
-	return nil
 }
 
 func (s *BlackHoleSink) PassBlockEvent(event commonEvent.BlockEvent) {
@@ -79,11 +78,11 @@ func (s *BlackHoleSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *BlackHoleSink) AddCheckpointTs(ts uint64) {
+func (s *BlackHoleSink) AddCheckpointTs(_ uint64) {
 }
 
-func (s *BlackHoleSink) GetStartTsList(tableIds []int64, startTsList []int64) ([]int64, error) {
-	return []int64{}, nil
+func (s *BlackHoleSink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
+	return startTsList, make([]bool, len(startTsList)), nil
 }
 
 func (s *BlackHoleSink) Close(_ bool) {}

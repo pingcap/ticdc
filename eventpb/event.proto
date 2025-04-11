@@ -87,4 +87,5 @@ message RegisterDispatcherRequest {
     uint64 sync_point_ts = 9;
     uint64 sync_point_interval = 10;
     bool only_reuse = 11;
+    bool bdr_mode = 12;
 }

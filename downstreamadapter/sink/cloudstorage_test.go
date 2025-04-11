@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,7 +53,7 @@ func TestCloudStorageSinkBasicFunctionality(t *testing.T) {
 	sink, err := newCloudStorageSinkForTest(t.TempDir())
 	require.NoError(t, err)
 
-	count.Store(0)
+	var count atomic.Int64
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -108,8 +109,7 @@ func TestCloudStorageSinkBasicFunctionality(t *testing.T) {
 	err = sink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	err = sink.AddDMLEvent(dmlEvent)
-	require.NoError(t, err)
+	sink.AddDMLEvent(dmlEvent)
 
 	time.Sleep(5 * time.Second)
 

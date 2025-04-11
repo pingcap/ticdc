@@ -47,7 +47,7 @@ import (
 //     Otherwise,
 //     if there is only one rows of the whole group, we generate the sqls for the row.
 //     Otherwise, we batch all the event rows for the same dispatcherID to a single delete / update/ insert query(in order)
-func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
+func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 	// Step 1: group the events by dispatcher id
@@ -68,31 +68,28 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 	}
 
 	// Step 2: prepare the dmls for each group
-	var queryList []string
-	var argsList [][]interface{}
-	var err error
+	var (
+		queryList []string
+		argsList  [][]interface{}
+	)
 	for _, eventsInGroup := range eventsGroup {
 		tableInfo := eventsInGroup[0].TableInfo
-		if !tableInfo.HasHandleKey() || tableInfo.HasVirtualColumns() {
+		if !tableInfo.HasPrimaryKey() || tableInfo.HasVirtualColumns() {
 			// check if the table has a handle key or has a virtual column
-			queryList, argsList, err = w.generateNormalSQLs(eventsInGroup)
+			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 		} else if len(eventsInGroup) == 1 && eventsInGroup[0].Len() == 1 {
 			// if there only one row in the group, we can use the normal sql generate
-			queryList, argsList, err = w.generateNormalSQLs(eventsInGroup)
+			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 		} else if len(eventsInGroup) > 0 {
 			// if the events are in different safe mode, we can't use the batch dml generate
 			firstEventSafeMode := !w.cfg.SafeMode && eventsInGroup[0].CommitTs > eventsInGroup[0].ReplicatingTs
 			finalEventSafeMode := !w.cfg.SafeMode && eventsInGroup[len(eventsInGroup)-1].CommitTs > eventsInGroup[len(eventsInGroup)-1].ReplicatingTs
 			if firstEventSafeMode != finalEventSafeMode {
-				queryList, argsList, err = w.generateNormalSQLs(eventsInGroup)
+				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 			} else {
 				// use the batch dml generate
-				queryList, argsList, err = w.generateBatchSQL(eventsInGroup)
+				queryList, argsList = w.generateBatchSQL(eventsInGroup)
 			}
-		}
-
-		if err != nil {
-			return nil, errors.Trace(err)
 		}
 		for i := 0; i < len(queryList); i++ {
 			dmls.sqls = append(dmls.sqls, queryList[i])
@@ -105,7 +102,7 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 		log.Debug("prepareDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
 	}
 
-	return dmls, nil
+	return dmls
 }
 
 // for generate batch sql for multi events, we first need to compare the rows with the same pk, to generate the final rows.
@@ -127,17 +124,15 @@ func (w *MysqlWriter) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs
 //
 // For these all changes to row, we will continue to compare from the beginnning to the end, until there is no change.
 // Then we can generate the final sql of delete/update/insert.
-func (w *MysqlWriter) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
 	inSafeMode := !w.cfg.SafeMode && events[0].CommitTs > events[0].ReplicatingTs
-
 	if inSafeMode {
 		return w.generateBatchSQLInSafeMode(events)
-	} else {
-		return w.generateBatchSQLInUnsafeMode(events)
 	}
+	return w.generateBatchSQLInUnsafeMode(events)
 }
 
-func (w *MysqlWriter) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
 	inSafeMode := true
 	tableInfo := events[0].TableInfo
 	type RowChangeWithKeys struct {
@@ -151,22 +146,16 @@ func (w *MysqlWriter) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent)
 		for {
 			row, ok := event.GetNextRow()
 			if !ok {
-				event.FinishGetRow()
+				event.Rewind()
 				break
 			}
 			rowChangeWithKeys := RowChangeWithKeys{RowChange: &row}
 			if !row.Row.IsEmpty() {
-				_, keys, err := genKeyAndHash(&row.Row, tableInfo)
-				if err != nil {
-					return nil, nil, errors.Trace(err)
-				}
+				_, keys := genKeyAndHash(&row.Row, tableInfo)
 				rowChangeWithKeys.RowKeys = keys
 			}
 			if !row.PreRow.IsEmpty() {
-				_, keys, err := genKeyAndHash(&row.PreRow, tableInfo)
-				if err != nil {
-					return nil, nil, errors.Trace(err)
-				}
+				_, keys := genKeyAndHash(&row.PreRow, tableInfo)
 				rowChangeWithKeys.PreRowKeys = keys
 			}
 			rowLists = append(rowLists, rowChangeWithKeys)
@@ -292,7 +281,7 @@ func (w *MysqlWriter) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent)
 	return w.batchSingleTxnDmls(finalRowLists, tableInfo, inSafeMode)
 }
 
-func (w *MysqlWriter) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
 	inSafeMode := false
 	tableInfo := events[0].TableInfo
 	// step 1. divide update row to delete row and insert row, and set into map based on the key hash
@@ -304,23 +293,20 @@ func (w *MysqlWriter) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEven
 		for {
 			row, ok := event.GetNextRow()
 			if !ok {
-				event.FinishGetRow()
+				event.Rewind()
 				break
 			}
 			switch row.RowType {
 			case commonEvent.RowTypeUpdate:
 				{
 					deleteRow := commonEvent.RowChange{RowType: commonEvent.RowTypeDelete, PreRow: row.PreRow}
-					hashValue, keyValue, err := genKeyAndHash(&row.PreRow, tableInfo)
-					if err != nil {
-						return nil, nil, errors.Trace(err)
-					}
-					if _, ok := hashToKeyMap[hashValue]; !ok {
+					hashValue, keyValue := genKeyAndHash(&row.PreRow, tableInfo)
+					if _, ok = hashToKeyMap[hashValue]; !ok {
 						hashToKeyMap[hashValue] = keyValue
 					} else {
 						if !compareKeys(hashToKeyMap[hashValue], keyValue) {
 							log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
-							event.FinishGetRow() // reset event
+							event.Rewind() // reset event
 							// use normal sql instead
 							return w.generateNormalSQLs(events)
 						}
@@ -330,16 +316,13 @@ func (w *MysqlWriter) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEven
 
 				{
 					insertRow := commonEvent.RowChange{RowType: commonEvent.RowTypeInsert, Row: row.Row}
-					hashValue, keyValue, err := genKeyAndHash(&row.Row, tableInfo)
-					if err != nil {
-						return nil, nil, errors.Trace(err)
-					}
-					if _, ok := hashToKeyMap[hashValue]; !ok {
+					hashValue, keyValue := genKeyAndHash(&row.Row, tableInfo)
+					if _, ok = hashToKeyMap[hashValue]; !ok {
 						hashToKeyMap[hashValue] = keyValue
 					} else {
 						if !compareKeys(hashToKeyMap[hashValue], keyValue) {
 							log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
-							event.FinishGetRow() // reset event
+							event.Rewind() // reset event
 							// use normal sql instead
 							return w.generateNormalSQLs(events)
 						}
@@ -348,32 +331,26 @@ func (w *MysqlWriter) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEven
 					rowsMap[hashValue] = append(rowsMap[hashValue], &insertRow)
 				}
 			case commonEvent.RowTypeDelete:
-				hashValue, keyValue, err := genKeyAndHash(&row.PreRow, tableInfo)
-				if err != nil {
-					return nil, nil, errors.Trace(err)
-				}
-				if _, ok := hashToKeyMap[hashValue]; !ok {
+				hashValue, keyValue := genKeyAndHash(&row.PreRow, tableInfo)
+				if _, ok = hashToKeyMap[hashValue]; !ok {
 					hashToKeyMap[hashValue] = keyValue
 				} else {
 					if !compareKeys(hashToKeyMap[hashValue], keyValue) {
 						log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
-						event.FinishGetRow() // reset event
+						event.Rewind() // reset event
 						// use normal sql instead
 						return w.generateNormalSQLs(events)
 					}
 				}
 				rowsMap[hashValue] = append(rowsMap[hashValue], &row)
 			case commonEvent.RowTypeInsert:
-				hashValue, keyValue, err := genKeyAndHash(&row.Row, tableInfo)
-				if err != nil {
-					return nil, nil, errors.Trace(err)
-				}
-				if _, ok := hashToKeyMap[hashValue]; !ok {
+				hashValue, keyValue := genKeyAndHash(&row.Row, tableInfo)
+				if _, ok = hashToKeyMap[hashValue]; !ok {
 					hashToKeyMap[hashValue] = keyValue
 				} else {
 					if !compareKeys(hashToKeyMap[hashValue], keyValue) {
 						log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
-						event.FinishGetRow() // reset event
+						event.Rewind() // reset event
 						// use normal sql instead
 						return w.generateNormalSQLs(events)
 					}
@@ -413,7 +390,7 @@ func (w *MysqlWriter) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEven
 	return w.batchSingleTxnDmls(rowsList, tableInfo, inSafeMode)
 }
 
-func (w *MysqlWriter) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
 	var querys []string
 	var args [][]interface{}
 
@@ -422,63 +399,51 @@ func (w *MysqlWriter) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]stri
 			continue
 		}
 
-		queryList, argsList, err := w.generateNormalSQL(event)
-		if err != nil {
-			return nil, nil, errors.Trace(err)
-		}
-
+		queryList, argsList := w.generateNormalSQL(event)
 		for i := 0; i < len(queryList); i++ {
 			querys = append(querys, queryList[i])
 			args = append(args, argsList[i])
 		}
 	}
-	return querys, args, nil
+	return querys, args
 }
 
-func (w *MysqlWriter) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}) {
 	var queryList []string
 	var argsList [][]interface{}
 
 	inSafeMode := !w.cfg.SafeMode && event.CommitTs > event.ReplicatingTs
-
 	log.Debug("inSafeMode",
 		zap.Bool("inSafeMode", inSafeMode),
 		zap.Uint64("firstRowCommitTs", event.CommitTs),
 		zap.Uint64("firstRowReplicatingTs", event.ReplicatingTs),
 		zap.Bool("safeMode", w.cfg.SafeMode))
 
-	var query string
-	var args []interface{}
+	var (
+		query string
+		args  []interface{}
+	)
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
 			break
 		}
-
-		var err error
 		switch row.RowType {
 		case commonEvent.RowTypeUpdate:
 			if inSafeMode {
-				query, args, err = buildUpdate(event.TableInfo, row, w.cfg.ForceReplicate)
+				query, args = buildUpdate(event.TableInfo, row, w.cfg.ForceReplicate)
 			} else {
-				query, args, err = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
-				if err != nil {
-					return queryList, argsList, errors.Trace(err)
-				}
+				query, args = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
 				if query != "" {
 					queryList = append(queryList, query)
 					argsList = append(argsList, args)
 				}
-				query, args, err = buildInsert(event.TableInfo, row, inSafeMode)
+				query, args = buildInsert(event.TableInfo, row, inSafeMode)
 			}
 		case commonEvent.RowTypeDelete:
-			query, args, err = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
+			query, args = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
 		case commonEvent.RowTypeInsert:
-			query, args, err = buildInsert(event.TableInfo, row, inSafeMode)
-		}
-
-		if err != nil {
-			return queryList, argsList, errors.Trace(err)
+			query, args = buildInsert(event.TableInfo, row, inSafeMode)
 		}
 
 		if query != "" {
@@ -486,10 +451,10 @@ func (w *MysqlWriter) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, 
 			argsList = append(argsList, args)
 		}
 	}
-	return queryList, argsList, nil
+	return queryList, argsList
 }
 
-func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
+func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	if len(dmls.sqls) != len(dmls.values) {
 		return cerror.ErrUnexpected.FastGenByArgs(fmt.Sprintf("unexpected number of sqls and values, sqls is %s, values is %s", dmls.sqls, dmls.values))
 	}
@@ -510,7 +475,7 @@ func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		// Set session variables first and then execute the transaction.
 		// we try to set write source for each txn,
 		// so we can use it to trace the data source
-		if err = SetWriteSource(w.cfg, tx); err != nil {
+		if err = SetWriteSource(w.ctx, w.cfg, tx); err != nil {
 			log.Error("Failed to set write source", zap.Error(err))
 			if rbErr := tx.Rollback(); rbErr != nil {
 				if errors.Cause(rbErr) != context.Canceled {
@@ -570,7 +535,7 @@ func (w *MysqlWriter) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		retry.WithIsRetryableErr(isRetryableDMLError))
 }
 
-func (w *MysqlWriter) sequenceExecute(
+func (w *Writer) sequenceExecute(
 	dmls *preparedDMLs, tx *sql.Tx, writeTimeout time.Duration,
 ) error {
 	for i, query := range dmls.sqls {
@@ -616,7 +581,7 @@ func (w *MysqlWriter) sequenceExecute(
 }
 
 // execute SQLs in the multi statements way.
-func (w *MysqlWriter) multiStmtExecute(
+func (w *Writer) multiStmtExecute(
 	dmls *preparedDMLs, tx *sql.Tx, writeTimeout time.Duration,
 ) error {
 	var multiStmtArgs []any
@@ -664,15 +629,12 @@ func logDMLTxnErr(
 	return errors.WithMessage(err, fmt.Sprintf("Failed query info: %s; ", query))
 }
 
-func (w *MysqlWriter) batchSingleTxnDmls(
+func (w *Writer) batchSingleTxnDmls(
 	rows []*commonEvent.RowChange,
 	tableInfo *common.TableInfo,
 	translateToInsert bool,
-) (sqls []string, values [][]interface{}, err error) {
-	insertRows, updateRows, deleteRows, err := w.groupRowsByType(rows, tableInfo)
-	if err != nil {
-		return nil, nil, errors.Trace(err)
-	}
+) (sqls []string, values [][]interface{}) {
+	insertRows, updateRows, deleteRows := w.groupRowsByType(rows, tableInfo)
 
 	// handle delete
 	if len(deleteRows) > 0 {
@@ -723,10 +685,10 @@ func (w *MysqlWriter) batchSingleTxnDmls(
 	return
 }
 
-func (w *MysqlWriter) groupRowsByType(
+func (w *Writer) groupRowsByType(
 	rows []*commonEvent.RowChange,
 	tableInfo *common.TableInfo,
-) (insertRows, updateRows, deleteRows [][]*sqlmodel.RowChange, err error) {
+) (insertRows, updateRows, deleteRows [][]*sqlmodel.RowChange) {
 	rowSize := len(rows)
 	if rowSize > w.cfg.MaxTxnRow {
 		rowSize = w.cfg.MaxTxnRow
@@ -745,11 +707,7 @@ func (w *MysqlWriter) groupRowsByType(
 	for _, row := range rows {
 		switch row.RowType {
 		case commonEvent.RowTypeInsert:
-			args, err := getArgs(&row.Row, tableInfo, true)
-			if err != nil {
-				return nil, nil, nil, errors.Trace(err)
-			}
-
+			args := getArgs(&row.Row, tableInfo, true)
 			newInsertRow := sqlmodel.NewRowChange(
 				&tableInfo.TableName,
 				nil,
@@ -764,14 +722,8 @@ func (w *MysqlWriter) groupRowsByType(
 				insertRow = make([]*sqlmodel.RowChange, 0, rowSize)
 			}
 		case commonEvent.RowTypeUpdate:
-			args, err := getArgs(&row.Row, tableInfo, true)
-			if err != nil {
-				return nil, nil, nil, errors.Trace(err)
-			}
-			preArgs, err := getArgs(&row.PreRow, tableInfo, true)
-			if err != nil {
-				return nil, nil, nil, errors.Trace(err)
-			}
+			args := getArgs(&row.Row, tableInfo, true)
+			preArgs := getArgs(&row.PreRow, tableInfo, true)
 			newUpdateRow := sqlmodel.NewRowChange(
 				&tableInfo.TableName,
 				nil,
@@ -785,10 +737,7 @@ func (w *MysqlWriter) groupRowsByType(
 				updateRow = make([]*sqlmodel.RowChange, 0, rowSize)
 			}
 		case commonEvent.RowTypeDelete:
-			preArgs, err := getArgs(&row.PreRow, tableInfo, true)
-			if err != nil {
-				return nil, nil, nil, errors.Trace(err)
-			}
+			preArgs := getArgs(&row.PreRow, tableInfo, true)
 			newDeleteRow := sqlmodel.NewRowChange(
 				&tableInfo.TableName,
 				nil,
@@ -816,7 +765,7 @@ func (w *MysqlWriter) groupRowsByType(
 	return
 }
 
-func (w *MysqlWriter) genUpdateSQL(rows ...*sqlmodel.RowChange) ([]string, [][]interface{}) {
+func (w *Writer) genUpdateSQL(rows ...*sqlmodel.RowChange) ([]string, [][]interface{}) {
 	size := 0
 	for _, r := range rows {
 		size += int(r.GetApproximateDataSize())
