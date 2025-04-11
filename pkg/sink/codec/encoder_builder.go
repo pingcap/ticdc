@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/avro"
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
@@ -29,8 +30,8 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncod
 	switch cfg.Protocol {
 	case config.ProtocolDefault, config.ProtocolOpen:
 		return open.NewBatchEncoder(ctx, cfg)
-	// case config.ProtocolAvro:
-	// 	return avro.NewAvroEncoder(ctx, cfg)
+	case config.ProtocolAvro:
+		return avro.NewAvroEncoder(ctx, cfg)
 	case config.ProtocolCanalJSON:
 		return canal.NewJSONRowEventEncoder(ctx, cfg)
 	// case config.ProtocolDebezium:

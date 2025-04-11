@@ -201,6 +201,10 @@ var (
 		"schema manager API error, %s",
 		errors.RFCCodeText("CDC:ErrAvroSchemaAPIError"),
 	)
+	ErrAvroInvalidMessage = errors.Normalize(
+		"avro invalid message format, %s",
+		errors.RFCCodeText("CDC:ErrAvroInvalidMessage"),
+	)
 	ErrOpenProtocolCodecInvalidData = errors.Normalize(
 		"open-protocol codec invalid data",
 		errors.RFCCodeText("CDC:ErrOpenProtocolCodecInvalidData"),
