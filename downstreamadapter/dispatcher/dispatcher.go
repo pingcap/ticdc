@@ -316,17 +316,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	// Only return false when all events are resolvedTs Event.
 	block = false
 	// before bootstrap finished, cannot send any event.
-	ok := d.EmitBootstrap()
-	if !ok {
-		select {
-		case d.errCh <- errors.ErrExecDDLFailed:
-		default:
-			log.Error("error channel is full, discard error",
-				zap.Stringer("changefeedID", d.changefeedID),
-				zap.Stringer("dispatcherID", d.id))
-		}
-		return
-	}
+	block = d.EmitBootstrap()
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		log.Debug("dispatcher receive all event",
@@ -822,18 +812,18 @@ func (d *Dispatcher) HandleCheckpointTs(checkpointTs uint64) {
 
 func (d *Dispatcher) EmitBootstrap() bool {
 	if !d.IsTableTriggerEventDispatcher() {
-		return true
+		return false
 	}
 	tables := d.tableSchemaStore.GetAllNormalTableIds()
 	if len(tables) == 0 {
-		return true
+		return false
 	}
 	bootstrap := loadBootstrapState(&d.BootstrapState)
 	switch bootstrap {
 	case BootstrapFinished:
-		return true
-	case BootstrapInProgress:
 		return false
+	case BootstrapInProgress:
+		return true
 	case BootstrapNotStarted:
 	}
 	storeBootstrapState(&d.BootstrapState, BootstrapInProgress)
@@ -862,33 +852,32 @@ func (d *Dispatcher) EmitBootstrap() bool {
 		currentTables = append(currentTables, tableInfo)
 	}
 
-	go func() {
-		log.Info("start to send bootstrap messages",
-			zap.Stringer("changefeed", d.changefeedID),
-			zap.Int("tables", len(currentTables)))
-		for idx, table := range currentTables {
-			if table.IsView() {
-				continue
-			}
-			ddlEvent := codec.NewBootstrapDDLEvent(table)
-			err := d.sink.WriteBlockEvent(ddlEvent)
-			if err != nil {
-				log.Error("send bootstrap message failed",
-					zap.Stringer("changefeed", d.changefeedID),
-					zap.Int("tables", len(currentTables)),
-					zap.Int("emitted", idx+1),
-					zap.Duration("duration", time.Since(start)),
-					zap.Error(err))
-				return
-			}
+	log.Info("start to send bootstrap messages",
+		zap.Stringer("changefeed", d.changefeedID),
+		zap.Int("tables", len(currentTables)))
+	for idx, table := range currentTables {
+		if table.IsView() {
+			continue
 		}
-		storeBootstrapState(&d.BootstrapState, BootstrapFinished)
-		log.Info("send bootstrap messages finished",
-			zap.Stringer("changefeed", d.changefeedID),
-			zap.Int("tables", len(currentTables)),
-			zap.Duration("cost", time.Since(start)))
-	}()
-	return loadBootstrapState(&d.BootstrapState) == BootstrapFinished
+		ddlEvent := codec.NewBootstrapDDLEvent(table)
+		err := d.sink.WriteBlockEvent(ddlEvent)
+		if err != nil {
+			log.Error("send bootstrap message failed",
+				zap.Stringer("changefeed", d.changefeedID),
+				zap.Int("tables", len(currentTables)),
+				zap.Int("emitted", idx+1),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err))
+			d.errCh <- errors.ErrHandleDDLFailed.FastGenByArgs("BootstrapDDL", ts)
+			return true
+		}
+	}
+	storeBootstrapState(&d.BootstrapState, BootstrapFinished)
+	log.Info("send bootstrap messages finished",
+		zap.Stringer("changefeed", d.changefeedID),
+		zap.Int("tables", len(currentTables)),
+		zap.Duration("cost", time.Since(start)))
+	return false
 }
 
 func (d *Dispatcher) IsTableTriggerEventDispatcher() bool {
