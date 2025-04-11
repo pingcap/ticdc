@@ -220,10 +220,6 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	// s.dmlWorker[index].AddDMLEvent(event)
 }
 
-func (s *Sink) PassBlockEvent(event commonEvent.BlockEvent) {
-	event.PostFlush()
-}
-
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	var err error
 	switch event.GetType() {

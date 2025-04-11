@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/rcrowley/go-metrics"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -102,7 +103,7 @@ func (f *saramaFactory) SyncProducer() (SyncProducer, error) {
 
 // AsyncProducer return an Async Producer,
 // it should be the caller's responsibility to close the producer
-func (f *saramaFactory) AsyncProducer(_ context.Context) (AsyncProducer, error) {
+func (f *saramaFactory) AsyncProducer() (AsyncProducer, error) {
 	client, err := sarama.NewClient(f.endpoints, f.config)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
@@ -115,6 +116,7 @@ func (f *saramaFactory) AsyncProducer(_ context.Context) (AsyncProducer, error) 
 		client:       client,
 		producer:     p,
 		changefeedID: f.changefeedID,
+		closed:       atomic.NewBool(false),
 		failpointCh:  make(chan error, 1),
 	}, nil
 }

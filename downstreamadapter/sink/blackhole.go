@@ -52,10 +52,6 @@ func (s *BlackHoleSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	}
 }
 
-func (s *BlackHoleSink) PassBlockEvent(event commonEvent.BlockEvent) {
-	event.PostFlush()
-}
-
 func (s *BlackHoleSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:

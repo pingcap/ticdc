@@ -34,7 +34,6 @@ type Sink interface {
 
 	AddDMLEvent(event *commonEvent.DMLEvent)
 	WriteBlockEvent(event commonEvent.BlockEvent) error
-	PassBlockEvent(event commonEvent.BlockEvent)
 	AddCheckpointTs(ts uint64)
 
 	GetStartTsList(tableIds []int64, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error)

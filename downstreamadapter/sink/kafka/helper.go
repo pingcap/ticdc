@@ -136,8 +136,7 @@ func newKafkaSinkComponent(
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
 ) (components, config.Protocol, error) {
-	factoryCreator := kafka.NewSaramaFactory
-	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, factoryCreator)
+	return newKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, kafka.NewSaramaFactory)
 }
 
 func newKafkaSinkComponentForTest(

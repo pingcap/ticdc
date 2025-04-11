@@ -23,6 +23,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -33,7 +34,7 @@ type Factory interface {
 	// SyncProducer creates a sync producer to writer message to kafka
 	SyncProducer() (SyncProducer, error)
 	// AsyncProducer creates an async producer to writer message to kafka
-	AsyncProducer(ctx context.Context) (AsyncProducer, error)
+	AsyncProducer() (AsyncProducer, error)
 	// MetricsCollector returns the kafka metrics collector
 	MetricsCollector(adminClient ClusterAdminClient) MetricsCollector
 }
@@ -151,10 +152,13 @@ type saramaAsyncProducer struct {
 	client       sarama.Client
 	producer     sarama.AsyncProducer
 	changefeedID commonType.ChangeFeedID
-	failpointCh  chan error
+
+	closed      *atomic.Bool
+	failpointCh chan error
 }
 
 func (p *saramaAsyncProducer) Close() {
+	p.closed.Store(true)
 	go func() {
 		// We need to close it asynchronously. Otherwise, we might get stuck
 		// with an unhealthy(i.e. Network jitter, isolation) state of Kafka.
@@ -207,6 +211,7 @@ func (p *saramaAsyncProducer) Close() {
 func (p *saramaAsyncProducer) AsyncRunCallback(
 	ctx context.Context,
 ) error {
+	defer p.closed.Store(true)
 	for {
 		select {
 		case <-ctx.Done():
@@ -246,6 +251,9 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 func (p *saramaAsyncProducer) AsyncSend(
 	ctx context.Context, topic string, partition int32, message *common.Message,
 ) error {
+	if p.closed.Load() {
+		return cerror.ErrKafkaProducerClosed.GenWithStackByArgs()
+	}
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
 		Partition: partition,

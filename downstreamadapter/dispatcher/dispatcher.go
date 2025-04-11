@@ -432,7 +432,7 @@ func (d *Dispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
 
 func (d *Dispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 	d.tableProgress.Pass(event)
-	d.sink.PassBlockEvent(event)
+	event.PostFlush()
 }
 
 func (d *Dispatcher) SetInitialTableInfo(tableInfo *common.TableInfo) {

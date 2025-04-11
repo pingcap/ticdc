@@ -20,7 +20,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -46,24 +45,22 @@ const (
 type sink struct {
 	changefeedID commonType.ChangeFeedID
 
-	dmlProducer kafka.AsyncProducer
-	ddlProducer kafka.SyncProducer
-
-	// the module used by dmlWorker and ddlWorker
-	// sink need to close it when Close() is called
 	adminClient      kafka.ClusterAdminClient
-	topicManager     topicmanager.TopicManager
-	statistics       *metrics.Statistics
+	dmlProducer      kafka.AsyncProducer
+	ddlProducer      kafka.SyncProducer
 	metricsCollector kafka.MetricsCollector
 
-	comp             components
+	comp       components
+	statistics *metrics.Statistics
+
+	protocol      config.Protocol
+	partitionRule helper.DDLDispatchRule
+
 	checkpointChan   chan uint64
 	tableSchemaStore *util.TableSchemaStore
-	partitionRule    helper.DDLDispatchRule
 
 	eventChan chan *commonEvent.DMLEvent
 	rowChan   chan *commonEvent.MQRowEvent
-	protocol  config.Protocol
 
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
@@ -76,7 +73,7 @@ func (s *sink) SinkType() commonType.SinkType {
 
 func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
 	comp, _, err := newKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
-	comp.close()
+	defer comp.close()
 	return err
 }
 
@@ -94,7 +91,7 @@ func New(
 	}()
 
 	statistics := metrics.NewStatistics(changefeedID, "sink")
-	asyncProducer, err := comp.Factory.AsyncProducer(ctx)
+	asyncProducer, err := comp.Factory.AsyncProducer()
 	if err != nil {
 		return nil, err
 	}
@@ -108,16 +105,19 @@ func New(
 		changefeedID:     changefeedID,
 		dmlProducer:      asyncProducer,
 		ddlProducer:      syncProducer,
-		partitionRule:    helper.GetDDLDispatchRule(protocol),
-		protocol:         protocol,
-		comp:             comp,
-		statistics:       statistics,
-		isNormal:         atomic.NewBool(true),
-		checkpointChan:   make(chan uint64, 16),
-		eventChan:        make(chan *commonEvent.DMLEvent, 32),
-		rowChan:          make(chan *commonEvent.MQRowEvent, 32),
-		ctx:              ctx,
 		metricsCollector: comp.Factory.MetricsCollector(comp.AdminClient),
+
+		partitionRule: helper.GetDDLDispatchRule(protocol),
+		protocol:      protocol,
+		comp:          comp,
+		statistics:    statistics,
+
+		checkpointChan: make(chan uint64, 16),
+		eventChan:      make(chan *commonEvent.DMLEvent, 32),
+		rowChan:        make(chan *commonEvent.MQRowEvent, 32),
+
+		isNormal: atomic.NewBool(true),
+		ctx:      ctx,
 	}, nil
 }
 
@@ -149,28 +149,20 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.eventChan <- event
 }
 
-func (s *sink) PassBlockEvent(event commonEvent.BlockEvent) {
-	event.PostFlush()
-}
-
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
+	var err error
 	switch v := event.(type) {
 	case *commonEvent.DDLEvent:
-		err := s.sendDDLEvent(v)
-		if err != nil {
-			s.isNormal.Store(false)
-			return err
-		}
-	case *commonEvent.SyncPointEvent:
-		log.Error("sink doesn't support Sync Point Event",
-			zap.String("namespace", s.changefeedID.Namespace()),
-			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Any("event", event))
+		err = s.sendDDLEvent(v)
 	default:
-		log.Error("sink doesn't support this type of block event",
+		log.Panic("kafka sink doesn't support this type of block event",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("eventType", event.GetType()))
+	}
+	if err != nil {
+		s.isNormal.Store(false)
+		return err
 	}
 	return nil
 }
@@ -208,7 +200,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			topic := s.comp.EventRouter.GetTopicForRowChange(event.TableInfo)
 			partitionNum, err := s.comp.TopicManager.GetPartitionNum(ctx, topic)
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 
 			schema := event.TableInfo.GetSchemaName()
@@ -264,36 +256,25 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 }
 
 func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
-	log.Info("MQ sink non batch worker started",
-		zap.String("namespace", s.changefeedID.Namespace()),
-		zap.String("changefeed", s.changefeedID.Name()),
-		zap.String("protocol", s.protocol.String()),
-	)
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case event, ok := <-s.rowChan:
 			if !ok {
-				log.Warn("MQ sink flush worker channel closed",
+				log.Info("kafka sink event channel closed",
 					zap.String("namespace", s.changefeedID.Namespace()),
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			if err := s.comp.EncoderGroup.AddEvents(ctx, event.Key, &event.RowEvent); err != nil {
-				return errors.Trace(err)
+				return err
 			}
 		}
 	}
 }
 
 func (s *sink) batchEncodeRun(ctx context.Context) error {
-	log.Info("MQ sink batch worker started",
-		zap.String("namespace", s.changefeedID.Namespace()),
-		zap.String("changefeed", s.changefeedID.Name()),
-		zap.String("protocol", s.protocol.String()),
-	)
-
 	metricBatchDuration := metrics.WorkerBatchDuration.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 	metricBatchSize := metrics.WorkerBatchSize.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 	defer func() {
@@ -308,11 +289,11 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 		start := time.Now()
 		msgCount, err := s.batch(ctx, msgsBuf, ticker)
 		if err != nil {
-			log.Error("MQ dml worker batch failed",
+			log.Error("kafka sink batch dml events failed",
 				zap.String("namespace", s.changefeedID.Namespace()),
 				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Error(err))
-			return errors.Trace(err)
+			return err
 		}
 		if msgCount == 0 {
 			continue
@@ -326,7 +307,7 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 		groupedMsgs := s.group(msgs)
 		for key, msg := range groupedMsgs {
 			if err = s.comp.EncoderGroup.AddEvents(ctx, key, msg...); err != nil {
-				return errors.Trace(err)
+				return err
 			}
 		}
 	}
@@ -345,7 +326,9 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, tick
 		return msgCount, ctx.Err()
 	case msg, ok := <-s.rowChan:
 		if !ok {
-			log.Warn("kafka sink flush row event channel closed")
+			log.Info("kafka sink event channel closed",
+				zap.String("namespace", s.changefeedID.Namespace()),
+				zap.String("changefeed", s.changefeedID.Name()))
 			return msgCount, nil
 		}
 
@@ -362,7 +345,9 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, tick
 			return msgCount, ctx.Err()
 		case msg, ok := <-s.rowChan:
 			if !ok {
-				log.Warn("MQ sink flush worker channel closed")
+				log.Info("kafka sink event channel closed",
+					zap.String("namespace", s.changefeedID.Namespace()),
+					zap.String("changefeed", s.changefeedID.Name()))
 				return msgCount, nil
 			}
 
@@ -402,13 +387,13 @@ func (s *sink) sendMessages(ctx context.Context) error {
 			return errors.Trace(ctx.Err())
 		case future, ok := <-outCh:
 			if !ok {
-				log.Warn("kafka sink encoder's output channel closed",
+				log.Info("kafka sink encoder's output channel closed",
 					zap.String("namespace", s.changefeedID.Namespace()),
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
 			if err = future.Ready(ctx); err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			for _, message := range future.Messages {
 				start := time.Now()
@@ -423,7 +408,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 					}
 					return message.GetRowsCount(), int64(message.Length()), nil
 				}); err != nil {
-					return errors.Trace(err)
+					return err
 				}
 				metricSendMessageDuration.Observe(time.Since(start).Seconds())
 			}
@@ -440,7 +425,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 	for _, e := range event.GetEvents() {
 		message, err := s.comp.Encoder.EncodeDDLEvent(e)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		topic := s.comp.EventRouter.GetTopicForDDL(e)
 		// Notice: We must call GetPartitionNum here,
@@ -449,7 +434,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		// then the auto-created topic will not be created as configured by ticdc.
 		partitionNum, err := s.comp.TopicManager.GetPartitionNum(s.ctx, topic)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if s.partitionRule == helper.PartitionAll {
 			err = s.statistics.RecordDDLExecution(func() error {
@@ -461,10 +446,12 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 			})
 		}
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 	}
-	log.Info("kafka sink send DDL event", zap.Any("event", event.Query))
+	log.Info("kafka sink send DDL event",
+		zap.String("namespace", s.changefeedID.Namespace()), zap.String("changefeed", s.changefeedID.Name()),
+		zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()))
 	// after flush all the ddl event, we call the callback function.
 	event.PostFlush()
 	return nil
@@ -477,11 +464,11 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 func (s *sink) sendCheckpoint(ctx context.Context) error {
 	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
-
 	defer func() {
 		metrics.CheckpointTsMessageDuration.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 	}()
+
 	var (
 		msg          *common.Message
 		partitionNum int32
@@ -502,13 +489,13 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			start := time.Now()
 			msg, err = s.comp.Encoder.EncodeCheckpointEvent(ts)
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
-
 			if msg == nil {
 				continue
 			}
-			tableNames := s.tableSchemaStore.GetAllTableNames(ts)
+
+			tableNames := s.getAllTableNames(ts)
 			// NOTICE: When there are no tables to replicate,
 			// we need to send checkpoint ts to the default topic.
 			// This will be compatible with the old behavior.
@@ -516,24 +503,22 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				topic := s.comp.EventRouter.GetDefaultTopic()
 				partitionNum, err = s.comp.TopicManager.GetPartitionNum(ctx, topic)
 				if err != nil {
-					return errors.Trace(err)
+					return err
 				}
-				log.Debug("Emit checkpointTs to default topic",
-					zap.String("topic", topic), zap.Uint64("checkpointTs", ts), zap.Any("partitionNum", partitionNum))
 				err = s.ddlProducer.SendMessages(ctx, topic, partitionNum, msg)
 				if err != nil {
-					return errors.Trace(err)
+					return err
 				}
 			} else {
 				topics := s.comp.EventRouter.GetActiveTopics(tableNames)
 				for _, topic := range topics {
 					partitionNum, err = s.comp.TopicManager.GetPartitionNum(ctx, topic)
 					if err != nil {
-						return errors.Trace(err)
+						return err
 					}
 					err = s.ddlProducer.SendMessages(ctx, topic, partitionNum, msg)
 					if err != nil {
-						return errors.Trace(err)
+						return err
 					}
 				}
 			}
@@ -550,6 +535,17 @@ func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 
 func (s *sink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
 	return startTsList, make([]bool, len(startTsList)), nil
+}
+
+func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
+	if s.tableSchemaStore == nil {
+		log.Warn("kafka sink table schema store is not set",
+			zap.String("namespace", s.changefeedID.Namespace()),
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Uint64("ts", ts))
+		return nil
+	}
+	return s.tableSchemaStore.GetAllTableNames(ts)
 }
 
 func (s *sink) Close(_ bool) {

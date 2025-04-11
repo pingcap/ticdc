@@ -60,7 +60,7 @@ func (f *MockFactory) SyncProducer() (SyncProducer, error) {
 }
 
 // AsyncProducer creates an async producer
-func (f *MockFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
+func (f *MockFactory) AsyncProducer() (AsyncProducer, error) {
 	asyncProducer := mocks.NewAsyncProducer(f.ErrorReporter, f.config)
 	return &MockSaramaAsyncProducer{
 		AsyncProducer: asyncProducer,
