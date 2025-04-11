@@ -15,8 +15,6 @@ package kafka
 
 import (
 	"context"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -62,10 +60,6 @@ type SyncProducer interface {
 	// object passes out of scope, as it may otherwise leak memory.
 	// You must call this before calling Close on the underlying client.
 	Close()
-	SetTableSchemaStore(store *util.TableSchemaStore)
-	AddCheckpoint(ts uint64)
-	WriteBlockEvent(ctx context.Context, event *commonEvent.DDLEvent) error
-	Run(ctx context.Context) error
 }
 
 // AsyncProducer is the kafka async producer
@@ -85,8 +79,6 @@ type AsyncProducer interface {
 	// and run tha attached callback. the caller should call this
 	// method in a background goroutine
 	AsyncRunCallback(ctx context.Context) error
-	AddDMLEvent(event *commonEvent.DMLEvent)
-	Run(ctx context.Context) error
 }
 
 type saramaSyncProducer struct {
