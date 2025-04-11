@@ -78,7 +78,7 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 	sink.AddDMLEvent(dmlEvent)
 	time.Sleep(1 * time.Second)
 
-	sink.PassBlockEvent(ddlEvent2)
+	ddlEvent2.PostFlush()
 
 	require.Equal(t, count, 3)
 }

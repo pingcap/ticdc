@@ -150,10 +150,6 @@ func (s *CloudStorageSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmlWorker.AddDMLEvent(event)
 }
 
-func (s *CloudStorageSink) PassBlockEvent(event commonEvent.BlockEvent) {
-	event.PostFlush()
-}
-
 func (s *CloudStorageSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:

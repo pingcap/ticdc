@@ -46,10 +46,6 @@ func (s *mockSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *mockSink) PassBlockEvent(event commonEvent.BlockEvent) {
-	event.PostFlush()
-}
-
 func (s *mockSink) AddCheckpointTs(_ uint64) {
 }
 

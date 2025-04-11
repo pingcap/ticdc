@@ -40,7 +40,7 @@ const (
 
 // Sarama metrics names, see https://pkg.go.dev/github.com/IBM/sarama#pkg-overview.
 const (
-	// Producer level.
+	// SyncProducer level.
 	compressionRatioMetricName  = "compression-ratio"
 	recordsPerRequestMetricName = "records-per-request"
 
@@ -78,7 +78,7 @@ func (m *saramaMetricsCollector) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("Kafka metrics collector stopped",
+			log.Info("kafka metrics collector stopped",
 				zap.String("namespace", m.changefeedID.Namespace()),
 				zap.String("changefeed", m.changefeedID.Name()))
 			return

@@ -11,92 +11,70 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sink
+package pulsar
 
 import (
 	"context"
-	"fmt"
 	"net/url"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/pingcap/errors"
-	"github.com/pingcap/ticdc/downstreamadapter/worker"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
-func newKafkaSinkForTest() (*KafkaSink, producer.DMLProducer, producer.DDLProducer, error) {
+func newPulsarSinkForTest(t *testing.T) (*sink, producer.DMLProducer, producer.DDLProducer, error) {
+	sinkURL := "pulsar://127.0.0.1:6650/persistent://public/default/test?" +
+		"protocol=canal-json&pulsar-version=v2.10.0&enable-tidb-extension=true&" +
+		"authentication-token=eyJhbcGcixxxxxxxxxxxxxx"
+	sinkURI, err := url.Parse(sinkURL)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink = &config.SinkConfig{
+		Protocol: aws.String("canal-json"),
+	}
+
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	openProtocol := "open-protocol"
-	sinkConfig := &config.SinkConfig{Protocol: &openProtocol}
-	uriTemplate := "kafka://%s/%s?kafka-version=0.9.0.0&max-batch-size=1" +
-		"&max-message-bytes=1048576&partition-num=1" +
-		"&kafka-client-id=unit-test&auto-create-topic=false&compression=gzip&protocol=open-protocol"
-	uri := fmt.Sprintf(uriTemplate, "127.0.0.1:9092", kafka.DefaultMockTopicName)
+	comp, protocol, err := newPulsarSinkComponentForTest(ctx, changefeedID, sinkURI, replicaConfig.Sink)
+	require.NoError(t, err)
 
-	sinkURI, err := url.Parse(uri)
-	if err != nil {
-		return nil, nil, nil, errors.Trace(err)
-	}
-	statistics := metrics.NewStatistics(changefeedID, "KafkaSink")
-	kafkaComponent, protocol, err := worker.GetKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig)
-	if err != nil {
-		return nil, nil, nil, errors.Trace(err)
-	}
+	statistics := metrics.NewStatistics(changefeedID, "sink")
 
-	// We must close adminClient when this func return cause by an error
-	// otherwise the adminClient will never be closed and lead to a goroutine leak.
-	defer func() {
-		if err != nil && kafkaComponent.AdminClient != nil {
-			kafkaComponent.AdminClient.Close()
-		}
-	}()
+	dmlMockProducer := producer.NewMockPulsarDMLProducer()
+	ddlMockProducer := producer.NewMockPulsarDDLProducer()
 
-	dmlMockProducer := producer.NewMockKafkaDMLProducer()
+	sink := &sink{
+		changefeedID: changefeedID,
+		dmlProducer:  dmlMockProducer,
+		ddlProducer:  ddlMockProducer,
 
-	dmlWorker := worker.NewMQDMLWorker(
-		changefeedID,
-		protocol,
-		dmlMockProducer,
-		kafkaComponent.EncoderGroup,
-		kafkaComponent.ColumnSelector,
-		kafkaComponent.EventRouter,
-		kafkaComponent.TopicManager,
-		statistics)
+		checkpointTsChan: make(chan uint64, 16),
+		eventChan:        make(chan *commonEvent.DMLEvent, 32),
+		rowChan:          make(chan *commonEvent.MQRowEvent, 32),
 
-	ddlMockProducer := producer.NewMockKafkaDDLProducer()
-	ddlWorker := worker.NewMQDDLWorker(
-		changefeedID,
-		protocol,
-		ddlMockProducer,
-		kafkaComponent.Encoder,
-		kafkaComponent.EventRouter,
-		kafkaComponent.TopicManager,
-		statistics)
+		protocol:      protocol,
+		partitionRule: helper.GetDDLDispatchRule(protocol),
+		comp:          comp,
 
-	sink := &KafkaSink{
-		changefeedID:     changefeedID,
-		dmlWorker:        dmlWorker,
-		ddlWorker:        ddlWorker,
-		adminClient:      kafkaComponent.AdminClient,
-		topicManager:     kafkaComponent.TopicManager,
-		statistics:       statistics,
-		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
+		isNormal:   atomic.NewBool(true),
+		statistics: statistics,
+		ctx:        ctx,
 	}
 	go sink.Run(ctx)
 	return sink, dmlMockProducer, ddlMockProducer, nil
 }
 
-func TestKafkaSinkBasicFunctionality(t *testing.T) {
-	sink, dmlProducer, ddlProducer, err := newKafkaSinkForTest()
+func TestPulsarSinkBasicFunctionality(t *testing.T) {
+	sink, dmlProducer, ddlProducer, err := newPulsarSinkForTest(t)
 	require.NoError(t, err)
 
 	var count atomic.Int64
@@ -149,13 +127,12 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	require.NoError(t, err)
 
 	sink.AddDMLEvent(dmlEvent)
-
 	time.Sleep(1 * time.Second)
 
-	sink.PassBlockEvent(ddlEvent2)
+	ddlEvent2.PostFlush()
 
-	require.Len(t, dmlProducer.(*producer.KafkaMockProducer).GetAllEvents(), 2)
-	require.Len(t, ddlProducer.(*producer.KafkaMockProducer).GetAllEvents(), 1)
+	require.Len(t, dmlProducer.(*producer.PulsarMockProducer).GetAllEvents(), 2)
+	require.Len(t, ddlProducer.(*producer.PulsarMockProducer).GetAllEvents(), 1)
 
 	require.Equal(t, count.Load(), int64(3))
 }

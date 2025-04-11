@@ -131,6 +131,6 @@ func setupAuthentication(config *config.PulsarConfig) (bool, pulsar.Authenticati
 func NewMockCreatorFactory(config *config.PulsarConfig, changefeedID commonType.ChangeFeedID,
 	sinkConfig *config.SinkConfig,
 ) (pulsar.Client, error) {
-	log.Info("mock pulsar client factory created", zap.Any("changfeedID", changefeedID))
+	log.Info("mock pulsar client factory created", zap.Any("changefeedID", changefeedID))
 	return nil, nil
 }

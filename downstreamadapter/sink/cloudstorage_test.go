@@ -113,7 +113,7 @@ func TestCloudStorageSinkBasicFunctionality(t *testing.T) {
 
 	time.Sleep(5 * time.Second)
 
-	sink.PassBlockEvent(ddlEvent2)
+	ddlEvent2.PostFlush()
 
 	require.Equal(t, count.Load(), int64(3))
 }
