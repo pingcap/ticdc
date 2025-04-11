@@ -43,12 +43,12 @@ func newDDLProducers(
 	comp component,
 	sinkConfig *config.SinkConfig,
 ) (*ddlProducers, error) {
-	topicName, err := helper.GetTopic(comp.Config.SinkURI)
+	topicName, err := helper.GetTopic(comp.config.SinkURI)
 	if err != nil {
 		return nil, err
 	}
 
-	defaultProducer, err := newProducer(comp.Config, comp.client, topicName)
+	defaultProducer, err := newProducer(comp.config, comp.client, topicName)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +140,7 @@ func (p *ddlProducers) getProducerByTopic(topicName string) (producer pulsar.Pro
 	}
 
 	if !ok { // create a new producer for the topicName
-		producer, err = newProducer(p.comp.Config, p.comp.client, topicName)
+		producer, err = newProducer(p.comp.config, p.comp.client, topicName)
 		if err != nil {
 			return nil, err
 		}

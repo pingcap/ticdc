@@ -32,21 +32,21 @@ import (
 )
 
 type components struct {
-	EncoderGroup   codec.EncoderGroup
-	Encoder        common.EventEncoder
-	ColumnSelector *columnselector.ColumnSelectors
-	EventRouter    *eventrouter.EventRouter
-	TopicManager   topicmanager.TopicManager
-	AdminClient    kafka.ClusterAdminClient
-	Factory        kafka.Factory
+	encoderGroup   codec.EncoderGroup
+	encoder        common.EventEncoder
+	columnSelector *columnselector.ColumnSelectors
+	eventRouter    *eventrouter.EventRouter
+	topicManager   topicmanager.TopicManager
+	adminClient    kafka.ClusterAdminClient
+	factory        kafka.Factory
 }
 
 func (c components) close() {
-	if c.AdminClient != nil {
-		c.AdminClient.Close()
+	if c.adminClient != nil {
+		c.adminClient.Close()
 	}
-	if c.TopicManager != nil {
-		c.TopicManager.Close()
+	if c.topicManager != nil {
+		c.topicManager.Close()
 	}
 }
 
@@ -67,12 +67,12 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
 
-	kafkaComponent.Factory, err = factoryCreator(ctx, options, changefeedID)
+	kafkaComponent.factory, err = factoryCreator(ctx, options, changefeedID)
 	if err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 
-	kafkaComponent.AdminClient, err = kafkaComponent.Factory.AdminClient()
+	kafkaComponent.adminClient, err = kafkaComponent.factory.AdminClient()
 	if err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -80,8 +80,8 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 	// We must close adminClient when this func return cause by an error
 	// otherwise the adminClient will never be closed and lead to a goroutine leak.
 	defer func() {
-		if err != nil && kafkaComponent.AdminClient != nil {
-			kafkaComponent.AdminClient.Close()
+		if err != nil && kafkaComponent.adminClient != nil {
+			kafkaComponent.adminClient.Close()
 		}
 	}()
 
@@ -90,25 +90,25 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 	// adjust the option configuration before creating the kafka client
-	if err = kafka.AdjustOptions(ctx, kafkaComponent.AdminClient, options, topic); err != nil {
+	if err = kafka.AdjustOptions(ctx, kafkaComponent.adminClient, options, topic); err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 
-	kafkaComponent.TopicManager, err = topicmanager.GetTopicManagerAndTryCreateTopic(
+	kafkaComponent.topicManager, err = topicmanager.GetTopicManagerAndTryCreateTopic(
 		ctx,
 		changefeedID,
 		topic,
 		options.DeriveTopicConfig(),
-		kafkaComponent.AdminClient,
+		kafkaComponent.adminClient,
 	)
 
 	scheme := helper.GetScheme(sinkURI)
-	kafkaComponent.EventRouter, err = eventrouter.NewEventRouter(sinkConfig, protocol, topic, scheme)
+	kafkaComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, protocol, topic, scheme)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	kafkaComponent.ColumnSelector, err = columnselector.NewColumnSelectors(sinkConfig)
+	kafkaComponent.columnSelector, err = columnselector.NewColumnSelectors(sinkConfig)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
@@ -118,12 +118,12 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	kafkaComponent.EncoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
+	kafkaComponent.encoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	kafkaComponent.Encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
+	kafkaComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}

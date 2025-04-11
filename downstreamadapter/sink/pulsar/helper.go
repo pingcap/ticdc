@@ -33,18 +33,18 @@ import (
 )
 
 type component struct {
-	Config         *config.PulsarConfig
-	EncoderGroup   codec.EncoderGroup
-	Encoder        common.EventEncoder
-	ColumnSelector *columnselector.ColumnSelectors
-	EventRouter    *eventrouter.EventRouter
-	TopicManager   topicmanager.TopicManager
+	config         *config.PulsarConfig
+	encoderGroup   codec.EncoderGroup
+	encoder        common.EventEncoder
+	columnSelector *columnselector.ColumnSelectors
+	eventRouter    *eventrouter.EventRouter
+	topicManager   topicmanager.TopicManager
 	client         pulsarClient.Client
 }
 
 func (c component) close() {
-	if c.TopicManager != nil {
-		c.TopicManager.Close()
+	if c.topicManager != nil {
+		c.topicManager.Close()
 	}
 	if c.client != nil {
 		go c.client.Close()
@@ -81,12 +81,12 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, config.ProtocolUnknown, errors.Trace(err)
 	}
 
-	pulsarComponent.Config, err = pulsar.NewPulsarConfig(sinkURI, sinkConfig.PulsarConfig)
+	pulsarComponent.config, err = pulsar.NewPulsarConfig(sinkURI, sinkConfig.PulsarConfig)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.client, err = factoryCreator(pulsarComponent.Config, changefeedID, sinkConfig)
+	pulsarComponent.client, err = factoryCreator(pulsarComponent.config, changefeedID, sinkConfig)
 	if err != nil {
 		return pulsarComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -96,18 +96,18 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.TopicManager, err = topicmanager.GetPulsarTopicManagerAndTryCreateTopic(ctx, pulsarComponent.Config, topic, pulsarComponent.client)
+	pulsarComponent.topicManager, err = topicmanager.GetPulsarTopicManagerAndTryCreateTopic(ctx, pulsarComponent.config, topic, pulsarComponent.client)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
 	scheme := helper.GetScheme(sinkURI)
-	pulsarComponent.EventRouter, err = eventrouter.NewEventRouter(sinkConfig, protocol, topic, scheme)
+	pulsarComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, protocol, topic, scheme)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.ColumnSelector, err = columnselector.NewColumnSelectors(sinkConfig)
+	pulsarComponent.columnSelector, err = columnselector.NewColumnSelectors(sinkConfig)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
@@ -117,12 +117,12 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.EncoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
+	pulsarComponent.encoderGroup, err = codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.Encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
+	pulsarComponent.encoder, err = codec.NewEventEncoder(ctx, encoderConfig)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}

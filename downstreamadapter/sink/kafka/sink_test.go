@@ -54,17 +54,17 @@ func newKafkaSinkForTest() (*sink, error) {
 	// We must close adminClient when this func return cause by an error
 	// otherwise the adminClient will never be closed and lead to a goroutine leak.
 	defer func() {
-		if err != nil && comp.AdminClient != nil {
+		if err != nil && comp.adminClient != nil {
 			comp.close()
 		}
 	}()
 
-	asyncProducer, err := comp.Factory.AsyncProducer()
+	asyncProducer, err := comp.factory.AsyncProducer()
 	if err != nil {
 		return nil, err
 	}
 
-	syncProducer, err := comp.Factory.SyncProducer()
+	syncProducer, err := comp.factory.SyncProducer()
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func newKafkaSinkForTest() (*sink, error) {
 		changefeedID:     changefeedID,
 		dmlProducer:      asyncProducer,
 		ddlProducer:      syncProducer,
-		metricsCollector: comp.Factory.MetricsCollector(comp.AdminClient),
+		metricsCollector: comp.factory.MetricsCollector(comp.adminClient),
 
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		protocol:      protocol,

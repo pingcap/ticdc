@@ -29,14 +29,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	// batchSize is the maximum size of the number of messages in a batch.
-	batchSize = 2048
-	// batchInterval is the interval of the worker to collect a batch of messages.
-	// It shouldn't be too large, otherwise it will lead to a high latency.
-	batchInterval = 15 * time.Millisecond
-)
-
 // dmlProducers is used to send messages to pulsar.
 type dmlProducers struct {
 	changefeedID commonType.ChangeFeedID
@@ -71,14 +63,14 @@ func newDMLProducers(
 		zap.String("changefeed", changefeedID.ID().String()))
 	start := time.Now()
 
-	defaultTopicName := comp.Config.GetDefaultTopicName()
-	defaultProducer, err := newProducer(comp.Config, comp.client, defaultTopicName)
+	defaultTopicName := comp.config.GetDefaultTopicName()
+	defaultProducer, err := newProducer(comp.config, comp.client, defaultTopicName)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrPulsarNewProducer, err)
 	}
 	producerCacheSize := config.DefaultPulsarProducerCacheSize
-	if comp.Config != nil && comp.Config.PulsarProducerCacheSize != nil {
-		producerCacheSize = int(*comp.Config.PulsarProducerCacheSize)
+	if comp.config != nil && comp.config.PulsarProducerCacheSize != nil {
+		producerCacheSize = int(*comp.config.PulsarProducerCacheSize)
 	}
 
 	producers, err := lru.NewWithEvict(producerCacheSize, func(key interface{}, value interface{}) {
@@ -223,7 +215,7 @@ func (p *dmlProducers) getProducerByTopic(topicName string) (producer pulsar.Pro
 	}
 
 	if !ok { // create a new producer for the topicName
-		producer, err = newProducer(p.comp.Config, p.comp.client, topicName)
+		producer, err = newProducer(p.comp.config, p.comp.client, topicName)
 		if err != nil {
 			return nil, err
 		}

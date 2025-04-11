@@ -154,16 +154,16 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		return nil
 	}
 	for _, e := range event.GetEvents() {
-		message, err := s.comp.Encoder.EncodeDDLEvent(e)
+		message, err := s.comp.encoder.EncodeDDLEvent(e)
 		if err != nil {
 			return err
 		}
-		topic := s.comp.EventRouter.GetTopicForDDL(e)
+		topic := s.comp.eventRouter.GetTopicForDDL(e)
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
 		// If it is not called here and kafka has `auto.create.topics.enable` turned on,
 		// then the auto-created topic will not be created as configured by ticdc.
-		partitionNum, err := s.comp.TopicManager.GetPartitionNum(s.ctx, topic)
+		partitionNum, err := s.comp.topicManager.GetPartitionNum(s.ctx, topic)
 		if err != nil {
 			return err
 		}
@@ -226,7 +226,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			}
 
 			start := time.Now()
-			msg, err = s.comp.Encoder.EncodeCheckpointEvent(ts)
+			msg, err = s.comp.encoder.EncodeCheckpointEvent(ts)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -240,8 +240,8 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			// we need to send checkpoint ts to the default topic.
 			// This will be compatible with the old behavior.
 			if len(tableNames) == 0 {
-				topic := s.comp.EventRouter.GetDefaultTopic()
-				partitionNum, err = s.comp.TopicManager.GetPartitionNum(ctx, topic)
+				topic := s.comp.eventRouter.GetDefaultTopic()
+				partitionNum, err = s.comp.topicManager.GetPartitionNum(ctx, topic)
 				if err != nil {
 					return errors.Trace(err)
 				}
@@ -252,9 +252,9 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					return errors.Trace(err)
 				}
 			} else {
-				topics := s.comp.EventRouter.GetActiveTopics(tableNames)
+				topics := s.comp.eventRouter.GetActiveTopics(tableNames)
 				for _, topic := range topics {
-					partitionNum, err = s.comp.TopicManager.GetPartitionNum(ctx, topic)
+					partitionNum, err = s.comp.topicManager.GetPartitionNum(ctx, topic)
 					if err != nil {
 						return errors.Trace(err)
 					}
@@ -277,7 +277,7 @@ func (s *sink) sendDMLEvent(ctx context.Context) error {
 		return s.calculateKeyPartitions(ctx)
 	})
 	g.Go(func() error {
-		return s.comp.EncoderGroup.Run(ctx)
+		return s.comp.encoderGroup.Run(ctx)
 	})
 	g.Go(func() error {
 		if s.protocol.IsBatchEncode() {
@@ -297,16 +297,16 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case event := <-s.eventChan:
-			topic := s.comp.EventRouter.GetTopicForRowChange(event.TableInfo)
-			partitionNum, err := s.comp.TopicManager.GetPartitionNum(ctx, topic)
+			topic := s.comp.eventRouter.GetTopicForRowChange(event.TableInfo)
+			partitionNum, err := s.comp.topicManager.GetPartitionNum(ctx, topic)
 			if err != nil {
 				return errors.Trace(err)
 			}
 
 			schema := event.TableInfo.GetSchemaName()
 			table := event.TableInfo.GetTableName()
-			partitionGenerator := s.comp.EventRouter.GetPartitionGenerator(schema, table)
-			selector := s.comp.ColumnSelector.GetSelector(schema, table)
+			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
+			selector := s.comp.columnSelector.GetSelector(schema, table)
 			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
 				var calledCount atomic.Uint64
 				// The callback of the last row will trigger the callback of the txn.
@@ -355,6 +355,14 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 	}
 }
 
+const (
+	// batchSize is the maximum size of the number of messages in a batch.
+	batchSize = 2048
+	// batchInterval is the interval of the worker to collect a batch of messages.
+	// It shouldn't be too large, otherwise it will lead to a high latency.
+	batchInterval = 15 * time.Millisecond
+)
+
 // batchEncodeRun collect messages into batch and add them to the encoder group.
 func (s *sink) batchEncodeRun(ctx context.Context) error {
 	namespace, changefeed := s.changefeedID.Namespace(), s.changefeedID.Name()
@@ -389,7 +397,7 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 		// Group messages by its TopicPartitionKey before adding them to the encoder group.
 		groupedMsgs := s.group(msgs)
 		for key, msg := range groupedMsgs {
-			if err = s.comp.EncoderGroup.AddEvents(ctx, key, msg...); err != nil {
+			if err = s.comp.encoderGroup.AddEvents(ctx, key, msg...); err != nil {
 				return errors.Trace(err)
 			}
 		}
@@ -471,7 +479,7 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
-			if err := s.comp.EncoderGroup.AddEvents(ctx, event.Key, &event.RowEvent); err != nil {
+			if err := s.comp.encoderGroup.AddEvents(ctx, event.Key, &event.RowEvent); err != nil {
 				return errors.Trace(err)
 			}
 		}
@@ -483,7 +491,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 	defer metrics.WorkerSendMessageDuration.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 
 	var err error
-	outCh := s.comp.EncoderGroup.Output()
+	outCh := s.comp.encoderGroup.Output()
 	for {
 		select {
 		case <-ctx.Done():
