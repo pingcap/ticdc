@@ -86,7 +86,7 @@ func (f *saramaFactory) AdminClient() (ClusterAdminClient, error) {
 	}, nil
 }
 
-// SyncProducer returns a Sync Producer,
+// SyncProducer returns a Sync syncProducer,
 // it should be the caller's responsibility to close the producer
 func (f *saramaFactory) SyncProducer() (SyncProducer, error) {
 	p, err := sarama.NewSyncProducer(f.endpoints, f.config)
@@ -101,7 +101,7 @@ func (f *saramaFactory) SyncProducer() (SyncProducer, error) {
 	}, nil
 }
 
-// AsyncProducer return an Async Producer,
+// AsyncProducer return an Async syncProducer,
 // it should be the caller's responsibility to close the producer
 func (f *saramaFactory) AsyncProducer() (AsyncProducer, error) {
 	client, err := sarama.NewClient(f.endpoints, f.config)
