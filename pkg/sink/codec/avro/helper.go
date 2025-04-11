@@ -14,6 +14,8 @@
 package avro
 
 import (
+	"strings"
+
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -148,6 +150,17 @@ func getOperation(e *commonEvent.RowEvent) string {
 	return ""
 }
 
+// sanitizeTopic escapes ".", it may have special meanings for sink connectors
+func sanitizeTopic(name string) string {
+	return strings.ReplaceAll(name, ".", "_")
+}
+
+// <empty> | <name>[(<dot><name>)*]
 func getAvroNamespace(namespace string, schema string) string {
-	return common.SanitizeName(namespace) + "." + common.SanitizeName(schema)
+	ns := common.SanitizeName(namespace)
+	s := common.SanitizeName(schema)
+	if s != "" {
+		return ns + "." + s
+	}
+	return ns
 }
