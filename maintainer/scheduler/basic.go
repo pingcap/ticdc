@@ -116,7 +116,7 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 	}
 	availableSize = min(availableSize, size)
 
-	absentReplications := s.replicationDB.GetAbsentByGroup(id, availableSize)
+	absentReplications := s.replicationDB.GetAbsentByGroup(groupID, availableSize)
 
 	pkgScheduler.BasicSchedule(availableSize, absentReplications, scheduleNodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
 		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.replicationDB, replication, id))
