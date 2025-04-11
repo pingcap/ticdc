@@ -125,24 +125,22 @@ func (e *RowEvent) PrimaryKeyColumnNames() []string {
 	var result []string
 
 	result = make([]string, 0)
-	tableInfo := e.TableInfo
 	columns := e.TableInfo.GetColumns()
 	for _, col := range columns {
 		if col != nil && mysql.HasPriKeyFlag(col.GetFlag()) {
-			result = append(result, tableInfo.ForceGetColumnName(col.ID))
+			result = append(result, col.Name.O)
 		}
 	}
 	return result
 }
 
 // PrimaryKeyColumn return all primary key's indexes and column infos
-func (e *RowEvent) PrimaryKeyColumn() ([]int, []*model.ColumnInfo) {
-	infos := make([]*model.ColumnInfo, 0)
+func (e *RowEvent) PrimaryKeyColumn() ([]int, []*timodel.ColumnInfo) {
+	infos := make([]*timodel.ColumnInfo, 0)
 	index := make([]int, 0)
-	tableInfo := e.TableInfo
 	columns := e.TableInfo.GetColumns()
 	for i, col := range columns {
-		if col != nil && tableInfo.ForceGetColumnFlagType(col.ID).IsPrimaryKey() {
+		if col != nil && mysql.HasPriKeyFlag(col.GetFlag()) {
 			infos = append(infos, col)
 			index = append(index, i)
 		}
