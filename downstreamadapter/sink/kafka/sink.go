@@ -15,24 +15,36 @@ package kafka
 
 import (
 	"context"
-	"go.uber.org/atomic"
 	"net/url"
+	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	"github.com/pingcap/tiflow/cdc/model"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
+const (
+	// batchSize is the maximum size of the number of messages in a batch.
+	batchSize = 2048
+	// batchInterval is the interval of the worker to collect a batch of messages.
+	// It shouldn't be too large, otherwise it will lead to a high latency.
+	batchInterval = 15 * time.Millisecond
+)
+
 type sink struct {
-	changefeedID common.ChangeFeedID
+	changefeedID commonType.ChangeFeedID
 
 	dmlProducer kafka.AsyncProducer
 	ddlProducer kafka.SyncProducer
@@ -44,25 +56,32 @@ type sink struct {
 	statistics       *metrics.Statistics
 	metricsCollector kafka.MetricsCollector
 
+	comp             components
+	checkpointChan   chan uint64
+	tableSchemaStore *util.TableSchemaStore
+	partitionRule    helper.DDLDispatchRule
+
+	eventChan chan *commonEvent.DMLEvent
+	rowChan   chan *commonEvent.MQRowEvent
+	protocol  config.Protocol
+
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
 	ctx      context.Context
-	protocol config.Protocol
-	comp     components
 }
 
-func (s *sink) SinkType() common.SinkType {
-	return common.KafkaSinkType
+func (s *sink) SinkType() commonType.SinkType {
+	return commonType.KafkaSinkType
 }
 
-func Verify(ctx context.Context, changefeedID common.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
+func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
 	comp, _, err := newKafkaSinkComponent(ctx, changefeedID, uri, sinkConfig)
 	comp.close()
 	return err
 }
 
 func New(
-	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
 ) (*sink, error) {
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
@@ -89,10 +108,14 @@ func New(
 		changefeedID:     changefeedID,
 		dmlProducer:      asyncProducer,
 		ddlProducer:      syncProducer,
+		partitionRule:    helper.GetDDLDispatchRule(protocol),
 		protocol:         protocol,
 		comp:             comp,
 		statistics:       statistics,
 		isNormal:         atomic.NewBool(true),
+		checkpointChan:   make(chan uint64, 16),
+		eventChan:        make(chan *commonEvent.DMLEvent, 32),
+		rowChan:          make(chan *commonEvent.MQRowEvent, 32),
 		ctx:              ctx,
 		metricsCollector: comp.Factory.MetricsCollector(comp.AdminClient),
 	}, nil
@@ -101,10 +124,13 @@ func New(
 func (s *sink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		return s.dmlProducer.Run(ctx)
+		return s.sendCheckpoint(ctx)
 	})
 	g.Go(func() error {
-		return s.ddlProducer.Run(ctx)
+		return s.dmlProducer.AsyncRunCallback(ctx)
+	})
+	g.Go(func() error {
+		return s.sendDMLEvent(ctx)
 	})
 	g.Go(func() error {
 		s.metricsCollector.Run(ctx)
@@ -120,7 +146,7 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.dmlProducer.AddDMLEvent(event)
+	s.eventChan <- event
 }
 
 func (s *sink) PassBlockEvent(event commonEvent.BlockEvent) {
@@ -130,12 +156,7 @@ func (s *sink) PassBlockEvent(event commonEvent.BlockEvent) {
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch v := event.(type) {
 	case *commonEvent.DDLEvent:
-		if v.TiDBOnly {
-			// run callback directly and return
-			v.PostFlush()
-			return nil
-		}
-		err := s.ddlProducer.WriteBlockEvent(s.ctx, v)
+		err := s.sendDDLEvent(v)
 		if err != nil {
 			s.isNormal.Store(false)
 			return err
@@ -154,12 +175,377 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
+func (s *sink) sendDMLEvent(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		return s.calculateKeyPartitions(ctx)
+	})
+
+	g.Go(func() error {
+		return s.comp.EncoderGroup.Run(ctx)
+	})
+
+	g.Go(func() error {
+		if s.protocol.IsBatchEncode() {
+			return s.batchEncodeRun(ctx)
+		}
+		return s.nonBatchEncodeRun(ctx)
+	})
+
+	g.Go(func() error {
+		return s.sendMessages(ctx)
+	})
+	return g.Wait()
+}
+
+func (s *sink) calculateKeyPartitions(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case event := <-s.eventChan:
+			topic := s.comp.EventRouter.GetTopicForRowChange(event.TableInfo)
+			partitionNum, err := s.comp.TopicManager.GetPartitionNum(ctx, topic)
+			if err != nil {
+				return errors.Trace(err)
+			}
+
+			schema := event.TableInfo.GetSchemaName()
+			table := event.TableInfo.GetTableName()
+			partitionGenerator := s.comp.EventRouter.GetPartitionGenerator(schema, table)
+			selector := s.comp.ColumnSelector.GetSelector(schema, table)
+			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
+				var calledCount atomic.Uint64
+				// The callback of the last row will trigger the callback of the txn.
+				return func() {
+					if calledCount.Inc() == totalCount {
+						for _, callback := range postTxnFlushed {
+							callback()
+						}
+					}
+				}
+			}
+
+			rowsCount := uint64(event.Len())
+			rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
+
+			for {
+				row, ok := event.GetNextRow()
+				if !ok {
+					break
+				}
+
+				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.CommitTs)
+				if err != nil {
+					return errors.Trace(err)
+				}
+
+				mqEvent := &commonEvent.MQRowEvent{
+					Key: model.TopicPartitionKey{
+						Topic:          topic,
+						Partition:      index,
+						PartitionKey:   key,
+						TotalPartition: partitionNum,
+					},
+					RowEvent: commonEvent.RowEvent{
+						PhysicalTableID: event.PhysicalTableID,
+						TableInfo:       event.TableInfo,
+						CommitTs:        event.CommitTs,
+						Event:           row,
+						Callback:        rowCallback,
+						ColumnSelector:  selector,
+					},
+				}
+				s.rowChan <- mqEvent
+			}
+		}
+	}
+}
+
+func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
+	log.Info("MQ sink non batch worker started",
+		zap.String("namespace", s.changefeedID.Namespace()),
+		zap.String("changefeed", s.changefeedID.Name()),
+		zap.String("protocol", s.protocol.String()),
+	)
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case event, ok := <-s.rowChan:
+			if !ok {
+				log.Warn("MQ sink flush worker channel closed",
+					zap.String("namespace", s.changefeedID.Namespace()),
+					zap.String("changefeed", s.changefeedID.Name()))
+				return nil
+			}
+			if err := s.comp.EncoderGroup.AddEvents(ctx, event.Key, &event.RowEvent); err != nil {
+				return errors.Trace(err)
+			}
+		}
+	}
+}
+
+func (s *sink) batchEncodeRun(ctx context.Context) error {
+	log.Info("MQ sink batch worker started",
+		zap.String("namespace", s.changefeedID.Namespace()),
+		zap.String("changefeed", s.changefeedID.Name()),
+		zap.String("protocol", s.protocol.String()),
+	)
+
+	metricBatchDuration := metrics.WorkerBatchDuration.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+	metricBatchSize := metrics.WorkerBatchSize.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+	defer func() {
+		metrics.WorkerBatchDuration.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+		metrics.WorkerBatchSize.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+	}()
+
+	ticker := time.NewTicker(batchInterval)
+	defer ticker.Stop()
+	msgsBuf := make([]*commonEvent.MQRowEvent, batchSize)
+	for {
+		start := time.Now()
+		msgCount, err := s.batch(ctx, msgsBuf, ticker)
+		if err != nil {
+			log.Error("MQ dml worker batch failed",
+				zap.String("namespace", s.changefeedID.Namespace()),
+				zap.String("changefeed", s.changefeedID.Name()),
+				zap.Error(err))
+			return errors.Trace(err)
+		}
+		if msgCount == 0 {
+			continue
+		}
+
+		metricBatchSize.Observe(float64(msgCount))
+		metricBatchDuration.Observe(time.Since(start).Seconds())
+
+		msgs := msgsBuf[:msgCount]
+		// Group messages by its TopicPartitionKey before adding them to the encoder group.
+		groupedMsgs := s.group(msgs)
+		for key, msg := range groupedMsgs {
+			if err = s.comp.EncoderGroup.AddEvents(ctx, key, msg...); err != nil {
+				return errors.Trace(err)
+			}
+		}
+	}
+}
+
+// batch collects a batch of messages from w.msgChan into buffer.
+// It returns the number of messages collected.
+// Note: It will block until at least one message is received.
+func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) (int, error) {
+	msgCount := 0
+	maxBatchSize := len(buffer)
+	// We need to receive at least one message or be interrupted,
+	// otherwise it will lead to idling.
+	select {
+	case <-ctx.Done():
+		return msgCount, ctx.Err()
+	case msg, ok := <-s.rowChan:
+		if !ok {
+			log.Warn("kafka sink flush row event channel closed")
+			return msgCount, nil
+		}
+
+		buffer[msgCount] = msg
+		msgCount++
+	}
+
+	// Reset the ticker to start a new batching.
+	// We need to stop batching when the interval is reached.
+	ticker.Reset(batchInterval)
+	for {
+		select {
+		case <-ctx.Done():
+			return msgCount, ctx.Err()
+		case msg, ok := <-s.rowChan:
+			if !ok {
+				log.Warn("MQ sink flush worker channel closed")
+				return msgCount, nil
+			}
+
+			buffer[msgCount] = msg
+			msgCount++
+
+			if msgCount >= maxBatchSize {
+				return msgCount, nil
+			}
+		case <-ticker.C:
+			return msgCount, nil
+		}
+	}
+}
+
+// group groups messages by its key.
+func (s *sink) group(msgs []*commonEvent.MQRowEvent) map[model.TopicPartitionKey][]*commonEvent.RowEvent {
+	groupedMsgs := make(map[model.TopicPartitionKey][]*commonEvent.RowEvent)
+	for _, msg := range msgs {
+		if _, ok := groupedMsgs[msg.Key]; !ok {
+			groupedMsgs[msg.Key] = make([]*commonEvent.RowEvent, 0)
+		}
+		groupedMsgs[msg.Key] = append(groupedMsgs[msg.Key], &msg.RowEvent)
+	}
+	return groupedMsgs
+}
+
+func (s *sink) sendMessages(ctx context.Context) error {
+	metricSendMessageDuration := metrics.WorkerSendMessageDuration.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+	defer metrics.WorkerSendMessageDuration.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+
+	var err error
+	outCh := s.comp.EncoderGroup.Output()
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case future, ok := <-outCh:
+			if !ok {
+				log.Warn("kafka sink encoder's output channel closed",
+					zap.String("namespace", s.changefeedID.Namespace()),
+					zap.String("changefeed", s.changefeedID.Name()))
+				return nil
+			}
+			if err = future.Ready(ctx); err != nil {
+				return errors.Trace(err)
+			}
+			for _, message := range future.Messages {
+				start := time.Now()
+				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
+					message.SetPartitionKey(future.Key.PartitionKey)
+					if err = s.dmlProducer.AsyncSend(
+						ctx,
+						future.Key.Topic,
+						future.Key.Partition,
+						message); err != nil {
+						return 0, 0, err
+					}
+					return message.GetRowsCount(), int64(message.Length()), nil
+				}); err != nil {
+					return errors.Trace(err)
+				}
+				metricSendMessageDuration.Observe(time.Since(start).Seconds())
+			}
+		}
+	}
+}
+
+func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
+	if event.TiDBOnly {
+		// run callback directly and return
+		event.PostFlush()
+		return nil
+	}
+	for _, e := range event.GetEvents() {
+		message, err := s.comp.Encoder.EncodeDDLEvent(e)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		topic := s.comp.EventRouter.GetTopicForDDL(e)
+		// Notice: We must call GetPartitionNum here,
+		// which will be responsible for automatically creating topics when they don't exist.
+		// If it is not called here and kafka has `auto.create.topics.enable` turned on,
+		// then the auto-created topic will not be created as configured by ticdc.
+		partitionNum, err := s.comp.TopicManager.GetPartitionNum(s.ctx, topic)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if s.partitionRule == helper.PartitionAll {
+			err = s.statistics.RecordDDLExecution(func() error {
+				return s.ddlProducer.SendMessages(s.ctx, topic, partitionNum, message)
+			})
+		} else {
+			err = s.statistics.RecordDDLExecution(func() error {
+				return s.ddlProducer.SendMessage(s.ctx, topic, 0, message)
+			})
+		}
+		if err != nil {
+			return errors.Trace(err)
+		}
+	}
+	log.Info("kafka sink send DDL event", zap.Any("event", event.Query))
+	// after flush all the ddl event, we call the callback function.
+	event.PostFlush()
+	return nil
+}
+
 func (s *sink) AddCheckpointTs(ts uint64) {
-	s.ddlProducer.AddCheckpoint(ts)
+	s.checkpointChan <- ts
+}
+
+func (s *sink) sendCheckpoint(ctx context.Context) error {
+	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+
+	defer func() {
+		metrics.CheckpointTsMessageDuration.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+	}()
+	var (
+		msg          *common.Message
+		partitionNum int32
+		err          error
+	)
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case ts, ok := <-s.checkpointChan:
+			if !ok {
+				log.Warn("MQ sink flush worker channel closed",
+					zap.String("namespace", s.changefeedID.Namespace()),
+					zap.String("changefeed", s.changefeedID.Name()))
+				return nil
+			}
+
+			start := time.Now()
+			msg, err = s.comp.Encoder.EncodeCheckpointEvent(ts)
+			if err != nil {
+				return errors.Trace(err)
+			}
+
+			if msg == nil {
+				continue
+			}
+			tableNames := s.tableSchemaStore.GetAllTableNames(ts)
+			// NOTICE: When there are no tables to replicate,
+			// we need to send checkpoint ts to the default topic.
+			// This will be compatible with the old behavior.
+			if len(tableNames) == 0 {
+				topic := s.comp.EventRouter.GetDefaultTopic()
+				partitionNum, err = s.comp.TopicManager.GetPartitionNum(ctx, topic)
+				if err != nil {
+					return errors.Trace(err)
+				}
+				log.Debug("Emit checkpointTs to default topic",
+					zap.String("topic", topic), zap.Uint64("checkpointTs", ts), zap.Any("partitionNum", partitionNum))
+				err = s.ddlProducer.SendMessages(ctx, topic, partitionNum, msg)
+				if err != nil {
+					return errors.Trace(err)
+				}
+			} else {
+				topics := s.comp.EventRouter.GetActiveTopics(tableNames)
+				for _, topic := range topics {
+					partitionNum, err = s.comp.TopicManager.GetPartitionNum(ctx, topic)
+					if err != nil {
+						return errors.Trace(err)
+					}
+					err = s.ddlProducer.SendMessages(ctx, topic, partitionNum, msg)
+					if err != nil {
+						return errors.Trace(err)
+					}
+				}
+			}
+
+			checkpointTsMessageCount.Inc()
+			checkpointTsMessageDuration.Observe(time.Since(start).Seconds())
+		}
+	}
 }
 
 func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
-	s.ddlProducer.SetTableSchemaStore(tableSchemaStore)
+	s.tableSchemaStore = tableSchemaStore
 }
 
 func (s *sink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {

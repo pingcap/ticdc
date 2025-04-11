@@ -15,9 +15,9 @@ package sink
 
 import (
 	"context"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/kafka"
 	"net/url"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/kafka"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/pulsar"
 	"github.com/pingcap/ticdc/pkg/common"
