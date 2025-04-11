@@ -17,22 +17,21 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/ticdc/downstreamadapter/worker"
-	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
-func newKafkaSinkForTest() (*sink, producer.DMLProducer, producer.DDLProducer, error) {
+func newKafkaSinkForTest() (*sink, kafka.AsyncProducer, kafka.SyncProducer, error) {
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	openProtocol := "open-protocol"
@@ -47,7 +46,7 @@ func newKafkaSinkForTest() (*sink, producer.DMLProducer, producer.DDLProducer, e
 		return nil, nil, nil, errors.Trace(err)
 	}
 	statistics := metrics.NewStatistics(changefeedID, "sink")
-	kafkaComponent, protocol, err := newKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig)
+	comp, protocol, err := newKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, nil, nil, errors.Trace(err)
 	}
@@ -55,48 +54,45 @@ func newKafkaSinkForTest() (*sink, producer.DMLProducer, producer.DDLProducer, e
 	// We must close adminClient when this func return cause by an error
 	// otherwise the adminClient will never be closed and lead to a goroutine leak.
 	defer func() {
-		if err != nil && kafkaComponent.AdminClient != nil {
-			kafkaComponent.AdminClient.Close()
+		if err != nil && comp.AdminClient != nil {
+			comp.close()
 		}
 	}()
 
-	dmlMockProducer := producer.NewMockKafkaDMLProducer()
-
-	dmlWorker := worker.NewMQDMLWorker(
-		changefeedID,
-		protocol,
-		dmlMockProducer,
-		kafkaComponent.EncoderGroup,
-		kafkaComponent.ColumnSelector,
-		kafkaComponent.EventRouter,
-		kafkaComponent.TopicManager,
-		statistics)
-
-	ddlMockProducer := producer.NewMockKafkaDDLProducer()
-	ddlWorker := worker.NewMQDDLWorker(
-		changefeedID,
-		protocol,
-		ddlMockProducer,
-		kafkaComponent.Encoder,
-		kafkaComponent.EventRouter,
-		kafkaComponent.TopicManager,
-		statistics)
-
-	sink := &sink{
-		changefeedID:     changefeedID,
-		dmlWorker:        dmlWorker,
-		ddlWorker:        ddlWorker,
-		adminClient:      kafkaComponent.AdminClient,
-		topicManager:     kafkaComponent.TopicManager,
-		statistics:       statistics,
-		metricsCollector: kafkaComponent.Factory.MetricsCollector(kafkaComponent.AdminClient),
+	asyncProducer, err := comp.Factory.AsyncProducer()
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	go sink.Run(ctx)
-	return sink, dmlMockProducer, ddlMockProducer, nil
+
+	syncProducer, err := comp.Factory.SyncProducer()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	s := &sink{
+		changefeedID:     changefeedID,
+		dmlProducer:      asyncProducer,
+		ddlProducer:      syncProducer,
+		metricsCollector: comp.Factory.MetricsCollector(comp.AdminClient),
+
+		partitionRule: helper.GetDDLDispatchRule(protocol),
+		protocol:      protocol,
+		comp:          comp,
+		statistics:    statistics,
+
+		checkpointChan: make(chan uint64, 16),
+		eventChan:      make(chan *commonEvent.DMLEvent, 32),
+		rowChan:        make(chan *commonEvent.MQRowEvent, 32),
+
+		isNormal: atomic.NewBool(true),
+		ctx:      ctx,
+	}
+	go s.Run(ctx)
+	return s, asyncProducer, syncProducer, nil
 }
 
 func TestKafkaSinkBasicFunctionality(t *testing.T) {
-	sink, dmlProducer, ddlProducer, err := newKafkaSinkForTest()
+	kafkaSink, dmlProducer, ddlProducer, err := newKafkaSinkForTest()
 	require.NoError(t, err)
 
 	var count atomic.Int64
@@ -145,14 +141,14 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	}
 	dmlEvent.CommitTs = 2
 
-	err = sink.WriteBlockEvent(ddlEvent)
+	err = kafkaSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	sink.AddDMLEvent(dmlEvent)
+	kafkaSink.AddDMLEvent(dmlEvent)
 
 	time.Sleep(1 * time.Second)
 
-	sink.PassBlockEvent(ddlEvent2)
+	ddlEvent2.PostFlush()
 
 	require.Len(t, dmlProducer.(*producer.KafkaMockProducer).GetAllEvents(), 2)
 	require.Len(t, ddlProducer.(*producer.KafkaMockProducer).GetAllEvents(), 1)

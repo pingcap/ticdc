@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
@@ -35,17 +34,13 @@ type ddlProducers struct {
 	// support multiple topics
 	producers      *lru.Cache
 	producersMutex sync.RWMutex
-
-	statistics *metrics.Statistics
-	comp       component
+	comp           component
 }
 
 // newDDLProducers creates a pulsar producer
 func newDDLProducers(
 	changefeedID commonType.ChangeFeedID,
 	comp component,
-	statistics *metrics.Statistics,
-	protocol config.Protocol,
 	sinkConfig *config.SinkConfig,
 ) (*ddlProducers, error) {
 	topicName, err := helper.GetTopic(comp.Config.SinkURI)
@@ -80,7 +75,6 @@ func newDDLProducers(
 		defaultTopicName: topicName,
 		changefeedID:     changefeedID,
 		comp:             comp,
-		statistics:       statistics,
 	}, nil
 }
 

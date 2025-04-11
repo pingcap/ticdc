@@ -23,10 +23,8 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
@@ -48,6 +46,8 @@ type dmlProducers struct {
 	// support multiple topics
 	producers *lru.Cache
 
+	comp component
+
 	// closedMu is used to protect `closed`.
 	// We need to ensure that closed producers are never written to.
 	closedMu sync.RWMutex
@@ -58,21 +58,12 @@ type dmlProducers struct {
 	// failpointCh is used to inject failpoints to the run loop.
 	// Only used in test.
 	failpointCh chan error
-
-	eventChan chan *commonEvent.DMLEvent
-	rowChan   chan *commonEvent.MQRowEvent
-
-	protocol   config.Protocol
-	comp       component
-	statistics *metrics.Statistics
 }
 
 // newDMLProducers creates a new pulsar producer.
 func newDMLProducers(
 	changefeedID commonType.ChangeFeedID,
 	comp component,
-	statistics *metrics.Statistics,
-	sinkConfig *config.SinkConfig,
 	failpointCh chan error,
 ) (*dmlProducers, error) {
 	log.Info("Creating pulsar DML producer ...",
@@ -105,10 +96,7 @@ func newDMLProducers(
 
 	p := &dmlProducers{
 		changefeedID: changefeedID,
-		eventChan:    make(chan *commonEvent.DMLEvent, 32),
-		rowChan:      make(chan *commonEvent.MQRowEvent, 32),
 		comp:         comp,
-		statistics:   statistics,
 		producers:    producers,
 		closed:       false,
 		failpointCh:  failpointCh,
@@ -243,10 +231,6 @@ func (p *dmlProducers) getProducerByTopic(topicName string) (producer pulsar.Pro
 	}
 
 	return producer, nil
-}
-
-func (p *dmlProducers) AddDMLEvent(event *commonEvent.DMLEvent) {
-	p.eventChan <- event
 }
 
 // wrapperSchemaAndTopic wrapper schema and topic

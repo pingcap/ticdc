@@ -17,7 +17,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
@@ -27,7 +26,7 @@ func TestPulsarSyncAsyncSendMessage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	p := producer.NewMockPulsarDMLProducer()
+	p := NewMockPulsarDMLProducer()
 	err := p.AsyncSendMessage(ctx, "test", 0, &common.Message{
 		Value:        []byte("this value for test input data"),
 		PartitionKey: str2Pointer("test_key"),

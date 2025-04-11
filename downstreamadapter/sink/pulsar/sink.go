@@ -80,12 +80,12 @@ func New(
 
 	failpointCh := make(chan error, 1)
 	statistics := metrics.NewStatistics(changefeedID, "pulsar")
-	dmlProducer, err := newDMLProducers(changefeedID, comp, statistics, sinkConfig, failpointCh)
+	dmlProducer, err := newDMLProducers(changefeedID, comp, failpointCh)
 	if err != nil {
 		return nil, err
 	}
 
-	ddlProducer, err := newDDLProducers(changefeedID, comp, statistics, protocol, sinkConfig)
+	ddlProducer, err := newDDLProducers(changefeedID, comp, sinkConfig)
 	if err != nil {
 		return nil, err
 	}
