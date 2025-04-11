@@ -814,10 +814,6 @@ func (d *Dispatcher) EmitBootstrap() bool {
 	if !d.IsTableTriggerEventDispatcher() {
 		return false
 	}
-	tables := d.tableSchemaStore.GetAllNormalTableIds()
-	if len(tables) == 0 {
-		return false
-	}
 	bootstrap := loadBootstrapState(&d.BootstrapState)
 	switch bootstrap {
 	case BootstrapFinished:
@@ -827,7 +823,11 @@ func (d *Dispatcher) EmitBootstrap() bool {
 	case BootstrapNotStarted:
 	}
 	storeBootstrapState(&d.BootstrapState, BootstrapInProgress)
-
+	tables := d.tableSchemaStore.GetAllNormalTableIds()
+	if len(tables) == 0 {
+		storeBootstrapState(&d.BootstrapState, BootstrapFinished)
+		return false
+	}
 	start := time.Now()
 	ts := d.GetStartTs()
 	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
@@ -869,7 +869,7 @@ func (d *Dispatcher) EmitBootstrap() bool {
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
 			d.errCh <- errors.ErrHandleDDLFailed.FastGenByArgs("BootstrapDDL", ts)
-			return true
+			return false
 		}
 	}
 	storeBootstrapState(&d.BootstrapState, BootstrapFinished)
