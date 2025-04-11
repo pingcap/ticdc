@@ -868,7 +868,7 @@ func (d *Dispatcher) EmitBootstrap() bool {
 				zap.Int("emitted", idx+1),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
-			d.errCh <- errors.ErrHandleDDLFailed.FastGenByArgs("BootstrapDDL", ts)
+			d.errCh <- errors.ErrExecDDLFailed.GenWithStackByArgs()
 			return false
 		}
 	}
