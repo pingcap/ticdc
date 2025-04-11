@@ -167,20 +167,21 @@ func (ti *TableInfo) GetIndices() []*model.IndexInfo {
 	return ti.columnSchema.Indices
 }
 
-func (ti *TableInfo) GetColumnsOffset() map[int64]int {
-	return ti.columnSchema.ColumnsOffset
+// GetRowColumnsOffset return offset with visible column
+func (ti *TableInfo) GetRowColumnsOffset() map[int64]int {
+	return ti.columnSchema.RowColumnsOffset
 }
 
-func (ti *TableInfo) GetIndexColumnsOffset() [][]int {
-	return ti.columnSchema.IndexColumnsOffset
+func (ti *TableInfo) GetIndexColumns() [][]int64 {
+	return ti.columnSchema.IndexColumns
 }
 
 func (ti *TableInfo) PKIsHandle() bool {
 	return ti.columnSchema.PKIsHandle
 }
 
-func (ti *TableInfo) GetPKIndexOffset() []int {
-	return ti.columnSchema.PKIndexOffset
+func (ti *TableInfo) GetPKIndex() []int64 {
+	return ti.columnSchema.PKIndex
 }
 
 func (ti *TableInfo) UpdateTS() uint64 {

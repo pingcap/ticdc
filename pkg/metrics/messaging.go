@@ -24,7 +24,7 @@ var (
 			Subsystem: "messaging",
 			Name:      "send_message_counter",
 			Help:      "The counter of messages sent by a message center",
-		}, []string{"target", "type"}) // target: its addr, type: event, command
+		}, []string{"type"}) // target: its addr, type: event, command
 
 	MessagingReceiveMsgCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -32,7 +32,7 @@ var (
 			Subsystem: "messaging",
 			Name:      "receive_message_counter",
 			Help:      "The counter of messages received by a message center",
-		}, []string{"target", "type"}) // target: its addr, type: event, command
+		}, []string{"type"}) // target: its addr, type: event, command
 
 	MessagingDropMsgCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -40,7 +40,7 @@ var (
 			Subsystem: "messaging",
 			Name:      "drop_message_counter",
 			Help:      "The counter of messages dropped by a message center",
-		}, []string{"target", "type"}) // target: its addr, type: event, command
+		}, []string{"type"}) // target: its addr, type: event, command
 
 	MessagingErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -48,7 +48,7 @@ var (
 			Subsystem: "messaging",
 			Name:      "error_counter",
 			Help:      "The counter of errors occurred in a message center",
-		}, []string{"target", "type", "message"}) // target: its addr, type: event, command, message: error info
+		}, []string{"type", "message"}) // type: event, command, message: error info
 	MessagingStreamGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",

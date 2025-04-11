@@ -31,7 +31,7 @@ func compareKeys(firstKey, secondKey []byte) bool {
 }
 
 func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte) {
-	idxCol := tableInfo.GetPKIndexOffset()
+	idxCol := tableInfo.GetPKIndex()
 	// log.Info("genKeyAndHash", zap.Any("idxCol", idxCol), zap.Any("iIdx", iIdx))
 	key := genKeyList(row, idxCol, tableInfo)
 	if len(key) == 0 {
@@ -46,22 +46,27 @@ func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte)
 	return uint64(hasher.Sum32()), key
 }
 
-func genKeyList(row *chunk.Row, colIdx []int, tableInfo *common.TableInfo) []byte {
+func genKeyList(row *chunk.Row, colIdx []int64, tableInfo *common.TableInfo) []byte {
 	var key []byte
-	columnInfos := tableInfo.GetColumns()
-	for _, i := range colIdx {
-		if columnInfos[i] == nil {
+	for _, colID := range colIdx {
+		info, ok := tableInfo.GetColumnInfo(colID)
+		if !ok || info == nil {
+			return nil
+		}
+		i, ok1 := tableInfo.GetRowColumnsOffset()[colID]
+		if !ok1 {
+			log.Warn("can't find column offset", zap.Int64("colID", colID), zap.String("colName", info.Name.O))
 			return nil
 		}
 
-		value := common.ExtractColVal(row, columnInfos[i], i)
+		value := common.ExtractColVal(row, info, i)
 		// if a column value is null, we can ignore this index
 		if value == nil {
 			return nil
 		}
 
 		val := model.ColumnValueString(value)
-		if columnNeeds2LowerCase(columnInfos[i].GetType(), columnInfos[i].GetCollate()) {
+		if columnNeeds2LowerCase(info.GetType(), info.GetCollate()) {
 			val = strings.ToLower(val)
 		}
 

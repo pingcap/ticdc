@@ -152,8 +152,6 @@ type SinkConfig struct {
 	// FileIndexWidth is only available when the downstream is Storage
 	FileIndexWidth *int `toml:"file-index-digit,omitempty" json:"file-index-digit,omitempty"`
 
-	// EnableKafkaSinkV2 enabled then the kafka-go sink will be used.
-	// It is only available when the downstream is MQ.
 	EnableKafkaSinkV2 *bool `toml:"enable-kafka-sink-v2" json:"enable-kafka-sink-v2,omitempty"`
 
 	// OnlyOutputUpdatedColumns is only available when the downstream is MQ.
@@ -714,6 +712,10 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 
 	if sink.IsMySQLCompatibleScheme(sinkURI.Scheme) {
 		return nil
+	}
+
+	if util.GetOrZero(s.EnableKafkaSinkV2) {
+		log.Warn("enable-kafka-sink-v2 is deprecated, still use the default kafka sink")
 	}
 
 	protocol, _ := ParseSinkProtocolFromString(util.GetOrZero(s.Protocol))
