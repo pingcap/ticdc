@@ -31,7 +31,7 @@ import (
 	"go.uber.org/atomic"
 )
 
-func newKafkaSinkForTest() (*sink, kafka.AsyncProducer, kafka.SyncProducer, error) {
+func newKafkaSinkForTest() (*sink, error) {
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	openProtocol := "open-protocol"
@@ -43,12 +43,12 @@ func newKafkaSinkForTest() (*sink, kafka.AsyncProducer, kafka.SyncProducer, erro
 
 	sinkURI, err := url.Parse(uri)
 	if err != nil {
-		return nil, nil, nil, errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 	statistics := metrics.NewStatistics(changefeedID, "sink")
 	comp, protocol, err := newKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
-		return nil, nil, nil, errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 
 	// We must close adminClient when this func return cause by an error
@@ -61,12 +61,12 @@ func newKafkaSinkForTest() (*sink, kafka.AsyncProducer, kafka.SyncProducer, erro
 
 	asyncProducer, err := comp.Factory.AsyncProducer()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	syncProducer, err := comp.Factory.SyncProducer()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
 	s := &sink{
@@ -88,15 +88,10 @@ func newKafkaSinkForTest() (*sink, kafka.AsyncProducer, kafka.SyncProducer, erro
 		ctx:      ctx,
 	}
 	go s.Run(ctx)
-	return s, asyncProducer, syncProducer, nil
+	return s, nil
 }
 
 func TestKafkaSinkBasicFunctionality(t *testing.T) {
-	kafkaSink, dmlProducer, ddlProducer, err := newKafkaSinkForTest()
-	require.NoError(t, err)
-
-	var count atomic.Int64
-
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -105,6 +100,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	job := helper.DDL2Job(createTableSQL)
 	require.NotNil(t, job)
 
+	var count atomic.Int64
 	ddlEvent := &commonEvent.DDLEvent{
 		Query:      job.Query,
 		SchemaName: job.SchemaName,
@@ -135,23 +131,29 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 		},
 	}
 
-	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
+	dmlEvent := helper.DML2Event("test", "t",
+		"insert into t values (1, 'test')",
+		"insert into t values (2, 'test2');")
 	dmlEvent.PostTxnFlushed = []func(){
 		func() { count.Add(1) },
 	}
 	dmlEvent.CommitTs = 2
 
+	kafkaSink, err := newKafkaSinkForTest()
+	require.NoError(t, err)
+
+	kafkaSink.ddlProducer.(*kafka.MockSaramaSyncProducer).SyncProducer.ExpectSendMessageAndSucceed()
 	err = kafkaSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
+	kafkaSink.dmlProducer.(*kafka.MockSaramaAsyncProducer).AsyncProducer.ExpectInputAndSucceed()
+	kafkaSink.dmlProducer.(*kafka.MockSaramaAsyncProducer).AsyncProducer.ExpectInputAndSucceed()
 	kafkaSink.AddDMLEvent(dmlEvent)
-
-	time.Sleep(1 * time.Second)
 
 	ddlEvent2.PostFlush()
 
-	require.Len(t, dmlProducer.(*producer.KafkaMockProducer).GetAllEvents(), 2)
-	require.Len(t, ddlProducer.(*producer.KafkaMockProducer).GetAllEvents(), 1)
-
-	require.Equal(t, count.Load(), int64(3))
+	require.Eventually(t,
+		func() bool {
+			return count.Load() == int64(3)
+		}, 5*time.Second, time.Second)
 }

@@ -52,15 +52,15 @@ func (f *mockFactory) AdminClient() (ClusterAdminClient, error) {
 
 // SyncProducer creates a sync producer
 func (f *mockFactory) SyncProducer() (SyncProducer, error) {
-	return &mockSaramaSyncProducer{
-		syncProducer: mocks.NewSyncProducer(f.errorReporter, f.config),
+	return &MockSaramaSyncProducer{
+		SyncProducer: mocks.NewSyncProducer(f.errorReporter, f.config),
 	}, nil
 }
 
 // AsyncProducer creates an async producer
 func (f *mockFactory) AsyncProducer() (AsyncProducer, error) {
-	return &mockSaramaAsyncProducer{
-		asyncProducer: mocks.NewAsyncProducer(f.errorReporter, f.config),
+	return &MockSaramaAsyncProducer{
+		AsyncProducer: mocks.NewAsyncProducer(f.errorReporter, f.config),
 		failpointCh:   make(chan error, 1),
 	}, nil
 }
@@ -70,18 +70,18 @@ func (f *mockFactory) MetricsCollector(_ ClusterAdminClient) MetricsCollector {
 	return &mockMetricsCollector{}
 }
 
-// mockSaramaSyncProducer is a mock implementation of SyncProducer interface.
-type mockSaramaSyncProducer struct {
-	syncProducer *mocks.SyncProducer
+// MockSaramaSyncProducer is a mock implementation of SyncProducer interface.
+type MockSaramaSyncProducer struct {
+	SyncProducer *mocks.SyncProducer
 }
 
 // SendMessage implement the SyncProducer interface.
-func (m *mockSaramaSyncProducer) SendMessage(
+func (m *MockSaramaSyncProducer) SendMessage(
 	_ context.Context,
 	topic string, partitionNum int32,
 	message *common.Message,
 ) error {
-	_, _, err := m.syncProducer.SendMessage(&sarama.ProducerMessage{
+	_, _, err := m.SyncProducer.SendMessage(&sarama.ProducerMessage{
 		Topic:     topic,
 		Key:       sarama.ByteEncoder(message.Key),
 		Value:     sarama.ByteEncoder(message.Value),
@@ -91,7 +91,7 @@ func (m *mockSaramaSyncProducer) SendMessage(
 }
 
 // SendMessages implement the SyncProducer interface.
-func (m *mockSaramaSyncProducer) SendMessages(_ context.Context, topic string, partitionNum int32, message *common.Message) error {
+func (m *MockSaramaSyncProducer) SendMessages(_ context.Context, topic string, partitionNum int32, message *common.Message) error {
 	msgs := make([]*sarama.ProducerMessage, partitionNum)
 	for i := 0; i < int(partitionNum); i++ {
 		msgs[i] = &sarama.ProducerMessage{
@@ -101,24 +101,24 @@ func (m *mockSaramaSyncProducer) SendMessages(_ context.Context, topic string, p
 			Partition: int32(i),
 		}
 	}
-	return m.syncProducer.SendMessages(msgs)
+	return m.SyncProducer.SendMessages(msgs)
 }
 
 // Close implement the SyncProducer interface.
-func (m *mockSaramaSyncProducer) Close() {
-	_ = m.syncProducer.Close()
+func (m *MockSaramaSyncProducer) Close() {
+	_ = m.SyncProducer.Close()
 }
 
-// mockSaramaAsyncProducer is a mock implementation of AsyncProducer interface.
-type mockSaramaAsyncProducer struct {
-	asyncProducer *mocks.AsyncProducer
+// MockSaramaAsyncProducer is a mock implementation of AsyncProducer interface.
+type MockSaramaAsyncProducer struct {
+	AsyncProducer *mocks.AsyncProducer
 	failpointCh   chan error
 
 	closed bool
 }
 
 // AsyncRunCallback implement the AsyncProducer interface.
-func (p *mockSaramaAsyncProducer) AsyncRunCallback(
+func (p *MockSaramaAsyncProducer) AsyncRunCallback(
 	ctx context.Context,
 ) error {
 	for {
@@ -127,14 +127,14 @@ func (p *mockSaramaAsyncProducer) AsyncRunCallback(
 			return errors.Trace(ctx.Err())
 		case err := <-p.failpointCh:
 			return errors.Trace(err)
-		case ack := <-p.asyncProducer.Successes():
+		case ack := <-p.AsyncProducer.Successes():
 			if ack != nil {
 				callback := ack.Metadata.(func())
 				if callback != nil {
 					callback()
 				}
 			}
-		case err := <-p.asyncProducer.Errors():
+		case err := <-p.AsyncProducer.Errors():
 			// We should not wrap a nil pointer if the pointer
 			// is of a subtype of `error` because Go would store the type info
 			// and the resulted `error` variable would not be nil,
@@ -149,7 +149,7 @@ func (p *mockSaramaAsyncProducer) AsyncRunCallback(
 }
 
 // AsyncSend implement the AsyncProducer interface.
-func (p *mockSaramaAsyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error {
+func (p *MockSaramaAsyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error {
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
 		Partition: partition,
@@ -160,17 +160,17 @@ func (p *mockSaramaAsyncProducer) AsyncSend(ctx context.Context, topic string, p
 	select {
 	case <-ctx.Done():
 		return errors.Trace(ctx.Err())
-	case p.asyncProducer.Input() <- msg:
+	case p.AsyncProducer.Input() <- msg:
 	}
 	return nil
 }
 
 // Close implement the AsyncProducer interface.
-func (p *mockSaramaAsyncProducer) Close() {
+func (p *MockSaramaAsyncProducer) Close() {
 	if p.closed {
 		return
 	}
-	_ = p.asyncProducer.Close()
+	_ = p.AsyncProducer.Close()
 	p.closed = true
 }
 
