@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -500,6 +501,9 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 		}
 
 		if d.IsTableTriggerEventDispatcher() {
+			if util.GetOrZero(e.config.SinkConfig.SendAllBootstrapAtStart) {
+				d.BootstrapState = dispatcher.BootstrapNotStarted
+			}
 			e.tableTriggerEventDispatcher = d
 		} else {
 			e.schemaIDToDispatchers.Set(schemaIds[idx], id)

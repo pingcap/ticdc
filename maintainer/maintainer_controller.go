@@ -593,9 +593,8 @@ func (c *Controller) Stop() {
 
 func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.SchemaInfo {
 	schemaInfo := &heartbeatpb.SchemaInfo{}
-	if isMysqlCompatibleBackend {
-		schemaInfo.SchemaID = table.SchemaID
-	} else {
+	schemaInfo.SchemaID = table.SchemaID
+	if !isMysqlCompatibleBackend {
 		schemaInfo.SchemaName = table.SchemaName
 	}
 	return schemaInfo
@@ -603,9 +602,8 @@ func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *hear
 
 func getTableInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.TableInfo {
 	tableInfo := &heartbeatpb.TableInfo{}
-	if isMysqlCompatibleBackend {
-		tableInfo.TableID = table.TableID
-	} else {
+	tableInfo.TableID = table.TableID
+	if !isMysqlCompatibleBackend {
 		tableInfo.TableName = table.TableName
 	}
 	return tableInfo
