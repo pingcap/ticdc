@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
+	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 )
@@ -91,8 +92,8 @@ func (s *basicScheduler) Execute() time.Time {
 	return time.Now().Add(time.Millisecond * 500)
 }
 
-func (s *basicScheduler) schedule(id pkgreplica.GroupID, availableSize int) (scheduled int) {
-	scheduleNodeSize := s.replicationDB.GetScheduleTaskSizePerNodeByGroup(id)
+func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int) (scheduled int) {
+	scheduleNodeSize := s.replicationDB.GetScheduleTaskSizePerNodeByGroup(groupID)
 
 	// calculate the space based on schedule count
 	size := 0
@@ -100,7 +101,13 @@ func (s *basicScheduler) schedule(id pkgreplica.GroupID, availableSize int) (sch
 		if _, ok := scheduleNodeSize[id]; !ok {
 			scheduleNodeSize[id] = 0
 		}
-		size += s.schedulingTaskCountPerNode - scheduleNodeSize[id]
+		if groupID == pkgReplica.DefaultGroupID {
+			// for default group, each node can support more task
+			size += s.schedulingTaskCountPerNode*10 - scheduleNodeSize[id]
+		} else {
+			size += s.schedulingTaskCountPerNode - scheduleNodeSize[id]
+		}
+
 	}
 
 	if size == 0 {
