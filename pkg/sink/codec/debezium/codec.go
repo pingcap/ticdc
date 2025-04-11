@@ -31,8 +31,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/siddontang/go/hack"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
@@ -496,7 +494,7 @@ func (c *dbzCodec) writeDebeziumFieldValue(
 		v := datum.GetBytes()
 		isBinary := mysql.HasBinaryFlag(colInfo.GetFlag())
 		if !isBinary {
-			writer.WriteStringField(colName, hack.String(v))
+			writer.WriteStringField(colName, common.UnsafeBytesToString(v))
 		} else {
 			c.writeBinaryField(writer, colName, v)
 		}
@@ -840,7 +838,7 @@ func (c *dbzCodec) EncodeKey(
 				row = e.GetPreRows()
 			}
 			for idx, colInfo := range columns {
-				if colInfo != nil && e.TableInfo.ForceGetColumnFlagType(colInfo.ID).IsHandleKey() {
+				if colInfo != nil && e.TableInfo.IsHandleKey(colInfo.ID) {
 					err = c.writeDebeziumFieldValue(jWriter, row, idx, colInfo)
 				}
 			}
@@ -854,7 +852,7 @@ func (c *dbzCodec) EncodeKey(
 				jWriter.WriteArrayField("fields", func() {
 					columns := e.TableInfo.GetColumns()
 					for _, colInfo := range columns {
-						if colInfo != nil && e.TableInfo.ForceGetColumnFlagType(colInfo.ID).IsHandleKey() {
+						if colInfo != nil && e.TableInfo.IsHandleKey(colInfo.ID) {
 							c.writeDebeziumFieldSchema(jWriter, colInfo)
 						}
 					}
@@ -961,7 +959,7 @@ func (c *dbzCodec) EncodeValue(
 						}
 						if e.TableInfo.HasVirtualColumns() {
 							for _, colInfo := range e.TableInfo.GetColumns() {
-								if model.IsColCDCVisible(colInfo) {
+								if commonType.IsColCDCVisible(colInfo) {
 									continue
 								}
 								c.writeDebeziumFieldSchema(fieldsWriter, colInfo)

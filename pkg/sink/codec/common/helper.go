@@ -17,8 +17,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
@@ -369,10 +371,24 @@ func MustSnapshotQuery(
 }
 
 // MustBinaryLiteralToInt convert bytes into uint64,
+// by follow https://github.com/pingcap/tidb/blob/e3417913f58cdd5a136259b902bf177eaf3aa637/types/binary_literal.go#L105
 func MustBinaryLiteralToInt(bytes []byte) uint64 {
-	val, err := types.BinaryLiteral(bytes).ToInt(types.DefaultStmtNoWarningContext)
-	if err != nil {
+	bytes = trimLeadingZeroBytes(bytes)
+	length := len(bytes)
+
+	if length > 8 {
 		log.Panic("invalid bit value found", zap.ByteString("value", bytes))
+		return math.MaxUint64
+	}
+
+	if length == 0 {
+		return 0
+	}
+
+	// Note: the byte-order is BigEndian.
+	val := uint64(bytes[0])
+	for i := 1; i < length; i++ {
+		val = (val << 8) | uint64(bytes[i])
 	}
 	return val
 }
@@ -471,6 +487,16 @@ func SanitizeTopicName(name string) string {
 		)
 	}
 	return sanitizedName
+}
+
+// UnsafeBytesToString create string from byte slice without copying
+func UnsafeBytesToString(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
+}
+
+// UnsafeStringToBytes create byte slice from string without copying
+func UnsafeStringToBytes(s string) []byte {
+	return *(*[]byte)(unsafe.Pointer(&s))
 }
 
 // FakeTableIDAllocator is a fake table id allocator

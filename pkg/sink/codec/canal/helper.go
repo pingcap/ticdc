@@ -28,12 +28,12 @@ import (
 	"go.uber.org/zap"
 )
 
-func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, flag uint) (string, JavaSQLType) {
+func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, flag uint) (string, common.JavaSQLType) {
 	colType := columnInfo.GetType()
 
 	var (
 		value    string
-		javaType JavaSQLType
+		javaType common.JavaSQLType
 	)
 	switch colType {
 	case mysql.TypeBit:
@@ -51,7 +51,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
 		bytesValue := row.GetBytes(idx)
 		if mysql.HasBinaryFlag(flag) {
-			javaType = JavaSQLTypeBLOB
+			javaType = common.JavaSQLTypeBLOB
 		} else {
 			javaType = common.JavaSQLTypeCLOB
 		}
@@ -72,7 +72,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 	case mysql.TypeVarchar, mysql.TypeVarString:
 		bytesValue := row.GetBytes(idx)
 		if mysql.HasBinaryFlag(flag) {
-			javaType = JavaSQLTypeBLOB
+			javaType = common.JavaSQLTypeBLOB
 		} else {
 			javaType = common.JavaSQLTypeVARCHAR
 		}
@@ -93,7 +93,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 	case mysql.TypeString:
 		bytesValue := row.GetBytes(idx)
 		if mysql.HasBinaryFlag(flag) {
-			javaType = JavaSQLTypeBLOB
+			javaType = common.JavaSQLTypeBLOB
 		} else {
 			javaType = common.JavaSQLTypeCHAR
 		}
