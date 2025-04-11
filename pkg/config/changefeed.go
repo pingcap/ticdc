@@ -50,7 +50,8 @@ type ChangefeedConfig struct {
 	SyncPointRetention time.Duration `json:"sync_point_retention" default:"24h"`
 	SinkConfig         *SinkConfig   `json:"sink_config"`
 	// Epoch is the epoch of a changefeed, changes on every restart.
-	Epoch uint64 `json:"epoch"`
+	Epoch   uint64 `json:"epoch"`
+	BDRMode bool   `json:"bdr_mode" default:"false"`
 }
 
 // String implements fmt.Stringer interface, but hide some sensitive information
@@ -119,6 +120,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		SyncPointRetention: util.GetOrZero(info.Config.SyncPointRetention),
 		MemoryQuota:        info.Config.MemoryQuota,
 		Epoch:              info.Epoch,
+		BDRMode:            util.GetOrZero(info.Config.BDRMode),
 		// other fields are not necessary for dispatcherManager
 	}
 }
@@ -305,7 +307,6 @@ func (info *ChangeFeedInfo) rmMQOnlyFields() {
 	info.Config.Sink.DispatchRules = nil
 	info.Config.Sink.SchemaRegistry = nil
 	info.Config.Sink.EncoderConcurrency = nil
-	info.Config.Sink.EnableKafkaSinkV2 = nil
 	info.Config.Sink.OnlyOutputUpdatedColumns = nil
 	info.Config.Sink.DeleteOnlyOutputHandleKeyColumns = nil
 	info.Config.Sink.ContentCompatible = nil

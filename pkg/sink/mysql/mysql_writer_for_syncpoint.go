@@ -29,7 +29,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func (w *MysqlWriter) createSyncTable() error {
+func (w *Writer) createSyncTable() error {
 	database := filter.TiCDCSystemSchema
 	query := `CREATE TABLE IF NOT EXISTS %s
 	(
@@ -45,7 +45,7 @@ func (w *MysqlWriter) createSyncTable() error {
 	return w.createTable(database, filter.SyncPointTable, query)
 }
 
-func (w *MysqlWriter) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
+func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "sync table: begin Tx fail;"))

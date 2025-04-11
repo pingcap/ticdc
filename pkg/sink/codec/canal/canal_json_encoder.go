@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
 	"go.uber.org/zap"
-	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
 )
 
@@ -54,7 +53,7 @@ func fillColumns(
 		}
 		if col != nil {
 			colID := col.ID
-			if onlyHandleKeyColumn && !tableInfo.GetColumnFlags()[colID].IsHandleKey() {
+			if onlyHandleKeyColumn && !tableInfo.IsHandleKey(col.ID) {
 				continue
 			}
 			if isFirst {
@@ -98,7 +97,7 @@ func fillUpdateColumns(
 			if onlyOutputUpdatedColumn && newValueMap[colID] == oldValueMap[colID] {
 				continue
 			}
-			if onlyHandleKeyColumn && !tableInfo.GetColumnFlags()[colID].IsHandleKey() {
+			if onlyHandleKeyColumn && !tableInfo.IsHandleKey(col.ID) {
 				continue
 			}
 			if isFirst {
@@ -205,8 +204,8 @@ func newJSONMessageForDML(
 		out.String("")
 	}
 
-	valueMap := make(map[int64]string, 0)                // colId -> value
-	javaTypeMap := make(map[int64]common.JavaSQLType, 0) // colId -> javaType
+	valueMap := make(map[int64]string, columnLen)                // colId -> value
+	javaTypeMap := make(map[int64]common.JavaSQLType, columnLen) // colId -> javaType
 
 	row := e.GetRows()
 	if e.IsDelete() {
@@ -216,7 +215,7 @@ func newJSONMessageForDML(
 		if !e.ColumnSelector.Select(col) {
 			continue
 		}
-		flag := e.TableInfo.GetColumnFlags()[col.ID]
+		flag := col.GetFlag()
 		value, javaType := formatColumnValue(row, idx, col, flag)
 		valueMap[col.ID] = value
 		javaTypeMap[col.ID] = javaType
@@ -230,9 +229,8 @@ func newJSONMessageForDML(
 		for _, col := range columnInfos {
 			if col != nil && e.ColumnSelector.Select(col) {
 				colID := col.ID
-				colFlag := tableInfo.GetColumnFlags()[colID]
 				colName := col.Name.O
-				if onlyHandleKey && !colFlag.IsHandleKey() {
+				if onlyHandleKey && !tableInfo.IsHandleKey(colID) {
 					continue
 				}
 				if emptyColumn {
@@ -297,7 +295,7 @@ func newJSONMessageForDML(
 			if !e.ColumnSelector.Select(col) {
 				continue
 			}
-			flag := e.TableInfo.GetColumnFlags()[col.ID]
+			flag := col.GetFlag()
 			value, _ := formatColumnValue(preRow, idx, col, flag)
 			oldValueMap[col.ID] = value
 		}
@@ -358,12 +356,10 @@ func eventTypeString(e *commonEvent.RowEvent) string {
 
 // JSONRowEventEncoder encodes row event in JSON format
 type JSONRowEventEncoder struct {
-	messages     []*common.Message
-	bytesDecoder *encoding.Decoder
+	messages []*common.Message
 
 	claimCheck *claimcheck.ClaimCheck
-
-	config *common.Config
+	config     *common.Config
 }
 
 // NewJSONRowEventEncoder creates a new JSONRowEventEncoder
@@ -373,10 +369,9 @@ func NewJSONRowEventEncoder(ctx context.Context, config *common.Config) (common.
 		return nil, errors.Trace(err)
 	}
 	return &JSONRowEventEncoder{
-		messages:     make([]*common.Message, 0, 1),
-		bytesDecoder: charmap.ISO8859_1.NewDecoder(),
-		config:       config,
-		claimCheck:   claimCheck,
+		messages:   make([]*common.Message, 0, 1),
+		config:     config,
+		claimCheck: claimCheck,
 	}, nil
 }
 

@@ -17,17 +17,18 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math"
+	"strconv"
 	"strings"
 
-	"github.com/go-sql-driver/mysql"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	pMySQL "github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	ptypes "github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/zap"
 )
 
@@ -35,8 +36,8 @@ import (
 func GetMySQLType(columnInfo *model.ColumnInfo, fullType bool) string {
 	if !fullType {
 		result := types.TypeToStr(columnInfo.GetType(), columnInfo.GetCharset())
-		result = withUnsigned4MySQLType(result, pMySQL.HasUnsignedFlag(columnInfo.GetFlag()))
-		result = withZerofill4MySQLType(result, pMySQL.HasZerofillFlag(columnInfo.GetFlag()))
+		result = withUnsigned4MySQLType(result, mysql.HasUnsignedFlag(columnInfo.GetFlag()))
+		result = withZerofill4MySQLType(result, mysql.HasZerofillFlag(columnInfo.GetFlag()))
 		return result
 	}
 	return columnInfo.GetTypeDesc()
@@ -67,11 +68,71 @@ func IsBinaryMySQLType(mysqlType string) bool {
 func ExtractBasicMySQLType(mysqlType string) byte {
 	for i := 0; i < len(mysqlType); i++ {
 		if mysqlType[i] == '(' || mysqlType[i] == ' ' {
-			return types.StrToType(mysqlType[:i])
+			return ptypes.StrToType(mysqlType[:i])
 		}
 	}
 
-	return types.StrToType(mysqlType)
+	return ptypes.StrToType(mysqlType)
+}
+
+func IsUnsignedFlag(mysqlType string) bool {
+	return strings.Contains(mysqlType, "unsigned")
+}
+
+func ExtractFlenDecimal(mysqlType string) (int, int) {
+	if strings.HasPrefix(mysqlType, "enum") || strings.HasPrefix(mysqlType, "set") {
+		return 0, 0
+	}
+	start := strings.Index(mysqlType, "(")
+	end := strings.Index(mysqlType, ")")
+	if start == -1 || end == -1 {
+		return -1, types.UnspecifiedLength
+	}
+
+	data := strings.Split(mysqlType[start+1:end], ",")
+	flen, err := strconv.ParseInt(data[0], 10, 64)
+	if err != nil {
+		log.Panic("parse flen failed", zap.String("flen", data[0]), zap.Error(err))
+	}
+
+	if len(data) != 2 {
+		return int(flen), types.UnspecifiedLength
+	}
+
+	decimal, err := strconv.ParseInt(data[1], 10, 64)
+	if err != nil {
+		log.Panic("parse decimal failed", zap.String("decimal", data[1]), zap.Error(err))
+	}
+	return int(flen), int(decimal)
+}
+
+// ExtractElements for the Enum and Set Type
+func ExtractElements(mysqlType string) []string {
+	start := strings.Index(mysqlType, "(")
+	end := strings.LastIndex(mysqlType, ")")
+	if start == -1 || end == -1 {
+		return nil
+	}
+	parts := strings.Split(mysqlType[start+1:end], ",")
+	elements := make([]string, 0, len(parts))
+	for _, part := range parts {
+		elements = append(elements, strings.Trim(part, "'"))
+	}
+	return elements
+}
+
+func ExtractDecimal(mysqlType string) int {
+	start := strings.Index(mysqlType, "(")
+	end := strings.Index(mysqlType, ")")
+	if start == -1 || end == -1 {
+		return 0
+	}
+	decimal := mysqlType[start+1 : end]
+	result, err := strconv.ParseInt(decimal, 10, 64)
+	if err != nil {
+		log.Panic("parse decimal failed", zap.String("decimal", decimal), zap.Error(err))
+	}
+	return int(result)
 }
 
 // ColumnsHolder read columns from sql.Rows
@@ -198,7 +259,7 @@ func queryRowChecksumAux(
 	query := fmt.Sprintf("set @@tidb_snapshot=%d", commitTs)
 	_, err := conn.ExecContext(ctx, query)
 	if err != nil {
-		mysqlErr, ok := errors.Cause(err).(*mysql.MySQLError)
+		mysqlErr, ok := errors.Cause(err).(*mysqlDriver.MySQLError)
 		if ok {
 			// Error 8055 (HY000): snapshot is older than GC safe point
 			if mysqlErr.Number == 8055 {
@@ -254,7 +315,7 @@ func MustSnapshotQuery(
 	query := fmt.Sprintf("set @@tidb_snapshot=%d", commitTs)
 	_, err = conn.ExecContext(ctx, query)
 	if err != nil {
-		mysqlErr, ok := errors.Cause(err).(*mysql.MySQLError)
+		mysqlErr, ok := errors.Cause(err).(*mysqlDriver.MySQLError)
 		if ok {
 			// Error 8055 (HY000): snapshot is older than GC safe point
 			if mysqlErr.Number == 8055 {
@@ -308,24 +369,10 @@ func MustSnapshotQuery(
 }
 
 // MustBinaryLiteralToInt convert bytes into uint64,
-// by follow https://github.com/pingcap/tidb/blob/e3417913f58cdd5a136259b902bf177eaf3aa637/types/binary_literal.go#L105
 func MustBinaryLiteralToInt(bytes []byte) uint64 {
-	bytes = trimLeadingZeroBytes(bytes)
-	length := len(bytes)
-
-	if length > 8 {
+	val, err := types.BinaryLiteral(bytes).ToInt(types.DefaultStmtNoWarningContext)
+	if err != nil {
 		log.Panic("invalid bit value found", zap.ByteString("value", bytes))
-		return math.MaxUint64
-	}
-
-	if length == 0 {
-		return 0
-	}
-
-	// Note: the byte-order is BigEndian.
-	val := uint64(bytes[0])
-	for i := 1; i < length; i++ {
-		val = (val << 8) | uint64(bytes[i])
 	}
 	return val
 }

@@ -33,7 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/pkg/scheduler"
+	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
@@ -46,7 +46,7 @@ import (
 type Controller struct {
 	bootstrapped bool
 
-	schedulerController *scheduler.Controller
+	schedulerController *pkgscheduler.Controller
 	operatorController  *operator.Controller
 	replicationDB       *replica.ReplicationDB
 	messageCenter       messaging.MessageCenter

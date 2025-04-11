@@ -37,9 +37,8 @@ type mockSink struct {
 	sinkType common.SinkType
 }
 
-func (s *mockSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
+func (s *mockSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmls = append(s.dmls, event)
-	return nil
 }
 
 func (s *mockSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -51,10 +50,14 @@ func (s *mockSink) PassBlockEvent(event commonEvent.BlockEvent) {
 	event.PostFlush()
 }
 
-func (s *mockSink) AddCheckpointTs(ts uint64) {
+func (s *mockSink) AddCheckpointTs(_ uint64) {
 }
 
-func (s *mockSink) SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore) {
+func (s *mockSink) SetTableSchemaStore(_ *sinkutil.TableSchemaStore) {
+}
+
+func (s *mockSink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
+	return startTsList, make([]bool, len(startTsList)), nil
 }
 
 func (s *mockSink) Close(bool) {}
@@ -124,6 +127,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dis
 		nil,          // filterConfig
 		common.Ts(0), // pdTs
 		make(chan error, 1),
+		false,
 	)
 }
 

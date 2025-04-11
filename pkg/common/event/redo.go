@@ -18,7 +18,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"go.uber.org/zap"
 )
 
 //go:generate msgp
@@ -99,9 +98,9 @@ const (
 
 // ToRedoLog converts row changed event to redo log
 func (r *DMLEvent) ToRedoLog() *RedoLog {
-	r.FinishGetRow()
+	r.Rewind()
 	row, valid := r.GetNextRow()
-	r.FinishGetRow()
+	r.Rewind()
 
 	redoLog := &RedoLog{
 		RedoRow: RedoDMLEvent{
@@ -211,10 +210,7 @@ func (r RedoDMLEvent) IsUpdate() bool {
 }
 
 func parseColumnValue(row *chunk.Row, column *model.ColumnInfo, i int) RedoColumnValue {
-	v, err := common.FormatColVal(row, column, i)
-	if err != nil {
-		log.Panic("FormatColVal fail", zap.Error(err))
-	}
+	v := common.ExtractColVal(row, column, i)
 	rrv := RedoColumnValue{Value: v}
 	switch t := rrv.Value.(type) {
 	case []byte:

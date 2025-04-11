@@ -30,12 +30,13 @@ import (
 	"go.uber.org/zap"
 )
 
-func (w *MysqlWriter) asyncExecAddIndexDDLIfTimeout(event *commonEvent.DDLEvent) error {
+func (w *Writer) asyncExecAddIndexDDLIfTimeout(event *commonEvent.DDLEvent) error {
 	var tableIDs []int64
 	switch event.GetBlockedTables().InfluenceType {
 	// only normal type may have ddl need to async exec
 	case commonEvent.InfluenceTypeNormal:
 		tableIDs = event.GetBlockedTables().TableIDs
+	default:
 	}
 
 	for _, tableID := range tableIDs {
@@ -114,7 +115,7 @@ func needTimeoutCheck(ddlType timodel.ActionType) bool {
 	}
 }
 
-func (w *MysqlWriter) execDDL(event *commonEvent.DDLEvent) error {
+func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	if w.cfg.DryRun {
 		log.Info("Dry run DDL", zap.String("sql", event.GetDDLQuery()))
 		time.Sleep(w.cfg.DryRunDelay)
@@ -171,7 +172,7 @@ func (w *MysqlWriter) execDDL(event *commonEvent.DDLEvent) error {
 	}
 
 	// we try to set cdc write source for the ddl
-	if err = SetWriteSource(w.cfg, tx); err != nil {
+	if err = SetWriteSource(ctx, w.cfg, tx); err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil {
 			if errors.Cause(rbErr) != context.Canceled {
 				log.Error("Failed to rollback", zap.Error(err))
@@ -197,7 +198,7 @@ func (w *MysqlWriter) execDDL(event *commonEvent.DDLEvent) error {
 	return nil
 }
 
-func (w *MysqlWriter) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
+func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 	return retry.Do(w.ctx, func() error {
 		err := w.statistics.RecordDDLExecution(func() error { return w.execDDL(event) })
 		if err != nil {
@@ -224,7 +225,7 @@ func (w *MysqlWriter) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 		retry.WithIsRetryableErr(apperror.IsRetryableDDLError))
 }
 
-func (w *MysqlWriter) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
+func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 	if !needWaitAsyncExecDone(event.GetDDLType()) {
 		return
 	}
@@ -239,7 +240,7 @@ func (w *MysqlWriter) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 	}
 
 	for _, tableID := range relatedTableIDs {
-		// tableID 0 means table trigger, which can't not do async ddl
+		// tableID 0 means table trigger, which can't do async ddl
 		if tableID == 0 {
 			continue
 		}
@@ -257,7 +258,7 @@ func (w *MysqlWriter) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 	}
 }
 
-func (w *MysqlWriter) waitTableAsyncDDLDone(tableID int64) {
+func (w *Writer) waitTableAsyncDDLDone(tableID int64) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -276,13 +277,13 @@ func (w *MysqlWriter) waitTableAsyncDDLDone(tableID int64) {
 var checkRunningAddIndexSQL = `
 SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE_ID, STATE, QUERY
 FROM information_schema.ddl_jobs
-WHERE TABLE_ID = "%s"
+WHERE TABLE_ID = "%d"
     AND JOB_TYPE LIKE "add index%%"
     AND (STATE = "running" OR STATE = "queueing");
 `
 
 // true means the async ddl is still running, false means the async ddl is done.
-func (w *MysqlWriter) doQueryAsyncDDL(tableID int64, query string) (bool, error) {
+func (w *Writer) doQueryAsyncDDL(tableID int64, query string) (bool, error) {
 	start := time.Now()
 	rows, err := w.db.QueryContext(w.ctx, query)
 	log.Debug("query duration", zap.Any("duration", time.Since(start)), zap.Any("query", query))
@@ -324,7 +325,7 @@ func (w *MysqlWriter) doQueryAsyncDDL(tableID int64, query string) (bool, error)
 
 // query the ddl jobs to find the state of the async ddl
 // if the ddl is still running, we should wait for it.
-func (w *MysqlWriter) checkAndWaitAsyncDDLDoneDownstream(tableID int64) error {
+func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(tableID int64) error {
 	query := fmt.Sprintf(checkRunningAddIndexSQL, tableID)
 	running, err := w.doQueryAsyncDDL(tableID, query)
 	if err != nil {
@@ -342,7 +343,7 @@ func (w *MysqlWriter) checkAndWaitAsyncDDLDoneDownstream(tableID int64) error {
 		case <-w.ctx.Done():
 			return nil
 		case <-ticker.C:
-			running, err := w.doQueryAsyncDDL(tableID, query)
+			running, err = w.doQueryAsyncDDL(tableID, query)
 			if err != nil {
 				return err
 			}

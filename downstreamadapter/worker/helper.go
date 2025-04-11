@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	v2 "github.com/pingcap/ticdc/pkg/sink/kafka/v2"
 	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/br/pkg/utils"
@@ -132,9 +131,6 @@ func GetKafkaSinkComponent(
 	sinkConfig *config.SinkConfig,
 ) (KafkaComponent, config.Protocol, error) {
 	factoryCreator := kafka.NewSaramaFactory
-	if utils.GetOrZero(sinkConfig.EnableKafkaSinkV2) {
-		factoryCreator = v2.NewFactory
-	}
 	return getKafkaSinkComponentWithFactory(ctx, changefeedID, sinkURI, sinkConfig, factoryCreator)
 }
 

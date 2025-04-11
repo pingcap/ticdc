@@ -1523,6 +1523,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 		TableInfo:  wrapTableInfo,
 		FinishedTs: rawEvent.FinishedTs,
 		TiDBOnly:   tiDBOnly,
+		BDRMode:    rawEvent.BDRRole,
 
 		TableNameInDDLJob: rawEvent.TableNameInDDLJob,
 		DBNameInDDLJob:    rawEvent.DBNameInDDLJob,

@@ -874,6 +874,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 		info.GetStartTs(),
 		func(resolvedTs uint64, latestCommitTs uint64) { c.onNotify(dispatcher, resolvedTs, latestCommitTs) },
 		info.IsOnlyReuse(),
+		info.GetBdrMode(),
 	)
 	if err != nil {
 		log.Panic("register dispatcher to eventStore failed",

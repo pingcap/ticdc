@@ -100,19 +100,19 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		rawKv *common.RawKVEntry,
 		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error),
 ) error {
-	RowType := RowTypeInsert
+	rowType := RowTypeInsert
 	if raw.OpType == common.OpTypeDelete {
-		RowType = RowTypeDelete
+		rowType = RowTypeDelete
 	}
 	if len(raw.Value) != 0 && len(raw.OldValue) != 0 {
-		RowType = RowTypeUpdate
+		rowType = RowTypeUpdate
 	}
 	count, err := decode(raw, t.TableInfo, t.Rows)
 	if err != nil {
 		return err
 	}
 	for range count {
-		t.RowTypes = append(t.RowTypes, RowType)
+		t.RowTypes = append(t.RowTypes, rowType)
 	}
 	t.Length += 1
 	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
@@ -161,10 +161,8 @@ func (t *DMLEvent) AddPostFlushFunc(f func()) {
 	t.PostTxnFlushed = append(t.PostTxnFlushed, f)
 }
 
-// The function if called after call all the GetNextRow to get all rows.
-// It will reset the offset to 0
-// So that the next GetNextRow will return the first row
-func (t *DMLEvent) FinishGetRow() {
+// Rewind reset the offset to 0, So that the next GetNextRow will return the first row
+func (t *DMLEvent) Rewind() {
 	t.offset = 0
 }
 
