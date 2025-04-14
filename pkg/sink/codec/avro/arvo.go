@@ -90,8 +90,32 @@ func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *commonEve
 		index:    index,
 		colInfos: colInfos,
 	}
+	avroCodec, header, err := a.getKeySchemaCodec(ctx, topic, &e.TableInfo.TableName, e.TableInfo.UpdateTS(), keyColumns)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
 
-	return a.encode(ctx, topic, e, keyColumns)
+	native, err := a.columns2AvroData(keyColumns)
+	if err != nil {
+		log.Error("avro: key converting to native failed", zap.Error(err))
+		return nil, errors.Trace(err)
+	}
+
+	bin, err := avroCodec.BinaryFromNative(nil, native)
+	if err != nil {
+		log.Error("avro: key converting to Avro binary failed", zap.Error(err))
+		return nil, errors.WrapError(errors.ErrAvroEncodeToBinary, err)
+	}
+
+	result := &avroEncodeResult{
+		data:   bin,
+		header: header,
+	}
+	data, err := result.toEnvelope()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	return data, nil
 }
 
 func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *commonEvent.RowEvent) ([]byte, error) {
@@ -111,16 +135,10 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *commonE
 		colInfos: e.TableInfo.GetColumns(),
 		index:    index,
 	}
-
-	return a.encode(ctx, topic, e, input)
-}
-
-func (a *BatchEncoder) encode(ctx context.Context, topic string, e *commonEvent.RowEvent, input *avroEncodeInput) ([]byte, error) {
 	avroCodec, header, err := a.getValueSchemaCodec(ctx, topic, &e.TableInfo.TableName, e.TableInfo.UpdateTS(), input)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-
 	native, err := a.columns2AvroData(input)
 	if err != nil {
 		log.Error("avro: converting input to native failed", zap.Error(err))
