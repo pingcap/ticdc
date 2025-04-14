@@ -21,65 +21,41 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/pingcap/ticdc/cdc/entry"
-	"github.com/pingcap/ticdc/cdc/model"
+	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/columnselector"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/spanz"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"github.com/tikv/client-go/v2/oracle"
 )
 
 type SQLTestHelper struct {
 	t *testing.T
 
-	helper  *entry.SchemaTestHelper
-	mounter entry.Mounter
+	helper  *commonEvent.EventTestHelper
+	mounter commonEvent.Mounter
 
-	ts      uint64
-	tableID int64
+	tableInfo *commonType.TableInfo
 }
 
 func NewSQLTestHelper(t *testing.T, tableName, initialCreateTableDDL string) *SQLTestHelper {
-	helper := entry.NewSchemaTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	helper.Tk().MustExec("set @@tidb_enable_clustered_index=1;")
 	helper.Tk().MustExec("use test;")
 
-	changefeed := model.DefaultChangeFeedID("")
-
-	ver, err := helper.Storage().CurrentVersion(oracle.GlobalTxnScope)
-	require.NoError(t, err)
-
-	cfg := config.GetDefaultReplicaConfig()
-
-	filter, err := filter.NewFilter(cfg, "")
-	require.NoError(t, err)
-
-	schemaStorage, err := entry.NewSchemaStorage(helper.Storage(),
-		ver.Ver, false, changefeed, util.RoleTester, filter)
-	require.NoError(t, err)
-
 	job := helper.DDL2Job(initialCreateTableDDL)
-	err = schemaStorage.HandleDDLJob(job)
-	require.NoError(t, err)
+	require.NotNil(t, job)
 
-	ts := schemaStorage.GetLastSnapshot().CurrentTs()
-	schemaStorage.AdvanceResolvedTs(ver.Ver)
+	mounter := commonEvent.NewMounter(time.UTC)
 
-	mounter := entry.NewMounter(schemaStorage, changefeed, time.UTC, filter, cfg.Integrity)
-
-	tableInfo, ok := schemaStorage.GetLastSnapshot().TableByName("test", tableName)
-	require.True(t, ok)
+	tableInfo := helper.GetTableInfo(job)
 
 	return &SQLTestHelper{
-		t:       t,
-		helper:  helper,
-		mounter: mounter,
-		ts:      ts,
-		tableID: tableInfo.ID,
+		t:         t,
+		helper:    helper,
+		mounter:   mounter,
+		tableInfo: tableInfo,
 	}
 }
 
@@ -89,42 +65,6 @@ func (h *SQLTestHelper) Close() {
 
 func (h *SQLTestHelper) MustExec(query string, args ...interface{}) {
 	h.helper.Tk().MustExec(query, args...)
-}
-
-func (h *SQLTestHelper) ScanTable() []*model.RowChangedEvent {
-	txn, err := h.helper.Storage().Begin()
-	require.Nil(h.t, err)
-	defer txn.Rollback() //nolint:errcheck
-	startKey, endKey := spanz.GetTableRange(h.tableID)
-	kvIter, err := txn.Iter(startKey, endKey)
-	require.Nil(h.t, err)
-	defer kvIter.Close()
-
-	ret := make([]*model.RowChangedEvent, 0)
-
-	for kvIter.Valid() {
-		rawKV := &model.RawKVEntry{
-			OpType:  model.OpTypePut,
-			Key:     kvIter.Key(),
-			Value:   kvIter.Value(),
-			StartTs: h.ts - 1,
-			CRTs:    h.ts + 1,
-		}
-		pEvent := model.NewPolymorphicEvent(rawKV)
-		err := h.mounter.DecodeEvent(context.Background(), pEvent)
-		require.Nil(h.t, err)
-		if pEvent.Row == nil {
-			return ret
-		}
-
-		row := pEvent.Row
-		ret = append(ret, row)
-
-		err = kvIter.Next()
-		require.Nil(h.t, err)
-	}
-
-	return ret
 }
 
 type debeziumSuite struct {
@@ -189,15 +129,24 @@ func (s *debeziumSuite) TestDataTypes() {
 
 	helper.MustExec(`SET sql_mode='';`)
 	helper.MustExec(`SET time_zone='UTC';`)
-	helper.MustExec(string(dataDML))
+	dmls := helper.helper.DML2Event("test", "foo", string(dataDML))
 
-	rows := helper.ScanTable()
 	cfg := common.NewConfig(config.ProtocolDebezium)
 	cfg.TimeZone = time.UTC
 	cfg.DebeziumDisableSchema = s.disableSchema
-	encoder := NewBatchEncoderBuilder(cfg, "dbserver1").Build()
-	for _, row := range rows {
-		err := encoder.AppendRowChangedEvent(context.Background(), "", row, nil)
+	encoder := NewBatchEncoder(cfg, "dbserver1")
+	for {
+		row, ok := dmls.GetNextRow()
+		if !ok {
+			break
+		}
+		err := encoder.AppendRowChangedEvent(context.Background(), "", &commonEvent.RowEvent{
+			TableInfo:      helper.tableInfo,
+			CommitTs:       1,
+			Event:          row,
+			ColumnSelector: columnselector.NewDefaultColumnSelector(),
+			Callback:       func() {},
+		})
 		s.Require().Nil(err)
 	}
 
