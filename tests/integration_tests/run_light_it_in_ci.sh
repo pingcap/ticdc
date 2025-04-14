@@ -84,7 +84,7 @@ kafka_groups=(
 	# G06
 	'open_protocol_handle_key_only'
 	# G07
-	'kafka_big_messages'
+	''
 	# G08
 	'kafka_compression'
 	# G19
