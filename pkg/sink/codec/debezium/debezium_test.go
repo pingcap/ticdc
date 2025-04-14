@@ -40,7 +40,7 @@ type SQLTestHelper struct {
 }
 
 func NewSQLTestHelper(t *testing.T, tableName, initialCreateTableDDL string) *SQLTestHelper {
-	helper := commonEvent.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelperWithTimeZone(t, time.UTC)
 	helper.Tk().MustExec("set @@tidb_enable_clustered_index=1;")
 	helper.Tk().MustExec("use test;")
 

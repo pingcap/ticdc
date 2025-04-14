@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -53,8 +54,8 @@ type EventTestHelper struct {
 	tableInfos map[string]*common.TableInfo
 }
 
-// NewEventTestHelper creates a SchemaTestHelper
-func NewEventTestHelper(t testing.TB) *EventTestHelper {
+// NewEventTestHelperWithTimeZone creates a SchemaTestHelper with time zone
+func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestHelper {
 	store, err := mockstore.NewMockStore()
 	require.NoError(t, err)
 	ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
@@ -69,7 +70,7 @@ func NewEventTestHelper(t testing.TB) *EventTestHelper {
 
 	require.NoError(t, err)
 
-	mounter := NewMounter(time.UTC)
+	mounter := NewMounter(tz)
 
 	return &EventTestHelper{
 		t:          t,
@@ -79,6 +80,11 @@ func NewEventTestHelper(t testing.TB) *EventTestHelper {
 		mounter:    mounter,
 		tableInfos: make(map[string]*common.TableInfo),
 	}
+}
+
+// NewEventTestHelper creates a SchemaTestHelper
+func NewEventTestHelper(t testing.TB) *EventTestHelper {
+	return NewEventTestHelperWithTimeZone(t, time.Local)
 }
 
 func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
