@@ -29,6 +29,16 @@ import (
 	"go.uber.org/zap"
 )
 
+// dmlProducer is the interface for the pulsar DML message producer.
+type dmlProducer interface {
+	// AsyncSendMessage sends a message asynchronously.
+	asyncSendMessage(
+		ctx context.Context, topic string, message *common.Message,
+	) error
+
+	close()
+}
+
 // dmlProducers is used to send messages to pulsar.
 type dmlProducers struct {
 	changefeedID commonType.ChangeFeedID
@@ -168,7 +178,7 @@ func (p *dmlProducers) asyncSendMessage(
 	return nil
 }
 
-func (p *dmlProducers) Close() { // We have to hold the lock to synchronize closing with writing.
+func (p *dmlProducers) close() { // We have to hold the lock to synchronize closing with writing.
 	p.closedMu.Lock()
 	defer p.closedMu.Unlock()
 	// If the producer has already been closed, we should skip this close operation.

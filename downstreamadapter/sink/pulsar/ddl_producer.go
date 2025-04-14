@@ -27,6 +27,20 @@ import (
 	"go.uber.org/zap"
 )
 
+// ddlProducer is the interface for the pulsar DDL message producer.
+type ddlProducer interface {
+	// syncBroadcastMessage broadcasts a message synchronously.
+	syncBroadcastMessage(
+		ctx context.Context, topic string, message *common.Message,
+	) error
+	// syncSendMessage sends a message for a partition synchronously.
+	syncSendMessage(
+		ctx context.Context, topic string, message *common.Message,
+	) error
+	// close closes the producer.
+	close()
+}
+
 // ddlProducers is a producer for pulsar
 type ddlProducers struct {
 	changefeedID     commonType.ChangeFeedID
@@ -80,19 +94,16 @@ func newDDLProducers(
 
 // SyncBroadcastMessage pulsar consume all partitions
 // totalPartitionsNum is not used
-func (p *ddlProducers) SyncBroadcastMessage(ctx context.Context, topic string,
-	totalPartitionsNum int32, message *common.Message,
+func (p *ddlProducers) syncBroadcastMessage(ctx context.Context, topic string, message *common.Message,
 ) error {
 	// call SyncSendMessage
 	// pulsar consumer all partitions
-	return p.SyncSendMessage(ctx, topic, totalPartitionsNum, message)
+	return p.syncSendMessage(ctx, topic, message)
 }
 
 // SyncSendMessage sends a message
 // partitionNum is not used, pulsar consume all partitions
-func (p *ddlProducers) SyncSendMessage(ctx context.Context, topic string,
-	partitionNum int32, message *common.Message,
-) error {
+func (p *ddlProducers) syncSendMessage(ctx context.Context, topic string, message *common.Message) error {
 	// TODO
 	// wrapperSchemaAndTopic(message)
 	// mq.IncPublishedDDLCount(topic, p.id.ID().String(), message)
@@ -150,8 +161,8 @@ func (p *ddlProducers) getProducerByTopic(topicName string) (producer pulsar.Pro
 	return producer, nil
 }
 
-// Close close all producers
-func (p *ddlProducers) Close() {
+// Close all producers
+func (p *ddlProducers) close() {
 	keys := p.producers.Keys()
 
 	p.producersMutex.Lock()

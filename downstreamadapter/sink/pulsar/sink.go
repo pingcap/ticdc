@@ -36,8 +36,8 @@ import (
 type sink struct {
 	changefeedID commonType.ChangeFeedID
 
-	dmlProducer *dmlProducers
-	ddlProducer *ddlProducers
+	dmlProducer dmlProducer
+	ddlProducer ddlProducer
 
 	comp       component
 	statistics *metrics.Statistics
@@ -169,11 +169,11 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		}
 		if s.partitionRule == helper.PartitionAll {
 			err = s.statistics.RecordDDLExecution(func() error {
-				return s.ddlProducer.SyncBroadcastMessage(s.ctx, topic, partitionNum, message)
+				return s.ddlProducer.syncBroadcastMessage(s.ctx, topic, partitionNum, message)
 			})
 		} else {
 			err = s.statistics.RecordDDLExecution(func() error {
-				return s.ddlProducer.SyncSendMessage(s.ctx, topic, 0, message)
+				return s.ddlProducer.syncSendMessage(s.ctx, topic, 0, message)
 			})
 		}
 		if err != nil {
@@ -247,7 +247,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				}
 				log.Debug("Emit checkpointTs to default topic",
 					zap.String("topic", topic), zap.Uint64("checkpointTs", ts), zap.Any("partitionNum", partitionNum))
-				err = s.ddlProducer.SyncBroadcastMessage(ctx, topic, partitionNum, msg)
+				err = s.ddlProducer.syncBroadcastMessage(ctx, topic, partitionNum, msg)
 				if err != nil {
 					return errors.Trace(err)
 				}
@@ -258,7 +258,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					if err != nil {
 						return errors.Trace(err)
 					}
-					err = s.ddlProducer.SyncBroadcastMessage(ctx, topic, partitionNum, msg)
+					err = s.ddlProducer.syncBroadcastMessage(ctx, topic, partitionNum, msg)
 					if err != nil {
 						return errors.Trace(err)
 					}
@@ -535,8 +535,8 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 }
 
 func (s *sink) Close(_ bool) {
-	s.ddlProducer.Close()
-	s.dmlProducer.Close()
+	s.ddlProducer.close()
+	s.dmlProducer.close()
 	s.comp.close()
 	s.statistics.Close()
 }
