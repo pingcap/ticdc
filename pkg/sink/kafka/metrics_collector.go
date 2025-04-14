@@ -40,7 +40,7 @@ const (
 
 // Sarama metrics names, see https://pkg.go.dev/github.com/IBM/sarama#pkg-overview.
 const (
-	// SyncProducer level.
+	// Producer level.
 	compressionRatioMetricName  = "compression-ratio"
 	recordsPerRequestMetricName = "records-per-request"
 

@@ -172,11 +172,11 @@ func (p *saramaAsyncProducer) Close() {
 		// * There is a risk of goroutine leakage, but it is acceptable and our main
 		//   goal is not to get stuck with the processor tick.
 
-		// `client` is mainly used by `AsyncProducer` to fetch metadata and perform other related
+		// `client` is mainly used by `asyncProducer` to fetch metadata and perform other related
 		// operations. When we close the `kafkaSaramaProducer`,
 		// there is no need for TiCDC to make sure that all buffered messages are flushed.
 		// Consider the situation where the broker is irresponsive. If the client were not
-		// closed, `AsyncProducer.Close()` would waste a mount of time to try flush all messages.
+		// closed, `asyncProducer.Close()` would waste a mount of time to try flush all messages.
 		// To prevent the scenario mentioned above, close the client first.
 		start := time.Now()
 		if err := p.client.Close(); err != nil {

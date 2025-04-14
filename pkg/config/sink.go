@@ -581,7 +581,7 @@ type PulsarConfig struct {
 	ConnectionTimeout *TimeSec `toml:"connection-timeout" json:"connection-timeout,omitempty"`
 
 	// Set the operation timeout (default: 30 seconds)
-	// syncProducer-create, subscribe and unsubscribe operations will be retried until this interval, after which the
+	// Producer-create, subscribe and unsubscribe operations will be retried until this interval, after which the
 	// operation will be marked as failed
 	OperationTimeout *TimeSec `toml:"operation-timeout" json:"operation-timeout,omitempty"`
 
