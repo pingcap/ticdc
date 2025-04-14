@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sink
+package cloudstorage
 
 import (
 	"context"
@@ -29,7 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newCloudStorageSinkForTest(parentDir string) (*CloudStorageSink, error) {
+func newCloudStorageSinkForTest(parentDir string) (*sink, error) {
 	ctx := context.Background()
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
@@ -41,7 +41,7 @@ func newCloudStorageSinkForTest(parentDir string) (*CloudStorageSink, error) {
 	if err != nil {
 		return nil, err
 	}
-	sink, err := newCloudStorageSink(ctx, changefeedID, sinkURI, sinkConfig, nil)
+	sink, err := New(ctx, changefeedID, sinkURI, sinkConfig, nil)
 	if err != nil {
 		return nil, err
 	}

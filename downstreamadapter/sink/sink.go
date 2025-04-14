@@ -15,6 +15,8 @@ package sink
 
 import (
 	"context"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/blackhole"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage"
 	"net/url"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
@@ -55,9 +57,9 @@ func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID 
 	case sink.PulsarScheme, sink.PulsarSSLScheme, sink.PulsarHTTPScheme, sink.PulsarHTTPSScheme:
 		return newPulsarSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.S3Scheme, sink.FileScheme, sink.GCSScheme, sink.GSScheme, sink.AzblobScheme, sink.AzureScheme, sink.CloudStorageNoopScheme:
-		return newCloudStorageSink(ctx, changefeedID, sinkURI, config.SinkConfig, nil)
+		return cloudstorage.New(ctx, changefeedID, sinkURI, config.SinkConfig, nil)
 	case sink.BlackHoleScheme:
-		return newBlackHoleSink()
+		return blackhole.New()
 	}
 	return nil, cerror.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
 }
@@ -76,7 +78,7 @@ func VerifySink(ctx context.Context, config *config.ChangefeedConfig, changefeed
 	case sink.PulsarScheme, sink.PulsarSSLScheme, sink.PulsarHTTPScheme, sink.PulsarHTTPSScheme:
 		return verifyPulsarSink(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.S3Scheme, sink.FileScheme, sink.GCSScheme, sink.GSScheme, sink.AzblobScheme, sink.AzureScheme, sink.CloudStorageNoopScheme:
-		return verifyCloudStorageSink(ctx, changefeedID, sinkURI, config.SinkConfig)
+		return cloudstorage.Verify(ctx, changefeedID, sinkURI, config.SinkConfig)
 	case sink.BlackHoleScheme:
 		return nil
 	}

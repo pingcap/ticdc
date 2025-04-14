@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sink
+package blackhole
 
 import (
 	"testing"
@@ -23,7 +23,7 @@ import (
 
 // Test callback and tableProgress works as expected after AddDMLEvent
 func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
-	sink, err := newBlackHoleSink()
+	sink, err := New()
 	require.NoError(t, err)
 
 	count := 0

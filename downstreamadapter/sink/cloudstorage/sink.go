@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sink
+package cloudstorage
 
 import (
 	"context"
@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
-	"github.com/pingcap/ticdc/downstreamadapter/worker"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -43,21 +42,21 @@ import (
 // The defragmenter will defragment the out-of-order encoded messages and sends encoded
 // messages to individual dmlWorkers.
 // The dmlWorkers will write the encoded messages to external storage in parallel between different tables.
-type CloudStorageSink struct {
+type sink struct {
 	changefeedID         commonType.ChangeFeedID
 	scheme               string
 	outputRawChangeEvent bool
 
 	// workers defines a group of workers for writing events to external storage.
-	dmlWorker *worker.CloudStorageDMLWorker
-	ddlWorker *worker.CloudStorageDDLWorker
+	dmlWorker *CloudStorageDMLWorker
+	ddlWorker *CloudStorageDDLWorker
 
 	statistics *metrics.Statistics
 
 	isNormal uint32
 }
 
-func verifyCloudStorageSink(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	var (
 		protocol config.Protocol
 		storage  storage.ExternalStorage
@@ -80,10 +79,10 @@ func verifyCloudStorageSink(ctx context.Context, changefeedID common.ChangeFeedI
 	return nil
 }
 
-func newCloudStorageSink(
+func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
 	cleanupJobs []func(), /* only for test */
-) (*CloudStorageSink, error) {
+) (*sink, error) {
 	// create cloud storage config and then apply the params of sinkURI to it.
 	cfg := cloudstorage.NewConfig()
 	err := cfg.Apply(ctx, sinkURI, sinkConfig)
@@ -109,26 +108,26 @@ func newCloudStorageSink(
 	if err != nil {
 		return nil, err
 	}
-	s := &CloudStorageSink{
+	s := &sink{
 		changefeedID:         changefeedID,
 		scheme:               strings.ToLower(sinkURI.Scheme),
 		outputRawChangeEvent: sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
-		statistics:           metrics.NewStatistics(changefeedID, "CloudStorageSink"),
+		statistics:           metrics.NewStatistics(changefeedID, "sink"),
 	}
 
-	s.dmlWorker, err = worker.NewCloudStorageDMLWorker(changefeedID, storage, cfg, encoderConfig, ext, s.statistics)
+	s.dmlWorker, err = NewCloudStorageDMLWorker(changefeedID, storage, cfg, encoderConfig, ext, s.statistics)
 	if err != nil {
 		return nil, err
 	}
-	s.ddlWorker = worker.NewCloudStorageDDLWorker(changefeedID, sinkURI, cfg, cleanupJobs, storage, s.statistics)
+	s.ddlWorker = NewCloudStorageDDLWorker(changefeedID, sinkURI, cfg, cleanupJobs, storage, s.statistics)
 	return s, nil
 }
 
-func (s *CloudStorageSink) SinkType() common.SinkType {
+func (s *sink) SinkType() common.SinkType {
 	return common.CloudStorageSinkType
 }
 
-func (s *CloudStorageSink) Run(ctx context.Context) error {
+func (s *sink) Run(ctx context.Context) error {
 	eg, ctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
@@ -142,19 +141,19 @@ func (s *CloudStorageSink) Run(ctx context.Context) error {
 	return eg.Wait()
 }
 
-func (s *CloudStorageSink) IsNormal() bool {
+func (s *sink) IsNormal() bool {
 	return atomic.LoadUint32(&s.isNormal) == 1
 }
 
-func (s *CloudStorageSink) AddDMLEvent(event *commonEvent.DMLEvent) {
+func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmlWorker.AddDMLEvent(event)
 }
 
-func (s *CloudStorageSink) PassBlockEvent(event commonEvent.BlockEvent) {
+func (s *sink) PassBlockEvent(event commonEvent.BlockEvent) {
 	event.PostFlush()
 }
 
-func (s *CloudStorageSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
+func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
 		if e.TiDBOnly {
@@ -168,12 +167,12 @@ func (s *CloudStorageSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 			return errors.Trace(err)
 		}
 	case *commonEvent.SyncPointEvent:
-		log.Error("CloudStorageSink doesn't support Sync Point Event",
+		log.Error("sink doesn't support Sync Point Event",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("event", event))
 	default:
-		log.Error("CloudStorageSink doesn't support this type of block event",
+		log.Error("sink doesn't support this type of block event",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("eventType", event.GetType()))
@@ -181,19 +180,19 @@ func (s *CloudStorageSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *CloudStorageSink) AddCheckpointTs(ts uint64) {
+func (s *sink) AddCheckpointTs(ts uint64) {
 	s.ddlWorker.AddCheckpointTs(ts)
 }
 
-func (s *CloudStorageSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *CloudStorageSink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
+func (s *sink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
 	return startTsList, make([]bool, len(startTsList)), nil
 }
 
-func (s *CloudStorageSink) Close(_ bool) {
+func (s *sink) Close(_ bool) {
 	s.dmlWorker.Close()
 	s.ddlWorker.Close()
 	if s.statistics != nil {
