@@ -30,8 +30,6 @@ func genRow(t *testing.T, helper *event.EventTestHelper, schema string, table st
 }
 
 func TestIndexValueDispatcher(t *testing.T) {
-	t.Parallel()
-
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
@@ -64,8 +62,6 @@ func TestIndexValueDispatcher(t *testing.T) {
 }
 
 func TestIndexValueDispatcherWithIndexName(t *testing.T) {
-	t.Parallel()
-
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")

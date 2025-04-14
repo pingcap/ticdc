@@ -22,7 +22,6 @@ import (
 )
 
 func TestColumnsDispatcher(t *testing.T) {
-	t.Parallel()
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
