@@ -28,9 +28,9 @@ func newRemoteMessageTargetForTest() *remoteMessageTarget {
 	localId := node.NewID()
 	remoteId := node.NewID()
 	ctx := context.Background()
-	cfg := config.NewDefaultMessageCenterConfig()
+	cfg := config.NewDefaultMessageCenterConfig("")
 	receivedMsgCh := make(chan *TargetMessage, 1)
-	rt := newRemoteMessageTarget(ctx, localId, remoteId, 1, 1, "", receivedMsgCh, receivedMsgCh, cfg, nil)
+	rt := newRemoteMessageTarget(ctx, localId, remoteId, "", "", receivedMsgCh, receivedMsgCh, cfg, nil)
 	return rt
 }
 
@@ -39,15 +39,12 @@ func TestRemoteTargetNewMessage(t *testing.T) {
 	defer rt.close()
 
 	msg := &TargetMessage{
-		Type:  TypeMessageHandShake,
-		Epoch: rt.messageCenterEpoch,
+		Type: TypeMessageHandShake,
 	}
 	msg1 := rt.newMessage(msg)
 	require.Equal(t, TypeMessageHandShake, IOType(msg1.Type))
-	require.Equal(t, rt.messageCenterEpoch, uint64(msg1.Epoch))
 
 	msg2 := rt.newMessage(msg)
 	log.Info("msg2", zap.Any("msg2", msg2))
 	require.Equal(t, TypeMessageHandShake, IOType(msg2.Type))
-	require.Equal(t, rt.messageCenterEpoch, uint64(msg2.Epoch))
 }

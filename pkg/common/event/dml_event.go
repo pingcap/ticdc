@@ -100,25 +100,27 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		rawKv *common.RawKVEntry,
 		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error),
 ) error {
-	RowType := RowTypeInsert
+	rowType := RowTypeInsert
 	if raw.OpType == common.OpTypeDelete {
-		RowType = RowTypeDelete
+		rowType = RowTypeDelete
 	}
 	if len(raw.Value) != 0 && len(raw.OldValue) != 0 {
-		RowType = RowTypeUpdate
+		rowType = RowTypeUpdate
 	}
 	count, err := decode(raw, t.TableInfo, t.Rows)
 	if err != nil {
 		return err
 	}
-	if count == 1 {
-		t.RowTypes = append(t.RowTypes, RowType)
-	} else if count == 2 {
-		t.RowTypes = append(t.RowTypes, RowType, RowType)
+	for range count {
+		t.RowTypes = append(t.RowTypes, rowType)
 	}
 	t.Length += 1
 	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
 	return nil
+}
+
+func (t *DMLEvent) GetTableID() int64 {
+	return t.PhysicalTableID
 }
 
 func (t *DMLEvent) GetType() int {
@@ -130,11 +132,11 @@ func (t *DMLEvent) GetDispatcherID() common.DispatcherID {
 }
 
 func (t *DMLEvent) GetCommitTs() common.Ts {
-	return common.Ts(t.CommitTs)
+	return t.CommitTs
 }
 
 func (t *DMLEvent) GetStartTs() common.Ts {
-	return common.Ts(t.StartTs)
+	return t.StartTs
 }
 
 func (t *DMLEvent) PostFlush() {
@@ -159,10 +161,8 @@ func (t *DMLEvent) AddPostFlushFunc(f func()) {
 	t.PostTxnFlushed = append(t.PostTxnFlushed, f)
 }
 
-// The function if called after call all the GetNextRow to get all rows.
-// It will reset the offset to 0
-// So that the next GetNextRow will return the first row
-func (t *DMLEvent) FinishGetRow() {
+// Rewind reset the offset to 0, So that the next GetNextRow will return the first row
+func (t *DMLEvent) Rewind() {
 	t.offset = 0
 }
 
@@ -387,16 +387,3 @@ const (
 	// RowTypeUpdate represents a update row.
 	RowTypeUpdate
 )
-
-func RowTypeToString(rowType RowType) string {
-	switch rowType {
-	case RowTypeInsert:
-		return "Insert"
-	case RowTypeDelete:
-		return "Delete"
-	case RowTypeUpdate:
-		return "Update"
-	default:
-		return "Unknown"
-	}
-}

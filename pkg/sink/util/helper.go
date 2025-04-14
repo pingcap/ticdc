@@ -209,12 +209,17 @@ func (s *TableNameStore) AddEvent(event *commonEvent.DDLEvent) {
 // GetAllTableNames only will be called when maintainer send message to ask dispatcher to write checkpointTs to downstream.
 // So the ts must be <= the latest received event ts of table trigger event dispatcher.
 func (s *TableNameStore) GetAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
+	// we have to send checkpointTs to the drop schema/tables so that consumer can know the schema/table is dropped.
+	tableNames := make([]*commonEvent.SchemaTableName, 0)
 	s.latestTableNameChanges.mutex.Lock()
 	if len(s.latestTableNameChanges.m) > 0 {
 		// update the existingTables with the latest table changes <= ts
 		for commitTs, tableNameChange := range s.latestTableNameChanges.m {
 			if commitTs <= ts {
 				if tableNameChange.DropDatabaseName != "" {
+					tableNames = append(tableNames, &commonEvent.SchemaTableName{
+						SchemaName: tableNameChange.DropDatabaseName,
+					})
 					delete(s.existingTables, tableNameChange.DropDatabaseName)
 				} else {
 					for _, addName := range tableNameChange.AddName {
@@ -224,6 +229,7 @@ func (s *TableNameStore) GetAllTableNames(ts uint64) []*commonEvent.SchemaTableN
 						s.existingTables[addName.SchemaName][addName.TableName] = &addName
 					}
 					for _, dropName := range tableNameChange.DropName {
+						tableNames = append(tableNames, &dropName)
 						delete(s.existingTables[dropName.SchemaName], dropName.TableName)
 						if len(s.existingTables[dropName.SchemaName]) == 0 {
 							delete(s.existingTables, dropName.SchemaName)
@@ -234,16 +240,13 @@ func (s *TableNameStore) GetAllTableNames(ts uint64) []*commonEvent.SchemaTableN
 			}
 		}
 	}
-
 	s.latestTableNameChanges.mutex.Unlock()
 
-	tableNames := make([]*commonEvent.SchemaTableName, 0)
 	for _, tables := range s.existingTables {
 		for _, tableName := range tables {
 			tableNames = append(tableNames, tableName)
 		}
 	}
-
 	return tableNames
 }
 

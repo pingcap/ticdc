@@ -29,15 +29,18 @@ type ReplicationID interface {
 	String() string
 }
 
-// Replication is the interface for the replication task, it should implement the GetNodeID method
+// Replication is the interface for the replication task
 type Replication[T ReplicationID] interface {
 	comparable
+	// GetID returns the id of the replication task
 	GetID() T
+	// GetGroupID returns the group id of the replication task
 	GetGroupID() GroupID
-
+	// GetNodeID returns the node id this task is scheduled to
 	GetNodeID() node.ID
+	// SetNodeID sets the node id this task is scheduled to
 	SetNodeID(node.ID)
-
+	// ShouldRun returns true if the task should run
 	ShouldRun() bool
 }
 
@@ -117,6 +120,14 @@ func (db *replicationDB[T, R]) GetGroups() []GroupID {
 			groups = append(groups, id)
 		}
 	})
+	return groups
+}
+
+func (db *replicationDB[T, R]) GetGroupsWithoutLock() []GroupID {
+	groups := make([]GroupID, 0, len(db.taskGroups))
+	for id := range db.taskGroups {
+		groups = append(groups, id)
+	}
 	return groups
 }
 
@@ -340,7 +351,7 @@ func (db *replicationDB[T, R]) GetGroupStat() string {
 	distribute := strings.Builder{}
 	db.withRLock(func() {
 		total := 0
-		for _, group := range db.GetGroups() {
+		for _, group := range db.GetGroupsWithoutLock() {
 			if total > 0 {
 				distribute.WriteString(" ")
 			}
@@ -387,7 +398,7 @@ func (db *replicationDB[T, R]) getOrCreateGroup(task R) *replicationGroup[T, R] 
 		db.taskGroups[groupID] = g
 		log.Info("scheduler: add new task group", zap.String("schedulerID", db.id),
 			zap.String("group", GetGroupName(groupID)),
-			zap.Stringer("groupType", GroupTpye(groupID)))
+			zap.Stringer("groupType", GroupType(groupID)))
 	}
 	return g
 }
@@ -399,7 +410,7 @@ func (db *replicationDB[T, R]) maybeRemoveGroup(g *replicationGroup[T, R]) {
 	delete(db.taskGroups, g.groupID)
 	log.Info("scheduler: remove task group", zap.String("schedulerID", db.id),
 		zap.String("group", GetGroupName(g.groupID)),
-		zap.Stringer("groupType", GroupTpye(g.groupID)))
+		zap.Stringer("groupType", GroupType(g.groupID)))
 }
 
 func (db *replicationDB[T, R]) mustGetGroup(groupID GroupID) *replicationGroup[T, R] {

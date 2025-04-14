@@ -297,6 +297,13 @@ func (c *eventBroker) logUnresetDispatchers(ctx context.Context) {
 				}
 				return true
 			})
+			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
+				dispatcher := value.(*dispatcherStat)
+				if dispatcher.resetTs.Load() == 0 {
+					log.Info("table trigger dispatcher not reset", zap.Any("dispatcher", dispatcher.id))
+				}
+				return true
+			})
 		}
 	}
 }
@@ -413,18 +420,34 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 // emitSyncPointEventIfNeeded emits a sync point event if the current ts is greater than the next sync point, and updates the next sync point.
 // We need call this function every time we send a event(whether dml/ddl/resolvedTs),
 // thus to ensure the sync point event is in correct order for each dispatcher.
+// When a period of time, there is no other dml and ddls, we will batch multiple sync point commit ts in one sync point event to enhance the speed.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
-	if d.enableSyncPoint && ts > d.nextSyncPoint {
-		// Send the sync point event.
+	commitTsList := make([]uint64, 0)
+	for d.enableSyncPoint && ts > d.nextSyncPoint {
+		commitTsList = append(commitTsList, d.nextSyncPoint)
+		d.nextSyncPoint = oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint).Add(d.syncPointInterval))
+	}
+
+	for len(commitTsList) > 0 {
+		// we limit a sync point event to contain at most 16 commit ts, to avoid a too large event.
+		newCommitTsList := commitTsList
+		if len(commitTsList) > 16 {
+			newCommitTsList = commitTsList[:16]
+		}
 		syncPointEvent := newWrapSyncPointEvent(
 			remoteID,
 			&pevent.SyncPointEvent{
 				DispatcherID: d.id,
-				CommitTs:     d.nextSyncPoint,
+				CommitTsList: newCommitTsList,
 			},
 			d.getEventSenderState())
 		c.getMessageCh(d.workerIndex) <- syncPointEvent
-		d.nextSyncPoint = oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint).Add(d.syncPointInterval))
+
+		if len(commitTsList) > 16 {
+			commitTsList = commitTsList[16:]
+		} else {
+			break
+		}
 	}
 }
 
@@ -565,7 +588,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 				if task.isRemoved.Load() {
 					log.Warn("get table info failed, since the dispatcher is removed", zap.Error(err))
 					return
-				} else if errors.Is(err, &schemastore.TableDeletedError{}) {
+				}
+				if errors.Is(err, &schemastore.TableDeletedError{}) {
 					// After a table is truncated, it is possible to receive more dml events, just ignore is ok.
 					// TODO: tables may be deleted in many ways, we need to check if it is safe to ignore later dmls in all cases.
 					// We must send the remaining ddl events to the dispatcher in this case.
@@ -577,7 +601,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			}
 			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
 		}
-		dml.AppendRow(e, c.mounter.DecodeToChunk)
+		if err = dml.AppendRow(e, c.mounter.DecodeToChunk); err != nil {
+			log.Panic("append row failed", zap.Error(err))
+		}
 	}
 }
 
@@ -733,6 +759,19 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 				}
 				return true
 			})
+			// Include the table trigger dispatchers in the metrics.
+			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
+				dispatcher := value.(*dispatcherStat)
+				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
+				if receivedMinResolvedTs == 0 || resolvedTs < receivedMinResolvedTs {
+					receivedMinResolvedTs = resolvedTs
+				}
+				watermark := dispatcher.sentResolvedTs.Load()
+				if sentMinWaterMark == 0 || watermark < sentMinWaterMark {
+					sentMinWaterMark = watermark
+				}
+				return true
+			})
 			if receivedMinResolvedTs == 0 {
 				continue
 			}
@@ -835,6 +874,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 		info.GetStartTs(),
 		func(resolvedTs uint64, latestCommitTs uint64) { c.onNotify(dispatcher, resolvedTs, latestCommitTs) },
 		info.IsOnlyReuse(),
+		info.GetBdrMode(),
 	)
 	if err != nil {
 		log.Panic("register dispatcher to eventStore failed",

@@ -74,13 +74,22 @@ type DDLEvent struct {
 	//   Recover Table
 	TableNameChange *TableNameChange `json:"table_name_change"`
 
-	TiDBOnly bool `json:"tidb_only"`
+	// the table name for the ddl job in the information_schema.ddl_jobs table(just ddl job.TableName)
+	TableNameInDDLJob string `msg:"table_name_in_ddl_job"`
+	// the database name for the ddl job in the information_schema.ddl_jobs table(just ddl job.dbName)
+	DBNameInDDLJob string `msg:"db_name_in_ddl_job"`
+
+	TiDBOnly bool   `json:"tidb_only"`
+	BDRMode  string `json:"bdr_mode"`
+
 	// Call when event flush is completed
 	PostTxnFlushed []func() `json:"-"`
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
 	eventSize int64 `json:"-"`
 
 	Err error `json:"-"`
+	// for simple protocol
+	IsBootstrap bool `msg:"-"`
 }
 
 func (d *DDLEvent) GetType() int {
@@ -123,6 +132,14 @@ func (d *DDLEvent) GetExtraSchemaName() string {
 
 func (d *DDLEvent) GetExtraTableName() string {
 	return d.ExtraTableName
+}
+
+func (d *DDLEvent) GetTableNameInDDLJob() string {
+	return d.TableNameInDDLJob
+}
+
+func (d *DDLEvent) GetDBNameInDDLJob() string {
+	return d.DBNameInDDLJob
 }
 
 func (d *DDLEvent) GetEvents() []*DDLEvent {
@@ -168,15 +185,20 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 		if len(queries) != len(d.MultipleTableInfos) {
 			log.Panic("queries length should be equal to multipleTableInfos length", zap.String("query", d.Query), zap.Any("multipleTableInfos", d.MultipleTableInfos))
 		}
+		if len(d.TableNameChange.DropName) != len(d.MultipleTableInfos) {
+			log.Panic("drop name length should be equal to multipleTableInfos length", zap.Any("query", d.TableNameChange.DropName), zap.Any("multipleTableInfos", d.MultipleTableInfos))
+		}
 		for i, info := range d.MultipleTableInfos {
 			events = append(events, &DDLEvent{
-				Version:    d.Version,
-				Type:       d.Type,
-				SchemaName: info.GetSchemaName(),
-				TableName:  info.GetTableName(),
-				TableInfo:  info,
-				Query:      queries[i],
-				FinishedTs: d.FinishedTs,
+				Version:         d.Version,
+				Type:            d.Type,
+				SchemaName:      info.GetSchemaName(),
+				TableName:       info.GetTableName(),
+				ExtraSchemaName: d.TableNameChange.DropName[i].SchemaName,
+				ExtraTableName:  d.TableNameChange.DropName[i].TableName,
+				TableInfo:       info,
+				Query:           queries[i],
+				FinishedTs:      d.FinishedTs,
 			})
 		}
 		return events

@@ -29,6 +29,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/spanz"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
@@ -144,6 +145,8 @@ type Dispatcher struct {
 	// such as error of flush ddl events
 	// errCh is shared in the eventDispatcherManager
 	errCh chan error
+
+	bdrMode bool
 }
 
 func NewDispatcher(
@@ -160,6 +163,7 @@ func NewDispatcher(
 	filterConfig *eventpb.FilterConfig,
 	currentPdTs uint64,
 	errCh chan error,
+	bdrMode bool,
 ) *Dispatcher {
 	dispatcher := &Dispatcher{
 		changefeedID:          changefeedID,
@@ -181,6 +185,7 @@ func NewDispatcher(
 		resendTaskMap:         newResendTaskMap(),
 		creationPDTs:          currentPdTs,
 		errCh:                 errCh,
+		bdrMode:               bdrMode,
 	}
 
 	dispatcher.addToStatusDynamicStream()
@@ -188,23 +193,26 @@ func NewDispatcher(
 	return dispatcher
 }
 
-func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo) error {
+// InitializeTableSchemaStore initializes the tableSchemaStore for the table trigger event dispatcher.
+// It returns true if the tableSchemaStore is initialized successfully, otherwise returns false.
+func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo) (ok bool, err error) {
 	// Only the table trigger event dispatcher need to create a tableSchemaStore
 	// Because we only need to calculate the tableNames or TableIds in the sink
 	// when the event dispatcher manager have table trigger event dispatcher
 	if !d.tableSpan.Equal(heartbeatpb.DDLSpan) {
 		log.Error("InitializeTableSchemaStore should only be received by table trigger event dispatcher", zap.Any("dispatcher", d.id))
-		return apperror.ErrChangefeedInitTableTriggerEventDispatcherFailed.
+		return false, apperror.ErrChangefeedInitTableTriggerEventDispatcherFailed.
 			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger event dispatcher")
 	}
 
 	if d.tableSchemaStore != nil {
 		log.Info("tableSchemaStore has already been initialized", zap.Stringer("dispatcher", d.id))
-		return nil
+		return false, nil
 	}
+
 	d.tableSchemaStore = util.NewTableSchemaStore(schemaInfo, d.sink.SinkType())
 	d.sink.SetTableSchemaStore(d.tableSchemaStore)
-	return nil
+	return true, nil
 }
 
 // HandleDispatcherStatus is used to handle the dispatcher status from the Maintainer to deal with the block event.
@@ -232,17 +240,17 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 	// deal with the dispatcher action
 	action := dispatcherStatus.GetAction()
 	if action != nil {
-		pendingEvent, blockStatus := d.blockEventStatus.getEventAndStage()
+		pendingEvent := d.blockEventStatus.getEvent()
 		if pendingEvent == nil && action.CommitTs > d.GetResolvedTs() {
-			// we have not receive the block event, and the action is for the future event, so just ignore
+			// we have not received the block event, and the action is for the future event, so just ignore
 			log.Info("pending event is nil, and the action's commit is larger than dispatchers resolvedTs",
 				zap.Uint64("resolvedTs", d.GetResolvedTs()),
 				zap.Uint64("actionCommitTs", action.CommitTs),
 				zap.Stringer("dispatcher", d.id))
-			// we have not receive the block event, and the action is for the future event, so just ignore
+			// we have not received the block event, and the action is for the future event, so just ignore
 			return
 		}
-		if pendingEvent != nil && action.CommitTs == pendingEvent.GetCommitTs() && blockStatus == heartbeatpb.BlockStage_WAITING {
+		if d.blockEventStatus.actionMatchs(action) {
 			log.Info("pending event get the action",
 				zap.Any("action", action),
 				zap.Stringer("dispatcher", d.id),
@@ -342,18 +350,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 					wakeCallback()
 				}
 			})
-			err := d.AddDMLEventToSink(dml)
-			if err != nil {
-				select {
-				case d.errCh <- err:
-				default:
-					log.Error("error channel is full, discard error",
-						zap.Stringer("changefeedID", d.changefeedID),
-						zap.Stringer("dispatcherID", d.id),
-						zap.Error(err))
-				}
-				return
-			}
+			d.AddDMLEventToSink(dml)
 		case commonEvent.TypeDDLEvent:
 			if len(dispatcherEvents) != 1 {
 				log.Panic("ddl event should only be singly handled",
@@ -362,6 +359,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			block = true
 			ddl := event.(*commonEvent.DDLEvent)
+
 			// Some DDL have some problem to sync to downstream, such as rename table with inappropriate filter
 			// such as https://docs.pingcap.com/zh/tidb/stable/ticdc-ddl#rename-table-%E7%B1%BB%E5%9E%8B%E7%9A%84-ddl-%E6%B3%A8%E6%84%8F%E4%BA%8B%E9%A1%B9
 			// so we need report the error to maintainer.
@@ -401,8 +399,9 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			syncPoint := event.(*commonEvent.SyncPointEvent)
 			log.Info("dispatcher receive sync point event",
 				zap.Stringer("dispatcher", d.id),
-				zap.Uint64("commitTs", event.GetCommitTs()),
+				zap.Any("commitTsList", syncPoint.GetCommitTsList()),
 				zap.Uint64("seq", event.GetSeq()))
+
 			syncPoint.AddPostFlushFunc(func() {
 				wakeCallback()
 			})
@@ -421,9 +420,9 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	return block
 }
 
-func (d *Dispatcher) AddDMLEventToSink(event *commonEvent.DMLEvent) error {
+func (d *Dispatcher) AddDMLEventToSink(event *commonEvent.DMLEvent) {
 	d.tableProgress.Add(event)
-	return d.sink.AddDMLEvent(event)
+	d.sink.AddDMLEvent(event)
 }
 
 func (d *Dispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
@@ -489,17 +488,24 @@ func (d *Dispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 // 2. If the event is a multi-table DDL / sync point Event, it will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
 func (d *Dispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	if !d.shouldBlock(event) {
-		err := d.AddBlockEventToSink(event)
-		if err != nil {
-			select {
-			case d.errCh <- err:
-			default:
-				log.Error("error channel is full, discard error",
-					zap.Stringer("changefeedID", d.changefeedID),
-					zap.Stringer("dispatcherID", d.id),
-					zap.Error(err))
+		ddl, ok := event.(*commonEvent.DDLEvent)
+		// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
+		// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
+		if ok && d.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
+			d.PassBlockEventToSink(event)
+		} else {
+			err := d.AddBlockEventToSink(event)
+			if err != nil {
+				select {
+				case d.errCh <- err:
+				default:
+					log.Error("error channel is full, discard error",
+						zap.Stringer("changefeedID", d.changefeedID),
+						zap.Stringer("dispatcherID", d.id),
+						zap.Error(err))
+				}
+				return
 			}
-			return
 		}
 		if event.GetNeedAddedTables() != nil || event.GetNeedDroppedTables() != nil {
 			message := &heartbeatpb.TableSpanBlockStatus{
@@ -543,25 +549,57 @@ func (d *Dispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 		}
 	} else {
 		d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
-		message := &heartbeatpb.TableSpanBlockStatus{
-			ID: d.id.ToPB(),
-			State: &heartbeatpb.State{
-				IsBlocked:         true,
-				BlockTs:           event.GetCommitTs(),
-				BlockTables:       event.GetBlockedTables().ToPB(),
-				NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
-				NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-				UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()), // only exists for rename table and rename tables
-				IsSyncPoint:       event.GetType() == commonEvent.TypeSyncPointEvent,         // sync point event must should block
-				Stage:             heartbeatpb.BlockStage_WAITING,
-			},
+
+		if event.GetType() == commonEvent.TypeSyncPointEvent {
+			// deal with multi sync point commit ts in one Sync Point Event
+			// make each commitTs as a single message for maintainer
+			// Because the batch commitTs in different dispatchers can be different.
+			commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
+			blockTables := event.GetBlockedTables().ToPB()
+			needDroppedTables := event.GetNeedDroppedTables().ToPB()
+			needAddedTables := commonEvent.ToTablesPB(event.GetNeedAddedTables())
+			for _, commitTs := range commitTsList {
+				message := &heartbeatpb.TableSpanBlockStatus{
+					ID: d.id.ToPB(),
+					State: &heartbeatpb.State{
+						IsBlocked:         true,
+						BlockTs:           commitTs,
+						BlockTables:       blockTables,
+						NeedDroppedTables: needDroppedTables,
+						NeedAddedTables:   needAddedTables,
+						UpdatedSchemas:    nil,
+						IsSyncPoint:       true,
+						Stage:             heartbeatpb.BlockStage_WAITING,
+					},
+				}
+				identifier := BlockEventIdentifier{
+					CommitTs:    commitTs,
+					IsSyncPoint: true,
+				}
+				d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
+				d.blockStatusesChan <- message
+			}
+		} else {
+			message := &heartbeatpb.TableSpanBlockStatus{
+				ID: d.id.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked:         true,
+					BlockTs:           event.GetCommitTs(),
+					BlockTables:       event.GetBlockedTables().ToPB(),
+					NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
+					NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+					UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()), // only exists for rename table and rename tables
+					IsSyncPoint:       false,
+					Stage:             heartbeatpb.BlockStage_WAITING,
+				},
+			}
+			identifier := BlockEventIdentifier{
+				CommitTs:    event.GetCommitTs(),
+				IsSyncPoint: false,
+			}
+			d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
+			d.blockStatusesChan <- message
 		}
-		identifier := BlockEventIdentifier{
-			CommitTs:    event.GetCommitTs(),
-			IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
-		}
-		d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-		d.blockStatusesChan <- message
 	}
 
 	// dealing with events which update schema ids

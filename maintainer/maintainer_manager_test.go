@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
-	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -66,7 +65,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 
 	appcontext.SetService(appcontext.SchemaStore, store)
-	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc := messaging.NewMessageCenter(ctx, selfNode.ID, config.NewDefaultMessageCenterConfig(selfNode.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()
 
@@ -81,8 +80,8 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		AddTableBatchSize:    1000,
 		CheckBalanceInterval: 0,
 	}
-	tsoClient := &replica.MockTsoClient{}
-	manager := NewMaintainerManager(selfNode, schedulerConf, nil, tsoClient, nil)
+	pdClock := pdutil.NewClock4Test()
+	manager := NewMaintainerManager(selfNode, schedulerConf, nil, pdClock, nil)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -131,17 +130,17 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 
 	// Case 2: Add new nodes
 	node2 := node.NewInfo("127.0.0.1:8400", "")
-	mc2 := messaging.NewMessageCenter(ctx, node2.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc2 := messaging.NewMessageCenter(ctx, node2.ID, config.NewDefaultMessageCenterConfig(node2.AdvertiseAddr), nil)
 	mc2.Run(ctx)
 	defer mc2.Close()
 
 	node3 := node.NewInfo("127.0.0.1:8500", "")
-	mc3 := messaging.NewMessageCenter(ctx, node3.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc3 := messaging.NewMessageCenter(ctx, node3.ID, config.NewDefaultMessageCenterConfig(node3.AdvertiseAddr), nil)
 	mc3.Run(ctx)
 	defer mc3.Close()
 
 	node4 := node.NewInfo("127.0.0.1:8600", "")
-	mc4 := messaging.NewMessageCenter(ctx, node4.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc4 := messaging.NewMessageCenter(ctx, node4.ID, config.NewDefaultMessageCenterConfig(node4.AdvertiseAddr), nil)
 	mc4.Run(ctx)
 	defer mc4.Close()
 
@@ -276,7 +275,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	appcontext.SetService(appcontext.SchemaStore, store)
-	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc := messaging.NewMessageCenter(ctx, selfNode.ID, config.NewDefaultMessageCenterConfig(selfNode.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()
 
@@ -287,8 +286,8 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		return nil
 	})
-	tsoClient := &replica.MockTsoClient{}
-	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, nil, tsoClient, nil)
+	pdClock := pdutil.NewClock4Test()
+	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, nil, pdClock, nil)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -396,7 +395,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	appcontext.SetService(appcontext.SchemaStore, store)
-	mc := messaging.NewMessageCenter(ctx, selfNode.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc := messaging.NewMessageCenter(ctx, selfNode.ID, config.NewDefaultMessageCenterConfig(selfNode.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)
@@ -407,8 +406,8 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 		return nil
 	})
 	schedulerConf := &config.SchedulerConfig{AddTableBatchSize: 1000}
-	tsoClient := &replica.MockTsoClient{}
-	manager := NewMaintainerManager(selfNode, schedulerConf, nil, tsoClient, nil)
+	pdClock := pdutil.NewClock4Test()
+	manager := NewMaintainerManager(selfNode, schedulerConf, nil, pdClock, nil)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -469,7 +468,7 @@ func startDispatcherNode(t *testing.T, ctx context.Context,
 		var opts []grpc.ServerOption
 		grpcServer := grpc.NewServer(opts...)
 		mcs := messaging.NewMessageCenterServer(mc)
-		proto.RegisterMessageCenterServer(grpcServer, mcs)
+		proto.RegisterMessageServiceServer(grpcServer, mcs)
 		lis, err := net.Listen("tcp", node.AdvertiseAddr)
 		require.NoError(t, err)
 		go func() {

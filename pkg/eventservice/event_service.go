@@ -48,6 +48,7 @@ type DispatcherInfo interface {
 	GetSyncPointInterval() time.Duration
 
 	IsOnlyReuse() bool
+	GetBdrMode() bool
 }
 
 // EventService accepts the requests of pulling events.

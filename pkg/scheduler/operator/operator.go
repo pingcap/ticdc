@@ -19,25 +19,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 )
 
-// type OpType int
-
-// const (
-// 	OpAdd           OpType = iota // Add a new task
-// 	OpStop                        // Stop a task
-// 	OpRemove                      // Remove a task
-// 	OpMove                        // Move a task to another node
-// 	OpSplit                       // Split one task to multiple subtasks
-// 	OpMerge                       // merge multiple tasks to one task
-// 	OpMergeAndSplit               // remove old tasks and split to multiple subtasks
-// )
-
-// type OpOption[T replica.ReplicationID, R replica.Replication[T]] struct {
-// 	OpType         OpType
-// 	Source         node.ID
-// 	Target         node.ID
-// 	OriginReplicas []R
-// }
-
 type Controller[T replica.ReplicationID, S replica.ReplicationStatus] interface {
 	// AddOperator adds an operator to the controller
 	AddOperator(op Operator[T, S]) bool
@@ -57,7 +38,7 @@ type Operator[T replica.ReplicationID, S replica.ReplicationStatus] interface {
 	Type() string
 	// Start is called when the operator is added to the operator executing queue
 	Start()
-	// Schedule schedules this operator returns the message to be sent to the remote node
+	// Schedule schedules this operator, it returns the message to be sent to the remote node
 	Schedule() *messaging.TargetMessage
 	// IsFinished returns true if the operator is finished
 	IsFinished() bool
@@ -69,7 +50,7 @@ type Operator[T replica.ReplicationID, S replica.ReplicationStatus] interface {
 	// 3. revert some modifies if the operator is canceled
 	PostFinish()
 	// Check checks when the new status comes, returns true if the operator is finished
-	// It is called by when the node reported a new status
+	// It is called when the node reported a new status
 	Check(from node.ID, status S)
 	// OnNodeRemove is called when node offline
 	OnNodeRemove(node.ID)

@@ -25,6 +25,11 @@ type PersistedDDLEvent struct {
 	ID   int64 `msg:"id"`
 	Type byte  `msg:"type"`
 
+	// the table name for the ddl job in the information_schema.ddl_jobs table(just ddl job.TableName)
+	TableNameInDDLJob string `msg:"table_name_in_ddl_job"`
+	// the database name for the ddl job in the information_schema.ddl_jobs table(just ddl job.dbName)
+	DBNameInDDLJob string `msg:"db_name_in_ddl_job"`
+
 	// SchemaID is from upstream Job.SchemaID, it corresponds to TableID
 	// it is the DB id of the table after the ddl
 	SchemaID int64 `msg:"schema_id"`
@@ -110,6 +115,18 @@ type BasicTableInfo struct {
 }
 
 type BasicPartitionInfo map[int64]interface{}
+
+func (info BasicPartitionInfo) AddPartitionIDs(ids ...int64) {
+	for _, id := range ids {
+		info[id] = nil
+	}
+}
+
+func (info BasicPartitionInfo) RemovePartitionIDs(ids ...int64) {
+	for _, id := range ids {
+		delete(info, id)
+	}
+}
 
 //msgp:ignore DDLJobWithCommitTs
 type DDLJobWithCommitTs struct {

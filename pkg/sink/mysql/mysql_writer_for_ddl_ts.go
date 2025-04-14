@@ -20,11 +20,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tiflow/pkg/config"
 	"go.uber.org/zap"
@@ -45,28 +44,26 @@ import (
 // Thus, we try to flush ddl ts pre first before the ddl event is sent to downstream,
 // and after send the ddl ts, we update the ddl ts item to finished.
 // It can maximum guarantee we use the correct startTs.
-func (w *MysqlWriter) FlushDDLTsPre(event commonEvent.BlockEvent) error {
+func (w *Writer) FlushDDLTsPre(event commonEvent.BlockEvent) error {
 	err := w.createDDLTsTableIfNotExist()
 	if err != nil {
 		return err
 	}
-	err = w.SendDDLTsPre(event)
-	return errors.Trace(err)
+	return w.SendDDLTsPre(event)
 }
 
-func (w *MysqlWriter) FlushDDLTs(event commonEvent.BlockEvent) error {
+func (w *Writer) FlushDDLTs(event commonEvent.BlockEvent) error {
 	err := w.createDDLTsTableIfNotExist()
 	if err != nil {
 		return err
 	}
-	err = w.SendDDLTs(event)
-	return errors.Trace(err)
+	return w.SendDDLTs(event)
 }
 
-func (w *MysqlWriter) SendDDLTsPre(event commonEvent.BlockEvent) error {
+func (w *Writer) SendDDLTsPre(event commonEvent.BlockEvent) error {
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "ddl ts table: begin Tx fail;"))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "ddl ts table: begin Tx fail;"))
 	}
 
 	changefeedID := w.ChangefeedID.String()
@@ -94,10 +91,14 @@ func (w *MysqlWriter) SendDDLTsPre(event commonEvent.BlockEvent) error {
 
 	if len(tableIds) > 0 {
 		isSyncpoint := "1"
+		tableNameInDDLJob := ""
+		dbNameInDDLJob := ""
 		if event.GetType() == commonEvent.TypeDDLEvent {
 			isSyncpoint = "0"
+			tableNameInDDLJob = event.(*commonEvent.DDLEvent).GetTableNameInDDLJob()
+			dbNameInDDLJob = event.(*commonEvent.DDLEvent).GetDBNameInDDLJob()
 		}
-		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint)
+		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint, tableNameInDDLJob, dbNameInDDLJob)
 		log.Info("send ddl ts table query", zap.String("query", query))
 
 		_, err = tx.Exec(query)
@@ -107,20 +108,20 @@ func (w *MysqlWriter) SendDDLTsPre(event commonEvent.BlockEvent) error {
 			if err2 != nil {
 				log.Error("failed to write ddl ts table", zap.Error(err2))
 			}
-			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write ddl ts table; Exec Failed; Query is %s", query)))
+			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write ddl ts table; Exec Failed; Query is %s", query)))
 		}
 	} else {
 		log.Error("table ids is empty when write ddl ts table, FIX IT", zap.Any("event", event))
 	}
 
 	err = tx.Commit()
-	return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "failed to write ddl ts table; Commit Fail;"))
+	return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "failed to write ddl ts table; Commit Fail;"))
 }
 
-func (w *MysqlWriter) SendDDLTs(event commonEvent.BlockEvent) error {
+func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "ddl ts table: begin Tx fail;"))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "ddl ts table: begin Tx fail;"))
 	}
 
 	changefeedID := w.ChangefeedID.String()
@@ -165,10 +166,14 @@ func (w *MysqlWriter) SendDDLTs(event commonEvent.BlockEvent) error {
 
 	if len(tableIds) > 0 {
 		isSyncpoint := "1"
+		tableNameInDDLJob := ""
+		dbNameInDDLJob := ""
 		if event.GetType() == commonEvent.TypeDDLEvent {
 			isSyncpoint = "0"
+			tableNameInDDLJob = event.(*commonEvent.DDLEvent).GetTableNameInDDLJob()
+			dbNameInDDLJob = event.(*commonEvent.DDLEvent).GetDBNameInDDLJob()
 		}
-		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint)
+		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint, tableNameInDDLJob, dbNameInDDLJob)
 		log.Info("send ddl ts table query", zap.String("query", query))
 
 		_, err = tx.Exec(query)
@@ -178,7 +183,7 @@ func (w *MysqlWriter) SendDDLTs(event commonEvent.BlockEvent) error {
 			if err2 != nil {
 				log.Error("failed to write ddl ts table", zap.Error(err2))
 			}
-			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write ddl ts table; Exec Failed; Query is %s", query)))
+			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write ddl ts table; Exec Failed; Query is %s", query)))
 		}
 	} else {
 		log.Error("table ids is empty when write ddl ts table, FIX IT", zap.Any("event", event))
@@ -196,28 +201,21 @@ func (w *MysqlWriter) SendDDLTs(event commonEvent.BlockEvent) error {
 			if err2 != nil {
 				log.Error("failed to delete ddl ts item", zap.Error(err2))
 			}
-			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
+			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
 		}
 	}
 
 	err = tx.Commit()
-	return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "failed to write ddl ts table; Commit Fail;"))
+	return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "failed to write ddl ts table; Commit Fail;"))
 }
 
-func insertItemQuery(tableIds []int64, ticdcClusterID string, changefeedID string, ddlTs string, finished string, isSyncpoint string) string {
-	// choose one related table_id to help table trigger event dispatcher to find the ddl jobs.
-	relatedTableID := tableIds[0] // TODO: relatedID need to be selected carefully, especially for partitioned tables
-	if relatedTableID == 0 {
-		if len(tableIds) > 1 {
-			relatedTableID = tableIds[1]
-		}
-	}
+func insertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs, finished, isSyncpoint, tableNameInDDLJob, dbNameInDDlJob string) string {
 	var builder strings.Builder
 	builder.WriteString("INSERT INTO ")
 	builder.WriteString(filter.TiCDCSystemSchema)
 	builder.WriteString(".")
 	builder.WriteString(filter.DDLTsTable)
-	builder.WriteString(" (ticdc_cluster_id, changefeed, ddl_ts, table_id, related_table_id, finished, is_syncpoint) VALUES ")
+	builder.WriteString(" (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint) VALUES ")
 
 	for idx, tableId := range tableIds {
 		builder.WriteString("('")
@@ -228,9 +226,11 @@ func insertItemQuery(tableIds []int64, ticdcClusterID string, changefeedID strin
 		builder.WriteString(ddlTs)
 		builder.WriteString("', ")
 		builder.WriteString(strconv.FormatInt(tableId, 10))
-		builder.WriteString(", ")
-		builder.WriteString(strconv.FormatInt(relatedTableID, 10))
-		builder.WriteString(", ")
+		builder.WriteString(", '")
+		builder.WriteString(tableNameInDDLJob)
+		builder.WriteString("', '")
+		builder.WriteString(dbNameInDDlJob)
+		builder.WriteString("', ")
 		builder.WriteString(finished)
 		builder.WriteString(", ")
 		builder.WriteString(isSyncpoint)
@@ -239,7 +239,7 @@ func insertItemQuery(tableIds []int64, ticdcClusterID string, changefeedID strin
 			builder.WriteString(", ")
 		}
 	}
-	builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), related_table_id=VALUES(related_table_id), ddl_ts=VALUES(ddl_ts), created_at=NOW(), is_syncpoint=VALUES(is_syncpoint);")
+	builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), created_at=NOW(), is_syncpoint=VALUES(is_syncpoint);")
 
 	return builder.String()
 }
@@ -280,9 +280,9 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 //     (we use related table to find the ddl job -- take `truncate table` as an example, the ddl job used the table truncated, but not the new table)
 //     2.2.2.1 if the latest ddl job time is larger than the createdAt, startTs = ddlTs
 //     2.2.2.2 else startTs = ddlTs - 1
-func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
+func (w *Writer) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) {
 	retStartTsList := make([]int64, len(tableIDs))
-	tableIdIdxMap := make(map[int64]int, 0)
+	tableIdIdxMap := make(map[int64]int, len(tableIDs))
 	isSyncpoints := make([]bool, len(tableIDs))
 	for i, tableID := range tableIDs {
 		tableIdIdxMap[tableID] = i
@@ -303,17 +303,18 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) 
 				zap.Error(err))
 			return retStartTsList, isSyncpoints, nil
 		}
-		return retStartTsList, isSyncpoints, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
+		return retStartTsList, isSyncpoints, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 	}
 
 	defer rows.Close()
-	var ddlTs, tableId, relatedTableId int64
+	var ddlTs, tableId int64
+	var tableNameInDDLJob, dbNameInDDLJob string
 	var finished, isSyncpoint bool
 	var createdAtBytes []byte
 	for rows.Next() {
-		err := rows.Scan(&tableId, &relatedTableId, &ddlTs, &finished, &createdAtBytes, &isSyncpoint)
+		err = rows.Scan(&tableId, &tableNameInDDLJob, &dbNameInDDLJob, &ddlTs, &finished, &createdAtBytes, &isSyncpoint)
 		if err != nil {
-			return retStartTsList, isSyncpoints, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
+			return retStartTsList, isSyncpoints, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 		}
 		if finished {
 			retStartTsList[tableIdIdxMap[tableId]] = ddlTs
@@ -323,7 +324,7 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) 
 				log.Panic("ddl ts table is not finished, but downstream is not tidb, FIX IT")
 			}
 
-			createdAt, err := time.Parse("2006-01-02 15:04:05", string(createdAtBytes))
+			createdAt, err := time.Parse(time.DateTime, string(createdAtBytes))
 			if err != nil {
 				log.Error("Failed to parse created_at", zap.Any("createdAtBytes", createdAtBytes), zap.Any("error", err))
 				retStartTsList[tableIdIdxMap[tableId]] = ddlTs - 1
@@ -331,7 +332,7 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) 
 			}
 
 			// query the ddl_jobs table to find whether the ddl is executed and the ddl created time
-			createdTime, ok := w.queryDDLJobs(relatedTableId)
+			createdTime, ok := w.queryDDLJobs(dbNameInDDLJob, tableNameInDDLJob)
 			if !ok {
 				retStartTsList[tableIdIdxMap[tableId]] = ddlTs - 1
 			} else {
@@ -339,12 +340,12 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) 
 					// show the ddl is executed
 					retStartTsList[tableIdIdxMap[tableId]] = ddlTs
 					isSyncpoints[tableIdIdxMap[tableId]] = isSyncpoint
-					log.Debug("createdTime is larger than createdAt", zap.Int64("tableId", tableId), zap.Int64("relatedTableId", relatedTableId), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs))
+					log.Debug("createdTime is larger than createdAt", zap.Int64("tableId", tableId), zap.Any("tableNameInDDLJob", tableNameInDDLJob), zap.Any("dbNameInDDLJob", dbNameInDDLJob), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs))
 					continue
 				} else {
 					// show the ddl is not executed
 					retStartTsList[tableIdIdxMap[tableId]] = ddlTs - 1
-					log.Debug("createdTime is less than  createdAt", zap.Int64("tableId", tableId), zap.Int64("relatedTableId", relatedTableId), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs-1))
+					log.Debug("createdTime is less than  createdAt", zap.Int64("tableId", tableId), zap.Any("tableNameInDDLJob", tableNameInDDLJob), zap.Any("dbNameInDDLJob", dbNameInDDLJob), zap.Int64("ddlTs", ddlTs), zap.Int64("startTs", ddlTs-1))
 					continue
 				}
 			}
@@ -356,7 +357,7 @@ func (w *MysqlWriter) GetStartTsList(tableIDs []int64) ([]int64, []bool, error) 
 
 func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID string) string {
 	var builder strings.Builder
-	builder.WriteString("SELECT table_id, related_table_id, ddl_ts, finished, created_at, is_syncpoint FROM ")
+	builder.WriteString("SELECT table_id, table_name_in_ddl_job, db_name_in_ddl_job, ddl_ts, finished, created_at, is_syncpoint FROM ")
 	builder.WriteString(filter.TiCDCSystemSchema)
 	builder.WriteString(".")
 	builder.WriteString(filter.DDLTsTable)
@@ -378,11 +379,15 @@ func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID stri
 	return builder.String()
 }
 
-var queryDDLJobs = `SELECT CREATE_TIME FROM information_schema.ddl_jobs WHERE TABLE_ID = "%s" order by CREATE_TIME desc limit 1;`
+var queryDDLJobs = `SELECT CREATE_TIME FROM information_schema.ddl_jobs WHERE DB_NAME = '%s' AND TABLE_NAME = '%s' order by CREATE_TIME desc limit 1;`
 
-func (w *MysqlWriter) queryDDLJobs(tableID int64) (time.Time, bool) {
+func (w *Writer) queryDDLJobs(dbNameInDDLJob, tableNameInDDLJob string) (time.Time, bool) {
+	if dbNameInDDLJob == "" && tableNameInDDLJob == "" {
+		log.Info("tableNameInDDLJob and dbNameInDDLJob both are nil")
+		return time.Time{}, false
+	}
 	// query the ddl_jobs table to find whether the ddl is executed
-	query := fmt.Sprintf(queryDDLJobs, strconv.FormatInt(tableID, 10))
+	query := fmt.Sprintf(queryDDLJobs, dbNameInDDLJob, tableNameInDDLJob)
 	log.Info("query the info from ddl jobs", zap.String("query", query))
 
 	start := time.Now()
@@ -397,7 +402,7 @@ func (w *MysqlWriter) queryDDLJobs(tableID int64) (time.Time, bool) {
 	var createdTimeBytes []byte
 	var createdTime time.Time
 	for ddlJobRows.Next() {
-		err := ddlJobRows.Scan(&createdTimeBytes)
+		err = ddlJobRows.Scan(&createdTimeBytes)
 		if err != nil {
 			log.Error("failed to query ddl jobs", zap.Error(err))
 			return time.Time{}, false
@@ -409,14 +414,14 @@ func (w *MysqlWriter) queryDDLJobs(tableID int64) (time.Time, bool) {
 		}
 		return createdTime, true
 	}
-	log.Debug("no ddl job item", zap.Int64("relatedTableId", tableID))
+	log.Debug("no ddl job item", zap.Any("tableNameInDDLJob", tableNameInDDLJob), zap.Any("dbNameInDDLJob", dbNameInDDLJob))
 	return time.Time{}, false
 }
 
-func (w *MysqlWriter) RemoveDDLTsItem() error {
+func (w *Writer) RemoveDDLTsItem() error {
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "select ddl ts table: begin Tx fail;"))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "select ddl ts table: begin Tx fail;"))
 	}
 
 	changefeedID := w.ChangefeedID.String()
@@ -452,14 +457,14 @@ func (w *MysqlWriter) RemoveDDLTsItem() error {
 		if err2 != nil {
 			log.Error("failed to delete ddl ts item", zap.Error(err2))
 		}
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
 	}
 
 	err = tx.Commit()
-	return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
+	return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
 }
 
-func (w *MysqlWriter) isDDLExecuted(tableID int64, ddlTs uint64) (bool, error) {
+func (w *Writer) isDDLExecuted(tableID int64, ddlTs uint64) (bool, error) {
 	changefeedID := w.ChangefeedID.String()
 	ticdcClusterID := config.GetGlobalServerConfig().ClusterID
 
@@ -487,7 +492,7 @@ func (w *MysqlWriter) isDDLExecuted(tableID int64, ddlTs uint64) (bool, error) {
 
 	rows, err := w.db.Query(query)
 	if err != nil {
-		return false, cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
+		return false, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 	}
 
 	defer rows.Close()
@@ -497,20 +502,20 @@ func (w *MysqlWriter) isDDLExecuted(tableID int64, ddlTs uint64) (bool, error) {
 	return false, nil
 }
 
-func (w *MysqlWriter) createTable(dbName string, tableName string, createTableQuery string) error {
+func (w *Writer) createTable(dbName string, tableName string, createTableQuery string) error {
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: begin Tx fail;", tableName)))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: begin Tx fail;", tableName)))
 	}
 
 	// we try to set cdc write source for the ddl
-	if err = SetWriteSource(w.cfg, tx); err != nil {
+	if err = SetWriteSource(w.ctx, w.cfg, tx); err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil {
 			if errors.Cause(rbErr) != context.Canceled {
 				log.Error("Failed to rollback", zap.Error(err))
 			}
 		}
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: set write source fail;", tableName)))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: set write source fail;", tableName)))
 	}
 
 	_, err = tx.Exec("CREATE DATABASE IF NOT EXISTS " + dbName)
@@ -519,7 +524,7 @@ func (w *MysqlWriter) createTable(dbName string, tableName string, createTableQu
 		if errRollback != nil {
 			log.Error("failed to rollback", zap.Any("tableName", tableName), zap.Error(errRollback))
 		}
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to create %s table;", tableName)))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to create %s table;", tableName)))
 	}
 	_, err = tx.Exec("USE " + dbName)
 	if err != nil {
@@ -527,7 +532,7 @@ func (w *MysqlWriter) createTable(dbName string, tableName string, createTableQu
 		if errRollback != nil {
 			log.Error("failed to rollback", zap.Any("tableName", tableName), zap.Error(errRollback))
 		}
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: use %s db fail;", tableName, dbName)))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: use %s db fail;", tableName, dbName)))
 	}
 
 	_, err = tx.Exec(createTableQuery)
@@ -536,13 +541,16 @@ func (w *MysqlWriter) createTable(dbName string, tableName string, createTableQu
 		if errRollback != nil {
 			log.Error("failed to rollback", zap.Any("tableName", tableName), zap.Error(errRollback))
 		}
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: Exec fail; Query is %s", tableName, createTableQuery)))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: Exec fail; Query is %s", tableName, createTableQuery)))
 	}
 	err = tx.Commit()
-	return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: Commit Failed; Query is %s", tableName, createTableQuery)))
+	if err != nil {
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: Commit Failed; Query is %s", tableName, createTableQuery)))
+	}
+	return nil
 }
 
-func (w *MysqlWriter) createDDLTsTable() error {
+func (w *Writer) createDDLTsTable() error {
 	database := filter.TiCDCSystemSchema
 	query := `CREATE TABLE IF NOT EXISTS %s
 	(
@@ -551,7 +559,8 @@ func (w *MysqlWriter) createDDLTsTable() error {
 		ddl_ts varchar(18),
 		table_id bigint(21),
 		finished bool,
-		related_table_id bigint(21),
+		table_name_in_ddl_job varchar(1024),
+		db_name_in_ddl_job varchar(1024),
 		is_syncpoint bool,
 		created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		INDEX (ticdc_cluster_id, changefeed, table_id),
@@ -562,14 +571,15 @@ func (w *MysqlWriter) createDDLTsTable() error {
 	return w.createTable(database, filter.DDLTsTable, query)
 }
 
-func (w *MysqlWriter) createDDLTsTableIfNotExist() error {
-	if !w.ddlTsTableInit {
-		// create checkpoint ts table if not exist
-		err := w.createDDLTsTable()
-		if err != nil {
-			return err
-		}
-		w.ddlTsTableInit = true
+func (w *Writer) createDDLTsTableIfNotExist() error {
+	if w.ddlTsTableInit {
+		return nil
 	}
+	// create checkpoint ts table if not exist
+	err := w.createDDLTsTable()
+	if err != nil {
+		return err
+	}
+	w.ddlTsTableInit = true
 	return nil
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -31,15 +32,15 @@ func TestOneBlockEvent(t *testing.T) {
 	setNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
-	tsoClient := &replica.MockTsoClient{}
-	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID,
-		tsoClient, heartbeatpb.DDLSpanSchemaID,
+	pdClock := pdutil.NewClock4Test()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		pdClock, heartbeatpb.DDLSpanSchemaID,
 		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, tsoClient,
+	controller := NewController(cfID, 1, nil, pdClock,
 		nil, nil, nil, ddlSpan, 1000, 0)
 	startTs := uint64(10)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, startTs)
@@ -160,15 +161,15 @@ func TestNormalBlock(t *testing.T) {
 	setNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
-	tsoClient := &replica.MockTsoClient{}
-	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID,
-		tsoClient, heartbeatpb.DDLSpanSchemaID,
+	pdClock := pdutil.NewClock4Test()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		pdClock, heartbeatpb.DDLSpanSchemaID,
 		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, tsoClient, nil, nil, nil, ddlSpan, 1000, 0)
+	controller := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
 		controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 10)
@@ -327,15 +328,15 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	setNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
-	tsoClient := &replica.MockTsoClient{}
-	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID,
-		tsoClient, heartbeatpb.DDLSpanSchemaID,
+	pdClock := pdutil.NewClock4Test()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		pdClock, heartbeatpb.DDLSpanSchemaID,
 		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, tsoClient, nil, nil, nil, ddlSpan, 1000, 0)
+	controller := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 3; id++ {
 		controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 10)
@@ -472,15 +473,15 @@ func TestSchemaBlock(t *testing.T) {
 	nmap["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
-	tsoClient := &replica.MockTsoClient{}
-	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID,
-		tsoClient, heartbeatpb.DDLSpanSchemaID,
+	pdClock := pdutil.NewClock4Test()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		pdClock, heartbeatpb.DDLSpanSchemaID,
 		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, tsoClient, nil, nil, nil, ddlSpan, 1000, 0)
+	controller := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
 
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
@@ -649,15 +650,15 @@ func TestSyncPointBlock(t *testing.T) {
 	nmap["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
-	tsoClient := &replica.MockTsoClient{}
-	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID,
-		tsoClient, heartbeatpb.DDLSpanSchemaID,
+	pdClock := pdutil.NewClock4Test()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		pdClock, heartbeatpb.DDLSpanSchemaID,
 		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, tsoClient, nil, nil, nil, ddlSpan, 1000, 0)
+	controller := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 2, TableID: 3}, 1)
@@ -810,15 +811,15 @@ func TestNonBlocked(t *testing.T) {
 	setNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
-	tsoClient := &replica.MockTsoClient{}
-	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID,
-		tsoClient, heartbeatpb.DDLSpanSchemaID,
+	pdClock := pdutil.NewClock4Test()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		pdClock, heartbeatpb.DDLSpanSchemaID,
 		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, tsoClient, nil, nil, nil, ddlSpan, 1000, 0)
+	controller := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
 	barrier := NewBarrier(controller, false)
 
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
@@ -860,15 +861,15 @@ func TestUpdateCheckpointTs(t *testing.T) {
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
 
-	tsoClient := &replica.MockTsoClient{Phy: 2, Logic: 3}
-	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID,
-		tsoClient, heartbeatpb.DDLSpanSchemaID,
+	pdClock := pdutil.NewClock4Test()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		pdClock, heartbeatpb.DDLSpanSchemaID,
 		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, tsoClient,
+	controller := NewController(cfID, 1, nil, pdClock,
 		nil, nil, nil, ddlSpan, 1000, 0)
 
 	barrier := NewBarrier(controller, false)
@@ -917,15 +918,15 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	setNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
-	tsoClient := &replica.MockTsoClient{}
-	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID,
-		tsoClient, heartbeatpb.DDLSpanSchemaID,
+	pdClock := pdutil.NewClock4Test()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		pdClock, heartbeatpb.DDLSpanSchemaID,
 		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, tsoClient, nil, nil, nil, ddlSpan, 1000, 0)
+	controller := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
 	var dispatcherIDs []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
 		controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 2)
@@ -1082,15 +1083,15 @@ func TestSyncPointBlockPerf(t *testing.T) {
 	setNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
-	tsoClient := &replica.MockTsoClient{}
-	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID,
-		tsoClient, heartbeatpb.DDLSpanSchemaID,
+	pdClock := pdutil.NewClock4Test()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		pdClock, heartbeatpb.DDLSpanSchemaID,
 		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, tsoClient, nil, nil, nil, ddlSpan, 1000, 0)
+	controller := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
 	barrier := NewBarrier(controller, true)
 	for id := 1; id < 1000; id++ {
 		controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 1)

@@ -106,7 +106,7 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 	var pause, resume bool
 	var memoryUsageRatio float64
 	switch algorithm {
-	case "v2":
+	case MemoryControlAlgorithmV2:
 		pause, resume, memoryUsageRatio = shouldPausePathV2(
 			path.paused.Load(),
 			path.pendingSize.Load(),
@@ -171,7 +171,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 	var pause, resume bool
 	var memoryUsageRatio float64
 	switch algorithm {
-	case "v2":
+	case MemoryControlAlgorithmV2:
 		pause, resume, memoryUsageRatio = shouldPauseAreaV2(
 			as.paused.Load(),
 			as.totalPendingSize.Load(),
@@ -221,7 +221,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 		)
 	}
 
-	if algorithm != "v2" {
+	if algorithm != MemoryControlAlgorithmV2 {
 		failpoint.Inject("PauseArea", func() {
 			log.Warn("inject PauseArea")
 			sendFeedback(true)
@@ -235,7 +235,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 		sendFeedback(false)
 	}
 
-	if algorithm == "v2" && as.paused.Load() {
+	if algorithm == MemoryControlAlgorithmV2 && as.paused.Load() {
 		log.Panic("area is paused, but the algorithm is v2, this should not happen")
 	}
 }

@@ -80,7 +80,7 @@ func TestEventRouter(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "test", d.GetDefaultTopic())
 
-	partitionDispatcher := d.GetPartitionDispatcher("test", "test")
+	partitionDispatcher := d.GetPartitionGenerator("test", "test")
 	topicDispatcher := d.matchTopicGenerator("test", "test")
 	require.IsType(t, &topic.StaticTopicGenerator{}, topicDispatcher)
 	require.IsType(t, &partition.TablePartitionGenerator{}, partitionDispatcher)
@@ -93,49 +93,49 @@ func TestEventRouter(t *testing.T) {
 	require.NoError(t, err)
 
 	// no matched, use the default
-	partitionDispatcher = d.GetPartitionDispatcher("sbs", "test")
+	partitionDispatcher = d.GetPartitionGenerator("sbs", "test")
 	topicDispatcher = d.matchTopicGenerator("sbs", "test")
 	require.IsType(t, &topic.StaticTopicGenerator{}, topicDispatcher)
 	require.IsType(t, &partition.TablePartitionGenerator{}, partitionDispatcher)
 
 	// match rule-0
-	partitionDispatcher = d.GetPartitionDispatcher("test_default1", "test")
+	partitionDispatcher = d.GetPartitionGenerator("test_default1", "test")
 	topicDispatcher = d.matchTopicGenerator("test_default1", "test")
 	require.IsType(t, &topic.StaticTopicGenerator{}, topicDispatcher)
 	require.IsType(t, &partition.TablePartitionGenerator{}, partitionDispatcher)
 
 	// match rule-1
-	partitionDispatcher = d.GetPartitionDispatcher("test_default2", "test")
+	partitionDispatcher = d.GetPartitionGenerator("test_default2", "test")
 	topicDispatcher = d.matchTopicGenerator("test_default2", "test")
 	require.IsType(t, &topic.StaticTopicGenerator{}, topicDispatcher)
 	require.IsType(t, &partition.TablePartitionGenerator{}, partitionDispatcher)
 
 	// match rule-2
-	partitionDispatcher = d.GetPartitionDispatcher("test_table", "test")
+	partitionDispatcher = d.GetPartitionGenerator("test_table", "test")
 	topicDispatcher = d.matchTopicGenerator("test_table", "test")
 	require.IsType(t, &topic.DynamicTopicGenerator{}, topicDispatcher)
 	require.IsType(t, &partition.TablePartitionGenerator{}, partitionDispatcher)
 
 	// match rule-4
-	partitionDispatcher = d.GetPartitionDispatcher("test_index_value", "test")
+	partitionDispatcher = d.GetPartitionGenerator("test_index_value", "test")
 	topicDispatcher = d.matchTopicGenerator("test_index_value", "test")
 	require.IsType(t, &topic.DynamicTopicGenerator{}, topicDispatcher)
 	require.IsType(t, &partition.IndexValuePartitionGenerator{}, partitionDispatcher)
 
 	// match rule-4
-	partitionDispatcher = d.GetPartitionDispatcher("test", "table1")
+	partitionDispatcher = d.GetPartitionGenerator("test", "table1")
 	topicDispatcher = d.matchTopicGenerator("test", "table1")
 	require.IsType(t, &topic.DynamicTopicGenerator{}, topicDispatcher)
 	require.IsType(t, &partition.IndexValuePartitionGenerator{}, partitionDispatcher)
 
 	// match rule-5
-	partitionDispatcher = d.GetPartitionDispatcher("sbs", "table2")
+	partitionDispatcher = d.GetPartitionGenerator("sbs", "table2")
 	topicDispatcher = d.matchTopicGenerator("sbs", "table2")
 	require.IsType(t, &topic.DynamicTopicGenerator{}, topicDispatcher)
 	require.IsType(t, &partition.TsPartitionGenerator{}, partitionDispatcher)
 
 	// match rule-6
-	partitionDispatcher = d.GetPartitionDispatcher("hard_code_schema", "test")
+	partitionDispatcher = d.GetPartitionGenerator("hard_code_schema", "test")
 	topicDispatcher = d.matchTopicGenerator("hard_code_schema", "test")
 	require.IsType(t, &topic.StaticTopicGenerator{}, topicDispatcher)
 	require.IsType(t, &partition.TablePartitionGenerator{}, partitionDispatcher)
@@ -203,7 +203,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	tableInfo := &common.TableInfo{
 		TableName: common.TableName{Schema: "test_default1", Table: "table"},
 	}
-	partitionGenerator := d.GetPartitionGenerator(tableInfo)
+	partitionGenerator := d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	p, _, err := partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 16, tableInfo, 0)
 	require.NoError(t, err)
 	require.Equal(t, int32(14), p)
@@ -212,7 +212,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	tableInfo = &common.TableInfo{
 		TableName: common.TableName{Schema: "test_default2", Table: "table"},
 	}
-	partitionGenerator = d.GetPartitionGenerator(tableInfo)
+	partitionGenerator = d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 16, tableInfo, 0)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), p)
@@ -221,7 +221,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	tableInfo = &common.TableInfo{
 		TableName: common.TableName{Schema: "test_table", Table: "table"},
 	}
-	partitionGenerator = d.GetPartitionGenerator(tableInfo)
+	partitionGenerator = d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 16, tableInfo, 1)
 	require.NoError(t, err)
 	require.Equal(t, int32(15), p)
@@ -246,7 +246,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
 
-	partitionGenerator = d.GetPartitionGenerator(dmlEvent.TableInfo)
+	partitionGenerator = d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&row, 10, dmlEvent.TableInfo, 2)
 	require.NoError(t, err)
 	require.Equal(t, int32(9), p)
@@ -255,7 +255,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	tableInfo = &common.TableInfo{
 		TableName: common.TableName{Schema: "a", Table: "table"},
 	}
-	partitionGenerator = d.GetPartitionGenerator(tableInfo)
+	partitionGenerator = d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 2, tableInfo, 1)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), p)

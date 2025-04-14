@@ -25,7 +25,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -304,7 +303,7 @@ func TestMaintainerSchedule(t *testing.T) {
 	appcontext.SetService(appcontext.SchemaStore, schemaStore)
 
 	n := node.NewInfo("", "")
-	mc := messaging.NewMessageCenter(ctx, n.ID, 100, config.NewDefaultMessageCenterConfig(), nil)
+	mc := messaging.NewMessageCenter(ctx, n.ID, config.NewDefaultMessageCenterConfig(n.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)
@@ -323,7 +322,7 @@ func TestMaintainerSchedule(t *testing.T) {
 	}()
 
 	taskScheduler := threadpool.NewThreadPoolDefault()
-	tsoClient := &replica.MockTsoClient{}
+	pdClock := pdutil.NewClock4Test()
 	maintainer := NewMaintainer(cfID,
 		&config.SchedulerConfig{
 			CheckBalanceInterval: config.TomlDuration(time.Minute),
@@ -331,7 +330,7 @@ func TestMaintainerSchedule(t *testing.T) {
 		},
 		&config.ChangeFeedInfo{
 			Config: config.GetDefaultReplicaConfig(),
-		}, n, taskScheduler, nil, tsoClient, nil, 10, true)
+		}, n, taskScheduler, nil, pdClock, nil, 10, true)
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic,
 		func(ctx context.Context, msg *messaging.TargetMessage) error {

@@ -116,6 +116,7 @@ func New(
 		zap.Uint64("finishedDDLTS", s.finishedDDLTs),
 		zap.Int64("schemaVersion", s.schemaVersion))
 	s.ddlJobFetcher = newDDLJobFetcher(
+		ctx,
 		subClient,
 		kvStorage,
 		upperBound.ResolvedTs,
@@ -188,7 +189,7 @@ func (s *schemaStore) updateResolvedTsPeriodically(ctx context.Context) error {
 						zap.Uint64("storeFinishedDDLTS", s.finishedDDLTs))
 					continue
 				}
-				log.Info("handle ddl job",
+				log.Info("handle a ddl job",
 					zap.Int64("schemaID", event.Job.SchemaID),
 					zap.String("schemaName", event.Job.SchemaName),
 					zap.Int64("tableID", event.Job.TableID),

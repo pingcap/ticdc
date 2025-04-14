@@ -38,11 +38,11 @@ const (
 	defaultSupportVectorVersion = "8.4.0"
 )
 
-// MysqlWriter is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
-type MysqlWriter struct {
+// Writer is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
+type Writer struct {
 	ctx          context.Context
 	db           *sql.DB
-	cfg          *MysqlConfig
+	cfg          *Config
 	ChangefeedID common.ChangeFeedID
 
 	syncPointTableInit     bool
@@ -68,15 +68,15 @@ type MysqlWriter struct {
 	blockerTicker *time.Ticker
 }
 
-func NewMysqlWriter(
+func NewWriter(
 	ctx context.Context,
 	db *sql.DB,
-	cfg *MysqlConfig,
+	cfg *Config,
 	changefeedID common.ChangeFeedID,
 	statistics *metrics.Statistics,
 	needFormatVectorType bool,
-) *MysqlWriter {
-	res := &MysqlWriter{
+) *Writer {
+	res := &Writer{
 		ctx:                    ctx,
 		db:                     db,
 		cfg:                    cfg,
@@ -99,11 +99,11 @@ func NewMysqlWriter(
 	return res
 }
 
-func (w *MysqlWriter) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (w *Writer) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	w.tableSchemaStore = tableSchemaStore
 }
 
-func (w *MysqlWriter) FlushDDLEvent(event *commonEvent.DDLEvent) error {
+func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 	if w.cfg.DryRun {
 		for _, callback := range event.PostTxnFlushed {
 			callback()
@@ -132,7 +132,7 @@ func (w *MysqlWriter) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 
 		err := w.execDDLWithMaxRetries(event)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 
 		// We need to record ddl' ts after each ddl for each table in the downstream when sink is mysql-compatible.
@@ -154,7 +154,7 @@ func (w *MysqlWriter) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 	return nil
 }
 
-func (w *MysqlWriter) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
+func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	if w.cfg.DryRun {
 		for _, callback := range event.PostTxnFlushed {
 			callback()
@@ -199,11 +199,8 @@ func (w *MysqlWriter) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) err
 	return nil
 }
 
-func (w *MysqlWriter) Flush(events []*commonEvent.DMLEvent) error {
-	dmls, err := w.prepareDMLs(events)
-	if err != nil {
-		return errors.Trace(err)
-	}
+func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
+	dmls := w.prepareDMLs(events)
 	defer dmlsPool.Put(dmls) // Return dmls to pool after use
 
 	if dmls.rowCount == 0 {
@@ -211,12 +208,12 @@ func (w *MysqlWriter) Flush(events []*commonEvent.DMLEvent) error {
 	}
 
 	if !w.cfg.DryRun {
-		if err = w.execDMLWithMaxRetries(dmls); err != nil {
+		if err := w.execDMLWithMaxRetries(dmls); err != nil {
 			return errors.Trace(err)
 		}
 	} else {
 		w.tryDryRunBlock()
-		if err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
+		if err := w.statistics.RecordBatchExecution(func() (int, int64, error) {
 			return dmls.rowCount, dmls.approximateSize, nil
 		}); err != nil {
 			return errors.Trace(err)
@@ -230,7 +227,7 @@ func (w *MysqlWriter) Flush(events []*commonEvent.DMLEvent) error {
 	return nil
 }
 
-func (w *MysqlWriter) tryDryRunBlock() {
+func (w *Writer) tryDryRunBlock() {
 	time.Sleep(w.cfg.DryRunDelay)
 	if w.blockerTicker != nil {
 		select {
@@ -243,7 +240,7 @@ func (w *MysqlWriter) tryDryRunBlock() {
 	}
 }
 
-func (w *MysqlWriter) Close() {
+func (w *Writer) Close() {
 	if w.stmtCache != nil {
 		w.stmtCache.Purge()
 	}

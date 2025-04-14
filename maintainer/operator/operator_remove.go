@@ -26,22 +26,22 @@ import (
 	"go.uber.org/zap"
 )
 
-// RemoveDispatcherOperator is an operator to remove a table span from a dispatcher
+// removeDispatcherOperator is an operator to remove a table span from a dispatcher
 // and remove it from the replication db
-type RemoveDispatcherOperator struct {
+type removeDispatcherOperator struct {
 	replicaSet *replica.SpanReplication
 	finished   atomic.Bool
 	db         *replica.ReplicationDB
 }
 
-func NewRemoveDispatcherOperator(db *replica.ReplicationDB, replicaSet *replica.SpanReplication) *RemoveDispatcherOperator {
-	return &RemoveDispatcherOperator{
+func newRemoveDispatcherOperator(db *replica.ReplicationDB, replicaSet *replica.SpanReplication) *removeDispatcherOperator {
+	return &removeDispatcherOperator{
 		replicaSet: replicaSet,
 		db:         db,
 	}
 }
 
-func (m *RemoveDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSpanStatus) {
+func (m *removeDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSpanStatus) {
 	if !m.finished.Load() && from == m.replicaSet.GetNodeID() &&
 		status.ComponentStatus != heartbeatpb.ComponentState_Working {
 		m.replicaSet.UpdateStatus(status)
@@ -51,51 +51,51 @@ func (m *RemoveDispatcherOperator) Check(from node.ID, status *heartbeatpb.Table
 	}
 }
 
-func (m *RemoveDispatcherOperator) Schedule() *messaging.TargetMessage {
+func (m *removeDispatcherOperator) Schedule() *messaging.TargetMessage {
 	return m.replicaSet.NewRemoveDispatcherMessage(m.replicaSet.GetNodeID())
 }
 
 // OnNodeRemove is called when node offline, and the replicaset must already move to absent status and will be scheduled again
-func (m *RemoveDispatcherOperator) OnNodeRemove(n node.ID) {
+func (m *removeDispatcherOperator) OnNodeRemove(n node.ID) {
 	if n == m.replicaSet.GetNodeID() {
 		m.finished.Store(true)
 	}
 }
 
 // AffectedNodes returns the nodes that the operator will affect
-func (m *RemoveDispatcherOperator) AffectedNodes() []node.ID {
+func (m *removeDispatcherOperator) AffectedNodes() []node.ID {
 	return []node.ID{m.replicaSet.GetNodeID()}
 }
 
-func (m *RemoveDispatcherOperator) ID() common.DispatcherID {
+func (m *removeDispatcherOperator) ID() common.DispatcherID {
 	return m.replicaSet.ID
 }
 
-func (m *RemoveDispatcherOperator) IsFinished() bool {
+func (m *removeDispatcherOperator) IsFinished() bool {
 	return m.finished.Load()
 }
 
-func (m *RemoveDispatcherOperator) OnTaskRemoved() {
+func (m *removeDispatcherOperator) OnTaskRemoved() {
 	panic("unreachable")
 	// m.finished.Store(true)
 }
 
-func (m *RemoveDispatcherOperator) Start() {
+func (m *removeDispatcherOperator) Start() {
 	log.Info("start remove dispatcher operator",
 		zap.String("replicaSet", m.replicaSet.ID.String()))
 }
 
-func (m *RemoveDispatcherOperator) PostFinish() {
+func (m *removeDispatcherOperator) PostFinish() {
 	log.Info("remove dispatcher operator finished",
 		zap.String("replicaSet", m.replicaSet.ID.String()),
 		zap.String("changefeed", m.replicaSet.ChangefeedID.String()))
 }
 
-func (m *RemoveDispatcherOperator) String() string {
+func (m *removeDispatcherOperator) String() string {
 	return fmt.Sprintf("remove dispatcher operator: %s, dest %s",
 		m.replicaSet.ID, m.replicaSet.GetNodeID())
 }
 
-func (m *RemoveDispatcherOperator) Type() string {
+func (m *removeDispatcherOperator) Type() string {
 	return "remove"
 }

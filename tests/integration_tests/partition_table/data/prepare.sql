@@ -48,6 +48,7 @@ ALTER TABLE t1 REORGANIZE PARTITION p2,p3,p4 INTO (PARTITION p2 VALUES LESS THAN
 insert into t1 values (-3),(5),(14),(22),(30),(100);
 update t1 set a=a-16 where a=12;
 delete from t1 where a = 29;
+ALTER TABLE t1 REORGANIZE PARTITION p2,p3,p4,pMax INTO (PARTITION pRest VALUES LESS THAN (MAXVALUE));
 
 /* Change partitioning to key based and then back to range */
 alter table t1 partition by key(a) partitions 7;

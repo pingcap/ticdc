@@ -360,15 +360,18 @@ func (s *regionRequestWorker) processRegionSendTask(
 			zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Uint64("regionID", region.verID.GetID()),
 			zap.Uint64("storeID", s.store.storeID),
-			zap.String("addr", s.store.storeAddr))
+			zap.String("addr", s.store.storeAddr),
+			zap.Bool("bdrMode", region.filterLoop))
 
 		// It means it's a special task for stopping the table.
 		if region.isStopped() {
 			req := &cdcpb.ChangeDataRequest{
+				Header:    &cdcpb.Header{ClusterId: s.client.clusterID, TicdcVersion: version.ReleaseSemver()},
 				RequestId: uint64(subID),
 				Request: &cdcpb.ChangeDataRequest_Deregister_{
 					Deregister: &cdcpb.ChangeDataRequest_Deregister{},
 				},
+				FilterLoop: region.filterLoop,
 			}
 			if err := doSend(req); err != nil {
 				return err
@@ -413,7 +416,7 @@ func (s *regionRequestWorker) createRegionRequest(region regionInfo) *cdcpb.Chan
 		StartKey:     region.span.StartKey,
 		EndKey:       region.span.EndKey,
 		ExtraOp:      kvrpcpb.ExtraOp_ReadOldValue,
-		FilterLoop:   s.client.filterLoop,
+		FilterLoop:   region.filterLoop,
 	}
 }
 

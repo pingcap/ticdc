@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -237,7 +238,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[info.ID] = info
 	mc := messaging.NewMessageCenter(ctx,
-		info.ID, 100, config.NewDefaultMessageCenterConfig(), nil)
+		info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
 	mc.Run(ctx)
 	defer mc.Close()
 
@@ -302,9 +303,13 @@ func TestScaleNode(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[info.ID] = info
-	mc1 := messaging.NewMessageCenter(ctx, info.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	cfg := config.NewDefaultMessageCenterConfig(info.AdvertiseAddr)
+	mc1 := messaging.NewMessageCenter(ctx, info.ID, cfg, nil)
 	mc1.Run(ctx)
-	defer mc1.Close()
+	defer func() {
+		mc1.Close()
+		log.Info("close message center 1")
+	}()
 
 	appcontext.SetService(appcontext.MessageCenter, mc1)
 	startMaintainerNode(ctx, info, mc1, nodeManager)
@@ -345,15 +350,27 @@ func TestScaleNode(t *testing.T) {
 
 	// add two nodes
 	info2 := node.NewInfo("127.0.0.1:28400", "")
-	mc2 := messaging.NewMessageCenter(ctx, info2.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc2 := messaging.NewMessageCenter(ctx, info2.ID, config.NewDefaultMessageCenterConfig(info2.AdvertiseAddr), nil)
 	mc2.Run(ctx)
-	defer mc2.Close()
+	defer func() {
+		mc2.Close()
+		log.Info("close message center 2")
+	}()
 	startMaintainerNode(ctx, info2, mc2, nodeManager)
 	info3 := node.NewInfo("127.0.0.1:28500", "")
-	mc3 := messaging.NewMessageCenter(ctx, info3.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc3 := messaging.NewMessageCenter(ctx, info3.ID, config.NewDefaultMessageCenterConfig(info3.AdvertiseAddr), nil)
 	mc3.Run(ctx)
-	defer mc3.Close()
+	defer func() {
+		mc3.Close()
+		log.Info("close message center 3")
+	}()
+
 	startMaintainerNode(ctx, info3, mc3, nodeManager)
+
+	log.Info("Start maintainer node",
+		zap.Stringer("id", info3.ID),
+		zap.String("addr", info3.AdvertiseAddr))
+
 	// notify node changes
 	_, _ = nodeManager.Tick(ctx, &orchestrator.GlobalReactorState{
 		Captures: map[model.CaptureID]*model.CaptureInfo{
@@ -379,6 +396,7 @@ func TestScaleNode(t *testing.T) {
 			model.CaptureID(info2.ID): {ID: model.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
 		},
 	})
+
 	require.Eventually(t, func() bool {
 		return co.controller.changefeedDB.GetReplicatingSize() == changefeedNumber
 	}, waitTime, time.Millisecond*5)
@@ -386,6 +404,8 @@ func TestScaleNode(t *testing.T) {
 		return len(co.controller.changefeedDB.GetByNodeID(info.ID)) == 3 &&
 			len(co.controller.changefeedDB.GetByNodeID(info2.ID)) == 3
 	}, waitTime, time.Millisecond*5)
+
+	log.Info("pass scale node")
 }
 
 func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
@@ -397,7 +417,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[info.ID] = info
 
-	mc1 := messaging.NewMessageCenter(ctx, info.ID, 0, config.NewDefaultMessageCenterConfig(), nil)
+	mc1 := messaging.NewMessageCenter(ctx, info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
 	mc1.Run(ctx)
 	defer mc1.Close()
 
@@ -477,6 +497,132 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	}, waitTime, time.Millisecond*5)
 }
 
+func TestConcurrentStopAndSendEvents(t *testing.T) {
+	// Setup context
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Initialize node info
+	info := node.NewInfo("127.0.0.1:28600", "")
+	etcdClient := newMockEtcdClient(string(info.ID))
+	nodeManager := watcher.NewNodeManager(nil, etcdClient)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+	nodeManager.GetAliveNodes()[info.ID] = info
+
+	// Initialize message center
+	mc := messaging.NewMessageCenter(ctx, info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
+	mc.Run(ctx)
+	defer mc.Close()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	// Initialize backend
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper{}, nil).AnyTimes()
+
+	// Create coordinator
+	cr := New(info, &mockPdClient{}, pdutil.NewClock4Test(), backend, "test-gc-service", 100, 10000, time.Millisecond*10)
+	co := cr.(*coordinator)
+
+	// Number of goroutines for each operation
+	const (
+		sendEventGoroutines = 10
+		stopGoroutines      = 5
+		eventsPerGoroutine  = 100
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(sendEventGoroutines + stopGoroutines)
+
+	// Start the coordinator
+	ctxRun, cancelRun := context.WithCancel(ctx)
+	go func() {
+		err := cr.Run(ctxRun)
+		if err != nil && err != context.Canceled {
+			t.Errorf("Coordinator Run returned unexpected error: %v", err)
+		}
+	}()
+
+	// Give coordinator some time to initialize
+	time.Sleep(100 * time.Millisecond)
+
+	// Start goroutines to send events
+	for i := 0; i < sendEventGoroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			defer func() {
+				// Recover from potential panics
+				if r := recover(); r != nil {
+					t.Errorf("Panic in send event goroutine %d: %v", id, r)
+				}
+			}()
+
+			for j := 0; j < eventsPerGoroutine; j++ {
+				// Try to send an event
+				if co.closed.Load() {
+					// Coordinator is already closed, stop sending
+					return
+				}
+
+				msg := &messaging.TargetMessage{
+					Topic: messaging.CoordinatorTopic,
+					Type:  messaging.TypeMaintainerHeartbeatRequest,
+				}
+
+				// Use recvMessages to send event to channel
+				err := co.recvMessages(ctx, msg)
+				if err != nil && err != context.Canceled {
+					t.Logf("Failed to send event in goroutine %d: %v", id, err)
+				}
+
+				// Small sleep to increase chance of race conditions
+				time.Sleep(time.Millisecond)
+			}
+		}(i)
+	}
+
+	// Start goroutines to stop the coordinator
+	for i := 0; i < stopGoroutines; i++ {
+		go func(id int) {
+			defer wg.Done()
+			// Small delay to ensure some events are sent first
+			time.Sleep(time.Duration(10+id*5) * time.Millisecond)
+			co.Stop()
+		}(i)
+	}
+
+	// Wait for all goroutines to complete
+	wg.Wait()
+
+	// Cancel the context to ensure the coordinator stops
+	cancelRun()
+
+	// Give some time for the coordinator to fully stop
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify that the coordinator is closed
+	require.True(t, co.closed.Load())
+
+	// Verify that event channel is closed
+	select {
+	case _, ok := <-co.eventCh.Out():
+		require.False(t, ok, "Event channel should be closed")
+	default:
+		// Channel might be already drained, which is fine
+	}
+
+	// Try sending another event - should not panic but may return error
+	msg := &messaging.TargetMessage{
+		Topic: messaging.CoordinatorTopic,
+		Type:  messaging.TypeMaintainerHeartbeatRequest,
+	}
+
+	err := co.recvMessages(ctx, msg)
+	require.NoError(t, err)
+	require.True(t, co.closed.Load())
+}
+
 type maintainNode struct {
 	cancel  context.CancelFunc
 	mc      messaging.MessageCenter
@@ -499,7 +645,7 @@ func startMaintainerNode(ctx context.Context,
 		var opts []grpc.ServerOption
 		grpcServer := grpc.NewServer(opts...)
 		mcs := messaging.NewMessageCenterServer(mc)
-		proto.RegisterMessageCenterServer(grpcServer, mcs)
+		proto.RegisterMessageServiceServer(grpcServer, mcs)
 		lis, err := net.Listen("tcp", node.AdvertiseAddr)
 		if err != nil {
 			panic(err)

@@ -25,9 +25,10 @@ import (
 
 const BlockLenInPendingQueue = 32
 
-// A stream uses two goroutines
-// 1. handleLoop: to handle the events.
-// 2. reportStatLoop: to report the statistics.
+// A stream has two goroutines: receiver and handleLoop.
+// The receiver receives the events and buffers them.
+// The handleLoop handles the events.
+// While if UseBuffer is false, the receiver is not needed, and the handleLoop directly receives the events.
 type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	id int
 
@@ -348,22 +349,11 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 }
 
 func (pi *pathInfo[A, P, T, D, H]) updatePendingSize(delta int64) {
-	oldSize := pi.pendingSize.Load()
-	// Check for integer overflow/underflow
-	newSize := oldSize + delta
-	if delta > 0 && newSize < oldSize {
-		log.Error("Integer overflow detected in updatePendingSize",
-			zap.Int64("oldSize", oldSize),
-			zap.Int64("delta", delta))
-		return
+	pi.pendingSize.Add(delta)
+	if pi.pendingSize.Load() < 0 {
+		log.Warn("pendingSize is negative", zap.Int64("pendingSize", pi.pendingSize.Load()))
+		pi.pendingSize.Store(0)
 	}
-	if delta < 0 && newSize > oldSize {
-		log.Error("Integer underflow detected in updatePendingSize",
-			zap.Int64("oldSize", oldSize),
-			zap.Int64("delta", delta))
-		return
-	}
-	pi.pendingSize.Store(newSize)
 }
 
 // eventWrap contains the event and the path info.
