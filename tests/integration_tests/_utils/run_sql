@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # parameter 1: sql
 # parameter 2: database host
 # parameter 3: database port
