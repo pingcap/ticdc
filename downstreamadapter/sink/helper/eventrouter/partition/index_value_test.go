@@ -26,6 +26,7 @@ func genRow(t *testing.T, helper *event.EventTestHelper, schema string, table st
 	event := helper.DML2Event(schema, table, dml...)
 	row, exist := event.GetNextRow()
 	require.True(t, exist)
+	helper.DDL2Job("TRUNCATE TABLE " + table)
 	return &row
 }
 
@@ -38,7 +39,7 @@ func TestIndexValueDispatcher(t *testing.T) {
 	job2 := helper.DDL2Job("create table t2(a int, b int, primary key(a,b))")
 	require.NotNil(t, job2)
 	tableInfoWithSinglePK := helper.GetTableInfo(job1)
-	tableInfoWithCompositePK := helper.GetTableInfo(job1)
+	tableInfoWithCompositePK := helper.GetTableInfo(job2)
 
 	testCases := []struct {
 		row             *event.RowChange
