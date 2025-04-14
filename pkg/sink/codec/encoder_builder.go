@@ -36,10 +36,6 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncod
 		return canal.NewJSONRowEventEncoder(ctx, cfg)
 	case config.ProtocolDebezium:
 		return debezium.NewBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID), nil
-	// case config.ProtocolSimple:
-	// 	return simple.NewEncoder(ctx, cfg)
-	// case config.ProtocolDebezium:
-	// 	return debezium.NewBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID), nil
 	case config.ProtocolSimple:
 		return simple.NewEncoder(ctx, cfg)
 	default:
