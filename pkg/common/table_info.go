@@ -407,14 +407,14 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 	return ok
 }
 
-func newTableInfo(schema string, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
+func newTableInfo(schema string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
 	ti := &TableInfo{
 		TableName: TableName{
 			Schema:      schema,
-			Table:       tableInfo.Name.O,
-			TableID:     tableInfo.ID,
+			Table:       table,
+			TableID:     tableID,
 			IsPartition: isPartition,
-			quotedName:  QuoteSchema(schema, tableInfo.Name.O),
+			quotedName:  QuoteSchema(schema, table),
 		},
 		columnSchema: columnSchema,
 		View:         tableInfo.View,
@@ -423,8 +423,8 @@ func newTableInfo(schema string, isPartition bool, columnSchema *columnSchema, t
 	return ti
 }
 
-func NewTableInfo(schemaName string, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
-	ti := newTableInfo(schemaName, isPartition, columnSchema, tableInfo)
+func NewTableInfo(schemaName string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
+	ti := newTableInfo(schemaName, table, tableID, isPartition, columnSchema, tableInfo)
 
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appeared when tableInfo is created as a pair.
@@ -441,14 +441,14 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
 	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
 
-	return NewTableInfo(schemaName, info.GetPartitionInfo() != nil, columnSchema, info)
+	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema, info)
 }
 
 // NewTableInfo4Decoder is only used by the codec decoder for the test purpose,
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
 	cs := newColumnSchema4Decoder(tableInfo)
-	return newTableInfo(schema, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
+	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
 }
 
 // BuildTiDBTableInfoWithoutVirtualColumns build a TableInfo without virual columns from the source table info

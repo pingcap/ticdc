@@ -23,6 +23,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
@@ -1330,6 +1331,8 @@ func extractTableInfoFuncForExchangeTablePartition(event *PersistedDDLEvent, tab
 	columnSchema := event.ExtraTableInfo.ShadowCopyColumnSchema()
 	tableInfo := common.NewTableInfo(
 		event.SchemaName,
+		pmodel.NewCIStr(event.TableName).O,
+		tableID,
 		false,
 		columnSchema,
 		event.TableInfo)
