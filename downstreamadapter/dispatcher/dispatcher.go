@@ -315,8 +315,6 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	// Only return false when all events are resolvedTs Event.
 	block = false
-	// before bootstrap finished, cannot send any event.
-	block = d.EmitBootstrap()
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		log.Debug("dispatcher receive all event",
@@ -810,23 +808,22 @@ func (d *Dispatcher) HandleCheckpointTs(checkpointTs uint64) {
 	d.sink.AddCheckpointTs(checkpointTs)
 }
 
+// EmitBootstrap emits the table bootstrap event in a blocking way after changefeed started
+// It will return after the bootstrap event is sent.
 func (d *Dispatcher) EmitBootstrap() bool {
-	if !d.IsTableTriggerEventDispatcher() {
-		return false
-	}
 	bootstrap := loadBootstrapState(&d.BootstrapState)
 	switch bootstrap {
 	case BootstrapFinished:
-		return false
-	case BootstrapInProgress:
 		return true
+	case BootstrapInProgress:
+		return false
 	case BootstrapNotStarted:
 	}
 	storeBootstrapState(&d.BootstrapState, BootstrapInProgress)
 	tables := d.tableSchemaStore.GetAllNormalTableIds()
 	if len(tables) == 0 {
 		storeBootstrapState(&d.BootstrapState, BootstrapFinished)
-		return false
+		return true
 	}
 	start := time.Now()
 	ts := d.GetStartTs()
@@ -869,7 +866,7 @@ func (d *Dispatcher) EmitBootstrap() bool {
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
 			d.errCh <- errors.ErrExecDDLFailed.GenWithStackByArgs()
-			return false
+			return true
 		}
 	}
 	storeBootstrapState(&d.BootstrapState, BootstrapFinished)
@@ -877,7 +874,7 @@ func (d *Dispatcher) EmitBootstrap() bool {
 		zap.Stringer("changefeed", d.changefeedID),
 		zap.Int("tables", len(currentTables)),
 		zap.Duration("cost", time.Since(start)))
-	return false
+	return true
 }
 
 func (d *Dispatcher) IsTableTriggerEventDispatcher() bool {

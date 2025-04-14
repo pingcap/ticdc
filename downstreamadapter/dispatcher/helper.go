@@ -383,6 +383,7 @@ func GetDispatcherStatusDynamicStream() dynstream.DynamicStream[common.GID, comm
 	return dispatcherStatusDS
 }
 
+// bootstrapState used to check if send bootstrap event after changefeed created
 type bootstrapState int32
 
 const (

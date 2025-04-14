@@ -418,6 +418,11 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 	if !needAddDispatcher {
 		return nil
 	}
+	// before bootstrap finished, cannot send any event.
+	success := e.tableTriggerEventDispatcher.EmitBootstrap()
+	if !success {
+		return errors.ErrDispatcherFailed.GenWithStackByArgs()
+	}
 
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.config.MemoryQuota, e.config.BDRMode)
