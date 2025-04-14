@@ -163,17 +163,17 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		// which will be responsible for automatically creating topics when they don't exist.
 		// If it is not called here and kafka has `auto.create.topics.enable` turned on,
 		// then the auto-created topic will not be created as configured by ticdc.
-		partitionNum, err := s.comp.topicManager.GetPartitionNum(s.ctx, topic)
+		_, err = s.comp.topicManager.GetPartitionNum(s.ctx, topic)
 		if err != nil {
 			return err
 		}
 		if s.partitionRule == helper.PartitionAll {
 			err = s.statistics.RecordDDLExecution(func() error {
-				return s.ddlProducer.syncBroadcastMessage(s.ctx, topic, partitionNum, message)
+				return s.ddlProducer.syncBroadcastMessage(s.ctx, topic, message)
 			})
 		} else {
 			err = s.statistics.RecordDDLExecution(func() error {
-				return s.ddlProducer.syncSendMessage(s.ctx, topic, 0, message)
+				return s.ddlProducer.syncSendMessage(s.ctx, topic, message)
 			})
 		}
 		if err != nil {
@@ -209,9 +209,8 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 	}()
 	var (
-		msg          *common.Message
-		partitionNum int32
-		err          error
+		msg *common.Message
+		err error
 	)
 	for {
 		select {
@@ -241,24 +240,22 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			// This will be compatible with the old behavior.
 			if len(tableNames) == 0 {
 				topic := s.comp.eventRouter.GetDefaultTopic()
-				partitionNum, err = s.comp.topicManager.GetPartitionNum(ctx, topic)
+				_, err = s.comp.topicManager.GetPartitionNum(ctx, topic)
 				if err != nil {
 					return errors.Trace(err)
 				}
-				log.Debug("Emit checkpointTs to default topic",
-					zap.String("topic", topic), zap.Uint64("checkpointTs", ts), zap.Any("partitionNum", partitionNum))
-				err = s.ddlProducer.syncBroadcastMessage(ctx, topic, partitionNum, msg)
+				err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg)
 				if err != nil {
 					return errors.Trace(err)
 				}
 			} else {
 				topics := s.comp.eventRouter.GetActiveTopics(tableNames)
 				for _, topic := range topics {
-					partitionNum, err = s.comp.topicManager.GetPartitionNum(ctx, topic)
+					_, err = s.comp.topicManager.GetPartitionNum(ctx, topic)
 					if err != nil {
 						return errors.Trace(err)
 					}
-					err = s.ddlProducer.syncBroadcastMessage(ctx, topic, partitionNum, msg)
+					err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg)
 					if err != nil {
 						return errors.Trace(err)
 					}

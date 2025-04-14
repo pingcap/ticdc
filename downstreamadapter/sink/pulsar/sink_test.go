@@ -21,7 +21,6 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
-	"github.com/pingcap/ticdc/downstreamadapter/worker/producer"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -30,7 +29,7 @@ import (
 	"go.uber.org/atomic"
 )
 
-func newPulsarSinkForTest(t *testing.T) (*sink, producer.DMLProducer, producer.DDLProducer, error) {
+func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 	sinkURL := "pulsar://127.0.0.1:6650/persistent://public/default/test?" +
 		"protocol=canal-json&pulsar-version=v2.10.0&enable-tidb-extension=true&" +
 		"authentication-token=eyJhbcGcixxxxxxxxxxxxxx"
@@ -48,14 +47,10 @@ func newPulsarSinkForTest(t *testing.T) (*sink, producer.DMLProducer, producer.D
 	require.NoError(t, err)
 
 	statistics := metrics.NewStatistics(changefeedID, "sink")
-
-	dmlMockProducer := producer.NewMockPulsarDMLProducer()
-	ddlMockProducer := producer.NewMockPulsarDDLProducer()
-
-	sink := &sink{
+	pulsarSink := &sink{
 		changefeedID: changefeedID,
-		dmlProducer:  dmlMockProducer,
-		ddlProducer:  ddlMockProducer,
+		dmlProducer:  newMockDMLProducer(),
+		ddlProducer:  newMockDDLProducer(),
 
 		checkpointTsChan: make(chan uint64, 16),
 		eventChan:        make(chan *commonEvent.DMLEvent, 32),
@@ -69,12 +64,12 @@ func newPulsarSinkForTest(t *testing.T) (*sink, producer.DMLProducer, producer.D
 		statistics: statistics,
 		ctx:        ctx,
 	}
-	go sink.Run(ctx)
-	return sink, dmlMockProducer, ddlMockProducer, nil
+	go pulsarSink.Run(ctx)
+	return pulsarSink, nil
 }
 
 func TestPulsarSinkBasicFunctionality(t *testing.T) {
-	sink, dmlProducer, ddlProducer, err := newPulsarSinkForTest(t)
+	pulsarSink, err := newPulsarSinkForTest(t)
 	require.NoError(t, err)
 
 	var count atomic.Int64
@@ -123,16 +118,16 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	}
 	dmlEvent.CommitTs = 2
 
-	err = sink.WriteBlockEvent(ddlEvent)
+	err = pulsarSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	sink.AddDMLEvent(dmlEvent)
+	pulsarSink.AddDMLEvent(dmlEvent)
 	time.Sleep(1 * time.Second)
 
 	ddlEvent2.PostFlush()
 
-	require.Len(t, dmlProducer.(*producer.PulsarMockProducer).GetAllEvents(), 2)
-	require.Len(t, ddlProducer.(*producer.PulsarMockProducer).GetAllEvents(), 1)
+	require.Len(t, pulsarSink.dmlProducer.(*mockProducer).GetAllEvents(), 2)
+	require.Len(t, pulsarSink.ddlProducer.(*mockProducer).GetAllEvents(), 1)
 
 	require.Equal(t, count.Load(), int64(3))
 }
