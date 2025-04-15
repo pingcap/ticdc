@@ -32,11 +32,20 @@ func TestEncodeFlag(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 
-	createTableDDL := `create table t(id int primary key)`
+	createTableDDL := `create table t(
+    	a int primary key,
+    	b int not null,
+    	c int,
+    	d int unsigned,
+    	e blob,
+    	unique key idx(b, c),
+    	key idx2(c, d)
+    )`
 	job := helper.DDL2Job(createTableDDL)
 	tableInfo := helper.GetTableInfo(job)
 
-	dmlEvent := helper.DML2Event("test", "t", `insert into t values (1)`)
+	dmlEvent := helper.DML2Event("test", "t",
+		`insert into t values (1, 2, 3, 4, "0x010201")`)
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
 
@@ -62,6 +71,24 @@ func TestEncodeFlag(t *testing.T) {
 	messages := enc.Build()
 	require.Len(t, messages, 1)
 	require.NotEmpty(t, messages[0])
+
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	err = decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+	require.NoError(t, err)
+
+	messageType, hasNext, err := decoder.HasNext()
+	require.NoError(t, err)
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decoded, err := decoder.NextDMLEvent()
+	require.NoError(t, err)
+
+	change, ok := decoded.GetNextRow()
+	require.True(t, ok)
+	common.CompareRow(t, insertEvent.Event, insertEvent.TableInfo, change, decoded.TableInfo)
 }
 
 func TestIntegerTypes(t *testing.T) {
@@ -122,41 +149,36 @@ func TestIntegerTypes(t *testing.T) {
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen)
-	for _, enableTiDBExtension := range []bool{true, false} {
-		for _, event := range []*commonEvent.RowEvent{minValueEvent, maxValueEvent} {
-			codecConfig.EnableTiDBExtension = enableTiDBExtension
-			encoder, err := NewBatchEncoder(ctx, codecConfig)
-			require.NoError(t, err)
+	for _, event := range []*commonEvent.RowEvent{minValueEvent, maxValueEvent} {
+		encoder, err := NewBatchEncoder(ctx, codecConfig)
+		require.NoError(t, err)
 
-			err = encoder.AppendRowChangedEvent(ctx, "", event)
-			require.NoError(t, err)
+		err = encoder.AppendRowChangedEvent(ctx, "", event)
+		require.NoError(t, err)
 
-			messages := encoder.Build()
-			require.Len(t, messages, 1)
+		messages := encoder.Build()
+		require.Len(t, messages, 1)
 
-			decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
-			require.NoError(t, err)
+		decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+		require.NoError(t, err)
 
-			err = decoder.AddKeyValue(messages[0].Key, messages[0].Value)
-			require.NoError(t, err)
+		err = decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+		require.NoError(t, err)
 
-			messageType, hasNext, err := decoder.HasNext()
-			require.NoError(t, err)
-			require.True(t, hasNext)
-			require.Equal(t, common.MessageTypeRow, messageType)
+		messageType, hasNext, err := decoder.HasNext()
+		require.NoError(t, err)
+		require.True(t, hasNext)
+		require.Equal(t, common.MessageTypeRow, messageType)
 
-			decoded, err := decoder.NextDMLEvent()
-			require.NoError(t, err)
+		decoded, err := decoder.NextDMLEvent()
+		require.NoError(t, err)
 
-			if enableTiDBExtension {
-				require.Equal(t, event.CommitTs, decoded.GetCommitTs())
-			}
+		require.Equal(t, event.CommitTs, decoded.GetCommitTs())
 
-			change, ok := decoded.GetNextRow()
-			require.True(t, ok)
+		change, ok := decoded.GetNextRow()
+		require.True(t, ok)
 
-			common.CompareRow(t, event.Event, event.TableInfo, change, decoded.TableInfo)
-		}
+		common.CompareRow(t, event.Event, event.TableInfo, change, decoded.TableInfo)
 	}
 }
 
@@ -584,7 +606,7 @@ func TestEncoderOneMessage(t *testing.T) {
 		CommitTs:       dmlEvent.GetCommitTs(),
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() { count = 1 },
+		Callback:       func() { count += 1 },
 	}
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
@@ -650,7 +672,7 @@ func TestEncoderMultipleMessage(t *testing.T) {
 			CommitTs:       dmlEvent.GetCommitTs(),
 			Event:          insertRow,
 			ColumnSelector: columnSelector,
-			Callback:       func() { count = 1 },
+			Callback:       func() { count += 1 },
 		}
 		insertEvents = append(insertEvents, insertRowEvent)
 
@@ -739,7 +761,7 @@ func TestMessageTooLarge(t *testing.T) {
 		CommitTs:       dmlEvent.GetCommitTs(),
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() { count = 1 },
+		Callback:       func() { count += 1 },
 	}
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)

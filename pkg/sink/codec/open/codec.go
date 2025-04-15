@@ -58,7 +58,6 @@ func encodeRowChangedEvent(
 			keyWriter.WriteStringField("ccl", claimCheckLocationName)
 		}
 	})
-
 	var err error
 	if e.IsDelete() {
 		onlyHandleKeyColumns := config.DeleteOnlyHandleKeyColumns || largeMessageOnlyHandleKeyColumns

@@ -67,8 +67,8 @@ func (d *batchEncoder) Clean() {
 func (d *batchEncoder) fetchColumnFlags(e *commonEvent.RowEvent) map[string]uint64 {
 	result, ok := d.columnFlagsCache[e.GetTableID()]
 	if !ok {
-		result = make(map[string]uint64)
-		d.columnFlagsCache[e.GetTableID()] = initColumnFlags(e.TableInfo)
+		result = initColumnFlags(e.TableInfo)
+		d.columnFlagsCache[e.GetTableID()] = result
 	}
 	return result
 }

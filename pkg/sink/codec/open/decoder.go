@@ -389,16 +389,14 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		}
 		if isBinary(raw.Flag) {
 			col.AddFlag(mysql.BinaryFlag)
+			col.SetCharset("binary")
+			col.SetCollate("binary")
 		}
 
 		switch col.GetType() {
 		case mysql.TypeVarchar, mysql.TypeString,
 			mysql.TypeTinyBlob, mysql.TypeBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
-			if mysql.HasBinaryFlag(col.GetFlag()) {
-				col.AddFlag(mysql.BinaryFlag)
-				col.SetCharset("binary")
-				col.SetCollate("binary")
-			} else {
+			if !mysql.HasBinaryFlag(col.GetFlag()) {
 				col.SetCharset("utf8mb4")
 				col.SetCollate("utf8mb4_bin")
 			}
