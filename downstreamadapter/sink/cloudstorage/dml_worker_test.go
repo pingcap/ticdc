@@ -48,14 +48,14 @@ func setClock(s *dmlWorker, clock pclock.Clock) {
 
 func getTableFiles(t *testing.T, tableDir string) []string {
 	files, err := os.ReadDir(tableDir)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	fileNames := []string{}
 	for _, f := range files {
 		fileName := f.Name()
 		if f.IsDir() {
 			metaFiles, err := os.ReadDir(path.Join(tableDir, f.Name()))
-			require.Nil(t, err)
+			require.NoError(t, err)
 			require.Len(t, metaFiles, 1)
 			fileName = metaFiles[0].Name()
 		}

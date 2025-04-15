@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
 	"path"
 	"sync"
 	"testing"
@@ -42,24 +41,6 @@ import (
 	pclock "github.com/pingcap/tiflow/engine/pkg/clock"
 	"github.com/stretchr/testify/require"
 )
-
-func getTableFiles(t *testing.T, tableDir string) []string {
-	files, err := os.ReadDir(tableDir)
-	require.Nil(t, err)
-
-	var fileNames []string
-	for _, f := range files {
-		fileName := f.Name()
-		if f.IsDir() {
-			metaFiles, err := os.ReadDir(path.Join(tableDir, f.Name()))
-			require.Nil(t, err)
-			require.Len(t, metaFiles, 1)
-			fileName = metaFiles[0].Name()
-		}
-		fileNames = append(fileNames, fileName)
-	}
-	return fileNames
-}
 
 func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)

@@ -110,7 +110,7 @@ func New(
 		changefeedID:         changefeedID,
 		scheme:               strings.ToLower(sinkURI.Scheme),
 		outputRawChangeEvent: sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
-		statistics:           metrics.NewStatistics(changefeedID, "sink"),
+		statistics:           metrics.NewStatistics(changefeedID, "cloudstorage"),
 	}
 
 	s.dmlWorker, err = newDMLWorker(changefeedID, storage, cfg, encoderConfig, ext, s.statistics)
