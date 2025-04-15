@@ -54,9 +54,9 @@ func (m *messageKey) Decode(data []byte) {
 type column struct {
 	Type byte `json:"t"`
 	// Deprecated: please use Flag instead.
-	WhereHandle *bool `json:"h,omitempty"`
-	Flag        uint  `json:"f"`
-	Value       any   `json:"v"`
+	WhereHandle *bool  `json:"h,omitempty"`
+	Flag        uint64 `json:"f"`
+	Value       any    `json:"v"`
 }
 
 // formatColumn formats a codec column.
@@ -65,7 +65,7 @@ func formatColumn(c column, ft types.FieldType) column {
 	switch c.Type {
 	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
 		str := c.Value.(string)
-		if mysql.HasBinaryFlag(c.Flag) {
+		if isBinary(c.Flag) {
 			str, err = strconv.Unquote("\"" + str + "\"")
 			if err != nil {
 				log.Panic("invalid column value, please report a bug", zap.Any("value", str), zap.Error(err))
@@ -94,7 +94,7 @@ func formatColumn(c column, ft types.FieldType) column {
 		}
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeLonglong, mysql.TypeInt24:
 		if s, ok := c.Value.(json.Number); ok {
-			if mysql.HasUnsignedFlag(c.Flag) {
+			if isUnsigned(c.Flag) {
 				c.Value, err = strconv.ParseUint(s.String(), 10, 64)
 			} else {
 				c.Value, err = strconv.ParseInt(s.String(), 10, 64)
@@ -104,7 +104,7 @@ func formatColumn(c column, ft types.FieldType) column {
 			}
 			// is it possible be the float64?
 		} else if f, ok := c.Value.(float64); ok {
-			if mysql.HasUnsignedFlag(c.Flag) {
+			if isUnsigned(c.Flag) {
 				c.Value = uint64(f)
 			} else {
 				c.Value = int64(f)
@@ -237,6 +237,30 @@ const (
 	// unsignedFlag means the column stores an unsigned integer
 	unsignedFlag
 )
+
+func isBinary(flag uint64) bool {
+	return flag&binaryFlag != 0
+}
+
+func isPrimary(flag uint64) bool {
+	return flag&primaryKeyFlag != 0
+}
+
+func isUnique(flag uint64) bool {
+	return flag&uniqueKeyFlag != 0
+}
+
+func isMultiKey(flag uint64) bool {
+	return flag&multipleKeyFlag != 0
+}
+
+func isNullable(flag uint64) bool {
+	return flag&nullableFlag != 0
+}
+
+func isUnsigned(flag uint64) bool {
+	return flag&unsignedFlag != 0
+}
 
 func initColumnFlags(tableInfo *commonType.TableInfo) map[string]uint64 {
 	result := make(map[string]uint64, len(tableInfo.GetColumns()))
