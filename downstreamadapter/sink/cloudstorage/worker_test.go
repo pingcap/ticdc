@@ -38,7 +38,7 @@ import (
 
 func testWorker(
 	t *testing.T,
-) (*Worker, chan EventFragment, chan EventFragment) {
+) (*worker, chan eventFragment, chan eventFragment) {
 	uri := fmt.Sprintf("file:///%s", t.TempDir())
 	sinkURI, err := url.Parse(uri)
 	require.Nil(t, err)
@@ -51,9 +51,9 @@ func testWorker(
 	encoder, err := codec.NewTxnEventEncoder(encoderConfig)
 	require.Nil(t, err)
 
-	encodedCh := make(chan EventFragment)
-	msgCh := make(chan EventFragment, 1024)
-	return NewWorker(1, changefeedID, encoder, msgCh, encodedCh), msgCh, encodedCh
+	encodedCh := make(chan eventFragment)
+	msgCh := make(chan eventFragment, 1024)
+	return newWorker(1, changefeedID, encoder, msgCh, encodedCh), msgCh, encodedCh
 }
 
 func TestEncodeEvents(t *testing.T) {
@@ -62,8 +62,8 @@ func TestEncodeEvents(t *testing.T) {
 	encodingWorker, _, encodedCh := testWorker(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	eg, egCtx := errgroup.WithContext(ctx)
-	outputChs := []*chann.DrainableChann[EventFragment]{chann.NewAutoDrainChann[EventFragment]()}
-	defragmenter := NewDefragmenter(encodedCh, outputChs)
+	outputChs := []*chann.DrainableChann[eventFragment]{chann.NewAutoDrainChann[eventFragment]()}
+	defragmenter := newDefragmenter(encodedCh, outputChs)
 	eg.Go(func() error {
 		return defragmenter.Run(egCtx)
 	})
@@ -77,7 +77,7 @@ func TestEncodeEvents(t *testing.T) {
 		},
 	}
 	tableInfo := common.WrapTableInfo("test", tidbTableInfo)
-	err := encodingWorker.encodeEvents(EventFragment{
+	err := encodingWorker.encodeEvents(eventFragment{
 		versionedTable: cloudstorage.VersionedTableName{
 			TableNameWithPhysicTableID: common.TableName{
 				Schema:  "test",
@@ -104,8 +104,8 @@ func TestEncodingWorkerRun(t *testing.T) {
 	encodingWorker, msgCh, encodedCh := testWorker(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	eg, egCtx := errgroup.WithContext(ctx)
-	outputChs := []*chann.DrainableChann[EventFragment]{chann.NewAutoDrainChann[EventFragment]()}
-	defragmenter := NewDefragmenter(encodedCh, outputChs)
+	outputChs := []*chann.DrainableChann[eventFragment]{chann.NewAutoDrainChann[eventFragment]()}
+	defragmenter := newDefragmenter(encodedCh, outputChs)
 	eg.Go(func() error {
 		return defragmenter.Run(egCtx)
 	})
@@ -121,7 +121,7 @@ func TestEncodingWorkerRun(t *testing.T) {
 	tableInfo := common.WrapTableInfo("test", tidbTableInfo)
 
 	for i := 0; i < 3; i++ {
-		frag := EventFragment{
+		frag := eventFragment{
 			versionedTable: cloudstorage.VersionedTableName{
 				TableNameWithPhysicTableID: common.TableName{
 					Schema:  "test",

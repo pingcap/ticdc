@@ -37,8 +37,8 @@ const (
 	defaultChannelSize         = 1024
 )
 
-// CloudStorageDMLWorker denotes a worker responsible for writing messages to cloud storage.
-type CloudStorageDMLWorker struct {
+// dmlWorker denotes a worker responsible for writing messages to cloud storage.
+type dmlWorker struct {
 	changefeedID commonType.ChangeFeedID
 	storage      storage.ExternalStorage
 	config       *cloudstorage.Config
@@ -47,52 +47,52 @@ type CloudStorageDMLWorker struct {
 	// last sequence number
 	lastSeqNum uint64
 	// workers defines a group of workers for encoding events.
-	workers []*Worker
-	writers []*Writer
+	workers []*worker
+	writers []*writer
 	// defragmenter is used to defragment the out-of-order encoded messages and
 	// sends encoded messages to individual dmlWorkers.
-	defragmenter *Defragmenter
+	defragmenter *defragmenter
 	alive        struct {
 		sync.RWMutex
 		// msgCh is a channel to hold eventFragment.
 		// The caller of WriteEvents will write eventFragment to msgCh and
 		// the encodingWorkers will read eventFragment from msgCh to encode events.
-		msgCh  *chann.DrainableChann[EventFragment]
+		msgCh  *chann.DrainableChann[eventFragment]
 		isDead bool
 	}
 }
 
-func NewCloudStorageDMLWorker(
+func newDMLWorker(
 	changefeedID commonType.ChangeFeedID,
 	storage storage.ExternalStorage,
 	config *cloudstorage.Config,
 	encoderConfig *common.Config,
 	extension string,
 	statistics *metrics.Statistics,
-) (*CloudStorageDMLWorker, error) {
-	w := &CloudStorageDMLWorker{
+) (*dmlWorker, error) {
+	w := &dmlWorker{
 		changefeedID: changefeedID,
 		storage:      storage,
 		config:       config,
 		statistics:   statistics,
-		workers:      make([]*Worker, defaultEncodingConcurrency),
-		writers:      make([]*Writer, config.WorkerCount),
+		workers:      make([]*worker, defaultEncodingConcurrency),
+		writers:      make([]*writer, config.WorkerCount),
 	}
-	w.alive.msgCh = chann.NewAutoDrainChann[EventFragment]()
-	encodedOutCh := make(chan EventFragment, defaultChannelSize)
-	workerChannels := make([]*chann.DrainableChann[EventFragment], config.WorkerCount)
+	w.alive.msgCh = chann.NewAutoDrainChann[eventFragment]()
+	encodedOutCh := make(chan eventFragment, defaultChannelSize)
+	workerChannels := make([]*chann.DrainableChann[eventFragment], config.WorkerCount)
 	// create a group of encoding workers.
 	for i := 0; i < defaultEncodingConcurrency; i++ {
 		encoderBuilder, err := codec.NewTxnEventEncoder(encoderConfig)
 		if err != nil {
 			return nil, err
 		}
-		w.workers[i] = NewWorker(i, w.changefeedID, encoderBuilder, w.alive.msgCh.Out(), encodedOutCh)
+		w.workers[i] = newWorker(i, w.changefeedID, encoderBuilder, w.alive.msgCh.Out(), encodedOutCh)
 	}
 	// create a group of dml workers.
 	for i := 0; i < w.config.WorkerCount; i++ {
-		inputCh := chann.NewAutoDrainChann[EventFragment]()
-		w.writers[i] = NewWriter(i, w.changefeedID, storage, config, extension,
+		inputCh := chann.NewAutoDrainChann[eventFragment]()
+		w.writers[i] = newWriter(i, w.changefeedID, storage, config, extension,
 			inputCh, w.statistics)
 		workerChannels[i] = inputCh
 	}
@@ -100,13 +100,13 @@ func NewCloudStorageDMLWorker(
 	// The defragmenter is used to defragment the out-of-order encoded messages from encoding workers and
 	// sends encoded messages to related dmlWorkers in order. Messages of the same table will be sent to
 	// the same dml
-	w.defragmenter = NewDefragmenter(encodedOutCh, workerChannels)
+	w.defragmenter = newDefragmenter(encodedOutCh, workerChannels)
 
 	return w, nil
 }
 
 // run creates a set of background goroutines.
-func (w *CloudStorageDMLWorker) Run(ctx context.Context) error {
+func (w *dmlWorker) Run(ctx context.Context) error {
 	eg, ctx := errgroup.WithContext(ctx)
 
 	for i := 0; i < len(w.workers); i++ {
@@ -130,7 +130,7 @@ func (w *CloudStorageDMLWorker) Run(ctx context.Context) error {
 	return eg.Wait()
 }
 
-func (w *CloudStorageDMLWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
+func (w *dmlWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
 	w.alive.RLock()
 	defer w.alive.RUnlock()
 	if w.alive.isDead {
@@ -158,12 +158,12 @@ func (w *CloudStorageDMLWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
 
 	w.statistics.RecordBatchExecution(func() (int, int64, error) {
 		// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
-		w.alive.msgCh.In() <- NewEventFragment(seq, tbl, event)
+		w.alive.msgCh.In() <- newEventFragment(seq, tbl, event)
 		return int(event.Len()), event.GetRowsSize(), nil
 	})
 }
 
-func (w *CloudStorageDMLWorker) Close() {
+func (w *dmlWorker) Close() {
 	w.alive.Lock()
 	w.alive.isDead = true
 	w.alive.msgCh.CloseAndDrain()

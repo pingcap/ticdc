@@ -22,25 +22,25 @@ import (
 	"github.com/pingcap/tiflow/pkg/errors"
 )
 
-// Worker denotes the worker responsible for encoding RowChangedEvents
+// worker denotes the worker responsible for encoding RowChangedEvents
 // to messages formatted in the specific protocol.
-type Worker struct {
+type worker struct {
 	id           int
 	changeFeedID commonType.ChangeFeedID
 	encoder      common.TxnEventEncoder
 	isClosed     uint64
-	inputCh      <-chan EventFragment
-	outputCh     chan<- EventFragment
+	inputCh      <-chan eventFragment
+	outputCh     chan<- eventFragment
 }
 
-func NewWorker(
+func newWorker(
 	workerID int,
 	changefeedID commonType.ChangeFeedID,
 	encoder common.TxnEventEncoder,
-	inputCh <-chan EventFragment,
-	outputCh chan<- EventFragment,
-) *Worker {
-	return &Worker{
+	inputCh <-chan eventFragment,
+	outputCh chan<- eventFragment,
+) *worker {
+	return &worker{
 		id:           workerID,
 		changeFeedID: changefeedID,
 		encoder:      encoder,
@@ -49,7 +49,7 @@ func NewWorker(
 	}
 }
 
-func (w *Worker) Run(ctx context.Context) error {
+func (w *worker) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -66,7 +66,7 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 }
 
-func (w *Worker) encodeEvents(frag EventFragment) error {
+func (w *worker) encodeEvents(frag eventFragment) error {
 	w.encoder.AppendTxnEvent(frag.event)
 	frag.encodedMsgs = w.encoder.Build()
 	w.outputCh <- frag
@@ -74,7 +74,7 @@ func (w *Worker) encodeEvents(frag EventFragment) error {
 	return nil
 }
 
-func (w *Worker) Close() {
+func (w *worker) Close() {
 	if !atomic.CompareAndSwapUint64(&w.isClosed, 0, 1) {
 		return
 	}

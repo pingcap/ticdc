@@ -43,9 +43,9 @@ func TestDeframenter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	eg, egCtx := errgroup.WithContext(ctx)
 
-	inputCh := make(chan EventFragment)
-	outputCh := chann.NewAutoDrainChann[EventFragment]()
-	defrag := NewDefragmenter(inputCh, []*chann.DrainableChann[EventFragment]{outputCh})
+	inputCh := make(chan eventFragment)
+	outputCh := chann.NewAutoDrainChann[eventFragment]()
+	defrag := newDefragmenter(inputCh, []*chann.DrainableChann[eventFragment]{outputCh})
 	eg.Go(func() error {
 		return defrag.Run(egCtx)
 	})
@@ -81,7 +81,7 @@ func TestDeframenter(t *testing.T) {
 	tableInfo := common.WrapTableInfo("test", tidbTableInfo)
 	for i := 0; i < txnCnt; i++ {
 		go func(seq uint64) {
-			frag := EventFragment{
+			frag := eventFragment{
 				versionedTable: cloudstorage.VersionedTableName{
 					TableNameWithPhysicTableID: common.TableName{
 						Schema:  "test",

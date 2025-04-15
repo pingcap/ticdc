@@ -61,7 +61,7 @@ func getTableFiles(t *testing.T, tableDir string) []string {
 	return fileNames
 }
 
-func testWriter(ctx context.Context, t *testing.T, dir string) *Writer {
+func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
 	storage, err := helper.GetExternalStorageFromURI(ctx, uri)
 	require.Nil(t, err)
@@ -80,8 +80,8 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *Writer {
 	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-	d := NewWriter(1, changefeedID, storage,
-		cfg, ".json", chann.NewAutoDrainChann[EventFragment](), statistics)
+	d := newWriter(1, changefeedID, storage,
+		cfg, ".json", chann.NewAutoDrainChann[eventFragment](), statistics)
 	return d
 }
 
@@ -105,7 +105,7 @@ func TestWriterRun(t *testing.T) {
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
 
 	for i := 0; i < 5; i++ {
-		frag := EventFragment{
+		frag := eventFragment{
 			seqNumber: uint64(i),
 			versionedTable: cloudstorage.VersionedTableName{
 				TableNameWithPhysicTableID: commonType.TableName{

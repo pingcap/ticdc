@@ -33,7 +33,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type CloudStorageDDLWorker struct {
+type ddlWorker struct {
 	changefeedID commonType.ChangeFeedID
 	sinkURI      *url.URL
 	statistics   *metrics.Statistics
@@ -48,16 +48,16 @@ type CloudStorageDDLWorker struct {
 	cleanupJobs []func() /* only for test */
 }
 
-// NewCloudStorageDDLWorker return a ddl worker instance.
-func NewCloudStorageDDLWorker(
+// newDDLWorker return a ddl worker instance.
+func newDDLWorker(
 	changefeedID commonType.ChangeFeedID,
 	sinkURI *url.URL,
 	cfg *cloudstorage.Config,
 	cleanupJobs []func(),
 	storage storage.ExternalStorage,
 	statistics *metrics.Statistics,
-) *CloudStorageDDLWorker {
-	return &CloudStorageDDLWorker{
+) *ddlWorker {
+	return &ddlWorker{
 		changefeedID:             changefeedID,
 		sinkURI:                  sinkURI,
 		cfg:                      cfg,
@@ -68,7 +68,7 @@ func NewCloudStorageDDLWorker(
 	}
 }
 
-func (w *CloudStorageDDLWorker) Run(ctx context.Context) error {
+func (w *ddlWorker) Run(ctx context.Context) error {
 	if err := w.initCron(ctx, w.sinkURI, w.cleanupJobs); err != nil {
 		return errors.Trace(err)
 	}
@@ -76,7 +76,7 @@ func (w *CloudStorageDDLWorker) Run(ctx context.Context) error {
 	return nil
 }
 
-func (w *CloudStorageDDLWorker) WriteBlockEvent(event *commonEvent.DDLEvent) error {
+func (w *ddlWorker) WriteBlockEvent(event *commonEvent.DDLEvent) error {
 	for _, e := range event.GetEvents() {
 		var def cloudstorage.TableDefinition
 		def.FromDDLEvent(e, w.cfg.OutputColumnID)
@@ -88,7 +88,7 @@ func (w *CloudStorageDDLWorker) WriteBlockEvent(event *commonEvent.DDLEvent) err
 	return nil
 }
 
-func (w *CloudStorageDDLWorker) AddCheckpointTs(ts uint64) {
+func (w *ddlWorker) AddCheckpointTs(ts uint64) {
 	if time.Since(w.lastSendCheckpointTsTime) < 2*time.Second {
 		log.Debug("skip write checkpoint ts to external storage",
 			zap.Any("changefeedID", w.changefeedID),
@@ -117,17 +117,17 @@ func (w *CloudStorageDDLWorker) AddCheckpointTs(ts uint64) {
 	}
 }
 
-func (w *CloudStorageDDLWorker) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (w *ddlWorker) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	w.tableSchemaStore = tableSchemaStore
 }
 
-func (w *CloudStorageDDLWorker) Close() {
+func (w *ddlWorker) Close() {
 	if w.cron != nil {
 		w.cron.Stop()
 	}
 }
 
-func (w *CloudStorageDDLWorker) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefinition) error {
+func (w *ddlWorker) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefinition) error {
 	encodedDef, err := def.MarshalWithQuery()
 	if err != nil {
 		return errors.Trace(err)
@@ -148,7 +148,7 @@ func (w *CloudStorageDDLWorker) writeFile(v *commonEvent.DDLEvent, def cloudstor
 	})
 }
 
-func (w *CloudStorageDDLWorker) initCron(
+func (w *ddlWorker) initCron(
 	ctx context.Context, sinkURI *url.URL, cleanupJobs []func(),
 ) (err error) {
 	if cleanupJobs == nil {
@@ -165,7 +165,7 @@ func (w *CloudStorageDDLWorker) initCron(
 	return nil
 }
 
-func (w *CloudStorageDDLWorker) bgCleanup(ctx context.Context) {
+func (w *ddlWorker) bgCleanup(ctx context.Context) {
 	if w.cfg.DateSeparator != config.DateSeparatorDay.String() || w.cfg.FileExpirationDays <= 0 {
 		log.Info("skip cleanup expired files for storage sink",
 			zap.String("namespace", w.changefeedID.Namespace()),
@@ -191,7 +191,7 @@ func (w *CloudStorageDDLWorker) bgCleanup(ctx context.Context) {
 		zap.Error(ctx.Err()))
 }
 
-func (w *CloudStorageDDLWorker) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
+func (w *ddlWorker) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 	ret := []func(){}
 
 	isLocal := uri.Scheme == "file" || uri.Scheme == "local" || uri.Scheme == ""

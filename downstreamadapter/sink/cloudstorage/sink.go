@@ -31,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	putil "github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -48,8 +47,8 @@ type sink struct {
 	outputRawChangeEvent bool
 
 	// workers defines a group of workers for writing events to external storage.
-	dmlWorker *CloudStorageDMLWorker
-	ddlWorker *CloudStorageDDLWorker
+	dmlWorker *dmlWorker
+	ddlWorker *ddlWorker
 
 	statistics *metrics.Statistics
 
@@ -57,22 +56,21 @@ type sink struct {
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
-	var (
-		protocol config.Protocol
-		storage  storage.ExternalStorage
-		err      error
-	)
 	cfg := cloudstorage.NewConfig()
-	if err = cfg.Apply(ctx, sinkURI, sinkConfig); err != nil {
+	err := cfg.Apply(ctx, sinkURI, sinkConfig)
+	if err != nil {
 		return err
 	}
-	if protocol, err = helper.GetProtocol(putil.GetOrZero(sinkConfig.Protocol)); err != nil {
+	protocol, err := helper.GetProtocol(putil.GetOrZero(sinkConfig.Protocol))
+	if err != nil {
 		return err
 	}
-	if _, err = util.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt); err != nil {
+	_, err = util.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
+	if err != nil {
 		return err
 	}
-	if storage, err = helper.GetExternalStorageFromURI(ctx, sinkURI.String()); err != nil {
+	storage, err := helper.GetExternalStorageFromURI(ctx, sinkURI.String())
+	if err != nil {
 		return err
 	}
 	storage.Close()
@@ -115,11 +113,11 @@ func New(
 		statistics:           metrics.NewStatistics(changefeedID, "sink"),
 	}
 
-	s.dmlWorker, err = NewCloudStorageDMLWorker(changefeedID, storage, cfg, encoderConfig, ext, s.statistics)
+	s.dmlWorker, err = newDMLWorker(changefeedID, storage, cfg, encoderConfig, ext, s.statistics)
 	if err != nil {
 		return nil, err
 	}
-	s.ddlWorker = NewCloudStorageDDLWorker(changefeedID, sinkURI, cfg, cleanupJobs, storage, s.statistics)
+	s.ddlWorker = newDDLWorker(changefeedID, sinkURI, cfg, cleanupJobs, storage, s.statistics)
 	return s, nil
 }
 

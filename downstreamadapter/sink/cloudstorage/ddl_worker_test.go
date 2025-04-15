@@ -37,7 +37,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newCloudStorageDDLWorkerForTest(parentDir string) (*CloudStorageDDLWorker, error) {
+func newCloudStorageDDLWorkerForTest(parentDir string) (*ddlWorker, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
@@ -63,7 +63,7 @@ func newCloudStorageDDLWorkerForTest(parentDir string) (*CloudStorageDDLWorker, 
 	if err != nil {
 		return nil, err
 	}
-	sink := NewCloudStorageDDLWorker(changefeedID, sinkURI, cfg, nil, storage, metrics.NewStatistics(changefeedID, "CloudStorageSink"))
+	sink := newDDLWorker(changefeedID, sinkURI, cfg, nil, storage, metrics.NewStatistics(changefeedID, "CloudStorageSink"))
 	go sink.Run(ctx)
 	return sink, nil
 }
@@ -165,7 +165,7 @@ func TestCleanupExpiredFiles(t *testing.T) {
 	storage, err := helper.GetExternalStorageFromURI(ctx, sinkURI.String())
 	require.Nil(t, err)
 
-	sink := NewCloudStorageDDLWorker(changefeedID, sinkURI, cfg, cleanupJobs, storage, metrics.NewStatistics(changefeedID, "CloudStorageSink"))
+	sink := newDDLWorker(changefeedID, sinkURI, cfg, cleanupJobs, storage, metrics.NewStatistics(changefeedID, "CloudStorageSink"))
 	go sink.Run(ctx)
 	require.Nil(t, err)
 

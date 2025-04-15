@@ -24,8 +24,8 @@ import (
 	"github.com/pingcap/tiflow/pkg/hash"
 )
 
-// EventFragment is used to attach a sequence number to TxnCallbackableEvent.
-type EventFragment struct {
+// eventFragment is used to attach a sequence number to TxnCallbackableEvent.
+type eventFragment struct {
 	event          *commonEvent.DMLEvent
 	versionedTable cloudstorage.VersionedTableName
 
@@ -39,37 +39,37 @@ type EventFragment struct {
 	encodedMsgs []*common.Message
 }
 
-func NewEventFragment(seq uint64, version cloudstorage.VersionedTableName, event *commonEvent.DMLEvent) EventFragment {
-	return EventFragment{
+func newEventFragment(seq uint64, version cloudstorage.VersionedTableName, event *commonEvent.DMLEvent) eventFragment {
+	return eventFragment{
 		seqNumber:      seq,
 		versionedTable: version,
 		event:          event,
 	}
 }
 
-// Defragmenter is used to handle event fragments which can be registered
+// defragmenter is used to handle event fragments which can be registered
 // out of order.
-type Defragmenter struct {
+type defragmenter struct {
 	lastDispatchedSeq uint64
-	future            map[uint64]EventFragment
-	inputCh           <-chan EventFragment
-	outputChs         []*chann.DrainableChann[EventFragment]
+	future            map[uint64]eventFragment
+	inputCh           <-chan eventFragment
+	outputChs         []*chann.DrainableChann[eventFragment]
 	hasher            *hash.PositionInertia
 }
 
-func NewDefragmenter(
-	inputCh <-chan EventFragment,
-	outputChs []*chann.DrainableChann[EventFragment],
-) *Defragmenter {
-	return &Defragmenter{
-		future:    make(map[uint64]EventFragment),
+func newDefragmenter(
+	inputCh <-chan eventFragment,
+	outputChs []*chann.DrainableChann[eventFragment],
+) *defragmenter {
+	return &defragmenter{
+		future:    make(map[uint64]eventFragment),
 		inputCh:   inputCh,
 		outputChs: outputChs,
 		hasher:    hash.NewPositionInertia(),
 	}
 }
 
-func (d *Defragmenter) Run(ctx context.Context) error {
+func (d *defragmenter) Run(ctx context.Context) error {
 	defer d.close()
 	for {
 		select {
@@ -93,9 +93,9 @@ func (d *Defragmenter) Run(ctx context.Context) error {
 	}
 }
 
-func (d *Defragmenter) writeMsgsConsecutive(
+func (d *defragmenter) writeMsgsConsecutive(
 	ctx context.Context,
-	start EventFragment,
+	start eventFragment,
 ) {
 	d.dispatchFragToDMLWorker(start)
 
@@ -116,7 +116,7 @@ func (d *Defragmenter) writeMsgsConsecutive(
 	}
 }
 
-func (d *Defragmenter) dispatchFragToDMLWorker(frag EventFragment) {
+func (d *defragmenter) dispatchFragToDMLWorker(frag eventFragment) {
 	tableName := frag.versionedTable.TableNameWithPhysicTableID
 	d.hasher.Reset()
 	d.hasher.Write([]byte(tableName.Schema), []byte(tableName.Table))
@@ -125,7 +125,7 @@ func (d *Defragmenter) dispatchFragToDMLWorker(frag EventFragment) {
 	d.lastDispatchedSeq = frag.seqNumber
 }
 
-func (d *Defragmenter) close() {
+func (d *defragmenter) close() {
 	for _, ch := range d.outputChs {
 		ch.CloseAndDrain()
 	}
