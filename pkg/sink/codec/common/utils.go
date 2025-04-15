@@ -178,6 +178,7 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEv
 	ddlEvent := &commonEvent.DDLEvent{
 		Query:      job.Query,
 		SchemaName: job.SchemaName,
+		Type:       byte(job.Type),
 		TableName:  job.TableName,
 		FinishedTs: 1,
 		TableInfo:  helper.GetTableInfo(job),

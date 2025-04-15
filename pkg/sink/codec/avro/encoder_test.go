@@ -25,6 +25,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newAvroEncoderForTest(namespace string, schemaM SchemaManager, config *common.Config) common.EventEncoder {
+	return &BatchEncoder{
+		namespace: namespace,
+		schemaM:   schemaM,
+		result:    make([]*common.Message, 0, 1),
+		config:    config,
+	}
+}
+
 func TestDMLEventE2E(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolAvro)
 	codecConfig.EnableTiDBExtension = true
@@ -62,7 +71,7 @@ func TestDMLEventE2E(t *testing.T) {
 			require.True(t, exist)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			decodedEvent, err := decoder.NextRowChangedEvent()
+			decodedEvent, err := decoder.NextDMLEvent()
 			require.NoError(t, err)
 			require.NotNil(t, decodedEvent)
 			require.NotZero(t, decodedEvent.GetTableID())
@@ -76,9 +85,7 @@ func TestDDLEventE2E(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolAvro)
 	codecConfig.EnableTiDBExtension = true
 	codecConfig.AvroEnableWatermark = true
-
-	encoder, err := NewAvroEncoder(context.Background(), codecConfig)
-	require.NoError(t, err)
+	encoder := newAvroEncoderForTest(codecConfig.ChangefeedID.Namespace(), nil, codecConfig)
 
 	ddl, _, _, _ := common.NewLargeEvent4Test(t)
 	message, err := encoder.EncodeDDLEvent(ddl)
@@ -99,7 +106,7 @@ func TestDDLEventE2E(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, decodedEvent)
 	require.Equal(t, ddl.GetCommitTs(), decodedEvent.GetCommitTs())
-	require.Equal(t, timodel.ActionCreateTable, decodedEvent.Type)
+	require.Equal(t, timodel.ActionCreateTable, decodedEvent.GetDDLType())
 	require.NotEmpty(t, decodedEvent.Query)
 	require.NotEmpty(t, decodedEvent.TableInfo.TableName.Schema)
 	require.NotEmpty(t, decodedEvent.TableInfo.TableName.Table)
@@ -112,8 +119,7 @@ func TestResolvedE2E(t *testing.T) {
 	codecConfig.EnableTiDBExtension = true
 	codecConfig.AvroEnableWatermark = true
 
-	encoder, err := NewAvroEncoder(context.Background(), codecConfig)
-	require.NoError(t, err)
+	encoder := newAvroEncoderForTest(codecConfig.ChangefeedID.Namespace(), nil, codecConfig)
 
 	resolvedTs := uint64(1591943372224)
 	message, err := encoder.EncodeCheckpointEvent(resolvedTs)
@@ -135,7 +141,7 @@ func TestResolvedE2E(t *testing.T) {
 	require.Equal(t, resolvedTs, obtained)
 }
 
-func TestArvoAppendRowChangedEventWithCallback(t *testing.T) {
+func TestArvoAppendDMLEventWithCallback(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolAvro)
 	codecConfig.EnableTiDBExtension = true
 
