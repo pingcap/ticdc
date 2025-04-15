@@ -18,7 +18,6 @@ import (
 	"math"
 	"net/url"
 	"strings"
-	"sync/atomic"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -31,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	putil "github.com/pingcap/ticdc/pkg/util"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -52,7 +52,7 @@ type sink struct {
 
 	statistics *metrics.Statistics
 
-	isNormal uint32
+	isNormal *atomic.Bool
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
@@ -111,6 +111,7 @@ func New(
 		scheme:               strings.ToLower(sinkURI.Scheme),
 		outputRawChangeEvent: sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
 		statistics:           metrics.NewStatistics(changefeedID, "cloudstorage"),
+		isNormal:             atomic.NewBool(true),
 	}
 
 	s.dmlWorker, err = newDMLWorker(changefeedID, storage, cfg, encoderConfig, ext, s.statistics)
@@ -140,7 +141,7 @@ func (s *sink) Run(ctx context.Context) error {
 }
 
 func (s *sink) IsNormal() bool {
-	return atomic.LoadUint32(&s.isNormal) == 1
+	return s.isNormal.Load()
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
@@ -157,16 +158,11 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		}
 		err := s.ddlWorker.WriteBlockEvent(e)
 		if err != nil {
-			atomic.StoreUint32(&s.isNormal, 0)
+			s.isNormal.Store(false)
 			return errors.Trace(err)
 		}
-	case *commonEvent.SyncPointEvent:
-		log.Error("sink doesn't support Sync Point Event",
-			zap.String("namespace", s.changefeedID.Namespace()),
-			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Any("event", event))
 	default:
-		log.Error("sink doesn't support this type of block event",
+		log.Panic("sink doesn't support this type of block event",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("eventType", event.GetType()))
