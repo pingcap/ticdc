@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package producer
+package pulsar
 
 import (
 	"context"
@@ -22,41 +22,38 @@ import (
 )
 
 var (
-	_ DDLProducer = (*PulsarMockProducer)(nil)
-	_ DMLProducer = (*PulsarMockProducer)(nil)
+	_ ddlProducer = (*mockProducer)(nil)
+	_ dmlProducer = (*mockProducer)(nil)
 )
 
-// PulsarMockProducer is a mock pulsar producer
-type PulsarMockProducer struct {
+// mockProducer is a mock pulsar producer
+type mockProducer struct {
 	mu     sync.Mutex
 	events map[string][]*pulsar.ProducerMessage
 }
 
-// NewMockPulsarDDLProducer creates a pulsar producer for DDLProducer
-func NewMockPulsarDDLProducer() DDLProducer {
-	return &PulsarMockProducer{
+func newMockDDLProducer() ddlProducer {
+	return &mockProducer{
 		events: map[string][]*pulsar.ProducerMessage{},
 	}
 }
 
-// NewMockPulsarDMLProducer creates a pulsar producer for DMLProducer
-func NewMockPulsarDMLProducer() DMLProducer {
-	return &PulsarMockProducer{
+func newMockDMLProducer() dmlProducer {
+	return &mockProducer{
 		events: map[string][]*pulsar.ProducerMessage{},
 	}
 }
 
 // SyncBroadcastMessage pulsar consume all partitions
-func (p *PulsarMockProducer) SyncBroadcastMessage(ctx context.Context, topic string,
-	totalPartitionsNum int32, message *common.Message,
+func (p *mockProducer) syncBroadcastMessage(ctx context.Context, topic string, message *common.Message,
 ) error {
-	return p.SyncSendMessage(ctx, topic, totalPartitionsNum, message)
+	return p.syncSendMessage(ctx, topic, message)
 }
 
 // SyncSendMessage sends a message
 // partitionNum is not used,pulsar consume all partitions
-func (p *PulsarMockProducer) SyncSendMessage(ctx context.Context, topic string,
-	partitionNum int32, message *common.Message,
+func (p *mockProducer) syncSendMessage(ctx context.Context, topic string,
+	message *common.Message,
 ) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -69,13 +66,12 @@ func (p *PulsarMockProducer) SyncSendMessage(ctx context.Context, topic string,
 }
 
 // GetProducerByTopic returns a producer by topic name
-func (p *PulsarMockProducer) GetProducerByTopic(topicName string) (producer pulsar.Producer, err error) {
+func (p *mockProducer) GetProducerByTopic(topicName string) (producer pulsar.Producer, err error) {
 	return producer, nil
 }
 
 // AsyncSendMessage appends a message to the mock producer.
-func (p *PulsarMockProducer) AsyncSendMessage(_ context.Context, topic string,
-	partition int32, message *common.Message,
+func (p *mockProducer) asyncSendMessage(_ context.Context, topic string, message *common.Message,
 ) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -90,18 +86,18 @@ func (p *PulsarMockProducer) AsyncSendMessage(_ context.Context, topic string,
 	return nil
 }
 
-func (m *PulsarMockProducer) Run(_ context.Context) error {
+func (m *mockProducer) run(_ context.Context) error {
 	// do nothing
 	return nil
 }
 
 // Close close all producers
-func (p *PulsarMockProducer) Close() {
+func (p *mockProducer) close() {
 	p.events = make(map[string][]*pulsar.ProducerMessage)
 }
 
 // GetAllEvents returns the events received by the mock producer.
-func (p *PulsarMockProducer) GetAllEvents() []*pulsar.ProducerMessage {
+func (p *mockProducer) GetAllEvents() []*pulsar.ProducerMessage {
 	var events []*pulsar.ProducerMessage
 	for _, v := range p.events {
 		events = append(events, v...)
@@ -110,6 +106,6 @@ func (p *PulsarMockProducer) GetAllEvents() []*pulsar.ProducerMessage {
 }
 
 // GetEvents returns the event filtered by the key.
-func (p *PulsarMockProducer) GetEvents(topic string) []*pulsar.ProducerMessage {
+func (p *mockProducer) GetEvents(topic string) []*pulsar.ProducerMessage {
 	return p.events[topic]
 }
