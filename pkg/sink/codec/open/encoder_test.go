@@ -26,6 +26,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestEncodeFlag(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	createTableDDL := `create table t(id int primary key)`
+	job := helper.DDL2Job(createTableDDL)
+	tableInfo := helper.GetTableInfo(job)
+
+	dmlEvent := helper.DML2Event("test", "t", `insert into t values (1)`)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	columnSelector := columnselector.NewDefaultColumnSelector()
+
+	insertEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		CommitTs:       dmlEvent.GetCommitTs(),
+		Event:          row,
+		ColumnSelector: columnSelector,
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	enc, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	err = enc.AppendRowChangedEvent(ctx, "", insertEvent)
+	require.NoError(t, err)
+
+	messages := enc.Build()
+	require.Len(t, messages, 1)
+	require.NotEmpty(t, messages[0])
+}
+
 func TestIntegerTypes(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -546,7 +584,7 @@ func TestEncoderOneMessage(t *testing.T) {
 		CommitTs:       dmlEvent.GetCommitTs(),
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() { count += 1 },
+		Callback:       func() { count = 1 },
 	}
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
@@ -612,7 +650,7 @@ func TestEncoderMultipleMessage(t *testing.T) {
 			CommitTs:       dmlEvent.GetCommitTs(),
 			Event:          insertRow,
 			ColumnSelector: columnSelector,
-			Callback:       func() { count += 1 },
+			Callback:       func() { count = 1 },
 		}
 		insertEvents = append(insertEvents, insertRowEvent)
 
@@ -701,11 +739,12 @@ func TestMessageTooLarge(t *testing.T) {
 		CommitTs:       dmlEvent.GetCommitTs(),
 		Event:          insertRow,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() { count += 1 },
+		Callback:       func() { count = 1 },
 	}
 
 	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
 	require.ErrorIs(t, err, errors.ErrMessageTooLarge)
+	require.Equal(t, count, 0)
 }
 
 func TestLargeMessageWithHandleEnableHandleKeyOnly(t *testing.T) {
