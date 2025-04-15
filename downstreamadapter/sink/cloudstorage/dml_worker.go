@@ -10,6 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package cloudstorage
 
 import (
@@ -18,7 +19,6 @@ import (
 	"sync/atomic"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/worker/writer"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -47,17 +47,17 @@ type CloudStorageDMLWorker struct {
 	// last sequence number
 	lastSeqNum uint64
 	// workers defines a group of workers for encoding events.
-	workers []*writer.Worker
-	writers []*writer.Writer
+	workers []*Worker
+	writers []*Writer
 	// defragmenter is used to defragment the out-of-order encoded messages and
 	// sends encoded messages to individual dmlWorkers.
-	defragmenter *writer.Defragmenter
+	defragmenter *Defragmenter
 	alive        struct {
 		sync.RWMutex
 		// msgCh is a channel to hold eventFragment.
 		// The caller of WriteEvents will write eventFragment to msgCh and
 		// the encodingWorkers will read eventFragment from msgCh to encode events.
-		msgCh  *chann.DrainableChann[writer.EventFragment]
+		msgCh  *chann.DrainableChann[EventFragment]
 		isDead bool
 	}
 }
@@ -75,24 +75,24 @@ func NewCloudStorageDMLWorker(
 		storage:      storage,
 		config:       config,
 		statistics:   statistics,
-		workers:      make([]*writer.Worker, defaultEncodingConcurrency),
-		writers:      make([]*writer.Writer, config.WorkerCount),
+		workers:      make([]*Worker, defaultEncodingConcurrency),
+		writers:      make([]*Writer, config.WorkerCount),
 	}
-	w.alive.msgCh = chann.NewAutoDrainChann[writer.EventFragment]()
-	encodedOutCh := make(chan writer.EventFragment, defaultChannelSize)
-	workerChannels := make([]*chann.DrainableChann[writer.EventFragment], config.WorkerCount)
+	w.alive.msgCh = chann.NewAutoDrainChann[EventFragment]()
+	encodedOutCh := make(chan EventFragment, defaultChannelSize)
+	workerChannels := make([]*chann.DrainableChann[EventFragment], config.WorkerCount)
 	// create a group of encoding workers.
 	for i := 0; i < defaultEncodingConcurrency; i++ {
 		encoderBuilder, err := codec.NewTxnEventEncoder(encoderConfig)
 		if err != nil {
 			return nil, err
 		}
-		w.workers[i] = writer.NewWorker(i, w.changefeedID, encoderBuilder, w.alive.msgCh.Out(), encodedOutCh)
+		w.workers[i] = NewWorker(i, w.changefeedID, encoderBuilder, w.alive.msgCh.Out(), encodedOutCh)
 	}
 	// create a group of dml workers.
 	for i := 0; i < w.config.WorkerCount; i++ {
-		inputCh := chann.NewAutoDrainChann[writer.EventFragment]()
-		w.writers[i] = writer.NewWriter(i, w.changefeedID, storage, config, extension,
+		inputCh := chann.NewAutoDrainChann[EventFragment]()
+		w.writers[i] = NewWriter(i, w.changefeedID, storage, config, extension,
 			inputCh, w.statistics)
 		workerChannels[i] = inputCh
 	}
@@ -100,7 +100,7 @@ func NewCloudStorageDMLWorker(
 	// The defragmenter is used to defragment the out-of-order encoded messages from encoding workers and
 	// sends encoded messages to related dmlWorkers in order. Messages of the same table will be sent to
 	// the same dml
-	w.defragmenter = writer.NewDefragmenter(encodedOutCh, workerChannels)
+	w.defragmenter = NewDefragmenter(encodedOutCh, workerChannels)
 
 	return w, nil
 }
@@ -158,7 +158,7 @@ func (w *CloudStorageDMLWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
 
 	w.statistics.RecordBatchExecution(func() (int, int64, error) {
 		// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
-		w.alive.msgCh.In() <- writer.NewEventFragment(seq, tbl, event)
+		w.alive.msgCh.In() <- NewEventFragment(seq, tbl, event)
 		return int(event.Len()), event.GetRowsSize(), nil
 	})
 }

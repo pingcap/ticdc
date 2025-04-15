@@ -10,7 +10,8 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package writer
+
+package cloudstorage
 
 import (
 	"context"
@@ -46,7 +47,7 @@ func getTableFiles(t *testing.T, tableDir string) []string {
 	files, err := os.ReadDir(tableDir)
 	require.Nil(t, err)
 
-	fileNames := []string{}
+	var fileNames []string
 	for _, f := range files {
 		fileName := f.Name()
 		if f.IsDir() {
