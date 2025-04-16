@@ -15,10 +15,10 @@ package sink
 
 import (
 	"context"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/blackhole"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage"
 	"net/url"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/blackhole"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/kafka"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/pulsar"
