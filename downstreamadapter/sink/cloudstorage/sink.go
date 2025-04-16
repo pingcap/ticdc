@@ -22,6 +22,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/parser/model"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -168,18 +169,9 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
-		if e.TiDBOnly {
-			// run callback directly and return
-			e.PostFlush()
-			return nil
-		}
-		for _, e := range e.GetEvents() {
-			var def cloudstorage.TableDefinition
-			def.FromDDLEvent(e, s.cfg.OutputColumnID)
-			if err := s.writeFile(e, def); err != nil {
-				s.isNormal.Store(false)
-				return err
-			}
+		if err := s.writeDDLEvent(e); err != nil {
+			s.isNormal.Store(false)
+			return err
 		}
 		event.PostFlush()
 		return nil
@@ -188,6 +180,28 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("eventType", event.GetType()))
+	}
+	return nil
+}
+
+func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
+	if event.TiDBOnly {
+		return nil
+	}
+	for _, e := range event.GetEvents() {
+		var def cloudstorage.TableDefinition
+		def.FromDDLEvent(e, s.cfg.OutputColumnID)
+		if err := s.writeFile(e, def); err != nil {
+			return err
+		}
+	}
+	if event.GetDDLType() == model.ActionExchangeTablePartition {
+		// For exchange partition, we need to write the schema of the source table.
+		var sourceTableDef cloudstorage.TableDefinition
+		sourceTableDef.FromTableInfo(event.ExtraSchemaName, event.ExtraTableName, event.MultipleTableInfos[1], event.GetCommitTs(), s.cfg.OutputColumnID)
+		if err := s.writeFile(event, sourceTableDef); err != nil {
+			return err
+		}
 	}
 	return nil
 }
