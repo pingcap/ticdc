@@ -11,50 +11,58 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package producer
+package pulsar
 
 import (
 	"context"
 	"sync"
 
 	"github.com/apache/pulsar-client-go/pulsar"
-	lru "github.com/hashicorp/golang-lru"
+	"github.com/hashicorp/golang-lru"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/cdc/sink/util"
 	"go.uber.org/zap"
 )
 
-// Assert DDLEventSink implementation
-var _ DDLProducer = (*pulsarDDLProducers)(nil)
+// ddlProducer is the interface for the pulsar DDL message producer.
+type ddlProducer interface {
+	// syncBroadcastMessage broadcasts a message synchronously.
+	syncBroadcastMessage(
+		ctx context.Context, topic string, message *common.Message,
+	) error
+	// syncSendMessage sends a message for a partition synchronously.
+	syncSendMessage(
+		ctx context.Context, topic string, message *common.Message,
+	) error
+	// close closes the producer.
+	close()
+}
 
-// pulsarDDLProducers is a producer for pulsar
-type pulsarDDLProducers struct {
-	client           pulsar.Client
-	pConfig          *config.PulsarConfig
+// ddlProducers is a producer for pulsar
+type ddlProducers struct {
+	changefeedID     commonType.ChangeFeedID
 	defaultTopicName string
 	// support multiple topics
 	producers      *lru.Cache
 	producersMutex sync.RWMutex
-	id             commonType.ChangeFeedID
+	comp           component
 }
 
-// NewPulsarDDLProducer creates a pulsar producer
-func NewPulsarDDLProducer(
-	ctx context.Context,
+// newDDLProducers creates a pulsar producer
+func newDDLProducers(
 	changefeedID commonType.ChangeFeedID,
-	pConfig *config.PulsarConfig,
-	client pulsar.Client,
+	comp component,
 	sinkConfig *config.SinkConfig,
-) (DDLProducer, error) {
-	topicName, err := util.GetTopic(pConfig.SinkURI)
+) (*ddlProducers, error) {
+	topicName, err := helper.GetTopic(comp.config.SinkURI)
 	if err != nil {
 		return nil, err
 	}
 
-	defaultProducer, err := newProducer(pConfig, client, topicName)
+	defaultProducer, err := newProducer(comp.config, comp.client, topicName)
 	if err != nil {
 		return nil, err
 	}
@@ -76,30 +84,26 @@ func NewPulsarDDLProducer(
 	}
 
 	producers.Add(topicName, defaultProducer)
-	return &pulsarDDLProducers{
-		client:           client,
-		pConfig:          pConfig,
+	return &ddlProducers{
 		producers:        producers,
 		defaultTopicName: topicName,
-		id:               changefeedID,
+		changefeedID:     changefeedID,
+		comp:             comp,
 	}, nil
 }
 
 // SyncBroadcastMessage pulsar consume all partitions
 // totalPartitionsNum is not used
-func (p *pulsarDDLProducers) SyncBroadcastMessage(ctx context.Context, topic string,
-	totalPartitionsNum int32, message *common.Message,
+func (p *ddlProducers) syncBroadcastMessage(ctx context.Context, topic string, message *common.Message,
 ) error {
 	// call SyncSendMessage
 	// pulsar consumer all partitions
-	return p.SyncSendMessage(ctx, topic, totalPartitionsNum, message)
+	return p.syncSendMessage(ctx, topic, message)
 }
 
 // SyncSendMessage sends a message
 // partitionNum is not used, pulsar consume all partitions
-func (p *pulsarDDLProducers) SyncSendMessage(ctx context.Context, topic string,
-	partitionNum int32, message *common.Message,
-) error {
+func (p *ddlProducers) syncSendMessage(ctx context.Context, topic string, message *common.Message) error {
 	// TODO
 	// wrapperSchemaAndTopic(message)
 	// mq.IncPublishedDDLCount(topic, p.id.ID().String(), message)
@@ -121,14 +125,14 @@ func (p *pulsarDDLProducers) SyncSendMessage(ctx context.Context, topic string,
 		return err
 	}
 
-	log.Debug("pulsarDDLProducers SyncSendMessage success",
+	log.Debug("ddlProducers SyncSendMessage success",
 		zap.Any("mID", mID), zap.String("topic", topic))
 
 	// mq.IncPublishedDDLSuccess(topic, p.id.ID().String(), message)
 	return nil
 }
 
-func (p *pulsarDDLProducers) getProducer(topic string) (pulsar.Producer, bool) {
+func (p *ddlProducers) getProducer(topic string) (pulsar.Producer, bool) {
 	target, ok := p.producers.Get(topic)
 	if ok {
 		producer, ok := target.(pulsar.Producer)
@@ -140,14 +144,14 @@ func (p *pulsarDDLProducers) getProducer(topic string) (pulsar.Producer, bool) {
 }
 
 // getProducerByTopic get producer by topicName
-func (p *pulsarDDLProducers) getProducerByTopic(topicName string) (producer pulsar.Producer, err error) {
+func (p *ddlProducers) getProducerByTopic(topicName string) (producer pulsar.Producer, err error) {
 	getProducer, ok := p.getProducer(topicName)
 	if ok && getProducer != nil {
 		return getProducer, nil
 	}
 
 	if !ok { // create a new producer for the topicName
-		producer, err = newProducer(p.pConfig, p.client, topicName)
+		producer, err = newProducer(p.comp.config, p.comp.client, topicName)
 		if err != nil {
 			return nil, err
 		}
@@ -157,13 +161,12 @@ func (p *pulsarDDLProducers) getProducerByTopic(topicName string) (producer puls
 	return producer, nil
 }
 
-// Close close all producers
-func (p *pulsarDDLProducers) Close() {
+// Close all producers
+func (p *ddlProducers) close() {
 	keys := p.producers.Keys()
 
 	p.producersMutex.Lock()
 	defer p.producersMutex.Unlock()
-	p.client.Close()
 	for _, topic := range keys {
 		p.producers.Remove(topic) // callback func will be called
 	}

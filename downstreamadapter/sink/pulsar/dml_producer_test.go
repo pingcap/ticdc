@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package producer
+package pulsar
 
 import (
 	"context"
@@ -26,8 +26,8 @@ func TestPulsarSyncAsyncSendMessage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	p := NewMockPulsarDMLProducer()
-	err := p.AsyncSendMessage(ctx, "test", 0, &common.Message{
+	p := newMockDMLProducer()
+	err := p.asyncSendMessage(ctx, "test", &common.Message{
 		Value:        []byte("this value for test input data"),
 		PartitionKey: str2Pointer("test_key"),
 	})

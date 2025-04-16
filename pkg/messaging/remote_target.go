@@ -357,7 +357,7 @@ func (s *remoteMessageTarget) connect() error {
 	// Start goroutines for sending messages
 	s.streams.Range(func(key, value interface{}) bool {
 		streamType := key.(string)
-		s.run(streamType)
+		s.run(s.eg, streamType)
 		return true
 	})
 
@@ -417,18 +417,19 @@ func (s *remoteMessageTarget) handleIncomingStream(stream proto.MessageService_S
 	}
 
 	s.streams.Store(handshake.StreamType, stream)
+	eg, _ := errgroup.WithContext(s.ctx)
 	// Start goroutines for sending and receiving messages
-	s.run(handshake.StreamType)
+	s.run(eg, handshake.StreamType)
 	// Block until the there is an error or the context is done
-	return s.eg.Wait()
+	return eg.Wait()
 }
 
 // run spawn two goroutines to handle message sending and receiving
-func (s *remoteMessageTarget) run(streamType string) {
-	s.eg.Go(func() error {
+func (s *remoteMessageTarget) run(eg *errgroup.Group, streamType string) {
+	eg.Go(func() error {
 		return s.runReceiveMessages(streamType)
 	})
-	s.eg.Go(func() error {
+	eg.Go(func() error {
 		return s.runSendMessages(streamType)
 	})
 
