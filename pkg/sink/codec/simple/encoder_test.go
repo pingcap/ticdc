@@ -58,8 +58,10 @@ func TestEncodeCheckpoint(t *testing.T) {
 			m, err := enc.EncodeCheckpointEvent(uint64(checkpoint))
 			require.NoError(t, err)
 
-			dec, err := NewDecoder(ctx, codecConfig, nil)
+			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
+			dec, ok := rowEventDecoder.(*decoder)
+			require.True(t, ok)
 
 			err = dec.AddKeyValue(m.Key, m.Value)
 			require.NoError(t, err)
@@ -100,8 +102,10 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 			enc, err := NewEncoder(ctx, codecConfig)
 			require.NoError(t, err)
 
-			dec, err := NewDecoder(ctx, codecConfig, nil)
+			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
+			dec, ok := rowEventDecoder.(*decoder)
+			require.True(t, ok)
 
 			m, err := enc.EncodeDDLEvent(createTableDDL)
 			require.NoError(t, err)
@@ -154,8 +158,11 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 	enc, err := NewEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	dec, err := NewDecoder(ctx, codecConfig, nil)
+	rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
+	dec, ok := rowEventDecoder.(*decoder)
+	require.True(t, ok)
+
 	m, err := enc.EncodeDDLEvent(createTableDDL)
 	require.NoError(t, err)
 
@@ -355,8 +362,10 @@ func TestEncodeDDLSequence(t *testing.T) {
 			enc, err := NewEncoder(ctx, codecConfig)
 			require.NoError(t, err)
 
-			dec, err := NewDecoder(ctx, codecConfig, nil)
+			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
+			dec, ok := rowEventDecoder.(*decoder)
+			require.True(t, ok)
 
 			m, err := enc.EncodeDDLEvent(dropDBEvent)
 			require.NoError(t, err)
@@ -865,8 +874,10 @@ func TestEncodeDDLEvent(t *testing.T) {
 			enc, err := NewEncoder(ctx, codecConfig)
 			require.NoError(t, err)
 
-			dec, err := NewDecoder(ctx, codecConfig, nil)
+			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
+			dec, ok := rowEventDecoder.(*decoder)
+			require.True(t, ok)
 
 			m, err := enc.EncodeDDLEvent(createTableDDLEvent)
 			require.NoError(t, err)
@@ -1022,8 +1033,10 @@ func TestColumnFlags(t *testing.T) {
 		m, err := enc.EncodeDDLEvent(createTableDDLEvent)
 		require.NoError(t, err)
 
-		dec, err := NewDecoder(ctx, codecConfig, nil)
+		rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
+		dec, ok := rowEventDecoder.(*decoder)
+		require.True(t, ok)
 
 		err = dec.AddKeyValue(m.Key, m.Value)
 		require.NoError(t, err)
@@ -1104,8 +1117,10 @@ func TestEncodeIntegerTypes(t *testing.T) {
 		m, err := enc.EncodeDDLEvent(ddlEvent)
 		require.NoError(t, err)
 
-		dec, err := NewDecoder(ctx, codecConfig, nil)
+		rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
+		dec, ok := rowEventDecoder.(*decoder)
+		require.True(t, ok)
 
 		err = dec.AddKeyValue(m.Key, m.Value)
 		require.NoError(t, err)
@@ -1187,8 +1202,10 @@ func TestEncoderOtherTypes(t *testing.T) {
 		m, err := enc.EncodeDDLEvent(ddlEvent)
 		require.NoError(t, err)
 
-		dec, err := NewDecoder(ctx, codecConfig, nil)
+		rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
+		dec, ok := rowEventDecoder.(*decoder)
+		require.True(t, ok)
 
 		err = dec.AddKeyValue(m.Key, m.Value)
 		require.NoError(t, err)
@@ -1349,8 +1366,10 @@ func TestEncodeDMLBeforeDDL(t *testing.T) {
 	messages := enc.Build()
 	require.Len(t, messages, 1)
 
-	dec, err := NewDecoder(ctx, codecConfig, nil)
+	rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
+	dec, ok := rowEventDecoder.(*decoder)
+	require.True(t, ok)
 
 	err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
 	require.NoError(t, err)
@@ -1426,8 +1445,10 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 			m, err := enc.EncodeDDLEvent(ddlEvent)
 			require.NoError(t, err)
 
-			dec, err := NewDecoder(ctx, codecConfig, nil)
+			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
+			dec, ok := rowEventDecoder.(*decoder)
+			require.True(t, ok)
 
 			err = dec.AddKeyValue(m.Key, m.Value)
 			require.NoError(t, err)
@@ -1504,8 +1525,10 @@ func TestEncodeLargeEventsNormal(t *testing.T) {
 			enc, err := NewEncoder(ctx, codecConfig)
 			require.NoError(t, err)
 
-			dec, err := NewDecoder(ctx, codecConfig, nil)
+			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
+			dec, ok := rowEventDecoder.(*decoder)
+			require.True(t, ok)
 
 			m, err := enc.EncodeDDLEvent(ddlEvent)
 			require.NoError(t, err)
@@ -1634,9 +1657,9 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 
 	codecConfig.LargeMessageHandle.ClaimCheckStorageURI = "unsupported:///"
 
-	badDec, err := NewDecoder(ctx, codecConfig, nil)
+	badRowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.Error(t, err)
-	require.Nil(t, badDec)
+	require.Nil(t, badRowEventDecoder)
 
 	codecConfig.LargeMessageHandle.ClaimCheckStorageURI = "file:///tmp/simple-claim-check"
 	for _, rawValue := range []bool{false, true} {
@@ -1660,8 +1683,10 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 				m, err := enc.EncodeDDLEvent(ddlEvent)
 				require.NoError(t, err)
 
-				dec, err := NewDecoder(ctx, codecConfig, nil)
+				rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 				require.NoError(t, err)
+				dec, ok := rowEventDecoder.(*decoder)
+				require.True(t, ok)
 
 				err = dec.AddKeyValue(m.Key, m.Value)
 				require.NoError(t, err)
@@ -1716,9 +1741,9 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolSimple)
 	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionHandleKeyOnly
 
-	badDec, err := NewDecoder(ctx, codecConfig, nil)
+	badRowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.Error(t, err)
-	require.Nil(t, badDec)
+	require.Nil(t, badRowEventDecoder)
 
 	events := []*commonEvent.RowEvent{
 		insertEvent,
@@ -1742,8 +1767,10 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 			enc, err := NewEncoder(ctx, codecConfig)
 			require.NoError(t, err)
 
-			dec, err := NewDecoder(ctx, codecConfig, db)
+			rowEventDecoder, err := NewDecoder(ctx, codecConfig, db)
 			require.NoError(t, err)
+			dec, ok := rowEventDecoder.(*decoder)
+			require.True(t, ok)
 
 			enc.(*Encoder).config.MaxMessageBytes = 500
 			dec.config.MaxMessageBytes = 500
@@ -1822,9 +1849,11 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 func TestDecoder(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolSimple)
-	decoder, err := NewDecoder(ctx, codecConfig, nil)
+	rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
-	require.NotNil(t, decoder)
+	require.NotNil(t, rowEventDecoder)
+	decoder, ok := rowEventDecoder.(*decoder)
+	require.True(t, ok)
 
 	messageType, hasNext, err := decoder.HasNext()
 	require.NoError(t, err)
@@ -1871,8 +1900,10 @@ func TestMarshallerError(t *testing.T) {
 	err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{})
 	require.ErrorIs(t, err, errors.ErrEncodeFailed)
 
-	dec, err := NewDecoder(ctx, codecConfig, nil)
+	rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
+	dec, ok := rowEventDecoder.(*decoder)
+	require.True(t, ok)
 	dec.marshaller = mockMarshaller
 
 	mockMarshaller.EXPECT().Unmarshal(gomock.Any(), gomock.Any()).Return(errors.ErrDecodeFailed)
