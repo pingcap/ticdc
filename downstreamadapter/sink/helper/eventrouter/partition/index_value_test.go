@@ -86,4 +86,9 @@ func TestIndexValueDispatcherWithIndexName(t *testing.T) {
 	index, _, err = p.GeneratePartitionIndexAndKey(&row, 16, tableInfo, 33)
 	require.NoError(t, err)
 	require.Equal(t, int32(2), index)
+
+	p = newIndexValuePartitionGenerator("")
+	index, _, err = p.GeneratePartitionIndexAndKey(&row, 3, tableInfo, 33)
+	require.NoError(t, err)
+	require.Equal(t, int32(0), index)
 }
