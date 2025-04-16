@@ -16,6 +16,7 @@ package cloudstorage
 import (
 	"context"
 	"fmt"
+	atomic2 "go.uber.org/atomic"
 	"net/url"
 	"os"
 	"path"
@@ -37,7 +38,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newCloudStorageDDLWorkerForTest(parentDir string) (*ddlWorker, error) {
+func newSinkForTest(parentDir string) (*sink, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
@@ -63,14 +64,28 @@ func newCloudStorageDDLWorkerForTest(parentDir string) (*ddlWorker, error) {
 	if err != nil {
 		return nil, err
 	}
-	sink := newDDLWorker(changefeedID, sinkURI, cfg, nil, storage, metrics.NewStatistics(changefeedID, "CloudStorageSink"))
-	go sink.Run(ctx)
-	return sink, nil
+	return &sink{
+		changefeedID:             common.NewChangefeedID4Test("test", "test"),
+		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
+		cfg:                      cfg,
+		storage:                  storage,
+		sinkURI:                  sinkURI,
+		cleanupJobs:              nil,
+		dmlWorker:                nil,
+		lastCheckpointTs:         atomic2.Uint64{},
+		lastSendCheckpointTsTime: time.Now(),
+		cron:                     nil,
+		statistics:               metrics.NewStatistics(changefeedID, "cloudstorage"),,
+		isNormal:                 atomic.NewBool(true),
+	}, nil
+	////sink := newDDLWorker(changefeedID, sinkURI, cfg, nil, storage, metrics.NewStatistics(changefeedID, "CloudStorageSink"))
+	//go sink.Run(ctx)
+	//return sink, nil
 }
 
 func TestCloudStorageWriteDDLEvent(t *testing.T) {
 	parentDir := t.TempDir()
-	sink, err := newCloudStorageDDLWorkerForTest(parentDir)
+	sink, err := newSinkForTest(parentDir)
 	require.NoError(t, err)
 
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
@@ -127,7 +142,7 @@ func TestCloudStorageWriteDDLEvent(t *testing.T) {
 
 func TestCloudStorageWriteCheckpointTs(t *testing.T) {
 	parentDir := t.TempDir()
-	sink, err := newCloudStorageDDLWorkerForTest(parentDir)
+	sink, err := newSinkForTest(parentDir)
 	require.NoError(t, err)
 
 	time.Sleep(3 * time.Second)

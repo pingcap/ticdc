@@ -76,11 +76,11 @@ func newDMLWorker(
 	workerChannels := make([]*chann.DrainableChann[eventFragment], config.WorkerCount)
 	// create a group of encoding workers.
 	for i := 0; i < defaultEncodingConcurrency; i++ {
-		encoderBuilder, err := codec.NewTxnEventEncoder(encoderConfig)
+		encoder, err := codec.NewTxnEventEncoder(encoderConfig)
 		if err != nil {
 			return nil, err
 		}
-		w.workers[i] = newWorker(i, w.changefeedID, encoderBuilder, w.msgCh.Out(), encodedOutCh)
+		w.workers[i] = newWorker(i, w.changefeedID, encoder, w.msgCh.Out(), encodedOutCh)
 	}
 	// create a group of dml workers.
 	for i := 0; i < w.config.WorkerCount; i++ {
@@ -114,9 +114,8 @@ func (w *dmlWorker) Run(ctx context.Context) error {
 	})
 
 	for i := 0; i < len(w.writers); i++ {
-		worker := w.writers[i]
 		eg.Go(func() error {
-			return worker.Run(ctx)
+			return w.writers[i].Run(ctx)
 		})
 	}
 
@@ -141,8 +140,7 @@ func (w *dmlWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
 		TableInfoVersion: event.TableInfoVersion,
 	}
 	seq := atomic.AddUint64(&w.lastSeqNum, 1)
-
-	w.statistics.RecordBatchExecution(func() (int, int64, error) {
+	_ = w.statistics.RecordBatchExecution(func() (int, int64, error) {
 		// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
 		w.msgCh.In() <- newEventFragment(seq, tbl, event)
 		return int(event.Len()), event.GetRowsSize(), nil

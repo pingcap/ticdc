@@ -226,6 +226,7 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefiniti
 	})
 }
 
+// todo: this method may be buggy, the error is not handled.
 func (s *sink) AddCheckpointTs(ts uint64) {
 	if time.Since(s.lastSendCheckpointTsTime) < 2*time.Second {
 		log.Debug("skip write checkpoint ts to external storage",
@@ -240,11 +241,11 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 	}()
 	ckpt, err := json.Marshal(map[string]uint64{"checkpoint-ts": ts})
 	if err != nil {
-		log.Error("CloudStorageSink marshal checkpoint-ts failed",
+		log.Panic("CloudStorageSink marshal checkpoint failed, this should never happen",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Uint64("checkpoint", ts),
 			zap.Error(err))
-		return
 	}
 	err = s.storage.WriteFile(context.Background(), "metadata", ckpt)
 	if err != nil {
