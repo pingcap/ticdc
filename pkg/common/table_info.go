@@ -76,6 +76,9 @@ type TableInfo struct {
 	// record the logical ID from the DDL event(job.BinlogInfo.TableInfo).
 	// So be careful when using the TableInfo.
 	TableName TableName `json:"table-name"`
+	Charset   string    `json:"charset"`
+	Collate   string    `json:"collate"`
+	Comment   string    `json:"comment"`
 
 	columnSchema *columnSchema `json:"-"`
 
@@ -407,8 +410,11 @@ func newTableInfo(schema, table string, tableID int64, isPartition bool, columnS
 	return ti
 }
 
-func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
+func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema, charset, collate, comment string) *TableInfo {
 	ti := newTableInfo(schemaName, tableName, tableID, isPartition, columnSchema)
+	ti.Charset = charset
+	ti.Collate = collate
+	ti.Comment = comment
 
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appeared when tableInfo is created as a pair.
@@ -424,8 +430,7 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 	// search column schema object
 	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
 	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
-
-	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema)
+	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema, info.Charset, info.Collate, info.Comment)
 }
 
 // NewTableInfo4Decoder is only used by the codec decoder for the test purpose,
