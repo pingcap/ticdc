@@ -39,9 +39,9 @@ const (
 	defaultConflictDetectorSlots uint64 = 16 * 1024
 )
 
-// Sink is responsible for writing data to mysql downstream.
+// sink is responsible for writing data to mysql downstream.
 // Including DDL and DML.
-type Sink struct {
+type sink struct {
 	changefeedID common.ChangeFeedID
 
 	dmlWriter []*mysql.Writer
@@ -78,7 +78,7 @@ func New(
 	changefeedID common.ChangeFeedID,
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
-) (*Sink, error) {
+) (*sink, error) {
 	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
@@ -91,9 +91,9 @@ func newMysqlSinkWithDBAndConfig(
 	changefeedID common.ChangeFeedID,
 	cfg *mysql.Config,
 	db *sql.DB,
-) *Sink {
+) *sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
-	result := &Sink{
+	result := &sink{
 		changefeedID: changefeedID,
 		db:           db,
 		dmlWriter:    make([]*mysql.Writer, cfg.WorkerCount),
@@ -114,7 +114,7 @@ func newMysqlSinkWithDBAndConfig(
 	return result
 }
 
-func (s *Sink) Run(ctx context.Context) error {
+func (s *sink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return s.conflictDetector.Run(ctx)
@@ -129,7 +129,7 @@ func (s *Sink) Run(ctx context.Context) error {
 	return err
 }
 
-func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
+func (s *sink) runDMLWriter(ctx context.Context, idx int) error {
 	namespace := s.changefeedID.Namespace()
 	changefeed := s.changefeedID.Name()
 
@@ -200,19 +200,19 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	}
 }
 
-func (s *Sink) IsNormal() bool {
+func (s *sink) IsNormal() bool {
 	return s.isNormal.Load()
 }
 
-func (s *Sink) SinkType() common.SinkType {
+func (s *sink) SinkType() common.SinkType {
 	return common.MysqlSinkType
 }
 
-func (s *Sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.conflictDetector.Add(event)
 	// // We use low value of dispatcherID to divide different tables into different workers.
 	// // And ensure the same table always goes to the same worker.
@@ -220,11 +220,7 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	// s.dmlWorker[index].AddDMLEvent(event)
 }
 
-func (s *Sink) PassBlockEvent(event commonEvent.BlockEvent) {
-	event.PostFlush()
-}
-
-func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
+func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	var err error
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
@@ -244,9 +240,9 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *Sink) AddCheckpointTs(_ uint64) {}
+func (s *sink) AddCheckpointTs(_ uint64) {}
 
-func (s *Sink) GetStartTsList(
+func (s *sink) GetStartTsList(
 	tableIds []int64,
 	startTsList []int64,
 	removeDDLTs bool,
@@ -276,7 +272,7 @@ func (s *Sink) GetStartTsList(
 	return startTsList, isSyncpointList, nil
 }
 
-func (s *Sink) Close(removeChangefeed bool) {
+func (s *sink) Close(removeChangefeed bool) {
 	// when remove the changefeed, we need to remove the ddl ts item in the ddl worker
 	if removeChangefeed {
 		if err := s.ddlWriter.RemoveDDLTsItem(); err != nil {

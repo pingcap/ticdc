@@ -532,4 +532,24 @@ var (
 		"initialize meta for redo log",
 		errors.RFCCodeText("CDC:ErrRedoMetaInitialize"),
 	)
+	ErrPulsarInvalidConfig = errors.Normalize(
+		"pulsar config invalid %s",
+		errors.RFCCodeText("CDC:ErrPulsarInvalidConfig"),
+	)
+	ErrPulsarNewProducer = errors.Normalize(
+		"new pulsar producer",
+		errors.RFCCodeText("CDC:ErrPulsarNewProducer"),
+	)
+	ErrPulsarProducerClosed = errors.Normalize(
+		"pulsar producer closed",
+		errors.RFCCodeText("CDC:ErrPulsarProducerClosed"),
+	)
+	ErrPulsarAsyncSendMessage = errors.Normalize(
+		"pulsar async send message failed",
+		errors.RFCCodeText("CDC:ErrPulsarAsyncSendMessage"),
+	)
+	ErrFailToCreateExternalStorage = errors.Normalize(
+		"failed to create external storage",
+		errors.RFCCodeText("CDC:ErrFailToCreateExternalStorage"),
+	)
 )

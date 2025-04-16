@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package producer
+package pulsar
 
 import (
 	"context"
@@ -20,30 +20,35 @@ import (
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	lru "github.com/hashicorp/golang-lru"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
 
-var _ DMLProducer = (*pulsarDMLProducer)(nil)
+// dmlProducer is the interface for the pulsar DML message producer.
+type dmlProducer interface {
+	// AsyncSendMessage sends a message asynchronously.
+	asyncSendMessage(
+		ctx context.Context, topic string, message *common.Message,
+	) error
 
-// pulsarDMLProducer is used to send messages to pulsar.
-type pulsarDMLProducer struct {
-	// id indicates which processor (changefeed) this sink belongs to.
-	id commonType.ChangeFeedID
-	// We hold the client to make close operation faster.
-	// Please see the comment of Close().
-	client pulsar.Client
+	close()
+}
+
+// dmlProducers is used to send messages to pulsar.
+type dmlProducers struct {
+	changefeedID commonType.ChangeFeedID
 	// producers is used to send messages to pulsar.
 	// One topic only use one producer , so we want to have many topics but use less memory,
 	// lru is a good idea to solve this question.
 	// support multiple topics
 	producers *lru.Cache
+
+	comp component
 
 	// closedMu is used to protect `closed`.
 	// We need to ensure that closed producers are never written to.
@@ -55,40 +60,27 @@ type pulsarDMLProducer struct {
 	// failpointCh is used to inject failpoints to the run loop.
 	// Only used in test.
 	failpointCh chan error
-
-	pConfig *config.PulsarConfig
 }
 
-// NewPulsarDMLProducer creates a new pulsar producer.
-func NewPulsarDMLProducer(
-	ctx context.Context,
+// newDMLProducers creates a new pulsar producer.
+func newDMLProducers(
 	changefeedID commonType.ChangeFeedID,
-	client pulsar.Client,
-	sinkConfig *config.SinkConfig,
+	comp component,
 	failpointCh chan error,
-) (DMLProducer, error) {
+) (*dmlProducers, error) {
 	log.Info("Creating pulsar DML producer ...",
 		zap.String("namespace", changefeedID.Namespace()),
 		zap.String("changefeed", changefeedID.ID().String()))
 	start := time.Now()
 
-	var pulsarConfig *config.PulsarConfig
-	if sinkConfig.PulsarConfig == nil {
-		log.Error("new pulsar DML producer fail,sink:pulsar config is empty")
-		return nil, cerror.ErrPulsarInvalidConfig.
-			GenWithStackByArgs("pulsar config is empty")
-	}
-
-	pulsarConfig = sinkConfig.PulsarConfig
-	defaultTopicName := pulsarConfig.GetDefaultTopicName()
-	defaultProducer, err := newProducer(pulsarConfig, client, defaultTopicName)
+	defaultTopicName := comp.config.GetDefaultTopicName()
+	defaultProducer, err := newProducer(comp.config, comp.client, defaultTopicName)
 	if err != nil {
-		go client.Close()
-		return nil, cerror.WrapError(cerror.ErrPulsarNewProducer, err)
+		return nil, errors.WrapError(errors.ErrPulsarNewProducer, err)
 	}
 	producerCacheSize := config.DefaultPulsarProducerCacheSize
-	if pulsarConfig != nil && pulsarConfig.PulsarProducerCacheSize != nil {
-		producerCacheSize = int(*pulsarConfig.PulsarProducerCacheSize)
+	if comp.config != nil && comp.config.PulsarProducerCacheSize != nil {
+		producerCacheSize = int(*comp.config.PulsarProducerCacheSize)
 	}
 
 	producers, err := lru.NewWithEvict(producerCacheSize, func(key interface{}, value interface{}) {
@@ -99,29 +91,26 @@ func NewPulsarDMLProducer(
 		}
 	})
 	if err != nil {
-		go client.Close()
-		return nil, cerror.WrapError(cerror.ErrPulsarNewProducer, err)
+		return nil, errors.WrapError(errors.ErrPulsarNewProducer, err)
 	}
 
 	producers.Add(defaultTopicName, defaultProducer)
 
-	p := &pulsarDMLProducer{
-		id:          changefeedID,
-		client:      client,
-		producers:   producers,
-		pConfig:     pulsarConfig,
-		closed:      false,
-		failpointCh: failpointCh,
+	p := &dmlProducers{
+		changefeedID: changefeedID,
+		comp:         comp,
+		producers:    producers,
+		closed:       false,
+		failpointCh:  failpointCh,
 	}
-	log.Info("Pulsar DML producer created", zap.Stringer("changefeed", p.id),
+	log.Info("Pulsar DML producer created", zap.Stringer("changefeed", p.changefeedID),
 		zap.Duration("duration", time.Since(start)))
 	return p, nil
 }
 
-// AsyncSendMessage  Async send one message
-func (p *pulsarDMLProducer) AsyncSendMessage(
-	ctx context.Context, topic string,
-	partition int32, message *common.Message,
+// asyncSendMessage  Async send one message
+func (p *dmlProducers) asyncSendMessage(
+	ctx context.Context, topic string, message *common.Message,
 ) error {
 	// wrapperSchemaAndTopic(message)
 
@@ -132,13 +121,13 @@ func (p *pulsarDMLProducer) AsyncSendMessage(
 
 	// If producers are closed, we should skip the message and return an error.
 	if p.closed {
-		return cerror.ErrPulsarProducerClosed.GenWithStackByArgs()
+		return errors.ErrPulsarProducerClosed.GenWithStackByArgs()
 	}
 	failpoint.Inject("PulsarSinkAsyncSendError", func() {
 		// simulate sending message to input channel successfully but flushing
 		// message to Pulsar meets error
-		log.Info("PulsarSinkAsyncSendError error injected", zap.String("namespace", p.id.Namespace()),
-			zap.String("changefeed", p.id.ID().String()))
+		log.Info("PulsarSinkAsyncSendError error injected", zap.String("namespace", p.changefeedID.Namespace()),
+			zap.String("changefeed", p.changefeedID.ID().String()))
 		p.failpointCh <- errors.New("pulsar sink injected error")
 		failpoint.Return(nil)
 	})
@@ -158,10 +147,10 @@ func (p *pulsarDMLProducer) AsyncSendMessage(
 		func(id pulsar.MessageID, m *pulsar.ProducerMessage, err error) {
 			// fail
 			if err != nil {
-				e := cerror.WrapError(cerror.ErrPulsarAsyncSendMessage, err)
+				e := errors.WrapError(errors.ErrPulsarAsyncSendMessage, err)
 				log.Error("Pulsar DML producer async send error",
-					zap.String("namespace", p.id.Namespace()),
-					zap.String("changefeed", p.id.ID().String()),
+					zap.String("namespace", p.changefeedID.Namespace()),
+					zap.String("changefeed", p.changefeedID.ID().String()),
 					zap.Int("messageSize", len(m.Payload)),
 					zap.String("topic", topic),
 					zap.Error(err))
@@ -175,7 +164,7 @@ func (p *pulsarDMLProducer) AsyncSendMessage(
 					if e != nil {
 					}
 					log.Warn("Error channel is full in pulsar DML producer",
-						zap.Stringer("changefeed", p.id), zap.Error(e))
+						zap.Stringer("changefeed", p.changefeedID), zap.Error(e))
 				}
 			} else if message.Callback != nil {
 				// success
@@ -189,11 +178,7 @@ func (p *pulsarDMLProducer) AsyncSendMessage(
 	return nil
 }
 
-func (p *pulsarDMLProducer) Run(ctx context.Context) error {
-	return nil
-}
-
-func (p *pulsarDMLProducer) Close() { // We have to hold the lock to synchronize closing with writing.
+func (p *dmlProducers) close() { // We have to hold the lock to synchronize closing with writing.
 	p.closedMu.Lock()
 	defer p.closedMu.Unlock()
 	// If the producer has already been closed, we should skip this close operation.
@@ -201,8 +186,8 @@ func (p *pulsarDMLProducer) Close() { // We have to hold the lock to synchronize
 		// We need to guard against double closing the clients,
 		// which could lead to panic.
 		log.Warn("Pulsar DML producer already closed",
-			zap.String("namespace", p.id.Namespace()),
-			zap.String("changefeed", p.id.ID().String()))
+			zap.String("namespace", p.changefeedID.Namespace()),
+			zap.String("changefeed", p.changefeedID.ID().String()))
 		return
 	}
 	close(p.failpointCh)
@@ -214,13 +199,12 @@ func (p *pulsarDMLProducer) Close() { // We have to hold the lock to synchronize
 		topicName, _ := topic.(string)
 		log.Info("Async client closed in pulsar DML producer",
 			zap.Duration("duration", time.Since(start)),
-			zap.String("namespace", p.id.Namespace()),
-			zap.String("changefeed", p.id.ID().String()), zap.String("topic", topicName))
+			zap.String("namespace", p.changefeedID.Namespace()),
+			zap.String("changefeed", p.changefeedID.ID().String()), zap.String("topic", topicName))
 	}
-	p.client.Close()
 }
 
-func (p *pulsarDMLProducer) getProducer(topic string) (pulsar.Producer, bool) {
+func (p *dmlProducers) getProducer(topic string) (pulsar.Producer, bool) {
 	target, ok := p.producers.Get(topic)
 	if ok {
 		producer, ok := target.(pulsar.Producer)
@@ -233,15 +217,15 @@ func (p *pulsarDMLProducer) getProducer(topic string) (pulsar.Producer, bool) {
 
 // getProducerByTopic get producer by topicName,
 // if not exist, it will create a producer with topicName, and set in LRU cache
-// more meta info at pulsarDMLProducer's producers
-func (p *pulsarDMLProducer) getProducerByTopic(topicName string) (producer pulsar.Producer, err error) {
+// more meta info at dmlProducers's producers
+func (p *dmlProducers) getProducerByTopic(topicName string) (producer pulsar.Producer, err error) {
 	getProducer, ok := p.getProducer(topicName)
 	if ok && getProducer != nil {
 		return getProducer, nil
 	}
 
 	if !ok { // create a new producer for the topicName
-		producer, err = newProducer(p.pConfig, p.client, topicName)
+		producer, err = newProducer(p.comp.config, p.comp.client, topicName)
 		if err != nil {
 			return nil, err
 		}
