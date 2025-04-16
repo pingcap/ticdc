@@ -18,10 +18,11 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/rcrowley/go-metrics"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -85,40 +86,37 @@ func (f *saramaFactory) AdminClient() (ClusterAdminClient, error) {
 	}, nil
 }
 
-// SyncProducer returns a Sync Producer,
+// SyncProducer returns a Sync SyncProducer,
 // it should be the caller's responsibility to close the producer
 func (f *saramaFactory) SyncProducer() (SyncProducer, error) {
-	client, err := sarama.NewClient(f.endpoints, f.config)
+	p, err := sarama.NewSyncProducer(f.endpoints, f.config)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 
-	p, err := sarama.NewSyncProducerFromClient(client)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
 	return &saramaSyncProducer{
 		id:       f.changefeedID,
-		client:   client,
 		producer: p,
+		closed:   false,
 	}, nil
 }
 
-// AsyncProducer return an Async Producer,
+// AsyncProducer return an Async SyncProducer,
 // it should be the caller's responsibility to close the producer
-func (f *saramaFactory) AsyncProducer(_ context.Context) (AsyncProducer, error) {
+func (f *saramaFactory) AsyncProducer() (AsyncProducer, error) {
 	client, err := sarama.NewClient(f.endpoints, f.config)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 	p, err := sarama.NewAsyncProducerFromClient(client)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 	return &saramaAsyncProducer{
 		client:       client,
 		producer:     p,
 		changefeedID: f.changefeedID,
+		closed:       atomic.NewBool(false),
 		failpointCh:  make(chan error, 1),
 	}, nil
 }

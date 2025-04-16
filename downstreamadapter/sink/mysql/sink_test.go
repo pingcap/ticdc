@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func MysqlSinkForTest() (*Sink, sqlmock.Sqlmock) {
+func MysqlSinkForTest() (*sink, sqlmock.Sqlmock) {
 	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
@@ -134,7 +134,7 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	sink.AddDMLEvent(dmlEvent)
 	time.Sleep(1 * time.Second)
 
-	sink.PassBlockEvent(ddlEvent2)
+	ddlEvent2.PostFlush()
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
