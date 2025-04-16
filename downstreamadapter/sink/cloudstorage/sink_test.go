@@ -36,27 +36,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newSinkForTest(parentDir string, cleanUpJobs []func()) (*sink, error) {
+func newSinkForTest(replicaConfig *config.ReplicaConfig, sinkURI *url.URL, cleanUpJobs []func()) (*sink, error) {
 	ctx := context.Background()
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	csvProtocol := "csv"
-	sinkConfig := &config.SinkConfig{Protocol: &csvProtocol}
-	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
-	sinkURI, err := url.Parse(uri)
+	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, cleanUpJobs)
 	if err != nil {
 		return nil, err
 	}
-	sink, err := New(ctx, changefeedID, sinkURI, sinkConfig, cleanUpJobs)
-	if err != nil {
-		return nil, err
-	}
-	return sink, nil
+	return result, nil
 }
 
 func TestBasicFunctionality(t *testing.T) {
-	cloudStorageSink, err := newSinkForTest(t.TempDir(), nil)
+	uri := fmt.Sprintf("file:///%s?protocol=csv", t.TempDir())
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	cloudStorageSink, err := newSinkForTest(replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -130,7 +132,15 @@ func TestBasicFunctionality(t *testing.T) {
 
 func TestWriteDDLEvent(t *testing.T) {
 	parentDir := t.TempDir()
-	cloudStorageSink, err := newSinkForTest(parentDir, nil)
+	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	cloudStorageSink, err := newSinkForTest(replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -191,7 +201,15 @@ func TestWriteDDLEvent(t *testing.T) {
 
 func TestWriteCheckpointEvent(t *testing.T) {
 	parentDir := t.TempDir()
-	cloudStorageSink, err := newSinkForTest(parentDir, nil)
+	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	cloudStorageSink, err := newSinkForTest(replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -210,6 +228,7 @@ func TestCleanupExpiredFiles(t *testing.T) {
 	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
+
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
 		FileExpirationDays:  util.AddressOf(1),
@@ -227,7 +246,7 @@ func TestCleanupExpiredFiles(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cloudStorageSink, err := newSinkForTest(parentDir, cleanupJobs)
+	cloudStorageSink, err := newSinkForTest(replicaConfig, sinkURI, cleanupJobs)
 	go cloudStorageSink.Run(ctx)
 	require.NoError(t, err)
 
