@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package producer
+package pulsar
 
 import (
 	"context"
@@ -30,7 +30,6 @@ func TestPulsarSyncSendMessage(t *testing.T) {
 	type args struct {
 		ctx          context.Context
 		topic        string
-		partition    int32
 		message      *common.Message
 		changefeedID commonType.ChangeFeedID
 		pulsarConfig *config.PulsarConfig
@@ -46,7 +45,6 @@ func TestPulsarSyncSendMessage(t *testing.T) {
 			args: args{
 				ctx:          context.Background(),
 				topic:        "test",
-				partition:    1,
 				changefeedID: commonType.NewChangefeedID4Test("test_namespace", "test"),
 				message: &common.Message{
 					Value:        []byte("this value for test input data"),
@@ -57,14 +55,12 @@ func TestPulsarSyncSendMessage(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		p := NewMockPulsarDDLProducer()
-		err := p.SyncSendMessage(tt.args.ctx, tt.args.topic,
-			tt.args.partition, tt.args.message)
+		p := newMockDDLProducer()
+		err := p.syncSendMessage(tt.args.ctx, tt.args.topic, tt.args.message)
 		require.NoError(t, err)
-		require.Len(t, p.(*PulsarMockProducer).GetEvents(tt.args.topic), 1)
+		require.Len(t, p.(*mockProducer).GetEvents(tt.args.topic), 1)
 
-		p.Close()
-
+		p.close()
 	}
 }
 
@@ -102,13 +98,11 @@ func TestPulsarSyncBroadcastMessage(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		p := NewMockPulsarDDLProducer()
-		err := p.SyncSendMessage(tt.args.ctx, tt.args.topic,
-			tt.args.partition, tt.args.message)
+		p := newMockDDLProducer()
+		err := p.syncSendMessage(tt.args.ctx, tt.args.topic, tt.args.message)
 		require.NoError(t, err)
-		require.Len(t, p.(*PulsarMockProducer).GetEvents(tt.args.topic), 1)
+		require.Len(t, p.(*mockProducer).GetEvents(tt.args.topic), 1)
 
-		p.Close()
-
+		p.close()
 	}
 }

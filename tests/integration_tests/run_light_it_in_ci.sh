@@ -96,7 +96,7 @@ kafka_groups=(
 	# G12
 	''
 	# G13
-	''
+	'avro_basic'
 )
 
 # Resource allocation for pulsar light integration tests in CI pipelines:
