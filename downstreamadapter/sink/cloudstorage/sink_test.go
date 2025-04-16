@@ -53,7 +53,6 @@ func newSinkForTest(parentDir string, cleanUpJobs []func()) (*sink, error) {
 		return nil, err
 	}
 	return sink, nil
-
 }
 
 func TestBasicFunctionality(t *testing.T) {
