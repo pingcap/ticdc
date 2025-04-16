@@ -15,20 +15,16 @@ package cloudstorage
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 
-	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -52,14 +48,10 @@ type dmlWorker struct {
 	// defragmenter is used to defragment the out-of-order encoded messages and
 	// sends encoded messages to individual dmlWorkers.
 	defragmenter *defragmenter
-	alive        struct {
-		sync.RWMutex
-		// msgCh is a channel to hold eventFragment.
-		// The caller of WriteEvents will write eventFragment to msgCh and
-		// the encodingWorkers will read eventFragment from msgCh to encode events.
-		msgCh  *chann.DrainableChann[eventFragment]
-		isDead bool
-	}
+	// msgCh is a channel to hold eventFragment.
+	// The caller of WriteEvents will write eventFragment to msgCh and
+	// the encodingWorkers will read eventFragment from msgCh to encode events.
+	msgCh *chann.DrainableChann[eventFragment]
 }
 
 func newDMLWorker(
@@ -77,8 +69,9 @@ func newDMLWorker(
 		statistics:   statistics,
 		workers:      make([]*worker, defaultEncodingConcurrency),
 		writers:      make([]*writer, config.WorkerCount),
+
+		msgCh: chann.NewAutoDrainChann[eventFragment](),
 	}
-	w.alive.msgCh = chann.NewAutoDrainChann[eventFragment]()
 	encodedOutCh := make(chan eventFragment, defaultChannelSize)
 	workerChannels := make([]*chann.DrainableChann[eventFragment], config.WorkerCount)
 	// create a group of encoding workers.
@@ -87,7 +80,7 @@ func newDMLWorker(
 		if err != nil {
 			return nil, err
 		}
-		w.workers[i] = newWorker(i, w.changefeedID, encoderBuilder, w.alive.msgCh.Out(), encodedOutCh)
+		w.workers[i] = newWorker(i, w.changefeedID, encoderBuilder, w.msgCh.Out(), encodedOutCh)
 	}
 	// create a group of dml workers.
 	for i := 0; i < w.config.WorkerCount; i++ {
@@ -131,13 +124,6 @@ func (w *dmlWorker) Run(ctx context.Context) error {
 }
 
 func (w *dmlWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
-	w.alive.RLock()
-	defer w.alive.RUnlock()
-	if w.alive.isDead {
-		log.Error("dead dmlSink", zap.Error(errors.Trace(errors.New("dead dmlSink"))))
-		return
-	}
-
 	if event.State != commonEvent.EventSenderStateNormal {
 		// The table where the event comes from is in stopping, so it's safe
 		// to drop the event directly.
@@ -158,21 +144,16 @@ func (w *dmlWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
 
 	w.statistics.RecordBatchExecution(func() (int, int64, error) {
 		// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
-		w.alive.msgCh.In() <- newEventFragment(seq, tbl, event)
+		w.msgCh.In() <- newEventFragment(seq, tbl, event)
 		return int(event.Len()), event.GetRowsSize(), nil
 	})
 }
 
 func (w *dmlWorker) Close() {
-	w.alive.Lock()
-	w.alive.isDead = true
-	w.alive.msgCh.CloseAndDrain()
-	w.alive.Unlock()
-
+	w.msgCh.CloseAndDrain()
 	for _, worker := range w.workers {
 		worker.Close()
 	}
-
 	for _, writer := range w.writers {
 		writer.Close()
 	}

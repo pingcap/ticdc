@@ -20,19 +20,18 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/parser/model"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/robfig/cron"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -46,7 +45,7 @@ import (
 // messages to individual dmlWorkers.
 // The dmlWorkers will write the encoded messages to external storage in parallel between different tables.
 type sink struct {
-	changefeedID         commonType.ChangeFeedID
+	changefeedID         common.ChangeFeedID
 	outputRawChangeEvent bool
 
 	cfg     *cloudstorage.Config
