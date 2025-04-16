@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
+	"github.com/pingcap/tiflow/pkg/integrity"
 )
 
 // DDLTableInfo contains the tableInfo about tidb_ddl_job and tidb_ddl_history
@@ -54,6 +55,10 @@ type Mounter interface {
 
 type mounter struct {
 	tz *time.Location
+	// decoder and preDecoder are used to decode the raw value, also used to extract checksum,
+	// they should not be nil after decode at least one event in the row format v2.
+	decoder    *rowcodec.ChunkDecoder
+	preDecoder *rowcodec.ChunkDecoder
 }
 
 // NewMounter creates a mounter
@@ -73,6 +78,11 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		return 0, nil
 	}
 
+	if m.decoder != nil {
+		checksumVersion := m.decoder.ChecksumVersion()
+	} else if m.preDecoder != nil {
+		checksumVersion := m.preDecoder.ChecksumVersion()
+	}
 	// key, physicalTableID, err := decodeTableID(raw.Key)
 	// if err != nil {
 	// 	return nil
@@ -82,24 +92,40 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		if !rowcodec.IsNewFormat(raw.OldValue) {
 			err = m.rawKVToChunkV1(raw.OldValue, tableInfo, chk, recordID)
 		} else {
-			err = m.rawKVToChunkV2(raw.OldValue, tableInfo, chk, recordID)
+			m.preDecoder, err = m.rawKVToChunkV2(raw.OldValue, tableInfo, chk, recordID)
 		}
 		if err != nil {
 			return 0, errors.Trace(err)
 		}
+		// preChecksum, matched, err = m.verifyChecksum(tableInfo, columnInfos, preCols, preRawCols, handle, key, true)
+		// if err != nil {
+		// 	return nil, rawRow, errors.Trace(err)
+		// }
 		count++
 	}
 	if len(raw.Value) != 0 {
 		if !rowcodec.IsNewFormat(raw.Value) {
 			err = m.rawKVToChunkV1(raw.Value, tableInfo, chk, recordID)
 		} else {
-			err = m.rawKVToChunkV2(raw.Value, tableInfo, chk, recordID)
+			m.decoder, err = m.rawKVToChunkV2(raw.Value, tableInfo, chk, recordID)
 		}
 		if err != nil {
 			return 0, errors.Trace(err)
 		}
 		count++
 	}
+
+	// if both are 0, it means the checksum is not enabled
+	// so the checksum is nil to reduce memory allocation.
+	if preChecksum != 0 || currentChecksum != 0 {
+		checksum = &integrity.Checksum{
+			Current:   currentChecksum,
+			Previous:  preChecksum,
+			Corrupted: corrupted,
+			Version:   checksumVersion,
+		}
+	}
+
 	return count, nil
 }
 
