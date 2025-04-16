@@ -427,6 +427,12 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
+		if message == nil {
+			log.Info("Skip ddl event", zap.Uint64("commitTs", e.GetCommitTs()),
+				zap.String("query", e.Query),
+				zap.Stringer("changefeed", s.changefeedID))
+			continue
+		}
 		topic := s.comp.eventRouter.GetTopicForDDL(e)
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
