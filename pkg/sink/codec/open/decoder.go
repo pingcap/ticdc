@@ -251,7 +251,7 @@ func buildColumns(
 			Value: value,
 		}
 		if _, ok := handleKeyColumns[name]; ok {
-			col.Flag = mysql.PriKeyFlag
+			col.Flag |= binaryFlag
 		}
 		result[name] = col
 	}
@@ -379,26 +379,24 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		col.Name = pmodel.NewCIStr(name)
 		col.FieldType = *types.NewFieldType(raw.Type)
 
-		if mysql.HasPriKeyFlag(raw.Flag) {
+		if isPrimary(raw.Flag) {
 			col.AddFlag(mysql.PriKeyFlag)
 			col.AddFlag(mysql.UniqueKeyFlag)
 			col.AddFlag(mysql.NotNullFlag)
 		}
-		if mysql.HasUnsignedFlag(raw.Flag) {
+		if isUnsigned(raw.Flag) {
 			col.AddFlag(mysql.UnsignedFlag)
 		}
-		if mysql.HasBinaryFlag(raw.Flag) {
+		if isBinary(raw.Flag) {
 			col.AddFlag(mysql.BinaryFlag)
+			col.SetCharset("binary")
+			col.SetCollate("binary")
 		}
 
 		switch col.GetType() {
 		case mysql.TypeVarchar, mysql.TypeString,
 			mysql.TypeTinyBlob, mysql.TypeBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
-			if mysql.HasBinaryFlag(col.GetFlag()) {
-				col.AddFlag(mysql.BinaryFlag)
-				col.SetCharset("binary")
-				col.SetCollate("binary")
-			} else {
+			if !mysql.HasBinaryFlag(col.GetFlag()) {
 				col.SetCharset("utf8mb4")
 				col.SetCollate("utf8mb4_bin")
 			}
