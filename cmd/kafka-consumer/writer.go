@@ -23,7 +23,7 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper/eventrouter"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -418,8 +418,8 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 		group.Append(dml, offset)
 		return
 	}
-	switch w.protocol {
-	case config.ProtocolSimple, config.ProtocolOpen, config.ProtocolCanalJSON:
+	switch w.option.protocol {
+	case config.ProtocolSimple, config.ProtocolOpen, config.ProtocolCanalJSON, config.ProtocolDebezium:
 		// simple protocol set the table id for all row message, it can be known which table the row message belongs to,
 		// also consider the table partition.
 		// open protocol set the partition table id if the table is partitioned.

@@ -464,7 +464,6 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			DateSeparator:                    c.Sink.DateSeparator,
 			EnablePartitionSeparator:         c.Sink.EnablePartitionSeparator,
 			FileIndexWidth:                   c.Sink.FileIndexWidth,
-			EnableKafkaSinkV2:                c.Sink.EnableKafkaSinkV2,
 			OnlyOutputUpdatedColumns:         c.Sink.OnlyOutputUpdatedColumns,
 			DeleteOnlyOutputHandleKeyColumns: c.Sink.DeleteOnlyOutputHandleKeyColumns,
 			ContentCompatible:                c.Sink.ContentCompatible,
@@ -767,7 +766,6 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			DateSeparator:                    cloned.Sink.DateSeparator,
 			EnablePartitionSeparator:         cloned.Sink.EnablePartitionSeparator,
 			FileIndexWidth:                   cloned.Sink.FileIndexWidth,
-			EnableKafkaSinkV2:                cloned.Sink.EnableKafkaSinkV2,
 			OnlyOutputUpdatedColumns:         cloned.Sink.OnlyOutputUpdatedColumns,
 			DeleteOnlyOutputHandleKeyColumns: cloned.Sink.DeleteOnlyOutputHandleKeyColumns,
 			ContentCompatible:                cloned.Sink.ContentCompatible,
@@ -945,17 +943,18 @@ type Table struct {
 // SinkConfig represents sink config for a changefeed
 // This is a duplicate of config.SinkConfig
 type SinkConfig struct {
-	Protocol                         *string             `json:"protocol,omitempty"`
-	SchemaRegistry                   *string             `json:"schema_registry,omitempty"`
-	CSVConfig                        *CSVConfig          `json:"csv,omitempty"`
-	DispatchRules                    []*DispatchRule     `json:"dispatchers,omitempty"`
-	ColumnSelectors                  []*ColumnSelector   `json:"column_selectors,omitempty"`
-	TxnAtomicity                     *string             `json:"transaction_atomicity,omitempty"`
-	EncoderConcurrency               *int                `json:"encoder_concurrency,omitempty"`
-	Terminator                       *string             `json:"terminator,omitempty"`
-	DateSeparator                    *string             `json:"date_separator,omitempty"`
-	EnablePartitionSeparator         *bool               `json:"enable_partition_separator,omitempty"`
-	FileIndexWidth                   *int                `json:"file_index_width,omitempty"`
+	Protocol                 *string           `json:"protocol,omitempty"`
+	SchemaRegistry           *string           `json:"schema_registry,omitempty"`
+	CSVConfig                *CSVConfig        `json:"csv,omitempty"`
+	DispatchRules            []*DispatchRule   `json:"dispatchers,omitempty"`
+	ColumnSelectors          []*ColumnSelector `json:"column_selectors,omitempty"`
+	TxnAtomicity             *string           `json:"transaction_atomicity,omitempty"`
+	EncoderConcurrency       *int              `json:"encoder_concurrency,omitempty"`
+	Terminator               *string           `json:"terminator,omitempty"`
+	DateSeparator            *string           `json:"date_separator,omitempty"`
+	EnablePartitionSeparator *bool             `json:"enable_partition_separator,omitempty"`
+	FileIndexWidth           *int              `json:"file_index_width,omitempty"`
+	// deprecated: it's become useless since v9.0.0
 	EnableKafkaSinkV2                *bool               `json:"enable_kafka_sink_v2,omitempty"`
 	OnlyOutputUpdatedColumns         *bool               `json:"only_output_updated_columns,omitempty"`
 	DeleteOnlyOutputHandleKeyColumns *bool               `json:"delete_only_output_handle_key_columns"`

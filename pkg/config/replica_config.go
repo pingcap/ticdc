@@ -69,7 +69,6 @@ var defaultReplicaConfig = &ReplicaConfig{
 		Terminator:                       util.AddressOf(CRLF),
 		DateSeparator:                    util.AddressOf(DateSeparatorDay.String()),
 		EnablePartitionSeparator:         util.AddressOf(true),
-		EnableKafkaSinkV2:                util.AddressOf(false),
 		OnlyOutputUpdatedColumns:         util.AddressOf(false),
 		DeleteOnlyOutputHandleKeyColumns: util.AddressOf(false),
 		ContentCompatible:                util.AddressOf(false),

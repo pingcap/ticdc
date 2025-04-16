@@ -19,12 +19,15 @@ const (
 )
 
 type MessageCenterConfig struct {
+	// The address of the message center.
+	Addr string
 	// The size of the channel for pending messages to be sent and received.
 	CacheChannelSize int
 }
 
-func NewDefaultMessageCenterConfig() *MessageCenterConfig {
+func NewDefaultMessageCenterConfig(addr string) *MessageCenterConfig {
 	return &MessageCenterConfig{
+		Addr:             addr,
 		CacheChannelSize: defaultCacheSize,
 	}
 }

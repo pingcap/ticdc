@@ -183,13 +183,13 @@ func (g *encoderGroup) AddEvents(
 	index := atomic.AddUint64(&g.index, 1) % uint64(g.concurrency)
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return errors.Trace(ctx.Err())
 	case g.inputCh[index] <- future:
 	}
 
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return errors.Trace(ctx.Err())
 	case g.outputCh <- future:
 	}
 
@@ -231,7 +231,7 @@ func newFuture(key model.TopicPartitionKey,
 func (p *future) Ready(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return errors.Trace(ctx.Err())
 	case <-p.done:
 	}
 	return nil

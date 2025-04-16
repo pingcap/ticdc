@@ -20,6 +20,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
@@ -28,7 +29,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/parser/types"
+	ptypes "github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/zap"
 )
 
@@ -68,11 +70,11 @@ func IsBinaryMySQLType(mysqlType string) bool {
 func ExtractBasicMySQLType(mysqlType string) byte {
 	for i := 0; i < len(mysqlType); i++ {
 		if mysqlType[i] == '(' || mysqlType[i] == ' ' {
-			return types.StrToType(mysqlType[:i])
+			return ptypes.StrToType(mysqlType[:i])
 		}
 	}
 
-	return types.StrToType(mysqlType)
+	return ptypes.StrToType(mysqlType)
 }
 
 func IsUnsignedFlag(mysqlType string) bool {
@@ -369,39 +371,106 @@ func MustSnapshotQuery(
 }
 
 // MustBinaryLiteralToInt convert bytes into uint64,
-// by follow https://github.com/pingcap/tidb/blob/e3417913f58cdd5a136259b902bf177eaf3aa637/types/binary_literal.go#L105
 func MustBinaryLiteralToInt(bytes []byte) uint64 {
-	bytes = trimLeadingZeroBytes(bytes)
-	length := len(bytes)
-
-	if length > 8 {
+	val, err := types.BinaryLiteral(bytes).ToInt(types.DefaultStmtNoWarningContext)
+	if err != nil {
 		log.Panic("invalid bit value found", zap.ByteString("value", bytes))
 		return math.MaxUint64
-	}
-
-	if length == 0 {
-		return 0
-	}
-
-	// Note: the byte-order is BigEndian.
-	val := uint64(bytes[0])
-	for i := 1; i < length; i++ {
-		val = (val << 8) | uint64(bytes[i])
 	}
 	return val
 }
 
-func trimLeadingZeroBytes(bytes []byte) []byte {
-	if len(bytes) == 0 {
-		return bytes
-	}
-	pos, posMax := 0, len(bytes)-1
-	for ; pos < posMax; pos++ {
-		if bytes[pos] != 0 {
-			break
+const (
+	replacementChar = "_"
+	numberPrefix    = 'x'
+)
+
+// EscapeEnumAndSetOptions escapes ",", "\" and "”"
+// https://github.com/debezium/debezium/blob/9f7ede0e0695f012c6c4e715e96aed85eecf6b5f/debezium-connector-mysql/src/main/java/io/debezium/connector/mysql/antlr/MySqlAntlrDdlParser.java#L374
+func EscapeEnumAndSetOptions(option string) string {
+	option = strings.ReplaceAll(option, ",", "\\,")
+	option = strings.ReplaceAll(option, "\\'", "'")
+	option = strings.ReplaceAll(option, "''", "'")
+	return option
+}
+
+func isValidFirstCharacter(c rune) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+}
+
+func isValidNonFirstCharacter(c rune) bool {
+	return isValidFirstCharacter(c) || (c >= '0' && c <= '9')
+}
+
+func isValidNonFirstCharacterForTopicName(c rune) bool {
+	return isValidNonFirstCharacter(c) || c == '.'
+}
+
+// SanitizeName escapes not permitted chars
+// https://avro.apache.org/docs/1.12.0/specification/#names
+// see https://github.com/debezium/debezium/blob/main/debezium-core/src/main/java/io/debezium/schema/SchemaNameAdjuster.java
+func SanitizeName(name string) string {
+	changed := false
+	var sb strings.Builder
+	for i, c := range name {
+		if i == 0 && !isValidFirstCharacter(c) {
+			sb.WriteString(replacementChar)
+			if c >= '0' && c <= '9' {
+				sb.WriteRune(c)
+			}
+			changed = true
+		} else if !isValidNonFirstCharacter(c) {
+			sb.WriteString(replacementChar)
+			changed = true
+		} else {
+			sb.WriteRune(c)
 		}
 	}
-	return bytes[pos:]
+
+	sanitizedName := sb.String()
+	if changed {
+		log.Warn(
+			"Name is potentially not safe for serialization, replace it",
+			zap.String("name", name),
+			zap.String("replacedName", sanitizedName),
+		)
+	}
+	return sanitizedName
+}
+
+// SanitizeTopicName escapes not permitted chars for topic name
+// https://github.com/debezium/debezium/blob/main/debezium-api/src/main/java/io/debezium/spi/topic/TopicNamingStrategy.java
+func SanitizeTopicName(name string) string {
+	changed := false
+	var sb strings.Builder
+	for _, c := range name {
+		if !isValidNonFirstCharacterForTopicName(c) {
+			sb.WriteString(replacementChar)
+			changed = true
+		} else {
+			sb.WriteRune(c)
+		}
+	}
+
+	sanitizedName := sb.String()
+	if changed {
+		log.Warn(
+			"Table name sanitize",
+			zap.String("name", name),
+			zap.String("replacedName", sanitizedName),
+		)
+	}
+	return sanitizedName
+}
+
+// UnsafeBytesToString create string from byte slice without copying
+func UnsafeBytesToString(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
+}
+
+// UnsafeStringToBytes create byte slice from string without copying
+func UnsafeStringToBytes(s string) []byte {
+	return *(*[]byte)(unsafe.Pointer(&s))
 }
 
 // FakeTableIDAllocator is a fake table id allocator

@@ -18,9 +18,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"go.uber.org/zap"
 )
 
 // BatchEncoder encodes message into Debezium format.
@@ -33,35 +35,54 @@ type BatchEncoder struct {
 
 // EncodeCheckpointEvent implements the RowEventEncoder interface
 func (d *BatchEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message, error) {
-	// Currently ignored. Debezium MySQL Connector does not emit such event.
-	return nil, nil
-}
-
-// AppendRowChangedEvent implements the RowEventEncoder interface
-func (d *BatchEncoder) AppendRowChangedEvent(
-	_ context.Context,
-	_ string,
-	e *commonEvent.RowChangedEvent,
-	callback func(),
-) error {
-	valueBuf := bytes.Buffer{}
-	err := d.codec.EncodeRowChangedEvent(e, &valueBuf)
-	if err != nil {
-		return errors.Trace(err)
+	if !d.config.EnableTiDBExtension {
+		return nil, nil
 	}
-	// TODO: Use a streaming compression is better.
+	keyMap := bytes.Buffer{}
+	valueBuf := bytes.Buffer{}
+	err := d.codec.EncodeCheckpointEvent(ts, &keyMap, &valueBuf)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	key, err := common.Compress(
+		d.config.ChangefeedID,
+		d.config.LargeMessageHandle.LargeMessageHandleCompression,
+		keyMap.Bytes(),
+	)
+	if err != nil {
+		return nil, err
+	}
 	value, err := common.Compress(
 		d.config.ChangefeedID,
 		d.config.LargeMessageHandle.LargeMessageHandleCompression,
 		valueBuf.Bytes(),
 	)
 	if err != nil {
+		return nil, err
+	}
+	result := common.NewMsg(key, value)
+	return result, nil
+}
+
+// AppendRowChangedEvent implements the RowEventEncoder interface
+func (d *BatchEncoder) AppendRowChangedEvent(
+	_ context.Context,
+	_ string,
+	e *commonEvent.RowEvent,
+) error {
+	var key []byte
+	var value []byte
+	var err error
+	if key, err = d.encodeKey(e); err != nil {
+		return errors.Trace(err)
+	}
+	if value, err = d.encodeValue(e); err != nil {
 		return errors.Trace(err)
 	}
 	m := &common.Message{
-		Key:      nil,
+		Key:      key,
 		Value:    value,
-		Callback: callback,
+		Callback: e.Callback,
 	}
 	m.IncRowsCount()
 
@@ -72,8 +93,65 @@ func (d *BatchEncoder) AppendRowChangedEvent(
 // EncodeDDLEvent implements the RowEventEncoder interface
 // DDL message unresolved tso
 func (d *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error) {
-	// Schema Change Events are currently not supported.
-	return nil, nil
+	valueBuf := bytes.Buffer{}
+	keyMap := bytes.Buffer{}
+	err := d.codec.EncodeDDLEvent(e, &keyMap, &valueBuf)
+	if err != nil {
+		if errors.ErrDDLUnsupportType.Equal(err) {
+			log.Warn("encode ddl event failed, just ignored", zap.Error(err))
+			return nil, nil
+		}
+		return nil, errors.Trace(err)
+	}
+	key, err := common.Compress(
+		d.config.ChangefeedID,
+		d.config.LargeMessageHandle.LargeMessageHandleCompression,
+		keyMap.Bytes(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	value, err := common.Compress(
+		d.config.ChangefeedID,
+		d.config.LargeMessageHandle.LargeMessageHandleCompression,
+		valueBuf.Bytes(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	result := common.NewMsg(key, value)
+
+	return result, nil
+}
+
+func (d *BatchEncoder) encodeKey(e *commonEvent.RowEvent) ([]byte, error) {
+	keyBuf := bytes.Buffer{}
+	err := d.codec.EncodeKey(e, &keyBuf)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	// TODO: Use a streaming compression is better.
+	key, err := common.Compress(
+		d.config.ChangefeedID,
+		d.config.LargeMessageHandle.LargeMessageHandleCompression,
+		keyBuf.Bytes(),
+	)
+	return key, err
+}
+
+func (d *BatchEncoder) encodeValue(e *commonEvent.RowEvent) ([]byte, error) {
+	valueBuf := bytes.Buffer{}
+	err := d.codec.EncodeValue(e, &valueBuf)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	// TODO: Use a streaming compression is better.
+	value, err := common.Compress(
+		d.config.ChangefeedID,
+		d.config.LargeMessageHandle.LargeMessageHandleCompression,
+		valueBuf.Bytes(),
+	)
+	return value, err
 }
 
 // Build implements the RowEventEncoder interface

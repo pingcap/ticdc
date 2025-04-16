@@ -146,13 +146,8 @@ func (s *CloudStorageSink) IsNormal() bool {
 	return atomic.LoadUint32(&s.isNormal) == 1
 }
 
-func (s *CloudStorageSink) AddDMLEvent(event *commonEvent.DMLEvent) error {
+func (s *CloudStorageSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmlWorker.AddDMLEvent(event)
-	return nil
-}
-
-func (s *CloudStorageSink) PassBlockEvent(event commonEvent.BlockEvent) {
-	event.PostFlush()
 }
 
 func (s *CloudStorageSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -188,6 +183,10 @@ func (s *CloudStorageSink) AddCheckpointTs(ts uint64) {
 
 func (s *CloudStorageSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	s.ddlWorker.SetTableSchemaStore(tableSchemaStore)
+}
+
+func (s *CloudStorageSink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
+	return startTsList, make([]bool, len(startTsList)), nil
 }
 
 func (s *CloudStorageSink) Close(_ bool) {

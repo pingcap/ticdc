@@ -91,7 +91,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "tinyunsigned",
 				Value: uint64(1),
 				Type:  mysql.TypeTiny,
-				Flag:  commonType.UnsignedFlag,
+				Flag:  mysql.UnsignedFlag,
 			},
 			model.ColumnInfo{
 				ID:        6,
@@ -105,7 +105,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "shortunsigned",
 				Value: uint64(1),
 				Type:  mysql.TypeShort,
-				Flag:  commonType.UnsignedFlag,
+				Flag:  mysql.UnsignedFlag,
 			},
 			model.ColumnInfo{
 				ID:        7,
@@ -119,7 +119,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "int24unsigned",
 				Value: uint64(1),
 				Type:  mysql.TypeInt24,
-				Flag:  commonType.UnsignedFlag,
+				Flag:  mysql.UnsignedFlag,
 			},
 			model.ColumnInfo{
 				ID:        8,
@@ -133,7 +133,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "longunsigned",
 				Value: uint64(1),
 				Type:  mysql.TypeLong,
-				Flag:  commonType.UnsignedFlag,
+				Flag:  mysql.UnsignedFlag,
 			},
 			model.ColumnInfo{
 				ID:        9,
@@ -147,7 +147,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "longlongunsigned",
 				Value: uint64(1),
 				Type:  mysql.TypeLonglong,
-				Flag:  commonType.UnsignedFlag,
+				Flag:  mysql.UnsignedFlag,
 			},
 			model.ColumnInfo{
 				ID: 10,
@@ -282,7 +282,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "tinyblob",
 				Value: []byte("hello world"),
 				Type:  mysql.TypeTinyBlob,
-				Flag:  commonType.BinaryFlag,
+				Flag:  mysql.BinaryFlag,
 			},
 			model.ColumnInfo{
 				ID:        22,
@@ -296,7 +296,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "mediumblob",
 				Value: []byte("hello world"),
 				Type:  mysql.TypeMediumBlob,
-				Flag:  commonType.BinaryFlag,
+				Flag:  mysql.BinaryFlag,
 			},
 			model.ColumnInfo{
 				ID:        23,
@@ -310,7 +310,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "blob",
 				Value: []byte("hello world"),
 				Type:  mysql.TypeBlob,
-				Flag:  commonType.BinaryFlag,
+				Flag:  mysql.BinaryFlag,
 			},
 			model.ColumnInfo{
 				ID:        24,
@@ -324,7 +324,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "longblob",
 				Value: []byte("hello world"),
 				Type:  mysql.TypeLongBlob,
-				Flag:  commonType.BinaryFlag,
+				Flag:  mysql.BinaryFlag,
 			},
 			model.ColumnInfo{
 				ID:        25,
@@ -338,7 +338,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "varbinary",
 				Value: []byte("hello world"),
 				Type:  mysql.TypeVarchar,
-				Flag:  commonType.BinaryFlag,
+				Flag:  mysql.BinaryFlag,
 			},
 			model.ColumnInfo{
 				ID:        26,
@@ -352,7 +352,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "varbinary1",
 				Value: []byte("hello world"),
 				Type:  mysql.TypeVarString,
-				Flag:  commonType.BinaryFlag,
+				Flag:  mysql.BinaryFlag,
 			},
 			model.ColumnInfo{
 				ID:        27,
@@ -366,7 +366,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "binary",
 				Value: []byte("hello world"),
 				Type:  mysql.TypeString,
-				Flag:  commonType.BinaryFlag,
+				Flag:  mysql.BinaryFlag,
 			},
 			model.ColumnInfo{
 				ID:        28,
@@ -382,7 +382,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "tinyblob",
 				Value: []byte("hello world"),
 				Type:  mysql.TypeTinyBlob,
-				Flag:  commonType.BinaryFlag,
+				Flag:  mysql.BinaryFlag,
 			},
 			model.ColumnInfo{
 				ID:        22,
@@ -396,7 +396,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "mediumblob",
 				Value: []byte("hello world"),
 				Type:  mysql.TypeMediumBlob,
-				Flag:  commonType.BinaryFlag,
+				Flag:  mysql.BinaryFlag,
 			},
 			model.ColumnInfo{
 				ID:        23,
@@ -410,7 +410,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "blob",
 				Value: []byte("hello world"),
 				Type:  mysql.TypeBlob,
-				Flag:  commonType.BinaryFlag,
+				Flag:  mysql.BinaryFlag,
 			},
 			model.ColumnInfo{
 				ID:        24,
@@ -424,7 +424,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "longblob",
 				Value: []byte("hello world"),
 				Type:  mysql.TypeLongBlob,
-				Flag:  commonType.BinaryFlag,
+				Flag:  mysql.BinaryFlag,
 			},
 			model.ColumnInfo{
 				ID:        25,
@@ -438,7 +438,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "varbinary",
 				Value: []byte("hello world"),
 				Type:  mysql.TypeVarchar,
-				Flag:  commonType.BinaryFlag,
+				Flag:  mysql.BinaryFlag,
 			},
 			model.ColumnInfo{
 				ID:        26,
@@ -452,7 +452,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "varbinary1",
 				Value: []byte("hello world"),
 				Type:  mysql.TypeVarString,
-				Flag:  commonType.BinaryFlag,
+				Flag:  mysql.BinaryFlag,
 			},
 			model.ColumnInfo{
 				ID:        27,
@@ -466,7 +466,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 				Name:  "binary",
 				Value: []byte("hello world"),
 				Type:  mysql.TypeString,
-				Flag:  commonType.BinaryFlag,
+				Flag:  mysql.BinaryFlag,
 			},
 			model.ColumnInfo{
 				ID:        28,
@@ -906,7 +906,7 @@ func TestConvertToCSVType(t *testing.T) {
 		for _, c := range group {
 			cfg := &common.Config{BinaryEncodingMethod: c.BinaryEncodingMethod}
 			row := chunk.MutRowFromValues(c.col.Value).ToRow()
-			val, _ := fromColValToCsvVal(cfg, &row, 0, &c.colInfo, &c.col.Flag)
+			val, _ := fromColValToCsvVal(cfg, &row, 0, &c.colInfo, c.col.Flag)
 			require.Equal(t, c.want, val, c.col.Name)
 		}
 	}
