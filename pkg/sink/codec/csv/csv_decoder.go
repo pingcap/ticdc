@@ -112,7 +112,7 @@ func (b *batchDecoder) NextResolvedEvent() (uint64, error) {
 	return 0, nil
 }
 
-// NextRowChangedEvent implements the RowEventDecoder interface.
+// NextDMLEvent implements the RowEventDecoder interface.
 func (b *batchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	if b.closed {
 		return nil, errors.WrapError(errors.ErrCSVDecodeFailed, errors.New("no csv row can be found"))
@@ -155,6 +155,8 @@ func fromCsvValToColValue(csvConfig *common.Config, csvVal any, ft types.FieldTy
 			}
 		}
 		val = []byte(str)
+	case mysql.TypeNewDecimal:
+		val = types.NewDecFromStringForTest(str)
 	case mysql.TypeFloat:
 		val, err = strconv.ParseFloat(str, 32)
 	case mysql.TypeDouble:
