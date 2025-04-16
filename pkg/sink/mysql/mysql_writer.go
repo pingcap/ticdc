@@ -115,28 +115,28 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 		// first we check whether there is some async ddl executed now.
 		w.waitAsyncDDLDone(event)
 	}
+	if !(event.TiDBOnly && !w.cfg.IsTiDB) {
+		if w.cfg.IsTiDB {
+			// if downstream is tidb, we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
+			// to ensure the atomic with ddl writing when server is restarted.
+			w.FlushDDLTsPre(event)
+		}
 
-	if w.cfg.IsTiDB {
-		// if downstream is tidb, we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
-		// to ensure the atomic with ddl writing when server is restarted.
-		w.FlushDDLTsPre(event)
-	}
+		err := w.execDDLWithMaxRetries(event)
+		if err != nil {
+			return err
+		}
+		// We need to record ddl' ts after each ddl for each table in the downstream when sink is mysql-compatible.
+		// Only in this way, when the node restart, we can continue sync data from the last ddl ts at least.
+		// Otherwise, after restarting, we may sync old data in new schema, which will leading to data loss.
 
-	err := w.execDDLWithMaxRetries(event)
-	if err != nil {
-		return err
-	}
-
-	// We need to record ddl' ts after each ddl for each table in the downstream when sink is mysql-compatible.
-	// Only in this way, when the node restart, we can continue sync data from the last ddl ts at least.
-	// Otherwise, after restarting, we may sync old data in new schema, which will leading to data loss.
-
-	// We make Flush ddl ts before callback(), in order to make sure the ddl ts is flushed
-	// before new checkpointTs will report to maintainer. Therefore, when the table checkpointTs is forward,
-	// we can ensure the ddl and ddl ts are both flushed downstream successfully.
-	err = w.FlushDDLTs(event)
-	if err != nil {
-		return err
+		// We make Flush ddl ts before callback(), in order to make sure the ddl ts is flushed
+		// before new checkpointTs will report to maintainer. Therefore, when the table checkpointTs is forward,
+		// we can ensure the ddl and ddl ts are both flushed downstream successfully.
+		err = w.FlushDDLTs(event)
+		if err != nil {
+			return err
+		}
 	}
 
 	for _, callback := range event.PostTxnFlushed {

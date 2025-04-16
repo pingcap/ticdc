@@ -375,6 +375,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 		Query:      job.Query,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
+		Type:       byte(job.Type),
 		FinishedTs: 1,
 		BlockedTables: &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
