@@ -256,9 +256,9 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	mockClock.Set(time.Date(2023, 3, 9, 0, 0, 10, 0, time.UTC))
 	setClock(s, mockClock)
 
-	failpoint.Enable("github.com/pingcap/ticdc/downstreamadapter/worker/writer/passTickerOnce", "1*return")
+	failpoint.Enable("github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/passTickerOnce", "1*return")
 	defer func() {
-		_ = failpoint.Disable("github.com/pingcap/ticdc/downstreamadapter/worker/writer/passTickerOnce")
+		_ = failpoint.Disable("github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/passTickerOnce")
 	}()
 
 	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
