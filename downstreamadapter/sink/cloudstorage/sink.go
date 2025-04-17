@@ -45,9 +45,10 @@ import (
 // messages to individual dmlWorkers.
 // The dmlWorkers will write the encoded messages to external storage in parallel between different tables.
 type sink struct {
-	changefeedID         common.ChangeFeedID
-	cfg                  *cloudstorage.Config
-	sinkURI              *url.URL
+	changefeedID common.ChangeFeedID
+	cfg          *cloudstorage.Config
+	sinkURI      *url.URL
+	// todo: this field is not take effects yet, should be fixed.
 	outputRawChangeEvent bool
 	storage              storage.ExternalStorage
 
