@@ -253,6 +253,11 @@ func newIMap[T ReplicationID, R Replication[T]]() *iMap[T, R] {
 	return &iMap[T, R]{inner: sync.Map{}}
 }
 
+func (m *iMap[T, R]) Find(key T) bool {
+	_, exists := m.inner.Load(key)
+	return exists
+}
+
 func (m *iMap[T, R]) Get(key T) (R, bool) {
 	var value R
 	v, exists := m.inner.Load(key)

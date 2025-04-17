@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
+	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
 	"go.uber.org/zap"
 )
@@ -77,6 +78,7 @@ func (s *balanceScheduler) Execute() time.Time {
 		return now.Add(s.checkBalanceInterval)
 	})
 
+	// TODO: consider to ignore split tables' dispatcher basic schedule operator to decide whether we can make balance schedule
 	if s.operatorController.OperatorSize() > 0 || s.replicationDB.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance
 		return now.Add(s.checkBalanceInterval)
@@ -102,6 +104,11 @@ func (s *balanceScheduler) Name() string {
 func (s *balanceScheduler) schedulerGroup(nodes map[node.ID]*node.Info) int {
 	batch, moved := s.batchSize, 0
 	for _, group := range s.replicationDB.GetGroups() {
+		// now we don't do balance for the split dispatcher
+		// TODO: update it when enable phase2
+		if group != pkgReplica.DefaultGroupID {
+			continue
+		}
 		// fast path, check the balance status
 		moveSize := pkgScheduler.CheckBalanceStatus(s.replicationDB.GetTaskSizePerNodeByGroup(group), nodes)
 		if moveSize <= 0 {
@@ -134,7 +141,11 @@ func (s *balanceScheduler) schedulerGlobal(nodes map[node.ID]*node.Info) int {
 	// complexity note: len(nodes) * len(groups)
 	totalTasks := 0
 	sizePerNode := make(map[node.ID]int, len(nodes))
-	for _, nodeTasks := range groupNodetasks {
+	for groupID, nodeTasks := range groupNodetasks {
+		// TODO: not balance the split table now.
+		if groupID != pkgReplica.DefaultGroupID {
+			continue
+		}
 		for id, task := range nodeTasks {
 			if task != nil {
 				totalTasks++
@@ -155,7 +166,10 @@ func (s *balanceScheduler) schedulerGlobal(nodes map[node.ID]*node.Info) int {
 	}
 
 	moved := 0
-	for _, nodeTasks := range groupNodetasks {
+	for groupID, nodeTasks := range groupNodetasks {
+		if groupID != pkgReplica.DefaultGroupID {
+			continue
+		}
 		availableNodes, victims, next := []node.ID{}, []node.ID{}, 0
 		for id, task := range nodeTasks {
 			if task != nil && sizePerNode[id] > lowerLimitPerNode {

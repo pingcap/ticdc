@@ -27,10 +27,14 @@ type ChangefeedSchedulerConfig struct {
 	EnableTableAcrossNodes bool `toml:"enable-table-across-nodes" json:"enable-table-across-nodes"`
 	// RegionThreshold is the region count threshold of splitting a table.
 	RegionThreshold int `toml:"region-threshold" json:"region-threshold"`
+	// RegionCountPerSpan is the maximax region count for each span when first splitted by RegionCountSpliiter
+	RegionCountPerSpan int `toml:"region-count-per-span" json:"region-count-per-span"`
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
 	WriteKeyThreshold int `toml:"write-key-threshold" json:"write-key-threshold"`
 	// SplitNumberPerNode is the number of splits per node.
 	SplitNumberPerNode int `toml:"split-number-per-node" json:"split-number-per-node"`
+	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
+	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-per-node"`
 }
 
 // Validate validates the config.
@@ -46,6 +50,12 @@ func (c *ChangefeedSchedulerConfig) Validate() error {
 	}
 	if c.SplitNumberPerNode <= 0 {
 		return errors.New("split-number-per-node must be larger than 0")
+	}
+	if c.SchedulingTaskCountPerNode <= 0 {
+		return errors.New("scheduling-task-count-per-node must be larger than 0")
+	}
+	if c.RegionCountPerSpan <= 0 {
+		return errors.New("region-count-per-span must be larger than 0")
 	}
 	return nil
 }

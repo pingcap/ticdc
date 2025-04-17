@@ -58,8 +58,9 @@ type splitter interface {
 }
 
 type Splitter struct {
-	splitters    []splitter
-	changefeedID common.ChangeFeedID
+	regionCounterSplitter *regionCountSplitter
+	writeKeySplitter      *writeSplitter
+	changefeedID          common.ChangeFeedID
 }
 
 // NewSplitter returns a Splitter.
@@ -70,30 +71,34 @@ func NewSplitter(
 	config *config.ChangefeedSchedulerConfig,
 ) *Splitter {
 	baseSpanNumberCoefficient = config.SplitNumberPerNode
-	if baseSpanNumberCoefficient <= 0 {
-		log.Panic("invalid SplitNumberPerNode, please set SplitNumberPerNode larger than 0", zap.Any("SplitNumberPerNode", baseSpanNumberCoefficient))
-	}
 	log.Info("baseSpanNumberCoefficient", zap.Any("ChangefeedID", changefeedID.Name()), zap.Any("baseSpanNumberCoefficient", baseSpanNumberCoefficient))
 	return &Splitter{
-		changefeedID: changefeedID,
-		splitters: []splitter{
-			// write splitter has the highest priority.
-			newWriteSplitter(changefeedID, pdapi, config.WriteKeyThreshold),
-			newRegionCountSplitter(changefeedID, regionCache, config.RegionThreshold),
-		},
+		changefeedID:          changefeedID,
+		regionCounterSplitter: newRegionCountSplitter(changefeedID, regionCache, config.RegionThreshold, config.RegionCountPerSpan),
+		writeKeySplitter:      newWriteSplitter(changefeedID, pdapi, config.WriteKeyThreshold),
 	}
 }
 
-func (s *Splitter) SplitSpans(ctx context.Context,
+func (s *Splitter) SplitSpansByRegion(ctx context.Context,
 	span *heartbeatpb.TableSpan,
 	totalCaptures int,
 ) []*heartbeatpb.TableSpan {
 	spans := []*heartbeatpb.TableSpan{span}
-	for _, sp := range s.splitters {
-		spans = sp.split(ctx, span, totalCaptures)
-		if len(spans) > 1 {
-			return spans
-		}
+	spans = s.regionCounterSplitter.split(ctx, span, totalCaptures)
+	if len(spans) > 1 {
+		return spans
+	}
+	return spans
+}
+
+func (s *Splitter) SplitSpansByWriteKey(ctx context.Context,
+	span *heartbeatpb.TableSpan,
+	totalCaptures int,
+) []*heartbeatpb.TableSpan {
+	spans := []*heartbeatpb.TableSpan{span}
+	spans = s.writeKeySplitter.split(ctx, span, totalCaptures)
+	if len(spans) > 1 {
+		return spans
 	}
 	return spans
 }
