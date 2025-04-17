@@ -46,23 +46,23 @@ import (
 // The dmlWorkers will write the encoded messages to external storage in parallel between different tables.
 type sink struct {
 	changefeedID         common.ChangeFeedID
+	cfg                  *cloudstorage.Config
+	sinkURI              *url.URL
 	outputRawChangeEvent bool
-
-	cfg     *cloudstorage.Config
-	storage storage.ExternalStorage
-
-	sinkURI     *url.URL
-	cleanupJobs []func() /* only for test */
+	storage              storage.ExternalStorage
 
 	dmlWriters *dmlWriters
 
+	checkpointChan           chan uint64
 	lastCheckpointTs         atomic.Uint64
 	lastSendCheckpointTsTime time.Time
-	tableSchemaStore         *util.TableSchemaStore
-	cron                     *cron.Cron
 
-	statistics *metrics.Statistics
-	isNormal   *atomic.Bool
+	tableSchemaStore *util.TableSchemaStore
+	cron             *cron.Cron
+	statistics       *metrics.Statistics
+
+	isNormal    *atomic.Bool
+	cleanupJobs []func() /* only for test */
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
@@ -124,6 +124,7 @@ func New(
 		cleanupJobs:              cleanupJobs,
 		storage:                  storage,
 		dmlWriters:               newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics),
+		checkpointChan:           make(chan uint64, 16),
 		lastSendCheckpointTsTime: time.Now(),
 		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
 		statistics:               statistics,
@@ -136,20 +137,24 @@ func (s *sink) SinkType() common.SinkType {
 }
 
 func (s *sink) Run(ctx context.Context) error {
-	eg, ctx := errgroup.WithContext(ctx)
+	g, ctx := errgroup.WithContext(ctx)
 
-	eg.Go(func() error {
+	g.Go(func() error {
 		return s.dmlWriters.Run(ctx)
 	})
 
-	eg.Go(func() error {
+	g.Go(func() error {
+		return s.sendCheckpointTs(ctx)
+	})
+
+	g.Go(func() error {
 		if err := s.initCron(ctx, s.sinkURI, s.cleanupJobs); err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		s.bgCleanup(ctx)
 		return nil
 	})
-	return eg.Wait()
+	return g.Wait()
 }
 
 func (s *sink) IsNormal() bool {
@@ -161,20 +166,21 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
+	var err error
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
-		if err := s.writeDDLEvent(e); err != nil {
-			s.isNormal.Store(false)
-			return err
-		}
-		event.PostFlush()
-		return nil
+		err = s.writeDDLEvent(e)
 	default:
 		log.Panic("sink doesn't support this type of block event",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("eventType", event.GetType()))
 	}
+	if err != nil {
+		s.isNormal.Store(false)
+		return err
+	}
+	event.PostFlush()
 	return nil
 }
 
@@ -221,33 +227,66 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefiniti
 	})
 }
 
-// todo: this method may be buggy, the error is not handled.
 func (s *sink) AddCheckpointTs(ts uint64) {
-	if time.Since(s.lastSendCheckpointTsTime) < 2*time.Second {
-		log.Debug("skip write checkpoint ts to external storage",
-			zap.Any("changefeedID", s.changefeedID),
-			zap.Uint64("ts", ts))
-		return
-	}
+	s.checkpointChan <- ts
+}
 
+func (s *sink) sendCheckpointTs(ctx context.Context) error {
+	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 	defer func() {
-		s.lastSendCheckpointTsTime = time.Now()
-		s.lastCheckpointTs.Store(ts)
+		metrics.CheckpointTsMessageDuration.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
+		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 	}()
-	ckpt, err := json.Marshal(map[string]uint64{"checkpoint-ts": ts})
-	if err != nil {
-		log.Panic("CloudStorageSink marshal checkpoint failed, this should never happen",
-			zap.String("namespace", s.changefeedID.Namespace()),
-			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Uint64("checkpoint", ts),
-			zap.Error(err))
-	}
-	err = s.storage.WriteFile(context.Background(), "metadata", ckpt)
-	if err != nil {
-		log.Error("CloudStorageSink storage write file failed",
-			zap.String("namespace", s.changefeedID.Namespace()),
-			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Error(err))
+
+	var (
+		checkpoint uint64
+		ok         bool
+	)
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case checkpoint, ok = <-s.checkpointChan:
+			if !ok {
+				log.Warn("cloud storage sink checkpoint channel closed",
+					zap.String("namespace", s.changefeedID.Namespace()),
+					zap.String("changefeed", s.changefeedID.Name()))
+				return nil
+			}
+		}
+
+		if time.Since(s.lastSendCheckpointTsTime) < 2*time.Second {
+			log.Debug("skip write checkpoint ts to external storage",
+				zap.Any("changefeedID", s.changefeedID),
+				zap.Uint64("checkpoint", checkpoint))
+			continue
+		}
+
+		start := time.Now()
+		message, err := json.Marshal(map[string]uint64{"checkpoint-ts": checkpoint})
+		if err != nil {
+			log.Panic("CloudStorageSink marshal checkpoint failed, this should never happen",
+				zap.String("namespace", s.changefeedID.Namespace()),
+				zap.String("changefeed", s.changefeedID.Name()),
+				zap.Uint64("checkpoint", checkpoint),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err))
+		}
+		err = s.storage.WriteFile(ctx, "metadata", message)
+		if err != nil {
+			log.Error("CloudStorageSink storage write file failed",
+				zap.String("namespace", s.changefeedID.Namespace()),
+				zap.String("changefeed", s.changefeedID.Name()),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err))
+			return errors.Trace(err)
+		}
+		s.lastSendCheckpointTsTime = time.Now()
+		s.lastCheckpointTs.Store(checkpoint)
+
+		checkpointTsMessageCount.Inc()
+		checkpointTsMessageDuration.Observe(time.Since(start).Seconds())
 	}
 }
 
@@ -270,7 +309,7 @@ func (s *sink) initCron(
 	for _, job := range cleanupJobs {
 		err = s.cron.AddFunc(s.cfg.FileCleanupCronSpec, job)
 		if err != nil {
-			return err
+			return errors.Trace(err)
 		}
 	}
 	return nil
