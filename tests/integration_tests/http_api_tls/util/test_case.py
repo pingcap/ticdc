@@ -281,7 +281,7 @@ def get_status():
     url = BASE_URL0 + "/status"
     resp = rq.get(url,cert=CERT, verify=VERIFY)
     assert resp.status_code == rq.codes.ok
-    assert resp.json()["is_owner"]
+    assert resp.json()["is-owner"]
 
     print("pass test: get status")
 

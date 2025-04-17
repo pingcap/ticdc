@@ -323,7 +323,7 @@ def get_status():
     url = BASE_URL0_V2 + "/status"
     resp = requests_get_with_retry(url)
     assert_status_code(resp, rq.codes.ok, url)
-    assert resp.json()["is_owner"]
+    assert resp.json()["is-owner"]
 
 
 
