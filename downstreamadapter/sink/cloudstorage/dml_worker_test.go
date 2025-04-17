@@ -40,7 +40,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setClock(s *dmlWorker, clock pclock.Clock) {
+func setClock(s *dmlWriters, clock pclock.Clock) {
 	for _, w := range s.writers {
 		w.SetClock(pdutil.NewMonotonicClock(clock))
 	}
@@ -64,7 +64,7 @@ func getTableFiles(t *testing.T, tableDir string) []string {
 	return fileNames
 }
 
-func newCloudStorageDMLWorkerForTest(parentDir string, flushInterval int, sinkConfig *config.SinkConfig) (*dmlWorker, error) {
+func newCloudStorageDMLWorkerForTest(parentDir string, flushInterval int, sinkConfig *config.SinkConfig) (*dmlWriters, error) {
 	ctx := context.Background()
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)

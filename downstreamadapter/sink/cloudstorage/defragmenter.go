@@ -33,7 +33,7 @@ type eventFragment struct {
 	// e.g. TxnCallbackableEvent 1~5 are dispatched to a group of encoding workers, but the
 	// encoding completion time varies. Let's say the final completion sequence are 1,3,2,5,4,
 	// we can use the sequence numbers to do defragmentation so that the events can arrive
-	// at dmlWorker sequentially.
+	// at dmlWriters sequentially.
 	seqNumber uint64
 	// encodedMsgs denote the encoded messages after the event is handled in encodingWorker.
 	encodedMsgs []*common.Message

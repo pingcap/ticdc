@@ -317,7 +317,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context,
 	}
 }
 
-func (d *writer) Close() {
+func (d *writer) close() {
 	if !atomic.CompareAndSwapUint64(&d.isClosed, 0, 1) {
 		return
 	}

@@ -54,8 +54,7 @@ type sink struct {
 	sinkURI     *url.URL
 	cleanupJobs []func() /* only for test */
 
-	// workers defines a group of workers for writing events to external storage.
-	dmlWorker *dmlWorker
+	dmlWriters *dmlWriters
 
 	lastCheckpointTs         atomic.Uint64
 	lastSendCheckpointTsTime time.Time
@@ -117,23 +116,19 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	s := &sink{
+	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
+	return &sink{
 		changefeedID:             changefeedID,
 		sinkURI:                  sinkURI,
 		cfg:                      cfg,
 		cleanupJobs:              cleanupJobs,
 		storage:                  storage,
+		dmlWriters:               newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics),
 		lastSendCheckpointTsTime: time.Now(),
 		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
-		statistics:               metrics.NewStatistics(changefeedID, "cloudstorage"),
+		statistics:               statistics,
 		isNormal:                 atomic.NewBool(true),
-	}
-
-	s.dmlWorker, err = newDMLWorker(changefeedID, storage, cfg, encoderConfig, ext, s.statistics)
-	if err != nil {
-		return nil, err
-	}
-	return s, nil
+	}, nil
 }
 
 func (s *sink) SinkType() common.SinkType {
@@ -144,7 +139,7 @@ func (s *sink) Run(ctx context.Context) error {
 	eg, ctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
-		return s.dmlWorker.Run(ctx)
+		return s.dmlWriters.Run(ctx)
 	})
 
 	eg.Go(func() error {
@@ -162,7 +157,7 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.dmlWorker.AddDMLEvent(event)
+	s.dmlWriters.AddDMLEvent(event)
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -308,13 +303,13 @@ func (s *sink) bgCleanup(ctx context.Context) {
 }
 
 func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
-	ret := []func(){}
+	var ret []func()
 
 	isLocal := uri.Scheme == "file" || uri.Scheme == "local" || uri.Scheme == ""
-	isRemoveEmptyDirsRuning := atomic.Bool{}
+	var isRemoveEmptyDirsRunning atomic.Bool
 	if isLocal {
 		ret = append(ret, func() {
-			if !isRemoveEmptyDirsRuning.CompareAndSwap(false, true) {
+			if !isRemoveEmptyDirsRunning.CompareAndSwap(false, true) {
 				log.Warn("remove empty dirs is already running, skip this round",
 					zap.String("namespace", s.changefeedID.Namespace()),
 					zap.Stringer("changefeedID", s.changefeedID.ID()))
@@ -343,7 +338,7 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 		})
 	}
 
-	isCleanupRunning := atomic.Bool{}
+	var isCleanupRunning atomic.Bool
 	ret = append(ret, func() {
 		if !isCleanupRunning.CompareAndSwap(false, true) {
 			log.Warn("cleanup expired files is already running, skip this round",
@@ -377,9 +372,10 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 }
 
 func (s *sink) Close(_ bool) {
-	s.dmlWorker.Close()
+	s.dmlWriters.close()
 	s.cron.Stop()
 	if s.statistics != nil {
 		s.statistics.Close()
 	}
+	s.storage.Close()
 }

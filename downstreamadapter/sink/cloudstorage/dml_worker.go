@@ -21,108 +21,84 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
-	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	defaultEncodingConcurrency = 8
-	defaultChannelSize         = 1024
-)
-
-// dmlWorker denotes a worker responsible for writing messages to cloud storage.
-type dmlWorker struct {
+// dmlWriters denotes a worker responsible for writing messages to cloud storage.
+type dmlWriters struct {
 	changefeedID commonType.ChangeFeedID
-	storage      storage.ExternalStorage
-	config       *cloudstorage.Config
 	statistics   *metrics.Statistics
 
-	// last sequence number
-	lastSeqNum uint64
-	// workers defines a group of workers for encoding events.
-	workers []*worker
-	writers []*writer
-	// defragmenter is used to defragment the out-of-order encoded messages and
-	// sends encoded messages to individual dmlWorkers.
-	defragmenter *defragmenter
 	// msgCh is a channel to hold eventFragment.
 	// The caller of WriteEvents will write eventFragment to msgCh and
 	// the encodingWorkers will read eventFragment from msgCh to encode events.
-	msgCh *chann.DrainableChann[eventFragment]
+	msgCh       *chann.DrainableChann[eventFragment]
+	encodeGroup *encodingGroup
+
+	// defragmenter is used to defragment the out-of-order encoded messages and
+	// sends encoded messages to individual dmlWorkers.
+	defragmenter *defragmenter
+
+	writers []*writer
+
+	// last sequence number
+	lastSeqNum uint64
 }
 
-func newDMLWorker(
+func newDMLWriters(
 	changefeedID commonType.ChangeFeedID,
 	storage storage.ExternalStorage,
 	config *cloudstorage.Config,
 	encoderConfig *common.Config,
 	extension string,
 	statistics *metrics.Statistics,
-) (*dmlWorker, error) {
-	w := &dmlWorker{
-		changefeedID: changefeedID,
-		storage:      storage,
-		config:       config,
-		statistics:   statistics,
-		workers:      make([]*worker, defaultEncodingConcurrency),
-		writers:      make([]*writer, config.WorkerCount),
-
-		msgCh: chann.NewAutoDrainChann[eventFragment](),
-	}
+) *dmlWriters {
+	messageCh := chann.NewAutoDrainChann[eventFragment]()
 	encodedOutCh := make(chan eventFragment, defaultChannelSize)
-	workerChannels := make([]*chann.DrainableChann[eventFragment], config.WorkerCount)
-	// create a group of encoding workers.
-	for i := 0; i < defaultEncodingConcurrency; i++ {
-		encoder, err := codec.NewTxnEventEncoder(encoderConfig)
-		if err != nil {
-			return nil, err
-		}
-		w.workers[i] = newWorker(i, w.changefeedID, encoder, w.msgCh.Out(), encodedOutCh)
-	}
-	// create a group of dml workers.
-	for i := 0; i < w.config.WorkerCount; i++ {
-		inputCh := chann.NewAutoDrainChann[eventFragment]()
-		w.writers[i] = newWriter(i, w.changefeedID, storage, config, extension,
-			inputCh, w.statistics)
-		workerChannels[i] = inputCh
-	}
-	// create defragmenter.
-	// The defragmenter is used to defragment the out-of-order encoded messages from encoding workers and
-	// sends encoded messages to related dmlWorkers in order. Messages of the same table will be sent to
-	// the same dml
-	w.defragmenter = newDefragmenter(encodedOutCh, workerChannels)
+	encoderGroup := newEncodingGroup(changefeedID, encoderConfig, defaultEncodingConcurrency, messageCh.Out(), encodedOutCh)
 
-	return w, nil
+	writers := make([]*writer, config.WorkerCount)
+	writerInputChs := make([]*chann.DrainableChann[eventFragment], config.WorkerCount)
+	for i := 0; i < config.WorkerCount; i++ {
+		inputCh := chann.NewAutoDrainChann[eventFragment]()
+		writerInputChs[i] = inputCh
+		writers[i] = newWriter(i, changefeedID, storage, config, extension, inputCh, statistics)
+	}
+
+	return &dmlWriters{
+		changefeedID: changefeedID,
+
+		msgCh: messageCh,
+
+		encodeGroup:  encoderGroup,
+		defragmenter: newDefragmenter(encodedOutCh, writerInputChs),
+		writers:      writers,
+	}
 }
 
-// run creates a set of background goroutines.
-func (w *dmlWorker) Run(ctx context.Context) error {
+func (d *dmlWriters) Run(ctx context.Context) error {
 	eg, ctx := errgroup.WithContext(ctx)
 
-	for i := 0; i < len(w.workers); i++ {
-		encodingWorker := w.workers[i]
-		eg.Go(func() error {
-			return encodingWorker.Run(ctx)
-		})
-	}
-
 	eg.Go(func() error {
-		return w.defragmenter.Run(ctx)
+		return d.encodeGroup.Run(ctx)
 	})
 
-	for i := 0; i < len(w.writers); i++ {
+	eg.Go(func() error {
+		return d.defragmenter.Run(ctx)
+	})
+
+	for i := 0; i < len(d.writers); i++ {
 		eg.Go(func() error {
-			return w.writers[i].Run(ctx)
+			return d.writers[i].Run(ctx)
 		})
 	}
-
 	return eg.Wait()
 }
 
-func (w *dmlWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
+func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 	if event.State != commonEvent.EventSenderStateNormal {
 		// The table where the event comes from is in stopping, so it's safe
 		// to drop the event directly.
@@ -139,20 +115,18 @@ func (w *dmlWorker) AddDMLEvent(event *commonEvent.DMLEvent) {
 		},
 		TableInfoVersion: event.TableInfoVersion,
 	}
-	seq := atomic.AddUint64(&w.lastSeqNum, 1)
-	_ = w.statistics.RecordBatchExecution(func() (int, int64, error) {
+	seq := atomic.AddUint64(&d.lastSeqNum, 1)
+	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {
 		// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
-		w.msgCh.In() <- newEventFragment(seq, tbl, event)
+		d.msgCh.In() <- newEventFragment(seq, tbl, event)
 		return int(event.Len()), event.GetRowsSize(), nil
 	})
 }
 
-func (w *dmlWorker) Close() {
-	w.msgCh.CloseAndDrain()
-	for _, worker := range w.workers {
-		worker.Close()
-	}
-	for _, writer := range w.writers {
-		writer.Close()
+func (d *dmlWriters) close() {
+	d.msgCh.CloseAndDrain()
+	d.encodeGroup.close()
+	for _, w := range d.writers {
+		w.close()
 	}
 }
