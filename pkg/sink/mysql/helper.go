@@ -37,6 +37,16 @@ import (
 	"go.uber.org/zap"
 )
 
+const checkRunningAddIndexSQL = `
+SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE_ID, STATE, QUERY
+FROM information_schema.ddl_jobs
+WHERE TABLE_ID = "%d"
+    AND JOB_TYPE LIKE "add index%%"
+    AND (STATE = "running" OR STATE = "queueing");
+`
+const checkRunningSQL = `SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE_ID, STATE, QUERY FROM information_schema.ddl_jobs 
+	WHERE CREATE_TIME >= "%s" AND QUERY = "%s";`
+
 // CheckIfBDRModeIsSupported checks if the downstream supports BDR mode.
 func CheckIfBDRModeIsSupported(ctx context.Context, db *sql.DB) (bool, error) {
 	isTiDB := CheckIsTiDB(ctx, db)
@@ -470,8 +480,7 @@ func getDDLCreateTime(ctx context.Context, db *sql.DB) string {
 // getDDLStateFromTiDB retrieves the ddl job status of the ddl query from downstream tidb based on the ddl query and the approximate ddl create time.
 func getDDLStateFromTiDB(ctx context.Context, db *sql.DB, ddl string, createTime string) (timodel.JobState, error) {
 	// ddlCreateTime and createTime are both based on UTC timezone of downstream
-	showJobs := fmt.Sprintf(`SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE_ID, STATE, QUERY FROM information_schema.ddl_jobs 
-	WHERE CREATE_TIME >= "%s" AND QUERY = "%s";`, createTime, ddl)
+	showJobs := fmt.Sprintf(checkRunningSQL, createTime, ddl)
 	//nolint:rowserrcheck
 	jobsRows, err := db.QueryContext(ctx, showJobs)
 	if err != nil {

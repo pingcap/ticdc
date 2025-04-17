@@ -104,6 +104,10 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	return nil
 }
 
+// execDDLWithMaxRetries will retry executing DDL statements.
+// When a DDL execution takes a long time and an invalid connection error occurs.
+// If the downstream is TiDB, it will query the DDL and wait until it finishes.
+// For 'add index' ddl, it will return immediately without waiting and will query it during the next DDL execution.
 func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 	ddlCreateTime := getDDLCreateTime(w.ctx, w.db)
 	return retry.Do(w.ctx, func() error {
@@ -137,6 +141,7 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 		retry.WithIsRetryableErr(apperror.IsRetryableDDLError))
 }
 
+// waitDDLDone wait current ddl
 func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddlCreateTime string) error {
 	ticker := time.NewTicker(5 * time.Second)
 	ticker1 := time.NewTicker(10 * time.Minute)
@@ -175,6 +180,7 @@ func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddl
 	}
 }
 
+// waitAsyncDDLDone wait previous ddl
 func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 	if !needWaitAsyncExecDone(event.GetDDLType()) {
 		return
@@ -194,43 +200,17 @@ func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 		if tableID == 0 {
 			continue
 		}
-		state, ok := w.asyncDDLState.Load(tableID)
-		if !ok {
-			// query the downstream,
-			// if the ddl is still running, we should wait for it.
-			w.checkAndWaitAsyncDDLDoneDownstream(tableID)
-			// update async ddl state
-			w.asyncDDLState.Store(tableID, 2)
-			// TODO
-		} else if state.(int) == 1 {
-			w.waitTableAsyncDDLDone(tableID)
+		// query the downstream,
+		// if the ddl is still running, we should wait for it.
+		err := w.checkAndWaitAsyncDDLDoneDownstream(tableID)
+		if err != nil {
+			log.Error("check previous asynchronous ddl failed",
+				zap.String("namespace", w.ChangefeedID.Namespace()),
+				zap.Stringer("changefeed", w.ChangefeedID),
+				zap.Error(err))
 		}
 	}
 }
-
-func (w *Writer) waitTableAsyncDDLDone(tableID int64) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-w.ctx.Done():
-			return
-		case <-ticker.C:
-			state, ok := w.asyncDDLState.Load(tableID)
-			if ok && state.(int) == 2 {
-				return
-			}
-		}
-	}
-}
-
-var checkRunningAddIndexSQL = `
-SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE_ID, STATE, QUERY
-FROM information_schema.ddl_jobs
-WHERE TABLE_ID = "%d"
-    AND JOB_TYPE LIKE "add index%%"
-    AND (STATE = "running" OR STATE = "queueing");
-`
 
 // true means the async ddl is still running, false means the async ddl is done.
 func (w *Writer) doQueryAsyncDDL(tableID int64, query string) (bool, error) {

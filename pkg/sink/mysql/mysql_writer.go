@@ -16,7 +16,6 @@ package mysql
 import (
 	"context"
 	"database/sql"
-	"sync"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru"
@@ -51,10 +50,6 @@ type Writer struct {
 	ddlTsTableInit   bool
 	tableSchemaStore *util.TableSchemaStore
 
-	// asyncDDLState is used to store the state of async ddl.
-	// key: tableID, value: state(0: unknown state , 1: executing, 2: no executing ddl)
-	asyncDDLState sync.Map
-
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
 	// Indicate if the CachePrepStmts should be enabled or not
@@ -84,7 +79,6 @@ func NewWriter(
 		ChangefeedID:           changefeedID,
 		lastCleanSyncPointTime: time.Now(),
 		ddlTsTableInit:         false,
-		asyncDDLState:          sync.Map{},
 		cachePrepStmts:         cfg.CachePrepStmts,
 		maxAllowedPacket:       cfg.MaxAllowedPacket,
 		stmtCache:              cfg.stmtCache,
