@@ -268,6 +268,7 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 		log.Debug("getAllPhysicalTables finish",
 			zap.Any("duration(s)", time.Since(start).Seconds()))
 	}()
+
 	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
 }
 
