@@ -320,7 +320,7 @@ func (ti *TableInfo) HasVirtualColumns() bool {
 // GetIndex return the corresponding index by the given name.
 func (ti *TableInfo) GetIndex(name string) *model.IndexInfo {
 	for _, index := range ti.columnSchema.Indices {
-		if index != nil && index.Name.O == name {
+		if index != nil && index.Name.L == strings.ToLower(name) {
 			return index
 		}
 	}
@@ -328,6 +328,9 @@ func (ti *TableInfo) GetIndex(name string) *model.IndexInfo {
 }
 
 // IndexByName returns the index columns and offsets of the corresponding index by name
+// Column is not case-sensitive on any platform, nor are column aliases.
+// So we always match in lowercase.
+// See also: https://dev.mysql.com/doc/refman/5.7/en/identifier-case-sensitivity.html
 func (ti *TableInfo) IndexByName(name string) ([]string, []int, bool) {
 	index := ti.GetIndex(name)
 	if index == nil {
@@ -336,7 +339,7 @@ func (ti *TableInfo) IndexByName(name string) ([]string, []int, bool) {
 	names := make([]string, 0, len(index.Columns))
 	offset := make([]int, 0, len(index.Columns))
 	for _, col := range index.Columns {
-		names = append(names, col.Name.O)
+		names = append(names, col.Name.L)
 		offset = append(offset, col.Offset)
 	}
 	return names, offset, true
@@ -344,18 +347,21 @@ func (ti *TableInfo) IndexByName(name string) ([]string, []int, bool) {
 
 // OffsetsByNames returns the column offsets of the corresponding columns by names
 // If any column does not exist, return false
+// Column is not case-sensitive on any platform, nor are column aliases.
+// So we always match in lowercase.
+// See also: https://dev.mysql.com/doc/refman/5.7/en/identifier-case-sensitivity.html
 func (ti *TableInfo) OffsetsByNames(names []string) ([]int, bool) {
 	// todo: optimize it
 	columnOffsets := make(map[string]int, len(ti.columnSchema.Columns))
 	for _, col := range ti.columnSchema.Columns {
 		if col != nil {
-			columnOffsets[col.Name.O] = col.Offset
+			columnOffsets[col.Name.L] = ti.MustGetColumnOffsetByID(col.ID)
 		}
 	}
 
 	result := make([]int, 0, len(names))
 	for _, col := range names {
-		offset, ok := columnOffsets[col]
+		offset, ok := columnOffsets[strings.ToLower(col)]
 		if !ok {
 			return nil, false
 		}
