@@ -70,8 +70,8 @@ func newDMLWriters(
 
 	return &dmlWriters{
 		changefeedID: changefeedID,
-
-		msgCh: messageCh,
+		statistics:   statistics,
+		msgCh:        messageCh,
 
 		encodeGroup:  encoderGroup,
 		defragmenter: newDefragmenter(encodedOutCh, writerInputChs),

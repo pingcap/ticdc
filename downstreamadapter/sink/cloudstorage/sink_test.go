@@ -36,11 +36,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newSinkForTest(replicaConfig *config.ReplicaConfig, sinkURI *url.URL, cleanUpJobs []func()) (*sink, error) {
-	ctx := context.Background()
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-
+func newSinkForTest(
+	ctx context.Context,
+	replicaConfig *config.ReplicaConfig,
+	sinkURI *url.URL,
+	cleanUpJobs []func(),
+) (*sink, error) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, cleanUpJobs)
 	if err != nil {
@@ -58,11 +59,14 @@ func TestBasicFunctionality(t *testing.T) {
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 
-	cloudStorageSink, err := newSinkForTest(replicaConfig, sinkURI, nil)
-	require.NoError(t, err)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
 	go cloudStorageSink.Run(ctx)
 
 	var count atomic.Int64
@@ -140,11 +144,15 @@ func TestWriteDDLEvent(t *testing.T) {
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 
-	cloudStorageSink, err := newSinkForTest(replicaConfig, sinkURI, nil)
-	require.NoError(t, err)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
 	go cloudStorageSink.Run(ctx)
 
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
@@ -209,11 +217,15 @@ func TestWriteCheckpointEvent(t *testing.T) {
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 
-	cloudStorageSink, err := newSinkForTest(replicaConfig, sinkURI, nil)
-	require.NoError(t, err)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
 	go cloudStorageSink.Run(ctx)
 
 	time.Sleep(3 * time.Second)
@@ -246,7 +258,11 @@ func TestCleanupExpiredFiles(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cloudStorageSink, err := newSinkForTest(replicaConfig, sinkURI, cleanupJobs)
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, cleanupJobs)
 	go cloudStorageSink.Run(ctx)
 	require.NoError(t, err)
 

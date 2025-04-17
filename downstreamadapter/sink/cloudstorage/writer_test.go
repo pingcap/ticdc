@@ -125,7 +125,7 @@ func TestWriterRun(t *testing.T) {
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{"CDC000001.json", "CDC.index"}, fileNames)
 	cancel()
-	d.Close()
+	d.close()
 	wg.Wait()
 	fragCh.CloseAndDrain()
 }
