@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"sync"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -102,13 +101,6 @@ func TestEncodingWorkerRun(t *testing.T) {
 	t.Parallel()
 
 	encodingWorker, msgCh, encodedCh := testWorker(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	eg, egCtx := errgroup.WithContext(ctx)
-	outputChs := []*chann.DrainableChann[eventFragment]{chann.NewAutoDrainChann[eventFragment]()}
-	defragmenter := newDefragmenter(encodedCh, outputChs)
-	eg.Go(func() error {
-		return defragmenter.Run(egCtx)
-	})
 
 	tidbTableInfo := &timodel.TableInfo{
 		ID:   100,
@@ -139,14 +131,20 @@ func TestEncodingWorkerRun(t *testing.T) {
 		msgCh <- frag
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		_ = encodingWorker.Run(ctx)
-	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	g, ctx := errgroup.WithContext(ctx)
 
+	outputChs := []*chann.DrainableChann[eventFragment]{chann.NewAutoDrainChann[eventFragment]()}
+	defragmenter := newDefragmenter(encodedCh, outputChs)
+	g.Go(func() error {
+		return defragmenter.Run(ctx)
+	})
+
+	g.Go(func() error {
+		return encodingWorker.Run(ctx)
+	})
 	cancel()
 	encodingWorker.Close()
-	wg.Wait()
+	err := g.Wait()
+	require.ErrorIs(t, err, context.Canceled)
 }
