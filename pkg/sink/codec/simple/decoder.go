@@ -40,8 +40,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// decoder implement the RowEventDecoder interface
-type decoder struct {
+// Decoder implement the RowEventDecoder interface
+type Decoder struct {
 	config *common.Config
 
 	marshaller marshaller
@@ -79,7 +79,7 @@ func NewDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.
 	}
 
 	m, err := newMarshaller(config)
-	return &decoder{
+	return &Decoder{
 		config:     config,
 		marshaller: m,
 
@@ -92,7 +92,7 @@ func NewDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.
 }
 
 // AddKeyValue add the received key and values to the Decoder,
-func (d *decoder) AddKeyValue(_, value []byte) (err error) {
+func (d *Decoder) AddKeyValue(_, value []byte) (err error) {
 	if d.value != nil {
 		return errors.ErrCodecDecode.GenWithStack(
 			"Decoder value already exists, not consumed yet")
@@ -102,7 +102,7 @@ func (d *decoder) AddKeyValue(_, value []byte) (err error) {
 }
 
 // HasNext returns whether there is any event need to be consumed
-func (d *decoder) HasNext() (common.MessageType, bool, error) {
+func (d *Decoder) HasNext() (common.MessageType, bool, error) {
 	if d.value == nil {
 		return common.MessageTypeUnknown, false, nil
 	}
@@ -127,7 +127,7 @@ func (d *decoder) HasNext() (common.MessageType, bool, error) {
 }
 
 // NextResolvedEvent returns the next resolved event if exists
-func (d *decoder) NextResolvedEvent() (uint64, error) {
+func (d *Decoder) NextResolvedEvent() (uint64, error) {
 	if d.msg.Type != MessageTypeWatermark {
 		return 0, errors.ErrCodecDecode.GenWithStack(
 			"not found resolved event message")
@@ -140,7 +140,7 @@ func (d *decoder) NextResolvedEvent() (uint64, error) {
 }
 
 // NextDMLEvent returns the next dml event if exists
-func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+func (d *Decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	if d.msg == nil || (d.msg.Data == nil && d.msg.Old == nil) {
 		return nil, errors.ErrCodecDecode.GenWithStack(
 			"invalid row changed event message")
@@ -173,7 +173,7 @@ func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	return event, err
 }
 
-func (d *decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) (*commonEvent.DMLEvent, error) {
+func (d *Decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) (*commonEvent.DMLEvent, error) {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
 	data, err := d.storage.ReadFile(context.Background(), claimCheckFileName)
 	if err != nil {
@@ -202,7 +202,7 @@ func (d *decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) (
 	return d.NextDMLEvent()
 }
 
-func (d *decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) (*commonEvent.DMLEvent, error) {
+func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) (*commonEvent.DMLEvent, error) {
 	tableInfo := d.memo.Read(m.Schema, m.Table, m.SchemaVersion)
 	if tableInfo == nil {
 		log.Debug("table info not found for the event, "+
@@ -251,7 +251,7 @@ func (d *decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) (*commonEvent
 	return d.NextDMLEvent()
 }
 
-func (d *decoder) buildData(
+func (d *Decoder) buildData(
 	holder *common.ColumnsHolder, fieldTypeMap map[string]*types.FieldType, timezone string,
 ) map[string]interface{} {
 	columnsCount := holder.Length()
@@ -268,7 +268,7 @@ func (d *decoder) buildData(
 }
 
 // NextDDLEvent returns the next DDL event if exists
-func (d *decoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
+func (d *Decoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	if d.msg == nil {
 		return nil, errors.ErrCodecDecode.GenWithStack(
 			"no message found when decode DDL event")
@@ -295,7 +295,7 @@ func (d *decoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 }
 
 // GetCachedEvents returns the cached events
-func (d *decoder) GetCachedEvents() []*commonEvent.DMLEvent {
+func (d *Decoder) GetCachedEvents() []*commonEvent.DMLEvent {
 	result := d.CachedRowChangedEvents
 	d.CachedRowChangedEvents = nil
 	return result
