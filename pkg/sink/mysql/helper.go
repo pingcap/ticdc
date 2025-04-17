@@ -44,6 +44,7 @@ WHERE TABLE_ID = "%d"
     AND JOB_TYPE LIKE "add index%%"
     AND (STATE = "running" OR STATE = "queueing");
 `
+
 const checkRunningSQL = `SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE_ID, STATE, QUERY FROM information_schema.ddl_jobs 
 	WHERE CREATE_TIME >= "%s" AND QUERY = "%s";`
 
