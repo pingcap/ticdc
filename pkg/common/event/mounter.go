@@ -20,15 +20,17 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
-	"github.com/pingcap/tiflow/pkg/integrity"
+	"go.uber.org/zap"
 )
 
 // DDLTableInfo contains the tableInfo about tidb_ddl_job and tidb_ddl_history
@@ -50,43 +52,56 @@ type Mounter interface {
 	// If the rawKV is a delete event, it will only decode the old value.
 	// If the rawKV is an insert event, it will only decode the value.
 	// If the rawKV is an update event, it will decode both the value and the old value.
-	DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error)
+	DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error)
 }
 
 type mounter struct {
 	tz *time.Location
+
+	integrity *integrity.Config
 	// decoder and preDecoder are used to decode the raw value, also used to extract checksum,
 	// they should not be nil after decode at least one event in the row format v2.
 	decoder    *rowcodec.ChunkDecoder
 	preDecoder *rowcodec.ChunkDecoder
+
+	lastSkipOldValueTime time.Time
 }
 
 // NewMounter creates a mounter
-func NewMounter(tz *time.Location) Mounter {
+func NewMounter(tz *time.Location, integrity *integrity.Config) Mounter {
 	return &mounter{
-		tz: tz,
+		tz:        tz,
+		integrity: integrity,
 	}
 }
 
 // DecodeToChunk decodes the raw KV entry to a chunk, it returns the number of rows decoded.
-func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error) {
+func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
 	recordID, err := tablecodec.DecodeRowKey(raw.Key)
 	if err != nil {
-		return 0, errors.Trace(err)
+		return 0, nil, errors.Trace(err)
 	}
 	if !bytes.HasPrefix(raw.Key, tablePrefix) {
-		return 0, nil
+		return 0, nil, nil
 	}
 
-	if m.decoder != nil {
-		checksumVersion := m.decoder.ChecksumVersion()
-	} else if m.preDecoder != nil {
-		checksumVersion := m.preDecoder.ChecksumVersion()
-	}
 	// key, physicalTableID, err := decodeTableID(raw.Key)
 	// if err != nil {
 	// 	return nil
 	// }
+	var (
+		checksumVersion int
+		preChecksum     uint32
+		currentChecksum uint32
+		matched         bool
+		corrupted       bool
+	)
+	if m.decoder != nil {
+		checksumVersion = m.decoder.ChecksumVersion()
+	} else if m.preDecoder != nil {
+		checksumVersion = m.preDecoder.ChecksumVersion()
+	}
+
 	count := 0
 	if len(raw.OldValue) != 0 {
 		if !rowcodec.IsNewFormat(raw.OldValue) {
@@ -95,12 +110,20 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 			m.preDecoder, err = m.rawKVToChunkV2(raw.OldValue, tableInfo, chk, recordID)
 		}
 		if err != nil {
-			return 0, errors.Trace(err)
+			return 0, nil, errors.Trace(err)
 		}
-		// preChecksum, matched, err = m.verifyChecksum(tableInfo, columnInfos, preCols, preRawCols, handle, key, true)
-		// if err != nil {
-		// 	return nil, rawRow, errors.Trace(err)
-		// }
+		preChecksum, matched, err = m.verifyChecksum(tableInfo, chk.GetRow(count), raw.Key, recordID, true)
+		if err != nil {
+			return 0, nil, errors.Trace(err)
+		}
+		if !matched {
+			log.Error("previous columns checksum mismatch",
+				zap.Uint32("checksum", preChecksum), zap.Any("tableInfo", tableInfo))
+			if m.integrity.ErrorHandle() {
+				return 0, nil, errors.ErrCorruptedDataMutation
+			}
+			corrupted = true
+		}
 		count++
 	}
 	if len(raw.Value) != 0 {
@@ -110,11 +133,24 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 			m.decoder, err = m.rawKVToChunkV2(raw.Value, tableInfo, chk, recordID)
 		}
 		if err != nil {
-			return 0, errors.Trace(err)
+			return 0, nil, errors.Trace(err)
+		}
+		currentChecksum, matched, err = m.verifyChecksum(tableInfo, chk.GetRow(count), raw.Key, recordID, false)
+		if err != nil {
+			return 0, nil, errors.Trace(err)
+		}
+		if !matched {
+			log.Error("current columns checksum mismatch",
+				zap.Uint32("checksum", currentChecksum), zap.Any("tableInfo", tableInfo))
+			if m.integrity.ErrorHandle() {
+				return 0, nil, errors.ErrCorruptedDataMutation
+			}
+			corrupted = true
 		}
 		count++
 	}
 
+	var checksum *integrity.Checksum
 	// if both are 0, it means the checksum is not enabled
 	// so the checksum is nil to reduce memory allocation.
 	if preChecksum != 0 || currentChecksum != 0 {
@@ -126,7 +162,7 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		}
 	}
 
-	return count, nil
+	return count, checksum, nil
 }
 
 // IsLegacyFormatJob returns true if the job is from the legacy DDL list key.

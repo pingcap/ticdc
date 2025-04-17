@@ -18,8 +18,8 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/pkg/integrity"
 	"go.uber.org/zap"
 )
 
@@ -103,13 +103,8 @@ func NewDMLEvent(
 func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	decode func(
 		rawKv *common.RawKVEntry,
-		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error),
+		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error),
 ) error {
-	var (
-		preChecksum     uint32
-		currentChecksum uint32
-	)
-
 	rowType := RowTypeInsert
 	if raw.OpType == common.OpTypeDelete {
 		rowType = RowTypeDelete
@@ -117,7 +112,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	if len(raw.Value) != 0 && len(raw.OldValue) != 0 {
 		rowType = RowTypeUpdate
 	}
-	count, err := decode(raw, t.TableInfo, t.Rows)
+	count, checksum, err := decode(raw, t.TableInfo, t.Rows)
 	if err != nil {
 		return err
 	}
@@ -126,43 +121,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	}
 	t.Length += 1
 	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
-
-	// if m.decoder != nil {
-	// 	checksumVersion = m.decoder.ChecksumVersion()
-	// } else if m.preDecoder != nil {
-	// 	checksumVersion = m.preDecoder.ChecksumVersion()
-	// }
-	// if row.RowExist {
-	// 	cols, rawCols, columnInfos, err = datum2Column(tableInfo, row.Row, m.tz)
-	// 	if err != nil {
-	// 		return nil, rawRow, errors.Trace(err)
-	// 	}
-
-	// 	currentChecksum, matched, err = m.verifyChecksum(tableInfo, columnInfos, cols, rawCols, handle, key, false)
-	// 	if err != nil {
-	// 		return nil, rawRow, errors.Trace(err)
-	// 	}
-	// 	if !matched {
-	// 		log.Error("current columns checksum mismatch",
-	// 			zap.Uint32("checksum", currentChecksum), zap.Any("tableInfo", tableInfo),
-	// 			zap.Any("cols", cols), zap.Any("rawCols", rawCols))
-	// 		if m.integrity.ErrorHandle() {
-	// 			return nil, rawRow, cerror.ErrCorruptedDataMutation.
-	// 				GenWithStackByArgs(m.changefeedID.Namespace, m.changefeedID.ID)
-	// 		}
-	// 		corrupted = true
-	// 	}
-	// }
-	// if both are 0, it means the checksum is not enabled
-	// so the checksum is nil to reduce memory allocation.
-	if preChecksum != 0 || currentChecksum != 0 {
-		t.Checksum = &integrity.Checksum{
-			Current:   currentChecksum,
-			Previous:  preChecksum,
-			Corrupted: corrupted,
-			Version:   checksumVersion,
-		}
-	}
+	t.Checksum = checksum
 	return nil
 }
 

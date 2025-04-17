@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -617,7 +618,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		innerIter:    iter,
 		prevStartTs:  0,
 		prevCommitTs: 0,
-		iterMounter:  event.NewMounter(time.Local), // FIXME
+		iterMounter:  event.NewMounter(time.Local, config.GetDefaultReplicaConfig().Integrity), // FIXME
 		startTs:      dataRange.StartTs,
 		endTs:        dataRange.EndTs,
 		rowCount:     0,

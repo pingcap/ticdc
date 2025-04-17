@@ -69,6 +69,7 @@ func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error 
 			CommitTs:       event.CommitTs,
 			Event:          row,
 			ColumnSelector: j.columnSelector,
+			// Checksum:       event.Checksum,
 		}, j.config, false, "")
 		if err != nil {
 			return err

@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -44,7 +45,7 @@ func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore) {
 	es := newMockEventStore(100)
 	ss := newMockSchemaStore()
 	mc := newMockMessageCenter()
-	return newEventBroker(context.Background(), 1, es, ss, mc, time.UTC), es, ss
+	return newEventBroker(context.Background(), 1, es, ss, mc, time.UTC, &integrity.Config{}), es, ss
 }
 
 func newMockDispatcherInfoForTest(t *testing.T) *mockDispatcherInfo {
