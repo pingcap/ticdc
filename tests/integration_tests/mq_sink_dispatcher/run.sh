@@ -64,12 +64,12 @@ function run() {
 	run_sql "UPDATE dispatcher.index set b = 6 where a = 2;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "DELETE FROM dispatcher.index where a = 3;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
+	# make sure send rows into same partition
 	run_sql "INSERT INTO dispatcher.columns values (2, 3);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "INSERT INTO dispatcher.columns values (3, 4);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO dispatcher.columns values (4, 5);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "UPDATE dispatcher.columns set col1 = 5 where id = 1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "UPDATE dispatcher.columns set CoL1 = 6 where ID = 2;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "DELETE FROM dispatcher.columns where Id = 3;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "UPDATE dispatcher.columns set col1 = 3 where id = 1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "UPDATE dispatcher.columns set CoL1 = 4 where ID = 2;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "DELETE FROM dispatcher.columns where Id = 4;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	run_sql "CREATE TABLE test.finish_mark (a int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
