@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -34,13 +33,14 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tiflow/engine/pkg/clock"
+
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 )
 
 func testFilePathGenerator(ctx context.Context, t *testing.T, dir string) *FilePathGenerator {
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
-	storage, err := helper.GetExternalStorageFromURI(ctx, uri)
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
 	require.NoError(t, err)
 
 	sinkURI, err := url.Parse(uri)
@@ -361,7 +361,7 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 	defer cancel()
 	dir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
-	storage, err := helper.GetExternalStorageFromURI(ctx, uri)
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
 	require.NoError(t, err)
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)

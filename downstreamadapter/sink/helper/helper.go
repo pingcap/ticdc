@@ -14,16 +14,11 @@
 package helper
 
 import (
-	"context"
 	"net/url"
 	"strings"
-	"time"
 
-	"github.com/aws/aws-sdk-go/aws/client"
-	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tidb/br/pkg/storage"
 )
 
 // DDLDispatchRule is the dispatch rule for DDL event.
@@ -44,70 +39,6 @@ func GetDDLDispatchRule(protocol config.Protocol) DDLDispatchRule {
 	default:
 	}
 	return PartitionAll
-}
-
-// GetExternalStorageFromURI creates a new storage.ExternalStorage from a uri.
-func GetExternalStorageFromURI(
-	ctx context.Context, uri string,
-) (storage.ExternalStorage, error) {
-	return GetExternalStorage(ctx, uri, nil, DefaultS3Retryer())
-}
-
-// GetExternalStorage creates a new storage.ExternalStorage based on the uri and options.
-func GetExternalStorage(
-	ctx context.Context, uri string,
-	opts *storage.BackendOptions,
-	retryer request.Retryer,
-) (storage.ExternalStorage, error) {
-	backEnd, err := storage.ParseBackend(uri, opts)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	ret, err := storage.New(ctx, backEnd, &storage.ExternalStorageOptions{
-		SendCredentials: false,
-		S3Retryer:       retryer,
-	})
-	if err != nil {
-		retErr := errors.ErrFailToCreateExternalStorage.Wrap(errors.Trace(err))
-		return nil, retErr.GenWithStackByArgs("creating ExternalStorage for s3")
-	}
-
-	// Check the connection and ignore the returned bool value, since we don't care if the file exists.
-	_, err = ret.FileExists(ctx, "test")
-	if err != nil {
-		retErr := errors.ErrFailToCreateExternalStorage.Wrap(errors.Trace(err))
-		return nil, retErr.GenWithStackByArgs("creating ExternalStorage for s3")
-	}
-	return ret, nil
-}
-
-// retryerWithLog wraps the client.DefaultRetryer, and logs when retrying.
-type retryerWithLog struct {
-	client.DefaultRetryer
-}
-
-// DefaultS3Retryer is the default s3 retryer, maybe this function
-// should be extracted to another place.
-func DefaultS3Retryer() request.Retryer {
-	return retryerWithLog{
-		DefaultRetryer: client.DefaultRetryer{
-			NumMaxRetries:    3,
-			MinRetryDelay:    1 * time.Second,
-			MinThrottleDelay: 2 * time.Second,
-		},
-	}
-}
-
-// NewS3Retryer creates a new s3 retryer.
-func NewS3Retryer(maxRetries int, minRetryDelay, minThrottleDelay time.Duration) request.Retryer {
-	return retryerWithLog{
-		DefaultRetryer: client.DefaultRetryer{
-			NumMaxRetries:    maxRetries,
-			MinRetryDelay:    minRetryDelay,
-			MinThrottleDelay: minThrottleDelay,
-		},
-	}
 }
 
 // GetTopic returns the topic name from the sink URI.
