@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -223,14 +224,17 @@ func (r RegisterDispatcherRequest) GetBdrMode() bool {
 
 func (r RegisterDispatcherRequest) GetIntegrity() *integrity.Config {
 	if r.RegisterDispatcherRequest.Integrity == nil {
-		return &integrity.Config{}
+		return &integrity.Config{
+			IntegrityCheckLevel:   integrity.CheckLevelNone,
+			CorruptionHandleLevel: integrity.CorruptionHandleLevelWarn,
+		}
 	}
 	integrity := integrity.Config(*r.RegisterDispatcherRequest.Integrity)
 	return &integrity
 }
 
 func (r RegisterDispatcherRequest) GetTimezone() *time.Location {
-	tz, err := time.LoadLocation(r.RegisterDispatcherRequest.GetTimezone())
+	tz, err := util.GetTimezone(r.RegisterDispatcherRequest.GetTimezone())
 	if err != nil {
 		log.Panic("Can't load time zone from dispatcher info", zap.Error(err))
 	}
