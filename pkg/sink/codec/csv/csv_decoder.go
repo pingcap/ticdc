@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"strconv"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -34,6 +35,7 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/errors"
+	"go.uber.org/zap"
 )
 
 const defaultIOConcurrency = 1
@@ -84,50 +86,48 @@ func NewBatchDecoder(ctx context.Context,
 }
 
 // AddKeyValue implements the RowEventDecoder interface.
-func (b *batchDecoder) AddKeyValue(_, _ []byte) error {
-	return nil
-}
+func (b *batchDecoder) AddKeyValue(_, _ []byte) {}
 
 // HasNext implements the RowEventDecoder interface.
-func (b *batchDecoder) HasNext() (common.MessageType, bool, error) {
+func (b *batchDecoder) HasNext() (common.MessageType, bool) {
 	err := b.parser.ReadRow()
 	if err != nil {
 		b.closed = true
 		if errors.Cause(err) == io.EOF {
-			return common.MessageTypeUnknown, false, nil
+			return common.MessageTypeUnknown, false
 		}
-		return common.MessageTypeUnknown, false, err
+		log.Panic("read csv row failed", zap.Error(err))
 	}
 
 	row := b.parser.LastRow()
 	if err = b.msg.decode(row.Row); err != nil {
-		return common.MessageTypeUnknown, false, errors.Trace(err)
+		log.Panic("decode csv row failed", zap.Error(err))
 	}
 
-	return common.MessageTypeRow, true, nil
+	return common.MessageTypeRow, true
 }
 
 // NextResolvedEvent implements the RowEventDecoder interface.
-func (b *batchDecoder) NextResolvedEvent() (uint64, error) {
-	return 0, nil
+func (b *batchDecoder) NextResolvedEvent() uint64 {
+	return 0
 }
 
 // NextDMLEvent implements the RowEventDecoder interface.
-func (b *batchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+func (b *batchDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if b.closed {
-		return nil, errors.WrapError(errors.ErrCSVDecodeFailed, errors.New("no csv row can be found"))
+		log.Panic("batch decoder is closed, cannot fetch the next DML event")
 	}
 
 	e, err := csvMsg2RowChangedEvent(b.codecConfig, b.msg, b.tableInfo)
 	if err != nil {
-		return nil, errors.Trace(err)
+		log.Panic("convert message to event failed", zap.Error(err))
 	}
-	return e, nil
+	return e
 }
 
 // NextDDLEvent implements the RowEventDecoder interface.
-func (b *batchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
-	return nil, nil
+func (b *batchDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+	return nil
 }
 
 func fromCsvValToColValue(csvConfig *common.Config, csvVal any, ft types.FieldType) (any, error) {

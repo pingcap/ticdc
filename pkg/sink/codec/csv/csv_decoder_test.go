@@ -46,15 +46,13 @@ func TestCSVBatchDecoder(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := 0; i < 5; i++ {
-		tp, hasNext, err := decoder.HasNext()
-		require.Nil(t, err)
+		tp, hasNext := decoder.HasNext()
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, tp)
-		event, err := decoder.NextDMLEvent()
-		require.NoError(t, err)
+		event := decoder.NextDMLEvent()
 		require.NotNil(t, event)
 	}
 
-	_, hasNext, _ := decoder.HasNext()
+	_, hasNext := decoder.HasNext()
 	require.False(t, hasNext)
 }
