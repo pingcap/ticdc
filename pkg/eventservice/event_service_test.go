@@ -32,6 +32,7 @@ import (
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -471,6 +472,8 @@ type mockDispatcherInfo struct {
 	actionType eventpb.ActionType
 	filter     filter.Filter
 	bdrMode    bool
+	integrity  *integrity.Config
+	tz         *time.Location
 }
 
 func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
@@ -490,6 +493,9 @@ func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, table
 		startTs:    1,
 		actionType: actionType,
 		filter:     filter,
+		bdrMode:    false,
+		integrity:  config.GetDefaultReplicaConfig().Integrity,
+		tz:         time.Local,
 	}
 }
 
@@ -552,7 +558,15 @@ func (m *mockDispatcherInfo) IsOnlyReuse() bool {
 }
 
 func (m *mockDispatcherInfo) GetBdrMode() bool {
-	return false
+	return m.bdrMode
+}
+
+func (m *mockDispatcherInfo) GetIntegrity() *integrity.Config {
+	return m.integrity
+}
+
+func (m *mockDispatcherInfo) GetTimezone() *time.Location {
+	return m.tz
 }
 
 func genEvents(helper *pevent.EventTestHelper, t *testing.T, ddl string, dmls ...string) (pevent.DDLEvent, []*common.RawKVEntry) {
