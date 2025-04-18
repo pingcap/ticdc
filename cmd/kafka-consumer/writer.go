@@ -238,7 +238,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		progress.updateWatermark(newWatermark, offset)
 
 		// since watermark is broadcast to all partitions, so that each partition can flush events individually.
-		err = w.flushDMLEventsByWatermark(ctx, progress)
+		err := w.flushDMLEventsByWatermark(ctx, progress)
 		if err != nil {
 			log.Panic("flush dml events by the watermark failed", zap.Error(err))
 		}
@@ -265,18 +265,18 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 
 		// the Query maybe empty if using simple protocol, it's comes from `bootstrap` event, no need to handle it.
 		if ddl.Query == "" {
-			return false, nil
+			return false
 		}
 
 		if partition != 0 {
-			return false, nil
+			return false
 		}
 
-		err = w.flushDDLEvent(ctx, ddl)
+		err := w.flushDDLEvent(ctx, ddl)
 		if err != nil {
-			return false, err
+			log.Panic("flush DDL event failed", zap.String("DDL", ddl.Query), zap.Error(err))
 		}
-		return true, nil
+		return true
 	case common.MessageTypeRow:
 		var counter int
 		row := progress.decoder.NextDMLEvent()
@@ -309,7 +309,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		log.Panic("unknown message type", zap.Any("messageType", messageType),
 			zap.Int32("partition", partition), zap.Any("offset", offset))
 	}
-	return false, nil
+	return false
 }
 
 func (w *writer) checkPartition(row *commonEvent.DMLEvent, partition int32, offset kafka.Offset) {
