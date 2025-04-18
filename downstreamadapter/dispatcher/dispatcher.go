@@ -24,12 +24,16 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -147,6 +151,8 @@ type Dispatcher struct {
 	errCh chan error
 
 	bdrMode bool
+
+	BootstrapState bootstrapState
 }
 
 func NewDispatcher(
@@ -186,6 +192,7 @@ func NewDispatcher(
 		creationPDTs:          currentPdTs,
 		errCh:                 errCh,
 		bdrMode:               bdrMode,
+		BootstrapState:        BootstrapFinished,
 	}
 
 	dispatcher.addToStatusDynamicStream()
@@ -799,6 +806,75 @@ func (d *Dispatcher) GetEventSizePerSecond() float32 {
 
 func (d *Dispatcher) HandleCheckpointTs(checkpointTs uint64) {
 	d.sink.AddCheckpointTs(checkpointTs)
+}
+
+// EmitBootstrap emits the table bootstrap event in a blocking way after changefeed started
+// It will return after the bootstrap event is sent.
+func (d *Dispatcher) EmitBootstrap() bool {
+	bootstrap := loadBootstrapState(&d.BootstrapState)
+	switch bootstrap {
+	case BootstrapFinished:
+		return true
+	case BootstrapInProgress:
+		return false
+	case BootstrapNotStarted:
+	}
+	storeBootstrapState(&d.BootstrapState, BootstrapInProgress)
+	tables := d.tableSchemaStore.GetAllNormalTableIds()
+	if len(tables) == 0 {
+		storeBootstrapState(&d.BootstrapState, BootstrapFinished)
+		return true
+	}
+	start := time.Now()
+	ts := d.GetStartTs()
+	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
+	currentTables := make([]*common.TableInfo, 0, len(tables))
+	for i := 0; i < len(tables); i++ {
+		err := schemaStore.RegisterTable(tables[i], ts)
+		if err != nil {
+			log.Warn("register table to schemaStore failed",
+				zap.Int64("tableID", tables[i]),
+				zap.Uint64("startTs", ts),
+				zap.Error(err),
+			)
+			continue
+		}
+		tableInfo, err := schemaStore.GetTableInfo(tables[i], ts)
+		if err != nil {
+			log.Warn("get table info failed, just ignore",
+				zap.Stringer("changefeed", d.changefeedID),
+				zap.Error(err))
+			continue
+		}
+		currentTables = append(currentTables, tableInfo)
+	}
+
+	log.Info("start to send bootstrap messages",
+		zap.Stringer("changefeed", d.changefeedID),
+		zap.Int("tables", len(currentTables)))
+	for idx, table := range currentTables {
+		if table.IsView() {
+			continue
+		}
+		ddlEvent := codec.NewBootstrapDDLEvent(table)
+		err := d.sink.WriteBlockEvent(ddlEvent)
+		if err != nil {
+			log.Error("send bootstrap message failed",
+				zap.Stringer("changefeed", d.changefeedID),
+				zap.Int("tables", len(currentTables)),
+				zap.Int("emitted", idx+1),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err))
+			d.errCh <- errors.ErrExecDDLFailed.GenWithStackByArgs()
+			return true
+		}
+	}
+	storeBootstrapState(&d.BootstrapState, BootstrapFinished)
+	log.Info("send bootstrap messages finished",
+		zap.Stringer("changefeed", d.changefeedID),
+		zap.Int("tables", len(currentTables)),
+		zap.Duration("cost", time.Since(start)))
+	return true
 }
 
 func (d *Dispatcher) IsTableTriggerEventDispatcher() bool {

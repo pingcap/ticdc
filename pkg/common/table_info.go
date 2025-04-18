@@ -82,6 +82,10 @@ type TableInfo struct {
 
 	columnSchema *columnSchema `json:"-"`
 
+	View *model.ViewInfo `json:"view"`
+
+	Sequence *model.SequenceInfo `json:"sequence"`
+
 	preSQLs struct {
 		mutex         sync.Mutex
 		isInitialized bool
@@ -287,6 +291,16 @@ func (ti *TableInfo) IsPartitionTable() bool {
 	return ti.TableName.IsPartition
 }
 
+// IsView checks if TableInfo is a view.
+func (t *TableInfo) IsView() bool {
+	return t.View != nil
+}
+
+// IsSequence checks if TableInfo is a sequence.
+func (t *TableInfo) IsSequence() bool {
+	return t.Sequence != nil
+}
+
 // GetRowColInfos returns all column infos for rowcodec
 func (ti *TableInfo) GetRowColInfos() ([]int64, map[int64]*types.FieldType, []rowcodec.ColInfo) {
 	return ti.columnSchema.HandleColID, ti.columnSchema.RowColFieldTps, ti.columnSchema.RowColInfos
@@ -402,7 +416,7 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 	return ok
 }
 
-func newTableInfo(schema, table string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
+func newTableInfo(schema string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
 	ti := &TableInfo{
 		TableName: TableName{
 			Schema:      schema,
@@ -412,15 +426,17 @@ func newTableInfo(schema, table string, tableID int64, isPartition bool, columnS
 			quotedName:  QuoteSchema(schema, table),
 		},
 		columnSchema: columnSchema,
+		View:         tableInfo.View,
+		Sequence:     tableInfo.Sequence,
+		Charset:      tableInfo.Charset,
+		Collate:      tableInfo.Collate,
+		Comment:      tableInfo.Comment,
 	}
 	return ti
 }
 
-func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema, charset, collate, comment string) *TableInfo {
-	ti := newTableInfo(schemaName, tableName, tableID, isPartition, columnSchema)
-	ti.Charset = charset
-	ti.Collate = collate
-	ti.Comment = comment
+func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
+	ti := newTableInfo(schemaName, tableName, tableID, isPartition, columnSchema, tableInfo)
 
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appeared when tableInfo is created as a pair.
@@ -436,14 +452,14 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 	// search column schema object
 	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
 	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
-	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema, info.Charset, info.Collate, info.Comment)
+	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema, info)
 }
 
 // NewTableInfo4Decoder is only used by the codec decoder for the test purpose,
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
 	cs := newColumnSchema4Decoder(tableInfo)
-	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs)
+	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
 }
 
 // BuildTiDBTableInfoWithoutVirtualColumns build a TableInfo without virual columns from the source table info

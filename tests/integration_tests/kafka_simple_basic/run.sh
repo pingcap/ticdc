@@ -44,8 +44,13 @@ function run() {
 
 	# pause and resume changefeed makes sure changefeed sending bootstrap events
 	# when it is resumed, so the data after pause can be decoded correctly
+	TOPIC_NAME="ticdc-simple-basic-$RANDOM"
+	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=simple"
 	run_cdc_cli changefeed pause -c "simple-basic"
+	run_cdc_cli changefeed update -c "simple-basic" --sink-uri=$SINK_URI --config="$CUR/conf/changefeed.toml" --no-confirm
 	run_cdc_cli changefeed resume -c "simple-basic"
+	cdc_kafka_consumer --upstream-uri $SINK_URI --downstream-uri="mysql://root@127.0.0.1:3306/?safe-mode=true&batch-dml-enable=false" --upstream-tidb-dsn="root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/?" \
+		--config="$CUR/conf/changefeed.toml" --log-file $WORK_DIR/cdc_kafka_consumer_resume.log 2>&1 &
 
 	run_sql_file $CUR/data/data.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 

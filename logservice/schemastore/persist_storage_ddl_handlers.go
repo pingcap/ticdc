@@ -1335,9 +1335,7 @@ func extractTableInfoFuncForExchangeTablePartition(event *PersistedDDLEvent, tab
 		tableID,
 		false,
 		columnSchema,
-		event.TableInfo.Charset,
-		event.TableInfo.Collate,
-		event.TableInfo.Comment,
+		event.TableInfo,
 	)
 	return tableInfo, false
 }
