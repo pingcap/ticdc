@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -37,8 +36,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// BatchDecoder decodes the byte of a batch into the original messages.
-type BatchDecoder struct {
+type batchDecoder struct {
 	keyBytes   []byte
 	valueBytes []byte
 
@@ -75,7 +73,7 @@ func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (co
 		}
 	}
 
-	return &BatchDecoder{
+	return &batchDecoder{
 		config:           config,
 		storage:          externalStorage,
 		upstreamTiDB:     db,
@@ -85,23 +83,20 @@ func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (co
 }
 
 // AddKeyValue implements the RowEventDecoder interface
-func (b *BatchDecoder) AddKeyValue(key, value []byte) error {
+func (b *batchDecoder) AddKeyValue(key, value []byte) {
 	if len(b.keyBytes) != 0 || len(b.valueBytes) != 0 {
-		return errors.ErrOpenProtocolCodecInvalidData.
-			GenWithStack("decoder key and value not nil")
+		log.Panic("add key / value to the decoder failed, since it's already set")
 	}
 	version := binary.BigEndian.Uint64(key[:8])
 	if version != batchVersion1 {
-		return errors.ErrOpenProtocolCodecInvalidData.
-			GenWithStack("unexpected key format version")
+		log.Panic("the batch version is not supported", zap.Uint64("version", version))
 	}
 
 	b.keyBytes = key[8:]
 	b.valueBytes = value
-	return nil
 }
 
-func (b *BatchDecoder) hasNext() bool {
+func (b *batchDecoder) hasNext() bool {
 	keyLen := len(b.keyBytes)
 	valueLen := len(b.valueBytes)
 
@@ -117,7 +112,7 @@ func (b *BatchDecoder) hasNext() bool {
 	return false
 }
 
-func (b *BatchDecoder) decodeNextKey() {
+func (b *batchDecoder) decodeNextKey() {
 	keyLen := binary.BigEndian.Uint64(b.keyBytes[:8])
 	key := b.keyBytes[8 : keyLen+8]
 	msgKey := new(messageKey)
@@ -128,15 +123,15 @@ func (b *BatchDecoder) decodeNextKey() {
 }
 
 // HasNext implements the RowEventDecoder interface
-func (b *BatchDecoder) HasNext() (common.MessageType, bool, error) {
+func (b *batchDecoder) HasNext() (common.MessageType, bool) {
 	if !b.hasNext() {
-		return 0, false, nil
+		return 0, false
 	}
 	b.decodeNextKey()
 
 	switch b.nextKey.Type {
 	case common.MessageTypeResolved, common.MessageTypeDDL:
-		return b.nextKey.Type, true, nil
+		return b.nextKey.Type, true
 	default:
 	}
 	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
@@ -152,19 +147,19 @@ func (b *BatchDecoder) HasNext() (common.MessageType, bool, error) {
 	b.nextRow = new(messageRow)
 	b.nextRow.decode(value)
 
-	return common.MessageTypeRow, true, nil
+	return common.MessageTypeRow, true
 }
 
 // NextResolvedEvent implements the RowEventDecoder interface
-func (b *BatchDecoder) NextResolvedEvent() (uint64, error) {
+func (b *batchDecoder) NextResolvedEvent() uint64 {
 	if b.nextKey.Type != common.MessageTypeResolved {
-		return 0, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found resolved event message")
+		log.Panic("message type is not watermark", zap.Any("messageType", b.nextKey.Type))
 	}
 	resolvedTs := b.nextKey.Ts
 	b.nextKey = nil
 	// resolved ts event's value part is empty, can be ignored.
 	b.valueBytes = nil
-	return resolvedTs, nil
+	return resolvedTs
 }
 
 type messageDDL struct {
@@ -173,9 +168,9 @@ type messageDDL struct {
 }
 
 // NextDDLEvent implements the RowEventDecoder interface
-func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
+func (b *batchDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if b.nextKey.Type != common.MessageTypeDDL {
-		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found ddl event message")
+		log.Panic("message type is not DDL", zap.Any("messageType", b.nextKey.Type))
 	}
 
 	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
@@ -183,7 +178,9 @@ func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 
 	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
-		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("decompress DDL event failed")
+		log.Panic("decompress failed",
+			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value), zap.Error(err))
 	}
 
 	var m messageDDL
@@ -200,13 +197,13 @@ func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	result.TableName = b.nextKey.Table
 	b.nextKey = nil
 	b.valueBytes = nil
-	return result, nil
+	return result
 }
 
 // NextDMLEvent implements the RowEventDecoder interface
-func (b *BatchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+func (b *batchDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if b.nextKey.Type != common.MessageTypeRow {
-		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found row event message")
+		log.Panic("message type is not row", zap.Any("messageType", b.nextKey.Type))
 	}
 
 	ctx := context.Background()
@@ -216,14 +213,14 @@ func (b *BatchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	}
 
 	if b.nextKey.OnlyHandleKey && b.upstreamTiDB != nil {
-		return b.assembleHandleKeyOnlyDMLEvent(ctx), nil
+		return b.assembleHandleKeyOnlyDMLEvent(ctx)
 	}
 
 	result := b.assembleDMLEvent()
 
 	b.nextKey = nil
 	b.nextRow = nil
-	return result, nil
+	return result
 }
 
 func buildColumns(
@@ -258,7 +255,7 @@ func buildColumns(
 	return result
 }
 
-func (b *BatchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context) *commonEvent.DMLEvent {
+func (b *batchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context) *commonEvent.DMLEvent {
 	key := b.nextKey
 	row := b.nextRow
 	var (
@@ -295,22 +292,21 @@ func (b *BatchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context) *commo
 	return b.assembleDMLEvent()
 }
 
-func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (*commonEvent.DMLEvent, error) {
+func (b *batchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(b.nextKey.ClaimCheckLocation)
 	b.nextKey = nil
 	data, err := b.storage.ReadFile(ctx, claimCheckFileName)
 	if err != nil {
-		return nil, errors.Trace(err)
+		log.Panic("read claim check file failed", zap.String("fileName", claimCheckFileName), zap.Error(err))
 	}
 	claimCheckM, err := common.UnmarshalClaimCheckMessage(data)
 	if err != nil {
-		return nil, errors.Trace(err)
+		log.Panic("unmarshal claim check message failed", zap.Any("data", data), zap.Error(err))
 	}
 
 	version := binary.BigEndian.Uint64(claimCheckM.Key[:8])
 	if version != batchVersion1 {
-		return nil, errors.ErrOpenProtocolCodecInvalidData.
-			GenWithStack("unexpected key format version")
+		log.Panic("the batch version is not supported", zap.Uint64("version", version))
 	}
 
 	key := claimCheckM.Key[8:]
@@ -323,7 +319,9 @@ func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 	value := claimCheckM.Value[8 : valueLen+8]
 	value, err = common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrOpenProtocolCodecInvalidData, err)
+		log.Panic("decompress large message failed",
+			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value), zap.Error(err))
 	}
 
 	rowMsg := new(messageRow)
@@ -332,7 +330,7 @@ func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 	b.nextKey = msgKey
 	b.nextRow = rowMsg
 
-	return b.assembleDMLEvent(), nil
+	return b.assembleDMLEvent()
 }
 
 type tableKey struct {
@@ -340,7 +338,7 @@ type tableKey struct {
 	table  string
 }
 
-func (b *BatchDecoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+func (b *batchDecoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
 	cacheKey := tableKey{
 		schema: key.Schema,
 		table:  key.Table,
@@ -353,7 +351,7 @@ func (b *BatchDecoder) queryTableInfo(key *messageKey, value *messageRow) *commo
 	return tableInfo
 }
 
-func (b *BatchDecoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+func (b *batchDecoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = b.tableIDAllocator.AllocateTableID(key.Schema, key.Table)
 	tableInfo.Name = pmodel.NewCIStr(key.Table)
@@ -436,7 +434,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 	return result
 }
 
-func (b *BatchDecoder) assembleDMLEvent() *commonEvent.DMLEvent {
+func (b *batchDecoder) assembleDMLEvent() *commonEvent.DMLEvent {
 	key := b.nextKey
 	value := b.nextRow
 

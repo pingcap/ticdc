@@ -127,25 +127,23 @@ func NewCanalJSONDecoder(
 }
 
 // AddKeyValue implements the RowEventDecoder interface
-func (b *canalJSONDecoder) AddKeyValue(_, value []byte) error {
+func (b *canalJSONDecoder) AddKeyValue(_, value []byte) {
 	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
-		log.Error("decompress data failed",
+		log.Panic("decompress data failed",
 			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value),
 			zap.Error(err))
-
-		return errors.Trace(err)
 	}
 	if _, err = b.decoder.Write(value); err != nil {
-		return errors.Trace(err)
+		log.Panic("add value to the decoder failed", zap.Any("value", value), zap.Error(err))
 	}
-	return nil
 }
 
 // HasNext implements the RowEventDecoder interface
-func (b *canalJSONDecoder) HasNext() (common.MessageType, bool, error) {
+func (b *canalJSONDecoder) HasNext() (common.MessageType, bool) {
 	if b.decoder.Len() == 0 {
-		return common.MessageTypeUnknown, false, nil
+		return common.MessageTypeUnknown, false
 	}
 
 	var msg canalJSONMessageInterface = &JSONMessage{}
@@ -157,46 +155,48 @@ func (b *canalJSONDecoder) HasNext() (common.MessageType, bool, error) {
 	}
 
 	if err := b.decoder.Decode(msg); err != nil {
-		log.Error("canal-json decoder decode failed",
-			zap.Error(err), zap.ByteString("data", b.decoder.Bytes()))
-		return common.MessageTypeUnknown, false, err
+		log.Panic("canal-json decode failed",
+			zap.ByteString("data", b.decoder.Bytes()),
+			zap.Error(err))
 	}
 	b.msg = msg
-	return b.msg.messageType(), true, nil
+	return b.msg.messageType(), true
 }
 
 func (b *canalJSONDecoder) assembleClaimCheckDMLEvent(
 	ctx context.Context, claimCheckLocation string,
-) (*commonEvent.DMLEvent, error) {
+) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
 	data, err := b.storage.ReadFile(ctx, claimCheckFileName)
 	if err != nil {
-		return nil, err
+		log.Panic("read claim check file failed", zap.String("fileName", claimCheckFileName), zap.Error(err))
 	}
 
 	if !b.config.LargeMessageHandle.ClaimCheckRawValue {
 		claimCheckM, err := common.UnmarshalClaimCheckMessage(data)
 		if err != nil {
-			return nil, err
+			log.Panic("unmarshal claim check message failed", zap.Any("data", data), zap.Error(err))
 		}
 		data = claimCheckM.Value
 	}
 
 	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, data)
 	if err != nil {
-		return nil, err
+		log.Panic("decompress data failed",
+			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("data", data), zap.Error(err))
 	}
 	message := &canalJSONMessageWithTiDBExtension{}
 	err = json.Unmarshal(value, message)
 	if err != nil {
-		return nil, err
+		log.Panic("unmarshal claim check message failed", zap.Any("value", value), zap.Error(err))
 	}
 
 	b.msg = message
 	return b.NextDMLEvent()
 }
 
-func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string, error) {
+func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string) {
 	columnsCount := holder.Length()
 	data := make(map[string]interface{}, columnsCount)
 	mysqlTypeMap := make(map[string]string, columnsCount)
@@ -211,7 +211,7 @@ func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string
 		if common.IsBinaryMySQLType(mysqlType) {
 			rawValue, err := bytesDecoder.Bytes(rawValue)
 			if err != nil {
-				return nil, nil, errors.Trace(err)
+				log.Panic("decode binary value failed", zap.Any("value", rawValue), zap.Error(err))
 			}
 			value = string(rawValue)
 		} else if strings.Contains(mysqlType, "bit") || strings.Contains(mysqlType, "set") {
@@ -224,12 +224,12 @@ func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string
 		data[name] = value
 	}
 
-	return data, mysqlTypeMap, nil
+	return data, mysqlTypeMap
 }
 
 func (b *canalJSONDecoder) assembleHandleKeyOnlyDMLEvent(
 	ctx context.Context, message *canalJSONMessageWithTiDBExtension,
-) (*commonEvent.DMLEvent, error) {
+) *commonEvent.DMLEvent {
 	var (
 		commitTs  = message.Extensions.CommitTs
 		schema    = message.Schema
@@ -255,33 +255,21 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyDMLEvent(
 	switch eventType {
 	case "INSERT":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		data, mysqlType, err := buildData(holder)
-		if err != nil {
-			return nil, err
-		}
+		data, mysqlType := buildData(holder)
 		result.MySQLType = mysqlType
 		result.Data = []map[string]interface{}{data}
 	case "UPDATE":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		data, mysqlType, err := buildData(holder)
-		if err != nil {
-			return nil, err
-		}
+		data, mysqlType := buildData(holder)
 		result.MySQLType = mysqlType
 		result.Data = []map[string]interface{}{data}
 
 		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		old, _, err := buildData(holder)
-		if err != nil {
-			return nil, err
-		}
+		old, _ := buildData(holder)
 		result.Old = []map[string]interface{}{old}
 	case "DELETE":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		data, mysqlType, err := buildData(holder)
-		if err != nil {
-			return nil, err
-		}
+		data, mysqlType := buildData(holder)
 		result.MySQLType = mysqlType
 		result.Data = []map[string]interface{}{data}
 	}
@@ -292,9 +280,10 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyDMLEvent(
 
 // NextDMLEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+func (b *canalJSONDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeRow {
-		return nil, errors.ErrCodecDecode.GenWithStack("not found row changed event message")
+		log.Panic("message type is not row changed",
+			zap.Any("messageType", b.msg.messageType()), zap.Any("msg", b.msg))
 	}
 
 	message, withExtension := b.msg.(*canalJSONMessageWithTiDBExtension)
@@ -307,9 +296,7 @@ func (b *canalJSONDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 			return b.assembleClaimCheckDMLEvent(ctx, message.Extensions.ClaimCheckLocation)
 		}
 	}
-
-	result := b.canalJSONMessage2DMLEvent()
-	return result, nil
+	return b.canalJSONMessage2DMLEvent()
 }
 
 func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
@@ -357,9 +344,10 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 
 // NextDDLEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
+func (b *canalJSONDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeDDL {
-		return nil, errors.ErrDecodeFailed.GenWithStack("not found ddl event message")
+		log.Panic("message type is not DDL Event",
+			zap.Any("messageType", b.msg.messageType()), zap.Any("msg", b.msg))
 	}
 
 	result := canalJSONMessage2DDLEvent(b.msg)
@@ -373,23 +361,22 @@ func (b *canalJSONDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 		}
 		delete(b.tableInfoCache, cacheKey)
 	}
-	return result, nil
+	return result
 }
 
 // NextResolvedEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextResolvedEvent() (uint64, error) {
+func (b *canalJSONDecoder) NextResolvedEvent() uint64 {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeResolved {
-		return 0, errors.ErrDecodeFailed.GenWithStack("not found resolved event message")
+		log.Panic("message type is not watermark", zap.Any("messageType", b.msg.messageType()))
 	}
 
 	withExtensionEvent, ok := b.msg.(*canalJSONMessageWithTiDBExtension)
 	if !ok {
-		log.Error("canal-json resolved event message should have tidb extension, but not found",
+		log.Panic("canal-json resolved event message should have tidb extension, but not found",
 			zap.Any("msg", b.msg))
-		return 0, errors.ErrDecodeFailed.GenWithStack("MessageTypeResolved tidb extension not found")
 	}
-	return withExtensionEvent.Extensions.WatermarkTs, nil
+	return withExtensionEvent.Extensions.WatermarkTs
 }
 
 func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEvent {

@@ -63,16 +63,13 @@ func TestDMLEventE2E(t *testing.T) {
 			require.NoError(t, err)
 
 			decoder := NewDecoder(codecConfig, schemaM, topic, nil)
-			err = decoder.AddKeyValue(message.Key, message.Value)
-			require.NoError(t, err)
+			decoder.AddKeyValue(message.Key, message.Value)
 
-			messageType, exist, err := decoder.HasNext()
-			require.NoError(t, err)
+			messageType, exist := decoder.HasNext()
 			require.True(t, exist)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			decodedEvent, err := decoder.NextDMLEvent()
-			require.NoError(t, err)
+			decodedEvent := decoder.NextDMLEvent()
 			require.NotNil(t, decodedEvent)
 			require.NotZero(t, decodedEvent.GetTableID())
 
@@ -94,16 +91,13 @@ func TestDDLEventE2E(t *testing.T) {
 
 	topic := "test-topic"
 	decoder := NewDecoder(codecConfig, nil, topic, nil)
-	err = decoder.AddKeyValue(message.Key, message.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
 
-	messageType, exist, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, exist := decoder.HasNext()
 	require.True(t, exist)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
-	decodedEvent, err := decoder.NextDDLEvent()
-	require.NoError(t, err)
+	decodedEvent := decoder.NextDDLEvent()
 	require.NotNil(t, decodedEvent)
 	require.Equal(t, ddl.GetCommitTs(), decodedEvent.GetCommitTs())
 	require.Equal(t, timodel.ActionCreateTable, decodedEvent.GetDDLType())
@@ -128,16 +122,13 @@ func TestResolvedE2E(t *testing.T) {
 
 	topic := "test-topic"
 	decoder := NewDecoder(codecConfig, nil, topic, nil)
-	err = decoder.AddKeyValue(message.Key, message.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
 
-	messageType, exist, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, exist := decoder.HasNext()
 	require.True(t, exist)
 	require.Equal(t, common.MessageTypeResolved, messageType)
 
-	obtained, err := decoder.NextResolvedEvent()
-	require.NoError(t, err)
+	obtained := decoder.NextResolvedEvent()
 	require.Equal(t, resolvedTs, obtained)
 }
 

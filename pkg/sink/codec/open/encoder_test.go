@@ -76,16 +76,13 @@ func TestEncodeFlag(t *testing.T) {
 	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(messages[0].Key, messages[0].Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded, err := decoder.NextDMLEvent()
-	require.NoError(t, err)
+	decoded := decoder.NextDMLEvent()
 
 	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
@@ -163,16 +160,13 @@ func TestIntegerTypes(t *testing.T) {
 		decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
 
-		err = decoder.AddKeyValue(messages[0].Key, messages[0].Value)
-		require.NoError(t, err)
+		decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 
-		messageType, hasNext, err := decoder.HasNext()
-		require.NoError(t, err)
+		messageType, hasNext := decoder.HasNext()
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, messageType)
 
-		decoded, err := decoder.NextDMLEvent()
-		require.NoError(t, err)
+		decoded := decoder.NextDMLEvent()
 
 		require.Equal(t, event.CommitTs, decoded.GetCommitTs())
 
@@ -221,16 +215,13 @@ func TestFloatTypes(t *testing.T) {
 	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event, err := decoder.NextDMLEvent()
-	require.NoError(t, err)
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -273,16 +264,13 @@ func TestTimeTypes(t *testing.T) {
 	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event, err := decoder.NextDMLEvent()
-	require.NoError(t, err)
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -325,16 +313,13 @@ func TestStringTypes(t *testing.T) {
 	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event, err := decoder.NextDMLEvent()
-	require.NoError(t, err)
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -378,16 +363,13 @@ func TestBlobTypes(t *testing.T) {
 	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event, err := decoder.NextDMLEvent()
-	require.NoError(t, err)
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -431,16 +413,13 @@ func TestTextTypes(t *testing.T) {
 	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event, err := decoder.NextDMLEvent()
-	require.NoError(t, err)
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -493,16 +472,13 @@ func TestOtherTypes(t *testing.T) {
 	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event, err := decoder.NextDMLEvent()
-	require.NoError(t, err)
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -522,17 +498,13 @@ func TestEncodeCheckpoint(t *testing.T) {
 	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, messageType, common.MessageTypeResolved)
 
-	obtained, err := decoder.NextResolvedEvent()
-	require.NoError(t, err)
-
+	obtained := decoder.NextResolvedEvent()
 	require.Equal(t, checkpoint, obtained)
 }
 
@@ -565,16 +537,13 @@ func TestCreateTableDDL(t *testing.T) {
 	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(message.Key, message.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
-	obtained, err := decoder.NextDDLEvent()
-	require.NoError(t, err)
+	obtained := decoder.NextDDLEvent()
 	require.Equal(t, ddlEvent.Query, obtained.Query)
 	require.Equal(t, ddlEvent.Type, obtained.Type)
 	require.Equal(t, ddlEvent.SchemaName, obtained.SchemaName)
@@ -625,16 +594,13 @@ func TestEncoderOneMessage(t *testing.T) {
 	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(messages[0].Key, messages[0].Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, messageType, common.MessageTypeRow)
 
-	decoded, err := decoder.NextDMLEvent()
-	require.NoError(t, err)
+	decoded := decoder.NextDMLEvent()
 	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
 
@@ -695,43 +661,35 @@ func TestEncoderMultipleMessage(t *testing.T) {
 	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(messages[0].Key, messages[0].Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, messageType, common.MessageTypeRow)
 
-	decoded, err := decoder.NextDMLEvent()
-	require.NoError(t, err)
+	decoded := decoder.NextDMLEvent()
 	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
 
 	common.CompareRow(t, insertEvents[0].Event, insertEvents[0].TableInfo, change, decoded.TableInfo)
 
-	messageType, hasNext, err = decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext = decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, messageType, common.MessageTypeRow)
 
-	decoded, err = decoder.NextDMLEvent()
-	require.NoError(t, err)
+	decoded = decoder.NextDMLEvent()
 	change, ok = decoded.GetNextRow()
 	require.True(t, ok)
 
 	common.CompareRow(t, insertEvents[1].Event, insertEvents[1].TableInfo, change, decoded.TableInfo)
 
-	err = decoder.AddKeyValue(messages[1].Key, messages[1].Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(messages[1].Key, messages[1].Value)
 
-	messageType, hasNext, err = decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext = decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, messageType, common.MessageTypeRow)
 
-	decoded, err = decoder.NextDMLEvent()
-	require.NoError(t, err)
+	decoded = decoder.NextDMLEvent()
 	change, ok = decoded.GetNextRow()
 	require.True(t, ok)
 
@@ -809,16 +767,13 @@ func TestLargeMessageWithHandleEnableHandleKeyOnly(t *testing.T) {
 	require.NoError(t, err)
 
 	message := messages[0]
-	err = decoder.AddKeyValue(message.Key, message.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, messageType, common.MessageTypeRow)
 
-	decoded, err := decoder.NextDMLEvent()
-	require.NoError(t, err)
+	decoded := decoder.NextDMLEvent()
 	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
 
@@ -909,16 +864,13 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	event, err := decoder.NextDMLEvent()
-	require.NoError(t, err)
+	event := decoder.NextDMLEvent()
 	change, ok := event.GetNextRow()
 	require.True(t, ok)
 
@@ -1005,16 +957,13 @@ func TestDMLEvent(t *testing.T) {
 
 		m := encoder.Build()[0]
 
-		err = decoder.AddKeyValue(m.Key, m.Value)
-		require.NoError(t, err)
+		decoder.AddKeyValue(m.Key, m.Value)
 
-		messageType, hasNext, err := decoder.HasNext()
-		require.NoError(t, err)
+		messageType, hasNext := decoder.HasNext()
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, messageType)
 
-		decoded, err := decoder.NextDMLEvent()
-		require.NoError(t, err)
+		decoded := decoder.NextDMLEvent()
 		change, ok := decoded.GetNextRow()
 		require.True(t, ok)
 
@@ -1060,16 +1009,13 @@ func TestOnlyOutputUpdatedEvent(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded, err := decoder.NextDMLEvent()
-	require.NoError(t, err)
+	decoded := decoder.NextDMLEvent()
 	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
 
@@ -1113,16 +1059,13 @@ func TestHandleOnlyEvent(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decoded, err := decoder.NextDMLEvent()
-	require.NoError(t, err)
+	decoded := decoder.NextDMLEvent()
 	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
 

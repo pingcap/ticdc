@@ -19,7 +19,6 @@ import (
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	canal "github.com/pingcap/tiflow/proto/canal"
@@ -43,23 +42,21 @@ func NewCanalJSONTxnEventDecoder(
 }
 
 // AddKeyValue set the key value to the decoder
-func (d *canalJSONTxnEventDecoder) AddKeyValue(_, value []byte) error {
+func (d *canalJSONTxnEventDecoder) AddKeyValue(_, value []byte) {
 	value, err := common.Decompress(d.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
-		log.Error("decompress data failed",
+		log.Panic("decompress data failed",
 			zap.String("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value),
 			zap.Error(err))
-
-		return errors.Trace(err)
 	}
 	d.data = value
-	return nil
 }
 
 // HasNext return true if there is any event can be returned.
-func (d *canalJSONTxnEventDecoder) HasNext() (common.MessageType, bool, error) {
+func (d *canalJSONTxnEventDecoder) HasNext() (common.MessageType, bool) {
 	if d.data == nil {
-		return common.MessageTypeUnknown, false, nil
+		return common.MessageTypeUnknown, false
 	}
 	var (
 		msg         canalJSONMessageInterface = &JSONMessage{}
@@ -83,28 +80,26 @@ func (d *canalJSONTxnEventDecoder) HasNext() (common.MessageType, bool, error) {
 	}
 
 	if len(encodedData) == 0 {
-		return common.MessageTypeUnknown, false, nil
+		return common.MessageTypeUnknown, false
 	}
 
 	if err := json.Unmarshal(encodedData, msg); err != nil {
-		log.Error("canal-json decoder unmarshal data failed",
+		log.Panic("canal-json decoder unmarshal data failed",
 			zap.Error(err), zap.ByteString("data", encodedData))
-		return common.MessageTypeUnknown, false, err
+		return common.MessageTypeUnknown, false
 	}
 	d.msg = msg
-	return d.msg.messageType(), true, nil
+	return d.msg.messageType(), true
 }
 
-// NextRowChangedEvent implements the RowEventDecoder interface
-// `HasNext` should be called before this.
-func (d *canalJSONTxnEventDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+func (d *canalJSONTxnEventDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
-		return nil, errors.ErrCanalEncodeFailed.
-			GenWithStack("not found row changed event message")
+		log.Panic("message type is not row changed",
+			zap.Any("messageType", d.msg.messageType()), zap.Any("msg", d.msg))
 	}
 	result := d.canalJSONMessage2RowChange()
 	d.msg = nil
-	return result, nil
+	return result
 }
 
 func (d *canalJSONTxnEventDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
@@ -147,11 +142,11 @@ func (d *canalJSONTxnEventDecoder) canalJSONMessage2RowChange() *commonEvent.DML
 }
 
 // NextResolvedEvent implements the RowEventDecoder interface
-func (d *canalJSONTxnEventDecoder) NextResolvedEvent() (uint64, error) {
-	return 0, nil
+func (d *canalJSONTxnEventDecoder) NextResolvedEvent() uint64 {
+	return 0
 }
 
 // NextDDLEvent implements the RowEventDecoder interface
-func (d *canalJSONTxnEventDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
-	return nil, nil
+func (d *canalJSONTxnEventDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+	return nil
 }
