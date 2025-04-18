@@ -144,13 +144,12 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		s.isNormal.Store(false)
 		return err
 	}
+	event.PostFlush()
 	return nil
 }
 
 func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 	if event.TiDBOnly {
-		// run callback directly and return
-		event.PostFlush()
 		return nil
 	}
 	for _, e := range event.GetEvents() {
@@ -183,8 +182,6 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 	log.Info("pulsar sink send DDL event",
 		zap.String("namespace", s.changefeedID.Namespace()), zap.String("changefeed", s.changefeedID.Name()),
 		zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()))
-	// after flush all the ddl event, we call the callback function.
-	event.PostFlush()
 	return nil
 }
 

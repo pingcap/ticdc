@@ -10,13 +10,13 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package writer
+
+package cloudstorage
 
 import (
 	"context"
 	"fmt"
 	"net/url"
-	"os"
 	"path"
 	"sync"
 	"testing"
@@ -41,25 +41,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func getTableFiles(t *testing.T, tableDir string) []string {
-	files, err := os.ReadDir(tableDir)
-	require.Nil(t, err)
-
-	fileNames := []string{}
-	for _, f := range files {
-		fileName := f.Name()
-		if f.IsDir() {
-			metaFiles, err := os.ReadDir(path.Join(tableDir, f.Name()))
-			require.Nil(t, err)
-			require.Len(t, metaFiles, 1)
-			fileName = metaFiles[0].Name()
-		}
-		fileNames = append(fileNames, fileName)
-	}
-	return fileNames
-}
-
-func testWriter(ctx context.Context, t *testing.T, dir string) *Writer {
+func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
 	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
 	require.Nil(t, err)
@@ -78,8 +60,8 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *Writer {
 	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-	d := NewWriter(1, changefeedID, storage,
-		cfg, ".json", chann.NewAutoDrainChann[EventFragment](), statistics)
+	d := newWriter(1, changefeedID, storage,
+		cfg, ".json", chann.NewAutoDrainChann[eventFragment](), statistics)
 	return d
 }
 
@@ -103,7 +85,7 @@ func TestWriterRun(t *testing.T) {
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
 
 	for i := 0; i < 5; i++ {
-		frag := EventFragment{
+		frag := eventFragment{
 			seqNumber: uint64(i),
 			versionedTable: cloudstorage.VersionedTableName{
 				TableNameWithPhysicTableID: commonType.TableName{
@@ -142,7 +124,7 @@ func TestWriterRun(t *testing.T) {
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{"CDC000001.json", "CDC.index"}, fileNames)
 	cancel()
-	d.Close()
+	d.close()
 	wg.Wait()
 	fragCh.CloseAndDrain()
 }

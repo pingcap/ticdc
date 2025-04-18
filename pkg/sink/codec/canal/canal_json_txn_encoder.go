@@ -47,8 +47,8 @@ type JSONTxnEventEncoder struct {
 	columnSelector columnselector.Selector
 }
 
-// NewJSONTxnEventEncoderBuilder creates a new JSONTxnEventEncoder
-func NewJSONTxnEventEncoderBuilder(config *common.Config) common.TxnEventEncoder {
+// NewJSONTxnEventEncoder creates a new JSONTxnEventEncoder
+func NewJSONTxnEventEncoder(config *common.Config) common.TxnEventEncoder {
 	return &JSONTxnEventEncoder{
 		valueBuf:       &bytes.Buffer{},
 		terminator:     []byte(config.Terminator),
