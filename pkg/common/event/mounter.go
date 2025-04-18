@@ -91,11 +91,6 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		matched         bool
 		corrupted       bool
 	)
-	// if m.decoder != nil {
-	// 	checksumVersion = m.decoder.ChecksumVersion()
-	// } else if m.preDecoder != nil {
-	// 	checksumVersion = m.preDecoder.ChecksumVersion()
-	// }
 
 	count := 0
 	if len(raw.OldValue) != 0 {

@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -66,8 +65,6 @@ type eventService struct {
 
 	// TODO: use a better way to cache the acceptorInfos
 	dispatcherInfo chan DispatcherInfo
-	tz             *time.Location
-	integrity      *integrity.Config
 }
 
 func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) common.SubModule {
@@ -78,8 +75,6 @@ func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) 
 		schemaStore:    schemaStore,
 		brokers:        make(map[uint64]*eventBroker),
 		dispatcherInfo: make(chan DispatcherInfo, basicChannelSize*16),
-		tz:             time.Local,                                 // FIXME use the timezone from the config
-		integrity:      config.GetDefaultReplicaConfig().Integrity, // FIXME use the timezone from the config
 	}
 	es.mc.RegisterHandler(messaging.EventServiceTopic, es.handleMessage)
 	return es

@@ -152,7 +152,6 @@ func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	// TODO: Checksum
 	corrupted := isCorrupted(valueMap)
 	if found {
 		event.Checksum = &integrity.Checksum{

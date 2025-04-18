@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
@@ -108,7 +107,7 @@ func (m *mounter) verifyColumnChecksum(
 }
 
 func calculateColumnChecksum(
-	columnInfos []*timodel.ColumnInfo, row chunk.Row, tz *time.Location,
+	columnInfos []*model.ColumnInfo, row chunk.Row, tz *time.Location,
 ) (uint32, error) {
 	columns := make([]rowcodec.ColData, 0, row.Len())
 	for idx, col := range columnInfos {
@@ -137,7 +136,7 @@ func calculateColumnChecksum(
 }
 
 func verifyRawBytesChecksum(
-	columnInfos []*timodel.ColumnInfo, row chunk.Row, decoder *rowcodec.ChunkDecoder, key kv.Key, handle kv.Handle, tz *time.Location,
+	columnInfos []*model.ColumnInfo, row chunk.Row, decoder *rowcodec.ChunkDecoder, key kv.Key, handle kv.Handle, tz *time.Location,
 ) (uint32, bool, error) {
 	expected, ok := decoder.GetChecksum()
 	if !ok {

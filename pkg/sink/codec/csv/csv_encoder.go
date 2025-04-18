@@ -48,7 +48,6 @@ func (b *batchEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error {
 			TableInfo: event.TableInfo,
 			CommitTs:  event.CommitTs,
 			Event:     row,
-			// Checksum:       event.Checksum,
 		})
 		if err != nil {
 			return err
