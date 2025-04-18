@@ -37,13 +37,6 @@ import (
 
 const defaultTimeout = 5 * time.Minute
 
-// GetExternalStorageFromURI creates a new storage.ExternalStorage from a uri.
-func GetExternalStorageFromURI(
-	ctx context.Context, uri string,
-) (storage.ExternalStorage, error) {
-	return GetExternalStorage(ctx, uri, nil, DefaultS3Retryer())
-}
-
 // GetExternalStorageWithDefaultTimeout creates a new storage.ExternalStorage from a uri
 // without retry. It is the caller's responsibility to set timeout to the context.
 func GetExternalStorageWithDefaultTimeout(ctx context.Context, uri string) (storage.ExternalStorage, error) {
@@ -51,7 +44,7 @@ func GetExternalStorageWithDefaultTimeout(ctx context.Context, uri string) (stor
 	defer cancel()
 	// total retry time is [1<<7, 1<<8] = [128, 256] + 30*6 = [308, 436] seconds
 	r := NewS3Retryer(7, 1*time.Second, 2*time.Second)
-	s, err := GetExternalStorage(ctx, uri, nil, r)
+	s, err := getExternalStorage(ctx, uri, nil, r)
 
 	return &extStorageWithTimeout{
 		ExternalStorage: s,
@@ -59,8 +52,8 @@ func GetExternalStorageWithDefaultTimeout(ctx context.Context, uri string) (stor
 	}, err
 }
 
-// GetExternalStorage creates a new storage.ExternalStorage based on the uri and options.
-func GetExternalStorage(
+// getExternalStorage creates a new storage.ExternalStorage based on the uri and options.
+func getExternalStorage(
 	ctx context.Context, uri string,
 	opts *storage.BackendOptions,
 	retryer request.Retryer,
@@ -88,12 +81,19 @@ func GetExternalStorage(
 	return ret, nil
 }
 
+// getExternalStorageFromURI creates a new storage.ExternalStorage from a uri.
+func getExternalStorageFromURI(
+	ctx context.Context, uri string,
+) (storage.ExternalStorage, error) {
+	return getExternalStorage(ctx, uri, nil, DefaultS3Retryer())
+}
+
 // GetTestExtStorage creates a test storage.ExternalStorage from a uri.
 func GetTestExtStorage(
 	ctx context.Context, tmpDir string,
 ) (storage.ExternalStorage, *url.URL, error) {
 	uriStr := fmt.Sprintf("file://%s", tmpDir)
-	ret, err := GetExternalStorageFromURI(ctx, uriStr)
+	ret, err := getExternalStorageFromURI(ctx, uriStr)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -61,7 +61,7 @@ func getTableFiles(t *testing.T, tableDir string) []string {
 
 func testWriter(ctx context.Context, t *testing.T, dir string) *Writer {
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
-	storage, err := util.GetExternalStorageFromURI(ctx, uri)
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
 	require.Nil(t, err)
 	sinkURI, err := url.Parse(uri)
 	require.Nil(t, err)

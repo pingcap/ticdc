@@ -179,7 +179,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 
 	extension := sinkutil.GetFileExtension(protocol)
 
-	storage, err := putil.GetExternalStorageFromURI(ctx, upstreamURIStr)
+	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, upstreamURIStr)
 	if err != nil {
 		log.Error("failed to create external storage", zap.Error(err))
 		return nil, err
