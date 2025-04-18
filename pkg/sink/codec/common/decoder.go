@@ -35,7 +35,7 @@ type RowEventDecoder interface {
 	NextResolvedEvent() uint64
 
 	// NextDMLEvent returns the next DML event if exists
-	NextDMLEvent() (*commonEvent.DMLEvent, error)
+	NextDMLEvent() *commonEvent.DMLEvent
 
 	// NextDDLEvent returns the next DDL event if exists
 	NextDDLEvent() (*commonEvent.DDLEvent, error)

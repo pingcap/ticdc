@@ -143,10 +143,9 @@ func (d *Decoder) NextResolvedEvent() uint64 {
 }
 
 // NextDMLEvent returns the next dml event if exists
-func (d *Decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || (d.msg.Data == nil && d.msg.Old == nil) {
-		return nil, errors.ErrCodecDecode.GenWithStack(
-			"invalid row changed event message")
+		log.Panic("invalid data for the DML event", zap.Any("message", d.msg))
 	}
 
 	if d.msg.ClaimCheckLocation != "" {
@@ -166,46 +165,49 @@ func (d *Decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 			zap.Uint64("version", d.msg.SchemaVersion))
 		d.cachedMessages.PushBack(d.msg)
 		d.msg = nil
-		return nil, nil
+		return nil
 	}
 
-	event, err := buildDMLEvent(d.msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
+	event := buildDMLEvent(d.msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
 	d.msg = nil
 
 	log.Debug("row changed event assembled", zap.Any("event", event))
-	return event, err
+	return event
 }
 
-func (d *Decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) (*commonEvent.DMLEvent, error) {
+func (d *Decoder) assembleClaimCheckRowChangedEvent(claimCheckLocation string) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
 	data, err := d.storage.ReadFile(context.Background(), claimCheckFileName)
 	if err != nil {
-		return nil, err
+		log.Panic("read claim check file failed", zap.String("fileName", claimCheckFileName), zap.Error(err))
 	}
 
 	if !d.config.LargeMessageHandle.ClaimCheckRawValue {
 		claimCheckM, err := common.UnmarshalClaimCheckMessage(data)
 		if err != nil {
-			return nil, err
+			log.Panic("unmarshal claim check message failed", zap.String("fileName", claimCheckFileName), zap.Error(err))
 		}
 		data = claimCheckM.Value
 	}
 
 	value, err := common.Decompress(d.config.LargeMessageHandle.LargeMessageHandleCompression, data)
 	if err != nil {
-		return nil, err
+		log.Panic("decompress the claim check message failed",
+			zap.Any("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value),
+			zap.Error(err))
 	}
 
 	m := new(message)
 	err = d.marshaller.Unmarshal(value, m)
 	if err != nil {
-		return nil, err
+		log.Panic("unmarshal claim check message failed", zap.Any("value", value), zap.Error(err))
 	}
 	d.msg = m
 	return d.NextDMLEvent()
 }
 
-func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) (*commonEvent.DMLEvent, error) {
+func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) *commonEvent.DMLEvent {
 	tableInfo := d.memo.Read(m.Schema, m.Table, m.SchemaVersion)
 	if tableInfo == nil {
 		log.Debug("table info not found for the event, "+
@@ -215,7 +217,7 @@ func (d *Decoder) assembleHandleKeyOnlyRowChangedEvent(m *message) (*commonEvent
 			zap.Uint64("version", d.msg.SchemaVersion))
 		d.cachedMessages.PushBack(d.msg)
 		d.msg = nil
-		return nil, nil
+		return nil
 	}
 
 	fieldTypeMap := make(map[string]*types.FieldType, len(tableInfo.GetColumns()))
@@ -574,7 +576,7 @@ func parseValue(
 	return result
 }
 
-func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowChecksum bool, db *sql.DB) (*commonEvent.DMLEvent, error) {
+func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowChecksum bool, db *sql.DB) *commonEvent.DMLEvent {
 	result := &commonEvent.DMLEvent{
 		CommitTs:        msg.CommitTs,
 		PhysicalTableID: msg.TableID,
@@ -627,7 +629,7 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 	// 	}
 	// }
 
-	return result, nil
+	return result
 }
 
 func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {

@@ -91,8 +91,10 @@ func (d *decoder) HasNext() (common.MessageType, bool) {
 		return common.MessageTypeDDL, true
 	case checkpointByte:
 		return common.MessageTypeResolved, true
+	default:
 	}
 	log.Panic("avro invalid data, the first byte is not magic byte or ddl byte")
+	return common.MessageTypeUnknown, false
 }
 
 // NextResolvedEvent returns the next resolved event if exists
@@ -106,7 +108,7 @@ func (d *decoder) NextResolvedEvent() uint64 {
 }
 
 // NextDMLEvent returns the next row changed event if exists
-func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	var (
 		valueMap    map[string]interface{}
 		valueSchema map[string]interface{}
@@ -116,7 +118,7 @@ func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	ctx := context.Background()
 	keyMap, keySchema, err := d.decodeKey(ctx)
 	if err != nil {
-		return nil, errors.Trace(err)
+		log.Panic("decode key failed", zap.Error(err))
 	}
 
 	// for the delete event, only have key part, it holds primary key or the unique key columns.
@@ -129,26 +131,23 @@ func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	} else {
 		valueMap, valueSchema, err = d.decodeValue(ctx)
 		if err != nil {
-			return nil, errors.Trace(err)
+			log.Panic("decode value failed", zap.Error(err))
 		}
 	}
 
 	event, err := assembleEvent(keyMap, valueMap, valueSchema, isDelete)
 	if err != nil {
-		return nil, errors.Trace(err)
+		log.Panic("assemble event failed", zap.Error(err))
 	}
 	event.PhysicalTableID = d.tableIDAllocator.AllocateTableID(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName())
 
 	// Delete event only has Primary Key Columns, but the checksum is calculated based on the whole row columns,
 	// checksum verification cannot be done here, so skip it.
 	if isDelete {
-		return event, nil
+		return event
 	}
 
-	expectedChecksum, found, err := extractExpectedChecksum(valueMap)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
+	expectedChecksum, found := extractExpectedChecksum(valueMap)
 	// TODO: Checksum
 	// corrupted := isCorrupted(valueMap)
 	if found {
@@ -177,7 +176,7 @@ func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 		// }
 	}
 
-	return event, nil
+	return event
 }
 
 // assembleEvent return a row changed event
@@ -302,20 +301,20 @@ func isCorrupted(valueMap map[string]interface{}) bool {
 
 // extract the checksum from the received value map
 // return true if the checksum found, and return error if the checksum is not valid
-func extractExpectedChecksum(valueMap map[string]interface{}) (uint64, bool, error) {
+func extractExpectedChecksum(valueMap map[string]interface{}) (uint64, bool) {
 	o, ok := valueMap[tidbRowLevelChecksum]
 	if !ok {
-		return 0, false, nil
+		return 0, false
 	}
 	checksum := o.(string)
 	if checksum == "" {
-		return 0, false, nil
+		return 0, false
 	}
 	result, err := strconv.ParseUint(checksum, 10, 64)
 	if err != nil {
-		return 0, true, errors.Trace(err)
+		log.Panic("parse checksum into uint64 failed", zap.String("checksum", checksum), zap.Error(err))
 	}
-	return result, true, nil
+	return result, true
 }
 
 // value is an interface, need to convert it to the real value with the help of type info.

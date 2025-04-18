@@ -19,7 +19,6 @@ import (
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	canal "github.com/pingcap/tiflow/proto/canal"
@@ -93,16 +92,14 @@ func (d *canalJSONTxnEventDecoder) HasNext() (common.MessageType, bool) {
 	return d.msg.messageType(), true
 }
 
-// NextRowChangedEvent implements the RowEventDecoder interface
-// `HasNext` should be called before this.
-func (d *canalJSONTxnEventDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+func (d *canalJSONTxnEventDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
-		return nil, errors.ErrCanalEncodeFailed.
-			GenWithStack("not found row changed event message")
+		log.Panic("message type is not row changed",
+			zap.Any("messageType", d.msg.messageType()), zap.Any("msg", d.msg))
 	}
 	result := d.canalJSONMessage2RowChange()
 	d.msg = nil
-	return result, nil
+	return result
 }
 
 func (d *canalJSONTxnEventDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {

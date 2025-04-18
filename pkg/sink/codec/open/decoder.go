@@ -200,9 +200,9 @@ func (b *batchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 }
 
 // NextDMLEvent implements the RowEventDecoder interface
-func (b *batchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+func (b *batchDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if b.nextKey.Type != common.MessageTypeRow {
-		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found row event message")
+		log.Panic("message type is not row", zap.Any("messageType", b.nextKey.Type))
 	}
 
 	ctx := context.Background()
@@ -212,14 +212,14 @@ func (b *batchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	}
 
 	if b.nextKey.OnlyHandleKey && b.upstreamTiDB != nil {
-		return b.assembleHandleKeyOnlyDMLEvent(ctx), nil
+		return b.assembleHandleKeyOnlyDMLEvent(ctx)
 	}
 
 	result := b.assembleDMLEvent()
 
 	b.nextKey = nil
 	b.nextRow = nil
-	return result, nil
+	return result
 }
 
 func buildColumns(
@@ -291,22 +291,21 @@ func (b *batchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context) *commo
 	return b.assembleDMLEvent()
 }
 
-func (b *batchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (*commonEvent.DMLEvent, error) {
+func (b *batchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(b.nextKey.ClaimCheckLocation)
 	b.nextKey = nil
 	data, err := b.storage.ReadFile(ctx, claimCheckFileName)
 	if err != nil {
-		return nil, errors.Trace(err)
+		log.Panic("read claim check file failed", zap.String("fileName", claimCheckFileName), zap.Error(err))
 	}
 	claimCheckM, err := common.UnmarshalClaimCheckMessage(data)
 	if err != nil {
-		return nil, errors.Trace(err)
+		log.Panic("unmarshal claim check message failed", zap.Any("data", data), zap.Error(err))
 	}
 
 	version := binary.BigEndian.Uint64(claimCheckM.Key[:8])
 	if version != batchVersion1 {
-		return nil, errors.ErrOpenProtocolCodecInvalidData.
-			GenWithStack("unexpected key format version")
+		log.Panic("the batch version is not supported", zap.Uint64("version", version))
 	}
 
 	key := claimCheckM.Key[8:]
@@ -319,7 +318,9 @@ func (b *batchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 	value := claimCheckM.Value[8 : valueLen+8]
 	value, err = common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrOpenProtocolCodecInvalidData, err)
+		log.Panic("decompress large message failed",
+			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value), zap.Error(err))
 	}
 
 	rowMsg := new(messageRow)
@@ -328,7 +329,7 @@ func (b *batchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 	b.nextKey = msgKey
 	b.nextRow = rowMsg
 
-	return b.assembleDMLEvent(), nil
+	return b.assembleDMLEvent()
 }
 
 type tableKey struct {

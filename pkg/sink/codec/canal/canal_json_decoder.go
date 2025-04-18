@@ -165,36 +165,38 @@ func (b *canalJSONDecoder) HasNext() (common.MessageType, bool) {
 
 func (b *canalJSONDecoder) assembleClaimCheckDMLEvent(
 	ctx context.Context, claimCheckLocation string,
-) (*commonEvent.DMLEvent, error) {
+) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
 	data, err := b.storage.ReadFile(ctx, claimCheckFileName)
 	if err != nil {
-		return nil, err
+		log.Panic("read claim check file failed", zap.String("fileName", claimCheckFileName), zap.Error(err))
 	}
 
 	if !b.config.LargeMessageHandle.ClaimCheckRawValue {
 		claimCheckM, err := common.UnmarshalClaimCheckMessage(data)
 		if err != nil {
-			return nil, err
+			log.Panic("unmarshal claim check message failed", zap.Any("data", data), zap.Error(err))
 		}
 		data = claimCheckM.Value
 	}
 
 	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, data)
 	if err != nil {
-		return nil, err
+		log.Panic("decompress data failed",
+			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("data", data), zap.Error(err))
 	}
 	message := &canalJSONMessageWithTiDBExtension{}
 	err = json.Unmarshal(value, message)
 	if err != nil {
-		return nil, err
+		log.Panic("unmarshal claim check message failed", zap.Any("value", value), zap.Error(err))
 	}
 
 	b.msg = message
 	return b.NextDMLEvent()
 }
 
-func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string, error) {
+func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string) {
 	columnsCount := holder.Length()
 	data := make(map[string]interface{}, columnsCount)
 	mysqlTypeMap := make(map[string]string, columnsCount)
@@ -209,7 +211,7 @@ func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string
 		if common.IsBinaryMySQLType(mysqlType) {
 			rawValue, err := bytesDecoder.Bytes(rawValue)
 			if err != nil {
-				return nil, nil, errors.Trace(err)
+				log.Panic("decode binary value failed", zap.Any("value", rawValue), zap.Error(err))
 			}
 			value = string(rawValue)
 		} else if strings.Contains(mysqlType, "bit") || strings.Contains(mysqlType, "set") {
@@ -222,12 +224,12 @@ func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string
 		data[name] = value
 	}
 
-	return data, mysqlTypeMap, nil
+	return data, mysqlTypeMap
 }
 
 func (b *canalJSONDecoder) assembleHandleKeyOnlyDMLEvent(
 	ctx context.Context, message *canalJSONMessageWithTiDBExtension,
-) (*commonEvent.DMLEvent, error) {
+) *commonEvent.DMLEvent {
 	var (
 		commitTs  = message.Extensions.CommitTs
 		schema    = message.Schema
@@ -253,33 +255,21 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyDMLEvent(
 	switch eventType {
 	case "INSERT":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		data, mysqlType, err := buildData(holder)
-		if err != nil {
-			return nil, err
-		}
+		data, mysqlType := buildData(holder)
 		result.MySQLType = mysqlType
 		result.Data = []map[string]interface{}{data}
 	case "UPDATE":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		data, mysqlType, err := buildData(holder)
-		if err != nil {
-			return nil, err
-		}
+		data, mysqlType := buildData(holder)
 		result.MySQLType = mysqlType
 		result.Data = []map[string]interface{}{data}
 
 		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		old, _, err := buildData(holder)
-		if err != nil {
-			return nil, err
-		}
+		old, _ := buildData(holder)
 		result.Old = []map[string]interface{}{old}
 	case "DELETE":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		data, mysqlType, err := buildData(holder)
-		if err != nil {
-			return nil, err
-		}
+		data, mysqlType := buildData(holder)
 		result.MySQLType = mysqlType
 		result.Data = []map[string]interface{}{data}
 	}
@@ -290,9 +280,10 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyDMLEvent(
 
 // NextDMLEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+func (b *canalJSONDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeRow {
-		return nil, errors.ErrCodecDecode.GenWithStack("not found row changed event message")
+		log.Panic("message type is not row changed",
+			zap.Any("messageType", b.msg.messageType()), zap.Any("msg", b.msg))
 	}
 
 	message, withExtension := b.msg.(*canalJSONMessageWithTiDBExtension)
@@ -305,9 +296,7 @@ func (b *canalJSONDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 			return b.assembleClaimCheckDMLEvent(ctx, message.Extensions.ClaimCheckLocation)
 		}
 	}
-
-	result := b.canalJSONMessage2DMLEvent()
-	return result, nil
+	return b.canalJSONMessage2DMLEvent()
 }
 
 func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
