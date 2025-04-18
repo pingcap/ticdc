@@ -222,6 +222,9 @@ func (r RegisterDispatcherRequest) GetBdrMode() bool {
 }
 
 func (r RegisterDispatcherRequest) GetIntegrity() *integrity.Config {
+	if r.RegisterDispatcherRequest.Integrity == nil {
+		return &integrity.Config{}
+	}
 	integrity := integrity.Config(*r.RegisterDispatcherRequest.Integrity)
 	return &integrity
 }
