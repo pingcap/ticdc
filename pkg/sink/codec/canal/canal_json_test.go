@@ -104,8 +104,7 @@ func TestIntegerTypes(t *testing.T) {
 
 			decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 
-			messageType, hasNext, err := decoder.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext := decoder.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
@@ -164,8 +163,7 @@ func TestFloatTypes(t *testing.T) {
 
 	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
@@ -215,8 +213,7 @@ func TestTimeTypes(t *testing.T) {
 
 	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
@@ -266,8 +263,7 @@ func TestStringTypes(t *testing.T) {
 
 	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
@@ -318,8 +314,7 @@ func TestBlobTypes(t *testing.T) {
 
 	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
@@ -370,8 +365,7 @@ func TestTextTypes(t *testing.T) {
 
 	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
@@ -431,8 +425,7 @@ func TestOtherTypes(t *testing.T) {
 
 	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
@@ -491,8 +484,7 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 
 	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
@@ -552,8 +544,7 @@ func TestDMLMultiplePK(t *testing.T) {
 
 	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
@@ -711,8 +702,7 @@ func TestMessageLargeHandleKeyOnly(t *testing.T) {
 
 	decoder.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
@@ -804,8 +794,7 @@ func TestDMLTypeEvent(t *testing.T) {
 
 		decoder.AddKeyValue(message.Key, message.Value)
 
-		messageType, hasNext, err := decoder.HasNext()
-		require.NoError(t, err)
+		messageType, hasNext := decoder.HasNext()
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, messageType)
 
@@ -832,8 +821,7 @@ func TestDMLTypeEvent(t *testing.T) {
 
 	decoder.AddKeyValue(message.Key, message.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
@@ -878,8 +866,7 @@ func TestCreateTableDDL(t *testing.T) {
 
 		decoder.AddKeyValue(message.Key, message.Value)
 
-		messageType, hasNext, err := decoder.HasNext()
-		require.NoError(t, err)
+		messageType, hasNext := decoder.HasNext()
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeDDL, messageType)
 
@@ -919,8 +906,7 @@ func TestCheckpointTs(t *testing.T) {
 
 	decoder.AddKeyValue(message.Key, message.Value)
 
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := decoder.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeResolved, messageType)
 

@@ -55,9 +55,9 @@ func (d *canalJSONTxnEventDecoder) AddKeyValue(_, value []byte) {
 }
 
 // HasNext return true if there is any event can be returned.
-func (d *canalJSONTxnEventDecoder) HasNext() (common.MessageType, bool, error) {
+func (d *canalJSONTxnEventDecoder) HasNext() (common.MessageType, bool) {
 	if d.data == nil {
-		return common.MessageTypeUnknown, false, nil
+		return common.MessageTypeUnknown, false
 	}
 	var (
 		msg         canalJSONMessageInterface = &JSONMessage{}
@@ -81,16 +81,16 @@ func (d *canalJSONTxnEventDecoder) HasNext() (common.MessageType, bool, error) {
 	}
 
 	if len(encodedData) == 0 {
-		return common.MessageTypeUnknown, false, nil
+		return common.MessageTypeUnknown, false
 	}
 
 	if err := json.Unmarshal(encodedData, msg); err != nil {
-		log.Error("canal-json decoder unmarshal data failed",
+		log.Panic("canal-json decoder unmarshal data failed",
 			zap.Error(err), zap.ByteString("data", encodedData))
-		return common.MessageTypeUnknown, false, err
+		return common.MessageTypeUnknown, false
 	}
 	d.msg = msg
-	return d.msg.messageType(), true, nil
+	return d.msg.messageType(), true
 }
 
 // NextRowChangedEvent implements the RowEventDecoder interface

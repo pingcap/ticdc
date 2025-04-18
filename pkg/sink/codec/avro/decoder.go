@@ -72,27 +72,27 @@ func (d *decoder) AddKeyValue(key, value []byte) {
 	d.value = value
 }
 
-func (d *decoder) HasNext() (common.MessageType, bool, error) {
+func (d *decoder) HasNext() (common.MessageType, bool) {
 	if d.key == nil && d.value == nil {
-		return common.MessageTypeUnknown, false, nil
+		return common.MessageTypeUnknown, false
 	}
 
 	// it must a row event.
 	if d.key != nil {
-		return common.MessageTypeRow, true, nil
+		return common.MessageTypeRow, true
 	}
 	if len(d.value) < 1 {
-		return common.MessageTypeUnknown, false, errors.ErrAvroInvalidMessage.FastGenByArgs(d.value)
+		log.Panic("avro invalid data, the length of value is less than 1", zap.Any("data", d.value))
 	}
 	switch d.value[0] {
 	case magicByte:
-		return common.MessageTypeRow, true, nil
+		return common.MessageTypeRow, true
 	case ddlByte:
-		return common.MessageTypeDDL, true, nil
+		return common.MessageTypeDDL, true
 	case checkpointByte:
-		return common.MessageTypeResolved, true, nil
+		return common.MessageTypeResolved, true
 	}
-	return common.MessageTypeUnknown, false, errors.ErrAvroInvalidMessage.FastGenByArgs(d.value)
+	log.Panic("avro invalid data, the first byte is not magic byte or ddl byte")
 }
 
 // NextResolvedEvent returns the next resolved event if exists

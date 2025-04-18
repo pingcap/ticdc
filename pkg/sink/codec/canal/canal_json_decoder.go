@@ -141,9 +141,9 @@ func (b *canalJSONDecoder) AddKeyValue(_, value []byte) {
 }
 
 // HasNext implements the RowEventDecoder interface
-func (b *canalJSONDecoder) HasNext() (common.MessageType, bool, error) {
+func (b *canalJSONDecoder) HasNext() (common.MessageType, bool) {
 	if b.decoder.Len() == 0 {
-		return common.MessageTypeUnknown, false, nil
+		return common.MessageTypeUnknown, false
 	}
 
 	var msg canalJSONMessageInterface = &JSONMessage{}
@@ -155,12 +155,12 @@ func (b *canalJSONDecoder) HasNext() (common.MessageType, bool, error) {
 	}
 
 	if err := b.decoder.Decode(msg); err != nil {
-		log.Error("canal-json decoder decode failed",
-			zap.Error(err), zap.ByteString("data", b.decoder.Bytes()))
-		return common.MessageTypeUnknown, false, err
+		log.Panic("canal-json decode failed",
+			zap.ByteString("data", b.decoder.Bytes()),
+			zap.Error(err))
 	}
 	b.msg = msg
-	return b.msg.messageType(), true, nil
+	return b.msg.messageType(), true
 }
 
 func (b *canalJSONDecoder) assembleClaimCheckDMLEvent(

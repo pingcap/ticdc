@@ -227,9 +227,9 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 	progress := w.progresses[partition]
 	progress.decoder.AddKeyValue(message.Key, message.Value)
 
-	messageType, hasNext, err := progress.decoder.HasNext()
-	if err != nil || hasNext {
-		log.Panic("try to fetch the next event failed, this should not happen", zap.Bool("hasNext", hasNext), zap.Error(err))
+	messageType, hasNext := progress.decoder.HasNext()
+	if !hasNext {
+		log.Panic("try to fetch the next event failed, this should not happen", zap.Bool("hasNext", hasNext))
 	}
 
 	switch messageType {
@@ -303,7 +303,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		}
 		log.Warn("DML event is nil, it's cached ", zap.Int32("partition", partition), zap.Any("offset", offset))
 
-		for _, hasNext, err = progress.decoder.HasNext(); err == nil && hasNext; {
+		for _, hasNext = progress.decoder.HasNext(); hasNext; {
 			row, err = progress.decoder.NextDMLEvent()
 			if err != nil {
 				log.Panic("decode message value failed",

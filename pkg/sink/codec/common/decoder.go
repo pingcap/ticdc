@@ -29,7 +29,7 @@ type RowEventDecoder interface {
 	//     1. the type of the next event
 	//     2. a bool if the next event is exist
 	//     3. error
-	HasNext() (MessageType, bool, error)
+	HasNext() (MessageType, bool)
 
 	// NextResolvedEvent returns the next resolved event if exists
 	NextResolvedEvent() uint64

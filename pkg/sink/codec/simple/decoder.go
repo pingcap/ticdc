@@ -107,28 +107,28 @@ func (d *Decoder) AddKeyValue(_, value []byte) {
 }
 
 // HasNext returns whether there is any event need to be consumed
-func (d *Decoder) HasNext() (common.MessageType, bool, error) {
+func (d *Decoder) HasNext() (common.MessageType, bool) {
 	if d.value == nil {
-		return common.MessageTypeUnknown, false, nil
+		return common.MessageTypeUnknown, false
 	}
 
 	m := new(message)
 	err := d.marshaller.Unmarshal(d.value, m)
 	if err != nil {
-		return common.MessageTypeUnknown, false, errors.WrapError(errors.ErrDecodeFailed, err)
+		log.Panic("decoder unmarshal failed", zap.Any("value", d.value), zap.Error(err))
 	}
 	d.msg = m
 	d.value = nil
 
 	if d.msg.Data != nil || d.msg.Old != nil {
-		return common.MessageTypeRow, true, nil
+		return common.MessageTypeRow, true
 	}
 
 	if m.Type == MessageTypeWatermark {
-		return common.MessageTypeResolved, true, nil
+		return common.MessageTypeResolved, true
 	}
 
-	return common.MessageTypeDDL, true, nil
+	return common.MessageTypeDDL, true
 }
 
 // NextResolvedEvent returns the next resolved event if exists

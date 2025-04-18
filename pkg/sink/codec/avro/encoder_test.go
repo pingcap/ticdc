@@ -65,8 +65,7 @@ func TestDMLEventE2E(t *testing.T) {
 			decoder := NewDecoder(codecConfig, schemaM, topic, nil)
 			decoder.AddKeyValue(message.Key, message.Value)
 
-			messageType, exist, err := decoder.HasNext()
-			require.NoError(t, err)
+			messageType, exist := decoder.HasNext()
 			require.True(t, exist)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
@@ -95,8 +94,7 @@ func TestDDLEventE2E(t *testing.T) {
 	decoder := NewDecoder(codecConfig, nil, topic, nil)
 	decoder.AddKeyValue(message.Key, message.Value)
 
-	messageType, exist, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, exist := decoder.HasNext()
 	require.True(t, exist)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
@@ -128,8 +126,7 @@ func TestResolvedE2E(t *testing.T) {
 	decoder := NewDecoder(codecConfig, nil, topic, nil)
 	decoder.AddKeyValue(message.Key, message.Value)
 
-	messageType, exist, err := decoder.HasNext()
-	require.NoError(t, err)
+	messageType, exist := decoder.HasNext()
 	require.True(t, exist)
 	require.Equal(t, common.MessageTypeResolved, messageType)
 

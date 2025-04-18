@@ -124,15 +124,15 @@ func (b *batchDecoder) decodeNextKey() {
 }
 
 // HasNext implements the RowEventDecoder interface
-func (b *batchDecoder) HasNext() (common.MessageType, bool, error) {
+func (b *batchDecoder) HasNext() (common.MessageType, bool) {
 	if !b.hasNext() {
-		return 0, false, nil
+		return 0, false
 	}
 	b.decodeNextKey()
 
 	switch b.nextKey.Type {
 	case common.MessageTypeResolved, common.MessageTypeDDL:
-		return b.nextKey.Type, true, nil
+		return b.nextKey.Type, true
 	default:
 	}
 	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
@@ -148,7 +148,7 @@ func (b *batchDecoder) HasNext() (common.MessageType, bool, error) {
 	b.nextRow = new(messageRow)
 	b.nextRow.decode(value)
 
-	return common.MessageTypeRow, true, nil
+	return common.MessageTypeRow, true
 }
 
 // NextResolvedEvent implements the RowEventDecoder interface
