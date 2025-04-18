@@ -1721,8 +1721,7 @@ func TestMarshallerError(t *testing.T) {
 	mockMarshaller.EXPECT().Unmarshal(gomock.Any(), gomock.Any()).Return(errors.ErrDecodeFailed)
 	dec.AddKeyValue([]byte("key"), []byte("value"))
 
-	messageType, hasNext := dec.HasNext()
-	require.ErrorIs(t, err, errors.ErrDecodeFailed)
-	require.False(t, hasNext)
-	require.Equal(t, common.MessageTypeUnknown, messageType)
+	require.Panics(t, func() {
+		_, _ = dec.HasNext()
+	})
 }
