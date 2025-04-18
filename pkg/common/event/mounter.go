@@ -58,12 +58,7 @@ type Mounter interface {
 type mounter struct {
 	tz *time.Location
 
-	integrity *integrity.Config
-	// decoder and preDecoder are used to decode the raw value, also used to extract checksum,
-	// they should not be nil after decode at least one event in the row format v2.
-	decoder    *rowcodec.ChunkDecoder
-	preDecoder *rowcodec.ChunkDecoder
-
+	integrity            *integrity.Config
 	lastSkipOldValueTime time.Time
 }
 
@@ -90,29 +85,29 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 	// 	return nil
 	// }
 	var (
-		checksumVersion int
+		decoder         *rowcodec.ChunkDecoder
 		preChecksum     uint32
 		currentChecksum uint32
 		matched         bool
 		corrupted       bool
 	)
-	if m.decoder != nil {
-		checksumVersion = m.decoder.ChecksumVersion()
-	} else if m.preDecoder != nil {
-		checksumVersion = m.preDecoder.ChecksumVersion()
-	}
+	// if m.decoder != nil {
+	// 	checksumVersion = m.decoder.ChecksumVersion()
+	// } else if m.preDecoder != nil {
+	// 	checksumVersion = m.preDecoder.ChecksumVersion()
+	// }
 
 	count := 0
 	if len(raw.OldValue) != 0 {
 		if !rowcodec.IsNewFormat(raw.OldValue) {
 			err = m.rawKVToChunkV1(raw.OldValue, tableInfo, chk, recordID)
 		} else {
-			m.preDecoder, err = m.rawKVToChunkV2(raw.OldValue, tableInfo, chk, recordID)
+			decoder, err = m.rawKVToChunkV2(raw.OldValue, tableInfo, chk, recordID)
 		}
 		if err != nil {
 			return 0, nil, errors.Trace(err)
 		}
-		preChecksum, matched, err = m.verifyChecksum(tableInfo, chk.GetRow(count), raw.Key, recordID, true)
+		preChecksum, matched, err = m.verifyChecksum(tableInfo, chk.GetRow(count), raw.Key, recordID, decoder)
 		if err != nil {
 			return 0, nil, errors.Trace(err)
 		}
@@ -130,12 +125,12 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		if !rowcodec.IsNewFormat(raw.Value) {
 			err = m.rawKVToChunkV1(raw.Value, tableInfo, chk, recordID)
 		} else {
-			m.decoder, err = m.rawKVToChunkV2(raw.Value, tableInfo, chk, recordID)
+			decoder, err = m.rawKVToChunkV2(raw.Value, tableInfo, chk, recordID)
 		}
 		if err != nil {
 			return 0, nil, errors.Trace(err)
 		}
-		currentChecksum, matched, err = m.verifyChecksum(tableInfo, chk.GetRow(count), raw.Key, recordID, false)
+		currentChecksum, matched, err = m.verifyChecksum(tableInfo, chk.GetRow(count), raw.Key, recordID, decoder)
 		if err != nil {
 			return 0, nil, errors.Trace(err)
 		}
@@ -158,7 +153,7 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 			Current:   currentChecksum,
 			Previous:  preChecksum,
 			Corrupted: corrupted,
-			Version:   checksumVersion,
+			Version:   decoder.ChecksumVersion(),
 		}
 	}
 

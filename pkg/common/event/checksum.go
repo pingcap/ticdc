@@ -31,26 +31,19 @@ import (
 // return error when calculate the checksum.
 // return false if the checksum is not matched
 func (m *mounter) verifyChecksum(
-	tableInfo *common.TableInfo, row chunk.Row, key kv.Key, handle kv.Handle, isPreRow bool,
+	tableInfo *common.TableInfo, row chunk.Row, key kv.Key, handle kv.Handle, decoder *rowcodec.ChunkDecoder,
 ) (uint32, bool, error) {
 	if !m.integrity.Enabled() {
 		return 0, true, nil
 	}
 	columnInfos := tableInfo.GetColumns()
-	var decoder *rowcodec.ChunkDecoder
-	if isPreRow {
-		decoder = m.preDecoder
-	} else {
-		decoder = m.decoder
-	}
-
 	version := decoder.ChecksumVersion()
 	switch version {
 	case 0:
 		// skip old value checksum verification for the checksum v1, since it cannot handle
 		// Update / Delete event correctly, after Add Column / Drop column DDL,
 		// since the table schema does not contain complete column information.
-		return m.verifyColumnChecksum(columnInfos, row, decoder, isPreRow)
+		return m.verifyColumnChecksum(columnInfos, row, decoder)
 	case 1, 2:
 
 		expected, matched, err := verifyRawBytesChecksum(columnInfos, row, decoder, key, handle, m.tz)
@@ -78,7 +71,7 @@ func (m *mounter) verifyChecksum(
 
 func (m *mounter) verifyColumnChecksum(
 	columnInfos []*model.ColumnInfo, row chunk.Row,
-	decoder *rowcodec.ChunkDecoder, skipFail bool,
+	decoder *rowcodec.ChunkDecoder,
 ) (uint32, bool, error) {
 	// if the checksum cannot be found, which means the upstream TiDB checksum is not enabled,
 	// so return matched as true to skip check the event.
@@ -102,13 +95,6 @@ func (m *mounter) verifyColumnChecksum(
 	extra, ok := decoder.GetExtraChecksum()
 	if ok && checksum == extra {
 		return checksum, true, nil
-	}
-
-	if !skipFail {
-		log.Error("cannot found the extra checksum, the first checksum mismatched",
-			zap.Uint32("checksum", checksum), zap.Uint32("first", first), zap.Uint32("extra", extra),
-			zap.Any("columnInfos", columnInfos), zap.Any("tz", m.tz))
-		return checksum, false, nil
 	}
 
 	if time.Since(m.lastSkipOldValueTime) > time.Minute {
