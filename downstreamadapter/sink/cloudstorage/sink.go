@@ -80,7 +80,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	if err != nil {
 		return err
 	}
-	storage, err := helper.GetExternalStorageFromURI(ctx, sinkURI.String())
+	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	if err != nil {
 		return err
 	}
@@ -113,7 +113,7 @@ func New(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	storage, err := helper.GetExternalStorageFromURI(ctx, sinkURI.String())
+	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	if err != nil {
 		return nil, err
 	}
