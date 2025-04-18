@@ -136,8 +136,7 @@ func TestResolvedE2E(t *testing.T) {
 	require.True(t, exist)
 	require.Equal(t, common.MessageTypeResolved, messageType)
 
-	obtained, err := decoder.NextResolvedEvent()
-	require.NoError(t, err)
+	obtained := decoder.NextResolvedEvent()
 	require.Equal(t, resolvedTs, obtained)
 }
 

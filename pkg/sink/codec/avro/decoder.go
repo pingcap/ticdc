@@ -98,13 +98,13 @@ func (d *decoder) HasNext() (common.MessageType, bool, error) {
 }
 
 // NextResolvedEvent returns the next resolved event if exists
-func (d *decoder) NextResolvedEvent() (uint64, error) {
+func (d *decoder) NextResolvedEvent() uint64 {
 	if len(d.value) == 0 {
-		return 0, errors.ErrCodecDecode.GenWithStack("value should not be empty")
+		log.Panic("value is empty, cannot found the resolved-ts")
 	}
 	ts := binary.BigEndian.Uint64(d.value[1:])
 	d.value = nil
-	return ts, nil
+	return ts
 }
 
 // NextDMLEvent returns the next row changed event if exists

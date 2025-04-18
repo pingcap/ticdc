@@ -155,15 +155,15 @@ func (b *batchDecoder) HasNext() (common.MessageType, bool, error) {
 }
 
 // NextResolvedEvent implements the RowEventDecoder interface
-func (b *batchDecoder) NextResolvedEvent() (uint64, error) {
+func (b *batchDecoder) NextResolvedEvent() uint64 {
 	if b.nextKey.Type != common.MessageTypeResolved {
-		return 0, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found resolved event message")
+		log.Panic("message type is not watermark", zap.Any("messageType", b.nextKey.Type))
 	}
 	resolvedTs := b.nextKey.Ts
 	b.nextKey = nil
 	// resolved ts event's value part is empty, can be ignored.
 	b.valueBytes = nil
-	return resolvedTs, nil
+	return resolvedTs
 }
 
 type messageDDL struct {

@@ -32,7 +32,7 @@ type RowEventDecoder interface {
 	HasNext() (MessageType, bool, error)
 
 	// NextResolvedEvent returns the next resolved event if exists
-	NextResolvedEvent() (uint64, error)
+	NextResolvedEvent() uint64
 
 	// NextDMLEvent returns the next DML event if exists
 	NextDMLEvent() (*commonEvent.DMLEvent, error)

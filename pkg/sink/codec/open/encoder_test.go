@@ -529,9 +529,7 @@ func TestEncodeCheckpoint(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, messageType, common.MessageTypeResolved)
 
-	obtained, err := decoder.NextResolvedEvent()
-	require.NoError(t, err)
-
+	obtained := decoder.NextResolvedEvent()
 	require.Equal(t, checkpoint, obtained)
 }
 

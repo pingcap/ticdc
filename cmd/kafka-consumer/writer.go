@@ -210,16 +210,22 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context, progress *partit
 // WriteMessage is to decode kafka message to event.
 // return true if the message is flushed to the downstream.
 // return error if flush messages failed.
-func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool, error) {
+func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool {
 	var (
-		key       = message.Key
-		value     = message.Value
 		partition = message.TopicPartition.Partition
 		offset    = message.TopicPartition.Offset
 	)
 
+	// If the message containing only one event exceeds the length limit, CDC will allow it and issue a warning.
+	if len(message.Key)+len(message.Value) > w.maxMessageBytes {
+		log.Panic("kafka max-messages-bytes exceeded",
+			zap.Int32("partition", partition), zap.Any("offset", offset),
+			zap.Int("max-message-bytes", w.maxMessageBytes),
+			zap.Int("receivedBytes", len(message.Key)+len(message.Value)))
+	}
+
 	progress := w.progresses[partition]
-	if err := progress.decoder.AddKeyValue(key, value); err != nil {
+	if err := progress.decoder.AddKeyValue(message.Key, message.Value); err != nil {
 		log.Panic("add key value to the decoder failed",
 			zap.Int32("partition", partition), zap.Any("offset", offset), zap.Error(err))
 	}
@@ -229,31 +235,17 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 		log.Panic("try to fetch the next event failed, this should not happen", zap.Bool("hasNext", hasNext), zap.Error(err))
 	}
 
-	// If the message containing only one event exceeds the length limit, CDC will allow it and issue a warning.
-	if len(key)+len(value) > w.maxMessageBytes {
-		log.Panic("kafka max-messages-bytes exceeded",
-			zap.Int32("partition", partition), zap.Any("offset", offset),
-			zap.Int("max-message-bytes", w.maxMessageBytes),
-			zap.Int("receivedBytes", len(key)+len(value)))
-	}
-
 	switch messageType {
 	case common.MessageTypeResolved:
-		newWatermark, err := progress.decoder.NextResolvedEvent()
-		if err != nil {
-			log.Panic("decode message value failed",
-				zap.Int32("partition", partition), zap.Any("offset", offset),
-				zap.ByteString("value", value), zap.Error(err))
-		}
-
+		newWatermark := progress.decoder.NextResolvedEvent()
 		progress.updateWatermark(newWatermark, offset)
 
 		// since watermark is broadcast to all partitions, so that each partition can flush events individually.
 		err = w.flushDMLEventsByWatermark(ctx, progress)
 		if err != nil {
-			return false, err
+			log.Panic("flush dml events by the watermark failed", zap.Error(err))
 		}
-		return true, nil
+		return true
 	case common.MessageTypeDDL:
 		// for some protocol, DDL would be dispatched to all partitions,
 		// Consider that DDL a, b, c received from partition-0, the latest DDL is c,

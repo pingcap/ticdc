@@ -378,18 +378,17 @@ func (b *canalJSONDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 
 // NextResolvedEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextResolvedEvent() (uint64, error) {
+func (b *canalJSONDecoder) NextResolvedEvent() uint64 {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeResolved {
-		return 0, errors.ErrDecodeFailed.GenWithStack("not found resolved event message")
+		log.Panic("message type is not watermark", zap.Any("messageType", b.msg.messageType()))
 	}
 
 	withExtensionEvent, ok := b.msg.(*canalJSONMessageWithTiDBExtension)
 	if !ok {
-		log.Error("canal-json resolved event message should have tidb extension, but not found",
+		log.Panic("canal-json resolved event message should have tidb extension, but not found",
 			zap.Any("msg", b.msg))
-		return 0, errors.ErrDecodeFailed.GenWithStack("MessageTypeResolved tidb extension not found")
 	}
-	return withExtensionEvent.Extensions.WatermarkTs, nil
+	return withExtensionEvent.Extensions.WatermarkTs
 }
 
 func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEvent {

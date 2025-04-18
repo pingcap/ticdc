@@ -938,7 +938,6 @@ func TestCheckpointTs(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeResolved, messageType)
 
-	obtained, err := decoder.NextResolvedEvent()
-	require.NoError(t, err)
+	obtained := decoder.NextResolvedEvent()
 	require.Equal(t, watermark, obtained)
 }

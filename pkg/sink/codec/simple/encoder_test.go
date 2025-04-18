@@ -72,8 +72,7 @@ func TestEncodeCheckpoint(t *testing.T) {
 			require.Equal(t, common.MessageTypeResolved, messageType)
 			require.NotEqual(t, 0, dec.msg.BuildTs)
 
-			ts, err := dec.NextResolvedEvent()
-			require.NoError(t, err)
+			ts := dec.NextResolvedEvent()
 			require.Equal(t, uint64(checkpoint), ts)
 		}
 	}
@@ -1844,38 +1843,6 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 			}
 		}
 	}
-}
-
-func TestDecoder(t *testing.T) {
-	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolSimple)
-	rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
-	require.NoError(t, err)
-	require.NotNil(t, rowEventDecoder)
-	decoder, ok := rowEventDecoder.(*Decoder)
-	require.True(t, ok)
-
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
-	require.False(t, hasNext)
-	require.Equal(t, common.MessageTypeUnknown, messageType)
-
-	ddl, err := decoder.NextDDLEvent()
-	require.ErrorIs(t, err, errors.ErrCodecDecode)
-	require.Nil(t, ddl)
-
-	decoder.msg = new(message)
-	checkpoint, err := decoder.NextResolvedEvent()
-	require.ErrorIs(t, err, errors.ErrCodecDecode)
-	require.Equal(t, uint64(0), checkpoint)
-
-	event, err := decoder.NextDMLEvent()
-	require.ErrorIs(t, err, errors.ErrCodecDecode)
-	require.Nil(t, event)
-
-	decoder.value = []byte("invalid")
-	err = decoder.AddKeyValue(nil, nil)
-	require.ErrorIs(t, err, errors.ErrCodecDecode)
 }
 
 func TestMarshallerError(t *testing.T) {

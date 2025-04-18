@@ -147,7 +147,7 @@ func (d *canalJSONTxnEventDecoder) canalJSONMessage2RowChange() *commonEvent.DML
 }
 
 // NextResolvedEvent implements the RowEventDecoder interface
-func (d *canalJSONTxnEventDecoder) NextResolvedEvent() (uint64, error) {
+func (d *canalJSONTxnEventDecoder) NextResolvedEvent() uint64 {
 	return 0, nil
 }
 

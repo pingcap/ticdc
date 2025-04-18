@@ -127,16 +127,14 @@ func (d *Decoder) HasNext() (common.MessageType, bool, error) {
 }
 
 // NextResolvedEvent returns the next resolved event if exists
-func (d *Decoder) NextResolvedEvent() (uint64, error) {
+func (d *Decoder) NextResolvedEvent() uint64 {
 	if d.msg.Type != MessageTypeWatermark {
-		return 0, errors.ErrCodecDecode.GenWithStack(
-			"not found resolved event message")
+		log.Panic("message type is not watermark", zap.Any("messageType", d.msg.Type))
 	}
 
 	ts := d.msg.CommitTs
 	d.msg = nil
-
-	return ts, nil
+	return ts
 }
 
 // NextDMLEvent returns the next dml event if exists
