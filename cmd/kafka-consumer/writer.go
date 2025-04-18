@@ -295,7 +295,6 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		for _, hasNext = progress.decoder.HasNext(); hasNext; {
 			row = progress.decoder.NextDMLEvent()
 			if row != nil {
-				w.checkPartition(row, partition, message.TopicPartition.Offset)
 				w.appendRow2Group(row, progress, offset)
 			}
 			counter++
