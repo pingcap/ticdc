@@ -270,19 +270,18 @@ func (a *avroMarshaller) newDMLMessageMap(
 		}
 	}
 
-	// TODO: EnableRowChecksum
-	// if a.config.EnableRowChecksum && event.Checksum != nil {
-	// 	cc := map[string]interface{}{
-	// 		"version":   event.Checksum.Version,
-	// 		"corrupted": event.Checksum.Corrupted,
-	// 		"current":   int64(event.Checksum.Current),
-	// 		"previous":  int64(event.Checksum.Previous),
-	// 	}
+	if a.config.EnableRowChecksum && event.Checksum != nil {
+		cc := map[string]interface{}{
+			"version":   event.Checksum.Version,
+			"corrupted": event.Checksum.Corrupted,
+			"current":   int64(event.Checksum.Current),
+			"previous":  int64(event.Checksum.Previous),
+		}
 
-	// 	holder := genericMapPool.Get().(map[string]interface{})
-	// 	holder["com.pingcap.simple.avro.Checksum"] = cc
-	// 	dmlMessagePayload["checksum"] = holder
-	// }
+		holder := genericMapPool.Get().(map[string]interface{})
+		holder["com.pingcap.simple.avro.Checksum"] = cc
+		dmlMessagePayload["checksum"] = holder
+	}
 
 	if event.IsInsert() {
 		data := a.collectColumns(event.GetRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)

@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	tiddl "github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/domain"
@@ -69,7 +70,7 @@ func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestH
 
 	require.NoError(t, err)
 
-	mounter := NewMounter(tz)
+	mounter := NewMounter(tz, config.GetDefaultReplicaConfig().Integrity)
 
 	return &EventTestHelper{
 		t:          t,

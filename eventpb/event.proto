@@ -75,6 +75,11 @@ enum ActionType {
     ACTION_TYPE_RESUME_CHANGEFEED = 7;
 }
 
+message IntegrityConfig {
+	string IntegrityCheckLevel  = 1;
+	string CorruptionHandleLevel  = 2;
+}
+
 message RegisterDispatcherRequest {
     heartbeatpb.ChangefeedID changefeed_id = 1;
     heartbeatpb.DispatcherID dispatcher_id = 2;
@@ -88,4 +93,6 @@ message RegisterDispatcherRequest {
     uint64 sync_point_interval = 10;
     bool only_reuse = 11;
     bool bdr_mode = 12;
+    IntegrityConfig integrity = 13;
+	string timezone = 14;
 }

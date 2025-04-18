@@ -343,15 +343,14 @@ func (a *JSONMarshaller) newDMLMessage(
 		m.Data = a.formatColumns(event.GetRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)
 		m.Old = a.formatColumns(event.GetPreRows(), event.TableInfo, onlyHandleKey, event.ColumnSelector)
 	}
-	// TODO: EnableRowChecksum
-	// if a.config.EnableRowChecksum && event.Checksum != nil {
-	// 	m.Checksum = &checksum{
-	// 		Version:   event.Checksum.Version,
-	// 		Corrupted: event.Checksum.Corrupted,
-	// 		Current:   event.Checksum.Current,
-	// 		Previous:  event.Checksum.Previous,
-	// 	}
-	// }
+	if a.config.EnableRowChecksum && event.Checksum != nil {
+		m.Checksum = &checksum{
+			Version:   event.Checksum.Version,
+			Corrupted: event.Checksum.Corrupted,
+			Current:   event.Checksum.Current,
+			Previous:  event.Checksum.Previous,
+		}
+	}
 	return m
 }
 

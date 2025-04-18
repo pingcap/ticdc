@@ -27,6 +27,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -606,23 +607,22 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 	}
 	result.Rows = chk
 
-	// TODO: enableRowChecksum
-	// if enableRowChecksum && msg.Checksum != nil {
-	// 	result.Checksum = &integrity.Checksum{
-	// 		Current:   msg.Checksum.Current,
-	// 		Previous:  msg.Checksum.Previous,
-	// 		Corrupted: msg.Checksum.Corrupted,
-	// 		Version:   msg.Checksum.Version,
-	// 	}
+	if enableRowChecksum && msg.Checksum != nil {
+		result.Checksum = &integrity.Checksum{
+			Current:   msg.Checksum.Current,
+			Previous:  msg.Checksum.Previous,
+			Corrupted: msg.Checksum.Corrupted,
+			Version:   msg.Checksum.Version,
+		}
 
-	// 	err := common.VerifyChecksum(result, db)
-	// 	if err != nil || msg.Checksum.Corrupted {
-	// 		log.Warn("consumer detect checksum corrupted",
-	// 			zap.String("schema", msg.Schema), zap.String("table", msg.Table), zap.Error(err))
-	// 		return nil, cerror.ErrDecodeFailed.GenWithStackByArgs("checksum corrupted")
+		err := common.VerifyChecksum(result, db)
+		if err != nil || msg.Checksum.Corrupted {
+			log.Warn("consumer detect checksum corrupted",
+				zap.String("schema", msg.Schema), zap.String("table", msg.Table), zap.Error(err))
+			return nil, errors.ErrDecodeFailed.GenWithStackByArgs("checksum corrupted")
 
-	// 	}
-	// }
+		}
+	}
 
 	return result, nil
 }

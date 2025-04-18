@@ -31,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -617,7 +616,6 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		innerIter:    iter,
 		prevStartTs:  0,
 		prevCommitTs: 0,
-		iterMounter:  event.NewMounter(time.Local), // FIXME
 		startTs:      dataRange.StartTs,
 		endTs:        dataRange.EndTs,
 		rowCount:     0,
@@ -714,7 +712,6 @@ type eventStoreIter struct {
 	innerIter    *pebble.Iterator
 	prevStartTs  uint64
 	prevCommitTs uint64
-	iterMounter  event.Mounter
 
 	// for debug
 	startTs  uint64

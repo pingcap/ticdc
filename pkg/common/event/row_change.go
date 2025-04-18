@@ -16,11 +16,11 @@ package event
 import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/integrity"
 )
 
 //go:generate msgp
@@ -93,6 +93,8 @@ type RowEvent struct {
 	Event           RowChange
 	ColumnSelector  columnselector.Selector
 	Callback        func()
+
+	Checksum *integrity.Checksum
 }
 
 func (e *RowEvent) IsDelete() bool {
