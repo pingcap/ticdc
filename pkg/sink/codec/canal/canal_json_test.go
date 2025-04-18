@@ -102,8 +102,7 @@ func TestIntegerTypes(t *testing.T) {
 			decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
 
-			err = decoder.AddKeyValue(messages[0].Key, messages[0].Value)
-			require.NoError(t, err)
+			decoder.AddKeyValue(messages[0].Key, messages[0].Value)
 
 			messageType, hasNext, err := decoder.HasNext()
 			require.NoError(t, err)
@@ -163,8 +162,7 @@ func TestFloatTypes(t *testing.T) {
 	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
 	messageType, hasNext, err := decoder.HasNext()
 	require.NoError(t, err)
@@ -215,8 +213,7 @@ func TestTimeTypes(t *testing.T) {
 	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
 	messageType, hasNext, err := decoder.HasNext()
 	require.NoError(t, err)
@@ -267,8 +264,7 @@ func TestStringTypes(t *testing.T) {
 	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
 	messageType, hasNext, err := decoder.HasNext()
 	require.NoError(t, err)
@@ -320,8 +316,7 @@ func TestBlobTypes(t *testing.T) {
 	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
 	messageType, hasNext, err := decoder.HasNext()
 	require.NoError(t, err)
@@ -373,8 +368,7 @@ func TestTextTypes(t *testing.T) {
 	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
 	messageType, hasNext, err := decoder.HasNext()
 	require.NoError(t, err)
@@ -435,8 +429,7 @@ func TestOtherTypes(t *testing.T) {
 	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
 	messageType, hasNext, err := decoder.HasNext()
 	require.NoError(t, err)
@@ -496,8 +489,7 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
 	messageType, hasNext, err := decoder.HasNext()
 	require.NoError(t, err)
@@ -558,8 +550,7 @@ func TestDMLMultiplePK(t *testing.T) {
 	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
 	messageType, hasNext, err := decoder.HasNext()
 	require.NoError(t, err)
@@ -718,8 +709,7 @@ func TestMessageLargeHandleKeyOnly(t *testing.T) {
 	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(m.Key, m.Value)
 
 	messageType, hasNext, err := decoder.HasNext()
 	require.NoError(t, err)
@@ -812,8 +802,7 @@ func TestDMLTypeEvent(t *testing.T) {
 
 		message := encoder.Build()[0]
 
-		err = decoder.AddKeyValue(message.Key, message.Value)
-		require.NoError(t, err)
+		decoder.AddKeyValue(message.Key, message.Value)
 
 		messageType, hasNext, err := decoder.HasNext()
 		require.NoError(t, err)
@@ -841,8 +830,7 @@ func TestDMLTypeEvent(t *testing.T) {
 	decoder, err = NewCanalJSONDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(message.Key, message.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, hasNext, err := decoder.HasNext()
 	require.NoError(t, err)
@@ -888,8 +876,7 @@ func TestCreateTableDDL(t *testing.T) {
 		decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
 
-		err = decoder.AddKeyValue(message.Key, message.Value)
-		require.NoError(t, err)
+		decoder.AddKeyValue(message.Key, message.Value)
 
 		messageType, hasNext, err := decoder.HasNext()
 		require.NoError(t, err)
@@ -930,8 +917,7 @@ func TestCheckpointTs(t *testing.T) {
 	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
-	err = decoder.AddKeyValue(message.Key, message.Value)
-	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, hasNext, err := decoder.HasNext()
 	require.NoError(t, err)

@@ -225,10 +225,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 	}
 
 	progress := w.progresses[partition]
-	if err := progress.decoder.AddKeyValue(message.Key, message.Value); err != nil {
-		log.Panic("add key value to the decoder failed",
-			zap.Int32("partition", partition), zap.Any("offset", offset), zap.Error(err))
-	}
+	progress.decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, hasNext, err := progress.decoder.HasNext()
 	if err != nil || hasNext {

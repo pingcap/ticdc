@@ -127,19 +127,17 @@ func NewCanalJSONDecoder(
 }
 
 // AddKeyValue implements the RowEventDecoder interface
-func (b *canalJSONDecoder) AddKeyValue(_, value []byte) error {
+func (b *canalJSONDecoder) AddKeyValue(_, value []byte) {
 	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
-		log.Error("decompress data failed",
+		log.Panic("decompress data failed",
 			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value),
 			zap.Error(err))
-
-		return errors.Trace(err)
 	}
 	if _, err = b.decoder.Write(value); err != nil {
-		return errors.Trace(err)
+		log.Panic("add value to the decoder failed", zap.Any("value", value), zap.Error(err))
 	}
-	return nil
 }
 
 // HasNext implements the RowEventDecoder interface

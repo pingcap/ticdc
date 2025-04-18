@@ -64,14 +64,12 @@ func NewDecoder(
 	}
 }
 
-func (d *decoder) AddKeyValue(key, value []byte) error {
+func (d *decoder) AddKeyValue(key, value []byte) {
 	if d.key != nil || d.value != nil {
-		return errors.ErrCodecDecode.GenWithStack(
-			"key or value is not nil")
+		log.Panic("add key/value to the decoder failed, since it's already set")
 	}
 	d.key = key
 	d.value = value
-	return nil
 }
 
 func (d *decoder) HasNext() (common.MessageType, bool, error) {

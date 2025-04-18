@@ -43,17 +43,15 @@ func NewCanalJSONTxnEventDecoder(
 }
 
 // AddKeyValue set the key value to the decoder
-func (d *canalJSONTxnEventDecoder) AddKeyValue(_, value []byte) error {
+func (d *canalJSONTxnEventDecoder) AddKeyValue(_, value []byte) {
 	value, err := common.Decompress(d.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
-		log.Error("decompress data failed",
+		log.Panic("decompress data failed",
 			zap.String("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value),
 			zap.Error(err))
-
-		return errors.Trace(err)
 	}
 	d.data = value
-	return nil
 }
 
 // HasNext return true if there is any event can be returned.
@@ -148,7 +146,7 @@ func (d *canalJSONTxnEventDecoder) canalJSONMessage2RowChange() *commonEvent.DML
 
 // NextResolvedEvent implements the RowEventDecoder interface
 func (d *canalJSONTxnEventDecoder) NextResolvedEvent() uint64 {
-	return 0, nil
+	return 0
 }
 
 // NextDDLEvent implements the RowEventDecoder interface

@@ -63,8 +63,7 @@ func TestEncodeCheckpoint(t *testing.T) {
 			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			messageType, hasNext, err := dec.HasNext()
 			require.NoError(t, err)
@@ -109,8 +108,7 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 			m, err := enc.EncodeDDLEvent(createTableDDL)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			messageType, hasNext, err := dec.HasNext()
 			require.NoError(t, err)
@@ -134,8 +132,7 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 			messages := enc.Build()
 			require.Len(t, messages, 1)
 
-			err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
 			messageType, hasNext, err = dec.HasNext()
 			require.NoError(t, err)
@@ -165,8 +162,7 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 	m, err := enc.EncodeDDLEvent(createTableDDL)
 	require.NoError(t, err)
 
-	err = dec.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	dec.AddKeyValue(m.Key, m.Value)
 
 	messageType, hasNext, err := dec.HasNext()
 	require.NoError(t, err)
@@ -182,8 +178,7 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 	messages := enc.Build()
 	require.Len(t, messages, 1)
 
-	err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-	require.NoError(t, err)
+	dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
 	messageType, hasNext, err = dec.HasNext()
 	require.NoError(t, err)
@@ -369,8 +364,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err := enc.EncodeDDLEvent(dropDBEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			messageType, hasNext, err := dec.HasNext()
 			require.NoError(t, err)
@@ -384,8 +378,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(createDBDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			messageType, hasNext, err = dec.HasNext()
 			require.NoError(t, err)
@@ -399,8 +392,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(createTableDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			messageType, hasNext, err = dec.HasNext()
 			require.NoError(t, err)
@@ -416,8 +408,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(addColumnDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -431,8 +422,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(dropColumnDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -446,8 +436,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(changeColumnDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -461,8 +450,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(modifyColumnDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -476,8 +464,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(setDefaultDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -496,8 +483,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(dropDefaultDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -516,8 +502,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(autoIncrementDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -531,8 +516,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(modifyColumnNullDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -551,8 +535,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(modifyColumnNotNullDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -571,8 +554,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(addIndexDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -586,8 +568,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(renameIndexDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -613,8 +594,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(indexVisibilityDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -628,8 +608,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(dropIndexDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -643,8 +622,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(truncateTableDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -658,8 +636,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(multiSchemaChangeDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -673,8 +650,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(multiSchemaChangeDropDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -688,8 +664,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(renameTableDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -703,8 +678,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(renameColumnDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -718,8 +692,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(partitionTableDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -733,8 +706,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(addPartitionDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -748,8 +720,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(dropPartitionDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -763,8 +734,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(truncatePartitionDDLevent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -778,8 +748,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(reorganizePartitionDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -793,8 +762,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(removePartitionDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -808,8 +776,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(alterCharsetCollateDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -823,8 +790,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(dropTableDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			_, _, err = dec.HasNext()
 			require.NoError(t, err)
@@ -881,8 +847,7 @@ func TestEncodeDDLEvent(t *testing.T) {
 			m, err := enc.EncodeDDLEvent(createTableDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			messageType, hasNext, err := dec.HasNext()
 			require.NoError(t, err)
@@ -930,8 +895,7 @@ func TestEncodeDDLEvent(t *testing.T) {
 			messages := enc.Build()
 			require.Len(t, messages, 1)
 
-			err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
 			messageType, hasNext, err = dec.HasNext()
 			require.NoError(t, err)
@@ -948,8 +912,7 @@ func TestEncodeDDLEvent(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(renameTableDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			messageType, hasNext, err = dec.HasNext()
 			require.NoError(t, err)
@@ -985,8 +948,7 @@ func TestEncodeDDLEvent(t *testing.T) {
 			messages = enc.Build()
 			require.Len(t, messages, 1)
 
-			err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
 			messageType, hasNext, err = dec.HasNext()
 			require.NoError(t, err)
@@ -1037,8 +999,7 @@ func TestColumnFlags(t *testing.T) {
 		dec, ok := rowEventDecoder.(*Decoder)
 		require.True(t, ok)
 
-		err = dec.AddKeyValue(m.Key, m.Value)
-		require.NoError(t, err)
+		dec.AddKeyValue(m.Key, m.Value)
 
 		messageType, hasNext, err := dec.HasNext()
 		require.NoError(t, err)
@@ -1121,8 +1082,7 @@ func TestEncodeIntegerTypes(t *testing.T) {
 		dec, ok := rowEventDecoder.(*Decoder)
 		require.True(t, ok)
 
-		err = dec.AddKeyValue(m.Key, m.Value)
-		require.NoError(t, err)
+		dec.AddKeyValue(m.Key, m.Value)
 
 		messageType, hasNext, err := dec.HasNext()
 		require.NoError(t, err)
@@ -1149,8 +1109,7 @@ func TestEncodeIntegerTypes(t *testing.T) {
 			require.NoError(t, err)
 
 			messages := enc.Build()
-			err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
 			messageType, hasNext, err = dec.HasNext()
 			require.NoError(t, err)
@@ -1206,8 +1165,7 @@ func TestEncoderOtherTypes(t *testing.T) {
 		dec, ok := rowEventDecoder.(*Decoder)
 		require.True(t, ok)
 
-		err = dec.AddKeyValue(m.Key, m.Value)
-		require.NoError(t, err)
+		dec.AddKeyValue(m.Key, m.Value)
 
 		messageType, hasNext, err := dec.HasNext()
 		require.NoError(t, err)
@@ -1230,8 +1188,7 @@ func TestEncoderOtherTypes(t *testing.T) {
 		messages := enc.Build()
 		require.Len(t, messages, 1)
 
-		err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-		require.NoError(t, err)
+		dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
 		messageType, hasNext, err = dec.HasNext()
 		require.NoError(t, err)
@@ -1370,8 +1327,7 @@ func TestEncodeDMLBeforeDDL(t *testing.T) {
 	dec, ok := rowEventDecoder.(*Decoder)
 	require.True(t, ok)
 
-	err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-	require.NoError(t, err)
+	dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
 	messageType, hasNext, err := dec.HasNext()
 	require.NoError(t, err)
@@ -1385,8 +1341,7 @@ func TestEncodeDMLBeforeDDL(t *testing.T) {
 	m, err := enc.EncodeDDLEvent(ddlEvent)
 	require.NoError(t, err)
 
-	err = dec.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	dec.AddKeyValue(m.Key, m.Value)
 
 	messageType, hasNext, err = dec.HasNext()
 	require.NoError(t, err)
@@ -1449,8 +1404,7 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			messageType, hasNext, err := dec.HasNext()
 			require.NoError(t, err)
@@ -1483,8 +1437,7 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 			messages := enc.Build()
 			require.Len(t, messages, 1)
 
-			err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
 			messageType, hasNext, err = dec.HasNext()
 			require.NoError(t, err)
@@ -1532,8 +1485,7 @@ func TestEncodeLargeEventsNormal(t *testing.T) {
 			m, err := enc.EncodeDDLEvent(ddlEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			messageType, hasNext, err := dec.HasNext()
 			require.NoError(t, err)
@@ -1566,8 +1518,7 @@ func TestEncodeLargeEventsNormal(t *testing.T) {
 				messages := enc.Build()
 				require.Len(t, messages, 1)
 
-				err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-				require.NoError(t, err)
+				dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
 				messageType, hasNext, err = dec.HasNext()
 				require.NoError(t, err)
@@ -1687,8 +1638,7 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 				dec, ok := rowEventDecoder.(*Decoder)
 				require.True(t, ok)
 
-				err = dec.AddKeyValue(m.Key, m.Value)
-				require.NoError(t, err)
+				dec.AddKeyValue(m.Key, m.Value)
 
 				messageType, hasNext, err := dec.HasNext()
 				require.NoError(t, err)
@@ -1705,8 +1655,7 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 				claimCheckLocationM := enc.Build()[0]
 
 				dec.config.MaxMessageBytes = 500
-				err = dec.AddKeyValue(claimCheckLocationM.Key, claimCheckLocationM.Value)
-				require.NoError(t, err)
+				dec.AddKeyValue(claimCheckLocationM.Key, claimCheckLocationM.Value)
 
 				messageType, hasNext, err = dec.HasNext()
 				require.NoError(t, err)
@@ -1780,8 +1729,7 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 				messages := enc.Build()
 				require.Len(t, messages, 1)
 
-				err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-				require.NoError(t, err)
+				dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
 				messageType, hasNext, err := dec.HasNext()
 				require.NoError(t, err)
@@ -1799,8 +1747,7 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 			m, err := enc.EncodeDDLEvent(ddlEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
 			messageType, hasNext, err := dec.HasNext()
 			require.NoError(t, err)
@@ -1874,8 +1821,7 @@ func TestMarshallerError(t *testing.T) {
 	dec.marshaller = mockMarshaller
 
 	mockMarshaller.EXPECT().Unmarshal(gomock.Any(), gomock.Any()).Return(errors.ErrDecodeFailed)
-	err = dec.AddKeyValue([]byte("key"), []byte("value"))
-	require.NoError(t, err)
+	dec.AddKeyValue([]byte("key"), []byte("value"))
 
 	messageType, hasNext, err := dec.HasNext()
 	require.ErrorIs(t, err, errors.ErrDecodeFailed)

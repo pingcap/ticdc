@@ -92,13 +92,18 @@ func NewDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.
 }
 
 // AddKeyValue add the received key and values to the Decoder,
-func (d *Decoder) AddKeyValue(_, value []byte) (err error) {
+func (d *Decoder) AddKeyValue(_, value []byte) {
 	if d.value != nil {
-		return errors.ErrCodecDecode.GenWithStack(
-			"Decoder value already exists, not consumed yet")
+		log.Panic("add key / value to the decoder failed, since it's already set")
 	}
-	d.value, err = common.Decompress(d.config.LargeMessageHandle.LargeMessageHandleCompression, value)
-	return err
+	value, err := common.Decompress(d.config.LargeMessageHandle.LargeMessageHandleCompression, value)
+	if err != nil {
+		log.Panic("decompress the value failed",
+			zap.Any("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value),
+			zap.Error(err))
+	}
+	d.value = value
 }
 
 // HasNext returns whether there is any event need to be consumed

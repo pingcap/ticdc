@@ -84,20 +84,17 @@ func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (co
 }
 
 // AddKeyValue implements the RowEventDecoder interface
-func (b *batchDecoder) AddKeyValue(key, value []byte) error {
+func (b *batchDecoder) AddKeyValue(key, value []byte) {
 	if len(b.keyBytes) != 0 || len(b.valueBytes) != 0 {
-		return errors.ErrOpenProtocolCodecInvalidData.
-			GenWithStack("decoder key and value not nil")
+		log.Panic("add key / value to the decoder failed, since it's already set")
 	}
 	version := binary.BigEndian.Uint64(key[:8])
 	if version != batchVersion1 {
-		return errors.ErrOpenProtocolCodecInvalidData.
-			GenWithStack("unexpected key format version")
+		log.Panic("the batch version is not supported", zap.Uint64("version", version))
 	}
 
 	b.keyBytes = key[8:]
 	b.valueBytes = value
-	return nil
 }
 
 func (b *batchDecoder) hasNext() bool {
