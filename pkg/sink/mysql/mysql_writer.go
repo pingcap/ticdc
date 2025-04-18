@@ -16,7 +16,6 @@ package mysql
 import (
 	"context"
 	"database/sql"
-	"sync"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru"
@@ -51,10 +50,6 @@ type Writer struct {
 	ddlTsTableInit   bool
 	tableSchemaStore *util.TableSchemaStore
 
-	// asyncDDLState is used to store the state of async ddl.
-	// key: tableID, value: state(0: unknown state , 1: executing, 2: no executing ddl)
-	asyncDDLState sync.Map
-
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
 	// Indicate if the CachePrepStmts should be enabled or not
@@ -84,7 +79,6 @@ func NewWriter(
 		ChangefeedID:           changefeedID,
 		lastCleanSyncPointTime: time.Now(),
 		ddlTsTableInit:         false,
-		asyncDDLState:          sync.Map{},
 		cachePrepStmts:         cfg.CachePrepStmts,
 		maxAllowedPacket:       cfg.MaxAllowedPacket,
 		stmtCache:              cfg.stmtCache,
@@ -115,15 +109,7 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 		// first we check whether there is some async ddl executed now.
 		w.waitAsyncDDLDone(event)
 	}
-
-	// check the ddl should by async or sync executed.
-	if needAsyncExecDDL(event.GetDDLType()) && w.cfg.IsTiDB {
-		// for async exec ddl, we don't flush ddl ts here. Because they don't block checkpointTs.
-		err := w.asyncExecAddIndexDDLIfTimeout(event)
-		if err != nil {
-			return errors.Trace(err)
-		}
-	} else if !(event.TiDBOnly && !w.cfg.IsTiDB) {
+	if !(event.TiDBOnly && !w.cfg.IsTiDB) {
 		if w.cfg.IsTiDB {
 			// if downstream is tidb, we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
 			// to ensure the atomic with ddl writing when server is restarted.
@@ -134,7 +120,6 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
-
 		// We need to record ddl' ts after each ddl for each table in the downstream when sink is mysql-compatible.
 		// Only in this way, when the node restart, we can continue sync data from the last ddl ts at least.
 		// Otherwise, after restarting, we may sync old data in new schema, which will leading to data loss.

@@ -165,6 +165,14 @@ var (
 		"unknown '%s' message protocol for sink",
 		errors.RFCCodeText("CDC:ErrSinkUnknownProtocol"),
 	)
+	ErrExecDDLFailed = errors.Normalize(
+		"exec DDL failed %s",
+		errors.RFCCodeText("CDC:ErrExecDDLFailed"),
+	)
+	ErrDDLStateNotFound = errors.Normalize(
+		"DDL state not found %s",
+		errors.RFCCodeText("CDC:ErrDDLStateNotFound"),
+	)
 	ErrMySQLTxnError = errors.Normalize(
 		"MySQL txn error",
 		errors.RFCCodeText("CDC:ErrMySQLTxnError"),

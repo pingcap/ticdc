@@ -54,7 +54,7 @@ mysql_groups=(
 	# G10
 	'changefeed_error bdr_mode fail_over_ddl_K'
 	# G11
-	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
+	'multi_tables_ddl ddl_attributes multi_cdc_cluster ddl_wait fail_over_ddl_L'
 	# G12
 	'row_format tiflash multi_rocks fail_over_ddl_M'
 	# G13
