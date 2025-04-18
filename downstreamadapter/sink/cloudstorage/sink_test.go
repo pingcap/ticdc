@@ -227,9 +227,11 @@ func TestWriteCheckpointEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	go cloudStorageSink.Run(ctx)
-
 	time.Sleep(3 * time.Second)
+
 	cloudStorageSink.AddCheckpointTs(100)
+
+	time.Sleep(2 * time.Second)
 	metadata, err := os.ReadFile(path.Join(parentDir, "metadata"))
 	require.NoError(t, err)
 	require.JSONEq(t, `{"checkpoint-ts":100}`, string(metadata))

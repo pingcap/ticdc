@@ -258,7 +258,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		}
 
 		if time.Since(s.lastSendCheckpointTsTime) < 2*time.Second {
-			log.Debug("skip write checkpoint ts to external storage",
+			log.Warn("skip write checkpoint ts to external storage",
 				zap.Any("changefeedID", s.changefeedID),
 				zap.Uint64("checkpoint", checkpoint))
 			continue
