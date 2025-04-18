@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -44,7 +43,7 @@ import (
 
 func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
-	storage, err := helper.GetExternalStorageFromURI(ctx, uri)
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
 	require.Nil(t, err)
 	sinkURI, err := url.Parse(uri)
 	require.Nil(t, err)

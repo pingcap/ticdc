@@ -205,7 +205,7 @@ func initExternalStorageForTest(ctx context.Context, uri url.URL) (storage.Exter
 		return nil, errors.WrapError(errors.ErrStorageInitialize,
 			errors.Errorf("please specify the bucket for %+v", uri))
 	}
-	s, err := util.GetExternalStorageFromURI(ctx, uri.String())
+	s, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri.String())
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrStorageInitialize, err)
 	}
