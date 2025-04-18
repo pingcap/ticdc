@@ -76,6 +76,9 @@ type TableInfo struct {
 	// record the logical ID from the DDL event(job.BinlogInfo.TableInfo).
 	// So be careful when using the TableInfo.
 	TableName TableName `json:"table-name"`
+	Charset   string    `json:"charset"`
+	Collate   string    `json:"collate"`
+	Comment   string    `json:"comment"`
 
 	columnSchema *columnSchema `json:"-"`
 
@@ -331,7 +334,7 @@ func (ti *TableInfo) HasVirtualColumns() bool {
 // GetIndex return the corresponding index by the given name.
 func (ti *TableInfo) GetIndex(name string) *model.IndexInfo {
 	for _, index := range ti.columnSchema.Indices {
-		if index != nil && index.Name.O == name {
+		if index != nil && index.Name.L == strings.ToLower(name) {
 			return index
 		}
 	}
@@ -339,6 +342,9 @@ func (ti *TableInfo) GetIndex(name string) *model.IndexInfo {
 }
 
 // IndexByName returns the index columns and offsets of the corresponding index by name
+// Column is not case-sensitive on any platform, nor are column aliases.
+// So we always match in lowercase.
+// See also: https://dev.mysql.com/doc/refman/5.7/en/identifier-case-sensitivity.html
 func (ti *TableInfo) IndexByName(name string) ([]string, []int, bool) {
 	index := ti.GetIndex(name)
 	if index == nil {
@@ -347,7 +353,7 @@ func (ti *TableInfo) IndexByName(name string) ([]string, []int, bool) {
 	names := make([]string, 0, len(index.Columns))
 	offset := make([]int, 0, len(index.Columns))
 	for _, col := range index.Columns {
-		names = append(names, col.Name.O)
+		names = append(names, col.Name.L)
 		offset = append(offset, col.Offset)
 	}
 	return names, offset, true
@@ -355,18 +361,21 @@ func (ti *TableInfo) IndexByName(name string) ([]string, []int, bool) {
 
 // OffsetsByNames returns the column offsets of the corresponding columns by names
 // If any column does not exist, return false
+// Column is not case-sensitive on any platform, nor are column aliases.
+// So we always match in lowercase.
+// See also: https://dev.mysql.com/doc/refman/5.7/en/identifier-case-sensitivity.html
 func (ti *TableInfo) OffsetsByNames(names []string) ([]int, bool) {
 	// todo: optimize it
 	columnOffsets := make(map[string]int, len(ti.columnSchema.Columns))
 	for _, col := range ti.columnSchema.Columns {
 		if col != nil {
-			columnOffsets[col.Name.O] = col.Offset
+			columnOffsets[col.Name.L] = ti.MustGetColumnOffsetByID(col.ID)
 		}
 	}
 
 	result := make([]int, 0, len(names))
 	for _, col := range names {
-		offset, ok := columnOffsets[col]
+		offset, ok := columnOffsets[strings.ToLower(col)]
 		if !ok {
 			return nil, false
 		}
@@ -419,12 +428,15 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 		columnSchema: columnSchema,
 		View:         tableInfo.View,
 		Sequence:     tableInfo.Sequence,
+		Charset:      tableInfo.Charset,
+		Collate:      tableInfo.Collate,
+		Comment:      tableInfo.Comment,
 	}
 	return ti
 }
 
-func NewTableInfo(schemaName string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
-	ti := newTableInfo(schemaName, table, tableID, isPartition, columnSchema, tableInfo)
+func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
+	ti := newTableInfo(schemaName, tableName, tableID, isPartition, columnSchema, tableInfo)
 
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appeared when tableInfo is created as a pair.
@@ -440,7 +452,6 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 	// search column schema object
 	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
 	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
-
 	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema, info)
 }
 

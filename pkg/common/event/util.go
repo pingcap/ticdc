@@ -53,8 +53,8 @@ type EventTestHelper struct {
 	tableInfos map[string]*common.TableInfo
 }
 
-// NewEventTestHelper creates a SchemaTestHelper
-func NewEventTestHelper(t testing.TB) *EventTestHelper {
+// NewEventTestHelperWithTimeZone creates a SchemaTestHelper with time zone
+func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestHelper {
 	store, err := mockstore.NewMockStore()
 	require.NoError(t, err)
 	ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
@@ -69,7 +69,7 @@ func NewEventTestHelper(t testing.TB) *EventTestHelper {
 
 	require.NoError(t, err)
 
-	mounter := NewMounter(time.Local)
+	mounter := NewMounter(tz)
 
 	return &EventTestHelper{
 		t:          t,
@@ -79,6 +79,11 @@ func NewEventTestHelper(t testing.TB) *EventTestHelper {
 		mounter:    mounter,
 		tableInfos: make(map[string]*common.TableInfo),
 	}
+}
+
+// NewEventTestHelper creates a SchemaTestHelper
+func NewEventTestHelper(t testing.TB) *EventTestHelper {
+	return NewEventTestHelperWithTimeZone(t, time.Local)
 }
 
 func (s *EventTestHelper) ApplyJob(job *timodel.Job) {

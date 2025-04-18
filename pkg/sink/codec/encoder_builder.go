@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
+	"github.com/pingcap/ticdc/pkg/sink/codec/debezium"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 )
@@ -34,8 +35,8 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncod
 		return avro.NewAvroEncoder(ctx, cfg)
 	case config.ProtocolCanalJSON:
 		return canal.NewJSONRowEventEncoder(ctx, cfg)
-	// case config.ProtocolDebezium:
-	// 	return debezium.NewBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID), nil
+	case config.ProtocolDebezium:
+		return debezium.NewBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID), nil
 	case config.ProtocolSimple:
 		return simple.NewEncoder(ctx, cfg)
 	default:

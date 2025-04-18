@@ -19,6 +19,7 @@ import (
 	"strconv"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -27,16 +28,16 @@ import (
 	"go.uber.org/zap"
 )
 
-func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, flag uint) (string, JavaSQLType) {
+func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, flag uint) (string, common.JavaSQLType) {
 	colType := columnInfo.GetType()
 
 	var (
 		value    string
-		javaType JavaSQLType
+		javaType common.JavaSQLType
 	)
 	switch colType {
 	case mysql.TypeBit:
-		javaType = JavaSQLTypeBIT
+		javaType = common.JavaSQLTypeBIT
 		d := row.GetDatum(idx, &columnInfo.FieldType)
 		if d.IsNull() {
 			value = "null"
@@ -50,9 +51,9 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
 		bytesValue := row.GetBytes(idx)
 		if mysql.HasBinaryFlag(flag) {
-			javaType = JavaSQLTypeBLOB
+			javaType = common.JavaSQLTypeBLOB
 		} else {
-			javaType = JavaSQLTypeCLOB
+			javaType = common.JavaSQLTypeCLOB
 		}
 		if string(bytesValue) == "" {
 			value = "null"
@@ -71,9 +72,9 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 	case mysql.TypeVarchar, mysql.TypeVarString:
 		bytesValue := row.GetBytes(idx)
 		if mysql.HasBinaryFlag(flag) {
-			javaType = JavaSQLTypeBLOB
+			javaType = common.JavaSQLTypeBLOB
 		} else {
-			javaType = JavaSQLTypeVARCHAR
+			javaType = common.JavaSQLTypeVARCHAR
 		}
 
 		if string(bytesValue) == "" {
@@ -92,9 +93,9 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 	case mysql.TypeString:
 		bytesValue := row.GetBytes(idx)
 		if mysql.HasBinaryFlag(flag) {
-			javaType = JavaSQLTypeBLOB
+			javaType = common.JavaSQLTypeBLOB
 		} else {
-			javaType = JavaSQLTypeCHAR
+			javaType = common.JavaSQLTypeCHAR
 		}
 		if string(bytesValue) == "" {
 			value = "null"
@@ -110,7 +111,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			value = string(bytesValue)
 		}
 	case mysql.TypeEnum:
-		javaType = JavaSQLTypeINTEGER
+		javaType = common.JavaSQLTypeINTEGER
 		enumValue := row.GetEnum(idx).Value
 		if enumValue == 0 {
 			value = "null"
@@ -118,7 +119,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			value = fmt.Sprintf("%d", enumValue)
 		}
 	case mysql.TypeSet:
-		javaType = JavaSQLTypeBIT
+		javaType = common.JavaSQLTypeBIT
 		bitValue := row.GetEnum(idx).Value
 		if bitValue == 0 {
 			value = "null"
@@ -126,7 +127,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			value = fmt.Sprintf("%d", bitValue)
 		}
 	case mysql.TypeDate, mysql.TypeNewDate:
-		javaType = JavaSQLTypeDATE
+		javaType = common.JavaSQLTypeDATE
 		timeValue := row.GetTime(idx)
 		if timeValue.IsZero() {
 			value = "null"
@@ -134,7 +135,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			value = timeValue.String()
 		}
 	case mysql.TypeDatetime, mysql.TypeTimestamp:
-		javaType = JavaSQLTypeTIMESTAMP
+		javaType = common.JavaSQLTypeTIMESTAMP
 		timeValue := row.GetTime(idx)
 		if timeValue.IsZero() {
 			value = "null"
@@ -142,7 +143,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			value = timeValue.String()
 		}
 	case mysql.TypeDuration:
-		javaType = JavaSQLTypeTIME
+		javaType = common.JavaSQLTypeTIME
 		durationValue := row.GetDuration(idx, 0)
 		if durationValue.ToNumber().IsZero() {
 			value = "null"
@@ -150,7 +151,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			value = durationValue.String()
 		}
 	case mysql.TypeJSON:
-		javaType = JavaSQLTypeVARCHAR
+		javaType = common.JavaSQLTypeVARCHAR
 		// json needs null check before, otherwise it will panic.
 		if row.IsNull(idx) {
 			value = "null"
@@ -163,7 +164,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			}
 		}
 	case mysql.TypeNewDecimal:
-		javaType = JavaSQLTypeDECIMAL
+		javaType = common.JavaSQLTypeDECIMAL
 		decimalValue := row.GetMyDecimal(idx)
 		if decimalValue.IsZero() {
 			value = "null"
@@ -171,7 +172,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			value = decimalValue.String()
 		}
 	case mysql.TypeInt24:
-		javaType = JavaSQLTypeINTEGER
+		javaType = common.JavaSQLTypeINTEGER
 		d := row.GetDatum(idx, &columnInfo.FieldType)
 		if d.IsNull() {
 			value = "null"
@@ -185,7 +186,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			}
 		}
 	case mysql.TypeTiny:
-		javaType = JavaSQLTypeTINYINT
+		javaType = common.JavaSQLTypeTINYINT
 		d := row.GetDatum(idx, &columnInfo.FieldType)
 		if d.IsNull() {
 			value = "null"
@@ -193,7 +194,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			if mysql.HasUnsignedFlag(flag) {
 				uintValue := d.GetUint64()
 				if uintValue > math.MaxInt8 {
-					javaType = JavaSQLTypeSMALLINT
+					javaType = common.JavaSQLTypeSMALLINT
 				}
 				value = strconv.FormatUint(uintValue, 10)
 			} else {
@@ -202,7 +203,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			}
 		}
 	case mysql.TypeShort:
-		javaType = JavaSQLTypeSMALLINT
+		javaType = common.JavaSQLTypeSMALLINT
 		d := row.GetDatum(idx, &columnInfo.FieldType)
 		if d.IsNull() {
 			value = "null"
@@ -210,7 +211,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			if mysql.HasUnsignedFlag(flag) {
 				uintValue := d.GetUint64()
 				if uintValue > math.MaxInt16 {
-					javaType = JavaSQLTypeINTEGER
+					javaType = common.JavaSQLTypeINTEGER
 				}
 				value = strconv.FormatUint(uintValue, 10)
 			} else {
@@ -219,7 +220,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			}
 		}
 	case mysql.TypeLong:
-		javaType = JavaSQLTypeINTEGER
+		javaType = common.JavaSQLTypeINTEGER
 		d := row.GetDatum(idx, &columnInfo.FieldType)
 		if d.IsNull() {
 			value = "null"
@@ -227,7 +228,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			if mysql.HasUnsignedFlag(flag) {
 				uintValue := d.GetUint64()
 				if uintValue > math.MaxInt32 {
-					javaType = JavaSQLTypeBIGINT
+					javaType = common.JavaSQLTypeBIGINT
 				}
 				value = strconv.FormatUint(uintValue, 10)
 			} else {
@@ -236,7 +237,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			}
 		}
 	case mysql.TypeLonglong:
-		javaType = JavaSQLTypeBIGINT
+		javaType = common.JavaSQLTypeBIGINT
 		d := row.GetDatum(idx, &columnInfo.FieldType)
 		if d.IsNull() {
 			value = "null"
@@ -244,7 +245,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			if mysql.HasUnsignedFlag(flag) {
 				uintValue := d.GetUint64()
 				if uintValue > math.MaxInt64 {
-					javaType = JavaSQLTypeDECIMAL
+					javaType = common.JavaSQLTypeDECIMAL
 				}
 				value = strconv.FormatUint(uintValue, 10)
 			} else {
@@ -253,7 +254,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			}
 		}
 	case mysql.TypeFloat:
-		javaType = JavaSQLTypeREAL
+		javaType = common.JavaSQLTypeREAL
 		d := row.GetDatum(idx, &columnInfo.FieldType)
 		if d.IsNull() {
 			value = "null"
@@ -262,7 +263,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			value = strconv.FormatFloat(float64(floatValue), 'f', -1, 32)
 		}
 	case mysql.TypeDouble:
-		javaType = JavaSQLTypeDOUBLE
+		javaType = common.JavaSQLTypeDOUBLE
 		d := row.GetDatum(idx, &columnInfo.FieldType)
 		if d.IsNull() {
 			value = "null"
@@ -271,7 +272,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			value = strconv.FormatFloat(floatValue, 'f', -1, 64)
 		}
 	case mysql.TypeYear:
-		javaType = JavaSQLTypeVARCHAR
+		javaType = common.JavaSQLTypeVARCHAR
 		d := row.GetDatum(idx, &columnInfo.FieldType)
 		if d.IsNull() {
 			value = "null"
@@ -280,11 +281,11 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo, fl
 			value = strconv.FormatInt(yearValue, 10)
 		}
 	case mysql.TypeTiDBVectorFloat32:
-		javaType = JavaSQLTypeVARCHAR
+		javaType = common.JavaSQLTypeVARCHAR
 		d := row.GetDatum(idx, &columnInfo.FieldType)
 		value = d.GetVectorFloat32().String()
 	default:
-		javaType = JavaSQLTypeVARCHAR
+		javaType = common.JavaSQLTypeVARCHAR
 		d := row.GetDatum(idx, &columnInfo.FieldType)
 		if d.IsNull() {
 			value = "null"

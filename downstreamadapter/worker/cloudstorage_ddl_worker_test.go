@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -59,7 +58,7 @@ func newCloudStorageDDLWorkerForTest(parentDir string) (*CloudStorageDDLWorker, 
 	if err != nil {
 		return nil, err
 	}
-	storage, err := helper.GetExternalStorageFromURI(ctx, sinkURI.String())
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +161,7 @@ func TestCleanupExpiredFiles(t *testing.T) {
 	cfg := cloudstorage.NewConfig()
 	err = cfg.Apply(ctx, sinkURI, replicaConfig.Sink)
 	require.Nil(t, err)
-	storage, err := helper.GetExternalStorageFromURI(ctx, sinkURI.String())
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	require.Nil(t, err)
 
 	sink := NewCloudStorageDDLWorker(changefeedID, sinkURI, cfg, cleanupJobs, storage, metrics.NewStatistics(changefeedID, "CloudStorageSink"))

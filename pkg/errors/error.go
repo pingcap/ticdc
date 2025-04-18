@@ -54,6 +54,10 @@ var (
 	)
 
 	// codec related errors
+	ErrDDLUnsupportType = errors.Normalize(
+		"unsupport ddl type %s, query %s",
+		errors.RFCCodeText("CDC:ErrDDLUnsupportType"),
+	)
 	ErrEncodeFailed = errors.Normalize(
 		"encode failed",
 		errors.RFCCodeText("CDC:ErrEncodeFailed"),
@@ -228,6 +232,14 @@ var (
 	ErrDebeziumEncodeFailed = errors.Normalize(
 		"debezium encode failed",
 		errors.RFCCodeText("CDC:ErrDebeziumEncodeFailed"),
+	)
+	ErrDebeziumInvalidMessage = errors.Normalize(
+		"debezium invalid message format, %s",
+		errors.RFCCodeText("CDC:ErrDebeziumInvalidMessage"),
+	)
+	ErrDebeziumEmptyValueMessage = errors.Normalize(
+		"debezium value should not be empty",
+		errors.RFCCodeText("CDC:ErrDebeziumEmptyValueMessage"),
 	)
 	ErrStorageSinkInvalidConfig = errors.Normalize(
 		"storage sink config invalid",

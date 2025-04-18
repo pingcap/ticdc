@@ -17,8 +17,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
@@ -373,14 +375,9 @@ func MustBinaryLiteralToInt(bytes []byte) uint64 {
 	val, err := types.BinaryLiteral(bytes).ToInt(types.DefaultStmtNoWarningContext)
 	if err != nil {
 		log.Panic("invalid bit value found", zap.ByteString("value", bytes))
+		return math.MaxUint64
 	}
 	return val
-}
-
-// FakeTableIDAllocator is a fake table id allocator
-type FakeTableIDAllocator struct {
-	tableIDs       map[string]int64
-	currentTableID int64
 }
 
 const (
@@ -464,6 +461,22 @@ func SanitizeTopicName(name string) string {
 		)
 	}
 	return sanitizedName
+}
+
+// UnsafeBytesToString create string from byte slice without copying
+func UnsafeBytesToString(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
+}
+
+// UnsafeStringToBytes create byte slice from string without copying
+func UnsafeStringToBytes(s string) []byte {
+	return *(*[]byte)(unsafe.Pointer(&s))
+}
+
+// FakeTableIDAllocator is a fake table id allocator
+type FakeTableIDAllocator struct {
+	tableIDs       map[string]int64
+	currentTableID int64
 }
 
 // NewFakeTableIDAllocator creates a new FakeTableIDAllocator

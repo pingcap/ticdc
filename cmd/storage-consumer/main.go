@@ -31,7 +31,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
@@ -180,7 +179,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 
 	extension := sinkutil.GetFileExtension(protocol)
 
-	storage, err := helper.GetExternalStorageFromURI(ctx, upstreamURIStr)
+	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, upstreamURIStr)
 	if err != nil {
 		log.Error("failed to create external storage", zap.Error(err))
 		return nil, err
