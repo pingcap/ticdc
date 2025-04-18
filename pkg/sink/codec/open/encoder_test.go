@@ -17,6 +17,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -1126,4 +1127,6 @@ func TestHandleOnlyEvent(t *testing.T) {
 	require.True(t, ok)
 
 	common.CompareRow(t, insertRowEvent.Event, insertRowEvent.TableInfo, change, decoded.TableInfo)
+
+	log.Info("pass TestHandleOnlyEvent")
 }
