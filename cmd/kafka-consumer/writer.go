@@ -122,11 +122,10 @@ func newWriter(ctx context.Context, o *option) *writer {
 		ChangefeedID: changefeedID,
 		SinkURI:      o.downstreamURI,
 	}
-	mysqlSink, err := sink.NewSink(ctx, cfg, changefeedID)
+	w.mysqlSink, err = sink.NewSink(ctx, cfg, changefeedID)
 	if err != nil {
 		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
-	w.mysqlSink = mysqlSink
 	return w
 }
 
@@ -135,7 +134,7 @@ func (w *writer) run(ctx context.Context) error {
 }
 
 func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) error {
-	// The DDL event is delivered once all messages belongs to the tables which are blocked by the DDL event
+	// The DDL event is delivered after all messages belongs to the tables which are blocked by the DDL event
 	// so we can make assumption that the all DMLs received before the DDL event.
 	// since one table's events may be produced to the different partitions, so we have to flush all partitions.
 	var (
@@ -224,19 +223,14 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 		log.Panic("add key value to the decoder failed",
 			zap.Int32("partition", partition), zap.Any("offset", offset), zap.Error(err))
 	}
-	var (
-		counter int
-		//messageType common.MessageType
-	)
 
 	messageType, hasNext, err := progress.decoder.HasNext()
 	if err != nil || hasNext {
 		log.Panic("try to fetch the next event failed, this should not happen", zap.Bool("hasNext", hasNext), zap.Error(err))
 	}
 
-	counter++
 	// If the message containing only one event exceeds the length limit, CDC will allow it and issue a warning.
-	if len(key)+len(value) > w.maxMessageBytes && counter > 1 {
+	if len(key)+len(value) > w.maxMessageBytes {
 		log.Panic("kafka max-messages-bytes exceeded",
 			zap.Int32("partition", partition), zap.Any("offset", offset),
 			zap.Int("max-message-bytes", w.maxMessageBytes),
@@ -300,6 +294,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 		}
 		return true, nil
 	case common.MessageTypeRow:
+		var counter int
 		row, err := progress.decoder.NextDMLEvent()
 		if err != nil {
 			log.Panic("decode message value failed",
@@ -311,6 +306,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 			w.appendRow2Group(row, progress, offset)
 			// continue here
 		}
+		counter++
 
 		if w.protocol != config.ProtocolSimple {
 			log.Panic("DML event is nil, it's not expected",
@@ -328,9 +324,8 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) (bool
 			if row != nil {
 				w.checkPartition(row, partition, message.TopicPartition.Offset)
 				w.appendRow2Group(row, progress, offset)
-				counter++
 			}
-
+			counter++
 		}
 		if counter > w.maxBatchSize {
 			log.Panic("Open Protocol max-batch-size exceeded",
