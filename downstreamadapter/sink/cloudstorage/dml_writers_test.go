@@ -210,6 +210,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	require.Equal(t, uint64(100), atomic.LoadUint64(&cnt))
 
 	cancel()
+	time.Sleep(5 * time.Second)
 
 	// test date (day) is NOT changed.
 	mockClock.Set(time.Date(2023, 3, 8, 23, 59, 59, 0, time.UTC))
@@ -247,6 +248,8 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	require.Equal(t, uint64(200), atomic.LoadUint64(&cnt))
 	cancel()
 
+	time.Sleep(5 * time.Second)
+
 	// test date (day) is changed.
 	mockClock.Set(time.Date(2023, 3, 9, 0, 0, 10, 0, time.UTC))
 	clock = pdutil.NewMonotonicClock(mockClock)
@@ -273,7 +276,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	})
 	event.TableInfoVersion = tableInfoVersion
 	cloudStorageSink.AddDMLEvent(event)
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	tableDir = path.Join(parentDir, "test/table1/33/2023-03-09")
 	fileNames = getTableFiles(t, tableDir)
@@ -290,10 +293,10 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	cloudStorageSink.Close(false)
 
 	cancel()
+	time.Sleep(5 * time.Second)
 
 	// test table is scheduled from one node to another
 	cnt = 0
-
 	mockClock = pclock.NewMock()
 	mockClock.Set(time.Date(2023, 3, 9, 0, 1, 10, 0, time.UTC))
 	appcontext.SetService(appcontext.DefaultPDClock, clock)
@@ -327,5 +330,5 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	require.Equal(t, "CDC000002.csv\n", string(content))
 	require.Equal(t, uint64(100), atomic.LoadUint64(&cnt))
 
-	cloudStorageSink.Close(false)
+	cancel()
 }
