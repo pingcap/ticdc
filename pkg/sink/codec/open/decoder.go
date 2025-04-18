@@ -169,9 +169,9 @@ type messageDDL struct {
 }
 
 // NextDDLEvent implements the RowEventDecoder interface
-func (b *batchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
+func (b *batchDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if b.nextKey.Type != common.MessageTypeDDL {
-		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found ddl event message")
+		log.Panic("message type is not DDL", zap.Any("messageType", b.nextKey.Type))
 	}
 
 	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
@@ -179,7 +179,9 @@ func (b *batchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 
 	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
-		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("decompress DDL event failed")
+		log.Panic("decompress failed",
+			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value), zap.Error(err))
 	}
 
 	var m messageDDL
@@ -196,7 +198,7 @@ func (b *batchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	result.TableName = b.nextKey.Table
 	b.nextKey = nil
 	b.valueBytes = nil
-	return result, nil
+	return result
 }
 
 // NextDMLEvent implements the RowEventDecoder interface

@@ -344,9 +344,10 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 
 // NextDDLEvent implements the RowEventDecoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
+func (b *canalJSONDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeDDL {
-		return nil, errors.ErrDecodeFailed.GenWithStack("not found ddl event message")
+		log.Panic("message type is not DDL Event",
+			zap.Any("messageType", b.msg.messageType()), zap.Any("msg", b.msg))
 	}
 
 	result := canalJSONMessage2DDLEvent(b.msg)
@@ -360,7 +361,7 @@ func (b *canalJSONDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 		}
 		delete(b.tableInfoCache, cacheKey)
 	}
-	return result, nil
+	return result
 }
 
 // NextResolvedEvent implements the RowEventDecoder interface

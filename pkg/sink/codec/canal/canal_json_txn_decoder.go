@@ -147,6 +147,6 @@ func (d *canalJSONTxnEventDecoder) NextResolvedEvent() uint64 {
 }
 
 // NextDDLEvent implements the RowEventDecoder interface
-func (d *canalJSONTxnEventDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
-	return nil, nil
+func (d *canalJSONTxnEventDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+	return nil
 }

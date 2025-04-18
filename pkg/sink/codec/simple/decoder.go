@@ -273,10 +273,9 @@ func (d *Decoder) buildData(
 }
 
 // NextDDLEvent returns the next DDL event if exists
-func (d *Decoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
+func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if d.msg == nil {
-		return nil, errors.ErrCodecDecode.GenWithStack(
-			"no message found when decode DDL event")
+		log.Panic("msg is not set when parse the DDL event")
 	}
 	ddl := buidDDLEvent(d.msg)
 	d.msg = nil
@@ -286,17 +285,14 @@ func (d *Decoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 
 	for ele := d.cachedMessages.Front(); ele != nil; {
 		d.msg = ele.Value.(*message)
-		event, err := d.NextDMLEvent()
-		if err != nil {
-			return nil, err
-		}
+		event := d.NextDMLEvent()
 		d.CachedRowChangedEvents = append(d.CachedRowChangedEvents, event)
 
 		next := ele.Next()
 		d.cachedMessages.Remove(ele)
 		ele = next
 	}
-	return ddl, nil
+	return ddl
 }
 
 // GetCachedEvents returns the cached events

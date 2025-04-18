@@ -418,19 +418,19 @@ func getColumnValue(
 }
 
 // NextDDLEvent returns the next DDL event if exists
-func (d *decoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
+func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if len(d.value) == 0 {
-		return nil, errors.ErrCodecDecode.GenWithStack("value should not be empty")
+		log.Panic("value is empty, cannot found the ddl event")
 	}
 	if d.value[0] != ddlByte {
-		return nil, errors.ErrCodecDecode.GenWithStack("first byte is not the ddl byte, but got: %+v", d.value[0])
+		log.Panic("avro invalid data, the first byte is not ddl byte", zap.Any("value", d.value))
 	}
 
 	data := d.value[1:]
 	var baseDDLEvent ddlEvent
 	err := json.Unmarshal(data, &baseDDLEvent)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrDecodeFailed, err)
+		log.Panic("unmarshal ddl event failed", zap.Any("value", d.value), zap.Error(err))
 	}
 	d.value = nil
 
@@ -444,7 +444,7 @@ func (d *decoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	result.Type = byte(baseDDLEvent.Type)
 	result.Query = baseDDLEvent.Query
 
-	return result, nil
+	return result
 }
 
 // return the schema ID and the encoded binary data

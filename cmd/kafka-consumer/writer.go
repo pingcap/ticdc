@@ -250,12 +250,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		// then cause the consumer panic, but it was a duplicate one.
 		// so we only handle DDL received from partition-0 should be enough.
 		// but all DDL event messages should be consumed.
-		ddl, err := progress.decoder.NextDDLEvent()
-		if err != nil {
-			log.Panic("decode message value failed",
-				zap.Int32("partition", partition), zap.Any("offset", offset),
-				zap.ByteString("value", value), zap.Error(err))
-		}
+		ddl := progress.decoder.NextDDLEvent()
 
 		// todo: enable this logic, after simple decoder is supported.
 		if dec, ok := progress.decoder.(*simple.Decoder); ok {
@@ -284,13 +279,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		return true, nil
 	case common.MessageTypeRow:
 		var counter int
-		row, err := progress.decoder.NextDMLEvent()
-		if err != nil {
-			log.Panic("decode message value failed",
-				zap.Int32("partition", partition), zap.Any("offset", offset),
-				zap.ByteString("value", value),
-				zap.Error(err))
-		}
+		row := progress.decoder.NextDMLEvent()
 		if row != nil {
 			w.appendRow2Group(row, progress, offset)
 			// continue here
@@ -304,12 +293,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		log.Warn("DML event is nil, it's cached ", zap.Int32("partition", partition), zap.Any("offset", offset))
 
 		for _, hasNext = progress.decoder.HasNext(); hasNext; {
-			row, err = progress.decoder.NextDMLEvent()
-			if err != nil {
-				log.Panic("decode message value failed",
-					zap.Int32("partition", partition), zap.Any("offset", offset),
-					zap.ByteString("value", value), zap.Error(err))
-			}
+			row = progress.decoder.NextDMLEvent()
 			if row != nil {
 				w.checkPartition(row, partition, message.TopicPartition.Offset)
 				w.appendRow2Group(row, progress, offset)
