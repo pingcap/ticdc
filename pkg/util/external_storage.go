@@ -163,28 +163,44 @@ type extStorageWithTimeout struct {
 func (s *extStorageWithTimeout) WriteFile(ctx context.Context, name string, data []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	return s.ExternalStorage.WriteFile(ctx, name, data)
+	err := s.ExternalStorage.WriteFile(ctx, name, data)
+	if err != nil {
+		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("WriteFile")
+	}
+	return err
 }
 
 // ReadFile reads a complete file from storage, similar to os.ReadFile
 func (s *extStorageWithTimeout) ReadFile(ctx context.Context, name string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	return s.ExternalStorage.ReadFile(ctx, name)
+	data, err := s.ExternalStorage.ReadFile(ctx, name)
+	if err != nil {
+		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("ReadFile")
+	}
+	return data, err
 }
 
 // FileExists return true if file exists
 func (s *extStorageWithTimeout) FileExists(ctx context.Context, name string) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	return s.ExternalStorage.FileExists(ctx, name)
+	exists, err := s.ExternalStorage.FileExists(ctx, name)
+	if err != nil {
+		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("FileExists")
+	}
+	return exists, err
 }
 
 // DeleteFile delete the file in storage
 func (s *extStorageWithTimeout) DeleteFile(ctx context.Context, name string) error {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	return s.ExternalStorage.DeleteFile(ctx, name)
+	err := s.ExternalStorage.DeleteFile(ctx, name)
+	if err != nil {
+		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("DeleteFile")
+	}
+	return err
 }
 
 // Open a Reader by file path. path is relative path to storage base path
@@ -193,7 +209,11 @@ func (s *extStorageWithTimeout) Open(
 ) (storage.ExternalFileReader, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	return s.ExternalStorage.Open(ctx, path, nil)
+	reader, err := s.ExternalStorage.Open(ctx, path, nil)
+	if err != nil {
+		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("Open")
+	}
+	return reader, err
 }
 
 // WalkDir traverse all the files in a dir.
@@ -202,7 +222,11 @@ func (s *extStorageWithTimeout) WalkDir(
 ) error {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	return s.ExternalStorage.WalkDir(ctx, opt, fn)
+	err := s.ExternalStorage.WalkDir(ctx, opt, fn)
+	if err != nil {
+		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("WalkDir")
+	}
+	return err
 }
 
 // Create opens a file writer by path. path is relative path to storage base path
@@ -215,7 +239,11 @@ func (s *extStorageWithTimeout) Create(
 		defer cancel()
 	}
 	// multipart uploading spawns a background goroutine, can't set timeout
-	return s.ExternalStorage.Create(ctx, path, option)
+	writer, err := s.ExternalStorage.Create(ctx, path, option)
+	if err != nil {
+		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("Create")
+	}
+	return writer, err
 }
 
 // Rename file name from oldFileName to newFileName
@@ -224,7 +252,11 @@ func (s *extStorageWithTimeout) Rename(
 ) error {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	return s.ExternalStorage.Rename(ctx, oldFileName, newFileName)
+	err := s.ExternalStorage.Rename(ctx, oldFileName, newFileName)
+	if err != nil {
+		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("Rename")
+	}
+	return err
 }
 
 // IsNotExistInExtStorage checks if the error is caused by the file not exist in external storage.
