@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -20,16 +21,18 @@ type MemoryLimitConfig struct {
 
 type MemoryLimiter struct {
 	mu        sync.RWMutex
+	role      string
 	rateLimit *rate.Limiter
 	config    *MemoryLimitConfig
+	started   atomic.Bool
 }
 
-func NewMemoryLimiter(config *MemoryLimitConfig) *MemoryLimiter {
+func NewMemoryLimiter(role string, config *MemoryLimitConfig) *MemoryLimiter {
 	m := &MemoryLimiter{
+		role:      role,
 		config:    config,
 		rateLimit: rate.NewLimiter(rate.Limit(config.CurrentMemoryLimit), config.CurrentMemoryLimit),
 	}
-	go m.run()
 	return m
 }
 
@@ -46,6 +49,13 @@ func (m *MemoryLimiter) WaitN(n int) {
 	m.rateLimit.WaitN(context.Background(), n)
 }
 
+func (m *MemoryLimiter) Start() {
+	if m.started.CompareAndSwap(false, true) {
+		log.Info("Start memory limiter", zap.String("role", m.role))
+		go m.run()
+	}
+}
+
 func (m *MemoryLimiter) Decrease() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -57,7 +67,7 @@ func (m *MemoryLimiter) Decrease() {
 		m.config.CurrentMemoryLimit = m.config.MinMemoryLimit
 	}
 	m.rateLimit.SetLimit(rate.Limit(m.config.CurrentMemoryLimit))
-	log.Info("Decrease memory limit", zap.Int("currentMemoryLimit", m.config.CurrentMemoryLimit))
+	log.Info("Decrease memory limit", zap.String("role", m.role), zap.Int("currentMemoryLimit", m.config.CurrentMemoryLimit))
 }
 
 func (m *MemoryLimiter) run() {
@@ -82,5 +92,5 @@ func (m *MemoryLimiter) increaseMemoryLimit() {
 		m.config.CurrentMemoryLimit = m.config.MaxMemoryLimit
 	}
 	m.rateLimit.SetLimit(rate.Limit(m.config.CurrentMemoryLimit))
-	log.Info("Increase memory limit", zap.Int("currentMemoryLimit", m.config.CurrentMemoryLimit))
+	log.Info("Increase memory limit", zap.String("role", m.role), zap.Int("currentMemoryLimit", m.config.CurrentMemoryLimit))
 }

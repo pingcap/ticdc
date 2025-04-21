@@ -133,7 +133,7 @@ func newEventBroker(
 	// For now, since there is only one upstream, using the default pdClock is sufficient.
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 
-	memoryLimiter := common.NewMemoryLimiter(&common.MemoryLimitConfig{
+	memoryLimiter := common.NewMemoryLimiter("eventBroker", &common.MemoryLimitConfig{
 		CurrentMemoryLimit:      defaultInitialMemoryLimit,
 		MinMemoryLimit:          defaultInitialMemoryLimit,
 		MaxMemoryLimit:          defaultInitialMemoryLimit * 30, // 150MB
@@ -575,11 +575,17 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	for {
 		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
-		eSize := int(e.KeyLen+e.ValueLen+e.OldValueLen) * memoryEnlargeFactor
-		if eSize > c.memoryLimiter.GetCurrentMemoryLimit() {
-			log.Warn("The single event memory limit is exceeded the total memory limit, set it to the current memory limit", zap.Int("eventSize", eSize), zap.Int("currentMemoryLimit", c.memoryLimiter.GetCurrentMemoryLimit()))
-			eSize = c.memoryLimiter.GetCurrentMemoryLimit()
-			c.memoryLimiter.WaitN(eSize)
+
+		// Start the memory limiter when the first event is read.
+		c.memoryLimiter.Start()
+
+		if e != nil {
+			eSize := int(e.KeyLen+e.ValueLen+e.OldValueLen) * memoryEnlargeFactor
+			if eSize > c.memoryLimiter.GetCurrentMemoryLimit() {
+				log.Warn("The single event memory limit is exceeded the total memory limit, set it to the current memory limit", zap.Int("eventSize", eSize), zap.Int("currentMemoryLimit", c.memoryLimiter.GetCurrentMemoryLimit()))
+				eSize = c.memoryLimiter.GetCurrentMemoryLimit()
+				c.memoryLimiter.WaitN(eSize)
+			}
 		}
 
 		if err != nil {

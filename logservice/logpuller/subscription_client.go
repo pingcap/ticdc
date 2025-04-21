@@ -214,7 +214,7 @@ func NewSubscriptionClient(
 	credential *security.Credential,
 ) *SubscriptionClient {
 
-	memoryLimiter := common.NewMemoryLimiter(&common.MemoryLimitConfig{
+	memoryLimiter := common.NewMemoryLimiter("subscriptionClient", &common.MemoryLimitConfig{
 		CurrentMemoryLimit:      100 * 1024 * 1024,     // 100MB
 		MinMemoryLimit:          100 * 1024 * 1024,     // 100MB
 		MaxMemoryLimit:          100 * 1024 * 1024 * 6, // 600MB
@@ -371,6 +371,9 @@ func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
 }
 
 func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
+	// Start the memory limiter when the first event is pushed.
+	s.memoryLimiter.Start()
+
 	eventSize := event.getSize()
 	if eventSize > s.memoryLimiter.GetCurrentMemoryLimit() {
 		log.Warn("event size is greater than memory limit, set it to the current memory limit",
