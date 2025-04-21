@@ -20,7 +20,6 @@ import (
 	"github.com/benbjohnson/clock"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,7 +40,7 @@ func TestRetry(t *testing.T) {
 		},
 	})
 	require.True(t, changefeed)
-	require.Equal(t, model.StateWarning, state)
+	require.Equal(t, common.StateWarning, state)
 	require.NotNil(t, err)
 	require.False(t, backoff.ShouldRun())
 	require.True(t, backoff.retrying.Load())
@@ -52,7 +51,7 @@ func TestRetry(t *testing.T) {
 	})
 
 	require.True(t, changefeed)
-	require.Equal(t, model.StateNormal, state)
+	require.Equal(t, common.StateNormal, state)
 	require.Nil(t, err)
 	require.True(t, backoff.ShouldRun())
 	require.False(t, backoff.retrying.Load())
@@ -67,7 +66,7 @@ func TestRetry(t *testing.T) {
 	})
 
 	require.True(t, changefeed)
-	require.Equal(t, model.StateFailed, state)
+	require.Equal(t, common.StateFailed, state)
 	require.NotNil(t, err)
 	require.False(t, backoff.ShouldRun())
 	require.False(t, backoff.retrying.Load())
@@ -77,7 +76,7 @@ func TestRetry(t *testing.T) {
 		CheckpointTs: 3,
 	})
 	require.False(t, changefeed)
-	require.Equal(t, model.StateFailed, state)
+	require.Equal(t, common.StateFailed, state)
 	require.Equal(t, uint64(2), backoff.checkpointTs)
 
 	backoff.resetErrRetry()
@@ -90,7 +89,7 @@ func TestRetry(t *testing.T) {
 	})
 
 	require.False(t, changefeed)
-	require.Equal(t, model.StateNormal, state)
+	require.Equal(t, common.StateNormal, state)
 	require.Nil(t, err)
 	require.True(t, backoff.ShouldRun())
 	require.False(t, backoff.retrying.Load())
@@ -108,7 +107,7 @@ func TestErrorReportedWhenRetrying(t *testing.T) {
 	})
 	require.NotNil(t, err)
 	require.True(t, changefeed)
-	require.Equal(t, model.StateWarning, state)
+	require.Equal(t, common.StateWarning, state)
 	require.True(t, backoff.retrying.Load())
 	require.True(t, backoff.isRestarting.Load())
 	backoffInterval := backoff.backoffInterval
@@ -122,7 +121,7 @@ func TestErrorReportedWhenRetrying(t *testing.T) {
 	})
 	require.NotNil(t, err)
 	require.True(t, changefeed)
-	require.Equal(t, model.StateWarning, state)
+	require.Equal(t, common.StateWarning, state)
 	require.True(t, backoff.retrying.Load())
 	require.True(t, backoff.isRestarting.Load())
 	// the interval is increased, todo: maybe we should ignore the error when retrying
@@ -145,7 +144,7 @@ func TestFailedWhenRetry(t *testing.T) {
 	})
 	require.NotNil(t, err)
 	require.True(t, changefeed)
-	require.Equal(t, model.StateWarning, state)
+	require.Equal(t, common.StateWarning, state)
 	require.True(t, backoff.retrying.Load())
 	require.True(t, backoff.isRestarting.Load())
 
@@ -159,7 +158,7 @@ func TestFailedWhenRetry(t *testing.T) {
 	})
 	require.NotNil(t, err)
 	require.True(t, changefeed)
-	require.Equal(t, model.StateFailed, state)
+	require.Equal(t, common.StateFailed, state)
 	require.True(t, backoff.retrying.Load())
 	require.True(t, backoff.isRestarting.Load())
 	backoff.StartFinished()
@@ -175,7 +174,7 @@ func TestNormal(t *testing.T) {
 	})
 	require.Nil(t, err)
 	require.False(t, changefeed)
-	require.Equal(t, model.StateNormal, state)
+	require.Equal(t, common.StateNormal, state)
 	require.False(t, backoff.retrying.Load())
 	require.False(t, backoff.isRestarting.Load())
 }
