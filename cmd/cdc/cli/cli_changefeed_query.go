@@ -22,7 +22,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/api"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
-	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/spf13/cobra"
 )
@@ -40,12 +40,12 @@ type cfMeta struct {
 	TargetTs       uint64                     `json:"target_ts"`
 	CheckpointTSO  uint64                     `json:"checkpoint_tso"`
 	CheckpointTime api.JSONTime               `json:"checkpoint_time"`
-	Engine         common.SortEngine          `json:"sort_engine,omitempty"`
-	FeedState      common.FeedState           `json:"state"`
+	Engine         config.SortEngine          `json:"sort_engine,omitempty"`
+	FeedState      config.FeedState           `json:"state"`
 	RunningError   *v2.RunningError           `json:"error,omitempty"`
 	ErrorHis       []int64                    `json:"error_history,omitempty"`
 	CreatorVersion string                     `json:"creator_version"`
-	TaskStatus     []common.CaptureTaskStatus `json:"task_status,omitempty"`
+	TaskStatus     []config.CaptureTaskStatus `json:"task_status,omitempty"`
 }
 
 // queryChangefeedOptions defines flags for the `cli changefeed query` command.

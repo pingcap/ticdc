@@ -14,6 +14,7 @@
 package config
 
 import (
+	"database/sql/driver"
 	"encoding/json"
 	"math"
 	"net/url"
@@ -25,10 +26,165 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
+	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/sink"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
+
+// SortEngine is the sorter engine
+type SortEngine = string
+
+// sort engines
+const (
+	SortInMemory SortEngine = "memory"
+	SortInFile   SortEngine = "file"
+	SortUnified  SortEngine = "unified"
+)
+
+// FeedState represents the running state of a changefeed
+type FeedState string
+
+// All FeedStates
+// Only `StateNormal` and `StatePending` changefeed is running,
+// others are stopped.
+const (
+	StateNormal   FeedState = "normal"
+	StatePending  FeedState = "pending"
+	StateFailed   FeedState = "failed"
+	StateStopped  FeedState = "stopped"
+	StateRemoved  FeedState = "removed"
+	StateFinished FeedState = "finished"
+	StateWarning  FeedState = "warning"
+	// StateUnInitialized is used for the changefeed that has not been initialized
+	// it only exists in memory for a short time and will not be persisted to storage
+	StateUnInitialized FeedState = ""
+)
+
+// ToInt return an int for each `FeedState`, only use this for metrics.
+func (s FeedState) ToInt() int {
+	switch s {
+	case StateNormal:
+		return 0
+	case StatePending:
+		return 1
+	case StateFailed:
+		return 2
+	case StateStopped:
+		return 3
+	case StateFinished:
+		return 4
+	case StateRemoved:
+		return 5
+	case StateWarning:
+		return 6
+	case StateUnInitialized:
+		return 7
+	}
+	// -1 for unknown feed state
+	return -1
+}
+
+// IsNeeded return true if the given feedState matches the listState.
+func (s FeedState) IsNeeded(need string) bool {
+	if need == "all" {
+		return true
+	}
+	if need == "" {
+		switch s {
+		case StateNormal:
+			return true
+		case StateStopped:
+			return true
+		case StateFailed:
+			return true
+		case StateWarning:
+			return true
+		case StatePending:
+			return true
+		}
+	}
+	return need == string(s)
+}
+
+// IsRunning return true if the feedState represents a running state.
+func (s FeedState) IsRunning() bool {
+	return s == StateNormal || s == StateWarning
+}
+
+// RunningError represents some running error from cdc components, such as processor.
+type RunningError struct {
+	Time    time.Time `json:"time"`
+	Addr    string    `json:"addr"`
+	Code    string    `json:"code"`
+	Message string    `json:"message"`
+}
+
+// ShouldFailChangefeed return true if a running error contains a changefeed not retry error.
+func (e RunningError) ShouldFailChangefeed() bool {
+	return cerror.ShouldFailChangefeed(errors.New(e.Message + e.Code))
+}
+
+// Value implements the driver.Valuer interface
+func (e RunningError) Value() (driver.Value, error) {
+	return json.Marshal(e)
+}
+
+// Scan implements the sql.Scanner interface
+func (e *RunningError) Scan(value interface{}) error {
+	b, ok := value.([]byte)
+	if !ok {
+		return errors.New("type assertion to []byte failed")
+	}
+
+	return json.Unmarshal(b, e)
+}
+
+// AdminJobType represents for admin job type, both used in owner and processor
+type AdminJobType int
+
+// AdminJob holds an admin job
+type AdminJob struct {
+	CfID                  common.ChangeFeedID
+	Type                  AdminJobType
+	Error                 *RunningError
+	OverwriteCheckpointTs uint64
+}
+
+// All AdminJob types
+const (
+	AdminNone AdminJobType = iota
+	AdminStop
+	AdminResume
+	AdminRemove
+	AdminFinish
+)
+
+// String implements fmt.Stringer interface.
+func (t AdminJobType) String() string {
+	switch t {
+	case AdminNone:
+		return "noop"
+	case AdminStop:
+		return "stop changefeed"
+	case AdminResume:
+		return "resume changefeed"
+	case AdminRemove:
+		return "remove changefeed"
+	case AdminFinish:
+		return "finish changefeed"
+	}
+	return "unknown"
+}
+
+// IsStopState returns whether changefeed is in stop state with give admin job
+func (t AdminJobType) IsStopState() bool {
+	switch t {
+	case AdminStop, AdminRemove, AdminFinish:
+		return true
+	}
+	return false
+}
 
 type ChangefeedConfig struct {
 	ChangefeedID common.ChangeFeedID `json:"changefeed_id"`
@@ -86,18 +242,18 @@ type ChangeFeedInfo struct {
 	// The ChangeFeed will exits until sync to timestamp TargetTs
 	TargetTs uint64 `json:"target-ts"`
 	// used for admin job notification, trigger watch event in capture
-	AdminJobType common.AdminJobType `json:"admin-job-type"`
-	Engine       common.SortEngine   `json:"sort-engine"`
+	AdminJobType AdminJobType `json:"admin-job-type"`
+	Engine       SortEngine   `json:"sort-engine"`
 	// SortDir is deprecated
 	// it cannot be set by user in changefeed level, any assignment to it should be ignored.
 	// but can be fetched for backward compatibility
 	SortDir string `json:"sort-dir"`
 
-	UpstreamInfo *UpstreamInfo        `json:"upstream-info"`
-	Config       *ReplicaConfig       `json:"config"`
-	State        common.FeedState     `json:"state"`
-	Error        *common.RunningError `json:"error"`
-	Warning      *common.RunningError `json:"warning"`
+	UpstreamInfo *UpstreamInfo       `json:"upstream-info"`
+	Config       *ReplicaConfig      `json:"config"`
+	State        FeedState           `json:"state"`
+	Error        *model.RunningError `json:"error"`
+	Warning      *model.RunningError `json:"warning"`
 
 	CreatorVersion string `json:"creator-version"`
 	// Epoch is the epoch of a changefeed, changes on every restart.
@@ -128,11 +284,11 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 // Note: if the changefeed is failed by GC, it should not block the GC safepoint.
 func (info *ChangeFeedInfo) NeedBlockGC() bool {
 	switch info.State {
-	case common.StateNormal, common.StateStopped, common.StatePending, common.StateWarning:
+	case StateNormal, StateStopped, StatePending, StateWarning:
 		return true
-	case common.StateFailed:
+	case StateFailed:
 		return !info.isFailedByGC()
-	case common.StateFinished, common.StateRemoved:
+	case StateFinished, StateRemoved:
 	default:
 	}
 	return false
@@ -184,7 +340,7 @@ func (info *ChangeFeedInfo) GetStartTs() uint64 {
 }
 
 // GetCheckpointTs returns CheckpointTs if it's specified in ChangeFeedStatus, otherwise StartTs is returned.
-func (info *ChangeFeedInfo) GetCheckpointTs(status *common.ChangeFeedStatus) uint64 {
+func (info *ChangeFeedInfo) GetCheckpointTs(status *ChangeFeedStatus) uint64 {
 	if status != nil {
 		return status.CheckpointTs
 	}
@@ -378,23 +534,23 @@ func (info *ChangeFeedInfo) fixState() {
 	state := info.State
 	// Upgrading from an old owner, we need to deal with cases where the state is normal,
 	// but actually contains errors and does not match the admin job type.
-	if state == common.StateNormal {
+	if state == StateNormal {
 		switch info.AdminJobType {
 		// This corresponds to the case of failure or error.
-		case common.AdminNone, common.AdminResume:
+		case AdminNone, AdminResume:
 			if info.Error != nil {
 				if cerror.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code)) {
-					state = common.StateFailed
+					state = StateFailed
 				} else {
-					state = common.StateWarning
+					state = StateWarning
 				}
 			}
-		case common.AdminStop:
-			state = common.StateStopped
-		case common.AdminFinish:
-			state = common.StateFinished
-		case common.AdminRemove:
-			state = common.StateRemoved
+		case AdminStop:
+			state = StateStopped
+		case AdminFinish:
+			state = StateFinished
+		case AdminRemove:
+			state = StateRemoved
 		}
 	}
 
@@ -515,6 +671,13 @@ type ChangeFeedStatus struct {
 	// MaintainerAddr is the address of the changefeed's maintainer
 	// It is used to identify the changefeed's maintainer, and it is not stored in etcd.
 	maintainerAddr string `json:"-"`
+	// minTableBarrierTs is the minimum commitTs of all DDL events and is only
+	// used to check whether there is a pending DDL job at the checkpointTs when
+	// initializing the changefeed.
+	MinTableBarrierTs uint64 `json:"min-table-barrier-ts"`
+	// TODO: remove this filed after we don't use ChangeFeedStatus to
+	// control processor. This is too ambiguous.
+	AdminJobType AdminJobType `json:"admin-job-type"`
 }
 
 // Marshal returns json encoded string of ChangeFeedStatus, only contains necessary fields stored in storage

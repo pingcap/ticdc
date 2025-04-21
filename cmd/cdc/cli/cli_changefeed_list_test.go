@@ -24,7 +24,7 @@ import (
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/api/v2/mock"
-	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,7 +44,7 @@ func TestChangefeedListCli(t *testing.T) {
 			ID:             "pending-1",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
-			FeedState:      common.StateWarning,
+			FeedState:      config.StateWarning,
 		},
 		{
 			UpstreamID:     1,
@@ -52,7 +52,7 @@ func TestChangefeedListCli(t *testing.T) {
 			ID:             "normal-2",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
-			FeedState:      common.StateNormal,
+			FeedState:      config.StateNormal,
 		},
 		{
 			UpstreamID:     1,
@@ -60,7 +60,7 @@ func TestChangefeedListCli(t *testing.T) {
 			ID:             "failed-3",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
-			FeedState:      common.StateFailed,
+			FeedState:      config.StateFailed,
 		},
 		{
 			UpstreamID:     1,
@@ -68,7 +68,7 @@ func TestChangefeedListCli(t *testing.T) {
 			ID:             "removed-4",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
-			FeedState:      common.StateRemoved,
+			FeedState:      config.StateRemoved,
 		},
 		{
 			UpstreamID:     1,
@@ -76,7 +76,7 @@ func TestChangefeedListCli(t *testing.T) {
 			ID:             "finished-5",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
-			FeedState:      common.StateFinished,
+			FeedState:      config.StateFinished,
 		},
 		{
 			UpstreamID:     1,
@@ -84,7 +84,7 @@ func TestChangefeedListCli(t *testing.T) {
 			ID:             "stopped-6",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
-			FeedState:      common.StateStopped,
+			FeedState:      config.StateStopped,
 		},
 		{
 			UpstreamID:     1,
@@ -92,7 +92,7 @@ func TestChangefeedListCli(t *testing.T) {
 			ID:             "warning-7",
 			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
-			FeedState:      common.StateStopped,
+			FeedState:      config.StateStopped,
 		},
 	}, nil).Times(2)
 	// when --all=false, should contains StateNormal, StateWarning, StateFailed, StateStopped changefeed

@@ -53,7 +53,7 @@ type MetaManager interface {
 }
 
 type metaManager struct {
-	captureID    common.CaptureID
+	captureID    config.CaptureID
 	changeFeedID common.ChangeFeedID
 	enabled      bool
 
@@ -548,7 +548,7 @@ func (m *metaManager) bgGC(egCtx context.Context) error {
 }
 
 func getMetafileName(
-	captureID common.CaptureID,
+	captureID config.CaptureID,
 	changeFeedID common.ChangeFeedID,
 	uuidGenerator uuid.Generator,
 ) string {

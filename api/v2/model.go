@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/integrity"
 )
 
@@ -93,13 +94,13 @@ type PDConfig struct {
 
 // ChangefeedCommonInfo holds some common usage information of a changefeed
 type ChangefeedCommonInfo struct {
-	UpstreamID     uint64               `json:"upstream_id"`
-	ID             string               `json:"id"`
-	Namespace      string               `json:"namespace"`
-	FeedState      common.FeedState     `json:"state"`
-	CheckpointTSO  uint64               `json:"checkpoint_tso"`
-	CheckpointTime api.JSONTime         `json:"checkpoint_time"`
-	RunningError   *common.RunningError `json:"error"`
+	UpstreamID     uint64              `json:"upstream_id"`
+	ID             string              `json:"id"`
+	Namespace      string              `json:"namespace"`
+	FeedState      config.FeedState    `json:"state"`
+	CheckpointTSO  uint64              `json:"checkpoint_tso"`
+	CheckpointTime api.JSONTime        `json:"checkpoint_time"`
+	RunningError   *model.RunningError `json:"error"`
 }
 
 // SyncedStatusConfig represents synced check interval config for a changefeed
@@ -118,11 +119,11 @@ func (c ChangefeedCommonInfo) MarshalJSON() ([]byte, error) {
 	// alias the original type to prevent recursive call of MarshalJSON
 	type Alias ChangefeedCommonInfo
 
-	if c.FeedState == common.StateUnInitialized {
-		c.FeedState = common.StateNormal
+	if c.FeedState == config.StateUnInitialized {
+		c.FeedState = config.StateNormal
 	}
-	if c.FeedState == common.StatePending {
-		c.FeedState = common.StateWarning
+	if c.FeedState == config.StatePending {
+		c.FeedState = config.StateWarning
 	}
 
 	return json.Marshal(struct {
@@ -1080,16 +1081,16 @@ type ChangeFeedInfo struct {
 	// The ChangeFeed will exits until sync to timestamp TargetTs
 	TargetTs uint64 `json:"target_ts,omitempty"`
 	// used for admin job notification, trigger watch event in capture
-	AdminJobType   common.AdminJobType `json:"admin_job_type,omitempty"`
+	AdminJobType   config.AdminJobType `json:"admin_job_type,omitempty"`
 	Config         *ReplicaConfig      `json:"config,omitempty"`
-	State          common.FeedState    `json:"state,omitempty"`
+	State          config.FeedState    `json:"state,omitempty"`
 	Error          *RunningError       `json:"error,omitempty"`
 	CreatorVersion string              `json:"creator_version,omitempty"`
 
 	ResolvedTs     uint64                     `json:"resolved_ts"`
 	CheckpointTs   uint64                     `json:"checkpoint_ts"`
 	CheckpointTime api.JSONTime               `json:"checkpoint_time"`
-	TaskStatus     []common.CaptureTaskStatus `json:"task_status,omitempty"`
+	TaskStatus     []config.CaptureTaskStatus `json:"task_status,omitempty"`
 
 	GID            common.GID `json:"gid"`
 	MaintainerAddr string     `json:"maintainer_addr,omitempty"`
@@ -1165,19 +1166,15 @@ type ProcessorDetail struct {
 	Tables []int64 `json:"table_ids"`
 }
 
-// Liveness is the liveness status of a capture.
-// Liveness can only be changed from alive to stopping, and no way back.
-type Liveness int32
-
 // ServerStatus holds some common information of a server
 type ServerStatus struct {
-	Version   string   `json:"version"`
-	GitHash   string   `json:"git_hash"`
-	ID        string   `json:"id"`
-	ClusterID string   `json:"cluster_id"`
-	Pid       int      `json:"pid"`
-	IsOwner   bool     `json:"is_owner"`
-	Liveness  Liveness `json:"liveness"`
+	Version   string       `json:"version"`
+	GitHash   string       `json:"git_hash"`
+	ID        string       `json:"id"`
+	ClusterID string       `json:"cluster_id"`
+	Pid       int          `json:"pid"`
+	IsOwner   bool         `json:"is_owner"`
+	Liveness  api.Liveness `json:"liveness"`
 }
 
 // Capture holds common information of a capture in cdc

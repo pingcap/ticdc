@@ -148,7 +148,7 @@ func TestPauseChangefeed(t *testing.T) {
 	backend := NewEtcdBackend(cdcClient)
 
 	changefeedID := common.NewChangeFeedIDWithName("test")
-	info := &config.ChangeFeedInfo{State: common.StateNormal}
+	info := &config.ChangeFeedInfo{State: config.StateNormal}
 	status := &config.ChangeFeedStatus{Progress: config.ProgressStopping}
 
 	cdcClient.EXPECT().GetChangeFeedInfo(gomock.Any(), changefeedID.DisplayName).Return(info, nil).Times(1)
@@ -194,7 +194,7 @@ func TestResumeChangefeed(t *testing.T) {
 	backend := NewEtcdBackend(cdcClient)
 
 	changefeedID := common.NewChangeFeedIDWithName("test")
-	info := &config.ChangeFeedInfo{State: common.StateStopped}
+	info := &config.ChangeFeedInfo{State: config.StateStopped}
 	status := &config.ChangeFeedStatus{CheckpointTs: 100}
 
 	cdcClient.EXPECT().GetChangeFeedInfo(gomock.Any(), changefeedID.DisplayName).Return(info, nil).Times(1)

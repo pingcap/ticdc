@@ -33,9 +33,8 @@ const (
 var DefaultEndian = binary.LittleEndian
 
 type (
-	Ts        = uint64
-	TableID   = int64
-	CaptureID = string
+	Ts      = uint64
+	TableID = int64
 )
 
 type CoordinatorID string

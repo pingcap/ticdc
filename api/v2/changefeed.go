@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
+	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -163,7 +164,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		StartTs:        cfg.StartTs,
 		TargetTs:       cfg.TargetTs,
 		Config:         replicaCfg,
-		State:          common.StateNormal,
+		State:          config.StateNormal,
 		CreatorVersion: version.ReleaseVersion,
 	}
 
@@ -251,7 +252,7 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 			continue
 		}
 		status := statuses[idx]
-		var runningErr *common.RunningError
+		var runningErr *model.RunningError
 		if changefeed.Error != nil {
 			runningErr = changefeed.Error
 		} else {
@@ -302,7 +303,7 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 		return
 	}
 
-	taskStatus := make([]common.CaptureTaskStatus, 0)
+	taskStatus := make([]config.CaptureTaskStatus, 0)
 	detail := CfInfoToAPIModel(cfInfo, status, taskStatus)
 	c.JSON(http.StatusOK, detail)
 }
@@ -310,13 +311,13 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 func CfInfoToAPIModel(
 	info *config.ChangeFeedInfo,
 	status *config.ChangeFeedStatus,
-	taskStatus []common.CaptureTaskStatus,
+	taskStatus []config.CaptureTaskStatus,
 ) *ChangeFeedInfo {
 	var runningError *RunningError
 
 	// if the state is normal, we shall not return the error info
 	// because changefeed will is retrying. errors will confuse the users
-	if info.State != common.StateNormal && info.Error != nil {
+	if info.State != config.StateNormal && info.Error != nil {
 		runningError = &RunningError{
 			Addr:    info.Error.Addr,
 			Code:    info.Error.Code,
@@ -562,7 +563,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	}
 
 	switch oldCfInfo.State {
-	case common.StateStopped, common.StateFailed:
+	case config.StateStopped, config.StateFailed:
 	default:
 		_ = c.Error(
 			errors.ErrChangefeedUpdateRefused.GenWithStackByArgs(

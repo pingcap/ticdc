@@ -428,6 +428,10 @@ var (
 		"patch ops:%d of a single changefeed exceed etcd txn max ops:%d",
 		errors.RFCCodeText("CDC:ErrEtcdTxnOpsExceed"),
 	)
+	ErrEtcdMigrateFailed = errors.Normalize(
+		"etcd meta data migrate failed:%s",
+		errors.RFCCodeText("CDC:ErrEtcdMigrateFailed"),
+	)
 	ErrChangefeedUnretryable = errors.Normalize(
 		"changefeed is in unretryable state, please check the error message"+
 			", and you should manually handle it",

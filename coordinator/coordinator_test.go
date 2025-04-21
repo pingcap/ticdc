@@ -38,9 +38,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/pingcap/tiflow/pkg/orchestrator"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -182,7 +182,7 @@ func (m *mockMaintainerManager) onDispatchMaintainerRequest(
 		cfID := common.NewChangefeedIDFromPB(req.GetId())
 		cf, ok := m.maintainerMap[cfID]
 		if !ok {
-			cfConfig := &common.ChangeFeedInfo{}
+			cfConfig := &config.ChangeFeedInfo{}
 			err := json.Unmarshal(req.Config, cfConfig)
 			if err != nil {
 				log.Panic("decode changefeed fail", zap.Error(err))
@@ -272,7 +272,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 			Info: &config.ChangeFeedInfo{
 				ChangefeedID: cfID,
 				Config:       config.GetDefaultReplicaConfig(),
-				State:        common.StateNormal,
+				State:        config.StateNormal,
 			},
 			Status: &config.ChangeFeedStatus{CheckpointTs: 10},
 		}
@@ -328,7 +328,7 @@ func TestScaleNode(t *testing.T) {
 			Info: &config.ChangeFeedInfo{
 				ChangefeedID: cfID,
 				Config:       config.GetDefaultReplicaConfig(),
-				State:        common.StateNormal,
+				State:        config.StateNormal,
 			},
 			Status: &config.ChangeFeedStatus{CheckpointTs: 10},
 		}
@@ -372,10 +372,10 @@ func TestScaleNode(t *testing.T) {
 
 	// notify node changes
 	_, _ = nodeManager.Tick(ctx, &orchestrator.GlobalReactorState{
-		Captures: map[common.CaptureID]*common.CaptureInfo{
-			common.CaptureID(info.ID):  {ID: common.CaptureID(info.ID), AdvertiseAddr: info.AdvertiseAddr},
-			common.CaptureID(info2.ID): {ID: common.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
-			common.CaptureID(info3.ID): {ID: common.CaptureID(info3.ID), AdvertiseAddr: info3.AdvertiseAddr},
+		Captures: map[config.CaptureID]*config.CaptureInfo{
+			config.CaptureID(info.ID):  {ID: config.CaptureID(info.ID), AdvertiseAddr: info.AdvertiseAddr},
+			config.CaptureID(info2.ID): {ID: config.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
+			config.CaptureID(info3.ID): {ID: config.CaptureID(info3.ID), AdvertiseAddr: info3.AdvertiseAddr},
 		},
 	})
 
@@ -390,9 +390,9 @@ func TestScaleNode(t *testing.T) {
 
 	// notify node changes
 	_, _ = nodeManager.Tick(ctx, &orchestrator.GlobalReactorState{
-		Captures: map[common.CaptureID]*common.CaptureInfo{
-			common.CaptureID(info.ID):  {ID: common.CaptureID(info.ID), AdvertiseAddr: info.AdvertiseAddr},
-			common.CaptureID(info2.ID): {ID: common.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
+		Captures: map[config.CaptureID]*config.CaptureInfo{
+			config.CaptureID(info.ID):  {ID: config.CaptureID(info.ID), AdvertiseAddr: info.AdvertiseAddr},
+			config.CaptureID(info2.ID): {ID: config.CaptureID(info2.ID), AdvertiseAddr: info2.AdvertiseAddr},
 		},
 	})
 
@@ -427,7 +427,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 		Info: &config.ChangeFeedInfo{
 			ChangefeedID: common.NewChangeFeedIDWithName("cf1"),
 			Config:       config.GetDefaultReplicaConfig(),
-			State:        common.StateNormal,
+			State:        config.StateNormal,
 		},
 		Status: &config.ChangeFeedStatus{CheckpointTs: 10, Progress: config.ProgressRemoving},
 	}
@@ -435,7 +435,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 		Info: &config.ChangeFeedInfo{
 			ChangefeedID: common.NewChangeFeedIDWithName("cf2"),
 			Config:       config.GetDefaultReplicaConfig(),
-			State:        common.StateNormal,
+			State:        config.StateNormal,
 		},
 		Status: &config.ChangeFeedStatus{CheckpointTs: 10, Progress: config.ProgressRemoving},
 	}
@@ -443,7 +443,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 		Info: &config.ChangeFeedInfo{
 			ChangefeedID: common.NewChangeFeedIDWithName("cf1"),
 			Config:       config.GetDefaultReplicaConfig(),
-			State:        common.StateStopped,
+			State:        config.StateStopped,
 		},
 		Status: &config.ChangeFeedStatus{CheckpointTs: 10, Progress: config.ProgressStopping},
 	}
@@ -452,7 +452,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 		Info: &config.ChangeFeedInfo{
 			ChangefeedID: common.NewChangeFeedIDWithName("cf2"),
 			Config:       config.GetDefaultReplicaConfig(),
-			State:        common.StateStopped,
+			State:        config.StateStopped,
 		},
 		Status: &config.ChangeFeedStatus{CheckpointTs: 10, Progress: config.ProgressStopping},
 	}
@@ -673,6 +673,6 @@ func newMockEtcdClient(ownerID string) *mockEtcdClient {
 	}
 }
 
-func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (common.CaptureID, error) {
-	return common.CaptureID(m.ownerID), nil
+func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (config.CaptureID, error) {
+	return config.CaptureID(m.ownerID), nil
 }

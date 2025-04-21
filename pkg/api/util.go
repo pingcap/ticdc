@@ -14,12 +14,16 @@
 package api
 
 import (
+	"encoding/json"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/errors"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	"github.com/pingcap/log"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"go.uber.org/zap"
 )
 
 const timeFormat = `"2006-01-02 15:04:05.000"`
@@ -114,7 +118,31 @@ func IsHTTPBadRequestError(err error) bool {
 	return false
 }
 
-// Liveness is the liveness status of a capture.
+// WriteError write error message to response
+func WriteError(w http.ResponseWriter, statusCode int, err error) {
+	w.WriteHeader(statusCode)
+	_, err = w.Write([]byte(err.Error()))
+	if err != nil {
+		log.Error("write error", zap.Error(err))
+	}
+}
+
+// WriteData write data to response with http status code 200
+func WriteData(w http.ResponseWriter, data interface{}) {
+	js, err := json.MarshalIndent(data, "", " ")
+	if err != nil {
+		log.Error("invalid json data", zap.Any("data", data), zap.Error(err))
+		WriteError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, err = w.Write(js)
+	if err != nil {
+		log.Error("fail to write data", zap.Error(err))
+	}
+}
+
 // Liveness can only be changed from alive to stopping, and no way back.
 type Liveness int32
 

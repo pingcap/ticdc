@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/pingcap/tiflow/cdc/model"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -85,9 +86,9 @@ type Controller struct {
 type ChangefeedChange struct {
 	changefeedID common.ChangeFeedID
 	changefeed   *changefeed.Changefeed
-	state        common.FeedState
+	state        config.FeedState
 	changeType   ChangeType
-	err          *common.RunningError
+	err          *model.RunningError
 }
 
 func NewController(
@@ -412,7 +413,7 @@ func (c *Controller) updateChangefeedStatus(
 		return change
 	}
 	if err != nil {
-		change.err = &common.RunningError{
+		change.err = &model.RunningError{
 			Time:    time.Now(),
 			Addr:    err.Node,
 			Code:    err.Code,
@@ -554,7 +555,7 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	if clone, err := cf.GetInfo().Clone(); err != nil {
 		return errors.Trace(err)
 	} else {
-		clone.State = common.StateStopped
+		clone.State = config.StateStopped
 		cf.SetInfo(clone)
 	}
 	c.operatorController.StopChangefeed(ctx, id, false)
@@ -581,7 +582,7 @@ func (c *Controller) ResumeChangefeed(
 	if clone, err := cf.GetInfo().Clone(); err != nil {
 		return errors.Trace(err)
 	} else {
-		clone.State = common.StateNormal
+		clone.State = config.StateNormal
 		clone.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
 		cf.SetInfo(clone)
 	}
@@ -718,9 +719,9 @@ func (c *Controller) calculateGCSafepoint() uint64 {
 	return c.changefeedDB.CalculateGCSafepoint()
 }
 
-func shouldRunChangefeed(state common.FeedState) bool {
+func shouldRunChangefeed(state config.FeedState) bool {
 	switch state {
-	case common.StateStopped, common.StateFailed, common.StateFinished:
+	case config.StateStopped, config.StateFailed, config.StateFinished:
 		return false
 	}
 	return true

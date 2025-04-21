@@ -89,6 +89,7 @@ type Client interface {
 	Grant(ctx context.Context, ttl int64) (resp *clientV3.LeaseGrantResponse, err error)
 	TimeToLive(ctx context.Context, lease clientV3.LeaseID, opts ...clientV3.LeaseOption) (resp *clientV3.LeaseTimeToLiveResponse, err error)
 	NewSession(opts ...concurrency.SessionOption) (*concurrency.Session, error)
+	Unwrap() *clientV3.Client
 	Close() error
 }
 
@@ -106,6 +107,11 @@ type ClientImpl struct {
 // Wrap warps a clientV3.Client that provides etcd APIs required by TiCDC.
 func Wrap(cli *clientV3.Client, metrics map[string]prometheus.Counter) *ClientImpl {
 	return &ClientImpl{cli: cli, metrics: metrics, clock: clock.New()}
+}
+
+// Unwrap returns a clientV3.Client
+func (c *ClientImpl) Unwrap() *clientV3.Client {
+	return c.cli
 }
 
 // Close closes the clientV3.Client

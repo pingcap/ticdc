@@ -23,8 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/orchestrator"
+	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/zap"
 )
@@ -106,7 +105,7 @@ func (c *NodeManager) Tick(
 	}
 
 	for _, info := range oldMap {
-		if _, exist := state.Captures[model.CaptureID(info.ID)]; !exist {
+		if _, exist := state.Captures[config.CaptureID(info.ID)]; !exist {
 			changed = true
 		}
 	}

@@ -21,13 +21,12 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/chdelay"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/tiflow/pkg/chdelay"
-	"github.com/pingcap/tiflow/pkg/migrate"
-	tiorchestrator "github.com/pingcap/tiflow/pkg/orchestrator"
-	"github.com/pingcap/tiflow/pkg/orchestrator/util"
-	pkgutil "github.com/pingcap/tiflow/pkg/util"
+	"github.com/pingcap/ticdc/pkg/migrate"
+	"github.com/pingcap/ticdc/pkg/orchestrator/util"
+	pkgutil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
@@ -49,8 +48,8 @@ const (
 type EtcdWorker struct {
 	clusterID string
 	client    etcd.Client
-	reactor   tiorchestrator.Reactor
-	state     tiorchestrator.ReactorState
+	reactor   Reactor
+	state     ReactorState
 	// rawState is the local cache of the latest Etcd state.
 	rawState map[util.EtcdKey]rawStateEntry
 	// pendingUpdates stores Etcd updates that the Reactor has not been notified of.
@@ -103,8 +102,8 @@ type rawStateEntry struct {
 func NewEtcdWorker(
 	client etcd.CDCEtcdClient,
 	prefix string,
-	reactor tiorchestrator.Reactor,
-	initState tiorchestrator.ReactorState,
+	reactor Reactor,
+	initState ReactorState,
 	migrator migrate.Migrator,
 ) (*EtcdWorker, error) {
 	return &EtcdWorker{
@@ -165,7 +164,7 @@ func (worker *EtcdWorker) Run(ctx context.Context, session *concurrency.Session,
 	}
 
 	var (
-		pendingPatches   [][]tiorchestrator.DataPatch
+		pendingPatches   [][]DataPatch
 		committedChanges int
 		exiting          bool
 		retry            bool
@@ -409,7 +408,7 @@ func (worker *EtcdWorker) cloneRawState() map[util.EtcdKey][]byte {
 	return ret
 }
 
-func (worker *EtcdWorker) applyPatchGroups(ctx context.Context, patchGroups [][]tiorchestrator.DataPatch) ([][]tiorchestrator.DataPatch, int, error) {
+func (worker *EtcdWorker) applyPatchGroups(ctx context.Context, patchGroups [][]DataPatch) ([][]DataPatch, int, error) {
 	state := worker.cloneRawState()
 	committedChanges := 0
 	for len(patchGroups) > 0 {

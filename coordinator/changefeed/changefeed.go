@@ -84,7 +84,7 @@ func NewChangefeed(cfID common.ChangeFeedID,
 		backoff: NewBackoff(cfID, *info.Config.ChangefeedErrorStuckDuration, checkpointTs),
 	}
 	// Must set retrying to true when the changefeed is in warning state.
-	if info.State == common.StateWarning {
+	if info.State == config.StateWarning {
 		res.backoff.retrying.Store(true)
 	}
 
@@ -137,7 +137,7 @@ func (c *Changefeed) ShouldRun() bool {
 // It returns true if the status is changed
 // It returns false if the status is not changed
 // It returns the new state and error if the status is changed
-func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, common.FeedState, *heartbeatpb.RunningError) {
+func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {
 	old := c.status.Load()
 
 	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
@@ -146,22 +146,22 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 			log.Info("Received changefeed status with bootstrapDone",
 				zap.Stringer("changefeed", c.ID),
 				zap.Bool("bootstrapDone", newStatus.BootstrapDone))
-			return true, common.StateNormal, nil
+			return true, config.StateNormal, nil
 		}
 
 		info := c.GetInfo()
 		// the changefeed reaches the targetTs
 		if info.TargetTs != 0 && newStatus.CheckpointTs >= info.TargetTs {
-			return true, common.StateFinished, nil
+			return true, config.StateFinished, nil
 		}
 
 		return c.backoff.CheckStatus(newStatus)
 	}
 
-	return false, common.StateNormal, nil
+	return false, config.StateNormal, nil
 }
 
-func (c *Changefeed) ForceUpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, common.FeedState, *heartbeatpb.RunningError) {
+func (c *Changefeed) ForceUpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {
 	c.status.Store(newStatus)
 	return c.backoff.CheckStatus(newStatus)
 }

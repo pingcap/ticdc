@@ -29,7 +29,7 @@ func TestNewChangefeed(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
-		State:   common.StateNormal,
+		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
 	checkpointTs := uint64(100)
@@ -45,14 +45,14 @@ func TestChangefeed_GetSetInfo(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
-		State:   common.StateNormal,
+		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
 	cf := NewChangefeed(cfID, info, 100, true)
 
 	newInfo := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9097",
-		State:   common.StateNormal,
+		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
 	cf.SetInfo(newInfo)
@@ -63,7 +63,7 @@ func TestChangefeed_GetSetNodeID(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
-		State:   common.StateNormal,
+		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
 	cf := NewChangefeed(cfID, info, 100, true)
@@ -77,7 +77,7 @@ func TestChangefeed_UpdateStatus(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
-		State:   common.StateNormal,
+		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
 	cf := NewChangefeed(cfID, info, 100, true)
@@ -85,7 +85,7 @@ func TestChangefeed_UpdateStatus(t *testing.T) {
 	newStatus := &heartbeatpb.MaintainerStatus{CheckpointTs: 200}
 	updated, state, err := cf.UpdateStatus(newStatus)
 	require.False(t, updated)
-	require.Equal(t, common.StateNormal, state)
+	require.Equal(t, config.StateNormal, state)
 	require.Nil(t, err)
 	require.Equal(t, newStatus, cf.GetStatus())
 }
@@ -94,7 +94,7 @@ func TestChangefeed_IsMQSink(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
-		State:   common.StateNormal,
+		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
 	cf := NewChangefeed(cfID, info, 100, true)
@@ -106,7 +106,7 @@ func TestChangefeed_GetSetLastSavedCheckPointTs(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
-		State:   common.StateNormal,
+		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
 	cf := NewChangefeed(cfID, info, 100, true)
@@ -120,7 +120,7 @@ func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
-		State:   common.StateNormal,
+		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
 	cf := NewChangefeed(cfID, info, 100, true)
@@ -135,7 +135,7 @@ func TestChangefeed_NewRemoveMaintainerMessage(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
-		State:   common.StateNormal,
+		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
 	cf := NewChangefeed(cfID, info, 100, true)
@@ -150,7 +150,7 @@ func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
-		State:   common.StateNormal,
+		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
 	}
 	cf := NewChangefeed(cfID, info, 100, true)

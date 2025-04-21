@@ -197,7 +197,7 @@ func (b *EtcdBackend) PauseChangefeed(ctx context.Context, id common.ChangeFeedI
 	if err != nil {
 		return errors.Trace(err)
 	}
-	info.State = common.StateStopped
+	info.State = config.StateStopped
 	infoKey := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), id.DisplayName)
 	inforValue, err := info.Marshal()
 	if err != nil {
@@ -255,7 +255,7 @@ func (b *EtcdBackend) ResumeChangefeed(ctx context.Context,
 	if err != nil {
 		return errors.Trace(err)
 	}
-	info.State = common.StateNormal
+	info.State = config.StateNormal
 	newStr, err := info.Marshal()
 	if err != nil {
 		return errors.Trace(err)

@@ -21,7 +21,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	v2 "github.com/pingcap/ticdc/pkg/api/v2"
-	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/spf13/cobra"
 )
 
@@ -76,8 +76,8 @@ func (o *listChangefeedOptions) run(cmd *cobra.Command) error {
 
 	for _, cf := range raw {
 		if !o.listAll {
-			if cf.FeedState == common.StateFinished ||
-				cf.FeedState == common.StateRemoved {
+			if cf.FeedState == config.StateFinished ||
+				cf.FeedState == config.StateRemoved {
 				continue
 			}
 		}
