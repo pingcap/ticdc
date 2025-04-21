@@ -100,6 +100,7 @@ type EventCollector struct {
 	cancel context.CancelFunc
 
 	metricDispatcherReceivedKVEventCount         prometheus.Counter
+	metricDispatcherReceivedOtherEventCount prometheus.Counter
 	metricDispatcherReceivedResolvedTsEventCount prometheus.Counter
 	metricReceiveEventLagDuration                prometheus.Observer
 }
@@ -115,6 +116,7 @@ func New(serverId node.ID) *EventCollector {
 		metricDispatcherReceivedKVEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent"),
 		metricDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs"),
 		metricReceiveEventLagDuration:                metrics.EventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
+		metricDispatcherReceivedOtherEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("Other"),
 	}
 	eventCollector.ds = NewEventDynamicStream(&eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.RecvEventsMessage)
@@ -433,8 +435,11 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 							c.ds.Push(e.DispatcherID, event)
 						}
 						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(event.Len()))
-					default:
+					case commonEvent.TypeDMLEvent:
 						c.metricDispatcherReceivedKVEventCount.Add(float64(event.Len()))
+						c.ds.Push(event.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, event))
+					default:
+						c.metricDispatcherReceivedOtherEventCount.Add(float64(event.Len()))
 						c.ds.Push(event.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, event))
 					}
 				default:
