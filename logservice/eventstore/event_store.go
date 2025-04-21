@@ -183,7 +183,7 @@ const (
 	writeWorkerNumPerDB = 4
 
 	// scan rate limit
-	scanBytesRateLimit = 50 * 1024 * 1024   // 50MB/s
+	scanBytesRateLimit = 5 * 1024 * 1024    // 5MB/s
 	bucketCapacity     = scanBytesRateLimit // bucket capacity
 )
 
