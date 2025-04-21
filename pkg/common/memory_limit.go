@@ -49,19 +49,19 @@ func (m *MemoryLimiter) GetCurrentMemoryLimit() int {
 func (m *MemoryLimiter) penalty() float64 {
 	penalty := m.config.PenaltyFactor
 
-	if m.config.CurrentMemoryLimit >= m.config.MaxMemoryLimit &&
-		time.Since(m.lastChangeTime) >= 60*time.Second {
-		switch {
-		case time.Since(m.lastChangeTime) > 60*time.Second:
-			penalty = penalty / 1.5
-		case time.Since(m.lastChangeTime) > 120*time.Second:
-			penalty = penalty / 2
-		case time.Since(m.lastChangeTime) > 180*time.Second:
-			penalty = penalty / 3
-		case time.Since(m.lastChangeTime) > 240*time.Second:
-			penalty = 1
-		}
-	}
+	// if m.config.CurrentMemoryLimit >= m.config.MaxMemoryLimit &&
+	// 	time.Since(m.lastChangeTime) >= 60*time.Second {
+	// 	switch {
+	// 	case time.Since(m.lastChangeTime) > 60*time.Second:
+	// 		penalty = penalty / 1.5
+	// 	case time.Since(m.lastChangeTime) > 120*time.Second:
+	// 		penalty = penalty / 2
+	// 	case time.Since(m.lastChangeTime) > 180*time.Second:
+	// 		penalty = penalty / 3
+	// 	case time.Since(m.lastChangeTime) > 240*time.Second:
+	// 		penalty = 1
+	// 	}
+	// }
 
 	if penalty <= 1 {
 		return 1

@@ -383,8 +383,8 @@ func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event reg
 			zap.Int("eventSize", eventSize),
 			zap.Int("currentMemoryLimit", s.memoryLimiter.GetCurrentMemoryLimit()))
 		eventSize = s.memoryLimiter.GetCurrentMemoryLimit()
-		s.memoryLimiter.WaitN(eventSize)
 	}
+	s.memoryLimiter.WaitN(eventSize)
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)

@@ -587,8 +587,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			if eSize > c.memoryLimiter.GetCurrentMemoryLimit() {
 				log.Warn("The single event memory limit is exceeded the total memory limit, set it to the current memory limit", zap.Int("eventSize", eSize), zap.Int("currentMemoryLimit", c.memoryLimiter.GetCurrentMemoryLimit()))
 				eSize = c.memoryLimiter.GetCurrentMemoryLimit()
-				c.memoryLimiter.WaitN(eSize)
 			}
+			c.memoryLimiter.WaitN(eSize)
 		}
 
 		if err != nil {
