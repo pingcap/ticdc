@@ -41,6 +41,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 var (
@@ -182,7 +183,7 @@ const (
 	writeWorkerNumPerDB = 4
 
 	// scan rate limit
-	scanBytesRateLimit = 10 * 1024 * 1024   // 10MB/s
+	scanBytesRateLimit = 100 * 1024 * 1024   // 100MB/s
 	bucketCapacity     = scanBytesRateLimit // bucket capacity
 )
 

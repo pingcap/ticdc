@@ -41,6 +41,7 @@ import (
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -56,6 +57,10 @@ const (
 	resolveLockMinInterval  time.Duration = 10 * time.Second
 	resolveLockTickInterval time.Duration = 2 * time.Second
 	resolveLockFence        time.Duration = 4 * time.Second
+
+	// scan rate limit
+	pushBytesRateLimit = 600 * 1024 * 1024  // 600MB/s
+	bucketCapacity     = pushBytesRateLimit // bucket capacity
 )
 
 var (
