@@ -21,6 +21,7 @@ import (
 )
 
 func TestDispatcherProgress(t *testing.T) {
+	t.Parallel()
 	// Test GetSize function
 	dispatcherID := common.NewDispatcherID()
 	progress := DispatcherProgress{
@@ -56,6 +57,7 @@ func TestDispatcherProgress(t *testing.T) {
 }
 
 func TestDispatcherHeartbeat(t *testing.T) {
+	t.Parallel()
 	// Test NewDispatcherHeartbeat
 	dispatcherCount := 3
 	heartbeat := NewDispatcherHeartbeat(dispatcherCount)
@@ -116,6 +118,7 @@ func TestDispatcherHeartbeat(t *testing.T) {
 }
 
 func TestDispatcherHeartbeatWithMultipleDispatchers(t *testing.T) {
+	t.Parallel()
 	// Create multiple dispatchers
 	dispatcherCount := 5
 	heartbeat := NewDispatcherHeartbeat(dispatcherCount)
@@ -148,5 +151,122 @@ func TestDispatcherHeartbeatWithMultipleDispatchers(t *testing.T) {
 		require.Equal(t, progress.Version, unmarshaledHeartbeat.DispatcherProgresses[i].Version)
 		require.Equal(t, progress.CheckpointTs, unmarshaledHeartbeat.DispatcherProgresses[i].CheckpointTs)
 		require.Equal(t, progress.DispatcherID, unmarshaledHeartbeat.DispatcherProgresses[i].DispatcherID)
+	}
+}
+
+func TestDispatcherState(t *testing.T) {
+	t.Parallel()
+	// Test constructor function
+	dispatcherID := common.NewDispatcherID()
+	state := DSStateNormal
+	ds := NewDispatcherState(dispatcherID, state)
+
+	require.Equal(t, byte(DispatcherHeartbeatResponseVersion), ds.Version)
+	require.Equal(t, state, ds.State)
+	require.Equal(t, dispatcherID, ds.DispatcherID)
+
+	// Test GetSize
+	expectedSize := dispatcherID.GetSize() + 2 // dispatcherID size + version + state
+	require.Equal(t, expectedSize, ds.GetSize())
+
+	// Test Marshal and Unmarshal
+	data, err := ds.Marshal()
+	require.NoError(t, err)
+	require.Len(t, data, ds.GetSize())
+
+	var unmarshaledState DispatcherState
+	err = unmarshaledState.Unmarshal(data)
+	require.NoError(t, err)
+
+	require.Equal(t, ds.Version, unmarshaledState.Version)
+	require.Equal(t, ds.State, unmarshaledState.State)
+	require.Equal(t, ds.DispatcherID, unmarshaledState.DispatcherID)
+}
+
+func TestDispatcherHeartbeatResponse(t *testing.T) {
+	t.Parallel()
+	// Test constructor function
+	dispatcherCount := 3
+	response := NewDispatcherHeartbeatResponse(dispatcherCount)
+
+	require.Equal(t, byte(DispatcherHeartbeatVersion), response.Version)
+	require.Equal(t, uint32(dispatcherCount), response.DispatcherCount)
+	require.Empty(t, response.DispatcherStates)
+	require.Equal(t, dispatcherCount, cap(response.DispatcherStates))
+
+	// Test Append
+	dispatcherID1 := common.NewDispatcherID()
+	state1 := NewDispatcherState(dispatcherID1, DSStateNormal)
+	response.Append(state1)
+	require.Len(t, response.DispatcherStates, 1)
+	require.Equal(t, state1, response.DispatcherStates[0])
+
+	dispatcherID2 := common.NewDispatcherID()
+	state2 := NewDispatcherState(dispatcherID2, DSStateRemoved)
+	response.Append(state2)
+	require.Len(t, response.DispatcherStates, 2)
+	require.Equal(t, state2, response.DispatcherStates[1])
+
+	// Test GetSize
+	expectedSize := 1 + 4 + state1.GetSize() + state2.GetSize() // version + dispatcher count + state1 size + state2 size
+	require.Equal(t, expectedSize, response.GetSize())
+
+	// Test Marshal and Unmarshal
+	response.DispatcherCount = uint32(len(response.DispatcherStates))
+	data, err := response.Marshal()
+	require.NoError(t, err)
+	require.Len(t, data, response.GetSize())
+
+	var unmarshaledResponse DispatcherHeartbeatResponse
+	err = unmarshaledResponse.Unmarshal(data)
+	require.NoError(t, err)
+
+	require.Equal(t, response.Version, unmarshaledResponse.Version)
+	require.Equal(t, response.DispatcherCount, unmarshaledResponse.DispatcherCount)
+	require.Equal(t, len(response.DispatcherStates), len(unmarshaledResponse.DispatcherStates))
+
+	for i, state := range response.DispatcherStates {
+		require.Equal(t, state.Version, unmarshaledResponse.DispatcherStates[i].Version)
+		require.Equal(t, state.State, unmarshaledResponse.DispatcherStates[i].State)
+		require.Equal(t, state.DispatcherID, unmarshaledResponse.DispatcherStates[i].DispatcherID)
+	}
+}
+
+func TestDispatcherHeartbeatResponseWithMultipleStates(t *testing.T) {
+	t.Parallel()
+	// Create response with multiple dispatcher states
+	dispatcherCount := 5
+	response := NewDispatcherHeartbeatResponse(dispatcherCount)
+
+	// Add state for each dispatcher - alternating between Normal and Removed
+	for i := 0; i < dispatcherCount; i++ {
+		var state DSState
+		if i%2 == 0 {
+			state = DSStateNormal
+		} else {
+			state = DSStateRemoved
+		}
+
+		response.Append(NewDispatcherState(common.NewDispatcherID(), state))
+	}
+
+	require.Len(t, response.DispatcherStates, dispatcherCount)
+	response.DispatcherCount = uint32(len(response.DispatcherStates))
+
+	// Test Marshal and Unmarshal
+	data, err := response.Marshal()
+	require.NoError(t, err)
+
+	var unmarshaledResponse DispatcherHeartbeatResponse
+	err = unmarshaledResponse.Unmarshal(data)
+	require.NoError(t, err)
+
+	require.Equal(t, response.DispatcherCount, unmarshaledResponse.DispatcherCount)
+	require.Equal(t, len(response.DispatcherStates), len(unmarshaledResponse.DispatcherStates))
+
+	for i, state := range response.DispatcherStates {
+		require.Equal(t, state.Version, unmarshaledResponse.DispatcherStates[i].Version)
+		require.Equal(t, state.State, unmarshaledResponse.DispatcherStates[i].State)
+		require.Equal(t, state.DispatcherID, unmarshaledResponse.DispatcherStates[i].DispatcherID)
 	}
 }

@@ -22,14 +22,23 @@ import (
 )
 
 const (
-	DispatcherHeartbeatVersion = 0
+	DispatcherHeartbeatVersion         = 0
+	DispatcherHeartbeatResponseVersion = 0
 )
 
 // DispatcherProgress is used to report the progress of a dispatcher to the EventService
 type DispatcherProgress struct {
-	Version      byte // 1 byte
+	Version      byte // 1 byte, it should be the same as DispatcherHeartbeatVersion
 	DispatcherID common.DispatcherID
 	CheckpointTs uint64 // 8 bytes
+}
+
+func NewDispatcherProgress(dispatcherID common.DispatcherID, checkpointTs uint64) DispatcherProgress {
+	return DispatcherProgress{
+		Version:      DispatcherHeartbeatVersion,
+		DispatcherID: dispatcherID,
+		CheckpointTs: checkpointTs,
+	}
 }
 
 func (dp DispatcherProgress) GetSize() int {
@@ -134,4 +143,130 @@ func (d *DispatcherHeartbeat) decodeV0(data []byte) error {
 		d.DispatcherProgresses = append(d.DispatcherProgresses, dp)
 	}
 	return nil
+}
+
+type DSState byte
+
+const (
+	DSStateNormal DSState = iota
+	DSStateRemoved
+)
+
+type DispatcherState struct {
+	Version      byte // 1 byte, it should be the same as DispatcherHeartbeatResponseVersion
+	State        DSState
+	DispatcherID common.DispatcherID
+}
+
+func NewDispatcherState(dispatcherID common.DispatcherID, state DSState) DispatcherState {
+	return DispatcherState{
+		Version:      DispatcherHeartbeatResponseVersion,
+		State:        state,
+		DispatcherID: dispatcherID,
+	}
+}
+
+func (d *DispatcherState) GetSize() int {
+	return d.DispatcherID.GetSize() + 2 // version + state
+}
+
+func (d DispatcherState) Marshal() ([]byte, error) {
+	return d.encodeV0()
+}
+
+func (d *DispatcherState) Unmarshal(data []byte) error {
+	return d.decodeV0(data)
+}
+
+func (d *DispatcherState) decodeV0(data []byte) error {
+	buf := bytes.NewBuffer(data)
+	var err error
+	d.Version, err = buf.ReadByte()
+	if err != nil {
+		return err
+	}
+	d.DispatcherID.Unmarshal(buf.Next(d.DispatcherID.GetSize()))
+	state, err := buf.ReadByte()
+	if err != nil {
+		return err
+	}
+	d.State = DSState(state)
+	return nil
+}
+
+func (d *DispatcherState) encodeV0() ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0))
+	buf.WriteByte(d.Version)
+	buf.Write(d.DispatcherID.Marshal())
+	buf.WriteByte(byte(d.State))
+	return buf.Bytes(), nil
+}
+
+type DispatcherHeartbeatResponse struct {
+	Version          byte
+	DispatcherCount  uint32
+	DispatcherStates []DispatcherState
+}
+
+func NewDispatcherHeartbeatResponse(dispatcherCount int) DispatcherHeartbeatResponse {
+	return DispatcherHeartbeatResponse{
+		Version:          DispatcherHeartbeatVersion,
+		DispatcherCount:  uint32(dispatcherCount),
+		DispatcherStates: make([]DispatcherState, 0, dispatcherCount),
+	}
+}
+
+func (d *DispatcherHeartbeatResponse) Append(ds DispatcherState) {
+	d.DispatcherStates = append(d.DispatcherStates, ds)
+}
+
+func (d *DispatcherHeartbeatResponse) GetSize() int {
+	size := 1 // version
+	size += 4 // dispatcher count
+	for _, ds := range d.DispatcherStates {
+		size += ds.GetSize()
+	}
+	return size
+}
+
+func (d DispatcherHeartbeatResponse) Marshal() ([]byte, error) {
+	return d.encodeV0()
+}
+
+func (d *DispatcherHeartbeatResponse) Unmarshal(data []byte) error {
+	return d.decodeV0(data)
+}
+
+func (d *DispatcherHeartbeatResponse) decodeV0(data []byte) error {
+	buf := bytes.NewBuffer(data)
+	var err error
+	d.Version, err = buf.ReadByte()
+	if err != nil {
+		return err
+	}
+	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
+	d.DispatcherStates = make([]DispatcherState, 0, d.DispatcherCount)
+	for range d.DispatcherCount {
+		var ds DispatcherState
+		dsData := buf.Next(ds.GetSize())
+		if err := ds.Unmarshal(dsData); err != nil {
+			return err
+		}
+		d.DispatcherStates = append(d.DispatcherStates, ds)
+	}
+	return nil
+}
+
+func (d *DispatcherHeartbeatResponse) encodeV0() ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0))
+	buf.WriteByte(d.Version)
+	binary.Write(buf, binary.BigEndian, d.DispatcherCount)
+	for _, ds := range d.DispatcherStates {
+		dsData, err := ds.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(dsData)
+	}
+	return buf.Bytes(), nil
 }
