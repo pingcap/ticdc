@@ -183,7 +183,7 @@ const (
 	writeWorkerNumPerDB = 4
 
 	// scan rate limit
-	scanBytesRateLimit = 100 * 1024 * 1024   // 100MB/s
+	scanBytesRateLimit = 20 * 1024 * 1024   // 20MB/s
 	bucketCapacity     = scanBytesRateLimit // bucket capacity
 )
 
@@ -630,7 +630,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		startTs:      dataRange.StartTs,
 		endTs:        dataRange.EndTs,
 		rowCount:     0,
-		limiter: e.rateLimiter,
+		limiter:      e.rateLimiter,
 	}, nil
 }
 

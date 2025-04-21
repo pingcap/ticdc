@@ -59,7 +59,7 @@ const (
 	resolveLockFence        time.Duration = 4 * time.Second
 
 	// scan rate limit
-	pushBytesRateLimit = 600 * 1024 * 1024  // 600MB/s
+	pushBytesRateLimit = 400 * 1024 * 1024  // 600MB/s
 	bucketCapacity     = pushBytesRateLimit // bucket capacity
 )
 
@@ -232,7 +232,7 @@ func NewSubscriptionClient(
 		regionCh:          make(chan regionInfo, 1024),
 		resolveLockTaskCh: make(chan resolveLockTask, 1024),
 		errCache:          newErrCache(),
-		rateLimiter: rate.NewLimiter(rate.Limit(pushBytesRateLimit), bucketCapacity),
+		rateLimiter:       rate.NewLimiter(rate.Limit(pushBytesRateLimit), bucketCapacity),
 	}
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
