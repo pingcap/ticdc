@@ -48,7 +48,9 @@ const (
 
 	defaultInitialMemoryLimit      = 1024 * 1024 * 1 // 1MB
 	defaultMemoryLimitIncreaseRate = 2
-	memoryEnlargeFactor            = 4
+	// memoryEnlargeFactor is the enlarge factor for the real memory usage when scan an event from the eventStore.
+	// It is used to avoid the memory limit being exceeded when scan an event from the eventStore.
+	memoryEnlargeFactor = 4
 )
 
 var (
@@ -139,6 +141,7 @@ func newEventBroker(
 		MaxMemoryLimit:          defaultInitialMemoryLimit * 150, // 150MB
 		MemoryLimitIncreaseRate: defaultMemoryLimitIncreaseRate,
 		IncreaseInterval:        time.Second * 10,
+		PenaltyFactor:           memoryEnlargeFactor,
 	})
 
 	c := &eventBroker{
@@ -580,7 +583,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		c.memoryLimiter.Start()
 
 		if e != nil {
-			eSize := int(e.KeyLen+e.ValueLen+e.OldValueLen) * memoryEnlargeFactor
+			eSize := int(e.KeyLen + e.ValueLen + e.OldValueLen)
 			if eSize > c.memoryLimiter.GetCurrentMemoryLimit() {
 				log.Warn("The single event memory limit is exceeded the total memory limit, set it to the current memory limit", zap.Int("eventSize", eSize), zap.Int("currentMemoryLimit", c.memoryLimiter.GetCurrentMemoryLimit()))
 				eSize = c.memoryLimiter.GetCurrentMemoryLimit()

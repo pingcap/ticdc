@@ -220,6 +220,7 @@ func NewSubscriptionClient(
 		MaxMemoryLimit:          100 * 1024 * 1024 * 6, // 600MB
 		MemoryLimitIncreaseRate: 2,
 		IncreaseInterval:        time.Second * 10,
+		PenaltyFactor:           2,
 	})
 
 	subClient := &SubscriptionClient{
@@ -375,6 +376,7 @@ func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event reg
 	s.memoryLimiter.Start()
 
 	eventSize := event.getSize()
+
 	if eventSize > s.memoryLimiter.GetCurrentMemoryLimit() {
 		log.Warn("event size is greater than memory limit, set it to the current memory limit",
 			zap.Uint64("subscriptionID", uint64(subID)),

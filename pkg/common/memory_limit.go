@@ -17,14 +17,18 @@ type MemoryLimitConfig struct {
 	MaxMemoryLimit          int
 	MemoryLimitIncreaseRate float64
 	IncreaseInterval        time.Duration
+	// The penalty factor for the memory limit.
+	// When the memory limit is unstable, we need to set the penalty factor for an event.
+	PenaltyFactor float64
 }
 
 type MemoryLimiter struct {
-	mu        sync.RWMutex
-	role      string
-	rateLimit *rate.Limiter
-	config    *MemoryLimitConfig
-	started   atomic.Bool
+	mu             sync.RWMutex
+	role           string
+	rateLimit      *rate.Limiter
+	config         *MemoryLimitConfig
+	started        atomic.Bool
+	lastChangeTime time.Time
 }
 
 func NewMemoryLimiter(role string, config *MemoryLimitConfig) *MemoryLimiter {
@@ -42,9 +46,35 @@ func (m *MemoryLimiter) GetCurrentMemoryLimit() int {
 	return m.config.CurrentMemoryLimit
 }
 
+func (m *MemoryLimiter) penalty() float64 {
+	penalty := m.config.PenaltyFactor
+
+	if m.config.CurrentMemoryLimit >= m.config.MaxMemoryLimit &&
+		time.Since(m.lastChangeTime) >= 60*time.Second {
+		switch {
+		case time.Since(m.lastChangeTime) > 60*time.Second:
+			penalty = penalty / 1.5
+		case time.Since(m.lastChangeTime) > 120*time.Second:
+			penalty = penalty / 2
+		case time.Since(m.lastChangeTime) > 180*time.Second:
+			penalty = penalty / 3
+		case time.Since(m.lastChangeTime) > 240*time.Second:
+			penalty = 1
+		}
+	}
+
+	if penalty <= 1 {
+		return 1
+	}
+
+	return float64(penalty)
+}
+
 func (m *MemoryLimiter) WaitN(n int) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+
+	n = int(float64(n) * m.penalty())
 	// TODO: use a real context
 	m.rateLimit.WaitN(context.Background(), n)
 }
@@ -67,6 +97,7 @@ func (m *MemoryLimiter) Decrease() {
 		m.config.CurrentMemoryLimit = m.config.MinMemoryLimit
 	}
 	m.rateLimit.SetLimit(rate.Limit(m.config.CurrentMemoryLimit))
+	m.lastChangeTime = time.Now()
 	log.Info("Decrease memory limit", zap.String("role", m.role), zap.Int("currentMemoryLimit", m.config.CurrentMemoryLimit))
 }
 
@@ -92,5 +123,6 @@ func (m *MemoryLimiter) increaseMemoryLimit() {
 		m.config.CurrentMemoryLimit = m.config.MaxMemoryLimit
 	}
 	m.rateLimit.SetLimit(rate.Limit(m.config.CurrentMemoryLimit))
+	m.lastChangeTime = time.Now()
 	log.Info("Increase memory limit", zap.String("role", m.role), zap.Int("currentMemoryLimit", m.config.CurrentMemoryLimit))
 }

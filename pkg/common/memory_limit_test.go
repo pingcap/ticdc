@@ -30,7 +30,7 @@ func TestNewMemoryLimiter(t *testing.T) {
 		IncreaseInterval:        time.Millisecond * 10,
 	}
 
-	limiter := NewMemoryLimiter(config)
+	limiter := NewMemoryLimiter("test", config)
 	require.NotNil(t, limiter)
 	require.Equal(t, 100, limiter.GetCurrentMemoryLimit())
 }
@@ -47,7 +47,7 @@ func TestMemoryLimiterDecrease(t *testing.T) {
 		IncreaseInterval:        time.Hour, // Set to a long time to avoid auto-increase during test
 	}
 
-	limiter := NewMemoryLimiter(config)
+	limiter := NewMemoryLimiter("test", config)
 	require.Equal(t, 100, limiter.GetCurrentMemoryLimit())
 
 	limiter.Decrease()
@@ -66,7 +66,7 @@ func TestMemoryLimiterDecrease(t *testing.T) {
 		IncreaseInterval:        time.Hour,
 	}
 
-	limiter = NewMemoryLimiter(config)
+	limiter = NewMemoryLimiter("test", config)
 	require.Equal(t, 101, limiter.GetCurrentMemoryLimit())
 
 	limiter.Decrease()
@@ -85,7 +85,7 @@ func TestMemoryLimiterIncreaseMemoryLimit(t *testing.T) {
 		IncreaseInterval:        time.Millisecond * 10,
 	}
 
-	limiter := NewMemoryLimiter(config)
+	limiter := NewMemoryLimiter("test", config)
 	require.Equal(t, 100, limiter.GetCurrentMemoryLimit())
 
 	// Manually call the private method using reflection
@@ -105,7 +105,7 @@ func TestMemoryLimiterIncreaseMemoryLimit(t *testing.T) {
 		IncreaseInterval:        time.Hour,
 	}
 
-	limiter = NewMemoryLimiter(config)
+	limiter = NewMemoryLimiter("test", config)
 	require.Equal(t, 100, limiter.GetCurrentMemoryLimit())
 
 	limiter.increaseMemoryLimit()
@@ -126,7 +126,7 @@ func TestMemoryLimiterRunAutoIncrease(t *testing.T) {
 		IncreaseInterval:        time.Millisecond * 10,
 	}
 
-	limiter := NewMemoryLimiter(config)
+	limiter := NewMemoryLimiter("test", config)
 	require.Equal(t, 100, limiter.GetCurrentMemoryLimit())
 
 	// Wait for auto-increase to happen
@@ -149,7 +149,7 @@ func TestMemoryLimiterWaitN(t *testing.T) {
 		IncreaseInterval:        time.Hour,
 	}
 
-	limiter := NewMemoryLimiter(config)
+	limiter := NewMemoryLimiter("test", config)
 
 	// Small wait that should return quickly
 	start := time.Now()
