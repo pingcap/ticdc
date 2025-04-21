@@ -43,18 +43,19 @@ import (
 )
 
 /*
-EventDispatcherManager is responsible for managing the dispatchers of a changefeed in the instance.
-EventDispatcherManager is working on:
- 1. Init sink for the changefeed.
- 2. Register in the HeartBeatCollector, which is responsible for communication with the maintainer.
-    And collecting and batch the messages that need to communicate with the maintainer from all dispatchers,
-    These messages will be truly sent to the maintainer by heartbeat collector.
-    Messages include: 1. table status 2. block status 3. heartbeats.
- 3. Create and remove all dispatchers, including table trigger event dispatcher.
- 4. Collect the error from all the dispatchers and sink module, and report to the maintainer.
+EventDispatcherManager manages dispatchers for a changefeed instance with responsibilities including:
 
-One changefeed in one instance has one EventDispatcherManager.
-One EventDispatcherManager has one backend sink.
+1. Initializing and managing the sink for the changefeed.
+2. Communicating with the maintainer through the HeartBeatCollector by:
+  - Collecting and batching messages from all dispatchers
+  - Forwarding table status, block status, and heartbeat messages to the maintainer
+
+3. Creating and removing dispatchers, including the table trigger event dispatcher
+4. Collecting errors from all dispatchers and the sink module, reporting them to the maintainer
+
+Architecture:
+- Each changefeed in an instance has exactly one EventDispatcherManager
+- Each EventDispatcherManager has exactly one backend sink
 */
 type EventDispatcherManager struct {
 	changefeedID common.ChangeFeedID
@@ -243,9 +244,6 @@ func NewEventDispatcherManager(
 		manager.collectBlockStatusRequest(ctx)
 	}()
 
-	// Send register changefeedStat to eventService
-	// appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddChangefeedStat(manager)
-
 	log.Info("event dispatcher manager created",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("maintainerID", maintainerID),
@@ -294,11 +292,6 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 		zap.Stringer("changefeedID", e.changefeedID))
 
 	defer e.closing.Store(false)
-
-	// Remove changefeedStat from eventService,
-	// it will also remove all dispatcherStats of the changefeedStat in eventService
-	// appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveChangefeedStat(e)
-
 	e.closeAllDispatchers()
 
 	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(e)

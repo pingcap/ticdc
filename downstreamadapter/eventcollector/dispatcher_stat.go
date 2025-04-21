@@ -33,7 +33,7 @@ type dispatcherStat struct {
 
 	eventServiceInfo struct {
 		sync.RWMutex
-		// the server this dispatcher is currently connected to(except local event service)
+		// the server this dispatcher currently connects to(except local event service)
 		// if it is set to local event service id, ignore all messages from other event service
 		serverID node.ID
 		// whether has received ready signal from `serverID`
@@ -42,7 +42,7 @@ type dispatcherStat struct {
 		remoteCandidates []node.ID
 	}
 
-	// lastEventSeq is the sequence number of the last received DML/DDL event.
+	// lastEventSeq is the sequence number of the last received DML/DDL/Handshake event.
 	// It is used to ensure the order of events.
 	lastEventSeq atomic.Uint64
 
