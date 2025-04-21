@@ -18,7 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/api/internal/rest"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/security"
+	"github.com/pingcap/ticdc/pkg/security"
 )
 
 // APIV2Interface is an abstraction for TiCDC capture/changefeed/processor operations.

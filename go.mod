@@ -65,6 +65,7 @@ require (
 	github.com/tikv/pd/client v0.0.0-20241111073742-238d4d79ea31
 	github.com/tinylib/msgp v1.1.6
 	github.com/uber-go/atomic v1.4.0
+	github.com/xdg/scram v1.0.5
 	github.com/zeebo/assert v1.3.0
 	go.etcd.io/etcd/api/v3 v3.5.12
 	go.etcd.io/etcd/client/pkg/v3 v3.5.12
@@ -316,7 +317,6 @@ require (
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.1.2 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
-	github.com/xdg/scram v1.0.5 // indirect
 	github.com/xdg/stringprep v1.0.3 // indirect
 	github.com/xiang90/probing v0.0.0-20221125231312-a49e3df8f510 // indirect
 	github.com/xitongsys/parquet-go v1.6.3-0.20240520233950-75e935fc3e17 // indirect

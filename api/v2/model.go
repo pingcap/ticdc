@@ -17,14 +17,14 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/api"
+	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tiflow/cdc/model"
-	bf "github.com/pingcap/tiflow/pkg/binlog-filter"
 	"github.com/pingcap/tiflow/pkg/integrity"
-	"github.com/pingcap/tiflow/pkg/security"
 )
 
 // EmptyResponse return empty {} to http client
@@ -93,13 +93,13 @@ type PDConfig struct {
 
 // ChangefeedCommonInfo holds some common usage information of a changefeed
 type ChangefeedCommonInfo struct {
-	UpstreamID     uint64              `json:"upstream_id"`
-	ID             string              `json:"id"`
-	Namespace      string              `json:"namespace"`
-	FeedState      model.FeedState     `json:"state"`
-	CheckpointTSO  uint64              `json:"checkpoint_tso"`
-	CheckpointTime model.JSONTime      `json:"checkpoint_time"`
-	RunningError   *model.RunningError `json:"error"`
+	UpstreamID     uint64               `json:"upstream_id"`
+	ID             string               `json:"id"`
+	Namespace      string               `json:"namespace"`
+	FeedState      common.FeedState     `json:"state"`
+	CheckpointTSO  uint64               `json:"checkpoint_tso"`
+	CheckpointTime api.JSONTime         `json:"checkpoint_time"`
+	RunningError   *common.RunningError `json:"error"`
 }
 
 // SyncedStatusConfig represents synced check interval config for a changefeed
@@ -118,11 +118,11 @@ func (c ChangefeedCommonInfo) MarshalJSON() ([]byte, error) {
 	// alias the original type to prevent recursive call of MarshalJSON
 	type Alias ChangefeedCommonInfo
 
-	if c.FeedState == model.StateUnInitialized {
-		c.FeedState = model.StateNormal
+	if c.FeedState == common.StateUnInitialized {
+		c.FeedState = common.StateNormal
 	}
-	if c.FeedState == model.StatePending {
-		c.FeedState = model.StateWarning
+	if c.FeedState == common.StatePending {
+		c.FeedState = common.StateWarning
 	}
 
 	return json.Marshal(struct {
@@ -1080,16 +1080,16 @@ type ChangeFeedInfo struct {
 	// The ChangeFeed will exits until sync to timestamp TargetTs
 	TargetTs uint64 `json:"target_ts,omitempty"`
 	// used for admin job notification, trigger watch event in capture
-	AdminJobType   model.AdminJobType `json:"admin_job_type,omitempty"`
-	Config         *ReplicaConfig     `json:"config,omitempty"`
-	State          model.FeedState    `json:"state,omitempty"`
-	Error          *RunningError      `json:"error,omitempty"`
-	CreatorVersion string             `json:"creator_version,omitempty"`
+	AdminJobType   common.AdminJobType `json:"admin_job_type,omitempty"`
+	Config         *ReplicaConfig      `json:"config,omitempty"`
+	State          common.FeedState    `json:"state,omitempty"`
+	Error          *RunningError       `json:"error,omitempty"`
+	CreatorVersion string              `json:"creator_version,omitempty"`
 
-	ResolvedTs     uint64                    `json:"resolved_ts"`
-	CheckpointTs   uint64                    `json:"checkpoint_ts"`
-	CheckpointTime model.JSONTime            `json:"checkpoint_time"`
-	TaskStatus     []model.CaptureTaskStatus `json:"task_status,omitempty"`
+	ResolvedTs     uint64                     `json:"resolved_ts"`
+	CheckpointTs   uint64                     `json:"checkpoint_ts"`
+	CheckpointTime api.JSONTime               `json:"checkpoint_time"`
+	TaskStatus     []common.CaptureTaskStatus `json:"task_status,omitempty"`
 
 	GID            common.GID `json:"gid"`
 	MaintainerAddr string     `json:"maintainer_addr,omitempty"`
@@ -1097,12 +1097,12 @@ type ChangeFeedInfo struct {
 
 // SyncedStatus describes the detail of a changefeed's synced status
 type SyncedStatus struct {
-	Synced           bool           `json:"synced"`
-	SinkCheckpointTs model.JSONTime `json:"sink_checkpoint_ts"`
-	PullerResolvedTs model.JSONTime `json:"puller_resolved_ts"`
-	LastSyncedTs     model.JSONTime `json:"last_synced_ts"`
-	NowTs            model.JSONTime `json:"now_ts"`
-	Info             string         `json:"info"`
+	Synced           bool         `json:"synced"`
+	SinkCheckpointTs api.JSONTime `json:"sink_checkpoint_ts"`
+	PullerResolvedTs api.JSONTime `json:"puller_resolved_ts"`
+	LastSyncedTs     api.JSONTime `json:"last_synced_ts"`
+	NowTs            api.JSONTime `json:"now_ts"`
+	Info             string       `json:"info"`
 }
 
 // RunningError represents some running error from cdc components,

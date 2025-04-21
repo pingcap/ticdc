@@ -23,10 +23,9 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/sink"
-	"github.com/pingcap/tiflow/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
@@ -87,18 +86,18 @@ type ChangeFeedInfo struct {
 	// The ChangeFeed will exits until sync to timestamp TargetTs
 	TargetTs uint64 `json:"target-ts"`
 	// used for admin job notification, trigger watch event in capture
-	AdminJobType model.AdminJobType `json:"admin-job-type"`
-	Engine       model.SortEngine   `json:"sort-engine"`
+	AdminJobType common.AdminJobType `json:"admin-job-type"`
+	Engine       common.SortEngine   `json:"sort-engine"`
 	// SortDir is deprecated
 	// it cannot be set by user in changefeed level, any assignment to it should be ignored.
 	// but can be fetched for backward compatibility
 	SortDir string `json:"sort-dir"`
 
-	UpstreamInfo *UpstreamInfo       `json:"upstream-info"`
-	Config       *ReplicaConfig      `json:"config"`
-	State        model.FeedState     `json:"state"`
-	Error        *model.RunningError `json:"error"`
-	Warning      *model.RunningError `json:"warning"`
+	UpstreamInfo *UpstreamInfo        `json:"upstream-info"`
+	Config       *ReplicaConfig       `json:"config"`
+	State        common.FeedState     `json:"state"`
+	Error        *common.RunningError `json:"error"`
+	Warning      *common.RunningError `json:"warning"`
 
 	CreatorVersion string `json:"creator-version"`
 	// Epoch is the epoch of a changefeed, changes on every restart.
@@ -129,11 +128,11 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 // Note: if the changefeed is failed by GC, it should not block the GC safepoint.
 func (info *ChangeFeedInfo) NeedBlockGC() bool {
 	switch info.State {
-	case model.StateNormal, model.StateStopped, model.StatePending, model.StateWarning:
+	case common.StateNormal, common.StateStopped, common.StatePending, common.StateWarning:
 		return true
-	case model.StateFailed:
+	case common.StateFailed:
 		return !info.isFailedByGC()
-	case model.StateFinished, model.StateRemoved:
+	case common.StateFinished, common.StateRemoved:
 	default:
 	}
 	return false
@@ -185,7 +184,7 @@ func (info *ChangeFeedInfo) GetStartTs() uint64 {
 }
 
 // GetCheckpointTs returns CheckpointTs if it's specified in ChangeFeedStatus, otherwise StartTs is returned.
-func (info *ChangeFeedInfo) GetCheckpointTs(status *model.ChangeFeedStatus) uint64 {
+func (info *ChangeFeedInfo) GetCheckpointTs(status *common.ChangeFeedStatus) uint64 {
 	if status != nil {
 		return status.CheckpointTs
 	}
@@ -379,23 +378,23 @@ func (info *ChangeFeedInfo) fixState() {
 	state := info.State
 	// Upgrading from an old owner, we need to deal with cases where the state is normal,
 	// but actually contains errors and does not match the admin job type.
-	if state == model.StateNormal {
+	if state == common.StateNormal {
 		switch info.AdminJobType {
 		// This corresponds to the case of failure or error.
-		case model.AdminNone, model.AdminResume:
+		case common.AdminNone, common.AdminResume:
 			if info.Error != nil {
 				if cerror.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code)) {
-					state = model.StateFailed
+					state = common.StateFailed
 				} else {
-					state = model.StateWarning
+					state = common.StateWarning
 				}
 			}
-		case model.AdminStop:
-			state = model.StateStopped
-		case model.AdminFinish:
-			state = model.StateFinished
-		case model.AdminRemove:
-			state = model.StateRemoved
+		case common.AdminStop:
+			state = common.StateStopped
+		case common.AdminFinish:
+			state = common.StateFinished
+		case common.AdminRemove:
+			state = common.StateRemoved
 		}
 	}
 

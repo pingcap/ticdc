@@ -21,7 +21,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/tiflow/pkg/security"
+	"github.com/pingcap/ticdc/pkg/security"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	grpccodes "google.golang.org/grpc/codes"

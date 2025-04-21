@@ -21,9 +21,9 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
-	v2 "github.com/pingcap/tiflow/cdc/api/v2"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/config"
+	v2 "github.com/pingcap/ticdc/api/v2"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
@@ -93,19 +93,19 @@ func TestInvalidSortEngine(t *testing.T) {
 
 	cases := []struct {
 		input  string
-		expect model.SortEngine
+		expect common.SortEngine
 	}{{
 		input:  "invalid",
-		expect: model.SortUnified,
+		expect: common.SortUnified,
 	}, {
 		input:  "memory",
-		expect: model.SortInMemory,
+		expect: common.SortInMemory,
 	}, {
 		input:  "file",
-		expect: model.SortInFile,
+		expect: common.SortInFile,
 	}, {
 		input:  "unified",
-		expect: model.SortUnified,
+		expect: common.SortUnified,
 	}}
 	for _, cs := range cases {
 		cmd := new(cobra.Command)

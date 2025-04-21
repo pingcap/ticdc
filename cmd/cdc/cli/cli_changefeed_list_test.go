@@ -21,9 +21,10 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/errors"
-	v2 "github.com/pingcap/tiflow/cdc/api/v2"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/api/v2/mock"
+	v2 "github.com/pingcap/ticdc/api/v2"
+	"github.com/pingcap/ticdc/pkg/api"
+	"github.com/pingcap/ticdc/pkg/api/v2/mock"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,57 +42,57 @@ func TestChangefeedListCli(t *testing.T) {
 			UpstreamID:     1,
 			Namespace:      "default",
 			ID:             "pending-1",
-			CheckpointTime: model.JSONTime{},
+			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
-			FeedState:      model.StateWarning,
+			FeedState:      common.StateWarning,
 		},
 		{
 			UpstreamID:     1,
 			Namespace:      "default",
 			ID:             "normal-2",
-			CheckpointTime: model.JSONTime{},
+			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
-			FeedState:      model.StateNormal,
+			FeedState:      common.StateNormal,
 		},
 		{
 			UpstreamID:     1,
 			Namespace:      "default",
 			ID:             "failed-3",
-			CheckpointTime: model.JSONTime{},
+			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
-			FeedState:      model.StateFailed,
+			FeedState:      common.StateFailed,
 		},
 		{
 			UpstreamID:     1,
 			Namespace:      "default",
 			ID:             "removed-4",
-			CheckpointTime: model.JSONTime{},
+			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
-			FeedState:      model.StateRemoved,
+			FeedState:      common.StateRemoved,
 		},
 		{
 			UpstreamID:     1,
 			Namespace:      "default",
 			ID:             "finished-5",
-			CheckpointTime: model.JSONTime{},
+			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
-			FeedState:      model.StateFinished,
+			FeedState:      common.StateFinished,
 		},
 		{
 			UpstreamID:     1,
 			Namespace:      "default",
 			ID:             "stopped-6",
-			CheckpointTime: model.JSONTime{},
+			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
-			FeedState:      model.StateStopped,
+			FeedState:      common.StateStopped,
 		},
 		{
 			UpstreamID:     1,
 			Namespace:      "default",
 			ID:             "warning-7",
-			CheckpointTime: model.JSONTime{},
+			CheckpointTime: api.JSONTime{},
 			RunningError:   nil,
-			FeedState:      model.StateStopped,
+			FeedState:      common.StateStopped,
 		},
 	}, nil).Times(2)
 	// when --all=false, should contains StateNormal, StateWarning, StateFailed, StateStopped changefeed

@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/logservice/txnutil"
 	"github.com/pingcap/ticdc/maintainer"
+	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	appctx "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -38,12 +39,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/security"
 	tiserver "github.com/pingcap/ticdc/pkg/server"
+	"github.com/pingcap/ticdc/pkg/tcpserver"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/tidb/pkg/kv"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/security"
-	"github.com/pingcap/tiflow/pkg/tcpserver"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -62,7 +62,7 @@ type server struct {
 
 	info *node.Info
 
-	liveness model.Liveness
+	liveness api.Liveness
 
 	pdClient      pd.Client
 	pdAPIClient   pdutil.PDAPIClient
@@ -306,7 +306,7 @@ func (c *server) Close(ctx context.Context) {
 	// delete server info from etcd
 	timeoutCtx, cancel := context.WithTimeout(context.Background(), cleanMetaDuration)
 	defer cancel()
-	if err := c.EtcdClient.DeleteCaptureInfo(timeoutCtx, model.CaptureID(c.info.ID)); err != nil {
+	if err := c.EtcdClient.DeleteCaptureInfo(timeoutCtx, string(c.info.ID)); err != nil {
 		log.Warn("failed to delete server info when server exited",
 			zap.String("captureID", string(c.info.ID)),
 			zap.Error(err))
@@ -347,7 +347,7 @@ func (c *server) closePreServices() *errgroup.Group {
 }
 
 // Liveness returns liveness of the server.
-func (c *server) Liveness() model.Liveness {
+func (c *server) Liveness() api.Liveness {
 	return c.liveness.Load()
 }
 
