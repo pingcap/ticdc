@@ -45,6 +45,10 @@ const (
 
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
+
+	defaultInitialMemoryLimit      = 1024 * 1024 * 5 // 5MB
+	defaultMemoryLimitIncreaseRate = 2
+	memoryEnlargeFactor            = 4
 )
 
 var (
@@ -96,6 +100,8 @@ type eventBroker struct {
 	cancel context.CancelFunc
 	g      *errgroup.Group
 
+	memoryLimiter *common.MemoryLimiter
+
 	metricDispatcherCount                prometheus.Gauge
 	metricEventServiceReceivedResolvedTs prometheus.Gauge
 	metricEventServiceSentResolvedTs     prometheus.Gauge
@@ -127,6 +133,14 @@ func newEventBroker(
 	// For now, since there is only one upstream, using the default pdClock is sufficient.
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 
+	memoryLimiter := common.NewMemoryLimiter(&common.MemoryLimitConfig{
+		CurrentMemoryLimit:      defaultInitialMemoryLimit,
+		MinMemoryLimit:          defaultInitialMemoryLimit,
+		MaxMemoryLimit:          defaultInitialMemoryLimit * 30, // 150MB
+		MemoryLimitIncreaseRate: defaultMemoryLimitIncreaseRate,
+		IncreaseInterval:        time.Second * 10,
+	})
+
 	c := &eventBroker{
 		tidbClusterID:           id,
 		eventStore:              eventStore,
@@ -143,6 +157,7 @@ func newEventBroker(
 		scanWorkerCount:         scanWorkerCount,
 		cancel:                  cancel,
 		g:                       g,
+		memoryLimiter:           memoryLimiter,
 
 		metricDispatcherCount:                metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
 		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
@@ -560,6 +575,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	for {
 		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
+		eSize := int(e.KeyLen+e.ValueLen+e.OldValueLen) * memoryEnlargeFactor
+		if eSize > c.memoryLimiter.GetCurrentMemoryLimit() {
+			log.Warn("The single event memory limit is exceeded the total memory limit, set it to the current memory limit", zap.Int("eventSize", eSize), zap.Int("currentMemoryLimit", c.memoryLimiter.GetCurrentMemoryLimit()))
+			eSize = c.memoryLimiter.GetCurrentMemoryLimit()
+			c.memoryLimiter.WaitN(eSize)
+		}
+
 		if err != nil {
 			log.Panic("read events failed", zap.Error(err))
 		}
@@ -972,6 +994,8 @@ func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Uint64("seq", stat.seq.Load()))
 	stat.isRunning.Store(false)
+	// When receive pause event, decrease the memory limit to half of the current memory limit.
+	c.memoryLimiter.Decrease()
 }
 
 func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
