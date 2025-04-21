@@ -26,10 +26,10 @@ import (
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	putil "github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/spf13/cobra"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -63,7 +63,7 @@ func (o *changefeedCommonOptions) addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().Uint64Var(&o.targetTs, "target-ts", 0, "Target ts of changefeed")
 	cmd.PersistentFlags().StringVar(&o.sinkURI, "sink-uri", "", "sink uri")
 	cmd.PersistentFlags().StringVar(&o.configFile, "config", "", "Path of the configuration file")
-	cmd.PersistentFlags().StringVar(&o.sortEngine, "sort-engine", model.SortUnified, "sort engine used for data sort")
+	cmd.PersistentFlags().StringVar(&o.sortEngine, "sort-engine", common.SortUnified, "sort engine used for data sort")
 	cmd.PersistentFlags().StringVar(&o.sortDir, "sort-dir", "", "directory used for data sort")
 	cmd.PersistentFlags().StringVar(&o.schemaRegistry, "schema-registry", "",
 		"Avro Schema Registry URI")
@@ -165,13 +165,13 @@ func (o *createChangefeedOptions) completeReplicaCfg() error {
 	}
 
 	switch o.commonChangefeedOptions.sortEngine {
-	case model.SortInMemory:
-	case model.SortInFile:
-	case model.SortUnified:
+	case common.SortInMemory:
+	case common.SortInFile:
+	case common.SortUnified:
 	default:
 		log.Warn("invalid sort-engine, use Unified Sorter by default",
 			zap.String("invalidSortEngine", o.commonChangefeedOptions.sortEngine))
-		o.commonChangefeedOptions.sortEngine = model.SortUnified
+		o.commonChangefeedOptions.sortEngine = common.SortUnified
 	}
 
 	if o.disableGCSafePointCheck {
@@ -198,13 +198,13 @@ func (o *createChangefeedOptions) validate(cmd *cobra.Command) error {
 	}
 
 	switch o.commonChangefeedOptions.sortEngine {
-	case model.SortInMemory:
-	case model.SortInFile:
-	case model.SortUnified:
+	case common.SortInMemory:
+	case common.SortInFile:
+	case common.SortUnified:
 	default:
 		log.Warn("invalid sort-engine, use Unified Sorter by default",
 			zap.String("invalidSortEngine", o.commonChangefeedOptions.sortEngine))
-		o.commonChangefeedOptions.sortEngine = model.SortUnified
+		o.commonChangefeedOptions.sortEngine = common.SortUnified
 	}
 
 	return nil
