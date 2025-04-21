@@ -59,7 +59,7 @@ const (
 	resolveLockFence        time.Duration = 4 * time.Second
 
 	// scan rate limit
-	pushBytesRateLimit = 600 * 1024 * 1024  // 600MB/s
+	pushBytesRateLimit = 400 * 1024 * 1024  // 600MB/s
 	bucketCapacity     = pushBytesRateLimit // bucket capacity
 )
 
