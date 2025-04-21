@@ -118,6 +118,12 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 				ID:    req.req.GetID(),
 				Nodes: nodes,
 			}
+			log.Info("log coordinator get candidate nodes",
+				zap.Int("nodesLen", len(nodes)),
+				zap.Any("nodes", nodes),
+				zap.String("requestNodeId", req.target.String()),
+				zap.Uint64("startTs", req.req.GetStartTs()),
+				zap.String("span", req.req.GetSpan().String()))
 			c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(req.target, messaging.EventCollectorTopic, response))
 		}
 	}
@@ -125,12 +131,12 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 
 func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messaging.TargetMessage) error {
 	for _, msg := range targetMessage.Message {
-		switch msg.(type) {
+		switch msg := msg.(type) {
 		case *logservicepb.EventStoreState:
-			c.updateEventStoreState(targetMessage.From, msg.(*logservicepb.EventStoreState))
+			c.updateEventStoreState(targetMessage.From, msg)
 		case *logservicepb.ReusableEventServiceRequest:
 			c.requestChan.In() <- requestAndTarget{
-				req:    msg.(*logservicepb.ReusableEventServiceRequest),
+				req:    msg,
 				target: targetMessage.From,
 			}
 		default:
@@ -202,6 +208,11 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 	}
 	var candidates []candidateNode
 	for nodeID, state := range c.eventStoreStates.m {
+		log.Info("log coordinator get candidate nodes",
+			zap.String("nodeId", nodeID.String()),
+			zap.String("requestNodeId", requestNodeID.String()),
+			zap.String("span", span.String()),
+			zap.Uint64("startTs", startTs))
 		if nodeID == requestNodeID {
 			continue
 		}
@@ -213,6 +224,11 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 		var maxResolvedTs uint64
 		found := false
 		for _, subscriptionState := range subscriptionStates {
+			log.Info("log coordinator get subscription state",
+				zap.Uint64("subscriptionID", subscriptionState.subID),
+				zap.String("subscriptionSpan", subscriptionState.span.String()),
+				zap.Uint64("checkpointTs", subscriptionState.checkpointTs),
+				zap.Uint64("resolvedTs", subscriptionState.resolvedTs))
 			if subscriptionState.checkpointTs <= startTs {
 				if !found || subscriptionState.resolvedTs > maxResolvedTs {
 					maxResolvedTs = subscriptionState.resolvedTs
