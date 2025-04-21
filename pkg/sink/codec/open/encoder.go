@@ -40,6 +40,8 @@ type batchEncoder struct {
 
 	claimCheck *claimcheck.ClaimCheck
 
+	columnFlagsCache map[int64]map[string]uint64
+
 	config *common.Config
 }
 
@@ -50,8 +52,9 @@ func NewBatchEncoder(ctx context.Context, config *common.Config) (common.EventEn
 		return nil, errors.Trace(err)
 	}
 	return &batchEncoder{
-		config:     config,
-		claimCheck: claimCheck,
+		config:           config,
+		claimCheck:       claimCheck,
+		columnFlagsCache: make(map[int64]map[string]uint64, 32),
 	}, nil
 }
 
@@ -61,13 +64,23 @@ func (d *batchEncoder) Clean() {
 	}
 }
 
+func (d *batchEncoder) fetchColumnFlags(e *commonEvent.RowEvent) map[string]uint64 {
+	result, ok := d.columnFlagsCache[e.GetTableID()]
+	if !ok {
+		result = initColumnFlags(e.TableInfo)
+		d.columnFlagsCache[e.GetTableID()] = result
+	}
+	return result
+}
+
 // AppendRowChangedEvent implements the RowEventEncoder interface
 func (d *batchEncoder) AppendRowChangedEvent(
 	ctx context.Context,
 	_ string,
 	e *commonEvent.RowEvent,
 ) error {
-	key, value, length, err := encodeRowChangedEvent(e, d.config, false, "")
+	columnFlags := d.fetchColumnFlags(e)
+	key, value, length, err := encodeRowChangedEvent(e, columnFlags, d.config, false, "")
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -93,7 +106,7 @@ func (d *batchEncoder) AppendRowChangedEvent(
 				return errors.Trace(err)
 			}
 
-			key, value, length, err = encodeRowChangedEvent(e, d.config, true, d.claimCheck.FileNameWithPrefix(claimCheckFileName))
+			key, value, length, err = encodeRowChangedEvent(e, columnFlags, d.config, true, d.claimCheck.FileNameWithPrefix(claimCheckFileName))
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -110,7 +123,7 @@ func (d *batchEncoder) AppendRowChangedEvent(
 
 		if d.config.LargeMessageHandle.HandleKeyOnly() {
 			// it must that `LargeMessageHandle == LargeMessageHandleOnlyHandleKeyColumns` here.
-			key, value, length, err = encodeRowChangedEvent(e, d.config, true, "")
+			key, value, length, err = encodeRowChangedEvent(e, columnFlags, d.config, true, "")
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -211,6 +224,7 @@ func enhancedKeyValue(key, value []byte) ([]byte, []byte) {
 }
 
 func (d *batchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message, error) {
+	delete(d.columnFlagsCache, e.TableID)
 	key, value, err := encodeDDLEvent(e, d.config)
 	if err != nil {
 		return nil, errors.Trace(err)

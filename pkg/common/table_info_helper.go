@@ -355,27 +355,21 @@ type columnSchema struct {
 	ColumnsOffset map[int64]int `json:"columns_offset"`
 	// Column name -> ColumnID
 	NameToColID map[string]int64 `json:"name_to_col_id"`
-
 	// ColumnID -> offset in RowChangedEvents.Columns.
 	RowColumnsOffset map[int64]int `json:"row_columns_offset"`
 
 	// store handle key column ids
 	handleKeyIDs map[int64]struct{}
-	// IndexColumnsOffset store the offset of the columns in row changed events for
+	// IndexColumns store the colID of the columns in row changed events for
 	// unique index and primary key
 	// The reason why we need this is that the Indexes in TableInfo
 	// will not contain the PK if it is create in statement like:
 	// create table t (a int primary key, b int unique key);
 	// Every element in first dimension is a index, and the second dimension is the columns offset
-	// for example:
-	// table has 3 columns: a, b, c
-	// pk: a
-	// index1: a, b
-	// index2: a, c
-	// indexColumnsOffset: [[0], [0, 1], [0, 2]]
-	IndexColumnsOffset [][]int `json:"index_columns_offset"`
+	IndexColumns [][]int64 `json:"index_columns"`
 
-	PKIndexOffset []int `json:"pk_index_offset"`
+	// PKIndex store the colID of the columns in row changed events for primary key
+	PKIndex []int64 `json:"pk_index"`
 
 	// The following 3 fields, should only be used to decode datum from the raw value bytes, do not abuse those field.
 	// RowColInfos extend the model.ColumnInfo with some extra information
@@ -442,11 +436,10 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		HandleColID:      []int64{-1},
 		RowColInfos:      make([]rowcodec.ColInfo, len(tableInfo.Columns)),
 		RowColFieldTps:   make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
-		PKIndexOffset:    make([]int, 0),
+		PKIndex:          make([]int64, 0),
 	}
 
 	rowColumnsCurrentOffset := 0
-
 	colSchema.VirtualColumnCount = 0
 	for i, col := range colSchema.Columns {
 		colSchema.ColumnsOffset[col.ID] = i
@@ -460,8 +453,8 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 				// pk is handle
 				colSchema.handleKeyIDs[col.ID] = struct{}{}
 				colSchema.HandleColID = []int64{col.ID}
-				colSchema.IndexColumnsOffset = append(colSchema.IndexColumnsOffset, []int{colSchema.RowColumnsOffset[col.ID]})
-				colSchema.PKIndexOffset = []int{colSchema.RowColumnsOffset[col.ID]}
+				colSchema.IndexColumns = append(colSchema.IndexColumns, []int64{col.ID})
+				colSchema.PKIndex = []int64{col.ID}
 			} else if tableInfo.IsCommonHandle {
 				colSchema.handleKeyIDs[col.ID] = struct{}{}
 				colSchema.HandleColID = colSchema.HandleColID[:0]
@@ -595,16 +588,16 @@ func (s *columnSchema) initIndex(tableName string) {
 	for i, idx := range s.Indices {
 		if idx.Primary {
 			// append index
-			indexColOffset := make([]int, 0, len(idx.Columns))
+			indexColOffset := make([]int64, 0, len(idx.Columns))
 			for _, idxCol := range idx.Columns {
 				colInfo := s.Columns[idxCol.Offset]
 				if IsColCDCVisible(colInfo) {
-					indexColOffset = append(indexColOffset, s.RowColumnsOffset[colInfo.ID])
+					indexColOffset = append(indexColOffset, colInfo.ID)
 				}
 			}
 			if len(indexColOffset) > 0 {
-				s.IndexColumnsOffset = append(s.IndexColumnsOffset, indexColOffset)
-				s.PKIndexOffset = indexColOffset
+				s.IndexColumns = append(s.IndexColumns, indexColOffset)
+				s.PKIndex = indexColOffset
 			}
 			// check handle key with primary key
 			if !hasPrimary {
@@ -616,11 +609,11 @@ func (s *columnSchema) initIndex(tableName string) {
 		} else if idx.Unique {
 			hasNotNullUK := true
 			// append index
-			indexColOffset := make([]int, 0, len(idx.Columns))
+			indexColOffset := make([]int64, 0, len(idx.Columns))
 			for _, idxCol := range idx.Columns {
 				colInfo := s.Columns[idxCol.Offset]
 				if IsColCDCVisible(colInfo) {
-					indexColOffset = append(indexColOffset, s.RowColumnsOffset[colInfo.ID])
+					indexColOffset = append(indexColOffset, colInfo.ID)
 				} else {
 					hasNotNullUK = false
 				}
@@ -629,7 +622,7 @@ func (s *columnSchema) initIndex(tableName string) {
 				}
 			}
 			if len(indexColOffset) > 0 {
-				s.IndexColumnsOffset = append(s.IndexColumnsOffset, indexColOffset)
+				s.IndexColumns = append(s.IndexColumns, indexColOffset)
 			}
 			// check handle key with not null unique key
 			if hasPrimary || !hasNotNullUK {
@@ -783,7 +776,7 @@ func (s *columnSchema) getColumnSchemaWithoutVirtualColumns() *columnSchema {
 		NameToColID:                   s.NameToColID,
 		RowColumnsOffset:              s.RowColumnsOffset,
 		handleKeyIDs:                  s.handleKeyIDs,
-		IndexColumnsOffset:            s.IndexColumnsOffset,
+		IndexColumns:                  s.IndexColumns,
 		RowColInfos:                   s.RowColInfos,
 		RowColFieldTps:                s.RowColFieldTps,
 		HandleColID:                   s.HandleColID,

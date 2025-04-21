@@ -2,27 +2,20 @@ syntax = "proto3";
 package proto;
 option go_package = "./messaging/proto";
 
-message CallerInfo{
-    string address = 1;
-}
-
 message Message {
-    string from = 1;
-    string to = 2;
-    uint64 epoch = 3;
-    uint64 seqnum = 4;
-    int32 type = 5;
+    // type is the type of the message, it is used to determine how to decode the message.
+    int32 type = 1;
+    // from is the sender of the message.
+    string from = 2;
+    // to is the receiver of the message.
+    string to = 3;
     // topic is the destination of the message, it is used to route the message to the correct handler.
-    string topic = 6;
-    repeated bytes payload = 7;
+    string topic = 4;
+    // payload is the payload of the message.
+    repeated bytes payload = 5;
 }
 
-message MessageSummary {
-    int64 sent_bytes = 1;
-}
-
-service MessageCenter {
-    // The clients call this method to build a event channel from client to server.
-    rpc sendEvents(Message) returns (stream Message);
-    rpc sendCommands(Message) returns (stream Message);
+service MessageService {
+    // Bidirectional streaming RPC for both events and commands
+    rpc streamMessages(stream Message) returns (stream Message);
 }

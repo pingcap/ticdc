@@ -30,7 +30,13 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 )
 
-func encodeRowChangedEvent(e *commonEvent.RowEvent, config *common.Config, largeMessageOnlyHandleKeyColumns bool, claimCheckLocationName string) ([]byte, []byte, int, error) {
+func encodeRowChangedEvent(
+	e *commonEvent.RowEvent,
+	columnFlags map[string]uint64,
+	config *common.Config,
+	largeMessageOnlyHandleKeyColumns bool,
+	claimCheckLocationName string,
+) ([]byte, []byte, int, error) {
 	var (
 		keyBuf   bytes.Buffer
 		valueBuf bytes.Buffer
@@ -57,30 +63,30 @@ func encodeRowChangedEvent(e *commonEvent.RowEvent, config *common.Config, large
 		onlyHandleKeyColumns := config.DeleteOnlyHandleKeyColumns || largeMessageOnlyHandleKeyColumns
 		valueWriter.WriteObject(func() {
 			valueWriter.WriteObjectField("d", func() {
-				err = writeColumnFieldValues(valueWriter, e.GetPreRows(), e.TableInfo, e.ColumnSelector, onlyHandleKeyColumns)
+				err = writeColumnFieldValues(valueWriter, e.GetPreRows(), e.TableInfo, columnFlags, e.ColumnSelector, onlyHandleKeyColumns)
 			})
 		})
 	} else if e.IsInsert() {
 		valueWriter.WriteObject(func() {
 			valueWriter.WriteObjectField("u", func() {
-				err = writeColumnFieldValues(valueWriter, e.GetRows(), e.TableInfo, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
+				err = writeColumnFieldValues(valueWriter, e.GetRows(), e.TableInfo, columnFlags, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
 			})
 		})
 	} else if e.IsUpdate() {
 		valueWriter.WriteObject(func() {
 			valueWriter.WriteObjectField("u", func() {
-				err = writeColumnFieldValues(valueWriter, e.GetRows(), e.TableInfo, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
+				err = writeColumnFieldValues(valueWriter, e.GetRows(), e.TableInfo, columnFlags, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
 			})
 			if err != nil {
 				return
 			}
 			if !config.OnlyOutputUpdatedColumns {
 				valueWriter.WriteObjectField("p", func() {
-					err = writeColumnFieldValues(valueWriter, e.GetPreRows(), e.TableInfo, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
+					err = writeColumnFieldValues(valueWriter, e.GetPreRows(), e.TableInfo, columnFlags, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
 				})
 			} else {
 				valueWriter.WriteObjectField("p", func() {
-					writeUpdatedColumnFieldValues(valueWriter, e.GetPreRows(), e.GetRows(), e.TableInfo, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
+					writeUpdatedColumnFieldValues(valueWriter, e.GetPreRows(), e.GetRows(), e.TableInfo, columnFlags, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
 				})
 			}
 		})
@@ -163,26 +169,24 @@ func writeColumnFieldValue(
 	col *model.ColumnInfo,
 	row *chunk.Row,
 	idx int,
-	tableInfo *commonType.TableInfo,
+	isHandle bool,
+	columnFlag uint64,
 ) {
-	colType := col.GetType()
-	flag := col.GetFlag()
-	whereHandle := tableInfo.IsHandleKey(col.ID)
-
-	writer.WriteIntField("t", int(colType))
-	if whereHandle {
-		writer.WriteBoolField("h", whereHandle)
+	fieldType := col.FieldType
+	writer.WriteIntField("t", int(fieldType.GetType()))
+	if isHandle {
+		writer.WriteBoolField("h", isHandle)
 	}
-	writer.WriteUint64Field("f", uint64(flag))
+	writer.WriteUint64Field("f", columnFlag)
 
 	if row.IsNull(idx) {
 		writer.WriteNullField("v")
 		return
 	}
 
-	switch col.GetType() {
+	switch fieldType.GetType() {
 	case mysql.TypeBit:
-		d := row.GetDatum(idx, &col.FieldType)
+		d := row.GetDatum(idx, &fieldType)
 		if d.IsNull() {
 			writer.WriteNullField("v")
 		} else {
@@ -203,7 +207,7 @@ func writeColumnFieldValue(
 		if len(value) == 0 {
 			writer.WriteNullField("v")
 		} else {
-			if mysql.HasBinaryFlag(flag) {
+			if mysql.HasBinaryFlag(fieldType.GetFlag()) {
 				str := string(value)
 				str = strconv.Quote(str)
 				str = str[1 : len(str)-1]
@@ -248,7 +252,7 @@ func writeColumnFieldValue(
 			writer.WriteStringField("v", value.String())
 		}
 	default:
-		d := row.GetDatum(idx, &col.FieldType)
+		d := row.GetDatum(idx, &fieldType)
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
 		// Make specified convert upper if you need
 		// Go sql support type ref to: https://github.com/golang/go/blob/go1.17.4/src/database/sql/driver/types.go#L236
@@ -261,25 +265,25 @@ func writeColumnFieldValues(
 	jWriter *util.JSONWriter,
 	row *chunk.Row,
 	tableInfo *commonType.TableInfo,
+	columnFlags map[string]uint64,
 	selector columnselector.Selector,
 	onlyHandleKeyColumns bool,
 ) error {
-	flag := false // flag to check if any column is written
-
+	var encoded bool
 	colInfo := tableInfo.GetColumns()
-
 	for idx, col := range colInfo {
 		if selector.Select(col) {
-			if onlyHandleKeyColumns && !tableInfo.IsHandleKey(col.ID) {
+			isHandle := tableInfo.IsHandleKey(col.ID)
+			if onlyHandleKeyColumns && !isHandle {
 				continue
 			}
-			flag = true
+			encoded = true
 			jWriter.WriteObjectField(col.Name.O, func() {
-				writeColumnFieldValue(jWriter, col, row, idx, tableInfo)
+				writeColumnFieldValue(jWriter, col, row, idx, isHandle, columnFlags[col.Name.O])
 			})
 		}
 	}
-	if !flag {
+	if !encoded {
 		return errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found handle key columns for the delete event")
 	}
 	return nil
@@ -290,6 +294,7 @@ func writeUpdatedColumnFieldValues(
 	preRow *chunk.Row,
 	row *chunk.Row,
 	tableInfo *commonType.TableInfo,
+	columnFlags map[string]uint64,
 	selector columnselector.Selector,
 	onlyHandleKeyColumns bool,
 ) {
@@ -299,10 +304,11 @@ func writeUpdatedColumnFieldValues(
 
 	for idx, col := range colInfo {
 		if selector.Select(col) {
-			if onlyHandleKeyColumns && !tableInfo.IsHandleKey(col.ID) {
+			isHandle := tableInfo.IsHandleKey(col.ID)
+			if onlyHandleKeyColumns && !isHandle {
 				continue
 			}
-			writeColumnFieldValueIfUpdated(jWriter, col, preRow, row, idx, tableInfo)
+			writeColumnFieldValueIfUpdated(jWriter, col, preRow, row, idx, isHandle, columnFlags[col.Name.O])
 		}
 	}
 }
@@ -313,17 +319,17 @@ func writeColumnFieldValueIfUpdated(
 	preRow *chunk.Row,
 	row *chunk.Row,
 	idx int,
-	tableInfo *commonType.TableInfo,
+	isHandle bool,
+	columnFlag uint64,
 ) {
 	colType := col.GetType()
 	flag := col.GetFlag()
-	whereHandle := tableInfo.IsHandleKey(col.ID)
 
 	writeFunc := func(writeColumnValue func()) {
 		writer.WriteObjectField(col.Name.O, func() {
 			writer.WriteIntField("t", int(colType))
-			if whereHandle {
-				writer.WriteBoolField("h", whereHandle)
+			if isHandle {
+				writer.WriteBoolField("h", isHandle)
 			}
 			writer.WriteUint64Field("f", uint64(flag))
 			writeColumnValue()
@@ -338,7 +344,7 @@ func writeColumnFieldValueIfUpdated(
 		return
 	}
 	if !preRow.IsNull(idx) && row.IsNull(idx) {
-		writeColumnFieldValue(writer, col, preRow, idx, tableInfo)
+		writeColumnFieldValue(writer, col, preRow, idx, isHandle, columnFlag)
 		return
 	}
 

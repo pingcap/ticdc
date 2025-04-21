@@ -54,6 +54,10 @@ var (
 	)
 
 	// codec related errors
+	ErrDDLUnsupportType = errors.Normalize(
+		"unsupport ddl type %s, query %s",
+		errors.RFCCodeText("CDC:ErrDDLUnsupportType"),
+	)
 	ErrEncodeFailed = errors.Normalize(
 		"encode failed",
 		errors.RFCCodeText("CDC:ErrEncodeFailed"),
@@ -201,6 +205,10 @@ var (
 		"schema manager API error, %s",
 		errors.RFCCodeText("CDC:ErrAvroSchemaAPIError"),
 	)
+	ErrAvroInvalidMessage = errors.Normalize(
+		"avro invalid message format, %s",
+		errors.RFCCodeText("CDC:ErrAvroInvalidMessage"),
+	)
 	ErrOpenProtocolCodecInvalidData = errors.Normalize(
 		"open-protocol codec invalid data",
 		errors.RFCCodeText("CDC:ErrOpenProtocolCodecInvalidData"),
@@ -224,6 +232,14 @@ var (
 	ErrDebeziumEncodeFailed = errors.Normalize(
 		"debezium encode failed",
 		errors.RFCCodeText("CDC:ErrDebeziumEncodeFailed"),
+	)
+	ErrDebeziumInvalidMessage = errors.Normalize(
+		"debezium invalid message format, %s",
+		errors.RFCCodeText("CDC:ErrDebeziumInvalidMessage"),
+	)
+	ErrDebeziumEmptyValueMessage = errors.Normalize(
+		"debezium value should not be empty",
+		errors.RFCCodeText("CDC:ErrDebeziumEmptyValueMessage"),
 	)
 	ErrStorageSinkInvalidConfig = errors.Normalize(
 		"storage sink config invalid",
@@ -527,5 +543,25 @@ var (
 	ErrRedoMetaInitialize = errors.Normalize(
 		"initialize meta for redo log",
 		errors.RFCCodeText("CDC:ErrRedoMetaInitialize"),
+	)
+	ErrPulsarInvalidConfig = errors.Normalize(
+		"pulsar config invalid %s",
+		errors.RFCCodeText("CDC:ErrPulsarInvalidConfig"),
+	)
+	ErrPulsarNewProducer = errors.Normalize(
+		"new pulsar producer",
+		errors.RFCCodeText("CDC:ErrPulsarNewProducer"),
+	)
+	ErrPulsarProducerClosed = errors.Normalize(
+		"pulsar producer closed",
+		errors.RFCCodeText("CDC:ErrPulsarProducerClosed"),
+	)
+	ErrPulsarAsyncSendMessage = errors.Normalize(
+		"pulsar async send message failed",
+		errors.RFCCodeText("CDC:ErrPulsarAsyncSendMessage"),
+	)
+	ErrFailToCreateExternalStorage = errors.Normalize(
+		"failed to create external storage",
+		errors.RFCCodeText("CDC:ErrFailToCreateExternalStorage"),
 	)
 )

@@ -73,7 +73,7 @@ func verifyCloudStorageSink(ctx context.Context, changefeedID common.ChangeFeedI
 	if _, err = util.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt); err != nil {
 		return err
 	}
-	if storage, err = helper.GetExternalStorageFromURI(ctx, sinkURI.String()); err != nil {
+	if storage, err = putil.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String()); err != nil {
 		return err
 	}
 	storage.Close()
@@ -105,7 +105,7 @@ func newCloudStorageSink(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	storage, err := helper.GetExternalStorageFromURI(ctx, sinkURI.String())
+	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	if err != nil {
 		return nil, err
 	}
@@ -148,10 +148,6 @@ func (s *CloudStorageSink) IsNormal() bool {
 
 func (s *CloudStorageSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmlWorker.AddDMLEvent(event)
-}
-
-func (s *CloudStorageSink) PassBlockEvent(event commonEvent.BlockEvent) {
-	event.PostFlush()
 }
 
 func (s *CloudStorageSink) WriteBlockEvent(event commonEvent.BlockEvent) error {

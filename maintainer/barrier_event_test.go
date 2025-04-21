@@ -230,7 +230,7 @@ func setNodeManagerAndMessageCenter() *watcher.NodeManager {
 	n := node.NewInfo("", "")
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-	mc := messaging.NewMessageCenter(context.Background(), n.ID, 100, config.NewDefaultMessageCenterConfig(), nil)
+	mc := messaging.NewMessageCenter(context.Background(), n.ID, config.NewDefaultMessageCenterConfig(n.AdvertiseAddr), nil)
 	mc.Run(context.Background())
 	defer mc.Close()
 	appcontext.SetService(appcontext.MessageCenter, mc)

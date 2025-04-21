@@ -76,8 +76,15 @@ type TableInfo struct {
 	// record the logical ID from the DDL event(job.BinlogInfo.TableInfo).
 	// So be careful when using the TableInfo.
 	TableName TableName `json:"table-name"`
+	Charset   string    `json:"charset"`
+	Collate   string    `json:"collate"`
+	Comment   string    `json:"comment"`
 
 	columnSchema *columnSchema `json:"-"`
+
+	View *model.ViewInfo `json:"view"`
+
+	Sequence *model.SequenceInfo `json:"sequence"`
 
 	preSQLs struct {
 		mutex         sync.Mutex
@@ -163,20 +170,21 @@ func (ti *TableInfo) GetIndices() []*model.IndexInfo {
 	return ti.columnSchema.Indices
 }
 
-func (ti *TableInfo) GetColumnsOffset() map[int64]int {
-	return ti.columnSchema.ColumnsOffset
+// GetRowColumnsOffset return offset with visible column
+func (ti *TableInfo) GetRowColumnsOffset() map[int64]int {
+	return ti.columnSchema.RowColumnsOffset
 }
 
-func (ti *TableInfo) GetIndexColumnsOffset() [][]int {
-	return ti.columnSchema.IndexColumnsOffset
+func (ti *TableInfo) GetIndexColumns() [][]int64 {
+	return ti.columnSchema.IndexColumns
 }
 
 func (ti *TableInfo) PKIsHandle() bool {
 	return ti.columnSchema.PKIsHandle
 }
 
-func (ti *TableInfo) GetPKIndexOffset() []int {
-	return ti.columnSchema.PKIndexOffset
+func (ti *TableInfo) GetPKIndex() []int64 {
+	return ti.columnSchema.PKIndex
 }
 
 func (ti *TableInfo) UpdateTS() uint64 {
@@ -283,6 +291,16 @@ func (ti *TableInfo) IsPartitionTable() bool {
 	return ti.TableName.IsPartition
 }
 
+// IsView checks if TableInfo is a view.
+func (t *TableInfo) IsView() bool {
+	return t.View != nil
+}
+
+// IsSequence checks if TableInfo is a sequence.
+func (t *TableInfo) IsSequence() bool {
+	return t.Sequence != nil
+}
+
 // GetRowColInfos returns all column infos for rowcodec
 func (ti *TableInfo) GetRowColInfos() ([]int64, map[int64]*types.FieldType, []rowcodec.ColInfo) {
 	return ti.columnSchema.HandleColID, ti.columnSchema.RowColFieldTps, ti.columnSchema.RowColInfos
@@ -316,7 +334,7 @@ func (ti *TableInfo) HasVirtualColumns() bool {
 // GetIndex return the corresponding index by the given name.
 func (ti *TableInfo) GetIndex(name string) *model.IndexInfo {
 	for _, index := range ti.columnSchema.Indices {
-		if index != nil && index.Name.O == name {
+		if index != nil && index.Name.L == strings.ToLower(name) {
 			return index
 		}
 	}
@@ -324,6 +342,9 @@ func (ti *TableInfo) GetIndex(name string) *model.IndexInfo {
 }
 
 // IndexByName returns the index columns and offsets of the corresponding index by name
+// Column is not case-sensitive on any platform, nor are column aliases.
+// So we always match in lowercase.
+// See also: https://dev.mysql.com/doc/refman/5.7/en/identifier-case-sensitivity.html
 func (ti *TableInfo) IndexByName(name string) ([]string, []int, bool) {
 	index := ti.GetIndex(name)
 	if index == nil {
@@ -332,7 +353,7 @@ func (ti *TableInfo) IndexByName(name string) ([]string, []int, bool) {
 	names := make([]string, 0, len(index.Columns))
 	offset := make([]int, 0, len(index.Columns))
 	for _, col := range index.Columns {
-		names = append(names, col.Name.O)
+		names = append(names, col.Name.L)
 		offset = append(offset, col.Offset)
 	}
 	return names, offset, true
@@ -340,18 +361,21 @@ func (ti *TableInfo) IndexByName(name string) ([]string, []int, bool) {
 
 // OffsetsByNames returns the column offsets of the corresponding columns by names
 // If any column does not exist, return false
+// Column is not case-sensitive on any platform, nor are column aliases.
+// So we always match in lowercase.
+// See also: https://dev.mysql.com/doc/refman/5.7/en/identifier-case-sensitivity.html
 func (ti *TableInfo) OffsetsByNames(names []string) ([]int, bool) {
 	// todo: optimize it
 	columnOffsets := make(map[string]int, len(ti.columnSchema.Columns))
 	for _, col := range ti.columnSchema.Columns {
 		if col != nil {
-			columnOffsets[col.Name.O] = col.Offset
+			columnOffsets[col.Name.L] = ti.MustGetColumnOffsetByID(col.ID)
 		}
 	}
 
 	result := make([]int, 0, len(names))
 	for _, col := range names {
-		offset, ok := columnOffsets[col]
+		offset, ok := columnOffsets[strings.ToLower(col)]
 		if !ok {
 			return nil, false
 		}
@@ -392,7 +416,7 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 	return ok
 }
 
-func newTableInfo(schema, table string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
+func newTableInfo(schema string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
 	ti := &TableInfo{
 		TableName: TableName{
 			Schema:      schema,
@@ -402,12 +426,17 @@ func newTableInfo(schema, table string, tableID int64, isPartition bool, columnS
 			quotedName:  QuoteSchema(schema, table),
 		},
 		columnSchema: columnSchema,
+		View:         tableInfo.View,
+		Sequence:     tableInfo.Sequence,
+		Charset:      tableInfo.Charset,
+		Collate:      tableInfo.Collate,
+		Comment:      tableInfo.Comment,
 	}
 	return ti
 }
 
-func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema) *TableInfo {
-	ti := newTableInfo(schemaName, tableName, tableID, isPartition, columnSchema)
+func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
+	ti := newTableInfo(schemaName, tableName, tableID, isPartition, columnSchema, tableInfo)
 
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appeared when tableInfo is created as a pair.
@@ -423,15 +452,14 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 	// search column schema object
 	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
 	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
-
-	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema)
+	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema, info)
 }
 
 // NewTableInfo4Decoder is only used by the codec decoder for the test purpose,
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
 	cs := newColumnSchema4Decoder(tableInfo)
-	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs)
+	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
 }
 
 // BuildTiDBTableInfoWithoutVirtualColumns build a TableInfo without virual columns from the source table info

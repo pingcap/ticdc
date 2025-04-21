@@ -86,21 +86,17 @@ kafka_groups=(
 	# G07
 	'kafka_big_messages'
 	# G08
-	'kafka_big_messages_v2'
-	# G09
 	'kafka_compression'
-	# G10
+	# G19
 	'kafka_messages'
-	# G11
+	# G10
 	'mq_sink_dispatcher'
-	# G12
+	# G11
 	'multi_topics'
+	# G12
+	'debezium_basic'
 	# G13
-	'multi_topics_v2'
-	# G14
-	''
-	# G15
-	''
+	'avro_basic'
 )
 
 # Resource allocation for pulsar light integration tests in CI pipelines:

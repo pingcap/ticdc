@@ -50,7 +50,7 @@ func NewGrpcServer(lis net.Listener) common.SubModule {
 	option = append(option, grpc.KeepaliveEnforcementPolicy(kaep), grpc.KeepaliveParams(kasp))
 
 	grpcServer := grpc.NewServer(option...)
-	proto.RegisterMessageCenterServer(grpcServer, messaging.NewMessageCenterServer(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)))
+	proto.RegisterMessageServiceServer(grpcServer, messaging.NewMessageCenterServer(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)))
 	return &GrpcModule{
 		grpcServer: grpcServer,
 		lis:        lis,

@@ -114,3 +114,118 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		})
 	}
 }
+
+func newFieldTypeWithFlag(flags ...uint) *types.FieldType {
+	ft := &types.FieldType{}
+	for _, flag := range flags {
+		ft.AddFlag(flag)
+	}
+	return ft
+}
+
+func TestColumnIndex(t *testing.T) {
+	columns := []*model.ColumnInfo{
+		{ID: 101, Name: pmodel.NewCIStr("a"), FieldType: *newFieldTypeWithFlag(mysql.PriKeyFlag)},
+		{ID: 102, Name: pmodel.NewCIStr("b"), FieldType: *newFieldTypeWithFlag(mysql.UniqueKeyFlag)},
+		{ID: 103, Name: pmodel.NewCIStr("c"), FieldType: *newFieldTypeWithFlag()},
+	}
+	tableInfo := WrapTableInfo("test", &model.TableInfo{
+		PKIsHandle: true,
+		Columns:    columns,
+	})
+	require.Equal(t, tableInfo.GetIndexColumns(), [][]int64{{101}})
+	require.Equal(t, tableInfo.GetPKIndex(), []int64{101})
+
+	indices := []*model.IndexInfo{
+		{ID: 1, Primary: true, Columns: []*model.IndexColumn{{Offset: 0}}},
+		{ID: 2, Unique: true, Columns: []*model.IndexColumn{{Offset: 1}, {Offset: 2}}},
+	}
+	tableInfo = WrapTableInfo("test", &model.TableInfo{
+		Columns: columns,
+		Indices: indices,
+	})
+	require.Equal(t, tableInfo.GetIndexColumns(), [][]int64{{101}, {102, 103}})
+	require.Equal(t, tableInfo.GetPKIndex(), []int64{101})
+}
+
+func TestIndexByName(t *testing.T) {
+	tableInfo := WrapTableInfo("test", &model.TableInfo{
+		Indices: nil,
+	})
+	names, offsets, ok := tableInfo.IndexByName("idx1")
+	require.False(t, ok)
+	require.Nil(t, names)
+	require.Nil(t, offsets)
+
+	tableInfo = WrapTableInfo("test", &model.TableInfo{
+		Indices: []*model.IndexInfo{
+			{
+				Name: pmodel.NewCIStr("idx1"),
+				Columns: []*model.IndexColumn{
+					{
+						Name: pmodel.NewCIStr("col1"),
+					},
+				},
+			},
+		},
+	})
+
+	names, offsets, ok = tableInfo.IndexByName("idx2")
+	require.False(t, ok)
+	require.Nil(t, names)
+	require.Nil(t, offsets)
+
+	names, offsets, ok = tableInfo.IndexByName("idx1")
+	require.True(t, ok)
+	require.Equal(t, []string{"col1"}, names)
+	require.Equal(t, []int{0}, offsets)
+
+	names, offsets, ok = tableInfo.IndexByName("IDX1")
+	require.True(t, ok)
+	require.Equal(t, []string{"col1"}, names)
+	require.Equal(t, []int{0}, offsets)
+
+	names, offsets, ok = tableInfo.IndexByName("Idx1")
+	require.True(t, ok)
+	require.Equal(t, []string{"col1"}, names)
+	require.Equal(t, []int{0}, offsets)
+}
+
+func TestColumnsByNames(t *testing.T) {
+	tableInfo := WrapTableInfo("test", &model.TableInfo{
+		Columns: []*model.ColumnInfo{
+			{
+				Name: pmodel.NewCIStr("col2"),
+				ID:   1,
+			},
+			{
+				Name: pmodel.NewCIStr("col1"),
+				ID:   0,
+			},
+			{
+				Name: pmodel.NewCIStr("col3"),
+				ID:   2,
+			},
+		},
+	})
+
+	names := []string{"col1", "col2", "col3"}
+	offsets, ok := tableInfo.OffsetsByNames(names)
+	require.True(t, ok)
+	require.Equal(t, []int{1, 0, 2}, offsets)
+
+	names = []string{"col2"}
+	offsets, ok = tableInfo.OffsetsByNames(names)
+	require.True(t, ok)
+	require.Equal(t, []int{0}, offsets)
+
+	names = []string{"col1", "col-not-found"}
+	offsets, ok = tableInfo.OffsetsByNames(names)
+	require.False(t, ok)
+	require.Nil(t, offsets)
+
+	names = []string{"Col1", "COL2", "CoL3"}
+	offsets, ok = tableInfo.OffsetsByNames(names)
+	require.True(t, ok)
+	require.Equal(t, []int{1, 0, 2}, offsets)
+}

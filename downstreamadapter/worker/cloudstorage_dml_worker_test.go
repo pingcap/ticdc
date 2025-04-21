@@ -98,7 +98,7 @@ func newCloudStorageDMLWorkerForTest(parentDir string, flushInterval int, sinkCo
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	storage, err := helper.GetExternalStorageFromURI(ctx, sinkURI.String())
+	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	if err != nil {
 		return nil, err
 	}

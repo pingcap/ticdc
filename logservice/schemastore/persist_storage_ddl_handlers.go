@@ -1334,7 +1334,9 @@ func extractTableInfoFuncForExchangeTablePartition(event *PersistedDDLEvent, tab
 		pmodel.NewCIStr(event.TableName).O,
 		tableID,
 		false,
-		columnSchema)
+		columnSchema,
+		event.TableInfo,
+	)
 	return tableInfo, false
 }
 
