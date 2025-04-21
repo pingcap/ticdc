@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -702,6 +703,12 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	removedDispatcherSchemaIDs := make([]int64, 0)
 	heartBeatInfo := &dispatcher.HeartBeatInfo{}
 
+	eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{
+		Version:              event.DispatcherHeartbeatVersion,
+		DispatcherCount:      0,
+		DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
+	}
+
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.Dispatcher) {
 		dispatcherItem.GetHeartBeatInfo(heartBeatInfo)
 		// If the dispatcher is in removing state, we need to check if it's closed successfully.
@@ -731,6 +738,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 				CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
 				EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
 			})
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, heartBeatInfo.Watermark.CheckpointTs))
 		}
 	})
 	message.Watermark.Seq = seq
@@ -741,6 +749,11 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 		for idx, id := range toRemoveDispatcherIDs {
 			e.cleanDispatcher(id, removedDispatcherSchemaIDs[idx])
 		}
+	}
+
+	// If needCompleteStatus is true, we need to send the dispatcher heartbeat to the event service.
+	if needCompleteStatus {
+		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
 
 	e.metricCheckpointTs.Set(float64(message.Watermark.CheckpointTs))

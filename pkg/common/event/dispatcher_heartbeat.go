@@ -91,6 +91,7 @@ func NewDispatcherHeartbeat(dispatcherCount int) *DispatcherHeartbeat {
 }
 
 func (d *DispatcherHeartbeat) Append(dp DispatcherProgress) {
+	d.DispatcherCount++
 	d.DispatcherProgresses = append(d.DispatcherProgresses, dp)
 }
 
@@ -217,6 +218,7 @@ func NewDispatcherHeartbeatResponse(dispatcherCount int) DispatcherHeartbeatResp
 }
 
 func (d *DispatcherHeartbeatResponse) Append(ds DispatcherState) {
+	d.DispatcherCount++
 	d.DispatcherStates = append(d.DispatcherStates, ds)
 }
 

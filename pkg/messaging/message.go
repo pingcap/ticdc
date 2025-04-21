@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -55,6 +56,8 @@ const (
 	TypeHandshakeEvent
 	TypeReadyEvent
 	TypeNotReusableEvent
+	TypeDispatcherHeartbeat
+	TypeDispatcherHeartbeatResponse
 
 	// LogCoordinator related
 	TypeLogCoordinatorBroadcastRequest
@@ -144,6 +147,8 @@ func (t IOType) String() string {
 		return "MessageHandShake"
 	case TypeCheckpointTsMessage:
 		return "CheckpointTsMessage"
+	case TypeDispatcherHeartbeat:
+		return "DispatcherHeartbeat"
 	default:
 	}
 	return "Unknown"
@@ -284,6 +289,10 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.MaintainerBootstrapRequest{}
 	case TypeCheckpointTsMessage:
 		m = &heartbeatpb.CheckpointTsMessage{}
+	case TypeDispatcherHeartbeat:
+		m = &event.DispatcherHeartbeat{}
+	case TypeDispatcherHeartbeatResponse:
+		m = &event.DispatcherHeartbeatResponse{}
 	default:
 		log.Panic("Unimplemented IOType", zap.Stringer("Type", ioType))
 	}

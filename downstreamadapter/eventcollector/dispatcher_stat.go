@@ -271,28 +271,6 @@ func (d *dispatcherStat) pauseChangefeed(eventCollector *EventCollector) {
 	})
 }
 
-func (d *dispatcherStat) resumeChangefeed(eventCollector *EventCollector) {
-	d.eventServiceInfo.RLock()
-	defer d.eventServiceInfo.RUnlock()
-
-	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
-		log.Info("ignore resume changefeed request because the eventService is not ready",
-			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-			zap.Any("eventServiceID", d.eventServiceInfo.serverID))
-		// Just ignore the request if the dispatcher is not ready.
-		return
-	}
-	log.Info("Send resume changefeed event to event service",
-		zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-		zap.Stringer("dispatcher", d.target.GetId()),
-		zap.Uint64("resolvedTs", d.target.GetResolvedTs()))
-
-	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
-		Dispatcher: d.target,
-		ActionType: eventpb.ActionType_ACTION_TYPE_RESUME_CHANGEFEED,
-	})
-}
-
 func (d *dispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
 	d.eventServiceInfo.RLock()
 	defer d.eventServiceInfo.RUnlock()
@@ -355,4 +333,10 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *Eve
 			OnlyUse:    true,
 		},
 	)
+}
+
+func (d *dispatcherStat) getServerID() node.ID {
+	d.eventServiceInfo.RLock()
+	defer d.eventServiceInfo.RUnlock()
+	return d.eventServiceInfo.serverID
 }

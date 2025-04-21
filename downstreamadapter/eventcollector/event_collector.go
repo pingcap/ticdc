@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -60,6 +61,23 @@ type DispatcherRequestWithTarget struct {
 	Req    DispatcherRequest
 }
 
+type DispatcherHeartbeatWithTarget struct {
+	Target       node.ID
+	Topic        string
+	Heartbeat    *event.DispatcherHeartbeat
+	retryCounter int
+}
+
+// shouldRetry returns true if the retry counter is less than 3.
+// We set the limit to avoid retry sending heartbeat endlessly.
+func (d *DispatcherHeartbeatWithTarget) shouldRetry() bool {
+	return d.retryCounter < 3
+}
+
+func (d *DispatcherHeartbeatWithTarget) incRetryCounter() {
+	d.retryCounter++
+}
+
 const (
 	eventServiceTopic         = messaging.EventServiceTopic
 	eventCollectorTopic       = messaging.EventCollectorTopic
@@ -82,6 +100,9 @@ type EventCollector struct {
 
 	// dispatcherRequestChan cached dispatcher request when some error occurs.
 	dispatcherRequestChan *chann.DrainableChann[DispatcherRequestWithTarget]
+
+	// dispatcherHeartbeatChan is used to send the dispatcher heartbeat to the event service.
+	dispatcherHeartbeatChan *chann.DrainableChann[*DispatcherHeartbeatWithTarget]
 
 	logCoordinatorRequestChan *chann.DrainableChann[*logservicepb.ReusableEventServiceRequest]
 
@@ -244,6 +265,44 @@ func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID) {
 	c.ds.Wake(dispatcherID)
 }
 
+func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHeartbeat) {
+	groupedHeartbeats := c.groupHeartbeat(heartbeat)
+	for _, heartbeatWithTarget := range groupedHeartbeats {
+		c.dispatcherHeartbeatChan.In() <- heartbeatWithTarget
+	}
+}
+
+// TODO(dongmen): add unit test for this function.
+// groupHeartbeat groups the heartbeat by the dispatcherStat's serverID.
+func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) map[node.ID]*DispatcherHeartbeatWithTarget {
+	groupedHeartbeats := make(map[node.ID]*DispatcherHeartbeatWithTarget)
+	group := func(target node.ID, dp event.DispatcherProgress) {
+		dispatcherHeartbeatWithTarget, ok := groupedHeartbeats[target]
+		if !ok {
+			dispatcherHeartbeatWithTarget = &DispatcherHeartbeatWithTarget{
+				Target: target,
+				Topic:  messaging.EventServiceTopic,
+				Heartbeat: &event.DispatcherHeartbeat{
+					Version:              event.DispatcherHeartbeatVersion,
+					DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
+				},
+			}
+			groupedHeartbeats[target] = dispatcherHeartbeatWithTarget
+		}
+		dispatcherHeartbeatWithTarget.Heartbeat.Append(dp)
+	}
+
+	for _, dp := range heartbeat.DispatcherProgresses {
+		stat, ok := c.dispatcherMap.Load(dp.DispatcherID)
+		if !ok {
+			continue
+		}
+		group(stat.(*dispatcherStat).getServerID(), dp)
+	}
+
+	return groupedHeartbeats
+}
+
 // resetDispatcher is used to reset the dispatcher when it receives a out-of-order event.
 // It will send a reset request to the event service to reset the remote dispatcher.
 // And it will reset the dispatcher stat to wait for a new handshake event.
@@ -297,6 +356,11 @@ func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
 			return
 		case req := <-c.dispatcherRequestChan.Out():
 			if err := c.mustSendDispatcherRequest(req.Target, req.Topic, req.Req); err != nil {
+				// Sleep a short time to avoid too many requests in a short time.
+				time.Sleep(10 * time.Millisecond)
+			}
+		case heartbeat := <-c.dispatcherHeartbeatChan.Out():
+			if err := c.mustSendDispatcherHeartbeat(heartbeat); err != nil {
 				// Sleep a short time to avoid too many requests in a short time.
 				time.Sleep(10 * time.Millisecond)
 			}
@@ -371,6 +435,26 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 			Topic:  topic,
 			Req:    req,
 		}
+		return err
+	}
+	return nil
+}
+
+func (c *EventCollector) mustSendDispatcherHeartbeat(heartbeat *DispatcherHeartbeatWithTarget) error {
+	message := &messaging.TargetMessage{
+		To:      heartbeat.Target,
+		Topic:   heartbeat.Topic,
+		Type:    messaging.TypeDispatcherHeartbeat,
+		Message: []messaging.IOTypeT{heartbeat.Heartbeat},
+	}
+
+	err := c.mc.SendCommand(message)
+	if err != nil {
+		if heartbeat.shouldRetry() {
+			heartbeat.incRetryCounter()
+			c.dispatcherHeartbeatChan.In() <- heartbeat
+		}
+		log.Info("failed to send dispatcher heartbeat message to event service, try again later", zap.Error(err))
 		return err
 	}
 	return nil
