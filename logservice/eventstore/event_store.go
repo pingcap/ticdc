@@ -442,6 +442,7 @@ func (e *eventStore) RegisterDispatcher(
 		})
 		return true
 	}
+
 	advanceResolvedTs := func(ts uint64) {
 		// filter out identical resolved ts
 		currentResolvedTs := subStat.resolvedTs.Load()
@@ -688,6 +689,9 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 			value := kv.Encode()
 			if err := batch.Set(key, value, pebble.NoSync); err != nil {
 				log.Panic("failed to update pebble batch", zap.Error(err))
+			}
+			if kv.Callback != nil {
+				kv.Callback()
 			}
 		}
 	}

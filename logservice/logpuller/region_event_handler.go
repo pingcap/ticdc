@@ -43,6 +43,7 @@ type regionEvent struct {
 	// only one of the following fields will be set
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
+	callback   func()
 }
 
 func (event *regionEvent) getSize() int {
@@ -85,7 +86,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			continue
 		}
 		if event.entries != nil {
-			handleEventEntries(span, event.state, event.entries)
+			handleEventEntries(span, event)
 		} else if event.resolvedTs != 0 {
 			resolvedTs := handleResolvedTs(span, event.state, event.resolvedTs)
 			if resolvedTs > newResolvedTs {
@@ -190,7 +191,10 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *r
 }
 
 // func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *cdcpb.Event_Entries_, kvEvents []common.RawKVEntry) []common.RawKVEntry {
-func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *cdcpb.Event_Entries_) {
+func handleEventEntries(span *subscribedSpan, event regionEvent) {
+	state := event.state
+	entries := event.entries
+
 	regionID, _, _ := state.getRegionMeta()
 	assembleRowEvent := func(regionID uint64, entry *cdcpb.Event_Row) common.RawKVEntry {
 		var opType common.OpType
@@ -210,6 +214,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			CRTs:     entry.CommitTs,
 			RegionID: regionID,
 			OldValue: entry.GetOldValue(),
+			Callback: event.callback,
 		}
 	}
 

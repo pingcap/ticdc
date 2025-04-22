@@ -102,6 +102,7 @@ type eventBroker struct {
 	g      *errgroup.Group
 
 	memoryLimiter *memory.MemoryLimiter
+	memoryQuota   *memory.MemQuota
 
 	metricDispatcherCount                prometheus.Gauge
 	metricEventServiceReceivedResolvedTs prometheus.Gauge
@@ -144,6 +145,8 @@ func newEventBroker(
 		memoryEnlargeFactor,
 	)
 	memoryLimiter := memory.NewMemoryLimiter("eventBroker", memoryLimitConfig)
+	// 2GB
+	memoryQuota := memory.NewMemQuota(2048*1024*1024, "eventBroker")
 
 	c := &eventBroker{
 		tidbClusterID:           id,
@@ -161,7 +164,9 @@ func newEventBroker(
 		scanWorkerCount:         scanWorkerCount,
 		cancel:                  cancel,
 		g:                       g,
-		memoryLimiter:           memoryLimiter,
+
+		memoryLimiter: memoryLimiter,
+		memoryQuota:   memoryQuota,
 
 		metricDispatcherCount:                metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
 		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
@@ -539,7 +544,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// sendDML is used to send the dml event to the dispatcher.
 	// It returns true if the dml event is sent successfully.
 	// Otherwise, it returns false.
-	sendDML := func(dml *pevent.DMLEvent) bool {
+	sendDML := func(dml *pevent.DMLEvent, dmlSize int) bool {
 		if dml == nil {
 			return true
 		}
@@ -566,7 +571,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			c.sendDDL(ctx, remoteID, ddlEvents[0], task)
 			ddlEvents = ddlEvents[1:]
 		}
+
 		dml.Seq = task.seq.Add(1)
+
+		dml.Callback = func() {
+			log.Info("refund memory quota", zap.Uint64("dmlSize", uint64(dmlSize)))
+			c.memoryQuota.Refund(uint64(dmlSize))
+		}
+
 		c.emitSyncPointEventIfNeeded(dml.CommitTs, task, remoteID)
 		c.getMessageCh(task.workerIndex) <- newWrapDMLEvent(remoteID, dml, task.getEventSenderState())
 		metricEventServiceSendKvCount.Add(float64(dml.Len()))
@@ -579,17 +591,19 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	for {
 		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
-
+		var dmlSize int
 		// Start the memory limiter when the first event is read.
 		c.memoryLimiter.Start()
 
 		if e != nil {
 			eSize := int(e.KeyLen + e.ValueLen + e.OldValueLen)
-			if eSize > c.memoryLimiter.GetCurrentMemoryLimit() {
-				log.Warn("The single event memory limit is exceeded the total memory limit, set it to the current memory limit", zap.Int("eventSize", eSize), zap.Int("currentMemoryLimit", c.memoryLimiter.GetCurrentMemoryLimit()))
-				eSize = c.memoryLimiter.GetCurrentMemoryLimit()
-			}
-			c.memoryLimiter.WaitN(eSize)
+			// if eSize > c.memoryLimiter.GetCurrentMemoryLimit() {
+			// 	log.Warn("The single event memory limit is exceeded the total memory limit, set it to the current memory limit", zap.Int("eventSize", eSize), zap.Int("currentMemoryLimit", c.memoryLimiter.GetCurrentMemoryLimit()))
+			// 	eSize = c.memoryLimiter.GetCurrentMemoryLimit()
+			// }
+			// c.memoryLimiter.WaitN(eSize)
+			dmlSize += eSize
+			_ = c.memoryQuota.BlockAcquire(uint64(eSize))
 		}
 
 		if err != nil {
@@ -597,7 +611,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		}
 		if e == nil {
 			// Send the last dml to the dispatcher.
-			sendDML(dml)
+			ok := sendDML(dml, dmlSize)
+			if !ok {
+				dml.Callback()
+				return
+			}
+			dmlSize = 0
+
 			sendRemainingDDLEvents()
 			metrics.EventServiceScanDuration.Observe(time.Since(start).Seconds())
 			return
@@ -610,10 +630,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		}
 
 		if isNewTxn {
-			ok := sendDML(dml)
+			ok := sendDML(dml, dmlSize)
 			if !ok {
+				dml.Callback()
 				return
 			}
+
 			tableID := task.info.GetTableSpan().TableID
 			tableInfo, err := c.schemaStore.GetTableInfo(tableID, e.CRTs-1)
 			if err != nil {
@@ -683,6 +705,7 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 						continue
 					}
 				}
+
 				tMsg := messaging.NewSingleTargetMessage(
 					m.serverID,
 					messaging.EventCollectorTopic,
@@ -756,6 +779,9 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 				// Drop the message, and return.
 				// If the dispatcher finds the events are not continuous, it will send a reset message.
 				// And the broker will send the missed events to the dispatcher again.
+				if tMsg.Callback != nil {
+					tMsg.Callback()
+				}
 				return
 			}
 		}

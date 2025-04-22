@@ -190,6 +190,7 @@ type SubscriptionClient struct {
 	}
 
 	memoryLimiter *memory.MemoryLimiter
+	memoryQuota   *memory.MemQuota
 
 	// rangeTaskCh is used to receive range tasks.
 	// The tasks will be handled in `handleRangeTask` goroutine.
@@ -226,6 +227,9 @@ func NewSubscriptionClient(
 	)
 	memoryLimiter := memory.NewMemoryLimiter("subscriptionClient", memoryLimitConfig)
 
+	// 2GB
+	memoryQuota := memory.NewMemQuota(2048*1024*1024, "subscriptionClient")
+
 	subClient := &SubscriptionClient{
 		config: config,
 
@@ -237,6 +241,7 @@ func NewSubscriptionClient(
 		credential: credential,
 
 		memoryLimiter: memoryLimiter,
+		memoryQuota:   memoryQuota,
 
 		rangeTaskCh:       make(chan rangeTask, 1024),
 		regionCh:          make(chan regionInfo, 1024),
@@ -380,14 +385,21 @@ func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event reg
 
 	eventSize := event.getSize()
 
-	if eventSize > s.memoryLimiter.GetCurrentMemoryLimit() {
-		log.Warn("event size is greater than memory limit, set it to the current memory limit",
-			zap.Uint64("subscriptionID", uint64(subID)),
-			zap.Int("eventSize", eventSize),
-			zap.Int("currentMemoryLimit", s.memoryLimiter.GetCurrentMemoryLimit()))
-		eventSize = s.memoryLimiter.GetCurrentMemoryLimit()
+	_ = s.memoryQuota.BlockAcquire(uint64(eventSize))
+	event.callback = func() {
+		log.Info("refund memory quota", zap.Uint64("eventSize", uint64(eventSize)))
+		s.memoryQuota.Refund(uint64(eventSize))
 	}
-	s.memoryLimiter.WaitN(eventSize)
+
+	// if eventSize > s.memoryLimiter.GetCurrentMemoryLimit() {
+	// 	log.Warn("event size is greater than memory limit, set it to the current memory limit",
+	// 		zap.Uint64("subscriptionID", uint64(subID)),
+	// 		zap.Int("eventSize", eventSize),
+	// 		zap.Int("currentMemoryLimit", s.memoryLimiter.GetCurrentMemoryLimit()))
+	// 	eventSize = s.memoryLimiter.GetCurrentMemoryLimit()
+	// }
+	// s.memoryLimiter.WaitN(eventSize)
+
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)
