@@ -57,8 +57,6 @@ type RawKVEntry struct {
 	Value []byte `msg:"value"`
 	// nil for insert type
 	OldValue []byte `msg:"old_value"`
-
-	Callback func() `msg:"-"`
 }
 
 func (v *RawKVEntry) IsResolved() bool {

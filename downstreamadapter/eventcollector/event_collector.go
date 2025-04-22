@@ -419,9 +419,6 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 			return
 		case targetMessage := <-inCh:
 			for _, msg := range targetMessage.Message {
-				if targetMessage.Callback != nil {
-					targetMessage.Callback()
-				}
 				switch msg.(type) {
 				case commonEvent.Event:
 					event := msg.(commonEvent.Event)

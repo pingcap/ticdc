@@ -43,7 +43,6 @@ type regionEvent struct {
 	// only one of the following fields will be set
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
-	callback   func()
 }
 
 func (event *regionEvent) getSize() int {
@@ -147,6 +146,7 @@ func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp
 		return dynstream.Timestamp(event.resolvedTs)
 	}
 }
+
 func (h *regionEventHandler) IsPaused(event regionEvent) bool { return false }
 
 func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
@@ -214,7 +214,6 @@ func handleEventEntries(span *subscribedSpan, event regionEvent) {
 			CRTs:     entry.CommitTs,
 			RegionID: regionID,
 			OldValue: entry.GetOldValue(),
-			Callback: event.callback,
 		}
 	}
 

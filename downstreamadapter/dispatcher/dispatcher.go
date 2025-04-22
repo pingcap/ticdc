@@ -354,6 +354,9 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
 				// and wake dynamic stream to handle the next events.
 				if d.tableProgress.Empty() {
+					if dml.Callback != nil {
+						dml.Callback()
+					}
 					wakeCallback()
 				}
 			})

@@ -690,9 +690,6 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 			if err := batch.Set(key, value, pebble.NoSync); err != nil {
 				log.Panic("failed to update pebble batch", zap.Error(err))
 			}
-			if kv.Callback != nil {
-				kv.Callback()
-			}
 		}
 	}
 	CounterKv.Add(float64(kvCount))

@@ -49,7 +49,7 @@ const (
 
 	defaultInitialMemoryLimit      = 1024 * 1024 * 2 // 2MB
 	defaultMemoryLimitIncreaseRate = 2
-	memoryEnlargeFactor            = 2
+	memoryEnlargeFactor            = 1
 )
 
 var (
@@ -138,8 +138,8 @@ func newEventBroker(
 	memoryLimitConfig := memory.NewMemoryLimitConfig(
 		defaultInitialMemoryLimit,
 		defaultInitialMemoryLimit,
-		defaultInitialMemoryLimit*75, // 150MB
-		defaultInitialMemoryLimit*3,  // 6MB
+		defaultInitialMemoryLimit*100, // 200MB
+		defaultInitialMemoryLimit*3,   // 6MB
 		defaultMemoryLimitIncreaseRate,
 		10*time.Second,
 		memoryEnlargeFactor,
@@ -544,7 +544,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// sendDML is used to send the dml event to the dispatcher.
 	// It returns true if the dml event is sent successfully.
 	// Otherwise, it returns false.
-	sendDML := func(dml *pevent.DMLEvent, dmlSize int) bool {
+	sendDML := func(dml *pevent.DMLEvent) bool {
 		if dml == nil {
 			return true
 		}
@@ -574,9 +574,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 		dml.Seq = task.seq.Add(1)
 
+		size := dml.GetSize() * memoryEnlargeFactor
+		c.memoryQuota.BlockAcquire(uint64(size))
+
 		dml.Callback = func() {
-			log.Info("refund memory quota", zap.Uint64("dmlSize", uint64(dmlSize)))
-			c.memoryQuota.Refund(uint64(dmlSize))
+			//log.Info("refund memory quota", zap.Uint64("dmlSize", uint64(size)))
+			c.memoryQuota.Refund(uint64(size))
 		}
 
 		c.emitSyncPointEventIfNeeded(dml.CommitTs, task, remoteID)
@@ -591,32 +594,30 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	for {
 		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
-		var dmlSize int
 		// Start the memory limiter when the first event is read.
 		c.memoryLimiter.Start()
 
-		if e != nil {
-			eSize := int(e.KeyLen + e.ValueLen + e.OldValueLen)
-			// if eSize > c.memoryLimiter.GetCurrentMemoryLimit() {
-			// 	log.Warn("The single event memory limit is exceeded the total memory limit, set it to the current memory limit", zap.Int("eventSize", eSize), zap.Int("currentMemoryLimit", c.memoryLimiter.GetCurrentMemoryLimit()))
-			// 	eSize = c.memoryLimiter.GetCurrentMemoryLimit()
-			// }
-			// c.memoryLimiter.WaitN(eSize)
-			dmlSize += eSize
-			_ = c.memoryQuota.BlockAcquire(uint64(eSize))
-		}
+		// if e != nil {
+		// 	eSize := int(e.KeyLen + e.ValueLen + e.OldValueLen)
+		// 	if eSize > c.memoryLimiter.GetCurrentMemoryLimit() {
+		// 		log.Warn("The single event memory limit is exceeded the total memory limit, set it to the current memory limit", zap.Int("eventSize", eSize), zap.Int("currentMemoryLimit", c.memoryLimiter.GetCurrentMemoryLimit()))
+		// 		eSize = c.memoryLimiter.GetCurrentMemoryLimit()
+		// 	}
+		// 	c.memoryLimiter.WaitN(eSize)
+		// }
 
 		if err != nil {
 			log.Panic("read events failed", zap.Error(err))
 		}
 		if e == nil {
 			// Send the last dml to the dispatcher.
-			ok := sendDML(dml, dmlSize)
+			ok := sendDML(dml)
 			if !ok {
-				dml.Callback()
+				if dml != nil && dml.Callback != nil {
+					dml.Callback()
+				}
 				return
 			}
-			dmlSize = 0
 
 			sendRemainingDDLEvents()
 			metrics.EventServiceScanDuration.Observe(time.Since(start).Seconds())
@@ -630,9 +631,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		}
 
 		if isNewTxn {
-			ok := sendDML(dml, dmlSize)
+			ok := sendDML(dml)
 			if !ok {
-				dml.Callback()
+				if dml != nil && dml.Callback != nil {
+					dml.Callback()
+				}
 				return
 			}
 
