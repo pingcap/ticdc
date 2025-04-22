@@ -214,14 +214,16 @@ func NewSubscriptionClient(
 	credential *security.Credential,
 ) *SubscriptionClient {
 
-	memoryLimiter := common.NewMemoryLimiter("subscriptionClient", &common.MemoryLimitConfig{
-		CurrentMemoryLimit:      100 * 1024 * 1024,     // 100MB
-		MinMemoryLimit:          100 * 1024 * 1024,     // 100MB
-		MaxMemoryLimit:          100 * 1024 * 1024 * 6, // 600MB
-		MemoryLimitIncreaseRate: 2,
-		IncreaseInterval:        time.Second * 10,
-		PenaltyFactor:           2,
-	})
+	memoryLimitConfig := common.NewMemoryLimitConfig(
+		100*1024*1024,   // 100MB
+		100*1024*1024,   // 100MB
+		100*1024*1024*6, // 600MB
+		100*1024*1024,   // 100MB
+		2,
+		time.Second*10,
+		2,
+	)
+	memoryLimiter := common.NewMemoryLimiter("subscriptionClient", memoryLimitConfig)
 
 	subClient := &SubscriptionClient{
 		config: config,
