@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2024 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,49 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sink
+package blackhole
 
 import (
-	"context"
-	"fmt"
-	"net/url"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
 
-func newCloudStorageSinkForTest(parentDir string) (*CloudStorageSink, error) {
-	ctx := context.Background()
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-	changefeedID := common.NewChangefeedID4Test("test", "test")
-	csvProtocol := "csv"
-	sinkConfig := &config.SinkConfig{Protocol: &csvProtocol}
-	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
-	sinkURI, err := url.Parse(uri)
-	if err != nil {
-		return nil, err
-	}
-	sink, err := newCloudStorageSink(ctx, changefeedID, sinkURI, sinkConfig, nil)
-	if err != nil {
-		return nil, err
-	}
-	go sink.Run(ctx)
-	return sink, nil
-}
-
-func TestCloudStorageSinkBasicFunctionality(t *testing.T) {
-	sink, err := newCloudStorageSinkForTest(t.TempDir())
+// Test callback and tableProgress works as expected after AddDMLEvent
+func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
+	sink, err := New()
 	require.NoError(t, err)
 
-	var count atomic.Int64
+	count := 0
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -62,9 +35,6 @@ func TestCloudStorageSinkBasicFunctionality(t *testing.T) {
 	createTableSQL := "create table t (id int primary key, name varchar(32));"
 	job := helper.DDL2Job(createTableSQL)
 	require.NotNil(t, job)
-	helper.ApplyJob(job)
-
-	tableInfo := helper.GetTableInfo(job)
 
 	ddlEvent := &commonEvent.DDLEvent{
 		Query:      job.Query,
@@ -75,10 +45,9 @@ func TestCloudStorageSinkBasicFunctionality(t *testing.T) {
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{0},
 		},
-		TableInfo:       tableInfo,
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
-			func() { count.Add(1) },
+			func() { count++ },
 		},
 	}
 
@@ -91,29 +60,25 @@ func TestCloudStorageSinkBasicFunctionality(t *testing.T) {
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{0},
 		},
-		TableInfo:       tableInfo,
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
-			func() { count.Add(1) },
+			func() { count++ },
 		},
 	}
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
 	dmlEvent.PostTxnFlushed = []func(){
-		func() {
-			count.Add(1)
-		},
+		func() { count++ },
 	}
-	dmlEvent.TableInfoVersion = 1
+	dmlEvent.CommitTs = 2
 
 	err = sink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
 	sink.AddDMLEvent(dmlEvent)
-
-	time.Sleep(5 * time.Second)
+	time.Sleep(1 * time.Second)
 
 	ddlEvent2.PostFlush()
 
-	require.Equal(t, count.Load(), int64(3))
+	require.Equal(t, count, 3)
 }

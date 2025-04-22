@@ -20,10 +20,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tiflow/cdc/model"
 	bf "github.com/pingcap/tiflow/pkg/binlog-filter"
-	"github.com/pingcap/tiflow/pkg/integrity"
 	"github.com/pingcap/tiflow/pkg/security"
 )
 
@@ -1184,10 +1184,10 @@ type ServerStatus struct {
 type Capture struct {
 	ID string `json:"id"`
 	// IsCoordinator is true if the capture is the coordinator of the TiCDC cluster
-	// We make its json key as `is_owner` to keep the compatibility with old TiCDC.
-	IsCoordinator bool   `json:"is_owner"`
+	// We make its json key as `is-owner` to keep the compatibility with old TiCDC.
+	IsCoordinator bool   `json:"is-owner"`
 	AdvertiseAddr string `json:"address"`
-	ClusterID     string `json:"cluster_id"`
+	ClusterID     string `json:"cluster-id"`
 }
 
 // CodecConfig represents a MQ codec configuration

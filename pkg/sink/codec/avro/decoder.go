@@ -26,6 +26,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
@@ -148,13 +149,12 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	}
 
 	expectedChecksum, found := extractExpectedChecksum(valueMap)
-	// TODO: Checksum
-	// corrupted := isCorrupted(valueMap)
+	corrupted := isCorrupted(valueMap)
 	if found {
-		// event.Checksum = &integrity.Checksum{
-		// 	Current:   uint32(expectedChecksum),
-		// 	Corrupted: corrupted,
-		// }
+		event.Checksum = &integrity.Checksum{
+			Current:   uint32(expectedChecksum),
+			Corrupted: corrupted,
+		}
 	}
 
 	if isCorrupted(valueMap) {

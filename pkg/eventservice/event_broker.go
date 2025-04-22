@@ -29,6 +29,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -109,6 +110,7 @@ func newEventBroker(
 	schemaStore schemastore.SchemaStore,
 	mc messaging.MessageSender,
 	tz *time.Location,
+	integrity *integrity.Config,
 ) *eventBroker {
 	// These numbers are define by real test result.
 	// We noted that:
@@ -131,7 +133,7 @@ func newEventBroker(
 		tidbClusterID:           id,
 		eventStore:              eventStore,
 		pdClock:                 pdClock,
-		mounter:                 pevent.NewMounter(tz),
+		mounter:                 pevent.NewMounter(tz, integrity),
 		schemaStore:             schemaStore,
 		changefeedMap:           sync.Map{},
 		dispatchers:             sync.Map{},
