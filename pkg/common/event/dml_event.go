@@ -71,9 +71,6 @@ type DMLEvent struct {
 	// offset is the offset of the current row in the transaction.
 	// It is internal field, not exported. So it doesn't need to be marshalled.
 	offset int `json:"-"`
-
-	// callback is the function to be executed when the event is sent in the event service.
-	Callback func() `json:"-"`
 }
 
 func NewDMLEvent(

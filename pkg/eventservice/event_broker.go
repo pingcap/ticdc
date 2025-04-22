@@ -48,9 +48,9 @@ const (
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
 	defaultInitialMemoryLimit      = 1024 * 1024 * 2   // 5MB
-	defaultMaxMemoryLimit          = 1024 * 1024 * 200 // 200
+	defaultMaxMemoryLimit          = 1024 * 1024 * 150 // 160MB
 	defaultMemoryLimitIncreaseRate = 2
-	memoryEnlargeFactor            = 1
+	memoryEnlargeFactor            = 3
 )
 
 var (
@@ -575,14 +575,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 		dml.Seq = task.seq.Add(1)
 
-		size := dml.GetSize() * 3
-		c.memoryQuota.BlockAcquire(uint64(size))
-
-		dml.Callback = func() {
-			//log.Info("refund memory quota", zap.Uint64("dmlSize", uint64(size)))
-			c.memoryQuota.Refund(uint64(size))
-		}
-
 		c.emitSyncPointEventIfNeeded(dml.CommitTs, task, remoteID)
 		c.getMessageCh(task.workerIndex) <- newWrapDMLEvent(remoteID, dml, task.getEventSenderState())
 		metricEventServiceSendKvCount.Add(float64(dml.Len()))
@@ -597,9 +589,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		e, isNewTxn, err := iter.Next()
 		// Start the memory limiter when the first event is read.
 		c.memoryLimiter.Start()
-
+		var eSize int
 		if e != nil {
-			eSize := int(e.KeyLen + e.ValueLen + e.OldValueLen)
+			eSize = int(e.KeyLen + e.ValueLen + e.OldValueLen)
 			if eSize > c.memoryLimiter.GetCurrentMemoryLimit() {
 				log.Warn("The single event memory limit is exceeded the total memory limit, set it to the current memory limit", zap.Int("eventSize", eSize), zap.Int("currentMemoryLimit", c.memoryLimiter.GetCurrentMemoryLimit()))
 				eSize = c.memoryLimiter.GetCurrentMemoryLimit()
@@ -614,9 +606,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			// Send the last dml to the dispatcher.
 			ok := sendDML(dml)
 			if !ok {
-				if dml != nil && dml.Callback != nil {
-					dml.Callback()
-				}
 				return
 			}
 
@@ -634,9 +623,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		if isNewTxn {
 			ok := sendDML(dml)
 			if !ok {
-				if dml != nil && dml.Callback != nil {
-					dml.Callback()
-				}
 				return
 			}
 
@@ -659,9 +645,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			}
 			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
 		}
+
+		// The memory quota is used to limit the memory usage when decoding the event.
+		size := eSize * memoryEnlargeFactor
+		c.memoryQuota.BlockAcquire(uint64(size))
 		if err = dml.AppendRow(e, c.mounter.DecodeToChunk); err != nil {
 			log.Panic("append row failed", zap.Error(err))
 		}
+		c.memoryQuota.Refund(uint64(size))
 	}
 }
 
@@ -783,9 +774,6 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 				// Drop the message, and return.
 				// If the dispatcher finds the events are not continuous, it will send a reset message.
 				// And the broker will send the missed events to the dispatcher again.
-				if tMsg.Callback != nil {
-					tMsg.Callback()
-				}
 				return
 			}
 		}
