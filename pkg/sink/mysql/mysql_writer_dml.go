@@ -362,7 +362,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 
 	// step 2. compare the rows in the same key hash, to generate the final rows
 	rowsList := make([]*commonEvent.RowChange, 0, len(rowsMap))
-	for _, rowChanges := range rowsMap {
+	for hashValue, rowChanges := range rowsMap {
 		if len(rowChanges) == 0 {
 			continue
 		}
@@ -380,10 +380,9 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 				prevType = rowType
 			} else {
 				// use normal sql instead
-
 				query, args := w.generateNormalSQLs(events)
 				log.Info("Error case prepareDMLs", zap.Any("query", query), zap.Any("args", args))
-
+				log.Info("len of rowChanges", zap.Any("len of rowChanges", len(rowChanges)), zap.Any("hashValue", hashValue), zap.Any("key", hashToKeyMap[hashValue]))
 				log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges), zap.Any("prevType", prevType), zap.Any("currentType", rowType))
 				// // TODO:add more info here
 				//
