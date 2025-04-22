@@ -174,6 +174,9 @@ func (c *logCoordinator) updateEventStoreState(nodeId node.ID, state *logservice
 		subscriptionStates: make(map[int64]subscriptionStates),
 	}
 	count := 0
+	log.Info("log coordinator update event store state",
+		zap.String("nodeId", nodeId.String()),
+		zap.Int("subscriptionCount", len(state.GetSubscriptions())))
 	for tableId, subscriptions := range state.GetSubscriptions() {
 		subs := subscriptions.GetSubscriptions()
 		subStates := make(subscriptionStates, 0, len(subs))
