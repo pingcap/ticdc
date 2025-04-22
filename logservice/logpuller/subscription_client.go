@@ -219,7 +219,7 @@ func NewSubscriptionClient(
 		100*1024*1024,   // 100MB
 		100*1024*1024*6, // 600MB
 		100*1024*1024,   // 100MB
-		2,
+		1.5,
 		time.Second*10,
 		2,
 	)

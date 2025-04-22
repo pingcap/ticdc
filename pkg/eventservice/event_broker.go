@@ -46,7 +46,7 @@ const (
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
-	defaultInitialMemoryLimit      = 1024 * 1024 * 2 // 5MB
+	defaultInitialMemoryLimit      = 1024 * 1024 * 2 // 2MB
 	defaultMemoryLimitIncreaseRate = 2
 	memoryEnlargeFactor            = 2
 )
@@ -136,10 +136,10 @@ func newEventBroker(
 	memoryLimitConfig := common.NewMemoryLimitConfig(
 		defaultInitialMemoryLimit,
 		defaultInitialMemoryLimit,
-		defaultInitialMemoryLimit*100, // 200MB
-		defaultInitialMemoryLimit,
+		defaultInitialMemoryLimit*75, // 150MB
+		defaultInitialMemoryLimit*3,  // 6MB
 		defaultMemoryLimitIncreaseRate,
-		5*time.Second,
+		10*time.Second,
 		memoryEnlargeFactor,
 	)
 	memoryLimiter := common.NewMemoryLimiter("eventBroker", memoryLimitConfig)
