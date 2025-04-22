@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
@@ -71,6 +72,10 @@ type DMLEvent struct {
 	// offset is the offset of the current row in the transaction.
 	// It is internal field, not exported. So it doesn't need to be marshalled.
 	offset int `json:"-"`
+
+	// Checksum for the event, only not nil if the upstream TiDB enable the row level checksum
+	// and TiCDC set the integrity check level to the correctness.
+	Checksum *integrity.Checksum
 }
 
 func NewDMLEvent(
@@ -98,7 +103,7 @@ func NewDMLEvent(
 func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	decode func(
 		rawKv *common.RawKVEntry,
-		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, error),
+		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error),
 ) error {
 	rowType := RowTypeInsert
 	if raw.OpType == common.OpTypeDelete {
@@ -107,7 +112,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	if len(raw.Value) != 0 && len(raw.OldValue) != 0 {
 		rowType = RowTypeUpdate
 	}
-	count, err := decode(raw, t.TableInfo, t.Rows)
+	count, checksum, err := decode(raw, t.TableInfo, t.Rows)
 	if err != nil {
 		return err
 	}
@@ -116,6 +121,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	}
 	t.Length += 1
 	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
+	t.Checksum = checksum
 	return nil
 }
 
