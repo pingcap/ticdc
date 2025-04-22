@@ -306,8 +306,6 @@ type TargetMessage struct {
 	// Group is used to group messages into a same group.
 	// Different groups can be processed in different goroutines.
 	Group uint64
-
-	Callback func()
 }
 
 // NewSingleTargetMessage creates a new TargetMessage to be sent to a target server, with a single message.
@@ -316,12 +314,9 @@ type TargetMessage struct {
 // The Group is optional, if not specified, the Group will be 0.
 func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...uint64) *TargetMessage {
 	var ioType IOType
-	var callback func()
 	switch Message.(type) {
 	case *commonEvent.DMLEvent:
 		ioType = TypeDMLEvent
-		m := Message.(*commonEvent.DMLEvent)
-		callback = m.Callback
 	case *commonEvent.DDLEvent:
 		ioType = TypeDDLEvent
 	case *commonEvent.SyncPointEvent:
@@ -392,7 +387,6 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		Message:  []IOTypeT{Message},
 		CreateAt: time.Now().UnixMilli(),
 		Group:    group,
-		Callback: callback,
 	}
 }
 

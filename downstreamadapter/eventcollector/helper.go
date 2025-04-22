@@ -81,14 +81,6 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		validEventStart := 0
 		for _, event := range events {
 			if stat.shouldIgnoreDataEvent(event, h.eventCollector) {
-				if event.GetType() == commonEvent.TypeDMLEvent {
-					dml, ok := event.Event.(*commonEvent.DMLEvent)
-					if ok {
-						if dml.Callback != nil {
-							dml.Callback()
-						}
-					}
-				}
 				continue
 			}
 		}
