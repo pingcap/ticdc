@@ -247,6 +247,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						Event:           row,
 						Callback:        rowCallback,
 						ColumnSelector:  selector,
+						Checksum:        event.Checksum,
 					},
 				}
 				s.rowChan <- mqEvent

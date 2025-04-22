@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"go.uber.org/zap"
 )
@@ -49,6 +50,8 @@ type DispatcherInfo interface {
 
 	IsOnlyReuse() bool
 	GetBdrMode() bool
+	GetIntegrity() *integrity.Config
+	GetTimezone() *time.Location
 }
 
 // EventService accepts the requests of pulling events.
@@ -62,7 +65,6 @@ type eventService struct {
 
 	// TODO: use a better way to cache the acceptorInfos
 	dispatcherInfo chan DispatcherInfo
-	tz             *time.Location
 }
 
 func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) common.SubModule {
@@ -73,7 +75,6 @@ func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) 
 		schemaStore:    schemaStore,
 		brokers:        make(map[uint64]*eventBroker),
 		dispatcherInfo: make(chan DispatcherInfo, basicChannelSize*16),
-		tz:             time.Local, // FIXME use the timezone from the config
 	}
 	es.mc.RegisterHandler(messaging.EventServiceTopic, es.handleMessage)
 	return es
@@ -140,7 +141,7 @@ func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherIn
 	clusterID := info.GetClusterID()
 	c, ok := s.brokers[clusterID]
 	if !ok {
-		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, s.tz)
+		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, info.GetTimezone(), info.GetIntegrity())
 		s.brokers[clusterID] = c
 	}
 	c.addDispatcher(info)
