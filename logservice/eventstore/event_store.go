@@ -773,6 +773,7 @@ func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.T
 	for _, msg := range targetMessage.Message {
 		switch msg.(type) {
 		case *common.LogCoordinatorBroadcastRequest:
+			log.Info("event store get log coordinator request", zap.Stringer("from", targetMessage.From))
 			e.setCoordinatorInfo(targetMessage.From)
 		default:
 			log.Panic("invalid message type", zap.Any("msg", msg))
