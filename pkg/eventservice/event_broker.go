@@ -46,11 +46,9 @@ const (
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
-	defaultInitialMemoryLimit      = 1024 * 1024 * 1 // 1MB
+	defaultInitialMemoryLimit      = 1024 * 1024 * 2 // 5MB
 	defaultMemoryLimitIncreaseRate = 2
-	// memoryEnlargeFactor is the enlarge factor for the real memory usage when scan an event from the eventStore.
-	// It is used to avoid the memory limit being exceeded when scan an event from the eventStore.
-	memoryEnlargeFactor = 4
+	memoryEnlargeFactor            = 2
 )
 
 var (
@@ -135,14 +133,16 @@ func newEventBroker(
 	// For now, since there is only one upstream, using the default pdClock is sufficient.
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 
-	memoryLimiter := common.NewMemoryLimiter("eventBroker", &common.MemoryLimitConfig{
-		CurrentMemoryLimit:      defaultInitialMemoryLimit,
-		MinMemoryLimit:          defaultInitialMemoryLimit,
-		MaxMemoryLimit:          defaultInitialMemoryLimit * 150, // 150MB
-		MemoryLimitIncreaseRate: defaultMemoryLimitIncreaseRate,
-		IncreaseInterval:        time.Second * 10,
-		PenaltyFactor:           memoryEnlargeFactor,
-	})
+	memoryLimitConfig := common.NewMemoryLimitConfig(
+		defaultInitialMemoryLimit,
+		defaultInitialMemoryLimit,
+		defaultInitialMemoryLimit*100, // 200MB
+		defaultInitialMemoryLimit,
+		defaultMemoryLimitIncreaseRate,
+		5*time.Second,
+		memoryEnlargeFactor,
+	)
+	memoryLimiter := common.NewMemoryLimiter("eventBroker", memoryLimitConfig)
 
 	c := &eventBroker{
 		tidbClusterID:           id,
