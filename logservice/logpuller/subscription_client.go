@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/memory"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/spanz"
@@ -188,7 +189,7 @@ type SubscriptionClient struct {
 		spanMap map[SubscriptionID]*subscribedSpan
 	}
 
-	memoryLimiter *common.MemoryLimiter
+	memoryLimiter *memory.MemoryLimiter
 
 	// rangeTaskCh is used to receive range tasks.
 	// The tasks will be handled in `handleRangeTask` goroutine.
@@ -214,7 +215,7 @@ func NewSubscriptionClient(
 	credential *security.Credential,
 ) *SubscriptionClient {
 
-	memoryLimitConfig := common.NewMemoryLimitConfig(
+	memoryLimitConfig := memory.NewMemoryLimitConfig(
 		100*1024*1024,   // 100MB
 		100*1024*1024,   // 100MB
 		100*1024*1024*6, // 600MB
@@ -223,7 +224,7 @@ func NewSubscriptionClient(
 		time.Second*10,
 		2,
 	)
-	memoryLimiter := common.NewMemoryLimiter("subscriptionClient", memoryLimitConfig)
+	memoryLimiter := memory.NewMemoryLimiter("subscriptionClient", memoryLimitConfig)
 
 	subClient := &SubscriptionClient{
 		config: config,

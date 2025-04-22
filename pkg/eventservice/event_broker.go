@@ -29,6 +29,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/memory"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -100,7 +101,7 @@ type eventBroker struct {
 	cancel context.CancelFunc
 	g      *errgroup.Group
 
-	memoryLimiter *common.MemoryLimiter
+	memoryLimiter *memory.MemoryLimiter
 
 	metricDispatcherCount                prometheus.Gauge
 	metricEventServiceReceivedResolvedTs prometheus.Gauge
@@ -133,7 +134,7 @@ func newEventBroker(
 	// For now, since there is only one upstream, using the default pdClock is sufficient.
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 
-	memoryLimitConfig := common.NewMemoryLimitConfig(
+	memoryLimitConfig := memory.NewMemoryLimitConfig(
 		defaultInitialMemoryLimit,
 		defaultInitialMemoryLimit,
 		defaultInitialMemoryLimit*75, // 150MB
@@ -142,7 +143,7 @@ func newEventBroker(
 		10*time.Second,
 		memoryEnlargeFactor,
 	)
-	memoryLimiter := common.NewMemoryLimiter("eventBroker", memoryLimitConfig)
+	memoryLimiter := memory.NewMemoryLimiter("eventBroker", memoryLimitConfig)
 
 	c := &eventBroker{
 		tidbClusterID:           id,
