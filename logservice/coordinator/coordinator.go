@@ -205,6 +205,10 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 	if !isCompleteSpan(span) {
 		return nil
 	}
+	log.Info("log coordinator get candidate nodes",
+		zap.String("requestNodeId", requestNodeID.String()),
+		zap.String("span", span.String()),
+		zap.Uint64("startTs", startTs))
 
 	type candidateNode struct {
 		nodeID     node.ID
