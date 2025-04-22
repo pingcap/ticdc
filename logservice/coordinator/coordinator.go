@@ -17,7 +17,6 @@ import (
 	"context"
 	"sort"
 	"sync"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -92,7 +91,7 @@ func New() LogCoordinator {
 
 func (c *logCoordinator) Run(ctx context.Context) error {
 	log.Info("log coordinator start")
-	tick := time.NewTicker(time.Second)
+	// tick := time.NewTicker(time.Second)
 	for {
 		select {
 		case <-ctx.Done():
