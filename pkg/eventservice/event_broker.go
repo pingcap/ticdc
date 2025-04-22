@@ -47,7 +47,8 @@ const (
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
-	defaultInitialMemoryLimit      = 1024 * 1024 * 2 // 2MB
+	defaultInitialMemoryLimit      = 1024 * 1024 * 2   // 5MB
+	defaultMaxMemoryLimit          = 1024 * 1024 * 200 // 200
 	defaultMemoryLimitIncreaseRate = 2
 	memoryEnlargeFactor            = 1
 )
@@ -138,8 +139,8 @@ func newEventBroker(
 	memoryLimitConfig := memory.NewMemoryLimitConfig(
 		defaultInitialMemoryLimit,
 		defaultInitialMemoryLimit,
-		defaultInitialMemoryLimit*100, // 200MB
-		defaultInitialMemoryLimit*3,   // 6MB
+		defaultMaxMemoryLimit,
+		defaultInitialMemoryLimit,
 		defaultMemoryLimitIncreaseRate,
 		10*time.Second,
 		memoryEnlargeFactor,
@@ -574,7 +575,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 		dml.Seq = task.seq.Add(1)
 
-		size := dml.GetSize() * memoryEnlargeFactor
+		size := dml.GetSize() * 3
 		c.memoryQuota.BlockAcquire(uint64(size))
 
 		dml.Callback = func() {
@@ -597,14 +598,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		// Start the memory limiter when the first event is read.
 		c.memoryLimiter.Start()
 
-		// if e != nil {
-		// 	eSize := int(e.KeyLen + e.ValueLen + e.OldValueLen)
-		// 	if eSize > c.memoryLimiter.GetCurrentMemoryLimit() {
-		// 		log.Warn("The single event memory limit is exceeded the total memory limit, set it to the current memory limit", zap.Int("eventSize", eSize), zap.Int("currentMemoryLimit", c.memoryLimiter.GetCurrentMemoryLimit()))
-		// 		eSize = c.memoryLimiter.GetCurrentMemoryLimit()
-		// 	}
-		// 	c.memoryLimiter.WaitN(eSize)
-		// }
+		if e != nil {
+			eSize := int(e.KeyLen + e.ValueLen + e.OldValueLen)
+			if eSize > c.memoryLimiter.GetCurrentMemoryLimit() {
+				log.Warn("The single event memory limit is exceeded the total memory limit, set it to the current memory limit", zap.Int("eventSize", eSize), zap.Int("currentMemoryLimit", c.memoryLimiter.GetCurrentMemoryLimit()))
+				eSize = c.memoryLimiter.GetCurrentMemoryLimit()
+			}
+			c.memoryLimiter.WaitN(eSize)
+		}
 
 		if err != nil {
 			log.Panic("read events failed", zap.Error(err))

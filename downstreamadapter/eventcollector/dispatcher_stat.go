@@ -88,7 +88,7 @@ func (d *dispatcherStat) shouldIgnoreDataEvent(event dispatcher.DispatcherEvent,
 		return true
 	}
 	if d.waitHandshake.Load() {
-		log.Warn("Receive event before handshake event, ignore it",
+		log.Debug("Receive event before handshake event, ignore it",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Stringer("dispatcher", d.target.GetId()))
 		return true

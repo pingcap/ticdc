@@ -93,7 +93,7 @@ func (oc *Controller) Execute() time.Time {
 
 		if msg != nil {
 			_ = oc.messageCenter.SendCommand(msg)
-			log.Info("send command to dispatcher",
+			log.Debug("send command to dispatcher",
 				zap.String("role", oc.role),
 				zap.String("changefeed", oc.changefeedID.Name()),
 				zap.String("operator", op.String()))
