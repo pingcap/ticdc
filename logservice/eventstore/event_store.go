@@ -442,6 +442,7 @@ func (e *eventStore) RegisterDispatcher(
 		})
 		return true
 	}
+
 	advanceResolvedTs := func(ts uint64) {
 		// filter out identical resolved ts
 		currentResolvedTs := subStat.resolvedTs.Load()

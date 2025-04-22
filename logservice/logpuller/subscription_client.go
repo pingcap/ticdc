@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/memory"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/spanz"
@@ -188,6 +189,8 @@ type SubscriptionClient struct {
 		spanMap map[SubscriptionID]*subscribedSpan
 	}
 
+	memoryLimiter *memory.MemoryLimiter
+
 	// rangeTaskCh is used to receive range tasks.
 	// The tasks will be handled in `handleRangeTask` goroutine.
 	rangeTaskCh chan rangeTask
@@ -211,6 +214,19 @@ func NewSubscriptionClient(
 	lockResolver txnutil.LockResolver,
 	credential *security.Credential,
 ) *SubscriptionClient {
+
+	memoryLimitConfig := memory.NewMemoryLimitConfig(
+		100*1024*1024,   // 100MB
+		100*1024*1024,   // 100MB
+		100*1024*1024*6, // 600MB
+		100*1024*1024,   // 100MB
+		1.5,
+		time.Second*10,
+		1,
+	)
+
+	memoryLimiter := memory.NewMemoryLimiter("subscriptionClient", memoryLimitConfig)
+
 	subClient := &SubscriptionClient{
 		config: config,
 
@@ -220,6 +236,8 @@ func NewSubscriptionClient(
 		lockResolver: lockResolver,
 
 		credential: credential,
+
+		memoryLimiter: memoryLimiter,
 
 		rangeTaskCh:       make(chan rangeTask, 1024),
 		regionCh:          make(chan regionInfo, 1024),
@@ -358,6 +376,20 @@ func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
 }
 
 func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
+	// Start the memory limiter when the first event is pushed.
+	s.memoryLimiter.Start()
+
+	eventSize := event.getSize()
+
+	if eventSize > s.memoryLimiter.GetCurrentMemoryLimit() {
+		log.Warn("event size is greater than memory limit, set it to the current memory limit",
+			zap.Uint64("subscriptionID", uint64(subID)),
+			zap.Int("eventSize", eventSize),
+			zap.Int("currentMemoryLimit", s.memoryLimiter.GetCurrentMemoryLimit()))
+		eventSize = s.memoryLimiter.GetCurrentMemoryLimit()
+	}
+	s.memoryLimiter.WaitN(eventSize)
+
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)
@@ -381,6 +413,7 @@ func (s *SubscriptionClient) handleDSFeedBack(ctx context.Context) error {
 			switch feedback.FeedbackType {
 			case dynstream.PauseArea:
 				s.paused.Store(true)
+				s.memoryLimiter.Decrease()
 				log.Info("subscription client pause push region event")
 			case dynstream.ResumeArea:
 				s.paused.Store(false)

@@ -29,6 +29,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/memory"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -45,6 +46,10 @@ const (
 
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
+
+	defaultInitialMemoryLimit      = 1024 * 1024 * 2 // 2MB
+	defaultMemoryLimitIncreaseRate = 2
+	memoryEnlargeFactor            = 1
 )
 
 var (
@@ -96,6 +101,9 @@ type eventBroker struct {
 	cancel context.CancelFunc
 	g      *errgroup.Group
 
+	memoryLimiter *memory.MemoryLimiter
+	memoryQuota   *memory.MemQuota
+
 	metricDispatcherCount                prometheus.Gauge
 	metricEventServiceReceivedResolvedTs prometheus.Gauge
 	metricEventServiceSentResolvedTs     prometheus.Gauge
@@ -127,6 +135,19 @@ func newEventBroker(
 	// For now, since there is only one upstream, using the default pdClock is sufficient.
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 
+	memoryLimitConfig := memory.NewMemoryLimitConfig(
+		defaultInitialMemoryLimit,
+		defaultInitialMemoryLimit,
+		defaultInitialMemoryLimit*100, // 200MB
+		defaultInitialMemoryLimit*3,   // 6MB
+		defaultMemoryLimitIncreaseRate,
+		10*time.Second,
+		memoryEnlargeFactor,
+	)
+	memoryLimiter := memory.NewMemoryLimiter("eventBroker", memoryLimitConfig)
+	// 2GB
+	memoryQuota := memory.NewMemQuota(2048*1024*1024, "eventBroker")
+
 	c := &eventBroker{
 		tidbClusterID:           id,
 		eventStore:              eventStore,
@@ -143,6 +164,9 @@ func newEventBroker(
 		scanWorkerCount:         scanWorkerCount,
 		cancel:                  cancel,
 		g:                       g,
+
+		memoryLimiter: memoryLimiter,
+		memoryQuota:   memoryQuota,
 
 		metricDispatcherCount:                metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
 		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
@@ -547,7 +571,17 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			c.sendDDL(ctx, remoteID, ddlEvents[0], task)
 			ddlEvents = ddlEvents[1:]
 		}
+
 		dml.Seq = task.seq.Add(1)
+
+		size := dml.GetSize() * memoryEnlargeFactor
+		c.memoryQuota.BlockAcquire(uint64(size))
+
+		dml.Callback = func() {
+			//log.Info("refund memory quota", zap.Uint64("dmlSize", uint64(size)))
+			c.memoryQuota.Refund(uint64(size))
+		}
+
 		c.emitSyncPointEventIfNeeded(dml.CommitTs, task, remoteID)
 		c.getMessageCh(task.workerIndex) <- newWrapDMLEvent(remoteID, dml, task.getEventSenderState())
 		metricEventServiceSendKvCount.Add(float64(dml.Len()))
@@ -560,12 +594,31 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	for {
 		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
+		// Start the memory limiter when the first event is read.
+		c.memoryLimiter.Start()
+
+		// if e != nil {
+		// 	eSize := int(e.KeyLen + e.ValueLen + e.OldValueLen)
+		// 	if eSize > c.memoryLimiter.GetCurrentMemoryLimit() {
+		// 		log.Warn("The single event memory limit is exceeded the total memory limit, set it to the current memory limit", zap.Int("eventSize", eSize), zap.Int("currentMemoryLimit", c.memoryLimiter.GetCurrentMemoryLimit()))
+		// 		eSize = c.memoryLimiter.GetCurrentMemoryLimit()
+		// 	}
+		// 	c.memoryLimiter.WaitN(eSize)
+		// }
+
 		if err != nil {
 			log.Panic("read events failed", zap.Error(err))
 		}
 		if e == nil {
 			// Send the last dml to the dispatcher.
-			sendDML(dml)
+			ok := sendDML(dml)
+			if !ok {
+				if dml != nil && dml.Callback != nil {
+					dml.Callback()
+				}
+				return
+			}
+
 			sendRemainingDDLEvents()
 			metrics.EventServiceScanDuration.Observe(time.Since(start).Seconds())
 			return
@@ -580,8 +633,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		if isNewTxn {
 			ok := sendDML(dml)
 			if !ok {
+				if dml != nil && dml.Callback != nil {
+					dml.Callback()
+				}
 				return
 			}
+
 			tableID := task.info.GetTableSpan().TableID
 			tableInfo, err := c.schemaStore.GetTableInfo(tableID, e.CRTs-1)
 			if err != nil {
@@ -651,6 +708,7 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 						continue
 					}
 				}
+
 				tMsg := messaging.NewSingleTargetMessage(
 					m.serverID,
 					messaging.EventCollectorTopic,
@@ -724,6 +782,9 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 				// Drop the message, and return.
 				// If the dispatcher finds the events are not continuous, it will send a reset message.
 				// And the broker will send the missed events to the dispatcher again.
+				if tMsg.Callback != nil {
+					tMsg.Callback()
+				}
 				return
 			}
 		}
@@ -972,6 +1033,8 @@ func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Uint64("seq", stat.seq.Load()))
 	stat.isRunning.Store(false)
+	// When receive pause event, decrease the memory limit to half of the current memory limit.
+	c.memoryLimiter.Decrease()
 }
 
 func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {

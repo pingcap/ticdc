@@ -40,4 +40,5 @@ func InitMetrics(registry *prometheus.Registry) {
 	kafka.InitMetrics(registry)
 	codec.InitMetrics(registry)
 	gc.InitMetrics(registry)
+	InitMemoryMetrics(registry)
 }

@@ -293,7 +293,13 @@ func (mc *messageCenter) SendEvent(msg *TargetMessage) error {
 		// message to this target to avoid blocking.
 		return apperror.AppError{Type: apperror.ErrorTypeTargetNotFound, Reason: fmt.Sprintf("Target %s not found", msg.To)}
 	}
-	return target.sendEvent(msg)
+
+	err := target.sendEvent(msg)
+	if msg.Callback != nil {
+		msg.Callback()
+	}
+
+	return err
 }
 
 func (mc *messageCenter) SendCommand(msg *TargetMessage) error {
