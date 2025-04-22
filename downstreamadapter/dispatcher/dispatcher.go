@@ -349,14 +349,16 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
 			dml.AssembleRows(d.tableInfo)
+
+			if dml.Callback != nil {
+				dml.AddPostFlushFunc(dml.Callback)
+			}
+
 			dml.AddPostFlushFunc(func() {
 				// Considering dml event in sink may be written to downstream not in order,
 				// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
 				// and wake dynamic stream to handle the next events.
 				if d.tableProgress.Empty() {
-					if dml.Callback != nil {
-						dml.Callback()
-					}
 					wakeCallback()
 				}
 			})
