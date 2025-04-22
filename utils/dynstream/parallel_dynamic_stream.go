@@ -112,6 +112,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 	}
 
 	if pi.stream.isClosed.Load() {
+		log.Error("stream is closed")
 		return
 	}
 	pi.stream.in() <- eventWrap[A, P, T, D, H]{
