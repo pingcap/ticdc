@@ -92,6 +92,7 @@ func New() LogCoordinator {
 }
 
 func (c *logCoordinator) Run(ctx context.Context) error {
+	log.Info("log coordinator start")
 	tick := time.NewTicker(time.Second)
 	for {
 		select {
