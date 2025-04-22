@@ -311,6 +311,13 @@ func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) {
 			return
 		case req := <-c.logCoordinatorRequestChan.Out():
 			c.coordinatorInfo.RLock()
+			// log coordinator is not ready
+			if c.coordinatorInfo.id.GetSize() == 0 {
+				c.logCoordinatorRequestChan.In() <- req
+				c.coordinatorInfo.RUnlock()
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
 			targetMessage := messaging.NewSingleTargetMessage(c.coordinatorInfo.id, logCoordinatorTopic, req)
 			c.coordinatorInfo.RUnlock()
 			err := c.mc.SendCommand(targetMessage)
@@ -396,7 +403,7 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 		switch msg.(type) {
 		case *common.LogCoordinatorBroadcastRequest:
 			c.coordinatorInfo.Lock()
-			log.Info("event collector get log coordinator broadcast message", zap.String("from", targetMessage.From.String()))
+			// log.Info("event collector get log coordinator broadcast message", zap.String("from", targetMessage.From.String()))
 			c.coordinatorInfo.id = targetMessage.From
 			c.coordinatorInfo.Unlock()
 		case *logservicepb.ReusableEventServiceResponse:

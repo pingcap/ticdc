@@ -773,7 +773,7 @@ func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.T
 	for _, msg := range targetMessage.Message {
 		switch msg.(type) {
 		case *common.LogCoordinatorBroadcastRequest:
-			log.Info("event store get log coordinator request", zap.Stringer("from", targetMessage.From))
+			// log.Info("event store get log coordinator request", zap.Stringer("from", targetMessage.From))
 			e.setCoordinatorInfo(targetMessage.From)
 		default:
 			log.Panic("invalid message type", zap.Any("msg", msg))
@@ -789,6 +789,10 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-tick.C:
+			coordinatorID := e.getCoordinatorInfo()
+			if coordinatorID.GetSize() == 0 {
+				continue
+			}
 			e.dispatcherMeta.RLock()
 			state := &logservicepb.EventStoreState{
 				Subscriptions: make(map[int64]*logservicepb.SubscriptionStates),
@@ -819,7 +823,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 				}
 			}
 
-			message := messaging.NewSingleTargetMessage(e.getCoordinatorInfo(), messaging.LogCoordinatorTopic, state)
+			message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state)
 			e.dispatcherMeta.RUnlock()
 			// just ignore messagees fail to send
 			if err := e.messageCenter.SendEvent(message); err != nil {

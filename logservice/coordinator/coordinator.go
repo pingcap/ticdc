@@ -17,10 +17,12 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logservicepb"
+	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -91,26 +93,26 @@ func New() LogCoordinator {
 
 func (c *logCoordinator) Run(ctx context.Context) error {
 	log.Info("log coordinator start")
-	// tick := time.NewTicker(time.Second)
+	tick := time.NewTicker(time.Second)
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		// case <-tick.C:
-		// 	// send broadcast message to all nodes
-		// 	c.nodes.RLock()
-		// 	messages := make([]*messaging.TargetMessage, 0, 2*len(c.nodes.m))
-		// 	for id := range c.nodes.m {
-		// 		messages = append(messages, messaging.NewSingleTargetMessage(id, messaging.EventStoreTopic, &common.LogCoordinatorBroadcastRequest{}))
-		// 		messages = append(messages, messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, &common.LogCoordinatorBroadcastRequest{}))
-		// 	}
-		// 	c.nodes.RUnlock()
-		// 	for _, message := range messages {
-		// 		// just ignore messagees fail to send
-		// 		if err := c.messageCenter.SendEvent(message); err != nil {
-		// 			log.Debug("send broadcast message to node failed", zap.Error(err))
-		// 		}
-		// 	}
+		case <-tick.C:
+			// send broadcast message to all nodes
+			c.nodes.RLock()
+			messages := make([]*messaging.TargetMessage, 0, 2*len(c.nodes.m))
+			for id := range c.nodes.m {
+				messages = append(messages, messaging.NewSingleTargetMessage(id, messaging.EventStoreTopic, &common.LogCoordinatorBroadcastRequest{}))
+				messages = append(messages, messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, &common.LogCoordinatorBroadcastRequest{}))
+			}
+			c.nodes.RUnlock()
+			for _, message := range messages {
+				// just ignore messagees fail to send
+				if err := c.messageCenter.SendEvent(message); err != nil {
+					log.Debug("send broadcast message to node failed", zap.Error(err))
+				}
+			}
 		case req := <-c.requestChan.Out():
 			nodes := c.getCandidateNodes(req.target, req.req.GetSpan(), req.req.GetStartTs())
 			response := &logservicepb.ReusableEventServiceResponse{
