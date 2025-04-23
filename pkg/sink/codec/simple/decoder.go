@@ -620,7 +620,7 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 		if err != nil || msg.Checksum.Corrupted {
 			log.Warn("consumer detect checksum corrupted",
 				zap.String("schema", msg.Schema), zap.String("table", msg.Table), zap.Error(err))
-			return nil, errors.ErrDecodeFailed.GenWithStackByArgs("checksum corrupted")
+			return nil
 
 		}
 	}
