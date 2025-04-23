@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	mock_etcd "github.com/pingcap/ticdc/pkg/etcd/mock"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -149,7 +148,7 @@ func TestPauseChangefeed(t *testing.T) {
 	backend := NewEtcdBackend(cdcClient)
 
 	changefeedID := common.NewChangeFeedIDWithName("test")
-	info := &config.ChangeFeedInfo{State: model.StateNormal}
+	info := &config.ChangeFeedInfo{State: config.StateNormal}
 	status := &config.ChangeFeedStatus{Progress: config.ProgressStopping}
 
 	cdcClient.EXPECT().GetChangeFeedInfo(gomock.Any(), changefeedID.DisplayName).Return(info, nil).Times(1)
@@ -195,7 +194,7 @@ func TestResumeChangefeed(t *testing.T) {
 	backend := NewEtcdBackend(cdcClient)
 
 	changefeedID := common.NewChangeFeedIDWithName("test")
-	info := &config.ChangeFeedInfo{State: model.StateStopped}
+	info := &config.ChangeFeedInfo{State: config.StateStopped}
 	status := &config.ChangeFeedStatus{CheckpointTs: 100}
 
 	cdcClient.EXPECT().GetChangeFeedInfo(gomock.Any(), changefeedID.DisplayName).Return(info, nil).Times(1)

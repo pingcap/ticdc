@@ -57,9 +57,6 @@ func New(
 }
 
 func (d *ConflictDetector) Run(ctx context.Context) error {
-	defer func() {
-		d.notifiedNodes.CloseAndDrain()
-	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -108,4 +105,8 @@ func (d *ConflictDetector) sendToCache(event *commonEvent.DMLEvent, id int64) bo
 // Note txns in single cache should be executed sequentially.
 func (d *ConflictDetector) GetOutChByCacheID(id int) <-chan *commonEvent.DMLEvent {
 	return d.resolvedTxnCaches[id].out()
+}
+
+func (d *ConflictDetector) Close() {
+	d.notifiedNodes.CloseAndDrain()
 }

@@ -36,6 +36,14 @@ var (
 		"capture not exists, %s",
 		errors.RFCCodeText("CDC:ErrCaptureNotExist"),
 	)
+	ErrSchedulerRequestFailed = errors.Normalize(
+		"scheduler request failed, %s",
+		errors.RFCCodeText("CDC:ErrSchedulerRequestFailed"),
+	)
+	ErrGetAllStoresFailed = errors.Normalize(
+		"get stores from pd failed",
+		errors.RFCCodeText("CDC:ErrGetAllStoresFailed"),
+	)
 	ErrMetaListDatabases = errors.Normalize(
 		"meta store list databases",
 		errors.RFCCodeText("CDC:ErrMetaListDatabases"),
@@ -253,6 +261,21 @@ var (
 		"storage sink config invalid",
 		errors.RFCCodeText("CDC:ErrStorageSinkInvalidConfig"),
 	)
+	ErrStorageSinkInvalidFileName = errors.Normalize(
+		"filename in storage sink is invalid",
+		errors.RFCCodeText("CDC:ErrStorageSinkInvalidFileName"),
+	)
+
+	// utilities related errors
+	ErrToTLSConfigFailed = errors.Normalize(
+		"generate tls config failed",
+		errors.RFCCodeText("CDC:ErrToTLSConfigFailed"),
+	)
+	ErrCheckClusterVersionFromPD = errors.Normalize(
+		"failed to request PD %s, please try again later",
+		errors.RFCCodeText("CDC:ErrCheckClusterVersionFromPD"),
+	)
+
 	ErrURLFormatInvalid = errors.Normalize(
 		"url format is invalid",
 		errors.RFCCodeText("CDC:ErrURLFormatInvalid"),
@@ -281,6 +304,14 @@ var (
 	ErrUnmarshalFailed = errors.Normalize(
 		"unmarshal failed",
 		errors.RFCCodeText("CDC:ErrUnmarshalFailed"),
+	)
+	ErrInvalidChangefeedID = errors.Normalize(
+		`bad changefeed id, please match the pattern "^[a-zA-Z0-9]+(\-[a-zA-Z0-9]+)*$", the length should no more than %d, eg, "simple-changefeed-task"`,
+		errors.RFCCodeText("CDC:ErrInvalidChangefeedID"),
+	)
+	ErrInvalidNamespace = errors.Normalize(
+		`bad namespace, please match the pattern "^[a-zA-Z0-9]+(\-[a-zA-Z0-9]+)*$", the length should no more than %d, eg, "simple-namespace-test"`,
+		errors.RFCCodeText("CDC:ErrInvalidNamespace"),
 	)
 	ErrInvalidEtcdKey = errors.Normalize(
 		"invalid key: %s",
@@ -367,6 +398,11 @@ var (
 		"owner not found",
 		errors.RFCCodeText("CDC:ErrOwnerNotFound"),
 	)
+	ErrTableIneligible = errors.Normalize(
+		"some tables are not eligible to replicate(%v), "+
+			"if you want to ignore these tables, please set ignore_ineligible_table to true",
+		errors.RFCCodeText("CDC:ErrTableIneligible"),
+	)
 	// EtcdWorker related errors. Internal use only.
 	// ErrEtcdTryAgain is used by a PatchFunc to force a transaction abort.
 	ErrEtcdTryAgain = errors.Normalize(
@@ -399,6 +435,10 @@ var (
 	ErrEtcdTxnOpsExceed = errors.Normalize(
 		"patch ops:%d of a single changefeed exceed etcd txn max ops:%d",
 		errors.RFCCodeText("CDC:ErrEtcdTxnOpsExceed"),
+	)
+	ErrEtcdMigrateFailed = errors.Normalize(
+		"etcd meta data migrate failed:%s",
+		errors.RFCCodeText("CDC:ErrEtcdMigrateFailed"),
 	)
 	ErrChangefeedUnretryable = errors.Normalize(
 		"changefeed is in unretryable state, please check the error message"+
@@ -571,5 +611,10 @@ var (
 	ErrFailToCreateExternalStorage = errors.Normalize(
 		"failed to create external storage",
 		errors.RFCCodeText("CDC:ErrFailToCreateExternalStorage"),
+	)
+
+	// tcp server error
+	ErrTCPServerClosed = errors.Normalize("The TCP server has been closed",
+		errors.RFCCodeText("CDC:ErrTCPServerClosed"),
 	)
 )

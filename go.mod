@@ -34,9 +34,11 @@ require (
 	github.com/google/btree v1.1.2
 	github.com/google/go-cmp v0.6.0
 	github.com/google/uuid v1.6.0
+	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0
 	github.com/hashicorp/golang-lru v0.5.1
 	github.com/imdario/mergo v0.3.16
+	github.com/integralist/go-findroot v0.0.0-20160518114804-ac90681525dc
 	github.com/jarcoal/httpmock v1.2.0
 	github.com/json-iterator/go v1.1.12
 	github.com/klauspost/compress v1.17.9
@@ -56,6 +58,7 @@ require (
 	github.com/r3labs/diff v1.1.0
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475
 	github.com/robfig/cron v1.2.0
+	github.com/soheilhy/cmux v0.1.5
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/pflag v1.0.5
 	github.com/stretchr/testify v1.10.0
@@ -65,6 +68,7 @@ require (
 	github.com/tikv/pd/client v0.0.0-20241111073742-238d4d79ea31
 	github.com/tinylib/msgp v1.1.6
 	github.com/uber-go/atomic v1.4.0
+	github.com/xdg/scram v1.0.5
 	github.com/zeebo/assert v1.3.0
 	go.etcd.io/etcd/api/v3 v3.5.12
 	go.etcd.io/etcd/client/pkg/v3 v3.5.12
@@ -196,7 +200,6 @@ require (
 	github.com/googleapis/gax-go/v2 v2.12.3 // indirect
 	github.com/gorilla/mux v1.8.1 // indirect
 	github.com/gorilla/websocket v1.5.1 // indirect
-	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway v1.16.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.19.1 // indirect
 	github.com/gsterjov/go-libsecret v0.0.0-20161001094733-a6f4afe4910c // indirect
@@ -286,7 +289,6 @@ require (
 	github.com/shurcooL/httpfs v0.0.0-20230704072500-f1e31cf0ba5c // indirect
 	github.com/shurcooL/vfsgen v0.0.0-20200824052919-0d455de96546 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
-	github.com/soheilhy/cmux v0.1.5 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/spkg/bom v1.0.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
@@ -316,7 +318,6 @@ require (
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.1.2 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
-	github.com/xdg/scram v1.0.5 // indirect
 	github.com/xdg/stringprep v1.0.3 // indirect
 	github.com/xiang90/probing v0.0.0-20221125231312-a49e3df8f510 // indirect
 	github.com/xitongsys/parquet-go v1.6.3-0.20240520233950-75e935fc3e17 // indirect

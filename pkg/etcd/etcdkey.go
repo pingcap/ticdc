@@ -19,8 +19,9 @@ import (
 	"strings"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/cdc/model"
 )
 
 const (
@@ -93,11 +94,11 @@ const (
 */
 type CDCKey struct {
 	Tp           CDCKeyType
-	ChangefeedID model.ChangeFeedID
+	ChangefeedID common.ChangeFeedID
 	CaptureID    string
 	OwnerLeaseID string
 	ClusterID    string
-	UpstreamID   model.UpstreamID
+	UpstreamID   config.UpstreamID
 	Namespace    string
 }
 
@@ -151,9 +152,8 @@ func (k *CDCKey) Parse(clusterID, key string) error {
 		case strings.HasPrefix(key, ChangefeedInfoKey):
 			k.Tp = CDCKeyTypeChangefeedInfo
 			k.CaptureID = ""
-			k.ChangefeedID = model.ChangeFeedID{
-				Namespace: namespace,
-				ID:        key[len(ChangefeedInfoKey)+1:],
+			k.ChangefeedID = common.ChangeFeedID{
+				DisplayName: common.NewChangeFeedDisplayName(key[len(ChangefeedInfoKey)+1:], namespace),
 			}
 			k.OwnerLeaseID = ""
 		case strings.HasPrefix(key, upstreamKey):
@@ -167,9 +167,8 @@ func (k *CDCKey) Parse(clusterID, key string) error {
 		case strings.HasPrefix(key, ChangefeedStatusKey):
 			k.Tp = CDCKeyTypeChangeFeedStatus
 			k.CaptureID = ""
-			k.ChangefeedID = model.ChangeFeedID{
-				Namespace: namespace,
-				ID:        key[len(ChangefeedStatusKey)+1:],
+			k.ChangefeedID = common.ChangeFeedID{
+				DisplayName: common.NewChangeFeedDisplayName(key[len(ChangefeedStatusKey)+1:], namespace),
 			}
 			k.OwnerLeaseID = ""
 		case strings.HasPrefix(key, taskPositionKey):
@@ -179,9 +178,8 @@ func (k *CDCKey) Parse(clusterID, key string) error {
 			}
 			k.Tp = CDCKeyTypeTaskPosition
 			k.CaptureID = splitKey[0]
-			k.ChangefeedID = model.ChangeFeedID{
-				Namespace: namespace,
-				ID:        splitKey[1],
+			k.ChangefeedID = common.ChangeFeedID{
+				DisplayName: common.NewChangeFeedDisplayName(splitKey[1], namespace),
 			}
 			k.OwnerLeaseID = ""
 		default:
@@ -201,14 +199,14 @@ func (k *CDCKey) String() string {
 	case CDCKeyTypeCapture:
 		return BaseKey(k.ClusterID) + metaPrefix + captureKey + "/" + k.CaptureID
 	case CDCKeyTypeChangefeedInfo:
-		return NamespacedPrefix(k.ClusterID, k.ChangefeedID.Namespace) + ChangefeedInfoKey +
-			"/" + k.ChangefeedID.ID
+		return NamespacedPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + ChangefeedInfoKey +
+			"/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeChangeFeedStatus:
-		return NamespacedPrefix(k.ClusterID, k.ChangefeedID.Namespace) + ChangefeedStatusKey +
-			"/" + k.ChangefeedID.ID
+		return NamespacedPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + ChangefeedStatusKey +
+			"/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeTaskPosition:
-		return NamespacedPrefix(k.ClusterID, k.ChangefeedID.Namespace) + taskPositionKey +
-			"/" + k.CaptureID + "/" + k.ChangefeedID.ID
+		return NamespacedPrefix(k.ClusterID, k.ChangefeedID.DisplayName.Namespace) + taskPositionKey +
+			"/" + k.CaptureID + "/" + k.ChangefeedID.DisplayName.Name
 	case CDCKeyTypeMetaVersion:
 		return BaseKey(k.ClusterID) + metaPrefix + metaVersionKey
 	case CDCKeyTypeUpStream:

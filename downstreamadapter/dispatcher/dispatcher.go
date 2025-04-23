@@ -111,6 +111,9 @@ type Dispatcher struct {
 	// shared by the event dispatcher manager
 	sink sink.Sink
 
+	// statusesChan is used to store the status of dispatchers when status changed
+	// and push to heartbeatRequestQueue
+	statusesChan chan TableSpanStatusWithSeq
 	// blockStatusesChan use to collector block status of ddl/sync point event to Maintainer
 	// shared by the event dispatcher manager
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus
@@ -151,6 +154,7 @@ type Dispatcher struct {
 	errCh chan error
 
 	bdrMode bool
+	seq     uint64
 
 	BootstrapState bootstrapState
 }
@@ -161,6 +165,7 @@ func NewDispatcher(
 	tableSpan *heartbeatpb.TableSpan,
 	sink sink.Sink,
 	startTs uint64,
+	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
@@ -178,9 +183,10 @@ func NewDispatcher(
 		sink:                  sink,
 		startTs:               startTs,
 		startTsIsSyncpoint:    startTsIsSyncpoint,
+		statusesChan:          statusesChan,
 		blockStatusesChan:     blockStatusesChan,
 		syncPointConfig:       syncPointConfig,
-		componentStatus:       newComponentStateWithMutex(heartbeatpb.ComponentState_Working),
+		componentStatus:       newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
 		resolvedTs:            startTs,
 		filterConfig:          filterConfig,
 		isRemoving:            atomic.Bool{},
@@ -336,6 +342,12 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				zap.Int("eventType", event.GetType()),
 				zap.Stringer("dispatcher", d.id))
 			continue
+		}
+
+		// only when we receive the first event, we can regard the dispatcher begin syncing data
+		// then turning into working status.
+		if d.isFirstEvent(event) {
+			d.updateComponentStatus()
 		}
 
 		switch event.GetType() {
@@ -879,4 +891,33 @@ func (d *Dispatcher) EmitBootstrap() bool {
 
 func (d *Dispatcher) IsTableTriggerEventDispatcher() bool {
 	return d.tableSpan == heartbeatpb.DDLSpan
+}
+
+func (d *Dispatcher) SetSeq(seq uint64) {
+	d.seq = seq
+}
+
+func (d *Dispatcher) isFirstEvent(event commonEvent.Event) bool {
+	if d.componentStatus.Get() == heartbeatpb.ComponentState_Initializing {
+		switch event.GetType() {
+		case commonEvent.TypeResolvedEvent, commonEvent.TypeDMLEvent, commonEvent.TypeDDLEvent, commonEvent.TypeSyncPointEvent:
+			if event.GetCommitTs() > d.startTs {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (d *Dispatcher) updateComponentStatus() {
+	d.componentStatus.Set(heartbeatpb.ComponentState_Working)
+	d.statusesChan <- TableSpanStatusWithSeq{
+		TableSpanStatus: &heartbeatpb.TableSpanStatus{
+			ID:              d.id.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+		},
+		CheckpointTs: d.GetCheckpointTs(),
+		ResolvedTs:   d.GetResolvedTs(),
+		Seq:          d.seq,
+	}
 }

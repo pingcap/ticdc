@@ -21,7 +21,7 @@ import (
 	"github.com/benbjohnson/clock"
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/security"
+	"github.com/pingcap/ticdc/pkg/security"
 	pd "github.com/tikv/pd/client"
 	clientV3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"

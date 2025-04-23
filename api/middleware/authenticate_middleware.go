@@ -23,6 +23,8 @@ import (
 	"github.com/gin-gonic/gin"
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/api"
+	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
@@ -31,8 +33,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb-dashboard/util/distro"
 	"github.com/pingcap/tidb/pkg/domain/infosync"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/errorutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 )
@@ -56,7 +56,7 @@ func AuthenticateMiddleware(server server.Server) gin.HandlerFunc {
 		security := config.GetGlobalServerConfig().Security
 		if security != nil && security.ClientUserRequired {
 			if err := verify(ctx, server.GetEtcdClient().GetEtcdClient()); err != nil {
-				ctx.IndentedJSON(http.StatusUnauthorized, model.NewHTTPError(err))
+				ctx.IndentedJSON(http.StatusUnauthorized, api.NewHTTPError(err))
 				ctx.Abort()
 				return
 			}
@@ -107,7 +107,7 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 		if err == nil {
 			return nil
 		}
-		if errorutil.IsAccessDeniedError(err) {
+		if apperror.IsAccessDeniedError(err) {
 			// For access denied error, we can return immediately.
 			// For other errors, we need to continue to verify the next tidb instance.
 			return errors.ErrUnauthorized.GenWithStackByArgs(username, err.Error())

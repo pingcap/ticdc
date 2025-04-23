@@ -22,12 +22,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
-	"github.com/pingcap/tiflow/cdc/api"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/httputil"
 	"go.uber.org/zap"
 )
 
@@ -54,9 +53,9 @@ func ErrorHandleMiddleware() gin.HandlerFunc {
 			err := lastError.Err
 			// put the error into response
 			if api.IsHTTPBadRequestError(err) {
-				c.IndentedJSON(http.StatusBadRequest, model.NewHTTPError(err))
+				c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
 			} else {
-				c.IndentedJSON(http.StatusInternalServerError, model.NewHTTPError(err))
+				c.IndentedJSON(http.StatusInternalServerError, api.NewHTTPError(err))
 			}
 			c.Abort()
 			return

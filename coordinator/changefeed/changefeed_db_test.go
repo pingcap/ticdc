@@ -281,7 +281,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 		&config.ChangeFeedInfo{
 			ChangefeedID: cfID,
 			Config:       config.GetDefaultReplicaConfig(),
-			State:        model.StateStopped,
+			State:        config.StateStopped,
 		}, 11, true)
 	db.AddStoppedChangefeed(cf1)
 	require.Equal(t, uint64(11), db.CalculateGCSafepoint())
@@ -291,7 +291,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 		&config.ChangeFeedInfo{
 			ChangefeedID: cf2ID,
 			Config:       config.GetDefaultReplicaConfig(),
-			State:        model.StateFinished,
+			State:        config.StateFinished,
 		}, 9, true)
 	db.AddStoppedChangefeed(cf2)
 	require.Equal(t, uint64(11), db.CalculateGCSafepoint())
@@ -301,7 +301,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 		&config.ChangeFeedInfo{
 			ChangefeedID: cf3ID,
 			Config:       config.GetDefaultReplicaConfig(),
-			State:        model.StateNormal,
+			State:        config.StateNormal,
 		}, 10, true)
 	db.AddStoppedChangefeed(cf3)
 	require.Equal(t, uint64(10), db.CalculateGCSafepoint())
@@ -311,7 +311,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 		&config.ChangeFeedInfo{
 			ChangefeedID: cf4ID,
 			Config:       config.GetDefaultReplicaConfig(),
-			State:        model.StateFailed,
+			State:        config.StateFailed,
 			Error: &model.RunningError{
 				Code: string(errors.ErrGCTTLExceeded.ID()),
 			},
@@ -324,7 +324,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 		&config.ChangeFeedInfo{
 			ChangefeedID: cf5ID,
 			Config:       config.GetDefaultReplicaConfig(),
-			State:        model.StateFailed,
+			State:        config.StateFailed,
 			Error:        &model.RunningError{},
 		}, 7, true)
 	db.AddStoppedChangefeed(cf5)

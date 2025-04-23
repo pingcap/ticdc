@@ -56,7 +56,7 @@ if [ "$SINK_TYPE" != "storage" ]; then
 	# ticdc cost too much sink DDL, just leave more time here
 	check_table_exists mark.finish_mark_3 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 900
 	check_table_exists mark.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
-	check_sync_diff $WORK_DIR $CUR/diff_config.toml
+	check_sync_diff $WORK_DIR $CUR/diff_config.toml 300
 	cleanup_process $CDC_BINARY
 	check_logs $WORK_DIR
 fi

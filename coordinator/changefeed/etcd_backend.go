@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/tiflow/cdc/model"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -46,7 +45,7 @@ func NewEtcdBackend(etcdClient etcd.CDCEtcdClient) *EtcdBackend {
 }
 
 func (b *EtcdBackend) GetAllChangefeeds(ctx context.Context) (map[common.ChangeFeedID]*ChangefeedMetaWrapper, error) {
-	changefeedPrefix := etcd.NamespacedPrefix(b.etcdClient.GetClusterID(), model.DefaultNamespace) + "/changefeed"
+	changefeedPrefix := etcd.NamespacedPrefix(b.etcdClient.GetClusterID(), common.DefaultNamespace) + "/changefeed"
 
 	resp, err := b.etcdClient.GetEtcdClient().Get(ctx, changefeedPrefix, clientv3.WithPrefix())
 	if err != nil {
@@ -198,7 +197,7 @@ func (b *EtcdBackend) PauseChangefeed(ctx context.Context, id common.ChangeFeedI
 	if err != nil {
 		return errors.Trace(err)
 	}
-	info.State = model.StateStopped
+	info.State = config.StateStopped
 	infoKey := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), id.DisplayName)
 	inforValue, err := info.Marshal()
 	if err != nil {
@@ -256,7 +255,7 @@ func (b *EtcdBackend) ResumeChangefeed(ctx context.Context,
 	if err != nil {
 		return errors.Trace(err)
 	}
-	info.State = model.StateNormal
+	info.State = config.StateNormal
 	newStr, err := info.Marshal()
 	if err != nil {
 		return errors.Trace(err)

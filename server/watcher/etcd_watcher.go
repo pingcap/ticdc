@@ -21,9 +21,8 @@ import (
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/migrate"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
-	"github.com/pingcap/tiflow/pkg/migrate"
-	tiorchestrator "github.com/pingcap/tiflow/pkg/orchestrator"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/zap"
 )
@@ -48,8 +47,8 @@ func NewEtcdWatcher(etcdClient etcd.CDCEtcdClient, session *concurrency.Session,
 
 func (w *EtcdWatcher) RunEtcdWorker(
 	ctx context.Context,
-	reactor tiorchestrator.Reactor,
-	reactorState *tiorchestrator.GlobalReactorState,
+	reactor orchestrator.Reactor,
+	reactorState *orchestrator.GlobalReactorState,
 	timerInterval time.Duration,
 ) error {
 	log.Info("start to run etcd worker", zap.String("role", w.role))

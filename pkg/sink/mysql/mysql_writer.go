@@ -99,9 +99,6 @@ func (w *Writer) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 
 func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 	if w.cfg.DryRun {
-		for _, callback := range event.PostTxnFlushed {
-			callback()
-		}
 		return nil
 	}
 
@@ -132,18 +129,11 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 			return err
 		}
 	}
-
-	for _, callback := range event.PostTxnFlushed {
-		callback()
-	}
 	return nil
 }
 
 func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	if w.cfg.DryRun {
-		for _, callback := range event.PostTxnFlushed {
-			callback()
-		}
 		return nil
 	}
 
@@ -176,10 +166,6 @@ func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	err = w.FlushDDLTs(event)
 	if err != nil {
 		return err
-	}
-
-	for _, callback := range event.PostTxnFlushed {
-		callback()
 	}
 	return nil
 }
