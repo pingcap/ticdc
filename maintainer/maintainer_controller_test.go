@@ -98,7 +98,6 @@ func TestRemoveAbsentTask(t *testing.T) {
 	require.Equal(t, 0, controller.replicationDB.GetAbsentSize())
 }
 
-/*
 func TestBalanceGlobalEven(t *testing.T) {
 	nodeManager := setNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
@@ -114,19 +113,21 @@ func TestBalanceGlobalEven(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1")
 	s := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
+
+	nodeID := node.ID("node1")
 	for i := 0; i < 100; i++ {
 		// generate 100 groups
 		totalSpan := spanz.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'a'), EndKey: appendNew(totalSpan.StartKey, 'b')}
 		dispatcherID := common.NewDispatcherID()
 		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, pdClock, 1, span, 1)
-		spanReplica.SetNodeID("node1")
+		spanReplica.SetNodeID(nodeID)
 		s.replicationDB.AddReplicatingSpan(spanReplica)
 	}
 	s.schedulerController.GetScheduler(scheduler.BalanceScheduler).Execute()
 	require.Equal(t, 0, s.operatorController.OperatorSize())
 	require.Equal(t, 100, s.replicationDB.GetReplicatingSize())
-	require.Equal(t, 100, s.replicationDB.GetTaskSizeByNodeID("node1"))
+	require.Equal(t, 100, s.replicationDB.GetTaskSizeByNodeID(nodeID))
 
 	// add new node
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -167,9 +168,8 @@ func TestBalanceGlobalEven(t *testing.T) {
 	// changed to working status
 	require.Equal(t, 100, s.replicationDB.GetReplicatingSize())
 	require.Equal(t, 100, s.replicationDB.GetTaskSizeByNodeID("node1"))
-}*/
+}
 
-/*
 func TestBalanceGlobalUneven(t *testing.T) {
 	nodeManager := setNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
@@ -246,7 +246,6 @@ func TestBalanceGlobalUneven(t *testing.T) {
 	require.Equal(t, 50, s.replicationDB.GetTaskSizeByNodeID("node1"))
 	require.Equal(t, 50, s.replicationDB.GetTaskSizeByNodeID("node2"))
 }
-*/
 
 func TestBalance(t *testing.T) {
 	nodeManager := setNodeManagerAndMessageCenter()
