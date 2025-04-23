@@ -381,7 +381,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 			} else {
 				// use normal sql instead
 				query, args := w.generateNormalSQLs(events)
-				log.Error("Error prepareDMLs in batch sql in unsage mode", zap.Any("target query", query), zap.Any("target args", args))
+				log.Error("Error prepareDMLs in batch sql in unsafe mode", zap.Any("targetQuery", query), zap.Any("targetArgs", args))
 				// log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges), zap.Any("prevType", prevType), zap.Any("currentType", rowType))
 				return query, args
 			}

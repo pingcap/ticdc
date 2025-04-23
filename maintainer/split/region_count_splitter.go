@@ -116,7 +116,7 @@ func (m *regionCountSplitter) split(
 			end = end + step
 		} else {
 			// should not happen
-			log.Panic("Unexpected stepper step", zap.Any("end", end), zap.Any("step", step), zap.Any("len of regions", len(regions)))
+			log.Panic("Unexpected stepper step", zap.Any("end", end), zap.Any("step", step), zap.Any("lenOfRegions", len(regions)))
 		}
 	}
 	// Make sure spans does not exceed [startKey, endKey).
