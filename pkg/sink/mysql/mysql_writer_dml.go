@@ -362,7 +362,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 
 	// step 2. compare the rows in the same key hash, to generate the final rows
 	rowsList := make([]*commonEvent.RowChange, 0, len(rowsMap))
-	for hashValue, rowChanges := range rowsMap {
+	for _, rowChanges := range rowsMap {
 		if len(rowChanges) == 0 {
 			continue
 		}
