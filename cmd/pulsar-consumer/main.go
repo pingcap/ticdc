@@ -562,7 +562,7 @@ func (c *Consumer) appendDDL(ddl *model.DDLEvent) {
 	defer c.ddlListMu.Unlock()
 	// DDL CommitTs fallback, just crash it to indicate the bug.
 	if c.lastReceivedDDL != nil && ddl.CommitTs < c.lastReceivedDDL.CommitTs {
-		log.Error("DDL CommitTs < lastReceivedDDL.CommitTs",
+		log.Panic("DDL CommitTs < lastReceivedDDL.CommitTs",
 			zap.Uint64("commitTs", ddl.CommitTs),
 			zap.Uint64("lastReceivedDDLCommitTs", c.lastReceivedDDL.CommitTs),
 			zap.Uint64("commitTs", ddl.CommitTs), zap.String("DDL", ddl.Query))
@@ -578,8 +578,7 @@ func (c *Consumer) appendDDL(ddl *model.DDLEvent) {
 	}
 
 	c.ddlList = append(c.ddlList, ddl)
-	sort.Slice(c.ddlList, func(i, j int) bool { return c.ddlList[i].CommitTs < c.ddlList[j].CommitTs })
-	c.lastReceivedDDL = c.ddlList[len(c.ddlList)-1]
+	c.lastReceivedDDL = ddl
 	log.Info("DDL event received", zap.Uint64("commitTs", ddl.CommitTs), zap.String("DDL", ddl.Query))
 }
 

@@ -29,8 +29,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TODO: Merge this file into dispatcher_test.go after refactoring the dispatcher test.
-
 type mockSink struct {
 	dmls     []*commonEvent.DMLEvent
 	isNormal bool
