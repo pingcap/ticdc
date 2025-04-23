@@ -182,13 +182,6 @@ func (c *server) setPreServices(ctx context.Context) error {
 	c.PDClock.Run(ctx)
 	appctx.SetService(appctx.DefaultPDClock, c.PDClock)
 	c.preServices = append(c.preServices, c.PDClock)
-
-	// Set EventCollector to Global Context
-	ec := eventcollector.New(c.info.ID)
-	ec.Run(ctx)
-	appctx.SetService(appctx.EventCollector, ec)
-	c.preServices = append(c.preServices, ec)
-
 	// Set MessageCenter to Global Context
 	mcCfg := config.NewDefaultMessageCenterConfig(c.info.AdvertiseAddr)
 	messageCenter := messaging.NewMessageCenter(ctx, c.info.ID, mcCfg, c.security)
@@ -196,6 +189,11 @@ func (c *server) setPreServices(ctx context.Context) error {
 	appctx.SetService(appctx.MessageCenter, messageCenter)
 	c.preServices = append(c.preServices, messageCenter)
 
+	// Set EventCollector to Global Context
+	ec := eventcollector.New(c.info.ID)
+	ec.Run(ctx)
+	appctx.SetService(appctx.EventCollector, ec)
+	c.preServices = append(c.preServices, ec)
 	// Set HeartbeatCollector to Global Context
 	hc := dispatchermanager.NewHeartBeatCollector(c.info.ID)
 	hc.Run(ctx)
@@ -293,7 +291,12 @@ func (c *server) Close(ctx context.Context) {
 		log.Info("coordinator closed", zap.String("captureID", string(c.info.ID)))
 	}
 
-	closeGroup := c.closePreServices()
+	var closeGroup sync.WaitGroup
+	closeGroup.Add(1)
+	go func() {
+		defer closeGroup.Done()
+		c.closePreServices()
+	}()
 
 	for _, subModule := range c.subModules {
 		if err := subModule.Close(ctx); err != nil {
@@ -319,32 +322,11 @@ func (c *server) Close(ctx context.Context) {
 	log.Info("server closed", zap.Any("ServerInfo", c.info))
 }
 
-func (c *server) closePreServices() *errgroup.Group {
-	closeCtx, cancel := context.WithTimeout(context.Background(), closeServiceTimeout)
-	defer cancel()
-	closeGroup, closeCtx := errgroup.WithContext(closeCtx)
-
+func (c *server) closePreServices() {
 	// close preServices in reverse order
 	for idx := len(c.preServices) - 1; idx >= 0; idx-- {
-		service := c.preServices[idx]
-		s := service
-		closeGroup.Go(func() error {
-			done := make(chan struct{})
-			go func() {
-				s.Close()
-				close(done)
-			}()
-
-			select {
-			case <-done:
-				return nil
-			case <-closeCtx.Done():
-				log.Warn("service close operation timed out", zap.Error(closeCtx.Err()))
-				return closeCtx.Err()
-			}
-		})
+		c.preServices[idx].Close()
 	}
-	return closeGroup
 }
 
 // Liveness returns liveness of the server.

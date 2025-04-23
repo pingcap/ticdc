@@ -49,8 +49,6 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	option Option
 
 	isClosed atomic.Bool
-	// The eventWg wait inChan or eventChan to avoid panic
-	eventWg sync.WaitGroup
 
 	wg sync.WaitGroup
 
@@ -82,9 +80,7 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 }
 
 func (s *stream[A, P, T, D, H]) addPath(path *pathInfo[A, P, T, D, H]) {
-	s.eventWg.Add(1)
 	s.in() <- eventWrap[A, P, T, D, H]{pathInfo: path, newPath: true}
-	s.eventWg.Done()
 }
 
 func (s *stream[A, P, T, D, H]) getPendingSize() int {
@@ -122,7 +118,6 @@ func (s *stream[A, P, T, D, H]) start() {
 // wait is by default true, which means to wait for the goroutines to exit.
 func (s *stream[A, P, T, D, H]) close(wait ...bool) {
 	if s.isClosed.CompareAndSwap(false, true) {
-		s.eventWg.Wait()
 		if s.option.UseBuffer {
 			close(s.inChan)
 		} else {

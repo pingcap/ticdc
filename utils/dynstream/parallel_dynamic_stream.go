@@ -123,9 +123,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 	if pi.stream.isClosed.Load() {
 		return
 	}
-	pi.stream.eventWg.Add(1)
 	pi.stream.in() <- ew
-	pi.stream.eventWg.Done()
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) Wake(path P) {
@@ -143,9 +141,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Wake(path P) {
 	if pi.stream.isClosed.Load() {
 		return
 	}
-	pi.stream.eventWg.Add(1)
 	pi.stream.in() <- eventWrap[A, P, T, D, H]{wake: true, pathInfo: pi}
-	pi.stream.eventWg.Done()
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) Feedback() <-chan Feedback[A, P, D] {
@@ -198,9 +194,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	if pi.stream.isClosed.Load() {
 		return NewAppErrorS(ErrorTypeClosed)
 	}
-	pi.stream.eventWg.Add(1)
 	pi.stream.in() <- eventWrap[A, P, T, D, H]{pathInfo: pi}
-	pi.stream.eventWg.Done()
 
 	s._statRemovePathCount.Add(1)
 	return nil
