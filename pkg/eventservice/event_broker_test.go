@@ -152,7 +152,7 @@ func TestOnNotify(t *testing.T) {
 	log.Info("Pass case 4")
 
 	// Case 5: do scan and then onNotify again.
-	broker.doScan(context.TODO(), task)
+	broker.scanWorkers[0].doScan(context.TODO(), task)
 	require.False(t, disp.taskScanning.Load())
 	require.Equal(t, notifyMsgs4.resolvedTs, disp.sentResolvedTs.Load())
 	notifyMsgs5 := notifyMsg{104, 101}
