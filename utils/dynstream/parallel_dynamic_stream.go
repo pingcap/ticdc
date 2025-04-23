@@ -169,6 +169,9 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 
 	s.setMemControl(pi, as...)
 
+	if pi.stream.isClosed.Load() {
+		return NewAppErrorS(ErrorTypeClosed)
+	}
 	pi.stream.addPath(pi)
 
 	s._statAddPathCount.Add(1)
