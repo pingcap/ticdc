@@ -381,12 +381,13 @@ func (b *canalJSONDecoder) NextResolvedEvent() uint64 {
 
 func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEvent {
 	result := new(commonEvent.DDLEvent)
-	result.Query = msg.getQuery()
-	result.BlockedTables = nil // todo: set this
-	result.Type = byte(getDDLActionType(result.Query))
 	result.FinishedTs = msg.getCommitTs()
 	result.SchemaName = *msg.getSchema()
 	result.TableName = *msg.getTable()
+	result.Query = msg.getQuery()
+	actionType := common.GetDDLActionType(result.Query)
+	result.Type = byte(actionType)
+	result.BlockedTables = common.GetInfluenceTables(actionType, result.SchemaID, result.TableID)
 	return result
 }
 
@@ -628,23 +629,4 @@ func newTiIndices(columns []*timodel.ColumnInfo, keys map[string]struct{}) []*ti
 	}
 	result := []*timodel.IndexInfo{indexInfo}
 	return result
-}
-
-// return DDL ActionType by the prefix
-// see https://github.com/pingcap/tidb/blob/6dbf2de2f/parser/model/ddl.go#L101-L102
-func getDDLActionType(query string) timodel.ActionType {
-	query = strings.ToLower(query)
-	if strings.HasPrefix(query, "create schema") || strings.HasPrefix(query, "create database") {
-		return timodel.ActionCreateSchema
-	}
-	if strings.HasPrefix(query, "drop schema") || strings.HasPrefix(query, "drop database") {
-		return timodel.ActionDropSchema
-	}
-	if strings.HasPrefix(query, "create table") {
-		return timodel.ActionCreateTable
-	}
-	if strings.Contains(query, "exchange partition") {
-		return timodel.ActionExchangeTablePartition
-	}
-	return timodel.ActionNone
 }
