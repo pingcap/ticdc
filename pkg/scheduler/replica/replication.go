@@ -345,7 +345,7 @@ func (db *replicationDB[T, R]) getScheduleTaskSizePerNodeByGroup(id GroupID) (si
 	replicationGroup := db.mustGetGroup(id)
 	for nodeID, tasks := range replicationGroup.GetNodeTasks() {
 		count := 0
-		for taskID, _ := range tasks {
+		for taskID := range tasks {
 			if replicationGroup.scheduling.Find(taskID) {
 				count++
 			}

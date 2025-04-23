@@ -920,5 +920,4 @@ func (d *Dispatcher) updateComponentStatus() {
 		ResolvedTs:   d.GetResolvedTs(),
 		Seq:          d.seq,
 	}
-
 }
