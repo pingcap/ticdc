@@ -228,7 +228,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	case commonEvent.TypeSyncPointEvent:
 		err = s.ddlWriter.FlushSyncPointEvent(event.(*commonEvent.SyncPointEvent))
 	default:
-		log.Error("unknown event type",
+		log.Panic("mysql sink meet unknown event type",
 			zap.String("namespace", s.changefeedID.Namespace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.Any("event", event))
@@ -237,6 +237,7 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		s.isNormal.Store(false)
 		return errors.Trace(err)
 	}
+	event.PostFlush()
 	return nil
 }
 
@@ -280,6 +281,8 @@ func (s *sink) Close(removeChangefeed bool) {
 				zap.Any("changefeed", s.changefeedID.String()), zap.Error(err))
 		}
 	}
+
+	s.conflictDetector.Close()
 	s.ddlWriter.Close()
 	for _, w := range s.dmlWriter {
 		w.Close()

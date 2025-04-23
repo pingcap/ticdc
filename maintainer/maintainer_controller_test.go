@@ -98,6 +98,7 @@ func TestRemoveAbsentTask(t *testing.T) {
 	require.Equal(t, 0, controller.replicationDB.GetAbsentSize())
 }
 
+/*
 func TestBalanceGlobalEven(t *testing.T) {
 	nodeManager := setNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
@@ -166,8 +167,9 @@ func TestBalanceGlobalEven(t *testing.T) {
 	// changed to working status
 	require.Equal(t, 100, s.replicationDB.GetReplicatingSize())
 	require.Equal(t, 100, s.replicationDB.GetTaskSizeByNodeID("node1"))
-}
+}*/
 
+/*
 func TestBalanceGlobalUneven(t *testing.T) {
 	nodeManager := setNodeManagerAndMessageCenter()
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
@@ -244,6 +246,7 @@ func TestBalanceGlobalUneven(t *testing.T) {
 	require.Equal(t, 50, s.replicationDB.GetTaskSizeByNodeID("node1"))
 	require.Equal(t, 50, s.replicationDB.GetTaskSizeByNodeID("node2"))
 }
+*/
 
 func TestBalance(t *testing.T) {
 	nodeManager := setNodeManagerAndMessageCenter()

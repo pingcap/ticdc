@@ -10,7 +10,8 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package writer
+
+package cloudstorage
 
 import (
 	"bytes"
@@ -36,8 +37,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// Writer denotes a worker responsible for writing messages to cloud storage.
-type Writer struct {
+// writer denotes a worker responsible for writing messages to cloud storage.
+type writer struct {
 	// worker id
 	id           int
 	changeFeedID commonType.ChangeFeedID
@@ -45,7 +46,7 @@ type Writer struct {
 	config       *cloudstorage.Config
 	// toBeFlushedCh contains a set of batchedTask waiting to be flushed to cloud storage.
 	toBeFlushedCh          chan batchedTask
-	inputCh                *chann.DrainableChann[EventFragment]
+	inputCh                *chann.DrainableChann[eventFragment]
 	isClosed               uint64
 	statistics             *metrics.Statistics
 	filePathGenerator      *cloudstorage.FilePathGenerator
@@ -56,16 +57,16 @@ type Writer struct {
 	metricsWorkerBusyRatio prometheus.Counter
 }
 
-func NewWriter(
+func newWriter(
 	id int,
 	changefeedID commonType.ChangeFeedID,
 	storage storage.ExternalStorage,
 	config *cloudstorage.Config,
 	extension string,
-	inputCh *chann.DrainableChann[EventFragment],
+	inputCh *chann.DrainableChann[eventFragment],
 	statistics *metrics.Statistics,
-) *Writer {
-	d := &Writer{
+) *writer {
+	d := &writer{
 		id:                id,
 		changeFeedID:      changefeedID,
 		storage:           storage,
@@ -90,7 +91,7 @@ func NewWriter(
 }
 
 // Run creates a set of background goroutines.
-func (d *Writer) Run(ctx context.Context) error {
+func (d *writer) Run(ctx context.Context) error {
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		return d.flushMessages(ctx)
@@ -104,13 +105,13 @@ func (d *Writer) Run(ctx context.Context) error {
 }
 
 // SetClock is used for unit test
-func (d *Writer) SetClock(pdClock pdutil.Clock) {
+func (d *writer) SetClock(pdClock pdutil.Clock) {
 	d.filePathGenerator.SetClock(pdClock)
 }
 
 // flushMessages flushed messages of active tables to cloud storage.
 // active tables are those tables that have received events after the last flush.
-func (d *Writer) flushMessages(ctx context.Context) error {
+func (d *writer) flushMessages(ctx context.Context) error {
 	var flushTimeSlice time.Duration
 	overseerDuration := d.config.FlushInterval * 2
 	overseerTicker := time.NewTicker(overseerDuration)
@@ -196,14 +197,14 @@ func (d *Writer) flushMessages(ctx context.Context) error {
 	}
 }
 
-func (d *Writer) writeIndexFile(ctx context.Context, path, content string) error {
+func (d *writer) writeIndexFile(ctx context.Context, path, content string) error {
 	start := time.Now()
 	err := d.storage.WriteFile(ctx, path, []byte(content))
 	d.metricFlushDuration.Observe(time.Since(start).Seconds())
 	return err
 }
 
-func (d *Writer) writeDataFile(ctx context.Context, path string, task *singleTableTask) error {
+func (d *writer) writeDataFile(ctx context.Context, path string, task *singleTableTask) error {
 	var callbacks []func()
 	buf := bytes.NewBuffer(make([]byte, 0, task.size))
 	rowsCnt := 0
@@ -265,8 +266,8 @@ func (d *Writer) writeDataFile(ctx context.Context, path string, task *singleTab
 // genAndDispatchTask dispatches flush tasks in two conditions:
 // 1. the flush interval exceeds the upper limit.
 // 2. the file size exceeds the upper limit.
-func (d *Writer) genAndDispatchTask(ctx context.Context,
-	ch *chann.DrainableChann[EventFragment],
+func (d *writer) genAndDispatchTask(ctx context.Context,
+	ch *chann.DrainableChann[eventFragment],
 ) error {
 	batchedTask := newBatchedTask()
 	ticker := time.NewTicker(d.config.FlushInterval)
@@ -316,7 +317,7 @@ func (d *Writer) genAndDispatchTask(ctx context.Context,
 	}
 }
 
-func (d *Writer) Close() {
+func (d *writer) close() {
 	if !atomic.CompareAndSwapUint64(&d.isClosed, 0, 1) {
 		return
 	}
@@ -341,7 +342,7 @@ func newBatchedTask() batchedTask {
 	}
 }
 
-func (t *batchedTask) handleSingleTableEvent(event EventFragment) {
+func (t *batchedTask) handleSingleTableEvent(event eventFragment) {
 	table := event.versionedTable
 	if _, ok := t.batch[table]; !ok {
 		t.batch[table] = &singleTableTask{

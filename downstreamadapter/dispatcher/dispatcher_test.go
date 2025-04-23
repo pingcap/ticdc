@@ -112,6 +112,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dis
 		tableSpan,
 		sink,
 		common.Ts(0), // startTs
+		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		1, // schemaID
 		NewSchemaIDToDispatchers(),

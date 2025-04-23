@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sink
+package blackhole
 
 import (
 	"context"
@@ -23,27 +23,26 @@ import (
 	"go.uber.org/zap"
 )
 
-// BlackHoleSink is responsible for writing data to blackhole.
+// sink is responsible for writing data to blackhole.
 // Including DDL and DML.
-type BlackHoleSink struct{}
+type sink struct{}
 
-func newBlackHoleSink() (*BlackHoleSink, error) {
-	blackholeSink := BlackHoleSink{}
-	return &blackholeSink, nil
+func New() (*sink, error) {
+	return &sink{}, nil
 }
 
-func (s *BlackHoleSink) IsNormal() bool {
+func (s *sink) IsNormal() bool {
 	return true
 }
 
-func (s *BlackHoleSink) SinkType() common.SinkType {
+func (s *sink) SinkType() common.SinkType {
 	return common.BlackHoleSinkType
 }
 
-func (s *BlackHoleSink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 }
 
-func (s *BlackHoleSink) AddDMLEvent(event *commonEvent.DMLEvent) {
+func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	// NOTE: don't change the log, integration test `lossy_ddl` depends on it.
 	// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L23
 	log.Debug("BlackHoleSink: WriteEvents", zap.Any("dml", event))
@@ -52,37 +51,31 @@ func (s *BlackHoleSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	}
 }
 
-func (s *BlackHoleSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
+func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		e := event.(*commonEvent.DDLEvent)
 		// NOTE: don't change the log, integration test `lossy_ddl` depends on it.
 		// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L17
 		log.Debug("BlackHoleSink: DDL Event", zap.Any("ddl", e))
-		for _, callback := range e.PostTxnFlushed {
-			callback()
-		}
 	case commonEvent.TypeSyncPointEvent:
-		e := event.(*commonEvent.SyncPointEvent)
-		for _, callback := range e.PostTxnFlushed {
-			callback()
-		}
 	default:
 		log.Error("unknown event type",
 			zap.Any("event", event))
 	}
+	event.PostFlush()
 	return nil
 }
 
-func (s *BlackHoleSink) AddCheckpointTs(_ uint64) {
+func (s *sink) AddCheckpointTs(_ uint64) {
 }
 
-func (s *BlackHoleSink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
+func (s *sink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
 	return startTsList, make([]bool, len(startTsList)), nil
 }
 
-func (s *BlackHoleSink) Close(_ bool) {}
+func (s *sink) Close(_ bool) {}
 
-func (s *BlackHoleSink) Run(_ context.Context) error {
+func (s *sink) Run(_ context.Context) error {
 	return nil
 }

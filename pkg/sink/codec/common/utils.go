@@ -151,6 +151,7 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEv
 		TableInfo:       dmlEvent.TableInfo,
 		Event:           insert,
 		ColumnSelector:  columnselector.NewDefaultColumnSelector(),
+		Checksum:        dmlEvent.Checksum,
 	}
 	update := commonEvent.RowChange{
 		PreRow: insert.Row,
@@ -162,6 +163,7 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEv
 		TableInfo:       dmlEvent.TableInfo,
 		Event:           update,
 		ColumnSelector:  columnselector.NewDefaultColumnSelector(),
+		Checksum:        dmlEvent.Checksum,
 	}
 	delete := commonEvent.RowChange{
 		PreRow: insert.Row,
@@ -173,6 +175,7 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEv
 		TableInfo:       dmlEvent.TableInfo,
 		Event:           delete,
 		ColumnSelector:  columnselector.NewDefaultColumnSelector(),
+		Checksum:        dmlEvent.Checksum,
 	}
 
 	ddlEvent := &commonEvent.DDLEvent{
