@@ -120,9 +120,6 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 		timestamp: s.handler.GetTimestamp(e),
 		queueTime: time.Now(),
 	}
-	if pi.stream.isClosed.Load() {
-		return
-	}
 	pi.stream.in() <- ew
 }
 
@@ -138,9 +135,6 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Wake(path P) {
 		s.pathMap.RUnlock()
 	}
 
-	if pi.stream.isClosed.Load() {
-		return
-	}
 	pi.stream.in() <- eventWrap[A, P, T, D, H]{wake: true, pathInfo: pi}
 }
 
@@ -165,9 +159,6 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 
 	s.setMemControl(pi, as...)
 
-	if pi.stream.isClosed.Load() {
-		return NewAppErrorS(ErrorTypeClosed)
-	}
 	pi.stream.addPath(pi)
 
 	s._statAddPathCount.Add(1)
@@ -191,9 +182,6 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	delete(s.pathMap.m, path)
 	s.pathMap.Unlock()
 
-	if pi.stream.isClosed.Load() {
-		return NewAppErrorS(ErrorTypeClosed)
-	}
 	pi.stream.in() <- eventWrap[A, P, T, D, H]{pathInfo: pi}
 
 	s._statRemovePathCount.Add(1)
