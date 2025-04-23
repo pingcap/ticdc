@@ -621,7 +621,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 		if isNewTxn {
 			// Only send the dml event when the dml event is full.
-			if dml != nil && dml.Length >= int32(maxRowCount) || time.Since(lastSentTime) > 2*time.Second {
+			if dml != nil && (dml.Length >= int32(maxRowCount) ||
+				time.Since(lastSentTime) > 1000*time.Millisecond) {
 				dml.CommitTs = lastCommitTs
 				lastCommitTs = uint64(0)
 				ok := sendDML(dml)
@@ -648,7 +649,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 				}
 				log.Panic("get table info failed, unknown reason", zap.Error(err))
 			}
-			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
+			if dml == nil {
+				dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
+			}
 		}
 
 		// The memory quota is used to limit the memory usage when decoding the event.

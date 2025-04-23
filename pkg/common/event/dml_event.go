@@ -46,8 +46,6 @@ type DMLEvent struct {
 	Length int32 `json:"length"`
 	// TxnNumber is the number of the transaction in the event.
 	TxnNumber int32 `json:"txn_number"`
-	// TxnOffset is the offset of the transaction in the event.
-	TxnOffset int32 `json:"txn_offset"`
 	// RowTypes is the types of every row in the transaction.
 	// len(RowTypes) == Length
 	// ApproximateSize is the approximate size of all rows in the transaction.
@@ -391,3 +389,10 @@ const (
 	// RowTypeUpdate represents a update row.
 	RowTypeUpdate
 )
+
+type SingleTxn struct {
+	TxnOffset int32       `json:"txn_offset"`
+	StartTs   uint64      `json:"start_ts"`
+	CommitTs  uint64      `json:"commit_ts"`
+	Rows      []chunk.Row `json:"rows"`
+}
