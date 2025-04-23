@@ -580,6 +580,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	// 3. Send the events to the dispatcher.
 	var dml *pevent.DMLEvent
+	maxRowCount := 1024 // the max row batch in one dml event
+	lastCommitTs := uint64(0)
+	lastSentTime := time.Now()
 	for {
 		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
@@ -617,9 +620,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		}
 
 		if isNewTxn {
-			ok := sendDML(dml)
-			if !ok {
-				return
+			// Only send the dml event when the dml event is full.
+			if dml != nil && dml.Length >= int32(maxRowCount) || time.Since(lastSentTime) > 2*time.Second {
+				dml.CommitTs = lastCommitTs
+				lastCommitTs = uint64(0)
+				ok := sendDML(dml)
+				if !ok {
+					return
+				}
+				lastSentTime = time.Now()
 			}
 
 			tableID := task.info.GetTableSpan().TableID
@@ -645,6 +654,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		// The memory quota is used to limit the memory usage when decoding the event.
 		if err = dml.AppendRow(e, c.mounter.DecodeToChunk); err != nil {
 			log.Panic("append row failed", zap.Error(err))
+		}
+
+		if e.CRTs > lastCommitTs {
+			lastCommitTs = e.CRTs
 		}
 	}
 }

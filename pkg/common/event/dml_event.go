@@ -44,6 +44,10 @@ type DMLEvent struct {
 	State EventSenderState `json:"state"`
 	// Length is the number of rows in the transaction.
 	Length int32 `json:"length"`
+	// TxnNumber is the number of the transaction in the event.
+	TxnNumber int32 `json:"txn_number"`
+	// TxnOffset is the offset of the transaction in the event.
+	TxnOffset int32 `json:"txn_offset"`
 	// RowTypes is the types of every row in the transaction.
 	// len(RowTypes) == Length
 	// ApproximateSize is the approximate size of all rows in the transaction.
@@ -81,7 +85,7 @@ func NewDMLEvent(
 	tableInfo *common.TableInfo,
 ) *DMLEvent {
 	// FIXME: check if chk isFull in the future
-	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount)
+	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount)
 	return &DMLEvent{
 		Version:          DMLEventVersion,
 		DispatcherID:     dispatcherID,
