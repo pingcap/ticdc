@@ -47,8 +47,8 @@ const (
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
-	defaultInitialMemoryLimit      = 1024 * 1024 * 2   // 5MB
-	defaultMaxMemoryLimit          = 1024 * 1024 * 150 // 160MB
+	defaultInitialMemoryLimit      = 1024 * 1024 * 2   // 2MB
+	defaultMaxMemoryLimit          = 1024 * 1024 * 200 // 200MB
 	defaultMemoryLimitIncreaseRate = 2
 	memoryEnlargeFactor            = 3
 )
@@ -103,7 +103,6 @@ type eventBroker struct {
 	g      *errgroup.Group
 
 	memoryLimiter *memory.MemoryLimiter
-	memoryQuota   *memory.MemQuota
 
 	metricDispatcherCount                prometheus.Gauge
 	metricEventServiceReceivedResolvedTs prometheus.Gauge
@@ -140,14 +139,12 @@ func newEventBroker(
 		defaultInitialMemoryLimit,
 		defaultInitialMemoryLimit,
 		defaultMaxMemoryLimit,
-		defaultInitialMemoryLimit,
+		defaultInitialMemoryLimit*5, // 10MB
 		defaultMemoryLimitIncreaseRate,
 		10*time.Second,
 		memoryEnlargeFactor,
 	)
 	memoryLimiter := memory.NewMemoryLimiter("eventBroker", memoryLimitConfig)
-	// 2GB
-	memoryQuota := memory.NewMemQuota(2048*1024*1024, "eventBroker")
 
 	c := &eventBroker{
 		tidbClusterID:           id,
@@ -167,7 +164,6 @@ func newEventBroker(
 		g:                       g,
 
 		memoryLimiter: memoryLimiter,
-		memoryQuota:   memoryQuota,
 
 		metricDispatcherCount:                metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
 		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
@@ -647,12 +643,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		}
 
 		// The memory quota is used to limit the memory usage when decoding the event.
-		size := eSize * memoryEnlargeFactor
-		c.memoryQuota.BlockAcquire(uint64(size))
 		if err = dml.AppendRow(e, c.mounter.DecodeToChunk); err != nil {
 			log.Panic("append row failed", zap.Error(err))
 		}
-		c.memoryQuota.Refund(uint64(size))
 	}
 }
 

@@ -223,6 +223,7 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 		for _, callback := range event.PostTxnFlushed {
 			callback()
 		}
+		event.Rows.Destroy(int(1), event.TableInfo.GetFieldSlice())
 	}
 	return nil
 }
