@@ -46,7 +46,7 @@ func newRegionCountSplitter(
 }
 
 func (m *regionCountSplitter) split(
-	ctx context.Context, span *heartbeatpb.TableSpan, captureNum int,
+	ctx context.Context, span *heartbeatpb.TableSpan,
 ) []*heartbeatpb.TableSpan {
 	bo := tikv.NewBackoffer(ctx, 500)
 	regions, err := m.regionCache.ListRegionIDsInKeyRange(bo, span.StartKey, span.EndKey)
@@ -57,13 +57,13 @@ func (m *regionCountSplitter) split(
 			zap.Error(err))
 		return []*heartbeatpb.TableSpan{span}
 	}
-	if len(regions) <= m.regionThreshold || captureNum == 0 {
+	if len(regions) <= m.regionThreshold {
 		log.Info("skip split span by region count",
 			zap.String("changefeed", m.changefeedID.Name()),
 			zap.String("span", span.String()),
-			zap.Int("totalCaptures", captureNum),
 			zap.Int("regionCount", len(regions)),
-			zap.Int("regionThreshold", m.regionThreshold))
+			zap.Int("regionThreshold", m.regionThreshold),
+			zap.Any("regionCountPerSpan", m.regionCountPerSpan))
 		return []*heartbeatpb.TableSpan{span}
 	}
 
@@ -126,9 +126,9 @@ func (m *regionCountSplitter) split(
 		zap.String("changefeed", m.changefeedID.Name()),
 		zap.String("span", span.String()),
 		zap.Int("spans", len(spans)),
-		zap.Int("totalCaptures", captureNum),
 		zap.Int("regionCount", len(regions)),
 		zap.Int("regionThreshold", m.regionThreshold),
+		zap.Int("regionCountPerSpan", m.regionCountPerSpan),
 		zap.Int("spanRegionLimit", spanRegionLimit))
 	return spans
 }
