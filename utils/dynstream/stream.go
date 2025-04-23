@@ -49,7 +49,7 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	option Option
 
 	isClosed atomic.Bool
-	closed   chan struct{}
+	ewg      sync.WaitGroup
 
 	wg sync.WaitGroup
 
@@ -67,7 +67,6 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 		eventQueue: newEventQueue(option, handler),
 		option:     option,
 		startTime:  time.Now(),
-		closed:     make(chan struct{}),
 	}
 
 	if option.UseBuffer {
@@ -82,10 +81,9 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 }
 
 func (s *stream[A, P, T, D, H]) addPath(path *pathInfo[A, P, T, D, H]) {
-	select {
-	case s.in() <- eventWrap[A, P, T, D, H]{pathInfo: path, newPath: true}:
-	case <-s.closed:
-	}
+	s.ewg.Add(1)
+	s.in() <- eventWrap[A, P, T, D, H]{pathInfo: path, newPath: true}
+	s.ewg.Done()
 }
 
 func (s *stream[A, P, T, D, H]) getPendingSize() int {
@@ -123,7 +121,7 @@ func (s *stream[A, P, T, D, H]) start() {
 // wait is by default true, which means to wait for the goroutines to exit.
 func (s *stream[A, P, T, D, H]) close(wait ...bool) {
 	if s.isClosed.CompareAndSwap(false, true) {
-		close(s.closed)
+		s.ewg.Wait()
 		if s.option.UseBuffer {
 			close(s.inChan)
 		} else {

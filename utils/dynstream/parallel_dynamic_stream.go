@@ -120,10 +120,12 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 		timestamp: s.handler.GetTimestamp(e),
 		queueTime: time.Now(),
 	}
-	select {
-	case pi.stream.in() <- ew:
-	case <-pi.stream.closed:
+	if pi.stream.isClosed.Load() {
+		return
 	}
+	pi.stream.ewg.Add(1)
+	pi.stream.in() <- ew
+	pi.stream.ewg.Done()
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) Wake(path P) {
@@ -138,10 +140,12 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Wake(path P) {
 		s.pathMap.RUnlock()
 	}
 
-	select {
-	case pi.stream.in() <- eventWrap[A, P, T, D, H]{wake: true, pathInfo: pi}:
-	case <-pi.stream.closed:
+	if pi.stream.isClosed.Load() {
+		return
 	}
+	pi.stream.ewg.Add(1)
+	pi.stream.in() <- eventWrap[A, P, T, D, H]{wake: true, pathInfo: pi}
+	pi.stream.ewg.Done()
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) Feedback() <-chan Feedback[A, P, D] {
@@ -188,10 +192,12 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	delete(s.pathMap.m, path)
 	s.pathMap.Unlock()
 
-	select {
-	case pi.stream.in() <- eventWrap[A, P, T, D, H]{pathInfo: pi}:
-	case <-pi.stream.closed:
+	if pi.stream.isClosed.Load() {
+		return NewAppErrorS(ErrorTypeClosed)
 	}
+	pi.stream.ewg.Add(1)
+	pi.stream.in() <- eventWrap[A, P, T, D, H]{pathInfo: pi}
+	pi.stream.ewg.Done()
 
 	s._statRemovePathCount.Add(1)
 	return nil
