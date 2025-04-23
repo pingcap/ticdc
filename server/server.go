@@ -194,6 +194,7 @@ func (c *server) setPreServices(ctx context.Context) error {
 	ec.Run(ctx)
 	appctx.SetService(appctx.EventCollector, ec)
 	c.preServices = append(c.preServices, ec)
+
 	// Set HeartbeatCollector to Global Context
 	hc := dispatchermanager.NewHeartBeatCollector(c.info.ID)
 	hc.Run(ctx)
