@@ -38,6 +38,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -88,6 +89,7 @@ type eventBroker struct {
 	sendMessageWorkerCount int
 	// scanWorkerCount is the number of the scan workers to spawn.
 	scanWorkerCount int
+	rateLimiter     *rate.Limiter
 
 	// messageCh is used to receive message from the scanWorker,
 	// and a goroutine is responsible for sending the message to the dispatchers.
@@ -145,6 +147,8 @@ func newEventBroker(
 		scanWorkerCount:         scanWorkerCount,
 		cancel:                  cancel,
 		g:                       g,
+		// 200MB/s
+		rateLimiter: rate.NewLimiter(rate.Limit(200*1024*1024), 200*1024*1024),
 
 		metricDispatcherCount:                metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
 		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
@@ -572,6 +576,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			metrics.EventServiceScanDuration.Observe(time.Since(start).Seconds())
 			return
 		}
+
+		eSize := int(e.KeyLen + e.ValueLen + e.OldValueLen)
+		c.rateLimiter.WaitN(context.Background(), eSize)
 
 		if e.CRTs < dataRange.StartTs {
 			// If the commitTs of the event is less than the startTs of the data range,
