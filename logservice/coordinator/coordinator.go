@@ -271,14 +271,22 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 	return candidateNodes
 }
 
+// func isCompleteSpan(tableSpan *heartbeatpb.TableSpan) bool {
+// 	startKey, endKey := spanz.GetTableRange(tableSpan.TableID)
+// 	log.Info("log coordinator check complete span",
+// 		zap.String("startKey", string(startKey)),
+// 		zap.String("endKey", string(endKey)),
+// 		zap.String("tableSpanStartKey", string(tableSpan.StartKey)),
+// 		zap.String("tableSpanEndKey", string(tableSpan.EndKey)))
+// 	if spanz.StartCompare(startKey, tableSpan.StartKey) == 0 && spanz.EndCompare(endKey, tableSpan.EndKey) == 0 {
+// 		return true
+// 	}
+// 	return false
+// }
+
 func isCompleteSpan(tableSpan *heartbeatpb.TableSpan) bool {
 	startKey, endKey := spanz.GetTableRange(tableSpan.TableID)
-	log.Info("log coordinator check complete span",
-		zap.String("startKey", string(startKey)),
-		zap.String("endKey", string(endKey)),
-		zap.String("tableSpanStartKey", string(tableSpan.StartKey)),
-		zap.String("tableSpanEndKey", string(tableSpan.EndKey)))
-	if spanz.StartCompare(startKey, tableSpan.StartKey) == 0 && spanz.EndCompare(endKey, tableSpan.EndKey) == 0 {
+	if spanz.StartCompare(spanz.ToComparableKey(startKey), tableSpan.StartKey) == 0 && spanz.EndCompare(spanz.ToComparableKey(endKey), tableSpan.EndKey) == 0 {
 		return true
 	}
 	return false
