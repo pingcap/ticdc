@@ -201,11 +201,6 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 	c.eventStoreStates.RLock()
 	defer c.eventStoreStates.RUnlock()
 
-	log.Info("log coordinator get candidate nodes",
-		zap.String("requestNodeId", requestNodeID.String()),
-		zap.String("span", span.String()),
-		zap.Uint64("startTs", startTs))
-
 	// TODO: support incomplete span
 	if !isCompleteSpan(span) {
 		return nil
@@ -213,7 +208,8 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 	log.Info("log coordinator get candidate nodes",
 		zap.String("requestNodeId", requestNodeID.String()),
 		zap.String("span", span.String()),
-		zap.Uint64("startTs", startTs))
+		zap.Uint64("startTs", startTs),
+		zap.Int("eventStoreStatesLen", len(c.eventStoreStates.m)))
 
 	type candidateNode struct {
 		nodeID     node.ID
