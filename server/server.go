@@ -182,18 +182,19 @@ func (c *server) setPreServices(ctx context.Context) error {
 	c.PDClock.Run(ctx)
 	appctx.SetService(appctx.DefaultPDClock, c.PDClock)
 	c.preServices = append(c.preServices, c.PDClock)
-	// Set MessageCenter to Global Context
-	mcCfg := config.NewDefaultMessageCenterConfig(c.info.AdvertiseAddr)
-	messageCenter := messaging.NewMessageCenter(ctx, c.info.ID, mcCfg, c.security)
-	messageCenter.Run(ctx)
-	appctx.SetService(appctx.MessageCenter, messageCenter)
-	c.preServices = append(c.preServices, messageCenter)
 
 	// Set EventCollector to Global Context
 	ec := eventcollector.New(c.info.ID)
 	ec.Run(ctx)
 	appctx.SetService(appctx.EventCollector, ec)
 	c.preServices = append(c.preServices, ec)
+
+	// Set MessageCenter to Global Context
+	mcCfg := config.NewDefaultMessageCenterConfig(c.info.AdvertiseAddr)
+	messageCenter := messaging.NewMessageCenter(ctx, c.info.ID, mcCfg, c.security)
+	messageCenter.Run(ctx)
+	appctx.SetService(appctx.MessageCenter, messageCenter)
+	c.preServices = append(c.preServices, messageCenter)
 
 	// Set HeartbeatCollector to Global Context
 	hc := dispatchermanager.NewHeartBeatCollector(c.info.ID)
