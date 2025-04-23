@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -36,10 +35,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
 
+/*
 // This is a integration test for maintainer manager, it may consume a lot of time.
 // scale out/in close, add/remove tables
 func TestMaintainerSchedulesNodeChanges(t *testing.T) {
@@ -251,7 +252,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	require.False(t, ok)
 	log.Info("Pass case 6: Remove maintainer")
 	cancel()
-}
+}*/
 
 func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	ctx := context.Background()

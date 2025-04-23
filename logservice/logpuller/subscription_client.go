@@ -67,6 +67,7 @@ var (
 	metricFeedRPCCtxUnavailable       = metrics.EventFeedErrorCounter.WithLabelValues("RPCCtxUnavailable")
 	metricStoreSendRequestErr         = metrics.EventFeedErrorCounter.WithLabelValues("SendRequestToStore")
 	metricKvIsBusyCounter             = metrics.EventFeedErrorCounter.WithLabelValues("KvIsBusy")
+	metricKvCongestedCounter          = metrics.EventFeedErrorCounter.WithLabelValues("KvCongested")
 
 	metricSubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store")
 	metricSubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store")
@@ -746,6 +747,11 @@ func (s *SubscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
 			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop)
+			return nil
+		}
+		if innerErr.GetCongested() != nil {
+			metricKvCongestedCounter.Inc()
+			s.scheduleRegionRequest(ctx, errInfo.regionInfo)
 			return nil
 		}
 		if innerErr.GetServerIsBusy() != nil {

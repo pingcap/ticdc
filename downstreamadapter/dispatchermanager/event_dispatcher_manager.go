@@ -84,7 +84,7 @@ type EventDispatcherManager struct {
 
 	// statusesChan is used to store the status of dispatchers when status changed
 	// and push to heartbeatRequestQueue
-	statusesChan chan TableSpanStatusWithSeq
+	statusesChan chan dispatcher.TableSpanStatusWithSeq
 	// heartbeatRequestQueue is used to store the heartbeat request from all the dispatchers.
 	// heartbeat collector will consume the heartbeat request from the queue and send the response to each dispatcher.
 	heartbeatRequestQueue *HeartbeatRequestQueue
@@ -152,7 +152,7 @@ func NewEventDispatcherManager(
 		dispatcherMap:                          newDispatcherMap(),
 		changefeedID:                           changefeedID,
 		pdClock:                                pdClock,
-		statusesChan:                           make(chan TableSpanStatusWithSeq, 8192),
+		statusesChan:                           make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		blockStatusesChan:                      make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		errCh:                                  make(chan error, 1),
 		cancel:                                 cancel,
@@ -491,6 +491,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			e.changefeedID,
 			id, tableSpans[idx], e.sink,
 			uint64(newStartTsList[idx]),
+			e.statusesChan,
 			e.blockStatusesChan,
 			schemaIds[idx],
 			e.schemaIDToDispatchers,
@@ -519,14 +520,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 		}
 
 		seq := e.dispatcherMap.Set(id, d)
-		e.statusesChan <- TableSpanStatusWithSeq{
-			TableSpanStatus: &heartbeatpb.TableSpanStatus{
-				ID:              id.ToPB(),
-				ComponentStatus: heartbeatpb.ComponentState_Working,
-			},
-			StartTs: uint64(newStartTsList[idx]),
-			Seq:     seq,
-		}
+		d.SetSeq(seq)
 
 		if d.IsTableTriggerEventDispatcher() {
 			e.metricTableTriggerEventDispatcherCount.Inc()
@@ -646,11 +640,11 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 		case tableSpanStatus := <-e.statusesChan:
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
 			newWatermark.Seq = tableSpanStatus.Seq
-			if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < newWatermark.CheckpointTs {
-				newWatermark.CheckpointTs = tableSpanStatus.StartTs
+			if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
+				newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
 			}
-			if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < newWatermark.ResolvedTs {
-				newWatermark.ResolvedTs = tableSpanStatus.StartTs
+			if tableSpanStatus.ResolvedTs != 0 && tableSpanStatus.ResolvedTs < newWatermark.ResolvedTs {
+				newWatermark.ResolvedTs = tableSpanStatus.ResolvedTs
 			}
 			delay := time.NewTimer(10 * time.Millisecond)
 		loop:
@@ -661,11 +655,11 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 					if newWatermark.Seq < tableSpanStatus.Seq {
 						newWatermark.Seq = tableSpanStatus.Seq
 					}
-					if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < newWatermark.CheckpointTs {
-						newWatermark.CheckpointTs = tableSpanStatus.StartTs
+					if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
+						newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
 					}
-					if tableSpanStatus.StartTs != 0 && tableSpanStatus.StartTs < newWatermark.ResolvedTs {
-						newWatermark.ResolvedTs = tableSpanStatus.StartTs
+					if tableSpanStatus.ResolvedTs != 0 && tableSpanStatus.ResolvedTs < newWatermark.ResolvedTs {
+						newWatermark.ResolvedTs = tableSpanStatus.ResolvedTs
 					}
 				case <-delay.C:
 					break loop
@@ -763,22 +757,22 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 }
 
 func (e *EventDispatcherManager) removeDispatcher(id common.DispatcherID) {
-	dispatcher, ok := e.dispatcherMap.Get(id)
+	dispatcherItem, ok := e.dispatcherMap.Get(id)
 	if ok {
-		if dispatcher.GetRemovingStatus() {
+		if dispatcherItem.GetRemovingStatus() {
 			return
 		}
-		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
+		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
 
 		// for non-mysql class sink, only the event dispatcher manager with table trigger event dispatcher need to receive the checkpointTs message.
-		if dispatcher.IsTableTriggerEventDispatcher() && e.sink.SinkType() != common.MysqlSinkType {
+		if dispatcherItem.IsTableTriggerEventDispatcher() && e.sink.SinkType() != common.MysqlSinkType {
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(e.changefeedID)
 			log.Error("remove checkpointTs message ds failed", zap.Error(err))
 		}
 
-		dispatcher.Remove()
+		dispatcherItem.Remove()
 	} else {
-		e.statusesChan <- TableSpanStatusWithSeq{
+		e.statusesChan <- dispatcher.TableSpanStatusWithSeq{
 			TableSpanStatus: &heartbeatpb.TableSpanStatus{
 				ID:              id.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Stopped,

@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer/scheduler"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
 )
@@ -32,6 +33,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 	nodeM *watcher.NodeManager,
 	balanceInterval time.Duration,
 	splitter *split.Splitter,
+	schedulerCfg *config.ChangefeedSchedulerConfig,
 ) *pkgscheduler.Controller {
 	schedulers := map[string]pkgscheduler.Scheduler{
 		pkgscheduler.BasicScheduler: scheduler.NewBasicScheduler(
@@ -40,6 +42,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			oc,
 			db,
 			nodeM,
+			schedulerCfg,
 		),
 		pkgscheduler.BalanceScheduler: scheduler.NewBalanceScheduler(
 			changefeedID,

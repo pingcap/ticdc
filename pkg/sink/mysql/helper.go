@@ -37,6 +37,17 @@ import (
 	"go.uber.org/zap"
 )
 
+const checkRunningAddIndexSQL = `
+SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE_ID, STATE, QUERY
+FROM information_schema.ddl_jobs
+WHERE TABLE_ID = "%d"
+    AND JOB_TYPE LIKE "add index%%"
+    AND (STATE = "running" OR STATE = "queueing");
+`
+
+const checkRunningSQL = `SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE_ID, STATE, QUERY FROM information_schema.ddl_jobs 
+	WHERE CREATE_TIME >= "%s" AND QUERY = "%s";`
+
 // CheckIfBDRModeIsSupported checks if the downstream supports BDR mode.
 func CheckIfBDRModeIsSupported(ctx context.Context, db *sql.DB) (bool, error) {
 	isTiDB := CheckIsTiDB(ctx, db)
@@ -365,6 +376,17 @@ func needSwitchDB(event *commonEvent.DDLEvent) bool {
 	return true
 }
 
+func needWaitAsyncExecDone(t timodel.ActionType) bool {
+	switch t {
+	case timodel.ActionCreateTable, timodel.ActionCreateTables:
+		return false
+	case timodel.ActionCreateSchema:
+		return false
+	default:
+		return true
+	}
+}
+
 // SetWriteSource sets write source for the transaction.
 // When this variable is set to a value other than 0, data written in this session is considered to be written by TiCDC.
 // DDLs executed in a PRIMARY cluster can be replicated to a SECONDARY cluster by TiCDC.
@@ -435,4 +457,54 @@ func getSQLErrCode(err error) (errors.ErrCode, bool) {
 	}
 
 	return errors.ErrCode(mysqlErr.Number), true
+}
+
+func getDDLCreateTime(ctx context.Context, db *sql.DB) string {
+	ddlCreateTime := "" // default when scan failed
+	row, err := db.QueryContext(ctx, "BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;")
+	if err != nil {
+		log.Warn("selecting tidb current timestamp failed", zap.Error(err))
+	} else {
+		for row.Next() {
+			err = row.Scan(&ddlCreateTime)
+			if err != nil {
+				log.Warn("getting ddlCreateTime failed", zap.Error(err))
+			}
+		}
+		//nolint:sqlclosecheck
+		_ = row.Close()
+		_ = row.Err()
+	}
+	return ddlCreateTime
+}
+
+// getDDLStateFromTiDB retrieves the ddl job status of the ddl query from downstream tidb based on the ddl query and the approximate ddl create time.
+func getDDLStateFromTiDB(ctx context.Context, db *sql.DB, ddl string, createTime string) (timodel.JobState, error) {
+	// ddlCreateTime and createTime are both based on UTC timezone of downstream
+	showJobs := fmt.Sprintf(checkRunningSQL, createTime, ddl)
+	//nolint:rowserrcheck
+	jobsRows, err := db.QueryContext(ctx, showJobs)
+	if err != nil {
+		return timodel.JobStateNone, err
+	}
+
+	var jobsResults [][]string
+	jobsResults, err = export.GetSpecifiedColumnValuesAndClose(jobsRows, "QUERY", "STATE", "JOB_ID", "JOB_TYPE", "SCHEMA_STATE")
+	if err != nil {
+		return timodel.JobStateNone, err
+	}
+	if len(jobsResults) > 0 {
+		result := jobsResults[0]
+		state, jobID, jobType, schemaState := result[1], result[2], result[3], result[4]
+		log.Debug("Find ddl state in downstream",
+			zap.String("jobID", jobID),
+			zap.String("jobType", jobType),
+			zap.String("schemaState", schemaState),
+			zap.String("ddl", ddl),
+			zap.String("state", state),
+			zap.Any("jobsResults", jobsResults),
+		)
+		return timodel.StrToJobState(result[1]), nil
+	}
+	return timodel.JobStateNone, nil
 }

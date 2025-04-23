@@ -16,25 +16,20 @@ package split
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tiflow/cdc/processor/tablepb"
-	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
 func TestRegionCountSplitSpan(t *testing.T) {
-	// t.Parallel()
-
-	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
-	baseSpanNumberCoefficient = 3
-	defer func() {
-		baseSpanNumberCoefficient = oldBaseSpanNumberCoefficient
-	}()
+	t.Parallel()
 
 	cache := NewMockRegionCache(nil)
 	cache.regions.ReplaceOrInsert(tablepb.Span{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")}, 1)
@@ -45,13 +40,16 @@ func TestRegionCountSplitSpan(t *testing.T) {
 	cache.regions.ReplaceOrInsert(tablepb.Span{StartKey: []byte("t2_2"), EndKey: []byte("t2_3")}, 6)
 
 	cases := []struct {
-		totalCaptures int
-		span          *heartbeatpb.TableSpan
-		expectSpans   []*heartbeatpb.TableSpan
+		span        *heartbeatpb.TableSpan
+		cfg         *config.ChangefeedSchedulerConfig
+		expectSpans []*heartbeatpb.TableSpan
 	}{
 		{
-			totalCaptures: 7,
-			span:          &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
+			span: &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    1,
+				RegionCountPerSpan: 1,
+			},
 			expectSpans: []*heartbeatpb.TableSpan{
 				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_1")},   // 1 region
 				{TableID: 1, StartKey: []byte("t1_1"), EndKey: []byte("t1_2")}, // 1 region
@@ -61,92 +59,61 @@ func TestRegionCountSplitSpan(t *testing.T) {
 			},
 		},
 		{
-			totalCaptures: 6,
-			span:          &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
-			expectSpans: []*heartbeatpb.TableSpan{
-				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_1")},   // 1 region
-				{TableID: 1, StartKey: []byte("t1_1"), EndKey: []byte("t1_2")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_2"), EndKey: []byte("t1_3")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t1_4")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_4"), EndKey: []byte("t2")},   // 1 region
+			span: &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    1,
+				RegionCountPerSpan: 2,
 			},
-		},
-		{
-			totalCaptures: 5,
-			span:          &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
-			expectSpans: []*heartbeatpb.TableSpan{
-				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_1")},   // 1 region
-				{TableID: 1, StartKey: []byte("t1_1"), EndKey: []byte("t1_2")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_2"), EndKey: []byte("t1_3")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t1_4")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_4"), EndKey: []byte("t2")},   // 1 region
-			},
-		},
-		{
-			totalCaptures: 4,
-			span:          &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
-			expectSpans: []*heartbeatpb.TableSpan{
-				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_1")},   // 1 region
-				{TableID: 1, StartKey: []byte("t1_1"), EndKey: []byte("t1_2")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_2"), EndKey: []byte("t1_3")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t1_4")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_4"), EndKey: []byte("t2")},   // 1 region
-			},
-		},
-		{
-			totalCaptures: 3,
-			span:          &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
-			expectSpans: []*heartbeatpb.TableSpan{
-				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_1")},   // 1 region
-				{TableID: 1, StartKey: []byte("t1_1"), EndKey: []byte("t1_2")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_2"), EndKey: []byte("t1_3")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t1_4")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_4"), EndKey: []byte("t2")},   // 1 region
-			},
-		},
-		{
-			totalCaptures: 2,
-			span:          &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
-			expectSpans: []*heartbeatpb.TableSpan{
-				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_1")},   // 1 region
-				{TableID: 1, StartKey: []byte("t1_1"), EndKey: []byte("t1_2")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_2"), EndKey: []byte("t1_3")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t1_4")}, // 1 region
-				{TableID: 1, StartKey: []byte("t1_4"), EndKey: []byte("t2")},   // 1 region
-			},
-		},
-		{
-			totalCaptures: 1,
-			span:          &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
 			expectSpans: []*heartbeatpb.TableSpan{
 				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_2")},   // 2 region
 				{TableID: 1, StartKey: []byte("t1_2"), EndKey: []byte("t1_4")}, // 2 region
 				{TableID: 1, StartKey: []byte("t1_4"), EndKey: []byte("t2")},   // 1 region
 			},
 		},
+		{
+			span: &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    1,
+				RegionCountPerSpan: 3,
+			},
+			expectSpans: []*heartbeatpb.TableSpan{
+				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_3")}, // 3 region
+				{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t2")}, // 2 region
+			},
+		},
+		{
+			span: &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    1,
+				RegionCountPerSpan: 4,
+			},
+			expectSpans: []*heartbeatpb.TableSpan{
+				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_3")}, // 3 region
+				{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t2")}, // 2 region
+			},
+		},
+		{
+			span: &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    10,
+				RegionCountPerSpan: 2,
+			},
+			expectSpans: []*heartbeatpb.TableSpan{
+				{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}, // no split
+			},
+		},
 	}
 
 	cfID := common.NewChangeFeedIDWithName("test")
 	for i, cs := range cases {
-		cfg := &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes: true,
-			RegionThreshold:        1,
-		}
-		splitter := newRegionCountSplitter(cfID, cache, cfg.RegionThreshold)
-		spans := splitter.split(context.Background(), cs.span, cs.totalCaptures)
+		splitter := newRegionCountSplitter(cfID, cache, cs.cfg.RegionThreshold, cs.cfg.RegionCountPerSpan)
+		spans := splitter.split(context.Background(), cs.span)
 		require.Equalf(t, cs.expectSpans, spans, "%d %s", i, cs.span.String())
 	}
 }
 
-/*
 func TestRegionCountEvenlySplitSpan(t *testing.T) {
-	// t.Parallel()
-
-	oldBaseSpanNumberCoefficient := baseSpanNumberCoefficient
-	baseSpanNumberCoefficient = 3
-	defer func() {
-		baseSpanNumberCoefficient = oldBaseSpanNumberCoefficient
-	}()
+	t.Parallel()
 
 	cache := NewMockRegionCache(nil)
 	totalRegion := 1000
@@ -158,86 +125,75 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 	}
 
 	cases := []struct {
-		totalCaptures  int
-		expectedSpans  int
-		expectSpansMin int
-		expectSpansMax int
+		expectedSpans int
+		cfg           *config.ChangefeedSchedulerConfig
 	}{
 		{
-			totalCaptures:  0,
-			expectedSpans:  1,
-			expectSpansMin: 1000,
-			expectSpansMax: 1000,
+			expectedSpans: 1000,
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    1,
+				RegionCountPerSpan: 1,
+			},
 		},
 		{
-			totalCaptures:  1,
-			expectedSpans:  3,
-			expectSpansMin: 333,
-			expectSpansMax: 334,
+			expectedSpans: 500,
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    1,
+				RegionCountPerSpan: 2,
+			},
 		},
 		{
-			totalCaptures:  3,
-			expectedSpans:  9,
-			expectSpansMin: 111,
-			expectSpansMax: 113,
+			expectedSpans: 334,
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    1,
+				RegionCountPerSpan: 3,
+			},
 		},
 		{
-			totalCaptures:  7,
-			expectedSpans:  42,
-			expectSpansMin: 23,
-			expectSpansMax: 24,
+			expectedSpans: 250,
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    1,
+				RegionCountPerSpan: 4,
+			},
 		},
 		{
-			totalCaptures:  999,
-			expectedSpans:  100,
-			expectSpansMin: 1,
-			expectSpansMax: 10,
+			expectedSpans: 200,
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    1,
+				RegionCountPerSpan: 5,
+			},
 		},
 		{
-			totalCaptures:  1000,
-			expectedSpans:  100,
-			expectSpansMin: 1,
-			expectSpansMax: 10,
+			expectedSpans: 167,
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    1,
+				RegionCountPerSpan: 6,
+			},
 		},
 		{
-			totalCaptures:  2000,
-			expectedSpans:  100,
-			expectSpansMin: 1,
-			expectSpansMax: 10,
+			expectedSpans: 143,
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    1,
+				RegionCountPerSpan: 7,
+			},
+		},
+		{
+			expectedSpans: 125,
+			cfg: &config.ChangefeedSchedulerConfig{
+				RegionThreshold:    1,
+				RegionCountPerSpan: 8,
+			},
 		},
 	}
 
 	cfID := common.NewChangeFeedIDWithName("test")
+	spans := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}
 	for i, cs := range cases {
-		cfg := &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes: true,
-			RegionThreshold:        1,
-		}
-		splitter := newRegionCountSplitter(cfID, cache, cfg.RegionThreshold)
-		spans := splitter.split(
-			context.Background(),
-			&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
-			cs.totalCaptures,
-		)
-
+		splitter := newRegionCountSplitter(cfID, cache, cs.cfg.RegionThreshold, cs.cfg.RegionCountPerSpan)
+		spans := splitter.split(context.Background(), spans)
 		require.Equalf(t, cs.expectedSpans, len(spans), "%d %v", i, cs)
-
-		for _, span := range spans {
-			start, end := 0, 1000
-			if len(span.StartKey) > len("t1") {
-				_, err := fmt.Sscanf(string(span.StartKey), "t1_%d", &start)
-				require.Nil(t, err, "%d %v %s", i, cs, span.StartKey)
-			}
-			if len(span.EndKey) > len("t2") {
-				_, err := fmt.Sscanf(string(span.EndKey), "t1_%d", &end)
-				require.Nil(t, err, "%d %v %s", i, cs, span.EndKey)
-			}
-			require.GreaterOrEqual(t, end-start, cs.expectSpansMin, "%d %v", i, cs)
-			require.LessOrEqual(t, end-start, cs.expectSpansMax, "%d %v", i, cs)
-		}
 	}
 }
-*/
 
 func TestSplitSpanRegionOutOfOrder(t *testing.T) {
 	t.Parallel()
@@ -248,13 +204,13 @@ func TestSplitSpanRegionOutOfOrder(t *testing.T) {
 	cache.regions.ReplaceOrInsert(tablepb.Span{StartKey: []byte("t1_2"), EndKey: []byte("t1_3")}, 3)
 
 	cfg := &config.ChangefeedSchedulerConfig{
-		EnableTableAcrossNodes: true,
-		RegionThreshold:        1,
+		RegionThreshold:    1,
+		RegionCountPerSpan: 1,
 	}
 	cfID := common.NewChangeFeedIDWithName("test")
-	splitter := newRegionCountSplitter(cfID, cache, cfg.RegionThreshold)
+	splitter := newRegionCountSplitter(cfID, cache, cfg.RegionThreshold, cfg.RegionCountPerSpan)
 	span := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}
-	spans := splitter.split(context.Background(), span, 1)
+	spans := splitter.split(context.Background(), span)
 	require.Equal(
 		t, []*heartbeatpb.TableSpan{{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}}, spans)
 }

@@ -510,10 +510,12 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	}
 	if c.Scheduler != nil {
 		res.Scheduler = &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes: c.Scheduler.EnableTableAcrossNodes,
-			RegionThreshold:        c.Scheduler.RegionThreshold,
-			WriteKeyThreshold:      c.Scheduler.WriteKeyThreshold,
-			SplitNumberPerNode:     c.Scheduler.SplitNumberPerNode,
+			EnableTableAcrossNodes:     c.Scheduler.EnableTableAcrossNodes,
+			RegionThreshold:            c.Scheduler.RegionThreshold,
+			RegionCountPerSpan:         c.Scheduler.RegionCountPerSpan,
+			WriteKeyThreshold:          c.Scheduler.WriteKeyThreshold,
+			SplitNumberPerNode:         c.Scheduler.SplitNumberPerNode,
+			SchedulingTaskCountPerNode: c.Scheduler.SchedulingTaskCountPerNode,
 		}
 	}
 	if c.Integrity != nil {
@@ -833,10 +835,12 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 	}
 	if cloned.Scheduler != nil {
 		res.Scheduler = &ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes: cloned.Scheduler.EnableTableAcrossNodes,
-			RegionThreshold:        cloned.Scheduler.RegionThreshold,
-			WriteKeyThreshold:      cloned.Scheduler.WriteKeyThreshold,
-			SplitNumberPerNode:     cloned.Scheduler.SplitNumberPerNode,
+			EnableTableAcrossNodes:     cloned.Scheduler.EnableTableAcrossNodes,
+			RegionThreshold:            cloned.Scheduler.RegionThreshold,
+			RegionCountPerSpan:         cloned.Scheduler.RegionCountPerSpan,
+			WriteKeyThreshold:          cloned.Scheduler.WriteKeyThreshold,
+			SplitNumberPerNode:         cloned.Scheduler.SplitNumberPerNode,
+			SchedulingTaskCountPerNode: cloned.Scheduler.SchedulingTaskCountPerNode,
 		}
 	}
 
@@ -1043,10 +1047,14 @@ type ChangefeedSchedulerConfig struct {
 	EnableTableAcrossNodes bool `toml:"enable_table_across_nodes" json:"enable_table_across_nodes"`
 	// RegionThreshold is the region count threshold of splitting a table.
 	RegionThreshold int `toml:"region_threshold" json:"region_threshold"`
+	// RegionCountPerSpan is the maximax region count for each span when first splitted by RegionCountSpliiter
+	RegionCountPerSpan int `toml:"region-count-per-span" json:"region-count-per-span"`
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
 	WriteKeyThreshold int `toml:"write_key_threshold" json:"write_key_threshold"`
 	// SplitNumberPerNode is the number of splits per node.
 	SplitNumberPerNode int `toml:"split_number_per_node" json:"split_number_per_node"`
+	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
+	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-per-node"`
 }
 
 // IntegrityConfig is the config for integrity check
@@ -1181,10 +1189,10 @@ type ServerStatus struct {
 type Capture struct {
 	ID string `json:"id"`
 	// IsCoordinator is true if the capture is the coordinator of the TiCDC cluster
-	// We make its json key as `is_owner` to keep the compatibility with old TiCDC.
-	IsCoordinator bool   `json:"is_owner"`
+	// We make its json key as `is-owner` to keep the compatibility with old TiCDC.
+	IsCoordinator bool   `json:"is-owner"`
 	AdvertiseAddr string `json:"address"`
-	ClusterID     string `json:"cluster_id"`
+	ClusterID     string `json:"cluster-id"`
 }
 
 // CodecConfig represents a MQ codec configuration

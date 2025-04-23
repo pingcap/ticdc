@@ -52,7 +52,7 @@ func NewTxnEventEncoder(
 	case config.ProtocolCsv:
 		return csv.NewTxnEventEncoder(c), nil
 	case config.ProtocolCanalJSON:
-		return canal.NewJSONTxnEventEncoderBuilder(c), nil
+		return canal.NewJSONTxnEventEncoder(c), nil
 	default:
 		return nil, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(c.Protocol)
 	}
