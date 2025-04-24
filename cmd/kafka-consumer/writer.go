@@ -155,8 +155,9 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 						close(done)
 					}
 				})
-				w.mysqlSink.AddDMLEvent(e)
 			}
+			event := mergeDMLEvent(events)
+			w.mysqlSink.AddDMLEvent(event)
 		}
 	}
 
@@ -172,6 +173,21 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			zap.String("query", ddl.Query))
 	}
 	return w.mysqlSink.WriteBlockEvent(ddl)
+}
+
+func mergeDMLEvent(events []*commonEvent.DMLEvent) *commonEvent.DMLEvent {
+	if len(events) == 0 {
+		log.Panic("DMLEvent: empty events")
+	}
+	event := events[0]
+	for _, e := range events[1:] {
+		event.Rows.Append(e.Rows, 0, e.Rows.NumRows())
+		event.RowTypes = append(event.RowTypes, e.RowTypes...)
+		event.Length += e.Length
+		event.PostTxnFlushed = append(event.PostTxnFlushed, e.PostTxnFlushed...)
+		event.ApproximateSize += e.ApproximateSize
+	}
+	return event
 }
 
 func (w *writer) flushDMLEventsByWatermark(ctx context.Context, progress *partitionProgress) error {
@@ -191,8 +207,9 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context, progress *partit
 					close(done)
 				}
 			})
-			w.mysqlSink.AddDMLEvent(e)
 		}
+		e := mergeDMLEvent(events)
+		w.mysqlSink.AddDMLEvent(e)
 	}
 
 	ticker := time.NewTicker(time.Minute)
@@ -281,18 +298,17 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 	case common.MessageTypeRow:
 		var counter int
 		row := progress.decoder.NextDMLEvent()
-		if row != nil {
-			w.appendRow2Group(row, progress, offset)
-			// continue here
+		if row == nil {
+			if w.protocol != config.ProtocolSimple {
+				log.Panic("DML event is nil, it's not expected",
+					zap.Int32("partition", partition), zap.Any("offset", offset))
+			}
+			log.Warn("DML event is nil, it's cached ", zap.Int32("partition", partition), zap.Any("offset", offset))
+			break
 		}
+
+		w.appendRow2Group(row, progress, offset)
 		counter++
-
-		if w.protocol != config.ProtocolSimple {
-			log.Panic("DML event is nil, it's not expected",
-				zap.Int32("partition", partition), zap.Any("offset", offset))
-		}
-		log.Warn("DML event is nil, it's cached ", zap.Int32("partition", partition), zap.Any("offset", offset))
-
 		for _, hasNext = progress.decoder.HasNext(); hasNext; {
 			row = progress.decoder.NextDMLEvent()
 			if row != nil {
