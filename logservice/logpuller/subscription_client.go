@@ -44,6 +44,9 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// 500MB/s
+var RateLimiter = rate.NewLimiter(rate.Limit(500*1024*1024), 500*1024*1024)
+
 const (
 	// Maximum total sleep time(in ms), 20 seconds.
 	tikvRequestMaxBackoff = 20000
@@ -216,9 +219,6 @@ func NewSubscriptionClient(
 	credential *security.Credential,
 ) *SubscriptionClient {
 
-	// 600MB/s
-	rateLimiter := rate.NewLimiter(rate.Limit(600*1024*1024), 600*1024*1024)
-
 	subClient := &SubscriptionClient{
 		config: config,
 
@@ -234,7 +234,7 @@ func NewSubscriptionClient(
 		resolveLockTaskCh: make(chan resolveLockTask, 1024),
 		errCache:          newErrCache(),
 
-		rateLimiter: rateLimiter,
+		rateLimiter: RateLimiter,
 	}
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
@@ -339,8 +339,8 @@ func (s *SubscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	// 1GB
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlAlgorithmV1)
+	// 2GB
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(2*1024*1024*1024, dynstream.MemoryControlAlgorithmV1)
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: bdrMode}
@@ -370,7 +370,7 @@ func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
 
 func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
 	// rate limit
-	// s.rateLimiter.WaitN(context.Background(), int(event.getSize()))
+	s.rateLimiter.WaitN(context.Background(), int(event.getSize()))
 
 	// fast path
 	if !s.paused.Load() {
