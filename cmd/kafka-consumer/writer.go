@@ -144,6 +144,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 		total   int
 		flushed atomic.Int64
 	)
+	log.Info("try to flush ddl event", zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query))
 	for _, tableID := range ddl.GetBlockedTables().TableIDs {
 		for _, progress := range w.progresses {
 			events := progress.eventGroups[tableID].Resolve(progress.watermark)
@@ -164,20 +165,18 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			w.mysqlSink.AddDMLEvent(event)
 		}
 	}
-	if total == 0 {
-		return nil
-	}
-
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	select {
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	case <-done:
-	case <-ticker.C:
-		log.Panic("DDL event timeout, since the DML events are not flushed in time",
-			zap.Int("total", total), zap.Int64("flushed", flushed.Load()),
-			zap.String("query", ddl.Query))
+	if total != 0 {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-done:
+		case <-ticker.C:
+			log.Panic("DDL event timeout, since the DML events are not flushed in time",
+				zap.Int("total", total), zap.Int64("flushed", flushed.Load()),
+				zap.String("query", ddl.Query))
+		}
 	}
 	return w.mysqlSink.WriteBlockEvent(ddl)
 }

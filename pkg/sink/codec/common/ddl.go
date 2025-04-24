@@ -26,26 +26,58 @@ import (
 // see https://github.com/pingcap/tidb/blob/master/pkg/meta/model/job.go
 func GetDDLActionType(query string) timodel.ActionType {
 	query = strings.ToLower(query)
+	// DDL related to the Database
 	if strings.HasPrefix(query, "create schema") || strings.HasPrefix(query, "create database") {
 		return timodel.ActionCreateSchema
 	}
 	if strings.HasPrefix(query, "drop schema") || strings.HasPrefix(query, "drop database") {
 		return timodel.ActionDropSchema
 	}
+	// DDL related to the Table
 	if strings.HasPrefix(query, "create table") {
 		return timodel.ActionCreateTable
 	}
 	if strings.HasPrefix(query, "drop table") {
 		return timodel.ActionDropTable
 	}
-	if strings.HasPrefix(query, "add column") {
+	if strings.HasPrefix(query, "recover table") {
+		return timodel.ActionRecoverTable
+	}
+	if strings.HasPrefix(query, "truncate") {
+		return timodel.ActionTruncateTable
+	}
+	if strings.HasPrefix(query, "rename table") {
+		return timodel.ActionRenameTable
+	}
+
+	// DDL related to column
+	if strings.Contains(query, "add column") {
 		return timodel.ActionAddColumn
 	}
-	if strings.HasPrefix(query, "drop column") {
+	if strings.Contains(query, "drop column") {
 		return timodel.ActionDropColumn
 	}
-	if strings.Contains(query, "add index") {
+	if strings.Contains(query, "modify") {
+		return timodel.ActionModifyColumn
+	}
+	if strings.Contains(query, "change") {
+		return timodel.ActionModifyColumn
+	}
+
+	if strings.Contains(query, "add primary key") {
+		return timodel.ActionAddPrimaryKey
+	}
+	if strings.Contains(query, "add index") ||
+		strings.Contains(query, "add key") ||
+		strings.Contains(query, "add unique index") ||
+		strings.Contains(query, "add unique key") ||
+		strings.Contains(query, "add fulltext index") ||
+		strings.Contains(query, "add fulltext key") {
 		return timodel.ActionAddIndex
+	}
+	// todo: add unit test to verify this
+	if strings.Contains(query, "drop primary key") {
+		return timodel.ActionDropPrimaryKey
 	}
 	if strings.Contains(query, "drop index") {
 		return timodel.ActionDropIndex
@@ -56,57 +88,45 @@ func GetDDLActionType(query string) timodel.ActionType {
 	if strings.Contains(query, "drop foreign key") {
 		return timodel.ActionDropForeignKey
 	}
-	if strings.HasPrefix(query, "truncate table") {
-		return timodel.ActionTruncateTable
-	}
-	if strings.Contains(query, "modify column") {
-		return timodel.ActionModifyColumn
-	}
-	if strings.Contains(query, "rebase autoid") {
-		return timodel.ActionRebaseAutoID
-	}
-	if strings.Contains(query, "rename table") {
-		return timodel.ActionRenameTable
-	}
-	if strings.Contains(query, "set default value") {
-		return timodel.ActionSetDefaultValue
-	}
 	if strings.Contains(query, "rename index") {
 		return timodel.ActionRenameIndex
 	}
-	if strings.Contains(query, "add table partition") {
+
+	if strings.Contains(query, "set default") {
+		return timodel.ActionSetDefaultValue
+	}
+
+	if strings.Contains(query, "add partition") {
 		return timodel.ActionAddTablePartition
 	}
-	if strings.Contains(query, "drop table partition") {
+	if strings.Contains(query, "drop partition") {
 		return timodel.ActionDropTablePartition
 	}
-	if strings.Contains(query, "truncate table partition") {
+	if strings.Contains(query, "truncate partition") {
 		return timodel.ActionTruncateTablePartition
 	}
 	if strings.Contains(query, "reorganize partition") {
 		return timodel.ActionReorganizePartition
 	}
+
+	// ALTER TABLE partitioned_table EXCHANGE PARTITION p1 WITH TABLE non_partitioned_table
 	if strings.Contains(query, "exchange partition") {
 		return timodel.ActionExchangeTablePartition
 	}
-	if strings.Contains(query, "alter table partitioning") {
+	if strings.Contains(query, "partition by") {
 		return timodel.ActionAlterTablePartitioning
 	}
-	if strings.Contains(query, "remove table partition") {
+	if strings.Contains(query, "remove partitioning") {
 		return timodel.ActionRemovePartitioning
 	}
+
 	if strings.Contains(query, "modify table charset") {
 		return timodel.ActionModifyTableCharsetAndCollate
 	}
 	if strings.Contains(query, "modify schema charset") {
 		return timodel.ActionModifySchemaCharsetAndCollate
 	}
-	if strings.Contains(query, "add primary key") {
-		return timodel.ActionAddPrimaryKey
-	}
-	if strings.Contains(query, "drop primary key") {
-		return timodel.ActionDropPrimaryKey
-	}
+	log.Panic("how to set action for the DDL", zap.String("query", query))
 	return timodel.ActionNone
 }
 
@@ -137,7 +157,7 @@ func GetInfluenceTables(action timodel.ActionType, schemaID int64, tableID int64
 	case timodel.ActionAddColumn, timodel.ActionDropColumn,
 		timodel.ActionAddIndex, timodel.ActionDropIndex,
 		timodel.ActionAddForeignKey, timodel.ActionDropForeignKey,
-		timodel.ActionModifyColumn, timodel.ActionRebaseAutoID,
+		timodel.ActionModifyColumn,
 		timodel.ActionSetDefaultValue, timodel.ActionRenameIndex,
 		timodel.ActionAddPrimaryKey, timodel.ActionDropPrimaryKey,
 		timodel.ActionModifyTableCharsetAndCollate:
