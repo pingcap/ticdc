@@ -14,7 +14,7 @@
 package config
 
 import (
-	bf "github.com/pingcap/tiflow/pkg/binlog-filter"
+	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 )
 
 // FilterConfig represents filter config for a changefeed

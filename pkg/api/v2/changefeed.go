@@ -20,7 +20,7 @@ import (
 
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/pkg/api/internal/rest"
-	"github.com/pingcap/tiflow/cdc/model"
+	"github.com/pingcap/ticdc/pkg/common"
 )
 
 // ChangefeedsGetter has a method to return a ChangefeedInterface.
@@ -135,7 +135,7 @@ func (c *changefeeds) Pause(ctx context.Context,
 func (c *changefeeds) Get(ctx context.Context,
 	namespace string, name string,
 ) (*v2.ChangeFeedInfo, error) {
-	err := model.ValidateChangefeedID(name)
+	err := common.ValidateChangefeedID(name)
 	if err != nil {
 		return nil, err
 	}

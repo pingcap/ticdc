@@ -578,8 +578,8 @@ func (c *Consumer) appendDDL(ddl *model.DDLEvent) {
 	}
 
 	c.ddlList = append(c.ddlList, ddl)
-	log.Info("DDL event received", zap.Uint64("commitTs", ddl.CommitTs), zap.String("DDL", ddl.Query))
 	c.lastReceivedDDL = ddl
+	log.Info("DDL event received", zap.Uint64("commitTs", ddl.CommitTs), zap.String("DDL", ddl.Query))
 }
 
 func (c *Consumer) getFrontDDL() *model.DDLEvent {

@@ -19,7 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/logutil"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"go.uber.org/zap"
 )
 
@@ -41,7 +41,7 @@ func (h *OpenAPIV2) SetLogLevel(c *gin.Context) {
 		return
 	}
 
-	err = logutil.SetLogLevel(req.Level)
+	err = logger.SetLogLevel(req.Level)
 	if err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
 			"fail to change log level: %s", req.Level))

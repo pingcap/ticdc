@@ -81,10 +81,9 @@ func NewSplitter(
 
 func (s *Splitter) SplitSpansByRegion(ctx context.Context,
 	span *heartbeatpb.TableSpan,
-	totalCaptures int,
 ) []*heartbeatpb.TableSpan {
 	spans := []*heartbeatpb.TableSpan{span}
-	spans = s.regionCounterSplitter.split(ctx, span, totalCaptures)
+	spans = s.regionCounterSplitter.split(ctx, span)
 	if len(spans) > 1 {
 		return spans
 	}
