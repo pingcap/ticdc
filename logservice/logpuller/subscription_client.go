@@ -339,7 +339,8 @@ func (s *SubscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(4*1024*1024*1024, dynstream.MemoryControlAlgorithmV1) // 4GB
+	// 1GB
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlAlgorithmV1)
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: bdrMode}
@@ -369,7 +370,7 @@ func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
 
 func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
 	// rate limit
-	s.rateLimiter.WaitN(context.Background(), int(event.getSize()))
+	// s.rateLimiter.WaitN(context.Background(), int(event.getSize()))
 
 	// fast path
 	if !s.paused.Load() {
