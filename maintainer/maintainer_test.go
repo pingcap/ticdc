@@ -15,13 +15,29 @@ package maintainer
 
 import (
 	"context"
+	"flag"
+	"net/http"
+	"net/http/pprof"
+	"strconv"
+	"sync"
+	"testing"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -237,7 +253,6 @@ func (m *mockDispatcherManager) sendHeartbeat() {
 	}
 }
 
-/*
 func TestMaintainerSchedule(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	mux := http.NewServeMux()
@@ -354,4 +369,3 @@ func TestMaintainerSchedule(t *testing.T) {
 	cancel()
 	wg.Wait()
 }
-*/
