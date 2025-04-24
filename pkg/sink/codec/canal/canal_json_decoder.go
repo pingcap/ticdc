@@ -41,11 +41,6 @@ import (
 	"golang.org/x/text/encoding/charmap"
 )
 
-type tableKey struct {
-	schema string
-	table  string
-}
-
 type bufferedJSONDecoder struct {
 	buf     *bytes.Buffer
 	decoder *json.Decoder
@@ -90,8 +85,8 @@ type canalJSONDecoder struct {
 	storage      storage.ExternalStorage
 	upstreamTiDB *sql.DB
 
-	tableInfoCache   map[tableKey]*commonType.TableInfo
-	tableIDAllocator *common.FakeTableIDAllocator
+	tableIDAllocator  *common.FakeTableIDAllocator
+	tableInfoAccessor *common.TableInfoAccessor
 }
 
 // NewCanalJSONDecoder return a decoder for canal-json
@@ -117,12 +112,13 @@ func NewCanalJSONDecoder(
 	}
 
 	return &canalJSONDecoder{
-		config:           codecConfig,
-		decoder:          newBufferedJSONDecoder(),
-		storage:          externalStorage,
-		upstreamTiDB:     db,
-		tableInfoCache:   make(map[tableKey]*commonType.TableInfo),
-		tableIDAllocator: common.NewFakeTableIDAllocator(),
+		config:       codecConfig,
+		decoder:      newBufferedJSONDecoder(),
+		storage:      externalStorage,
+		upstreamTiDB: db,
+
+		tableIDAllocator:  common.NewFakeTableIDAllocator(),
+		tableInfoAccessor: common.NewTableInfoAccessor(),
 	}, nil
 }
 
@@ -351,16 +347,7 @@ func (b *canalJSONDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	}
 
 	result := canalJSONMessage2DDLEvent(b.msg)
-	schemaName := result.GetSchemaName()
-	tableName := result.GetTableName()
-	// if receive a table level DDL, just remove the table info to trigger create a new one.
-	if schemaName != "" && tableName != "" {
-		cacheKey := tableKey{
-			schema: schemaName,
-			table:  tableName,
-		}
-		delete(b.tableInfoCache, cacheKey)
-	}
+	b.tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
 	return result
 }
 
@@ -538,15 +525,12 @@ func formatValue(value any, ft types.FieldType) any {
 func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	schema := *msg.getSchema()
 	table := *msg.getTable()
-	cacheKey := tableKey{
-		schema: schema,
-		table:  table,
-	}
-	tableInfo, ok := b.tableInfoCache[cacheKey]
+
+	tableInfo, ok := b.tableInfoAccessor.Get(schema, table)
 	if !ok {
 		tableID := b.tableIDAllocator.AllocateTableID(schema, table)
 		tableInfo = newTableInfo(msg, tableID)
-		b.tableInfoCache[cacheKey] = tableInfo
+		b.tableInfoAccessor.Add(schema, table, tableInfo)
 	}
 	return tableInfo
 }
