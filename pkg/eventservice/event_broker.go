@@ -653,6 +653,10 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 						continue
 					}
 				}
+				// For testing, drop DML directly.
+				if m.msgType == pevent.TypeDMLEvent {
+					continue
+				}
 				tMsg := messaging.NewSingleTargetMessage(
 					m.serverID,
 					messaging.EventCollectorTopic,
