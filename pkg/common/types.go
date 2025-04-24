@@ -16,10 +16,12 @@ package common
 import (
 	"bytes"
 	"encoding/binary"
+	"regexp"
 	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 const (
@@ -31,9 +33,8 @@ const (
 var DefaultEndian = binary.LittleEndian
 
 type (
-	Ts        = uint64
-	TableID   = int64
-	CaptureID = string
+	Ts      = uint64
+	TableID = int64
 )
 
 type CoordinatorID string
@@ -255,6 +256,33 @@ func (c ChangeFeedID) ToPB() *heartbeatpb.ChangefeedID {
 		Name:      c.Name(),
 		Namespace: c.Namespace(),
 	}
+}
+
+const changeFeedIDMaxLen = 128
+
+var changeFeedIDRe = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
+
+// ValidateChangefeedID returns true if the changefeed ID matches
+// the pattern "^[a-zA-Z0-9]+(\-[a-zA-Z0-9]+)*$", length no more than "changeFeedIDMaxLen", eg, "simple-changefeed-task".
+func ValidateChangefeedID(changefeedID string) error {
+	if !changeFeedIDRe.MatchString(changefeedID) || len(changefeedID) > changeFeedIDMaxLen {
+		return errors.ErrInvalidChangefeedID.GenWithStackByArgs(changeFeedIDMaxLen)
+	}
+	return nil
+}
+
+const namespaceMaxLen = 128
+
+var namespaceRe = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
+
+// ValidateNamespace returns true if the namespace matches
+// the pattern "^[a-zA-Z0-9]+(\-[a-zA-Z0-9]+)*$",
+// length no more than "changeFeedIDMaxLen", eg, "simple-changefeed-task".
+func ValidateNamespace(namespace string) error {
+	if !namespaceRe.MatchString(namespace) || len(namespace) > namespaceMaxLen {
+		return errors.ErrInvalidNamespace.GenWithStackByArgs(namespaceRe)
+	}
+	return nil
 }
 
 func NewChangefeedID4Test(namespace, name string) ChangeFeedID {

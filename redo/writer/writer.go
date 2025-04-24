@@ -50,7 +50,7 @@ type RedoLogWriter interface {
 type LogWriterConfig struct {
 	config.ConsistentConfig
 	LogType      string
-	CaptureID    common.CaptureID
+	CaptureID    config.CaptureID
 	ChangeFeedID common.ChangeFeedID
 
 	URI                *url.URL

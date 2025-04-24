@@ -7,8 +7,8 @@ package mock_simple
 import (
 	reflect "reflect"
 
-	"github.com/golang/mock/gomock"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	gomock "github.com/golang/mock/gomock"
+	event "github.com/pingcap/ticdc/pkg/common/event"
 )
 
 // Mockmarshaller is a mock of marshaller interface.
@@ -50,7 +50,7 @@ func (mr *MockmarshallerMockRecorder) MarshalCheckpoint(ts interface{}) *gomock.
 }
 
 // MarshalDDLEvent mocks base method.
-func (m *Mockmarshaller) MarshalDDLEvent(event *commonEvent.DDLEvent) ([]byte, error) {
+func (m *Mockmarshaller) MarshalDDLEvent(event *event.DDLEvent) ([]byte, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "MarshalDDLEvent", event)
 	ret0, _ := ret[0].([]byte)
@@ -65,7 +65,7 @@ func (mr *MockmarshallerMockRecorder) MarshalDDLEvent(event interface{}) *gomock
 }
 
 // MarshalRowChangedEvent mocks base method.
-func (m *Mockmarshaller) MarshalRowChangedEvent(event *commonEvent.RowEvent, handleKeyOnly bool, claimCheckFileName string) ([]byte, error) {
+func (m *Mockmarshaller) MarshalRowChangedEvent(event *event.RowEvent, handleKeyOnly bool, claimCheckFileName string) ([]byte, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "MarshalRowChangedEvent", event, handleKeyOnly, claimCheckFileName)
 	ret0, _ := ret[0].([]byte)

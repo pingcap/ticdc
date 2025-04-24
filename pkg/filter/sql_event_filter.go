@@ -16,11 +16,11 @@ package filter
 import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"github.com/pingcap/tiflow/cdc/model"
-	bf "github.com/pingcap/tiflow/pkg/binlog-filter"
 	"go.uber.org/zap"
 )
 

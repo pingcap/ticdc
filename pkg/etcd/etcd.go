@@ -81,6 +81,14 @@ func GetEtcdKeyJob(clusterID string, changeFeedID common.ChangeFeedDisplayName) 
 	return ChangefeedStatusKeyPrefix(clusterID, changeFeedID.Namespace) + "/" + changeFeedID.Name
 }
 
+// MigrateBackupKey is the key of backup data during a migration.
+func MigrateBackupKey(version int, backupKey string) string {
+	if strings.HasPrefix(backupKey, "/") {
+		return fmt.Sprintf("%s/%d%s", migrateBackupPrefix, version, backupKey)
+	}
+	return fmt.Sprintf("%s/%d/%s", migrateBackupPrefix, version, backupKey)
+}
+
 // OwnerCaptureInfoClient is the sub interface of CDCEtcdClient that used for get owner capture information
 type OwnerCaptureInfoClient interface {
 	GetOwnerID(context.Context) (model.CaptureID, error)

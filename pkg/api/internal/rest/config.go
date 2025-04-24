@@ -18,8 +18,8 @@ import (
 	"path"
 
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/httputil"
-	"github.com/pingcap/tiflow/pkg/security"
+	"github.com/pingcap/ticdc/pkg/httputil"
+	"github.com/pingcap/ticdc/pkg/security"
 )
 
 // Config holds the common attributes that can be passed to a cdc REST client

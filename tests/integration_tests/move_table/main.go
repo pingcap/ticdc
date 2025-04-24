@@ -32,8 +32,8 @@ import (
 	v2 "github.com/pingcap/ticdc/api/v2"
 	clientv2 "github.com/pingcap/ticdc/pkg/api/v2"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/httputil"
-	"github.com/pingcap/tiflow/pkg/security"
+	"github.com/pingcap/ticdc/pkg/httputil"
+	"github.com/pingcap/ticdc/pkg/security"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )

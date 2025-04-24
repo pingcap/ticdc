@@ -97,10 +97,12 @@ var defaultReplicaConfig = &ReplicaConfig{
 		},
 	},
 	Scheduler: &ChangefeedSchedulerConfig{
-		EnableTableAcrossNodes: false,
-		RegionThreshold:        100_000,
-		WriteKeyThreshold:      0,
-		SplitNumberPerNode:     1,
+		EnableTableAcrossNodes:     false,
+		RegionThreshold:            100_000,
+		WriteKeyThreshold:          0,
+		SplitNumberPerNode:         1,
+		SchedulingTaskCountPerNode: 20,  // TODO: choose a btter value
+		RegionCountPerSpan:         100, // TODO: choose a btter value
 	},
 	Integrity: &integrity.Config{
 		IntegrityCheckLevel:   integrity.CheckLevelNone,

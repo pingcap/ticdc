@@ -77,6 +77,7 @@ func (s *balanceScheduler) Execute() time.Time {
 		return now.Add(s.checkBalanceInterval)
 	})
 
+	// TODO: consider to ignore split tables' dispatcher basic schedule operator to decide whether we can make balance schedule
 	if s.operatorController.OperatorSize() > 0 || s.replicationDB.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance
 		return now.Add(s.checkBalanceInterval)

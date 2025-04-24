@@ -22,9 +22,9 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	v2 "github.com/pingcap/ticdc/api/v2"
+	"github.com/pingcap/ticdc/pkg/config"
 	putil "github.com/pingcap/ticdc/pkg/util"
-	v2 "github.com/pingcap/tiflow/cdc/api/v2"
-	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 

@@ -15,8 +15,7 @@ package orchestrator
 
 import (
 	"github.com/pingcap/ticdc/pkg/errors"
-	tiorchestrator "github.com/pingcap/tiflow/pkg/orchestrator"
-	"github.com/pingcap/tiflow/pkg/orchestrator/util"
+	"github.com/pingcap/ticdc/pkg/orchestrator/util"
 )
 
 const (
@@ -32,7 +31,7 @@ const (
 // 2.number of patch apply to batchChangedState
 // 3.size of batchChangedState in byte
 // 4.error
-func getBatchChangedState(state map[util.EtcdKey][]byte, patchGroups [][]tiorchestrator.DataPatch) (map[util.EtcdKey][]byte, int, int, error) {
+func getBatchChangedState(state map[util.EtcdKey][]byte, patchGroups [][]DataPatch) (map[util.EtcdKey][]byte, int, int, error) {
 	num := 0
 	totalSize := 0
 	// store changedState of multiple changefeed
@@ -69,7 +68,7 @@ func getBatchChangedState(state map[util.EtcdKey][]byte, patchGroups [][]tiorche
 	return batchChangedState, num, totalSize, nil
 }
 
-func getChangedState(state map[util.EtcdKey][]byte, patches []tiorchestrator.DataPatch) (map[util.EtcdKey][]byte, int, error) {
+func getChangedState(state map[util.EtcdKey][]byte, patches []DataPatch) (map[util.EtcdKey][]byte, int, error) {
 	changedSet := make(map[util.EtcdKey]struct{})
 	changeState := make(map[util.EtcdKey][]byte)
 	changedSize := 0

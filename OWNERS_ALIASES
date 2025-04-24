@@ -1,0 +1,6 @@
+aliases:
+    sig-critical-approvers: # approvers for config or API specification scopes
+      - flowbehappy
+      # When the first version is GA, we will enable the following members.
+      # - yudongusa
+      # - BenMeadowcroft

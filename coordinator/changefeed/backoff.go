@@ -21,8 +21,8 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -115,16 +115,16 @@ func (m *Backoff) resetErrRetry() {
 // It takes a MaintainerStatus which contains the current checkpoint timestamp and any errors.
 // Returns:
 //   - bool: whether the state has changed and needs to be updated
-//   - model.FeedState: the new state of the changefeed (Normal, Warning, or Failed)
+//   - config.FeedState: the new state of the changefeed (Normal, Warning, or Failed)
 //   - *heartbeatpb.RunningError: any error that occurred during processing
 //
 // The method handles several cases:
 //  1. If the changefeed is marked as failed, returns Failed state
 //  2. If checkpoint has advanced (making progress), resets any retry attempts and returns Normal state
 //  3. If there are errors and checkpoint hasn't advanced, initiates the retry mechanism
-func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {
+func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {
 	if m.failed.Load() {
-		return false, model.StateFailed, nil
+		return false, config.StateFailed, nil
 	}
 
 	if m.checkpointTs < status.CheckpointTs {
@@ -139,9 +139,9 @@ func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, model
 				zap.Uint64("checkpointTs", status.CheckpointTs))
 			// reset the retry backoff
 			m.resetErrRetry()
-			return true, model.StateNormal, nil
+			return true, config.StateNormal, nil
 		}
-		return false, model.StateNormal, nil
+		return false, config.StateNormal, nil
 	}
 
 	// If the checkpointTs is not advanced, we should check if we should retry the changefeed
@@ -159,7 +159,7 @@ func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, model
 			zap.Uint64("checkpointTs", m.checkpointTs),
 			zap.String("node", status.Err[len(status.Err)-1].Node),
 			zap.String("code", status.Err[len(status.Err)-1].Code),
-			zap.String("state", string(model.StateWarning)),
+			zap.String("state", string(config.StateWarning)),
 			zap.Any("error", status.Err[len(status.Err)-1]))
 
 		// set the changefeed state to warning and waiting start the changefeed
@@ -168,12 +168,12 @@ func (m *Backoff) CheckStatus(status *heartbeatpb.MaintainerStatus) (bool, model
 		failed, err := m.HandleError(status.Err)
 		if failed {
 			m.failed.Store(true)
-			return true, model.StateFailed, err
+			return true, config.StateFailed, err
 		}
-		return true, model.StateWarning, err
+		return true, config.StateWarning, err
 	}
 
-	return false, model.StateNormal, nil
+	return false, config.StateNormal, nil
 }
 
 func (m *Backoff) StartFinished() {

@@ -29,8 +29,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TODO: Merge this file into dispatcher_test.go after refactoring the dispatcher test.
-
 type mockSink struct {
 	dmls     []*commonEvent.DMLEvent
 	isNormal bool
@@ -112,6 +110,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Dis
 		tableSpan,
 		sink,
 		common.Ts(0), // startTs
+		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		1, // schemaID
 		NewSchemaIDToDispatchers(),

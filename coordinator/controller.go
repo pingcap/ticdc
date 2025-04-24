@@ -86,7 +86,7 @@ type Controller struct {
 type ChangefeedChange struct {
 	changefeedID common.ChangeFeedID
 	changefeed   *changefeed.Changefeed
-	state        model.FeedState
+	state        config.FeedState
 	changeType   ChangeType
 	err          *model.RunningError
 }
@@ -555,7 +555,7 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	if clone, err := cf.GetInfo().Clone(); err != nil {
 		return errors.Trace(err)
 	} else {
-		clone.State = model.StateStopped
+		clone.State = config.StateStopped
 		cf.SetInfo(clone)
 	}
 	c.operatorController.StopChangefeed(ctx, id, false)
@@ -582,7 +582,7 @@ func (c *Controller) ResumeChangefeed(
 	if clone, err := cf.GetInfo().Clone(); err != nil {
 		return errors.Trace(err)
 	} else {
-		clone.State = model.StateNormal
+		clone.State = config.StateNormal
 		clone.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
 		cf.SetInfo(clone)
 	}
@@ -719,9 +719,9 @@ func (c *Controller) calculateGCSafepoint() uint64 {
 	return c.changefeedDB.CalculateGCSafepoint()
 }
 
-func shouldRunChangefeed(state model.FeedState) bool {
+func shouldRunChangefeed(state config.FeedState) bool {
 	switch state {
-	case model.StateStopped, model.StateFailed, model.StateFinished:
+	case config.StateStopped, config.StateFailed, config.StateFinished:
 		return false
 	}
 	return true

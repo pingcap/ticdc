@@ -22,12 +22,12 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/codec"
 	"github.com/pingcap/tiflow/cdc/processor/tablepb"
 	cerror "github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/httputil"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 )
