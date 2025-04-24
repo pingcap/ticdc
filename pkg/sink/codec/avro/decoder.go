@@ -172,7 +172,7 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	}
 	if found {
 		if err = common.VerifyChecksum(event, d.upstreamTiDB); err != nil {
-			return nil, errors.Trace(err)
+			return nil
 		}
 	}
 
