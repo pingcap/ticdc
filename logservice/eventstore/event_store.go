@@ -40,6 +40,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 var (
@@ -171,12 +172,18 @@ type eventStore struct {
 		// use table id as the key is to share data between spans not completely the same in the future.
 		tableToDispatchers map[int64]map[common.DispatcherID]bool
 	}
+
+	rateLimiter *rate.Limiter
 }
 
 const (
 	dataDir             = "event_store"
 	dbCount             = 4
 	writeWorkerNumPerDB = 4
+
+	// scan rate limit
+	scanBytesRateLimit = 10 * 1024 * 1024   // 10MB/s
+	bucketCapacity     = scanBytesRateLimit // bucket capacity
 )
 
 func New(
@@ -201,7 +208,8 @@ func New(
 		chs:            make([]*chann.UnlimitedChannel[eventWithCallback, uint64], 0, dbCount),
 		writeTaskPools: make([]*writeTaskPool, 0, dbCount),
 
-		gcManager: newGCManager(),
+		gcManager:   newGCManager(),
+		rateLimiter: rate.NewLimiter(rate.Limit(scanBytesRateLimit), bucketCapacity),
 	}
 
 	// create a write task pool per db instance
@@ -619,6 +627,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		startTs:      dataRange.StartTs,
 		endTs:        dataRange.EndTs,
 		rowCount:     0,
+		limiter:      e.rateLimiter,
 	}, nil
 }
 
@@ -717,6 +726,8 @@ type eventStoreIter struct {
 	startTs  uint64
 	endTs    uint64
 	rowCount int64
+	// scan rate limit
+	limiter *rate.Limiter
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
@@ -728,15 +739,23 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	}
 
 	value := iter.innerIter.Value()
-	// rawKV need reference the byte slice, so we need copy it here
-	copiedValue := make([]byte, len(value))
+	valueLen := len(value)
+
+	// wait for the token
+	ctx := context.Background()
+	if err := iter.limiter.WaitN(ctx, valueLen); err != nil {
+		return nil, false, err
+	}
+
+	// copy the value and decode it
+	copiedValue := make([]byte, valueLen)
 	copy(copiedValue, value)
 	rawKV := &common.RawKVEntry{}
 	err := rawKV.Decode(copiedValue)
 	if err != nil {
 		log.Panic("fail to decode raw kv entry", zap.Error(err))
 	}
-	metrics.EventStoreScanBytes.Add(float64(len(copiedValue)))
+	metrics.EventStoreScanBytes.Add(float64(valueLen))
 	isNewTxn := false
 	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
 		isNewTxn = true
