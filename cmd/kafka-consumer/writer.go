@@ -141,17 +141,21 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	var (
 		done = make(chan struct{}, 1)
 
-		totalCount   int
-		flushedCount atomic.Int64
+		total   int
+		flushed atomic.Int64
 	)
 	for _, tableID := range ddl.GetBlockedTables().TableIDs {
 		for _, progress := range w.progresses {
 			events := progress.eventGroups[tableID].Resolve(progress.watermark)
-			totalCount += len(events)
+			resolvedCount := len(events)
+			if resolvedCount == 0 {
+				continue
+			}
+			total += resolvedCount
 			for _, e := range events {
 				e.AddPostFlushFunc(func() {
-					flushedCount.Inc()
-					if int(flushedCount.Load()) == totalCount {
+					flushed.Inc()
+					if int(flushed.Load()) == total {
 						close(done)
 					}
 				})
@@ -159,6 +163,9 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			event := mergeDMLEvent(events)
 			w.mysqlSink.AddDMLEvent(event)
 		}
+	}
+	if total == 0 {
+		return nil
 	}
 
 	ticker := time.NewTicker(time.Minute)
@@ -169,7 +176,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	case <-done:
 	case <-ticker.C:
 		log.Panic("DDL event timeout, since the DML events are not flushed in time",
-			zap.Int("count", totalCount), zap.Int64("flushed", flushedCount.Load()),
+			zap.Int("total", total), zap.Int64("flushed", flushed.Load()),
 			zap.String("query", ddl.Query))
 	}
 	return w.mysqlSink.WriteBlockEvent(ddl)
@@ -194,22 +201,29 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context, progress *partit
 	var (
 		done = make(chan struct{}, 1)
 
-		totalCount   int
-		flushedCount atomic.Int64
+		total   int
+		flushed atomic.Int64
 	)
 	for _, group := range progress.eventGroups {
 		events := group.Resolve(progress.watermark)
-		totalCount += len(events)
+		resolvedCount := len(events)
+		if resolvedCount == 0 {
+			continue
+		}
+		total += resolvedCount
 		for _, e := range events {
 			e.AddPostFlushFunc(func() {
-				flushedCount.Inc()
-				if int(flushedCount.Load()) == totalCount {
+				flushed.Inc()
+				if int(flushed.Load()) == total {
 					close(done)
 				}
 			})
 		}
 		e := mergeDMLEvent(events)
 		w.mysqlSink.AddDMLEvent(e)
+	}
+	if total == 0 {
+		return nil
 	}
 
 	ticker := time.NewTicker(time.Minute)
@@ -220,7 +234,7 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context, progress *partit
 	case <-done:
 	case <-ticker.C:
 		log.Panic("DDL event timeout, since the DML events are not flushed in time",
-			zap.Int("count", totalCount), zap.Int64("flushed", flushedCount.Load()))
+			zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 	}
 	return nil
 }
