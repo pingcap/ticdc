@@ -173,12 +173,42 @@ func TestGetDDLActionType(t *testing.T) {
 	ddl = helper.DDL2Event(addTablePartitionSQL)
 	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(addTablePartitionSQL))
 
+	reorganizePartitionSQL := `alter table t reorganize partition p0, p1 into (partition p0 values less than (20))`
+	ddl = helper.DDL2Event(reorganizePartitionSQL)
+	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(reorganizePartitionSQL))
+
+	truncatePartitionTableSQL := `alter table t truncate partition p2`
+	ddl = helper.DDL2Event(truncatePartitionTableSQL)
+	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(truncatePartitionTableSQL))
+
+	createTableSQL = `create table t1 (a int primary key)`
+	ddl = helper.DDL2Event(createTableSQL)
+	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(createTableSQL))
+
+	exchangePartitionSQL := `alter table t exchange partition p0 with table t1`
+	ddl = helper.DDL2Event(exchangePartitionSQL)
+	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(exchangePartitionSQL))
+
 	dropTablePartitionSQL := `alter table t drop partition p0`
 	ddl = helper.DDL2Event(dropTablePartitionSQL)
 	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(dropTablePartitionSQL))
 
-	truncatePartitionTableSQL := `alter table t truncate partition p1`
-	ddl = helper.DDL2Event(truncatePartitionTableSQL)
-	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(truncatePartitionTableSQL))
+	partitionBySQL := `alter table t1 partition by hash(a) partitions 4`
+	ddl = helper.DDL2Event(partitionBySQL)
+	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(partitionBySQL))
+
+	removePartitioningSQL := `alter table t1 remove partitioning`
+	ddl = helper.DDL2Event(removePartitioningSQL)
+	require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(removePartitioningSQL))
+
+	//// modify table charset
+	//modifyTableCharsetSQL := `alter table t1 character set utf8mb4`
+	//ddl = helper.DDL2Event(modifyTableCharsetSQL)
+	//require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(modifyTableCharsetSQL))
+	//
+	//// modify schema charset
+	//modifySchemaCharsetSQL := `alter database test character set utf8mb4`
+	//ddl = helper.DDL2Event(modifySchemaCharsetSQL)
+	//require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(modifySchemaCharsetSQL))
 
 }

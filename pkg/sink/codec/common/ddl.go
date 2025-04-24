@@ -50,18 +50,38 @@ func GetDDLActionType(query string) timodel.ActionType {
 		return timodel.ActionRenameTable
 	}
 
-	// DDL related to column
-	if strings.Contains(query, "add column") {
-		return timodel.ActionAddColumn
+	if strings.Contains(query, "add partition") {
+		return timodel.ActionAddTablePartition
 	}
-	if strings.Contains(query, "drop column") {
-		return timodel.ActionDropColumn
+	if strings.Contains(query, "drop partition") {
+		return timodel.ActionDropTablePartition
 	}
-	if strings.Contains(query, "modify") {
-		return timodel.ActionModifyColumn
+	if strings.Contains(query, "truncate partition") {
+		return timodel.ActionTruncateTablePartition
 	}
-	if strings.Contains(query, "change") {
-		return timodel.ActionModifyColumn
+	if strings.Contains(query, "reorganize partition") {
+		return timodel.ActionReorganizePartition
+	}
+
+	// ALTER TABLE partitioned_table EXCHANGE PARTITION p1 WITH TABLE non_partitioned_table
+	if strings.Contains(query, "exchange partition") {
+		return timodel.ActionExchangeTablePartition
+	}
+	if strings.Contains(query, "partition by") {
+		return timodel.ActionAlterTablePartitioning
+	}
+	if strings.Contains(query, "remove partitioning") {
+		return timodel.ActionRemovePartitioning
+	}
+
+	if strings.Contains(query, "character set") {
+		if strings.HasPrefix(query, "alter table") {
+			return timodel.ActionModifyTableCharsetAndCollate
+		}
+		if strings.HasPrefix(query, "alter database") {
+			return timodel.ActionModifySchemaCharsetAndCollate
+		}
+		log.Panic("how to set action for the DDL", zap.String("query", query))
 	}
 
 	if strings.Contains(query, "add primary key") {
@@ -96,36 +116,20 @@ func GetDDLActionType(query string) timodel.ActionType {
 		return timodel.ActionSetDefaultValue
 	}
 
-	if strings.Contains(query, "add partition") {
-		return timodel.ActionAddTablePartition
+	// DDL related to column
+	if strings.Contains(query, "add column") {
+		return timodel.ActionAddColumn
 	}
-	if strings.Contains(query, "drop partition") {
-		return timodel.ActionDropTablePartition
+	if strings.Contains(query, "drop column") {
+		return timodel.ActionDropColumn
 	}
-	if strings.Contains(query, "truncate partition") {
-		return timodel.ActionTruncateTablePartition
+	if strings.Contains(query, "modify") {
+		return timodel.ActionModifyColumn
 	}
-	if strings.Contains(query, "reorganize partition") {
-		return timodel.ActionReorganizePartition
-	}
-
-	// ALTER TABLE partitioned_table EXCHANGE PARTITION p1 WITH TABLE non_partitioned_table
-	if strings.Contains(query, "exchange partition") {
-		return timodel.ActionExchangeTablePartition
-	}
-	if strings.Contains(query, "partition by") {
-		return timodel.ActionAlterTablePartitioning
-	}
-	if strings.Contains(query, "remove partitioning") {
-		return timodel.ActionRemovePartitioning
+	if strings.Contains(query, "change") {
+		return timodel.ActionModifyColumn
 	}
 
-	if strings.Contains(query, "modify table charset") {
-		return timodel.ActionModifyTableCharsetAndCollate
-	}
-	if strings.Contains(query, "modify schema charset") {
-		return timodel.ActionModifySchemaCharsetAndCollate
-	}
 	log.Panic("how to set action for the DDL", zap.String("query", query))
 	return timodel.ActionNone
 }
