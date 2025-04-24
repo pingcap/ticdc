@@ -26,7 +26,7 @@ import (
 // TODO: add config for pebble options
 const (
 	cacheSize         = (1 << 20) * 256 // 256MB
-	memTableTotalSize = (1 << 20) * 256 // 256MB
+	memTableTotalSize = (1 << 20) * 512 // 512MB
 	memTableSize      = 64 << 20        // 64MB
 )
 
