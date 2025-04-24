@@ -280,6 +280,14 @@ var (
 		"url format is invalid",
 		errors.RFCCodeText("CDC:ErrURLFormatInvalid"),
 	)
+	ErrDiskFull = errors.Normalize(
+		"failed to preallocate file because disk is full",
+		errors.RFCCodeText("CDC:ErrDiskFull"))
+	ErrWaitFreeMemoryTimeout = errors.Normalize(
+		"wait free memory timeout",
+		errors.RFCCodeText("CDC:ErrWaitFreeMemoryTimeout"),
+	)
+
 	// encode/decode, data format and data integrity errors
 	ErrInvalidRecordKey = errors.Normalize(
 		"invalid record key - %q",
