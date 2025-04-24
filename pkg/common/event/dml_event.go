@@ -122,7 +122,9 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	}
 	t.Length += 1
 	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
-	t.Checksum = append(t.Checksum, checksum)
+	if checksum != nil {
+		t.Checksum = append(t.Checksum, checksum)
+	}
 	return nil
 }
 
@@ -175,8 +177,16 @@ func (t *DMLEvent) Rewind() {
 }
 
 func (t *DMLEvent) GetNextRow() (RowChange, bool) {
-	if t.offset >= len(t.RowTypes) || t.checksumOffset >= int(t.Length) {
+	if t.offset >= len(t.RowTypes) {
 		return RowChange{}, false
+	}
+	var checksum *integrity.Checksum
+	if len(t.Checksum) != 0 {
+		if t.checksumOffset >= len(t.Checksum) {
+			return RowChange{}, false
+		}
+		checksum = t.Checksum[t.checksumOffset]
+		t.checksumOffset++
 	}
 	rowType := t.RowTypes[t.offset]
 	switch rowType {
@@ -184,29 +194,26 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		row := RowChange{
 			Row:      t.Rows.GetRow(t.offset),
 			RowType:  rowType,
-			Checksum: t.Checksum[t.checksumOffset],
+			Checksum: checksum,
 		}
 		t.offset++
-		t.checksumOffset++
 		return row, true
 	case RowTypeDelete:
 		row := RowChange{
 			PreRow:   t.Rows.GetRow(t.offset),
 			RowType:  rowType,
-			Checksum: t.Checksum[t.checksumOffset],
+			Checksum: checksum,
 		}
 		t.offset++
-		t.checksumOffset++
 		return row, true
 	case RowTypeUpdate:
 		row := RowChange{
 			PreRow:   t.Rows.GetRow(t.offset),
 			Row:      t.Rows.GetRow(t.offset + 1),
 			RowType:  rowType,
-			Checksum: t.Checksum[t.checksumOffset],
+			Checksum: checksum,
 		}
 		t.offset += 2
-		t.checksumOffset++
 		return row, true
 	default:
 		log.Panic("TEvent.GetNextRow: invalid row type")
