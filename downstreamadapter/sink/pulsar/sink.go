@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -328,7 +327,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 				}
 
 				mqEvent := &commonEvent.MQRowEvent{
-					Key: model.TopicPartitionKey{
+					Key: commonEvent.TopicPartitionKey{
 						Topic:          topic,
 						Partition:      index,
 						PartitionKey:   key,
@@ -450,8 +449,8 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, tick
 }
 
 // group groups messages by its key.
-func (s *sink) group(msgs []*commonEvent.MQRowEvent) map[model.TopicPartitionKey][]*commonEvent.RowEvent {
-	groupedMsgs := make(map[model.TopicPartitionKey][]*commonEvent.RowEvent)
+func (s *sink) group(msgs []*commonEvent.MQRowEvent) map[commonEvent.TopicPartitionKey][]*commonEvent.RowEvent {
+	groupedMsgs := make(map[commonEvent.TopicPartitionKey][]*commonEvent.RowEvent)
 	for _, msg := range msgs {
 		if _, ok := groupedMsgs[msg.Key]; !ok {
 			groupedMsgs[msg.Key] = make([]*commonEvent.RowEvent, 0)

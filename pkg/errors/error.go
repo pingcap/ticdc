@@ -541,6 +541,10 @@ var (
 		"cdc met unexpected error: %s",
 		errors.RFCCodeText("CDC:ErrUnexpected"),
 	)
+	ErrGetDiskInfo = errors.Normalize(
+		"get dir disk info failed",
+		errors.RFCCodeText("CDC:ErrGetDiskInfo"),
+	)
 	ErrLoadTimezone = errors.Normalize(
 		"load timezone",
 		errors.RFCCodeText("CDC:ErrLoadTimezone"),
@@ -616,7 +620,10 @@ var (
 		"failed to create external storage",
 		errors.RFCCodeText("CDC:ErrFailToCreateExternalStorage"),
 	)
-
+	// retry error
+	ErrReachMaxTry = errors.Normalize("reach maximum try: %s, error: %s",
+		errors.RFCCodeText("CDC:ErrReachMaxTry"),
+	)
 	// tcp server error
 	ErrTCPServerClosed = errors.Normalize("The TCP server has been closed",
 		errors.RFCCodeText("CDC:ErrTCPServerClosed"),
