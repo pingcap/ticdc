@@ -324,9 +324,20 @@ func (c *server) Close(ctx context.Context) {
 }
 
 func (c *server) closePreServices() {
-	// close preServices in reverse order
-	for idx := len(c.preServices) - 1; idx >= 0; idx-- {
-		c.preServices[idx].Close()
+	closeCtx, cancel := context.WithTimeout(context.Background(), closeServiceTimeout)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		// close preServices in reverse order
+		for idx := len(c.preServices) - 1; idx >= 0; idx-- {
+			c.preServices[idx].Close()
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-closeCtx.Done():
+		log.Warn("service close operation timed out", zap.Error(closeCtx.Err()))
 	}
 }
 
