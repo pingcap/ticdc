@@ -29,11 +29,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
 

@@ -19,9 +19,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/quotes"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // SchemaPathKey is the key of schema path.
@@ -33,7 +33,7 @@ type SchemaPathKey struct {
 
 // GetKey returns the key of schema path.
 func (s *SchemaPathKey) GetKey() string {
-	return quotes.QuoteSchema(s.Schema, s.Table)
+	return common.QuoteSchema(s.Schema, s.Table)
 }
 
 // ParseSchemaFilePath parses the schema file path and returns the table version and checksum.

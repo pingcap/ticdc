@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
 // Operation is the action need to retry

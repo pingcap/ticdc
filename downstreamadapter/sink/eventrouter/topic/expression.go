@@ -17,9 +17,9 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/pkg/sink"
 )
 
 var (
@@ -143,7 +143,7 @@ func isHardCode(topicName string) bool {
 }
 
 func validateTopicExpression(expr Expression, scheme string, protocol config.Protocol) error {
-	if sink.IsPulsarScheme(scheme) {
+	if helper.IsPulsarScheme(scheme) {
 		return expr.validateForpulsar()
 	}
 

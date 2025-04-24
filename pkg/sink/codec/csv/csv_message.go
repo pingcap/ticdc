@@ -23,13 +23,13 @@ import (
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/errors"
 )
 
 // a csv row should at least contain operation-type, table-name, schema-name and one table column
@@ -388,7 +388,7 @@ func rowChangeColumns2CSVColumns(csvConfig *common.Config, row *chunk.Row, table
 
 	for i, col := range tableInfo.GetColumns() {
 		// column could be nil in a condition described in
-		// https://github.com/pingcap/tiflow/issues/6198#issuecomment-1191132951
+		// https://github.com/pingcap/ticdc/issues/6198#issuecomment-1191132951
 		if col == nil {
 			continue
 		}

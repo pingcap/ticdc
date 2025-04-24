@@ -27,14 +27,13 @@ import (
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
-	"github.com/pingcap/tiflow/pkg/sink"
-	pmysql "github.com/pingcap/tiflow/pkg/sink/mysql"
 	"go.uber.org/zap"
 )
 
@@ -164,7 +163,7 @@ func (c *Config) Apply(
 	}
 	c.sinkURI = sinkURI
 	scheme := strings.ToLower(sinkURI.Scheme)
-	if !sink.IsMySQLCompatibleScheme(scheme) {
+	if !helper.IsMySQLCompatibleScheme(scheme) {
 		return cerror.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
 	}
 	query := sinkURI.Query()
@@ -281,7 +280,7 @@ func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, 
 	cachePrepStmts := cfg.CachePrepStmts
 	if cachePrepStmts {
 		// query the size of the prepared statement cache on serverside
-		maxPreparedStmtCount, err := pmysql.QueryMaxPreparedStmtCount(ctx, db)
+		maxPreparedStmtCount, err := queryMaxPreparedStmtCount(ctx, db)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -311,7 +310,7 @@ func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, 
 
 	cfg.CachePrepStmts = cachePrepStmts
 	cfg.SyncPointRetention = config.SyncPointRetention
-	cfg.MaxAllowedPacket, err = pmysql.QueryMaxAllowedPacket(ctx, db)
+	cfg.MaxAllowedPacket, err = queryMaxAllowedPacket(ctx, db)
 	if err != nil {
 		log.Warn("failed to query max_allowed_packet, use default value",
 			zap.String("changefeed", changefeedID.String()),
@@ -328,7 +327,7 @@ func IsSinkSafeMode(sinkURI *url.URL, replicaConfig *config.ReplicaConfig) (bool
 	}
 
 	scheme := strings.ToLower(sinkURI.Scheme)
-	if !sink.IsMySQLCompatibleScheme(scheme) {
+	if !helper.IsMySQLCompatibleScheme(scheme) {
 		return false, cerror.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
 	}
 	query := sinkURI.Query()

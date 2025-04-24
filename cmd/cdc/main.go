@@ -17,10 +17,10 @@ import (
 	"os"
 
 	"github.com/pingcap/ticdc/cmd/cdc/cli"
+	"github.com/pingcap/ticdc/cmd/cdc/redo"
 	"github.com/pingcap/ticdc/cmd/cdc/server"
 	"github.com/pingcap/ticdc/cmd/cdc/version"
 	"github.com/pingcap/tidb/pkg/util/collate"
-	tiflowRedo "github.com/pingcap/tiflow/pkg/cmd/redo"
 	"github.com/spf13/cobra"
 )
 
@@ -46,7 +46,7 @@ func main() {
 	cmd.AddCommand(server.NewCmdServer())
 	cmd.AddCommand(cli.NewCmdCli())
 	cmd.AddCommand(version.NewCmdVersion())
-	cmd.AddCommand(tiflowRedo.NewCmdRedo())
+	cmd.AddCommand(redo.NewCmdRedo())
 
 	setNewCollationEnabled()
 	if err := cmd.Execute(); err != nil {

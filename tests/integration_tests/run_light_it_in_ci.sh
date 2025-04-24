@@ -44,7 +44,7 @@ mysql_groups=(
 	# G05
 	'vector simple partition_table fail_over_ddl_F'
 	# G06
-	'http_api http_api_tls fail_over_ddl_G'
+	'http_api http_api_tls ddl_wait fail_over_ddl_G'
 	# G07
 	'http_api_tls_with_user_auth fail_over_ddl_H'
 	# G08
@@ -54,7 +54,7 @@ mysql_groups=(
 	# G10
 	'changefeed_error bdr_mode fail_over_ddl_K'
 	# G11
-	'multi_tables_ddl ddl_attributes multi_cdc_cluster ddl_wait fail_over_ddl_L'
+	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
 	'row_format tiflash multi_rocks fail_over_ddl_M'
 	# G13

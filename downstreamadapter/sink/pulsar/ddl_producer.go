@@ -18,7 +18,7 @@ import (
 	"sync"
 
 	"github.com/apache/pulsar-client-go/pulsar"
-	"github.com/hashicorp/golang-lru"
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonType "github.com/pingcap/ticdc/pkg/common"

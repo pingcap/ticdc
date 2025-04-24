@@ -32,7 +32,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	pmysql "github.com/pingcap/tiflow/pkg/sink/mysql"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -532,8 +531,8 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			return errors.Trace(err)
 		}
 		return nil
-	}, retry.WithBackoffBaseDelay(pmysql.BackoffBaseDelay.Milliseconds()),
-		retry.WithBackoffMaxDelay(pmysql.BackoffMaxDelay.Milliseconds()),
+	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
+		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
 		retry.WithMaxTries(w.cfg.DMLMaxRetry),
 		retry.WithIsRetryableErr(isRetryableDMLError))
 }

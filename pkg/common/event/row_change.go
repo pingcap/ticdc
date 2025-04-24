@@ -20,7 +20,6 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/cdc/model"
 )
 
 //go:generate msgp
@@ -82,8 +81,16 @@ func (r *RowChangedEvent) IsUpdate() bool {
 }
 
 type MQRowEvent struct {
-	Key      model.TopicPartitionKey
+	Key      TopicPartitionKey
 	RowEvent RowEvent
+}
+
+// TopicPartitionKey contains the topic and partition key of the message.
+type TopicPartitionKey struct {
+	Topic          string
+	Partition      int32
+	PartitionKey   string
+	TotalPartition int32
 }
 
 type RowEvent struct {

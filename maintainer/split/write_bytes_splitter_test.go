@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -245,7 +244,7 @@ func TestSplitRegionsByWrittenKeysConfig(t *testing.T) {
 }
 
 func TestSplitRegionEven(t *testing.T) {
-	tblID := model.TableID(1)
+	var tblID int64 = 1
 	regionCount := 4653 + 1051 + 745 + 9530 + 1
 	regions := make([]pdutil.RegionInfo, regionCount)
 	for i := 0; i < regionCount; i++ {

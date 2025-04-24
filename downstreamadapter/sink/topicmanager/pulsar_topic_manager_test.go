@@ -19,7 +19,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
-	pulsarConfig "github.com/pingcap/ticdc/pkg/sink/pulsar"
+	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,7 +33,7 @@ func newPulsarConfig(t *testing.T) (*config.PulsarConfig, *url.URL) {
 	replicaConfig := config.GetDefaultReplicaConfig()
 	require.NoError(t, replicaConfig.ValidateAndAdjust(sinkURI))
 	require.NoError(t, err)
-	c, err := pulsarConfig.NewPulsarConfig(sinkURI, replicaConfig.Sink.PulsarConfig)
+	c, err := pulsar.NewPulsarConfig(sinkURI, replicaConfig.Sink.PulsarConfig)
 	require.NoError(t, err)
 	return c, sinkURI
 }

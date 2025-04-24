@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	pmysql "github.com/pingcap/tiflow/pkg/sink/mysql"
 	"go.uber.org/zap"
 )
 
@@ -135,8 +134,8 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 			zap.String("changefeed", w.ChangefeedID.String()),
 			zap.Any("ddl", event))
 		return nil
-	}, retry.WithBackoffBaseDelay(pmysql.BackoffBaseDelay.Milliseconds()),
-		retry.WithBackoffMaxDelay(pmysql.BackoffMaxDelay.Milliseconds()),
+	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
+		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
 		retry.WithMaxTries(defaultDDLMaxRetry),
 		retry.WithIsRetryableErr(apperror.IsRetryableDDLError))
 }

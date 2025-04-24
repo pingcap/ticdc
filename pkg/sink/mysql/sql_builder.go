@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/pkg/quotes"
 )
 
 type preparedDMLs struct {
@@ -109,10 +108,10 @@ func buildDelete(tableInfo *common.TableInfo, row commonEvent.RowChange, forceRe
 			builder.WriteString(" AND ")
 		}
 		if whereArgs[i] == nil {
-			builder.WriteString(quotes.QuoteName(colNames[i]))
+			builder.WriteString(common.QuoteName(colNames[i]))
 			builder.WriteString(" IS NULL")
 		} else {
-			builder.WriteString(quotes.QuoteName(colNames[i]))
+			builder.WriteString(common.QuoteName(colNames[i]))
 			builder.WriteString(" = ?")
 			args = append(args, whereArgs[i])
 		}
@@ -145,10 +144,10 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange, forceRe
 			builder.WriteString(" AND ")
 		}
 		if whereArgs[i] == nil {
-			builder.WriteString(quotes.QuoteName(whereColNames[i]))
+			builder.WriteString(common.QuoteName(whereColNames[i]))
 			builder.WriteString(" IS NULL")
 		} else {
-			builder.WriteString(quotes.QuoteName(whereColNames[i]))
+			builder.WriteString(common.QuoteName(whereColNames[i]))
 			builder.WriteString(" = ?")
 			args = append(args, whereArgs[i])
 		}

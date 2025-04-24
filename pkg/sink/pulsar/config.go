@@ -18,8 +18,8 @@ import (
 	"net/url"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/tiflow/pkg/sink"
 	"go.uber.org/zap"
 )
 
@@ -66,15 +66,15 @@ func NewPulsarConfig(sinkURI *url.URL, pulsarConfig *config.PulsarConfig) (*conf
 		return nil, err
 	}
 	// Adding an extra check to ensure that the scheme is a valid pulsar scheme
-	if !sink.IsPulsarScheme(sinkURI.Scheme) {
+	if !helper.IsPulsarScheme(sinkURI.Scheme) {
 		return nil, fmt.Errorf("invalid pulsar scheme %s", sinkURI.Scheme)
 	}
 
 	brokerScheme := sinkURI.Scheme
 	switch brokerScheme {
-	case sink.PulsarHTTPScheme:
+	case helper.PulsarHTTPScheme:
 		brokerScheme = "http"
-	case sink.PulsarHTTPSScheme:
+	case helper.PulsarHTTPSScheme:
 		brokerScheme = "https"
 	}
 	c.SinkURI = sinkURI
