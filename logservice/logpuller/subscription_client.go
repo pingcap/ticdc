@@ -41,6 +41,7 @@ import (
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -201,6 +202,8 @@ type SubscriptionClient struct {
 	// errCh is used to receive region errors.
 	// The errors will be handled in `handleErrors` goroutine.
 	errCache *errCache
+
+	rateLimiter *rate.Limiter
 }
 
 // NewSubscriptionClient creates a client.
@@ -212,6 +215,10 @@ func NewSubscriptionClient(
 	lockResolver txnutil.LockResolver,
 	credential *security.Credential,
 ) *SubscriptionClient {
+
+	// 600MB/s
+	rateLimiter := rate.NewLimiter(rate.Limit(600*1024*1024), 600*1024*1024)
+
 	subClient := &SubscriptionClient{
 		config: config,
 
@@ -226,6 +233,8 @@ func NewSubscriptionClient(
 		regionCh:          make(chan regionInfo, 1024),
 		resolveLockTaskCh: make(chan resolveLockTask, 1024),
 		errCache:          newErrCache(),
+
+		rateLimiter: rateLimiter,
 	}
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
@@ -359,6 +368,9 @@ func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
 }
 
 func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
+	// rate limit
+	s.rateLimiter.WaitN(context.Background(), int(event.getSize()))
+
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)

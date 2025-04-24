@@ -25,9 +25,9 @@ import (
 
 // TODO: add config for pebble options
 const (
-	cacheSize         = 1 << 30  // 1GB
-	memTableTotalSize = 1 << 30  // 1GB
-	memTableSize      = 64 << 20 // 64MB
+	cacheSize         = (1 << 20) * 256 // 256MB
+	memTableTotalSize = (1 << 20) * 256 // 256MB
+	memTableSize      = 64 << 20        // 64MB
 )
 
 func newPebbleOptions(dbNum int) *pebble.Options {
