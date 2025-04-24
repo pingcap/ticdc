@@ -522,6 +522,10 @@ var (
 		"invalid replica config, %s",
 		errors.RFCCodeText("CDC:ErrInvalidReplicaConfig"),
 	)
+	ErrInternalCheckFailed = errors.Normalize(
+		"internal check failed, %s",
+		errors.RFCCodeText("CDC:ErrInternalCheckFailed"),
+	)
 
 	ErrInvalidGlueSchemaRegistryConfig = errors.Normalize(
 		"invalid glue schema registry config, %s",

@@ -24,14 +24,13 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	mcloudstorage "github.com/pingcap/tiflow/cdc/sink/metrics/cloudstorage"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -75,15 +74,15 @@ func newWriter(
 		toBeFlushedCh:     make(chan batchedTask, 64),
 		statistics:        statistics,
 		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
-		metricWriteBytes: mcloudstorage.CloudStorageWriteBytesGauge.
+		metricWriteBytes: cloudStorageWriteBytesGauge.
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String()),
-		metricFileCount: mcloudstorage.CloudStorageFileCountGauge.
+		metricFileCount: cloudStorageFileCountGauge.
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String()),
-		metricWriteDuration: mcloudstorage.CloudStorageWriteDurationHistogram.
+		metricWriteDuration: cloudStorageWriteDurationHistogram.
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String()),
-		metricFlushDuration: mcloudstorage.CloudStorageFlushDurationHistogram.
+		metricFlushDuration: cloudStorageFlushDurationHistogram.
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String()),
-		metricsWorkerBusyRatio: mcloudstorage.CloudStorageWorkerBusyRatio.
+		metricsWorkerBusyRatio: cloudStorageWorkerBusyRatio.
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String(), strconv.Itoa(id)),
 	}
 

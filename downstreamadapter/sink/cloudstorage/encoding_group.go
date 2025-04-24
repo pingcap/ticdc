@@ -17,9 +17,9 @@ import (
 	"context"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 )
