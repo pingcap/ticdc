@@ -330,10 +330,12 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 		data := formatAllColumnsValue(msg.getData(), columns)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
+		result.Length += 1
 	case canal.EventType_INSERT:
 		data := formatAllColumnsValue(msg.getData(), columns)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
+		result.Length += 1
 	case canal.EventType_UPDATE:
 		previous := formatAllColumnsValue(msg.getOld(), columns)
 		data := formatAllColumnsValue(msg.getData(), columns)
@@ -346,6 +348,7 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
+		result.Length += 1
 	default:
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}

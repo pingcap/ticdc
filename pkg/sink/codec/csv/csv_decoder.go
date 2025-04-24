@@ -208,6 +208,13 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 		return nil, err
 	}
 	common.AppendRow2Chunk(data, columns, chk)
+	switch csvMsg.opType {
+	case operationInsert, operationUpdate:
+		e.RowTypes = append(e.RowTypes, commonEvent.RowTypeInsert)
+	case operationDelete:
+		e.RowTypes = append(e.RowTypes, commonEvent.RowTypeDelete)
+	}
+	e.Length += 1
 	return e, nil
 }
 

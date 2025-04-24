@@ -267,7 +267,12 @@ func assembleEvent(
 
 	chk := chunk.NewChunkWithCapacity(event.TableInfo.GetFieldSlice(), 1)
 	common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), chk)
-
+	if isDelete {
+		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeDelete)
+	} else {
+		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeInsert)
+	}
+	event.Length += 1
 	return event, nil
 }
 

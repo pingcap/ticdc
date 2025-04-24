@@ -153,14 +153,27 @@ func (d *Decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	}
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	columns := tableInfo.GetColumns()
-	if before, ok := d.valuePayload["before"].(map[string]interface{}); ok {
+	before, ok1 := d.valuePayload["before"].(map[string]interface{})
+	if ok1 {
 		data := assembleColumnData(before, columns)
 		common.AppendRow2Chunk(data, columns, chk)
 	}
-	if after, ok := d.valuePayload["after"].(map[string]interface{}); ok {
+	after, ok2 := d.valuePayload["after"].(map[string]interface{})
+	if ok2 {
 		data := assembleColumnData(after, columns)
 		common.AppendRow2Chunk(data, columns, chk)
 	}
+	if ok1 && ok2 {
+		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeUpdate)
+		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeUpdate)
+	} else if ok1 {
+		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeDelete)
+	} else if ok2 {
+		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeInsert)
+	} else {
+		log.Panic("unknown event type for the DML event")
+	}
+	event.Length += 1
 	event.PhysicalTableID = d.tableIDAllocator.AllocateTableID(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	return event, nil
 }
