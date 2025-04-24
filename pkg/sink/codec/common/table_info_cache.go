@@ -15,6 +15,7 @@ package common
 
 import (
 	"fmt"
+
 	commonType "github.com/pingcap/ticdc/pkg/common"
 )
 
