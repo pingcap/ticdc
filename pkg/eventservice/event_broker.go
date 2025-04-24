@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/eventstore"
-	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -579,8 +578,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		}
 
 		eSize := int(e.KeyLen + e.ValueLen + e.OldValueLen)
-		// Share the same rate limiter with logpuller.
-		logpuller.RateLimiter.WaitN(context.Background(), eSize*3)
+		c.rateLimiter.WaitN(context.Background(), eSize)
 
 		if e.CRTs < dataRange.StartTs {
 			// If the commitTs of the event is less than the startTs of the data range,

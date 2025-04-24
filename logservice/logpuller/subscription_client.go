@@ -44,9 +44,6 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// 500MB/s
-var RateLimiter = rate.NewLimiter(rate.Limit(500*1024*1024), 500*1024*1024)
-
 const (
 	// Maximum total sleep time(in ms), 20 seconds.
 	tikvRequestMaxBackoff = 20000
@@ -218,7 +215,8 @@ func NewSubscriptionClient(
 	lockResolver txnutil.LockResolver,
 	credential *security.Credential,
 ) *SubscriptionClient {
-
+	// 500MB/s
+	rateLimiter := rate.NewLimiter(rate.Limit(500*1024*1024), 500*1024*1024)
 	subClient := &SubscriptionClient{
 		config: config,
 
@@ -234,7 +232,7 @@ func NewSubscriptionClient(
 		resolveLockTaskCh: make(chan resolveLockTask, 1024),
 		errCache:          newErrCache(),
 
-		rateLimiter: RateLimiter,
+		rateLimiter: rateLimiter,
 	}
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
