@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/tidb/pkg/sessionctx"
 	"github.com/pingcap/tiflow/dm/pkg/log"
 	"github.com/pingcap/tiflow/dm/pkg/utils"
-	"github.com/pingcap/tiflow/pkg/quotes"
 	"go.uber.org/zap"
 )
 
@@ -257,7 +256,7 @@ func (r *RowChange) genWhere(buf *strings.Builder) []interface{} {
 		if i != 0 {
 			buf.WriteString(" AND ")
 		}
-		buf.WriteString(quotes.QuoteName(col))
+		buf.WriteString(common.QuoteName(col))
 		if whereValues[i] == nil {
 			buf.WriteString(" IS ?")
 		} else {
@@ -313,7 +312,7 @@ func (r *RowChange) genUpdateSQL() (string, []interface{}) {
 			buf.WriteString(", ")
 		}
 		writtenFirstCol = true
-		fmt.Fprintf(&buf, "%s = ?", quotes.QuoteName(col.Name.O))
+		fmt.Fprintf(&buf, "%s = ?", common.QuoteName(col.Name.O))
 		args = append(args, r.postValues[i])
 	}
 

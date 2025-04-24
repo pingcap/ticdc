@@ -292,7 +292,12 @@ func (c *server) Close(ctx context.Context) {
 		log.Info("coordinator closed", zap.String("captureID", string(c.info.ID)))
 	}
 
-	closeGroup := c.closePreServices()
+	var closeGroup sync.WaitGroup
+	closeGroup.Add(1)
+	go func() {
+		defer closeGroup.Done()
+		c.closePreServices()
+	}()
 
 	for _, subModule := range c.subModules {
 		if err := subModule.Close(ctx); err != nil {
@@ -318,32 +323,22 @@ func (c *server) Close(ctx context.Context) {
 	log.Info("server closed", zap.Any("ServerInfo", c.info))
 }
 
-func (c *server) closePreServices() *errgroup.Group {
+func (c *server) closePreServices() {
 	closeCtx, cancel := context.WithTimeout(context.Background(), closeServiceTimeout)
 	defer cancel()
-	closeGroup, closeCtx := errgroup.WithContext(closeCtx)
-
-	// close preServices in reverse order
-	for idx := len(c.preServices) - 1; idx >= 0; idx-- {
-		service := c.preServices[idx]
-		s := service
-		closeGroup.Go(func() error {
-			done := make(chan struct{})
-			go func() {
-				s.Close()
-				close(done)
-			}()
-
-			select {
-			case <-done:
-				return nil
-			case <-closeCtx.Done():
-				log.Warn("service close operation timed out", zap.Error(closeCtx.Err()))
-				return closeCtx.Err()
-			}
-		})
+	done := make(chan struct{})
+	go func() {
+		// close preServices in reverse order
+		for idx := len(c.preServices) - 1; idx >= 0; idx-- {
+			c.preServices[idx].Close()
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-closeCtx.Done():
+		log.Warn("service close operation timed out", zap.Error(closeCtx.Err()))
 	}
-	return closeGroup
 }
 
 // Liveness returns liveness of the server.

@@ -18,7 +18,6 @@ import (
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tiflow/pkg/sink/codec"
 )
 
 // batchEncoder encodes the events into the byte of a batch into.
@@ -67,7 +66,7 @@ func (b *batchEncoder) Build() (messages []*common.Message) {
 	ret := common.NewMsg(nil, b.valueBuf.Bytes())
 	ret.SetRowsCount(b.batchSize)
 	ret.Callback = b.callback
-	if b.valueBuf.Cap() > codec.MemBufShrinkThreshold {
+	if b.valueBuf.Cap() > common.MemBufShrinkThreshold {
 		b.valueBuf = &bytes.Buffer{}
 	} else {
 		b.valueBuf.Reset()

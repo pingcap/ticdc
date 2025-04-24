@@ -75,7 +75,8 @@ type DMLEvent struct {
 
 	// Checksum for the event, only not nil if the upstream TiDB enable the row level checksum
 	// and TiCDC set the integrity check level to the correctness.
-	Checksum *integrity.Checksum
+	Checksum       []*integrity.Checksum `json:"-"`
+	checksumOffset int                   `json:"-"`
 }
 
 func NewDMLEvent(
@@ -121,7 +122,9 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	}
 	t.Length += 1
 	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
-	t.Checksum = checksum
+	if checksum != nil {
+		t.Checksum = append(t.Checksum, checksum)
+	}
 	return nil
 }
 
@@ -170,33 +173,45 @@ func (t *DMLEvent) AddPostFlushFunc(f func()) {
 // Rewind reset the offset to 0, So that the next GetNextRow will return the first row
 func (t *DMLEvent) Rewind() {
 	t.offset = 0
+	t.checksumOffset = 0
 }
 
 func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 	if t.offset >= len(t.RowTypes) {
 		return RowChange{}, false
 	}
+	var checksum *integrity.Checksum
+	if len(t.Checksum) != 0 {
+		if t.checksumOffset >= len(t.Checksum) {
+			return RowChange{}, false
+		}
+		checksum = t.Checksum[t.checksumOffset]
+		t.checksumOffset++
+	}
 	rowType := t.RowTypes[t.offset]
 	switch rowType {
 	case RowTypeInsert:
 		row := RowChange{
-			Row:     t.Rows.GetRow(t.offset),
-			RowType: rowType,
+			Row:      t.Rows.GetRow(t.offset),
+			RowType:  rowType,
+			Checksum: checksum,
 		}
 		t.offset++
 		return row, true
 	case RowTypeDelete:
 		row := RowChange{
-			PreRow:  t.Rows.GetRow(t.offset),
-			RowType: rowType,
+			PreRow:   t.Rows.GetRow(t.offset),
+			RowType:  rowType,
+			Checksum: checksum,
 		}
 		t.offset++
 		return row, true
 	case RowTypeUpdate:
 		row := RowChange{
-			PreRow:  t.Rows.GetRow(t.offset),
-			Row:     t.Rows.GetRow(t.offset + 1),
-			RowType: rowType,
+			PreRow:   t.Rows.GetRow(t.offset),
+			Row:      t.Rows.GetRow(t.offset + 1),
+			RowType:  rowType,
+			Checksum: checksum,
 		}
 		t.offset += 2
 		return row, true
@@ -378,9 +393,10 @@ func (t *DMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 }
 
 type RowChange struct {
-	PreRow  chunk.Row
-	Row     chunk.Row
-	RowType RowType
+	PreRow   chunk.Row
+	Row      chunk.Row
+	RowType  RowType
+	Checksum *integrity.Checksum
 }
 
 type RowType byte

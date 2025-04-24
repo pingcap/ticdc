@@ -459,6 +459,27 @@ func getSQLErrCode(err error) (errors.ErrCode, bool) {
 	return errors.ErrCode(mysqlErr.Number), true
 }
 
+// queryMaxPreparedStmtCount gets the value of max_prepared_stmt_count
+func queryMaxPreparedStmtCount(ctx context.Context, db *sql.DB) (int, error) {
+	row := db.QueryRowContext(ctx, "select @@global.max_prepared_stmt_count;")
+	var maxPreparedStmtCount sql.NullInt32
+	err := row.Scan(&maxPreparedStmtCount)
+	if err != nil {
+		err = cerror.WrapError(cerror.ErrMySQLQueryError, err)
+	}
+	return int(maxPreparedStmtCount.Int32), err
+}
+
+// queryMaxAllowedPacket gets the value of max_allowed_packet
+func queryMaxAllowedPacket(ctx context.Context, db *sql.DB) (int64, error) {
+	row := db.QueryRowContext(ctx, "select @@global.max_allowed_packet;")
+	var maxAllowedPacket sql.NullInt64
+	if err := row.Scan(&maxAllowedPacket); err != nil {
+		return 0, cerror.WrapError(cerror.ErrMySQLQueryError, err)
+	}
+	return maxAllowedPacket.Int64, nil
+}
+
 func getDDLCreateTime(ctx context.Context, db *sql.DB) string {
 	ddlCreateTime := "" // default when scan failed
 	row, err := db.QueryContext(ctx, "BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;")

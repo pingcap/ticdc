@@ -245,6 +245,14 @@ var (
 		"date separator in storage sink is invalid",
 		errors.RFCCodeText("CDC:ErrStorageSinkInvalidDateSeparator"),
 	)
+	ErrCSVEncodeFailed = errors.Normalize(
+		"csv encode failed",
+		errors.RFCCodeText("CDC:ErrCSVEncodeFailed"),
+	)
+	ErrCSVDecodeFailed = errors.Normalize(
+		"csv decode failed",
+		errors.RFCCodeText("CDC:ErrCSVDecodeFailed"),
+	)
 	ErrDebeziumEncodeFailed = errors.Normalize(
 		"debezium encode failed",
 		errors.RFCCodeText("CDC:ErrDebeziumEncodeFailed"),
@@ -280,6 +288,14 @@ var (
 		"url format is invalid",
 		errors.RFCCodeText("CDC:ErrURLFormatInvalid"),
 	)
+	ErrDiskFull = errors.Normalize(
+		"failed to preallocate file because disk is full",
+		errors.RFCCodeText("CDC:ErrDiskFull"))
+	ErrWaitFreeMemoryTimeout = errors.Normalize(
+		"wait free memory timeout",
+		errors.RFCCodeText("CDC:ErrWaitFreeMemoryTimeout"),
+	)
+
 	// encode/decode, data format and data integrity errors
 	ErrInvalidRecordKey = errors.Normalize(
 		"invalid record key - %q",
@@ -522,6 +538,10 @@ var (
 		"invalid replica config, %s",
 		errors.RFCCodeText("CDC:ErrInvalidReplicaConfig"),
 	)
+	ErrInternalCheckFailed = errors.Normalize(
+		"internal check failed, %s",
+		errors.RFCCodeText("CDC:ErrInternalCheckFailed"),
+	)
 
 	ErrInvalidGlueSchemaRegistryConfig = errors.Normalize(
 		"invalid glue schema registry config, %s",
@@ -536,6 +556,10 @@ var (
 	ErrUnexpected = errors.Normalize(
 		"cdc met unexpected error: %s",
 		errors.RFCCodeText("CDC:ErrUnexpected"),
+	)
+	ErrGetDiskInfo = errors.Normalize(
+		"get dir disk info failed",
+		errors.RFCCodeText("CDC:ErrGetDiskInfo"),
 	)
 	ErrLoadTimezone = errors.Normalize(
 		"load timezone",
@@ -612,7 +636,10 @@ var (
 		"failed to create external storage",
 		errors.RFCCodeText("CDC:ErrFailToCreateExternalStorage"),
 	)
-
+	// retry error
+	ErrReachMaxTry = errors.Normalize("reach maximum try: %s, error: %s",
+		errors.RFCCodeText("CDC:ErrReachMaxTry"),
+	)
 	// tcp server error
 	ErrTCPServerClosed = errors.Normalize("The TCP server has been closed",
 		errors.RFCCodeText("CDC:ErrTCPServerClosed"),

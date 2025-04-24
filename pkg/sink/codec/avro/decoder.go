@@ -154,10 +154,10 @@ func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	}
 	corrupted := isCorrupted(valueMap)
 	if found {
-		event.Checksum = &integrity.Checksum{
+		event.Checksum = []*integrity.Checksum{{
 			Current:   uint32(expectedChecksum),
 			Corrupted: corrupted,
-		}
+		}}
 	}
 
 	if isCorrupted(valueMap) {
@@ -174,9 +174,9 @@ func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 		}
 	}
 	if found {
-		// if err = common.VerifyChecksum(event, d.upstreamTiDB); err != nil {
-		// 	return nil, errors.Trace(err)
-		// }
+		if err = common.VerifyChecksum(event, d.upstreamTiDB); err != nil {
+			return nil, errors.Trace(err)
+		}
 	}
 
 	return event, nil
@@ -267,7 +267,12 @@ func assembleEvent(
 
 	chk := chunk.NewChunkWithCapacity(event.TableInfo.GetFieldSlice(), 1)
 	common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), chk)
-
+	if isDelete {
+		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeDelete)
+	} else {
+		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeInsert)
+	}
+	event.Length += 1
 	return event, nil
 }
 

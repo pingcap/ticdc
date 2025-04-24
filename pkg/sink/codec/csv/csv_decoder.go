@@ -23,6 +23,8 @@ import (
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	lconfig "github.com/pingcap/tidb/pkg/lightning/config"
 	"github.com/pingcap/tidb/pkg/lightning/mydump"
@@ -32,8 +34,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/pkg/config"
-	"github.com/pingcap/tiflow/pkg/errors"
 )
 
 const defaultIOConcurrency = 1
@@ -208,6 +208,13 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 		return nil, err
 	}
 	common.AppendRow2Chunk(data, columns, chk)
+	switch csvMsg.opType {
+	case operationInsert, operationUpdate:
+		e.RowTypes = append(e.RowTypes, commonEvent.RowTypeInsert)
+	case operationDelete:
+		e.RowTypes = append(e.RowTypes, commonEvent.RowTypeDelete)
+	}
+	e.Length += 1
 	return e, nil
 }
 
