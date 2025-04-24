@@ -245,6 +245,14 @@ var (
 		"date separator in storage sink is invalid",
 		errors.RFCCodeText("CDC:ErrStorageSinkInvalidDateSeparator"),
 	)
+	ErrCSVEncodeFailed = errors.Normalize(
+		"csv encode failed",
+		errors.RFCCodeText("CDC:ErrCSVEncodeFailed"),
+	)
+	ErrCSVDecodeFailed = errors.Normalize(
+		"csv decode failed",
+		errors.RFCCodeText("CDC:ErrCSVDecodeFailed"),
+	)
 	ErrDebeziumEncodeFailed = errors.Normalize(
 		"debezium encode failed",
 		errors.RFCCodeText("CDC:ErrDebeziumEncodeFailed"),

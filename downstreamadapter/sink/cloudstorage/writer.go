@@ -23,9 +23,10 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
+	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -47,7 +48,7 @@ type writer struct {
 	toBeFlushedCh          chan batchedTask
 	inputCh                *chann.DrainableChann[eventFragment]
 	isClosed               uint64
-	statistics             *metrics.Statistics
+	statistics             *pmetrics.Statistics
 	filePathGenerator      *cloudstorage.FilePathGenerator
 	metricWriteBytes       prometheus.Gauge
 	metricFileCount        prometheus.Gauge
@@ -63,7 +64,7 @@ func newWriter(
 	config *cloudstorage.Config,
 	extension string,
 	inputCh *chann.DrainableChann[eventFragment],
-	statistics *metrics.Statistics,
+	statistics *pmetrics.Statistics,
 ) *writer {
 	d := &writer{
 		id:                id,
@@ -74,15 +75,15 @@ func newWriter(
 		toBeFlushedCh:     make(chan batchedTask, 64),
 		statistics:        statistics,
 		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
-		metricWriteBytes: cloudStorageWriteBytesGauge.
+		metricWriteBytes: metrics.CloudStorageWriteBytesGauge.
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String()),
-		metricFileCount: cloudStorageFileCountGauge.
+		metricFileCount: metrics.CloudStorageFileCountGauge.
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String()),
-		metricWriteDuration: cloudStorageWriteDurationHistogram.
+		metricWriteDuration: metrics.CloudStorageWriteDurationHistogram.
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String()),
-		metricFlushDuration: cloudStorageFlushDurationHistogram.
+		metricFlushDuration: metrics.CloudStorageFlushDurationHistogram.
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String()),
-		metricsWorkerBusyRatio: cloudStorageWorkerBusyRatio.
+		metricsWorkerBusyRatio: metrics.CloudStorageWorkerBusyRatio.
 			WithLabelValues(changefeedID.Namespace(), changefeedID.ID().String(), strconv.Itoa(id)),
 	}
 

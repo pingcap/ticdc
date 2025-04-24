@@ -24,13 +24,17 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
 
-// defaultMaxBatchSize sets the default value for max-batch-size
-const defaultMaxBatchSize int = 16
+const (
+	// MemBufShrinkThreshold represents the threshold of shrinking the buffer.
+	MemBufShrinkThreshold = 1024 * 1024
+	// defaultMaxBatchSize sets the default value for max-batch-size
+	defaultMaxBatchSize int = 16
+)
 
 // Config use to create the encoder
 type Config struct {

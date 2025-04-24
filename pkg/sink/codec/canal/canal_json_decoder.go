@@ -21,13 +21,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
@@ -35,7 +35,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/types"
 	tiTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/pkg/util"
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
 	"golang.org/x/text/encoding/charmap"
@@ -104,7 +103,7 @@ func NewCanalJSONDecoder(
 	)
 	if codecConfig.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := codecConfig.LargeMessageHandle.ClaimCheckStorageURI
-		externalStorage, err = util.GetExternalStorage(ctx, storageURI, nil, util.NewS3Retryer(10, 10*time.Second, 10*time.Second))
+		externalStorage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
 			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}

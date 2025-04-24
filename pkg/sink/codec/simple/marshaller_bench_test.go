@@ -36,7 +36,7 @@ func eventGenerator() *commonEvent.RowEvent {
 // Note(dongmen): Below is the result of running the benchmark at 2024-4-22.
 // goos: linux
 // goarch: amd64
-// pkg: github.com/pingcap/tiflow/pkg/sink/codec/simple
+// pkg: github.com/pingcap/ticdc/pkg/sink/codec/simple
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
 // BenchmarkMarshalRowChangedEvent-16    	   47527	     29011 ns/op	    8161 B/op	     130 allocs/op
 func BenchmarkMarshalRowChangedEvent(b *testing.B) {
