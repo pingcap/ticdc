@@ -40,31 +40,31 @@ func VerifyChecksum(event *commonEvent.DMLEvent, db *sql.DB) error {
 	if !ok {
 		log.Error("get RowChange failed")
 	}
-	if event.Checksum.Current != 0 {
+	if row.Checksum.Current != 0 {
 		checksum, err := calculateChecksum(row.Row, columns)
 		if err != nil {
 			return errors.Trace(err)
 		}
-		if checksum != event.Checksum.Current {
+		if checksum != row.Checksum.Current {
 			log.Error("current checksum mismatch",
-				zap.Uint32("expected", event.Checksum.Current), zap.Uint32("actual", checksum), zap.Any("event", event))
+				zap.Uint32("expected", row.Checksum.Current), zap.Uint32("actual", checksum), zap.Any("event", event))
 			for _, col := range columns {
 				log.Info("data corrupted, print each column for debugging",
 					zap.String("name", col.Name.O), zap.Any("type", col.GetType()),
 					zap.Any("charset", col.GetCharset()), zap.Any("flag", col.GetFlag()),
 					zap.Any("default", col.GetDefaultValue()))
 			}
-			return fmt.Errorf("current checksum mismatch, current: %d, expected: %d", checksum, event.Checksum.Current)
+			return fmt.Errorf("current checksum mismatch, current: %d, expected: %d", checksum, row.Checksum.Current)
 		}
 	}
-	if event.Checksum.Previous != 0 {
+	if row.Checksum.Previous != 0 {
 		checksum, err := calculateChecksum(row.PreRow, columns)
 		if err != nil {
 			return errors.Trace(err)
 		}
-		if checksum != event.Checksum.Previous {
+		if checksum != row.Checksum.Previous {
 			log.Error("previous checksum mismatch",
-				zap.Uint32("expected", event.Checksum.Previous),
+				zap.Uint32("expected", row.Checksum.Previous),
 				zap.Uint32("actual", checksum), zap.Any("event", event))
 			for _, col := range columns {
 				log.Info("data corrupted, print each column for debugging",
@@ -72,7 +72,7 @@ func VerifyChecksum(event *commonEvent.DMLEvent, db *sql.DB) error {
 					zap.Any("charset", col.GetCharset()), zap.Any("flag", col.GetFlag()),
 					zap.Any("default", col.GetDefaultValue()))
 			}
-			return fmt.Errorf("previous checksum mismatch, current: %d, expected: %d", checksum, event.Checksum.Previous)
+			return fmt.Errorf("previous checksum mismatch, current: %d, expected: %d", checksum, row.Checksum.Previous)
 		}
 	}
 

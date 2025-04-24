@@ -154,10 +154,10 @@ func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	}
 	corrupted := isCorrupted(valueMap)
 	if found {
-		event.Checksum = &integrity.Checksum{
+		event.Checksum = []*integrity.Checksum{{
 			Current:   uint32(expectedChecksum),
 			Corrupted: corrupted,
-		}
+		}}
 	}
 
 	if isCorrupted(valueMap) {
@@ -174,9 +174,9 @@ func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 		}
 	}
 	if found {
-		// if err = common.VerifyChecksum(event, d.upstreamTiDB); err != nil {
-		// 	return nil, errors.Trace(err)
-		// }
+		if err = common.VerifyChecksum(event, d.upstreamTiDB); err != nil {
+			return nil, errors.Trace(err)
+		}
 	}
 
 	return event, nil

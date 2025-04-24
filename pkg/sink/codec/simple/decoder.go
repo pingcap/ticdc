@@ -608,12 +608,12 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 	result.Rows = chk
 
 	if enableRowChecksum && msg.Checksum != nil {
-		result.Checksum = &integrity.Checksum{
+		result.Checksum = []*integrity.Checksum{{
 			Current:   msg.Checksum.Current,
 			Previous:  msg.Checksum.Previous,
 			Corrupted: msg.Checksum.Corrupted,
 			Version:   msg.Checksum.Version,
-		}
+		}}
 
 		err := common.VerifyChecksum(result, db)
 		if err != nil || msg.Checksum.Corrupted {
