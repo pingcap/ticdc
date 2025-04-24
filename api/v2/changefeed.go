@@ -36,7 +36,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -252,7 +251,7 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 			continue
 		}
 		status := statuses[idx]
-		var runningErr *model.RunningError
+		var runningErr *config.RunningError
 		if changefeed.Error != nil {
 			runningErr = changefeed.Error
 		} else {

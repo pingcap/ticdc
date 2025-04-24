@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -312,7 +311,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 			ChangefeedID: cf4ID,
 			Config:       config.GetDefaultReplicaConfig(),
 			State:        config.StateFailed,
-			Error: &model.RunningError{
+			Error: &config.RunningError{
 				Code: string(errors.ErrGCTTLExceeded.ID()),
 			},
 		}, 7, true)
@@ -325,7 +324,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 			ChangefeedID: cf5ID,
 			Config:       config.GetDefaultReplicaConfig(),
 			State:        config.StateFailed,
-			Error:        &model.RunningError{},
+			Error:        &config.RunningError{},
 		}, 7, true)
 	db.AddStoppedChangefeed(cf5)
 	require.Equal(t, uint64(7), db.CalculateGCSafepoint())

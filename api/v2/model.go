@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tiflow/cdc/model"
 )
 
 // EmptyResponse return empty {} to http client
@@ -94,13 +93,13 @@ type PDConfig struct {
 
 // ChangefeedCommonInfo holds some common usage information of a changefeed
 type ChangefeedCommonInfo struct {
-	UpstreamID     uint64              `json:"upstream_id"`
-	ID             string              `json:"id"`
-	Namespace      string              `json:"namespace"`
-	FeedState      config.FeedState    `json:"state"`
-	CheckpointTSO  uint64              `json:"checkpoint_tso"`
-	CheckpointTime api.JSONTime        `json:"checkpoint_time"`
-	RunningError   *model.RunningError `json:"error"`
+	UpstreamID     uint64               `json:"upstream_id"`
+	ID             string               `json:"id"`
+	Namespace      string               `json:"namespace"`
+	FeedState      config.FeedState     `json:"state"`
+	CheckpointTSO  uint64               `json:"checkpoint_tso"`
+	CheckpointTime api.JSONTime         `json:"checkpoint_time"`
+	RunningError   *config.RunningError `json:"error"`
 }
 
 // SyncedStatusConfig represents synced check interval config for a changefeed

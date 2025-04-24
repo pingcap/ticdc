@@ -26,7 +26,6 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/sink"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -249,11 +248,11 @@ type ChangeFeedInfo struct {
 	// but can be fetched for backward compatibility
 	SortDir string `json:"sort-dir"`
 
-	UpstreamInfo *UpstreamInfo       `json:"upstream-info"`
-	Config       *ReplicaConfig      `json:"config"`
-	State        FeedState           `json:"state"`
-	Error        *model.RunningError `json:"error"`
-	Warning      *model.RunningError `json:"warning"`
+	UpstreamInfo *UpstreamInfo  `json:"upstream-info"`
+	Config       *ReplicaConfig `json:"config"`
+	State        FeedState      `json:"state"`
+	Error        *RunningError  `json:"error"`
+	Warning      *RunningError  `json:"warning"`
 
 	CreatorVersion string `json:"creator-version"`
 	// Epoch is the epoch of a changefeed, changes on every restart.
