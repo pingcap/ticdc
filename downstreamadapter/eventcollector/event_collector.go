@@ -457,8 +457,6 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 		log.Panic("invalid dispatcher heartbeat response message", zap.Any("msg", targetMessage))
 	}
 
-	log.Info("fizz receive dispatcher heartbeat response", zap.Any("msg", targetMessage))
-
 	response := targetMessage.Message[0].(*event.DispatcherHeartbeatResponse)
 	for _, ds := range response.DispatcherStates {
 		// This means that the dispatcher is removed in the event service we have to reset it.
