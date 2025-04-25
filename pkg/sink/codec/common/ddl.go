@@ -134,7 +134,7 @@ func GetDDLActionType(query string) timodel.ActionType {
 	return timodel.ActionNone
 }
 
-func GetInfluenceTables(action timodel.ActionType, schemaID int64, tableID int64) *commonEvent.InfluencedTables {
+func GetInfluenceTables(action timodel.ActionType, tableID int64) *commonEvent.InfluencedTables {
 	switch action {
 	// create schema means the database not exist yet, so should not block tables.
 	case timodel.ActionCreateSchema, timodel.ActionCreateTable:
@@ -142,9 +142,9 @@ func GetInfluenceTables(action timodel.ActionType, schemaID int64, tableID int64
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 		}
 	case timodel.ActionDropSchema:
+		// schemaID is not set now, can be set if only block the table belongs to the schema.
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeDB,
-			SchemaID:      schemaID,
 		}
 	case timodel.ActionTruncateTable, timodel.ActionRenameTable, timodel.ActionDropTable,
 		timodel.ActionAddColumn, timodel.ActionDropColumn,

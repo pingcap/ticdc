@@ -299,11 +299,11 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	tableInfo := b.queryTableInfo(msg)
 
 	result := new(commonEvent.DMLEvent)
-	result.Length++
-	result.StartTs = msg.getCommitTs()
-	result.ApproximateSize = 0
 	result.TableInfo = tableInfo
+	result.StartTs = msg.getCommitTs()
 	result.CommitTs = msg.getCommitTs()
+	result.PhysicalTableID = result.TableInfo.TableName.TableID
+	result.Length++
 
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	columns := tableInfo.GetColumns()
@@ -335,8 +335,6 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}
 	result.Rows = chk
-	// todo: may fix this later.
-	result.PhysicalTableID = result.TableInfo.TableName.TableID
 	return result
 }
 
@@ -375,10 +373,17 @@ func (b *canalJSONDecoder) canalJSONMessage2DDLEvent() *commonEvent.DDLEvent {
 	result.Query = b.msg.getQuery()
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
-	result.BlockedTables = common.GetInfluenceTables(actionType, result.SchemaID, result.TableID)
+
+	var tableID int64
+	tableInfo, ok := b.tableInfoAccessor.Get(result.SchemaName, result.TableName)
+	if ok {
+		tableID = tableInfo.TableName.TableID
+	}
+	result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
 	log.Info("set blocked tables for the DDL event",
 		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
 		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
+
 	b.tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
 	return result
 }
