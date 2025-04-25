@@ -19,12 +19,12 @@ import (
 	"strconv"
 
 	"github.com/pingcap/log"
+	canal "github.com/pingcap/ticdc/pkg/sink/codec/canal/pb"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
 )
 

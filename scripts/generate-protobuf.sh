@@ -69,3 +69,8 @@ done
 # 	# Output generated go files next to protobuf files.
 # 	generate ./pkg/messaging/proto $pb paths="source_relative"
 # done
+
+for pb in $(find pkg/sink/codec/canal/pb -name '*.proto'); do
+	# Output generated go files next to protobuf files.
+	generate ./ $pb paths="source_relative"
+done
