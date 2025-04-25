@@ -538,6 +538,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				zap.Uint64("newCheckpointTs", newCheckpointTs),
 				zap.Uint64("oldCheckpointTs", subscriptionStat.checkpointTs.Load()))
 		}
+
 		if subscriptionStat.checkpointTs.Load() < newCheckpointTs {
 			e.gcManager.addGCItem(
 				subscriptionStat.dbIndex,
@@ -546,13 +547,13 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				subscriptionStat.checkpointTs.Load(),
 				newCheckpointTs,
 			)
+			subscriptionStat.checkpointTs.CompareAndSwap(subscriptionStat.checkpointTs.Load(), newCheckpointTs)
 			if log.GetLevel() <= zap.DebugLevel {
 				log.Debug("update checkpoint ts",
 					zap.Any("dispatcherID", dispatcherID),
 					zap.Uint64("subID", uint64(stat.subID)),
 					zap.Uint64("newCheckpointTs", newCheckpointTs),
 					zap.Uint64("oldCheckpointTs", subscriptionStat.checkpointTs.Load()))
-				subscriptionStat.checkpointTs.CompareAndSwap(subscriptionStat.checkpointTs.Load(), newCheckpointTs)
 			}
 		}
 	}
