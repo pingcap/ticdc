@@ -14,8 +14,8 @@
 package canal
 
 import (
-	canal "github.com/pingcap/ticdc/pkg/sink/codec/canal/pb"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	canal "github.com/pingcap/tiflow/proto/canal"
 )
 
 const tidbWaterMarkType = "TIDB_WATERMARK"
