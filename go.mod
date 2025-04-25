@@ -23,7 +23,6 @@ require (
 	github.com/cockroachdb/pebble v1.1.1
 	github.com/confluentinc/confluent-kafka-go/v2 v2.3.0
 	github.com/coreos/go-semver v0.3.1
-	github.com/dustin/go-humanize v1.0.1
 	github.com/fatih/color v1.18.0
 	github.com/gin-gonic/gin v1.9.1
 	github.com/go-oauth2/oauth2/v4 v4.5.2
@@ -159,6 +158,7 @@ require (
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dolthub/maphash v0.1.0 // indirect
 	github.com/dolthub/swiss v0.2.1 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/dvsekhvalnov/jose2go v1.5.0 // indirect
 	github.com/eapache/go-resiliency v1.4.0 // indirect
 	github.com/eapache/go-xerial-snappy v0.0.0-20230731223053-c322873962e3 // indirect
