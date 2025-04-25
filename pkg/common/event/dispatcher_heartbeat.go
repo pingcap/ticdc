@@ -79,13 +79,16 @@ func (dp *DispatcherProgress) decodeV0(data []byte) error {
 // DispatcherHeartbeat is used to report the progress of a dispatcher to the EventService
 type DispatcherHeartbeat struct {
 	Version              byte
+	ClusterID            uint64
 	DispatcherCount      uint32
 	DispatcherProgresses []DispatcherProgress
 }
 
 func NewDispatcherHeartbeat(dispatcherCount int) *DispatcherHeartbeat {
 	return &DispatcherHeartbeat{
-		Version:              DispatcherHeartbeatVersion,
+		Version: DispatcherHeartbeatVersion,
+		// TODO: Pass a real clusterID when we support 1 TiCDC cluster subscribe multiple TiDB clusters
+		ClusterID:            0,
 		DispatcherProgresses: make([]DispatcherProgress, 0, dispatcherCount),
 	}
 }
@@ -97,6 +100,7 @@ func (d *DispatcherHeartbeat) Append(dp DispatcherProgress) {
 
 func (d *DispatcherHeartbeat) GetSize() int {
 	size := 1 // version
+	size += 8 // clusterID
 	size += 4 // dispatcher count
 	for _, dp := range d.DispatcherProgresses {
 		size += dp.GetSize()
@@ -115,6 +119,7 @@ func (d *DispatcherHeartbeat) Unmarshal(data []byte) error {
 func (d *DispatcherHeartbeat) encodeV0() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	buf.WriteByte(d.Version)
+	binary.Write(buf, binary.BigEndian, d.ClusterID)
 	binary.Write(buf, binary.BigEndian, d.DispatcherCount)
 	for _, dp := range d.DispatcherProgresses {
 		dpData, err := dp.Marshal()
@@ -133,6 +138,7 @@ func (d *DispatcherHeartbeat) decodeV0(data []byte) error {
 	if err != nil {
 		return err
 	}
+	d.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
 	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
 	d.DispatcherProgresses = make([]DispatcherProgress, 0, d.DispatcherCount)
 	for range d.DispatcherCount {
@@ -205,13 +211,16 @@ func (d *DispatcherState) encodeV0() ([]byte, error) {
 
 type DispatcherHeartbeatResponse struct {
 	Version          byte
+	ClusterID        uint64
 	DispatcherCount  uint32
 	DispatcherStates []DispatcherState
 }
 
-func NewDispatcherHeartbeatResponse(dispatcherCount int) DispatcherHeartbeatResponse {
-	return DispatcherHeartbeatResponse{
-		Version:          DispatcherHeartbeatVersion,
+func NewDispatcherHeartbeatResponse(dispatcherCount int) *DispatcherHeartbeatResponse {
+	return &DispatcherHeartbeatResponse{
+		Version: DispatcherHeartbeatVersion,
+		// TODO: Pass a real clusterID when we support 1 TiCDC cluster subscribe multiple TiDB clusters
+		ClusterID:        0,
 		DispatcherCount:  uint32(dispatcherCount),
 		DispatcherStates: make([]DispatcherState, 0, dispatcherCount),
 	}
@@ -224,6 +233,7 @@ func (d *DispatcherHeartbeatResponse) Append(ds DispatcherState) {
 
 func (d *DispatcherHeartbeatResponse) GetSize() int {
 	size := 1 // version
+	size += 8 // clusterID
 	size += 4 // dispatcher count
 	for _, ds := range d.DispatcherStates {
 		size += ds.GetSize()
@@ -246,6 +256,7 @@ func (d *DispatcherHeartbeatResponse) decodeV0(data []byte) error {
 	if err != nil {
 		return err
 	}
+	d.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
 	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
 	d.DispatcherStates = make([]DispatcherState, 0, d.DispatcherCount)
 	for range d.DispatcherCount {
@@ -262,6 +273,7 @@ func (d *DispatcherHeartbeatResponse) decodeV0(data []byte) error {
 func (d *DispatcherHeartbeatResponse) encodeV0() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	buf.WriteByte(d.Version)
+	binary.Write(buf, binary.BigEndian, d.ClusterID)
 	binary.Write(buf, binary.BigEndian, d.DispatcherCount)
 	for _, ds := range d.DispatcherStates {
 		dsData, err := ds.Marshal()

@@ -248,29 +248,6 @@ func (d *dispatcherStat) unregisterDispatcher(eventCollector *EventCollector) {
 	}
 }
 
-func (d *dispatcherStat) pauseChangefeed(eventCollector *EventCollector) {
-	d.eventServiceInfo.RLock()
-	defer d.eventServiceInfo.RUnlock()
-
-	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
-		log.Info("ignore pause changefeed request because the eventService is not ready",
-			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-			zap.Any("eventServiceID", d.eventServiceInfo.serverID))
-		// Just ignore the request if the dispatcher is not ready.
-		return
-	}
-
-	log.Info("Send pause changefeed event to event service",
-		zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-		zap.String("dispatcher", d.target.GetId().String()),
-		zap.Uint64("resolvedTs", d.target.GetResolvedTs()))
-
-	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
-		Dispatcher: d.target,
-		ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE_CHANGEFEED,
-	})
-}
-
 func (d *dispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
 	d.eventServiceInfo.RLock()
 	defer d.eventServiceInfo.RUnlock()

@@ -175,7 +175,7 @@ func (r DispatcherRequest) GetID() common.DispatcherID {
 }
 
 func (r DispatcherRequest) GetClusterID() uint64 {
-	return 0
+	return r.ClusterId
 }
 
 func (r DispatcherRequest) GetTopic() string {

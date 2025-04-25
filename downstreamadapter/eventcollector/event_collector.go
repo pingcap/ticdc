@@ -416,12 +416,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 		message.DispatcherRequest.SyncPointTs = syncpoint.CalculateStartSyncPointTs(req.StartTs, req.Dispatcher.GetSyncPointInterval(), req.Dispatcher.GetStartTsIsSyncpoint())
 	}
 
-	err := c.mc.SendCommand(&messaging.TargetMessage{
-		To:      target,
-		Topic:   eventServiceTopic,
-		Type:    typeRegisterDispatcherReq,
-		Message: []messaging.IOTypeT{message},
-	})
+	err := c.mc.SendCommand(messaging.NewSingleTargetMessage(target, eventServiceTopic, message))
 	if err != nil {
 		log.Info("failed to send dispatcher request message to event service, try again later",
 			zap.String("changefeedID", req.Dispatcher.GetChangefeedID().ID().String()),
@@ -443,13 +438,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 // sendDispatcherHeartbeat sends the dispatcher heartbeat to the event service.
 // It will retry to send the heartbeat to the event service until it exceeds the retry limit.
 func (c *EventCollector) sendDispatcherHeartbeat(heartbeat *DispatcherHeartbeatWithTarget) error {
-	message := &messaging.TargetMessage{
-		To:      heartbeat.Target,
-		Topic:   heartbeat.Topic,
-		Type:    messaging.TypeDispatcherHeartbeat,
-		Message: []messaging.IOTypeT{heartbeat.Heartbeat},
-	}
-
+	message := messaging.NewSingleTargetMessage(heartbeat.Target, heartbeat.Topic, heartbeat.Heartbeat)
 	err := c.mc.SendCommand(message)
 	if err != nil {
 		if heartbeat.shouldRetry() {
@@ -458,6 +447,32 @@ func (c *EventCollector) sendDispatcherHeartbeat(heartbeat *DispatcherHeartbeatW
 			c.dispatcherHeartbeatChan.In() <- heartbeat
 		}
 		return err
+	}
+	return nil
+}
+
+func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messaging.TargetMessage) error {
+	if len(targetMessage.Message) != 1 {
+		log.Panic("invalid dispatcher heartbeat response message", zap.Any("msg", targetMessage))
+	}
+
+	log.Info("fizz receive dispatcher heartbeat response", zap.Any("msg", targetMessage))
+
+	response := targetMessage.Message[0].(*event.DispatcherHeartbeatResponse)
+	for _, ds := range response.DispatcherStates {
+		// This means that the dispatcher is removed in the event service we have to reset it.
+		if ds.State == event.DSStateRemoved {
+			v, ok := c.dispatcherMap.Load(ds.DispatcherID)
+			if !ok {
+				continue
+			}
+			stat := v.(*dispatcherStat)
+			// If the serverID not match, it means the dispatcher is not registered on this server now, just ignore it the response.
+			if stat.getServerID() == c.serverId {
+				// register the dispatcher again
+				c.resetDispatcher(stat)
+			}
+		}
 	}
 	return nil
 }
@@ -491,6 +506,8 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 				continue
 			}
 			value.(*dispatcherStat).setRemoteCandidates(msg.(*logservicepb.ReusableEventServiceResponse).Nodes, c)
+		case *event.DispatcherHeartbeatResponse:
+			c.handleDispatcherHeartbeatResponse(targetMessage)
 		default:
 			log.Panic("invalid message type", zap.Any("msg", msg))
 		}

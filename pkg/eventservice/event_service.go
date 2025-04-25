@@ -55,6 +55,11 @@ type DispatcherInfo interface {
 	GetTimezone() *time.Location
 }
 
+type DispatcherHeartBeatWithServerID struct {
+	serverID  string
+	heartbeat *event.DispatcherHeartbeat
+}
+
 // EventService accepts the requests of pulling events.
 // The EventService is a singleton in the system.
 type eventService struct {
@@ -66,7 +71,7 @@ type eventService struct {
 
 	// TODO: use a better way to cache the acceptorInfos
 	dispatcherInfoChan  chan DispatcherInfo
-	dispatcherHeartbeat chan *event.DispatcherHeartbeat
+	dispatcherHeartbeat chan *DispatcherHeartBeatWithServerID
 }
 
 func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) common.SubModule {
@@ -77,7 +82,7 @@ func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) 
 		schemaStore:         schemaStore,
 		brokers:             make(map[uint64]*eventBroker),
 		dispatcherInfoChan:  make(chan DispatcherInfo, basicChannelSize*16),
-		dispatcherHeartbeat: make(chan *event.DispatcherHeartbeat, basicChannelSize),
+		dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, basicChannelSize),
 	}
 	es.mc.RegisterHandler(messaging.EventServiceTopic, es.handleMessage)
 	return es
@@ -111,6 +116,8 @@ func (s *eventService) Run(ctx context.Context) error {
 			default:
 				log.Panic("invalid action type", zap.Any("info", info))
 			}
+		case heartbeat := <-s.dispatcherHeartbeat:
+			s.handleDispatcherHeartbeat(ctx, heartbeat)
 		}
 	}
 }
@@ -144,7 +151,10 @@ func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetM
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case s.dispatcherHeartbeat <- heartbeat:
+		case s.dispatcherHeartbeat <- &DispatcherHeartBeatWithServerID{
+			serverID:  msg.From.String(),
+			heartbeat: heartbeat,
+		}:
 		}
 	}
 	return nil
@@ -194,6 +204,15 @@ func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		return
 	}
 	c.resetDispatcher(dispatcherInfo)
+}
+
+func (s *eventService) handleDispatcherHeartbeat(ctx context.Context, heartbeat *DispatcherHeartBeatWithServerID) {
+	clusterID := heartbeat.heartbeat.ClusterID
+	c, ok := s.brokers[clusterID]
+	if !ok {
+		return
+	}
+	c.handleDispatcherHeartbeat(ctx, heartbeat)
 }
 
 func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
