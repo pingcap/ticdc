@@ -45,8 +45,6 @@ const (
 	defaultDataDir = "/tmp/cdc_data"
 	// dataDirThreshold is used to warn if the free space of the specified data-dir is lower than it, unit is GB
 	dataDirThreshold = 500
-	// maxGcTunerMemory is used to limit the max memory usage of cdc server. if the memory is larger than it, gc tuner will be disabled
-	maxGcTunerMemory = 512 * 1024 * 1024 * 1024
 )
 
 func (c *server) prepare(ctx context.Context) error {
@@ -149,6 +147,7 @@ func (c *server) prepare(ctx context.Context) error {
 }
 
 func calcMemoryLimit(percentage float64) int64 {
+	log.Info("ticdc server set memory limit percentage", zap.Float64("percentage", percentage), zap.Any("server memory", memory.ServerMemoryLimit.Load()))
 	memoryLimit := int64(float64(memory.ServerMemoryLimit.Load()) * percentage) // `server_memory_limit` * `gc_limit_percentage`
 	if memoryLimit == 0 {
 		memoryLimit = math.MaxInt64
