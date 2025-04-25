@@ -940,6 +940,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	defer c.metricDispatcherCount.Dec()
 	id := dispatcherInfo.GetID()
+
 	stat, ok := c.dispatchers.Load(id)
 	if !ok {
 		stat, ok = c.tableTriggerDispatchers.Load(id)
@@ -1034,7 +1035,7 @@ func (c *eventBroker) handleDispatcherHeartbeat(ctx context.Context, heartbeat *
 
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
 	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
-		v, ok := c.dispatchers.Load(dp.DispatcherID)
+		dispatcher, ok := c.getDispatcher(dp.DispatcherID)
 		// Can't find the dispatcher, it means the dispatcher is removed.
 		if !ok {
 			response, ok := responseMap[heartbeat.serverID]
@@ -1045,12 +1046,11 @@ func (c *eventBroker) handleDispatcherHeartbeat(ctx context.Context, heartbeat *
 			response.Append(event.NewDispatcherState(dp.DispatcherID, event.DSStateRemoved))
 			continue
 		}
-
-		dispatcher := v.(*dispatcherStat)
 		// TODO: Should we check if the dispatcher's serverID is the same as the heartbeat's serverID?
 		if dispatcher.checkpointTs.Load() < dp.CheckpointTs {
 			dispatcher.checkpointTs.Store(dp.CheckpointTs)
 		}
+		// Update the last received heartbeat time to the current time.
 		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
 	}
 	c.sendDispatcherResponse(ctx, responseMap)

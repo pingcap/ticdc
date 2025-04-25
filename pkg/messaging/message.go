@@ -403,6 +403,10 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeMaintainerCloseResponse
 	case *heartbeatpb.CheckpointTsMessage:
 		ioType = TypeCheckpointTsMessage
+	case *event.DispatcherHeartbeat:
+		ioType = TypeDispatcherHeartbeat
+	case *event.DispatcherHeartbeatResponse:
+		ioType = TypeDispatcherHeartbeatResponse
 	default:
 		panic("unknown io type")
 	}

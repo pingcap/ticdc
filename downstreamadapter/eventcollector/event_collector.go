@@ -132,6 +132,7 @@ func New(serverId node.ID) *EventCollector {
 		dispatcherRequestChan:                chann.NewAutoDrainChann[DispatcherRequestWithTarget](),
 		logCoordinatorRequestChan:            chann.NewAutoDrainChann[*logservicepb.ReusableEventServiceRequest](),
 		mc:                                   appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		dispatcherHeartbeatChan:              chann.NewAutoDrainChann[*DispatcherHeartbeatWithTarget](),
 		receiveChannels:                      make([]chan *messaging.TargetMessage, config.DefaultBasicEventHandlerConcurrency),
 		metricDispatcherReceivedKVEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent"),
 		metricDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs"),
