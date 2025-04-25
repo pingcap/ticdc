@@ -25,7 +25,7 @@ import (
 )
 
 type Rule struct {
-	partitionDispatcher partition.PartitionGenerator
+	partitionDispatcher partition.Generator
 	topicGenerator      topic.TopicGenerator
 	tableFilter.Filter
 }
@@ -59,7 +59,7 @@ func NewEventRouter(sinkConfig *config.SinkConfig, protocol config.Protocol, def
 			f = tableFilter.CaseInsensitive(f)
 		}
 
-		d := partition.GetPartitionGenerator(ruleConfig.PartitionRule, scheme, ruleConfig.IndexName, ruleConfig.Columns)
+		d := partition.NewGenerator(ruleConfig.PartitionRule, scheme, ruleConfig.IndexName, ruleConfig.Columns)
 
 		topicGenerator, err := topic.GetTopicGenerator(ruleConfig.TopicRule, defaultTopic, protocol, scheme)
 		if err != nil {
@@ -125,7 +125,7 @@ func (s *EventRouter) GetActiveTopics(activeTables []*commonEvent.SchemaTableNam
 }
 
 // GetPartitionGenerator returns the target partition by the table information.
-func (s *EventRouter) GetPartitionGenerator(schema, table string) partition.PartitionGenerator {
+func (s *EventRouter) GetPartitionGenerator(schema, table string) partition.Generator {
 	return s.matchPartitionGenerator(schema, table)
 }
 
@@ -145,7 +145,7 @@ func (s *EventRouter) matchTopicGenerator(schema, table string) topic.TopicGener
 	return nil
 }
 
-func (s *EventRouter) matchPartitionGenerator(schema, table string) partition.PartitionGenerator {
+func (s *EventRouter) matchPartitionGenerator(schema, table string) partition.Generator {
 	for _, rule := range s.rules {
 		if rule.MatchTable(schema, table) {
 			return rule.partitionDispatcher

@@ -48,12 +48,19 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonE
 	r.lock.Lock()
 	defer r.lock.Unlock()
 	r.hasher.Reset()
+
+	fields := make([]zap.Field, 0, 4)
 	r.hasher.Write([]byte(tableInfo.GetSchemaName()), []byte(tableInfo.GetTableName()))
+
+	fields = append(fields, zap.String("schema", tableInfo.GetSchemaName()))
+	fields = append(fields, zap.String("table", tableInfo.GetTableName()))
 
 	rowData := row.Row
 	if rowData.IsEmpty() {
 		rowData = row.PreRow
 	}
+
+	fields = append(fields, zap.String("indexName", r.IndexName))
 
 	// the most normal case, index-name is not set, use the handle key columns.
 	if r.IndexName == "" {
@@ -62,8 +69,12 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonE
 				continue
 			}
 			if tableInfo.IsHandleKey(col.ID) {
-				value := common.ExtractColVal(&rowData, col, idx)
-				r.hasher.Write([]byte(col.Name.L), []byte(model.ColumnValueString(value)))
+				colName := []byte(col.Name.L)
+				value := []byte(model.ColumnValueString(common.ExtractColVal(&rowData, col, idx)))
+				r.hasher.Write(colName, value)
+
+				fields = append(fields, zap.String("col", string(colName)))
+				fields = append(fields, zap.Any("value", value))
 			}
 		}
 	} else {
@@ -81,10 +92,22 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonE
 			if value == nil {
 				continue
 			}
-			r.hasher.Write([]byte(names[idx]), []byte(model.ColumnValueString(value)))
+
+			colName := []byte(names[idx])
+			v := []byte(model.ColumnValueString(value))
+			r.hasher.Write(colName, v)
+
+			fields = append(fields, zap.String("col", string(colName)))
+			fields = append(fields, zap.Any("value", v))
 		}
 	}
 
 	sum32 := r.hasher.Sum32()
-	return int32(sum32 % uint32(partitionNum)), strconv.FormatInt(int64(sum32), 10), nil
+	partition := int32(sum32 % uint32(partitionNum))
+
+	fields = append(fields, zap.Int32("partition", partition))
+
+	log.Info("index-value dispatch event", fields...)
+
+	return partition, strconv.FormatInt(int64(sum32), 10), nil
 }
