@@ -189,7 +189,7 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 							log.Error("Error prepareDMLs in batch sql in safe mode", zap.Any("targetQuery", query), zap.Any("targetArgs", args))
 							return query, args
 							// TODO: fix panic
-							//log.Panic("Here are two invalid rows, one is Delete A, the other is Update A to B", zap.Any("Events", events))
+							// log.Panic("Here are two invalid rows, one is Delete A, the other is Update A to B", zap.Any("Events", events))
 						}
 					}
 				case commonEvent.RowTypeInsert:
@@ -200,7 +200,7 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 							log.Error("Error prepareDMLs in batch sql in safe mode", zap.Any("targetQuery", query), zap.Any("targetArgs", args))
 							return query, args
 							// TODO: fix panic
-							//log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							// log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
 						}
 					} else if nextRowType == commonEvent.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
@@ -236,7 +236,7 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 							log.Error("Error prepareDMLs in batch sql in safe mode", zap.Any("targetQuery", query), zap.Any("targetArgs", args))
 							return query, args
 							// TODO: fix panic
-							//log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							// log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
 						}
 					} else if nextRowType == commonEvent.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
