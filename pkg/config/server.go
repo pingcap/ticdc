@@ -128,7 +128,7 @@ var defaultServerConfig = &ServerConfig{
 	},
 	ClusterID:              "default",
 	GcTunerMemoryThreshold: DisableMemoryLimit,
-	MemoryLimitPercentage:  0.8,
+	MemoryLimitPercentage:  0.75,
 }
 
 // ServerConfig represents a config for server
