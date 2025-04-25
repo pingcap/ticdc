@@ -20,31 +20,32 @@ import (
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
+	"github.com/pingcap/ticdc/pkg/api"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
+	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/spf13/cobra"
 )
 
 // cfMeta holds changefeed info and changefeed status.
 type cfMeta struct {
-	UpstreamID     uint64                    `json:"upstream_id"`
-	ID             string                    `json:"id"`
-	Namespace      string                    `json:"namespace"`
-	SinkURI        string                    `json:"sink_uri"`
-	Config         *v2.ReplicaConfig         `json:"config"`
-	CreateTime     model.JSONTime            `json:"create_time"`
-	StartTs        uint64                    `json:"start_ts"`
-	ResolvedTs     uint64                    `json:"resolved_ts"`
-	TargetTs       uint64                    `json:"target_ts"`
-	CheckpointTSO  uint64                    `json:"checkpoint_tso"`
-	CheckpointTime model.JSONTime            `json:"checkpoint_time"`
-	Engine         model.SortEngine          `json:"sort_engine,omitempty"`
-	FeedState      model.FeedState           `json:"state"`
-	RunningError   *v2.RunningError          `json:"error,omitempty"`
-	ErrorHis       []int64                   `json:"error_history,omitempty"`
-	CreatorVersion string                    `json:"creator_version"`
-	TaskStatus     []model.CaptureTaskStatus `json:"task_status,omitempty"`
+	UpstreamID     uint64                     `json:"upstream_id"`
+	ID             string                     `json:"id"`
+	Namespace      string                     `json:"namespace"`
+	SinkURI        string                     `json:"sink_uri"`
+	Config         *v2.ReplicaConfig          `json:"config"`
+	CreateTime     api.JSONTime               `json:"create_time"`
+	StartTs        uint64                     `json:"start_ts"`
+	ResolvedTs     uint64                     `json:"resolved_ts"`
+	TargetTs       uint64                     `json:"target_ts"`
+	CheckpointTSO  uint64                     `json:"checkpoint_tso"`
+	CheckpointTime api.JSONTime               `json:"checkpoint_time"`
+	Engine         config.SortEngine          `json:"sort_engine,omitempty"`
+	FeedState      config.FeedState           `json:"state"`
+	RunningError   *v2.RunningError           `json:"error,omitempty"`
+	ErrorHis       []int64                    `json:"error_history,omitempty"`
+	CreatorVersion string                     `json:"creator_version"`
+	TaskStatus     []config.CaptureTaskStatus `json:"task_status,omitempty"`
 }
 
 // queryChangefeedOptions defines flags for the `cli changefeed query` command.
@@ -105,7 +106,7 @@ func (o *queryChangefeedOptions) run(cmd *cobra.Command) error {
 		Namespace:      detail.Namespace,
 		SinkURI:        detail.SinkURI,
 		Config:         detail.Config,
-		CreateTime:     model.JSONTime(detail.CreateTime),
+		CreateTime:     api.JSONTime(detail.CreateTime),
 		StartTs:        detail.StartTs,
 		ResolvedTs:     detail.ResolvedTs,
 		TargetTs:       detail.TargetTs,

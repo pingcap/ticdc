@@ -17,11 +17,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/ticdc/api/owner"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	v2 "github.com/pingcap/ticdc/pkg/api/v2"
-	"github.com/pingcap/tiflow/cdc/api/owner"
-	"github.com/pingcap/tiflow/cdc/model"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/spf13/cobra"
 )
 
@@ -76,8 +76,8 @@ func (o *listChangefeedOptions) run(cmd *cobra.Command) error {
 
 	for _, cf := range raw {
 		if !o.listAll {
-			if cf.FeedState == model.StateFinished ||
-				cf.FeedState == model.StateRemoved {
+			if cf.FeedState == config.StateFinished ||
+				cf.FeedState == config.StateRemoved {
 				continue
 			}
 		}

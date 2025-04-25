@@ -67,6 +67,7 @@ type ScheduleGroup[T ReplicationID, R Replication[T]] interface {
 	GetTaskSizePerNode() map[node.ID]int
 	GetImbalanceGroupNodeTask(nodes map[node.ID]*node.Info) (groups map[GroupID]map[node.ID]R, valid bool)
 	GetTaskSizePerNodeByGroup(groupID GroupID) map[node.ID]int
+	GetScheduleTaskSizePerNodeByGroup(groupID GroupID) map[node.ID]int
 
 	GetGroupChecker(groupID GroupID) GroupChecker[T, R]
 	GetCheckerStat() string
@@ -329,6 +330,28 @@ func (db *replicationDB[T, R]) GetTaskSizeByNodeID(id node.ID) (size int) {
 			size += g.GetTaskSizeByNodeID(id)
 		}
 	})
+	return
+}
+
+func (db *replicationDB[T, R]) GetScheduleTaskSizePerNodeByGroup(id GroupID) (sizeMap map[node.ID]int) {
+	db.withRLock(func() {
+		sizeMap = db.getScheduleTaskSizePerNodeByGroup(id)
+	})
+	return
+}
+
+func (db *replicationDB[T, R]) getScheduleTaskSizePerNodeByGroup(id GroupID) (sizeMap map[node.ID]int) {
+	sizeMap = make(map[node.ID]int)
+	replicationGroup := db.mustGetGroup(id)
+	for nodeID, tasks := range replicationGroup.GetNodeTasks() {
+		count := 0
+		for taskID := range tasks {
+			if replicationGroup.scheduling.Find(taskID) {
+				count++
+			}
+		}
+		sizeMap[nodeID] = count
+	}
 	return
 }
 

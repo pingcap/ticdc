@@ -47,7 +47,7 @@ func NewSQLTestHelper(t *testing.T, tableName, initialCreateTableDDL string) *SQ
 	job := helper.DDL2Job(initialCreateTableDDL)
 	require.NotNil(t, job)
 
-	mounter := commonEvent.NewMounter(time.UTC)
+	mounter := commonEvent.NewMounter(time.UTC, config.GetDefaultReplicaConfig().Integrity)
 
 	tableInfo := helper.GetTableInfo(job)
 

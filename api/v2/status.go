@@ -46,7 +46,7 @@ func (h *OpenAPIV2) ServerStatus(c *gin.Context) {
 		ID:        string(info.ID),
 		ClusterID: etcdClient.GetClusterID(),
 		IsOwner:   h.server.IsCoordinator(),
-		Liveness:  Liveness(h.server.Liveness()),
+		Liveness:  h.server.Liveness(),
 	}
 	c.IndentedJSON(http.StatusOK, status)
 }

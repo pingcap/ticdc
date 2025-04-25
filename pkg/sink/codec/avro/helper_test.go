@@ -16,7 +16,6 @@ package avro
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,17 +43,4 @@ func TestGetAvroNamespace(t *testing.T) {
 		"normalNamespace",
 		getAvroNamespace("normalNamespace", ""),
 	)
-}
-
-func TestSanitizeName(t *testing.T) {
-	t.Parallel()
-
-	require.Equal(t, "normalColumnName123", common.SanitizeName("normalColumnName123"))
-	require.Equal(
-		t,
-		"_1ColumnNameStartWithNumber",
-		common.SanitizeName("1ColumnNameStartWithNumber"),
-	)
-	require.Equal(t, "A_B", common.SanitizeName("A.B"))
-	require.Equal(t, "columnNameWith__", common.SanitizeName("columnNameWith中文"))
 }

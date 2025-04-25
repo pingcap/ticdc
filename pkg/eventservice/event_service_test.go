@@ -29,13 +29,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	tconfig "github.com/pingcap/tiflow/pkg/config"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -81,7 +80,7 @@ func TestEventServiceBasic(t *testing.T) {
 	require.NotNil(t, esImpl.brokers[dispatcherInfo.GetClusterID()])
 
 	// add events to eventStore
-	helper := pevent.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
 		`insert into test.t(id,c) values (0, "c0")`,
@@ -471,6 +470,8 @@ type mockDispatcherInfo struct {
 	actionType eventpb.ActionType
 	filter     filter.Filter
 	bdrMode    bool
+	integrity  *integrity.Config
+	tz         *time.Location
 }
 
 func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
@@ -490,6 +491,9 @@ func newMockDispatcherInfo(t *testing.T, dispatcherID common.DispatcherID, table
 		startTs:    1,
 		actionType: actionType,
 		filter:     filter,
+		bdrMode:    false,
+		integrity:  config.GetDefaultReplicaConfig().Integrity,
+		tz:         time.Local,
 	}
 }
 
@@ -525,8 +529,8 @@ func (m *mockDispatcherInfo) GetChangefeedID() common.ChangeFeedID {
 	return common.NewChangefeedID4Test("default", "test")
 }
 
-func (m *mockDispatcherInfo) GetFilterConfig() *tconfig.FilterConfig {
-	return &tconfig.FilterConfig{
+func (m *mockDispatcherInfo) GetFilterConfig() *config.FilterConfig {
+	return &config.FilterConfig{
 		Rules: []string{"*.*"},
 	}
 }
@@ -552,10 +556,18 @@ func (m *mockDispatcherInfo) IsOnlyReuse() bool {
 }
 
 func (m *mockDispatcherInfo) GetBdrMode() bool {
-	return false
+	return m.bdrMode
 }
 
-func genEvents(helper *pevent.EventTestHelper, t *testing.T, ddl string, dmls ...string) (pevent.DDLEvent, []*common.RawKVEntry) {
+func (m *mockDispatcherInfo) GetIntegrity() *integrity.Config {
+	return m.integrity
+}
+
+func (m *mockDispatcherInfo) GetTimezone() *time.Location {
+	return m.tz
+}
+
+func genEvents(helper *commonEvent.EventTestHelper, t *testing.T, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
 	job := helper.DDL2Job(ddl)
 	schema := job.SchemaName
 	table := job.TableName
@@ -564,8 +576,8 @@ func genEvents(helper *pevent.EventTestHelper, t *testing.T, ddl string, dmls ..
 		require.Equal(t, job.BinlogInfo.TableInfo.UpdateTS-1, e.StartTs)
 		require.Equal(t, job.BinlogInfo.TableInfo.UpdateTS+1, e.CRTs)
 	}
-	return pevent.DDLEvent{
-		Version:    pevent.DDLEventVersion,
+	return commonEvent.DDLEvent{
+		Version:    commonEvent.DDLEventVersion,
 		FinishedTs: job.BinlogInfo.TableInfo.UpdateTS,
 		TableID:    job.BinlogInfo.TableInfo.ID,
 		SchemaName: job.SchemaName,

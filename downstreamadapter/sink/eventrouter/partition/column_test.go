@@ -17,7 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/tiflow/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 

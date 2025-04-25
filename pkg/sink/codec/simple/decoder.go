@@ -21,13 +21,14 @@ import (
 	"fmt"
 	"path/filepath"
 	"strconv"
-	"time"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/charset"
@@ -36,7 +37,6 @@ import (
 	ptypes "github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -67,7 +67,7 @@ func NewDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.
 	)
 	if config.LargeMessageHandle.EnableClaimCheck() {
 		storageURI := config.LargeMessageHandle.ClaimCheckStorageURI
-		externalStorage, err = util.GetExternalStorage(ctx, storageURI, nil, util.NewS3Retryer(10, 10*time.Second, 10*time.Second))
+		externalStorage, err = util.GetExternalStorageWithDefaultTimeout(ctx, storageURI)
 		if err != nil {
 			return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
@@ -585,10 +585,12 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 		data := formatAllColumnsValue(msg.Old, columns)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
+		result.Length += 1
 	case DMLTypeInsert:
 		data := formatAllColumnsValue(msg.Data, columns)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
+		result.Length += 1
 	case DMLTypeUpdate:
 		previous := formatAllColumnsValue(msg.Old, columns)
 		data := formatAllColumnsValue(msg.Data, columns)
@@ -601,28 +603,28 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
+		result.Length += 1
 	default:
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.Type))
 	}
 	result.Rows = chk
 
-	// TODO: enableRowChecksum
-	// if enableRowChecksum && msg.Checksum != nil {
-	// 	result.Checksum = &integrity.Checksum{
-	// 		Current:   msg.Checksum.Current,
-	// 		Previous:  msg.Checksum.Previous,
-	// 		Corrupted: msg.Checksum.Corrupted,
-	// 		Version:   msg.Checksum.Version,
-	// 	}
+	if enableRowChecksum && msg.Checksum != nil {
+		result.Checksum = []*integrity.Checksum{{
+			Current:   msg.Checksum.Current,
+			Previous:  msg.Checksum.Previous,
+			Corrupted: msg.Checksum.Corrupted,
+			Version:   msg.Checksum.Version,
+		}}
 
-	// 	err := common.VerifyChecksum(result, db)
-	// 	if err != nil || msg.Checksum.Corrupted {
-	// 		log.Warn("consumer detect checksum corrupted",
-	// 			zap.String("schema", msg.Schema), zap.String("table", msg.Table), zap.Error(err))
-	// 		return nil, cerror.ErrDecodeFailed.GenWithStackByArgs("checksum corrupted")
+		err := common.VerifyChecksum(result, db)
+		if err != nil || msg.Checksum.Corrupted {
+			log.Warn("consumer detect checksum corrupted",
+				zap.String("schema", msg.Schema), zap.String("table", msg.Table), zap.Error(err))
+			return nil, errors.ErrDecodeFailed.GenWithStackByArgs("checksum corrupted")
 
-	// 	}
-	// }
+		}
+	}
 
 	return result, nil
 }

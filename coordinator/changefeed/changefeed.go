@@ -19,14 +19,13 @@ import (
 	"sync"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/sink"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -85,7 +84,7 @@ func NewChangefeed(cfID common.ChangeFeedID,
 		backoff: NewBackoff(cfID, *info.Config.ChangefeedErrorStuckDuration, checkpointTs),
 	}
 	// Must set retrying to true when the changefeed is in warning state.
-	if info.State == model.StateWarning {
+	if info.State == config.StateWarning {
 		res.backoff.retrying.Store(true)
 	}
 
@@ -138,7 +137,7 @@ func (c *Changefeed) ShouldRun() bool {
 // It returns true if the status is changed
 // It returns false if the status is not changed
 // It returns the new state and error if the status is changed
-func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {
+func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {
 	old := c.status.Load()
 
 	if newStatus != nil && newStatus.CheckpointTs >= old.CheckpointTs {
@@ -147,22 +146,22 @@ func (c *Changefeed) UpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool
 			log.Info("Received changefeed status with bootstrapDone",
 				zap.Stringer("changefeed", c.ID),
 				zap.Bool("bootstrapDone", newStatus.BootstrapDone))
-			return true, model.StateNormal, nil
+			return true, config.StateNormal, nil
 		}
 
 		info := c.GetInfo()
 		// the changefeed reaches the targetTs
 		if info.TargetTs != 0 && newStatus.CheckpointTs >= info.TargetTs {
-			return true, model.StateFinished, nil
+			return true, config.StateFinished, nil
 		}
 
 		return c.backoff.CheckStatus(newStatus)
 	}
 
-	return false, model.StateNormal, nil
+	return false, config.StateNormal, nil
 }
 
-func (c *Changefeed) ForceUpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, model.FeedState, *heartbeatpb.RunningError) {
+func (c *Changefeed) ForceUpdateStatus(newStatus *heartbeatpb.MaintainerStatus) (bool, config.FeedState, *heartbeatpb.RunningError) {
 	c.status.Store(newStatus)
 	return c.backoff.CheckStatus(newStatus)
 }
@@ -262,13 +261,13 @@ func RemoveMaintainerMessage(id common.ChangeFeedID, server node.ID, caseCade bo
 
 // getSinkType returns the sink type of the url.
 func getSinkType(scheme string) common.SinkType {
-	if sink.IsMySQLCompatibleScheme(scheme) {
+	if helper.IsMySQLCompatibleScheme(scheme) {
 		return common.MysqlSinkType
 	}
-	if sink.IsMQScheme(scheme) {
+	if helper.IsMQScheme(scheme) {
 		return common.KafkaSinkType
 	}
-	if sink.IsStorageScheme(scheme) {
+	if helper.IsStorageScheme(scheme) {
 		return common.CloudStorageSinkType
 	}
 	return common.BlackHoleSinkType

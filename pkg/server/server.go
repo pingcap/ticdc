@@ -17,10 +17,10 @@ import (
 	"context"
 
 	"github.com/pingcap/ticdc/maintainer"
+	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/tidb/pkg/kv"
-	"github.com/pingcap/tiflow/cdc/model"
 	pd "github.com/tikv/pd/client"
 )
 
@@ -31,7 +31,7 @@ type Server interface {
 	Close(ctx context.Context)
 
 	SelfInfo() (*node.Info, error)
-	Liveness() model.Liveness
+	Liveness() api.Liveness
 
 	GetCoordinator() (Coordinator, error)
 	IsCoordinator() bool

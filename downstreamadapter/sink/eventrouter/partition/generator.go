@@ -17,9 +17,9 @@ import (
 	"strings"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/tiflow/pkg/sink"
 	"go.uber.org/zap"
 )
 
@@ -45,7 +45,7 @@ func GetPartitionGenerator(rule string, scheme string, indexName string, columns
 	default:
 	}
 
-	if sink.IsPulsarScheme(scheme) {
+	if helper.IsPulsarScheme(scheme) {
 		return newKeyPartitionGenerator(rule)
 	}
 

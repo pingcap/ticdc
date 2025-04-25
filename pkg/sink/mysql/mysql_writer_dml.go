@@ -32,7 +32,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	pmysql "github.com/pingcap/tiflow/pkg/sink/mysql"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -379,8 +378,11 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 			if rowType != prevType {
 				prevType = rowType
 			} else {
-				// TODO:add more info here
-				log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges), zap.Any("prevType", prevType), zap.Any("currentType", rowType))
+				// use normal sql instead
+				query, args := w.generateNormalSQLs(events)
+				log.Error("Error prepareDMLs in batch sql in unsafe mode", zap.Any("targetQuery", query), zap.Any("targetArgs", args))
+				// log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges), zap.Any("prevType", prevType), zap.Any("currentType", rowType))
+				return query, args
 			}
 		}
 		rowsList = append(rowsList, rowChanges[len(rowChanges)-1])
@@ -529,8 +531,8 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			return errors.Trace(err)
 		}
 		return nil
-	}, retry.WithBackoffBaseDelay(pmysql.BackoffBaseDelay.Milliseconds()),
-		retry.WithBackoffMaxDelay(pmysql.BackoffMaxDelay.Milliseconds()),
+	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
+		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
 		retry.WithMaxTries(w.cfg.DMLMaxRetry),
 		retry.WithIsRetryableErr(isRetryableDMLError))
 }

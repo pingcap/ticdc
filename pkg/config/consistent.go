@@ -18,9 +18,9 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/compression"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/pingcap/tiflow/pkg/redo"
-	"github.com/pingcap/tiflow/pkg/util"
 )
 
 // ConsistentConfig represents replication consistency config for a changefeed.

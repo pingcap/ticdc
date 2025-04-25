@@ -24,11 +24,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	// memBufShrinkThreshold represents the threshold of shrinking the buffer.
-	memBufShrinkThreshold = 1024 * 1024
-)
-
 // JSONTxnEventEncoder encodes txn event in JSON format
 type JSONTxnEventEncoder struct {
 	config *common.Config
@@ -47,8 +42,8 @@ type JSONTxnEventEncoder struct {
 	columnSelector columnselector.Selector
 }
 
-// NewJSONTxnEventEncoderBuilder creates a new JSONTxnEventEncoder
-func NewJSONTxnEventEncoderBuilder(config *common.Config) common.TxnEventEncoder {
+// NewJSONTxnEventEncoder creates a new JSONTxnEventEncoder
+func NewJSONTxnEventEncoder(config *common.Config) common.TxnEventEncoder {
 	return &JSONTxnEventEncoder{
 		valueBuf:       &bytes.Buffer{},
 		terminator:     []byte(config.Terminator),
@@ -102,7 +97,7 @@ func (j *JSONTxnEventEncoder) Build() []*common.Message {
 	ret := common.NewMsg(nil, j.valueBuf.Bytes())
 	ret.SetRowsCount(j.batchSize)
 	ret.Callback = j.callback
-	if j.valueBuf.Cap() > memBufShrinkThreshold {
+	if j.valueBuf.Cap() > common.MemBufShrinkThreshold {
 		j.valueBuf = &bytes.Buffer{}
 	} else {
 		j.valueBuf.Reset()

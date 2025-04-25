@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -26,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tiflow/pkg/sink"
 	"go.uber.org/zap"
 )
 
@@ -372,6 +372,6 @@ func IsMysqlCompatibleBackend(sinkURIStr string) (bool, error) {
 	if err != nil {
 		return false, errors.WrapError(errors.ErrSinkURIInvalid, err)
 	}
-	scheme := sink.GetScheme(sinkURI)
-	return sink.IsMySQLCompatibleScheme(scheme), nil
+	scheme := helper.GetScheme(sinkURI)
+	return helper.IsMySQLCompatibleScheme(scheme), nil
 }

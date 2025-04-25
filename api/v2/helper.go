@@ -24,7 +24,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/tiflow/pkg/httputil"
+	"github.com/pingcap/ticdc/pkg/httputil"
 	"go.uber.org/zap"
 )
 

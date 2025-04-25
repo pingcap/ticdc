@@ -90,8 +90,13 @@ func NewController(changefeedID common.ChangeFeedID,
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	oc := operator.NewOperatorController(changefeedID, mc, replicaSetDB, nodeManager, batchSize)
+
+	var schedulerCfg *config.ChangefeedSchedulerConfig
+	if cfConfig != nil {
+		schedulerCfg = cfConfig.Scheduler
+	}
 	sc := NewScheduleController(
-		changefeedID, batchSize, oc, replicaSetDB, nodeManager, balanceInterval, splitter,
+		changefeedID, batchSize, oc, replicaSetDB, nodeManager, balanceInterval, splitter, schedulerCfg,
 	)
 
 	return &Controller{
@@ -180,9 +185,9 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		EndKey:   span.EndKey,
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
-	if c.enableTableAcrossNodes {
-		// split the whole table span base on the configuration, todo: background split table
-		tableSpans = c.splitter.SplitSpans(context.Background(), tableSpan, len(c.nodeManager.GetAliveNodes()))
+	if c.enableTableAcrossNodes && len(c.nodeManager.GetAliveNodes()) > 1 {
+		// split the whole table span base on region count if table region count is exceed the limit
+		tableSpans = c.splitter.SplitSpansByRegion(context.Background(), tableSpan)
 	}
 	c.addNewSpans(table.SchemaID, tableSpans, startTs)
 }

@@ -18,10 +18,10 @@ import (
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/topic"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/tiflow/pkg/sink"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,7 +76,7 @@ func TestEventRouter(t *testing.T) {
 	t.Parallel()
 
 	sinkConfig := &config.SinkConfig{}
-	d, err := NewEventRouter(sinkConfig, config.ProtocolCanalJSON, "test", sink.KafkaScheme)
+	d, err := NewEventRouter(sinkConfig, config.ProtocolCanalJSON, "test", helper.KafkaScheme)
 	require.NoError(t, err)
 	require.Equal(t, "test", d.GetDefaultTopic())
 
@@ -89,7 +89,7 @@ func TestEventRouter(t *testing.T) {
 	require.Equal(t, d.defaultTopic, actual)
 
 	sinkConfig = newSinkConfig4Test()
-	d, err = NewEventRouter(sinkConfig, config.ProtocolCanalJSON, "", sink.KafkaScheme)
+	d, err = NewEventRouter(sinkConfig, config.ProtocolCanalJSON, "", helper.KafkaScheme)
 	require.NoError(t, err)
 
 	// no matched, use the default
@@ -145,7 +145,7 @@ func TestGetActiveTopics(t *testing.T) {
 	t.Parallel()
 
 	sinkConfig := newSinkConfig4Test()
-	d, err := NewEventRouter(sinkConfig, config.ProtocolCanalJSON, "test", sink.KafkaScheme)
+	d, err := NewEventRouter(sinkConfig, config.ProtocolCanalJSON, "test", helper.KafkaScheme)
 	require.NoError(t, err)
 	names := []*commonEvent.SchemaTableName{
 		{SchemaName: "test_default1", TableName: "table"},
@@ -196,7 +196,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	t.Parallel()
 
 	sinkConfig := newSinkConfig4Test()
-	d, err := NewEventRouter(sinkConfig, config.ProtocolCanalJSON, "test", sink.KafkaScheme)
+	d, err := NewEventRouter(sinkConfig, config.ProtocolCanalJSON, "test", helper.KafkaScheme)
 	require.NoError(t, err)
 
 	// default partition

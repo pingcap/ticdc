@@ -49,11 +49,3 @@ func Hang(ctx context.Context, dur time.Duration) error {
 		return nil
 	}
 }
-
-// Must panics if err is not nil.
-func Must[T any](v T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return v
-}

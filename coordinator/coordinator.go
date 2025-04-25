@@ -34,7 +34,6 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
@@ -271,7 +270,7 @@ func (c *coordinator) handleStateChange(
 	cfInfo.State = event.state
 	cfInfo.Error = event.err
 	progress := config.ProgressNone
-	if event.state == model.StateFailed || event.state == model.StateFinished {
+	if event.state == config.StateFailed || event.state == config.StateFinished {
 		progress = config.ProgressStopping
 	}
 	if err := c.backend.UpdateChangefeed(context.Background(), cfInfo, cf.GetStatus().CheckpointTs, progress); err != nil {
@@ -282,13 +281,13 @@ func (c *coordinator) handleStateChange(
 	cf.SetInfo(cfInfo)
 
 	switch event.state {
-	case model.StateWarning:
+	case config.StateWarning:
 		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
 		c.controller.updateChangefeedEpoch(ctx, event.changefeedID)
 		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
-	case model.StateFailed, model.StateFinished:
+	case config.StateFailed, config.StateFinished:
 		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
-	case model.StateNormal:
+	case config.StateNormal:
 		log.Info("changefeed is resumed or created successfully, try to delete its safeguard gc safepoint",
 			zap.String("changefeed", event.changefeedID.String()))
 		// We need to clean its gc safepoint when changefeed is resumed or created
@@ -314,14 +313,14 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.Chan
 	defer cancel()
 	if err != nil {
 		errCode, _ := errors.RFCCode(err)
-		state := model.StateFailed
+		state := config.StateFailed
 		if !errors.IsChangefeedGCFastFailErrorCode(errCode) {
-			state = model.StateWarning
+			state = config.StateWarning
 		}
 		change := &ChangefeedChange{
 			changefeedID: id,
 			state:        state,
-			err: &model.RunningError{
+			err: &config.RunningError{
 				Code:    string(errCode),
 				Message: err.Error(),
 			},

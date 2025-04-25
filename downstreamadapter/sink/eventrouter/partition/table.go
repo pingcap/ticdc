@@ -18,7 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/tiflow/pkg/hash"
+	"github.com/pingcap/ticdc/pkg/hash"
 )
 
 // TablePartitionGenerator is a partition generator which dispatches events based on the schema and table name.
