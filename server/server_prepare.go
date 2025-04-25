@@ -148,7 +148,7 @@ func (c *server) prepare(ctx context.Context) error {
 
 func calcMemoryLimit(percentage float64) int64 {
 	serverMemoryLimit, err := memory.MemTotal()
-	if record.err != nil {
+	if err != nil {
 		log.Error("get system total memory fail", zap.Error(err))
 		return math.MaxInt64
 	}
