@@ -38,6 +38,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -97,6 +98,8 @@ type eventBroker struct {
 	cancel context.CancelFunc
 	g      *errgroup.Group
 
+	rateLimiter *rate.Limiter
+
 	metricDispatcherCount                prometheus.Gauge
 	metricEventServiceReceivedResolvedTs prometheus.Gauge
 	metricEventServiceSentResolvedTs     prometheus.Gauge
@@ -129,23 +132,26 @@ func newEventBroker(
 	// For now, since there is only one upstream, using the default pdClock is sufficient.
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 
-	c := &eventBroker{
-		tidbClusterID:           id,
-		eventStore:              eventStore,
-		pdClock:                 pdClock,
-		mounter:                 pevent.NewMounter(tz, integrity),
-		schemaStore:             schemaStore,
-		changefeedMap:           sync.Map{},
-		dispatchers:             sync.Map{},
-		tableTriggerDispatchers: sync.Map{},
-		msgSender:               mc,
-		taskChan:                make(chan scanTask, conf.ScanTaskQueueSize),
-		sendMessageWorkerCount:  sendMessageWorkerCount,
-		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
-		scanWorkerCount:         scanWorkerCount,
-		cancel:                  cancel,
-		g:                       g,
+	// 240MB/s
+	rateLimiter := rate.NewLimiter(rate.Limit(240*1024*1024), 240*1024*1024)
 
+	c := &eventBroker{
+		tidbClusterID:                        id,
+		eventStore:                           eventStore,
+		pdClock:                              pdClock,
+		mounter:                              pevent.NewMounter(tz, integrity),
+		schemaStore:                          schemaStore,
+		changefeedMap:                        sync.Map{},
+		dispatchers:                          sync.Map{},
+		tableTriggerDispatchers:              sync.Map{},
+		msgSender:                            mc,
+		taskChan:                             make(chan scanTask, conf.ScanTaskQueueSize),
+		sendMessageWorkerCount:               sendMessageWorkerCount,
+		messageCh:                            make([]chan *wrapEvent, sendMessageWorkerCount),
+		scanWorkerCount:                      scanWorkerCount,
+		cancel:                               cancel,
+		g:                                    g,
+		rateLimiter:                          rateLimiter,
 		metricDispatcherCount:                metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
 		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
 		metricEventServiceResolvedTsLag:      metrics.EventServiceResolvedTsLagGauge.WithLabelValues("received"),
@@ -572,6 +578,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			metrics.EventServiceScanDuration.Observe(time.Since(start).Seconds())
 			return
 		}
+
+		eSize := int(e.KeyLen + e.ValueLen + e.OldValueLen)
+		c.rateLimiter.WaitN(ctx, eSize)
 
 		if e.CRTs < dataRange.StartTs {
 			// If the commitTs of the event is less than the startTs of the data range,
