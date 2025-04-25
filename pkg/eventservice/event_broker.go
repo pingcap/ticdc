@@ -1030,7 +1030,6 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 }
 
 func (c *eventBroker) handleDispatcherHeartbeat(ctx context.Context, heartbeat *DispatcherHeartBeatWithServerID) {
-
 	log.Info("fizz handle dispatcher heartbeat", zap.Any("heartbeat", heartbeat))
 
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)

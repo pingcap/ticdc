@@ -132,7 +132,6 @@ func (s *eventService) Close(_ context.Context) error {
 }
 
 func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
-
 	switch msg.Type {
 	case messaging.TypeDispatcherRequest:
 		infos := msgToDispatcherInfo(msg)
