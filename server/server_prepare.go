@@ -16,12 +16,13 @@ package server
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
-	"github.com/dustin/go-humanize"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -29,11 +30,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/upstream"
-	"github.com/pingcap/tidb/pkg/util/gctuner"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/pingcap/tiflow/pkg/fsutil"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/pkg/memory"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -147,24 +148,19 @@ func (c *server) prepare(ctx context.Context) error {
 	return nil
 }
 
+func calcMemoryLimit(percentage float64) int64 {
+	memoryLimit := int64(float64(memory.ServerMemoryLimit.Load()) * percentage) // `server_memory_limit` * `gc_limit_percentage`
+	if memoryLimit == 0 {
+		memoryLimit = math.MaxInt64
+	}
+	return memoryLimit
+}
+
 func (c *server) setMemoryLimit() {
 	conf := config.GetGlobalServerConfig()
-	if conf.GcTunerMemoryThreshold > maxGcTunerMemory {
-		// If total memory is larger than 512GB, we will not set memory limit.
-		// Because the memory limit is not accurate, and it is not necessary to set memory limit.
-		log.Info("total memory is larger than 512GB, skip setting memory limit",
-			zap.Uint64("bytes", conf.GcTunerMemoryThreshold),
-			zap.String("memory", humanize.IBytes(conf.GcTunerMemoryThreshold)),
-		)
-		return
-	}
-	if conf.GcTunerMemoryThreshold > 0 {
-		gctuner.EnableGOGCTuner.Store(true)
-		gctuner.Tuning(conf.GcTunerMemoryThreshold)
-		log.Info("enable gctuner, set memory limit",
-			zap.Uint64("bytes", conf.GcTunerMemoryThreshold),
-			zap.String("memory", humanize.IBytes(conf.GcTunerMemoryThreshold)),
-		)
+	if conf.GCLimitPercentage > 0 {
+		memoryLimit := calcMemoryLimit(conf.GCLimitPercentage)
+		debug.SetMemoryLimit(memoryLimit)
 	}
 }
 
