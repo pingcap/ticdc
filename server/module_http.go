@@ -24,7 +24,7 @@ import (
 	"github.com/pingcap/ticdc/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	clogutil "github.com/pingcap/tiflow/pkg/logutil"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"go.uber.org/zap"
 	"golang.org/x/net/netutil"
 )
@@ -51,7 +51,7 @@ func NewHttpServer(c *server, lis net.Listener) common.SubModule {
 	// We use it here to limit the max concurrent connections of statusServer.
 	lis = netutil.LimitListener(lis, maxHTTPConnection)
 
-	logWritter := clogutil.InitGinLogWritter()
+	logWritter := logger.InitGinLogWritter()
 	router := gin.New()
 	// add gin.RecoveryWithWriter() to handle unexpected panic (logging and
 	// returning status code 500)

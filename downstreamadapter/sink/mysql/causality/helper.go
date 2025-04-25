@@ -23,7 +23,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
 
@@ -113,7 +112,7 @@ func genKeyList(
 			return nil
 		}
 
-		val := model.ColumnValueString(value)
+		val := common.ColumnValueString(value)
 		if columnNeeds2LowerCase(info.GetType(), info.GetCollate()) {
 			val = strings.ToLower(val)
 		}

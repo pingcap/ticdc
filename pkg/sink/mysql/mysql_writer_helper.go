@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
 
@@ -65,7 +64,7 @@ func genKeyList(row *chunk.Row, colIdx []int64, tableInfo *common.TableInfo) []b
 			return nil
 		}
 
-		val := model.ColumnValueString(value)
+		val := common.ColumnValueString(value)
 		if columnNeeds2LowerCase(info.GetType(), info.GetCollate()) {
 			val = strings.ToLower(val)
 		}

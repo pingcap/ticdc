@@ -23,11 +23,11 @@ import (
 	"github.com/benbjohnson/clock"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/apperror"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
-	"github.com/pingcap/tiflow/pkg/errorutil"
-	"github.com/pingcap/tiflow/pkg/util"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/pd/pkg/errs"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
@@ -343,7 +343,7 @@ func isRetryableError(rpcName string) retry.IsRetryable {
 				return false
 			}
 		case EtcdTxn:
-			return errorutil.IsRetryableEtcdError(err)
+			return apperror.IsRetryableEtcdError(err)
 		default:
 			// For other types of operation, we retry directly without handling errors
 		}

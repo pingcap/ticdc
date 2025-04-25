@@ -24,13 +24,13 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
-	"github.com/pingcap/tiflow/cdc/model"
 	pd "github.com/tikv/pd/client"
 	clientV3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -226,7 +226,7 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 			beforeKV[newKey] = v.Value
 			log.Info("migrate key", zap.String("oldKey", oldKey), zap.String("newKey", newKey))
 			if strings.HasPrefix(string(v.Key), oldChangefeedPrefix) {
-				info := new(model.ChangeFeedInfo)
+				info := new(config.ChangeFeedInfo)
 				err = info.Unmarshal(v.Value)
 				if err != nil {
 					log.Error("unmarshal changefeed failed",
@@ -235,10 +235,10 @@ func (m *migrator) migrate(ctx context.Context, etcdNoMetaVersion bool, oldVersi
 					return cerror.WrapError(cerror.ErrEtcdMigrateFailed, err)
 				}
 				info.UpstreamID = upstreamID
-				info.Namespace = model.DefaultNamespace
+				info.ChangefeedID.DisplayName.Namespace = common.DefaultNamespace
 				// changefeed id is a part of etcd key path
 				// for example:  /tidb/cdc/changefeed/info/abcd,  abcd is the changefeed
-				info.ID = strings.TrimPrefix(string(v.Key), oldChangefeedPrefix+"/")
+				info.ChangefeedID.DisplayName.Name = strings.TrimPrefix(string(v.Key), oldChangefeedPrefix+"/")
 				var str string
 				str, err = info.Marshal()
 				if err != nil {
@@ -539,10 +539,10 @@ func (m *migrator) saveUpstreamInfo(ctx context.Context) error {
 		Tp:         etcd.CDCKeyTypeUpStream,
 		ClusterID:  m.cli.GetClusterID(),
 		UpstreamID: upstreamID,
-		Namespace:  model.DefaultNamespace,
+		Namespace:  common.DefaultNamespace,
 	}
 	upstreamKeyStr := upstreamKey.String()
-	upstreamInfo := &model.UpstreamInfo{
+	upstreamInfo := &config.UpstreamInfo{
 		ID:            upstreamID,
 		PDEndpoints:   strings.Join(m.pdEndpoints, ","),
 		KeyPath:       m.config.Security.KeyPath,

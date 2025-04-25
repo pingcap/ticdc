@@ -89,6 +89,12 @@ var (
 		errors.RFCCodeText("CDC:ErrColumnSelectorFailed"),
 	)
 
+	// Errors caused by unexpected behavior from external systems
+	ErrTiDBUnexpectedJobMeta = errors.Normalize(
+		"unexpected `job_meta` from tidb",
+		errors.RFCCodeText("CDC:ErrTiDBUnexpectedJobMeta"),
+	)
+
 	// ErrVersionIncompatible is an error for running CDC on an incompatible Cluster.
 	ErrVersionIncompatible = errors.Normalize(
 		"version is incompatible: %s",
@@ -283,10 +289,25 @@ var (
 		"failed to request PD %s, please try again later",
 		errors.RFCCodeText("CDC:ErrCheckClusterVersionFromPD"),
 	)
-
+	ErrNewSemVersion = errors.Normalize(
+		"create sem version",
+		errors.RFCCodeText("CDC:ErrNewSemVersion"),
+	)
+	ErrCheckDirWritable = errors.Normalize(
+		"check dir writable failed",
+		errors.RFCCodeText("CDC:ErrCheckDirWritable"),
+	)
+	ErrCheckDirValid = errors.Normalize(
+		"check dir valid failed",
+		errors.RFCCodeText("CDC:ErrCheckDirValid"),
+	)
 	ErrURLFormatInvalid = errors.Normalize(
 		"url format is invalid",
 		errors.RFCCodeText("CDC:ErrURLFormatInvalid"),
+	)
+	ErrIntersectNoOverlap = errors.Normalize(
+		"span doesn't overlap: %+v vs %+v",
+		errors.RFCCodeText("CDC:ErrIntersectNoOverlap"),
 	)
 	ErrDiskFull = errors.Normalize(
 		"failed to preallocate file because disk is full",
@@ -466,6 +487,10 @@ var (
 	ErrIllegalSorterParameter = errors.Normalize(
 		"illegal parameter for sorter: %s",
 		errors.RFCCodeText("CDC:ErrIllegalSorterParameter"),
+	)
+	ErrConflictingFileLocks = errors.Normalize(
+		"file lock conflict: %s",
+		errors.RFCCodeText("ErrConflictingFileLocks"),
 	)
 	// RESTful client error
 	ErrRewindRequestBodyError = errors.Normalize(
