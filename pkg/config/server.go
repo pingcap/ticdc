@@ -128,7 +128,7 @@ var defaultServerConfig = &ServerConfig{
 	},
 	ClusterID:              "default",
 	GcTunerMemoryThreshold: DisableMemoryLimit,
-	GCLimitPercentage:      0.8,
+	MemoryLimitPercentage:  0.8,
 }
 
 // ServerConfig represents a config for server
@@ -158,7 +158,7 @@ type ServerConfig struct {
 	ClusterID string               `toml:"cluster-id" json:"cluster-id"`
 	// Deprecated: we don't use this field anymore.
 	GcTunerMemoryThreshold uint64  `toml:"gc-tuner-memory-threshold" json:"gc-tuner-memory-threshold"`
-	GCLimitPercentage      float64 `toml:"gc-limit-percentage" json:"gc-limit-percentage"`
+	MemoryLimitPercentage  float64 `toml:"memory-limit-percentage" json:"memory-limit-percentage"`
 
 	// Deprecated: we don't use this field anymore.
 	PerTableMemoryQuota uint64 `toml:"per-table-memory-quota" json:"per-table-memory-quota"`

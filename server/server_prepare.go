@@ -158,9 +158,10 @@ func calcMemoryLimit(percentage float64) int64 {
 
 func (c *server) setMemoryLimit() {
 	conf := config.GetGlobalServerConfig()
-	if conf.GCLimitPercentage > 0 {
-		memoryLimit := calcMemoryLimit(conf.GCLimitPercentage)
+	if conf.MemoryLimitPercentage > 0 {
+		memoryLimit := calcMemoryLimit(conf.MemoryLimitPercentage)
 		debug.SetMemoryLimit(memoryLimit)
+		log.Info("ticdc server set memory limit", zap.Int64("memoryLimit", memoryLimit))
 	}
 }
 
