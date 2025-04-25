@@ -136,33 +136,21 @@ func GetDDLActionType(query string) timodel.ActionType {
 
 func GetInfluenceTables(action timodel.ActionType, schemaID int64, tableID int64) *commonEvent.InfluencedTables {
 	switch action {
-	case timodel.ActionCreateSchema:
+	// create schema means the database not exist yet, so should not block tables.
+	case timodel.ActionCreateSchema, timodel.ActionCreateTable:
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{0},
 		}
 	case timodel.ActionDropSchema:
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeDB,
 			SchemaID:      schemaID,
 		}
-	case timodel.ActionCreateTable:
-		return &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{0},
-		}
-	case timodel.ActionDropTable:
-		// todo: how to handle the partition tables, all partitions should be blocked
-		// only consider normal table now.
-		return &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{tableID},
-		}
-	case timodel.ActionAddColumn, timodel.ActionDropColumn,
-		timodel.ActionAddIndex, timodel.ActionDropIndex,
+	case timodel.ActionTruncateTable, timodel.ActionRenameTable, timodel.ActionDropTable,
+		timodel.ActionAddColumn, timodel.ActionDropColumn,
+		timodel.ActionModifyColumn, timodel.ActionSetDefaultValue,
+		timodel.ActionAddIndex, timodel.ActionDropIndex, timodel.ActionRenameIndex,
 		timodel.ActionAddForeignKey, timodel.ActionDropForeignKey,
-		timodel.ActionModifyColumn,
-		timodel.ActionSetDefaultValue, timodel.ActionRenameIndex,
 		timodel.ActionAddPrimaryKey, timodel.ActionDropPrimaryKey,
 		timodel.ActionModifyTableCharsetAndCollate:
 		// todo: how to handle the partition tables, all partitions should be blocked
@@ -171,10 +159,6 @@ func GetInfluenceTables(action timodel.ActionType, schemaID int64, tableID int64
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{tableID},
 		}
-	case timodel.ActionTruncateTable:
-		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
-	case timodel.ActionRenameTable:
-		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
 	case timodel.ActionAddTablePartition:
 		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
 	case timodel.ActionDropTablePartition:

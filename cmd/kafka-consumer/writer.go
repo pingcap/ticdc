@@ -148,7 +148,17 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 		zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query),
 		zap.Any("blockedTables", ddl.GetBlockedTables()), zap.Any("DDL", ddl))
 	// if block the whole database, flush all tables, otherwise flush the blocked tables.
-	for _, tableID := range ddl.GetBlockedTables().TableIDs {
+	var tableIDs []int64
+	switch ddl.GetBlockedTables().InfluenceType {
+	case commonEvent.InfluenceTypeDB:
+
+	case commonEvent.InfluenceTypeNormal:
+		tableIDs = ddl.GetBlockedTables().TableIDs
+	default:
+		log.Panic("unsupported influence type", zap.Any("influenceType", ddl.GetBlockedTables().InfluenceType))
+	}
+
+	for _, tableID := range tableIDs {
 		for _, progress := range w.progresses {
 			events := progress.eventGroups[tableID].Resolve(progress.watermark)
 			resolvedCount := len(events)

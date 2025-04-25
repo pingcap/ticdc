@@ -211,5 +211,4 @@ func TestGetDDLActionType(t *testing.T) {
 	//modifySchemaCharsetSQL := `alter database test character set utf8mb4`
 	//ddl = helper.DDL2Event(modifySchemaCharsetSQL)
 	//require.Equal(t, timodel.ActionType(ddl.Type), GetDDLActionType(modifySchemaCharsetSQL))
-
 }

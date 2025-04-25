@@ -376,7 +376,9 @@ func (b *canalJSONDecoder) canalJSONMessage2DDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 	result.BlockedTables = common.GetInfluenceTables(actionType, result.SchemaID, result.TableID)
-
+	log.Info("set blocked tables for the DDL event",
+		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
 	b.tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
 	return result
 }
