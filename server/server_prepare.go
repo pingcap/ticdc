@@ -147,8 +147,12 @@ func (c *server) prepare(ctx context.Context) error {
 }
 
 func calcMemoryLimit(percentage float64) int64 {
-	log.Info("ticdc server set memory limit percentage", zap.Float64("percentage", percentage), zap.Any("server memory", memory.ServerMemoryLimit.Load()))
-	memoryLimit := int64(float64(memory.ServerMemoryLimit.Load()) * percentage) // `server_memory_limit` * `gc_limit_percentage`
+	serverMemoryLimit, err := memory.MemTotal()
+	if record.err != nil {
+		log.Error("get system total memory fail", zap.Error(err))
+		return math.MaxInt64
+	}
+	memoryLimit := int64(float64(serverMemoryLimit) * percentage) // `server_memory_limit` * `gc_limit_percentage`
 	if memoryLimit == 0 {
 		memoryLimit = math.MaxInt64
 	}
