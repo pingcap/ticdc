@@ -71,8 +71,6 @@ enum ActionType {
     ACTION_TYPE_PAUSE = 3;
     ACTION_TYPE_RESUME = 4;
     ACTION_TYPE_RESET = 5;
-    ACTION_TYPE_PAUSE_CHANGEFEED = 6;
-    ACTION_TYPE_RESUME_CHANGEFEED = 7;
 }
 
 message IntegrityConfig {
@@ -80,7 +78,9 @@ message IntegrityConfig {
 	string CorruptionHandleLevel  = 2;
 }
 
-message RegisterDispatcherRequest {
+// DispatcherRequest is used to send a dispatcher request to the event service.
+// A request can be a register, remove, pause, resume, reset dispatcher request.
+message DispatcherRequest {
     heartbeatpb.ChangefeedID changefeed_id = 1;
     heartbeatpb.DispatcherID dispatcher_id = 2;
     heartbeatpb.TableSpan table_span = 3;

@@ -1015,23 +1015,3 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 	}
 	return stat.(*changefeedStatus)
 }
-
-func (c *eventBroker) pauseChangefeed(dispatcherInfo DispatcherInfo) {
-	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
-	if !ok {
-		return
-	}
-	log.Info("pause changefeed",
-		zap.Any("changefeedID", stat.changefeedStat.changefeedID.String()))
-	stat.changefeedStat.isRunning.Store(false)
-}
-
-func (c *eventBroker) resumeChangefeed(dispatcherInfo DispatcherInfo) {
-	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
-	if !ok {
-		return
-	}
-	log.Info("resume changefeed",
-		zap.Any("changefeedID", stat.changefeedStat.changefeedID.String()))
-	stat.changefeedStat.isRunning.Store(true)
-}

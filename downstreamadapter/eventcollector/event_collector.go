@@ -82,7 +82,7 @@ const (
 	eventServiceTopic         = messaging.EventServiceTopic
 	eventCollectorTopic       = messaging.EventCollectorTopic
 	logCoordinatorTopic       = messaging.LogCoordinatorTopic
-	typeRegisterDispatcherReq = messaging.TypeRegisterDispatcherRequest
+	typeRegisterDispatcherReq = messaging.TypeDispatcherRequest
 )
 
 /*
@@ -360,7 +360,7 @@ func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
 				time.Sleep(10 * time.Millisecond)
 			}
 		case heartbeat := <-c.dispatcherHeartbeatChan.Out():
-			if err := c.mustSendDispatcherHeartbeat(heartbeat); err != nil {
+			if err := c.sendDispatcherHeartbeat(heartbeat); err != nil {
 				// Sleep a short time to avoid too many requests in a short time.
 				time.Sleep(10 * time.Millisecond)
 			}
@@ -393,8 +393,8 @@ func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) {
 // FIXME: Add a checking mechanism to avoid sending request to offline EventService.
 // A simple way is to use a NodeManager to check if the target is online.
 func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string, req DispatcherRequest) error {
-	message := &messaging.RegisterDispatcherRequest{
-		RegisterDispatcherRequest: &eventpb.RegisterDispatcherRequest{
+	message := &messaging.DispatcherRequest{
+		DispatcherRequest: &eventpb.DispatcherRequest{
 			ChangefeedId: req.Dispatcher.GetChangefeedID().ToPB(),
 			DispatcherId: req.Dispatcher.GetId().ToPB(),
 			ActionType:   req.ActionType,
@@ -410,10 +410,10 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 	// If the action type is register and reset, we need fill all config related fields.
 	if req.ActionType == eventpb.ActionType_ACTION_TYPE_REGISTER ||
 		req.ActionType == eventpb.ActionType_ACTION_TYPE_RESET {
-		message.RegisterDispatcherRequest.FilterConfig = req.Dispatcher.GetFilterConfig()
-		message.RegisterDispatcherRequest.EnableSyncPoint = req.Dispatcher.EnableSyncPoint()
-		message.RegisterDispatcherRequest.SyncPointInterval = uint64(req.Dispatcher.GetSyncPointInterval().Seconds())
-		message.RegisterDispatcherRequest.SyncPointTs = syncpoint.CalculateStartSyncPointTs(req.StartTs, req.Dispatcher.GetSyncPointInterval(), req.Dispatcher.GetStartTsIsSyncpoint())
+		message.DispatcherRequest.FilterConfig = req.Dispatcher.GetFilterConfig()
+		message.DispatcherRequest.EnableSyncPoint = req.Dispatcher.EnableSyncPoint()
+		message.DispatcherRequest.SyncPointInterval = uint64(req.Dispatcher.GetSyncPointInterval().Seconds())
+		message.DispatcherRequest.SyncPointTs = syncpoint.CalculateStartSyncPointTs(req.StartTs, req.Dispatcher.GetSyncPointInterval(), req.Dispatcher.GetStartTsIsSyncpoint())
 	}
 
 	err := c.mc.SendCommand(&messaging.TargetMessage{
@@ -440,7 +440,9 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 	return nil
 }
 
-func (c *EventCollector) mustSendDispatcherHeartbeat(heartbeat *DispatcherHeartbeatWithTarget) error {
+// sendDispatcherHeartbeat sends the dispatcher heartbeat to the event service.
+// It will retry to send the heartbeat to the event service until it exceeds the retry limit.
+func (c *EventCollector) sendDispatcherHeartbeat(heartbeat *DispatcherHeartbeatWithTarget) error {
 	message := &messaging.TargetMessage{
 		To:      heartbeat.Target,
 		Topic:   heartbeat.Topic,
@@ -452,9 +454,9 @@ func (c *EventCollector) mustSendDispatcherHeartbeat(heartbeat *DispatcherHeartb
 	if err != nil {
 		if heartbeat.shouldRetry() {
 			heartbeat.incRetryCounter()
+			log.Info("failed to send dispatcher heartbeat message to event service, try again later", zap.Error(err))
 			c.dispatcherHeartbeatChan.In() <- heartbeat
 		}
-		log.Info("failed to send dispatcher heartbeat message to event service, try again later", zap.Error(err))
 		return err
 	}
 	return nil
