@@ -185,14 +185,22 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 					rowKey := rowLists[i].PreRowKeys
 					if nextRowType == commonEvent.RowTypeUpdate {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
-							log.Panic("Here are two invalid rows, one is Delete A, the other is Update A to B", zap.Any("Events", events))
+							query, args := w.generateNormalSQLs(events)
+							log.Error("Error prepareDMLs in batch sql in safe mode", zap.Any("targetQuery", query), zap.Any("targetArgs", args))
+							return query, args
+							// TODO: fix panic
+							//log.Panic("Here are two invalid rows, one is Delete A, the other is Update A to B", zap.Any("Events", events))
 						}
 					}
 				case commonEvent.RowTypeInsert:
 					rowKey := rowLists[i].RowKeys
 					if nextRowType == commonEvent.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							query, args := w.generateNormalSQLs(events)
+							log.Error("Error prepareDMLs in batch sql in safe mode", zap.Any("targetQuery", query), zap.Any("targetArgs", args))
+							return query, args
+							// TODO: fix panic
+							//log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
 						}
 					} else if nextRowType == commonEvent.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
@@ -224,7 +232,11 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 					preRowKey := rowLists[i].PreRowKeys
 					if nextRowType == commonEvent.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							query, args := w.generateNormalSQLs(events)
+							log.Error("Error prepareDMLs in batch sql in safe mode", zap.Any("targetQuery", query), zap.Any("targetArgs", args))
+							return query, args
+							// TODO: fix panic
+							//log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
 						}
 					} else if nextRowType == commonEvent.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
