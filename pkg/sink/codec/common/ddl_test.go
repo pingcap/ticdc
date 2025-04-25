@@ -14,10 +14,11 @@
 package common
 
 import (
+	"testing"
+
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestGetDDLActionType(t *testing.T) {

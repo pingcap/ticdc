@@ -348,8 +348,7 @@ func (b *canalJSONDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 			zap.Any("messageType", b.msg.messageType()), zap.Any("msg", b.msg))
 	}
 
-	result := canalJSONMessage2DDLEvent(b.msg)
-	b.tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
+	result := b.canalJSONMessage2DDLEvent()
 	return result
 }
 
@@ -368,15 +367,17 @@ func (b *canalJSONDecoder) NextResolvedEvent() uint64 {
 	return withExtensionEvent.Extensions.WatermarkTs
 }
 
-func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEvent {
+func (b *canalJSONDecoder) canalJSONMessage2DDLEvent() *commonEvent.DDLEvent {
 	result := new(commonEvent.DDLEvent)
-	result.FinishedTs = msg.getCommitTs()
-	result.SchemaName = *msg.getSchema()
-	result.TableName = *msg.getTable()
-	result.Query = msg.getQuery()
+	result.FinishedTs = b.msg.getCommitTs()
+	result.SchemaName = *b.msg.getSchema()
+	result.TableName = *b.msg.getTable()
+	result.Query = b.msg.getQuery()
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 	result.BlockedTables = common.GetInfluenceTables(actionType, result.SchemaID, result.TableID)
+
+	b.tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
 	return result
 }
 

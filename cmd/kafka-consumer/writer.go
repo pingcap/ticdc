@@ -144,7 +144,10 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 		total   int
 		flushed atomic.Int64
 	)
-	log.Info("try to flush ddl event", zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query))
+	log.Info("try to flush ddl event",
+		zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query),
+		zap.Any("blockedTables", ddl.GetBlockedTables()), zap.Any("DDL", ddl))
+	// if block the whole database, flush all tables, otherwise flush the blocked tables.
 	for _, tableID := range ddl.GetBlockedTables().TableIDs {
 		for _, progress := range w.progresses {
 			events := progress.eventGroups[tableID].Resolve(progress.watermark)
