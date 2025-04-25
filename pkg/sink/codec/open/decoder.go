@@ -48,8 +48,8 @@ type batchDecoder struct {
 
 	upstreamTiDB *sql.DB
 
-	tableInfoCache   map[tableKey]*commonType.TableInfo
-	tableIDAllocator *common.FakeTableIDAllocator
+	tableIDAllocator  *common.FakeTableIDAllocator
+	tableInfoAccessor *common.TableInfoAccessor
 }
 
 // NewBatchDecoder creates a new BatchDecoder.
@@ -73,11 +73,11 @@ func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (co
 	}
 
 	return &batchDecoder{
-		config:           config,
-		storage:          externalStorage,
-		upstreamTiDB:     db,
-		tableInfoCache:   make(map[tableKey]*commonType.TableInfo),
-		tableIDAllocator: common.NewFakeTableIDAllocator(),
+		config:            config,
+		storage:           externalStorage,
+		upstreamTiDB:      db,
+		tableInfoAccessor: common.NewTableInfoAccessor(),
+		tableIDAllocator:  common.NewFakeTableIDAllocator(),
 	}, nil
 }
 
@@ -194,6 +194,21 @@ func (b *batchDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.FinishedTs = b.nextKey.Ts
 	result.SchemaName = b.nextKey.Schema
 	result.TableName = b.nextKey.Table
+	actionType := common.GetDDLActionType(result.Query)
+	result.Type = byte(actionType)
+
+	var tableID int64
+	tableInfo, ok := b.tableInfoAccessor.Get(result.SchemaName, result.TableName)
+	if ok {
+		tableID = tableInfo.TableName.TableID
+	}
+	result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
+	log.Info("set blocked tables for the DDL event",
+		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
+
+	b.tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
+
 	b.nextKey = nil
 	b.valueBytes = nil
 	return result
@@ -332,20 +347,11 @@ func (b *batchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) *
 	return b.assembleDMLEvent()
 }
 
-type tableKey struct {
-	schema string
-	table  string
-}
-
 func (b *batchDecoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	cacheKey := tableKey{
-		schema: key.Schema,
-		table:  key.Table,
-	}
-	tableInfo, ok := b.tableInfoCache[cacheKey]
+	tableInfo, ok := b.tableInfoAccessor.Get(key.Schema, key.Table)
 	if !ok {
 		tableInfo = b.newTableInfo(key, value)
-		b.tableInfoCache[cacheKey] = tableInfo
+		b.tableInfoAccessor.Add(key.Schema, key.Table, tableInfo)
 	}
 	return tableInfo
 }
@@ -442,11 +448,11 @@ func (b *batchDecoder) assembleDMLEvent() *commonEvent.DMLEvent {
 
 	tableInfo := b.queryTableInfo(key, value)
 	result := new(commonEvent.DMLEvent)
-	result.Length++
-	result.StartTs = key.Ts
-	result.ApproximateSize = 0
 	result.TableInfo = tableInfo
+	result.PhysicalTableID = tableInfo.TableName.TableID
+	result.StartTs = key.Ts
 	result.CommitTs = key.Ts
+	result.Length++
 	if key.Partition != nil {
 		result.PhysicalTableID = *key.Partition
 		result.TableInfo.TableName.IsPartition = true
@@ -480,7 +486,6 @@ func (b *batchDecoder) assembleDMLEvent() *commonEvent.DMLEvent {
 	} else {
 		log.Panic("unknown event type")
 	}
-
 	result.Rows = chk
 	return result
 }

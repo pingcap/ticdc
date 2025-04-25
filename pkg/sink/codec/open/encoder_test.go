@@ -1073,3 +1073,127 @@ func TestHandleOnlyEvent(t *testing.T) {
 
 	log.Info("pass TestHandleOnlyEvent")
 }
+
+func TestDDLSequence(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	decoder, err := NewBatchDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	createDB := helper.DDL2Event(`create database abc`)
+
+	m, err := encoder.EncodeDDLEvent(createDB)
+	require.NoError(t, err)
+
+	decoder.AddKeyValue(m.Key, m.Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	obtained := decoder.NextDDLEvent()
+	require.Equal(t, createDB.Query, obtained.Query)
+	require.Equal(t, createDB.Type, obtained.Type)
+	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
+
+	dropDB := helper.DDL2Event(`drop database abc`)
+
+	m, err = encoder.EncodeDDLEvent(dropDB)
+	require.NoError(t, err)
+
+	decoder.AddKeyValue(m.Key, m.Value)
+
+	messageType, hasNext = decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	obtained = decoder.NextDDLEvent()
+	require.Equal(t, dropDB.Query, obtained.Query)
+	require.Equal(t, dropDB.Type, obtained.Type)
+	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeDB)
+
+	helper.Tk().MustExec("use test")
+
+	createTable := helper.DDL2Event(`create table t(a int primary key, b int)`)
+
+	m, err = encoder.EncodeDDLEvent(createTable)
+	require.NoError(t, err)
+
+	decoder.AddKeyValue(m.Key, m.Value)
+
+	messageType, hasNext = decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	obtained = decoder.NextDDLEvent()
+	require.Equal(t, createTable.Query, obtained.Query)
+	require.Equal(t, createTable.Type, obtained.Type)
+	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
+
+	insert := helper.DML2Event("test", "t", `insert into test.t(a,b) values (1,1)`)
+	require.NotNil(t, insert)
+	insertRow, ok := insert.GetNextRow()
+	require.True(t, ok)
+
+	columnSelector := columnselector.NewDefaultColumnSelector()
+	insertEvent := &commonEvent.RowEvent{
+		TableInfo:      insert.TableInfo,
+		CommitTs:       insert.GetCommitTs(),
+		Event:          insertRow,
+		ColumnSelector: columnSelector,
+		Callback:       func() {},
+	}
+
+	err = encoder.AppendRowChangedEvent(ctx, "", insertEvent)
+	require.NoError(t, err)
+
+	m = encoder.Build()[0]
+
+	decoder.AddKeyValue(m.Key, m.Value)
+	messageType, hasNext = decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decodedInsert := decoder.NextDMLEvent()
+	require.NotZero(t, decodedInsert.GetTableID())
+
+	addColumn := helper.DDL2Event(`alter table t add column c int`)
+
+	m, err = encoder.EncodeDDLEvent(addColumn)
+	require.NoError(t, err)
+
+	decoder.AddKeyValue(m.Key, m.Value)
+
+	messageType, hasNext = decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	obtained = decoder.NextDDLEvent()
+	require.Equal(t, addColumn.Query, obtained.Query)
+	require.Equal(t, addColumn.Type, obtained.Type)
+	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
+	require.Equal(t, decodedInsert.GetTableID(), obtained.GetBlockedTables().TableIDs[0])
+
+	dropTable := helper.DDL2Event(`drop table t`)
+
+	m, err = encoder.EncodeDDLEvent(dropTable)
+	require.NoError(t, err)
+
+	decoder.AddKeyValue(m.Key, m.Value)
+
+	messageType, hasNext = decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	obtained = decoder.NextDDLEvent()
+	require.Equal(t, dropTable.Query, obtained.Query)
+	require.Equal(t, dropTable.Type, obtained.Type)
+	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
+}
