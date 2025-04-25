@@ -1030,7 +1030,6 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 }
 
 func (c *eventBroker) handleDispatcherHeartbeat(ctx context.Context, heartbeat *DispatcherHeartBeatWithServerID) {
-
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
 	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
 		dispatcher, ok := c.getDispatcher(dp.DispatcherID)
