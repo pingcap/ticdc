@@ -536,6 +536,7 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
+	log.Info("hyy RemoveChangefeed", zap.String("changefeed", id.Name()))
 	c.operatorController.StopChangefeed(ctx, id, true)
 	return cf.GetStatus().CheckpointTs, nil
 }
@@ -557,6 +558,7 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 		clone.State = config.StateStopped
 		cf.SetInfo(clone)
 	}
+	log.Info("hyy PauseChangefeed", zap.String("changefeed", id.Name()))
 	c.operatorController.StopChangefeed(ctx, id, false)
 	return nil
 }

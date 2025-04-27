@@ -282,10 +282,12 @@ func (c *coordinator) handleStateChange(
 
 	switch event.state {
 	case config.StateWarning:
+		log.Info("hyy StopChangefeed because state warning", zap.String("changefeed", event.changefeedID.String()), zap.Any("state", event.state))
 		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
 		c.controller.updateChangefeedEpoch(ctx, event.changefeedID)
 		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
 	case config.StateFailed, config.StateFinished:
+		log.Info("hyy StopChangefeed because state finished or failed", zap.String("changefeed", event.changefeedID.String()), zap.Any("state", event.state))
 		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
 	case config.StateNormal:
 		log.Info("changefeed is resumed or created successfully, try to delete its safeguard gc safepoint",
