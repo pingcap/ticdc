@@ -82,7 +82,7 @@ type eventBroker struct {
 	// dispatcherID -> dispatcherStat map, track all table trigger dispatchers.
 	tableTriggerDispatchers sync.Map
 	// taskChan is used to send the scan tasks to the scan workers.
-	taskChan chan scanTask
+	taskChan []chan scanTask
 
 	// sendMessageWorkerCount is the number of the send message workers to spawn.
 	sendMessageWorkerCount int
@@ -139,7 +139,7 @@ func newEventBroker(
 		dispatchers:             sync.Map{},
 		tableTriggerDispatchers: sync.Map{},
 		msgSender:               mc,
-		taskChan:                make(chan scanTask, conf.ScanTaskQueueSize),
+		taskChan:                make([]chan scanTask, scanWorkerCount),
 		sendMessageWorkerCount:  sendMessageWorkerCount,
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
 		scanWorkerCount:         scanWorkerCount,
@@ -150,6 +150,10 @@ func newEventBroker(
 		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
 		metricEventServiceResolvedTsLag:      metrics.EventServiceResolvedTsLagGauge.WithLabelValues("received"),
 		metricEventServiceSentResolvedTs:     metrics.EventServiceResolvedTsLagGauge.WithLabelValues("sent"),
+	}
+
+	for i := 0; i < scanWorkerCount; i++ {
+		c.taskChan[i] = make(chan scanTask, conf.ScanTaskQueueSize)
 	}
 
 	for i := 0; i < c.sendMessageWorkerCount; i++ {
@@ -205,7 +209,7 @@ func (c *eventBroker) sendWatermark(
 		server,
 		re,
 		d.getEventSenderState())
-	c.getMessageCh(d.workerIndex) <- resolvedEvent
+	c.getMessageCh(d.messageWorkerIndex) <- resolvedEvent
 	metricEventServiceSendResolvedTsCount.Inc()
 }
 
@@ -215,7 +219,7 @@ func (c *eventBroker) sendReadyEvent(
 ) {
 	event := pevent.NewReadyEvent(d.info.GetID())
 	wrapEvent := newWrapReadyEvent(server, event)
-	c.getMessageCh(d.workerIndex) <- wrapEvent
+	c.getMessageCh(d.messageWorkerIndex) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
 }
 
@@ -227,7 +231,7 @@ func (c *eventBroker) sendNotReusableEvent(
 	wrapEvent := newWrapNotReusableEvent(server, event)
 
 	// must success unless we can do retry later
-	c.getMessageCh(d.workerIndex) <- wrapEvent
+	c.getMessageCh(d.messageWorkerIndex) <- wrapEvent
 	metricEventServiceSendCommandCount.Inc()
 }
 
@@ -240,7 +244,7 @@ func (c *eventBroker) runScanWorker(ctx context.Context, idx int) {
 		select {
 		case <-ctx.Done():
 			return
-		case task := <-c.taskChan:
+		case task := <-c.taskChan[idx]:
 			c.doScan(ctx, task, idx)
 		}
 	}
@@ -326,7 +330,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e pevent.DD
 	select {
 	case <-ctx.Done():
 		return
-	case c.getMessageCh(d.workerIndex) <- ddlEvent:
+	case c.getMessageCh(d.messageWorkerIndex) <- ddlEvent:
 		metricEventServiceSendDDLCount.Inc()
 	}
 }
@@ -418,7 +422,7 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 			task.isHandshaked.Store(true)
 		},
 	}
-	c.getMessageCh(task.workerIndex) <- wrapE
+	c.getMessageCh(task.messageWorkerIndex) <- wrapE
 	metricEventServiceSendCommandCount.Inc()
 	return false
 }
@@ -447,7 +451,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 				CommitTsList: newCommitTsList,
 			},
 			d.getEventSenderState())
-		c.getMessageCh(d.workerIndex) <- syncPointEvent
+		c.getMessageCh(d.messageWorkerIndex) <- syncPointEvent
 
 		if len(commitTsList) > 16 {
 			commitTsList = commitTsList[16:]
@@ -561,7 +565,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		}
 		dml.Seq = task.seq.Add(1)
 		c.emitSyncPointEventIfNeeded(dml.CommitTs, task, remoteID)
-		c.getMessageCh(task.workerIndex) <- newWrapDMLEvent(remoteID, dml, task.getEventSenderState())
+		c.getMessageCh(task.messageWorkerIndex) <- newWrapDMLEvent(remoteID, dml, task.getEventSenderState())
 		metricEventServiceSendKvCount.Add(float64(dml.Len()))
 		lastSentDMLCommitTs = dml.CommitTs
 		return true
@@ -847,7 +851,7 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommi
 			d.taskScanning.Lock()
 			d.taskScanning.state = true
 			d.taskScanning.Unlock()
-			c.taskChan <- d
+			c.taskChan[d.scanWorkerIndex] <- d
 		}
 	}
 }
@@ -874,8 +878,9 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 	changefeedID := info.GetChangefeedID()
 	changefeedStatus := c.getOrSetChangefeedStatus(changefeedID)
 	workerIndex := int((common.GID)(id).Hash(uint64(c.sendMessageWorkerCount)))
+	scanWorkerIndex := int((common.GID)(id).Hash(uint64(c.scanWorkerCount)))
 
-	dispatcher := newDispatcherStat(startTs, info, filter, workerIndex, changefeedStatus)
+	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, changefeedStatus)
 	if span.Equal(heartbeatpb.DDLSpan) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
 		log.Info("table trigger dispatcher register dispatcher",

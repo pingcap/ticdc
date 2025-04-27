@@ -34,9 +34,11 @@ type dispatcherStat struct {
 	id common.DispatcherID
 	// reverse pointer to the changefeed status this dispatcher belongs to.
 	changefeedStat *changefeedStatus
-	// workerIndex is the index of the worker that this dispatcher belongs to.
-	workerIndex int
-	info        DispatcherInfo
+	// scanWorkerIndex is the index of the worker that this dispatcher belongs to.
+	scanWorkerIndex int
+	// messageWorkerIndex is the index of the worker that this dispatcher belongs to.
+	messageWorkerIndex int
+	info               DispatcherInfo
 	// startTableInfo is the table info of the dispatcher when it is registered or reset.
 	startTableInfo atomic.Pointer[common.TableInfo]
 	filter         filter.Filter
@@ -94,15 +96,17 @@ func newDispatcherStat(
 	startTs uint64,
 	info DispatcherInfo,
 	filter filter.Filter,
-	workerIndex int,
+	scanWorkerIndex int,
+	messageWorkerIndex int,
 	changefeedStatus *changefeedStatus,
 ) *dispatcherStat {
 	dispStat := &dispatcherStat{
-		id:             info.GetID(),
-		changefeedStat: changefeedStatus,
-		workerIndex:    workerIndex,
-		info:           info,
-		filter:         filter,
+		id:                 info.GetID(),
+		changefeedStat:     changefeedStatus,
+		scanWorkerIndex:    scanWorkerIndex,
+		messageWorkerIndex: messageWorkerIndex,
+		info:               info,
+		filter:             filter,
 	}
 	changefeedStatus.addDispatcher()
 

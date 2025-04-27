@@ -42,7 +42,7 @@ func TestNewDispatcherStat(t *testing.T) {
 	stat := newDispatcherStat(startTs, info, info.filter, workerIndex, changefeedStatus)
 
 	require.Equal(t, info.GetID(), stat.id)
-	require.Equal(t, workerIndex, stat.workerIndex)
+	require.Equal(t, workerIndex, stat.messageWorkerIndex)
 	require.Equal(t, uint64(0), stat.resetTs.Load())
 	require.Equal(t, startTs, stat.eventStoreResolvedTs.Load())
 	require.Equal(t, startTs, stat.checkpointTs.Load())
