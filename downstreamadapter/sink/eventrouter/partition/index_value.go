@@ -22,7 +22,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/hash"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
 
@@ -63,7 +62,7 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonE
 			}
 			if tableInfo.IsHandleKey(col.ID) {
 				value := common.ExtractColVal(&rowData, col, idx)
-				r.hasher.Write([]byte(col.Name.L), []byte(model.ColumnValueString(value)))
+				r.hasher.Write([]byte(col.Name.L), []byte(common.ColumnValueString(value)))
 			}
 		}
 	} else {
@@ -81,7 +80,7 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonE
 			if value == nil {
 				continue
 			}
-			r.hasher.Write([]byte(names[idx]), []byte(model.ColumnValueString(value)))
+			r.hasher.Write([]byte(names[idx]), []byte(common.ColumnValueString(value)))
 		}
 	}
 

@@ -24,9 +24,9 @@ import (
 	logcoordinator "github.com/pingcap/ticdc/logservice/coordinator"
 	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.etcd.io/etcd/server/v3/mvcc"
 	"go.uber.org/zap"
@@ -123,7 +123,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		}
 
 		coordinatorVersion, err := e.svr.EtcdClient.GetOwnerRevision(ctx,
-			model.CaptureID(e.svr.info.ID))
+			config.CaptureID(e.svr.info.ID))
 		if err != nil {
 			return errors.Trace(err)
 		}

@@ -25,13 +25,13 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
@@ -232,7 +232,7 @@ func TestMigration(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint64(1), info.UpstreamID)
 		tc.info.UpstreamID = info.UpstreamID
-		require.Equal(t, model.DefaultNamespace, info.ChangefeedID.Namespace())
+		require.Equal(t, common.DefaultNamespace, info.ChangefeedID.Namespace())
 		require.Equal(t, tc.id, info.ChangefeedID.Name())
 		tc.info.ChangefeedID.DisplayName.Namespace = info.ChangefeedID.Namespace()
 		tc.info.ChangefeedID.DisplayName.Name = info.ChangefeedID.Name()
@@ -275,7 +275,7 @@ func TestMigration(t *testing.T) {
 	err = info.Unmarshal(infoResp.Kvs[0].Value)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), info.UpstreamID)
-	require.Equal(t, model.DefaultNamespace, info.ChangefeedID.Namespace())
+	require.Equal(t, common.DefaultNamespace, info.ChangefeedID.Namespace())
 
 	resp, err := cli.Get(context.Background(), otherClusterData)
 	require.Nil(t, err)
