@@ -28,12 +28,12 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tiflow/cdc/processor/tablepb"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )

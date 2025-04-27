@@ -20,7 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/tiflow/pkg/util/seahash"
+	"github.com/pingcap/ticdc/pkg/util/seahash"
 	"go.uber.org/zap"
 )
 

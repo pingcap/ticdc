@@ -34,7 +34,6 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
-	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
@@ -321,7 +320,7 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.Chan
 		change := &ChangefeedChange{
 			changefeedID: id,
 			state:        state,
-			err: &model.RunningError{
+			err: &config.RunningError{
 				Code:    string(errCode),
 				Message: err.Error(),
 			},

@@ -18,7 +18,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tiflow/cdc/model"
 )
 
 type CaptureID = string
@@ -85,9 +84,9 @@ type TaskPosition struct {
 	Count uint64 `json:"count"`
 
 	// Error when changefeed error happens
-	Error *model.RunningError `json:"error"`
+	Error *RunningError `json:"error"`
 	// Warning when module error happens
-	Warning *model.RunningError `json:"warning"`
+	Warning *RunningError `json:"warning"`
 }
 
 // Marshal returns the json marshal format of a TaskStatus
@@ -117,7 +116,7 @@ func (tp *TaskPosition) Clone() *TaskPosition {
 		Count:        tp.Count,
 	}
 	if tp.Error != nil {
-		ret.Error = &model.RunningError{
+		ret.Error = &RunningError{
 			Time:    tp.Error.Time,
 			Addr:    tp.Error.Addr,
 			Code:    tp.Error.Code,
@@ -125,7 +124,7 @@ func (tp *TaskPosition) Clone() *TaskPosition {
 		}
 	}
 	if tp.Warning != nil {
-		ret.Warning = &model.RunningError{
+		ret.Warning = &RunningError{
 			Time:    tp.Warning.Time,
 			Addr:    tp.Warning.Addr,
 			Code:    tp.Warning.Code,

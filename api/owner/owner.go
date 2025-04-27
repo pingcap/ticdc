@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
+	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/tiflow/cdc/api"
@@ -42,17 +43,17 @@ type commonResp struct {
 
 // ChangefeedResp holds the most common usage information for a changefeed
 type ChangefeedResp struct {
-	FeedState    string              `json:"state"`
-	TSO          uint64              `json:"tso"`
-	Checkpoint   string              `json:"checkpoint"`
-	RunningError *model.RunningError `json:"error"`
+	FeedState    string               `json:"state"`
+	TSO          uint64               `json:"tso"`
+	Checkpoint   string               `json:"checkpoint"`
+	RunningError *config.RunningError `json:"error"`
 }
 
 // MarshalJSON use to marshal ChangefeedResp
 func (c ChangefeedResp) MarshalJSON() ([]byte, error) {
 	// alias the original type to prevent recursive call of MarshalJSON
 	type Alias ChangefeedResp
-	if c.FeedState == string(model.StateNormal) {
+	if c.FeedState == string(config.StateNormal) {
 		c.RunningError = nil
 	}
 	return json.Marshal(struct {
@@ -231,7 +232,7 @@ func (h *ownerAPI) handleChangefeedQuery(w http.ResponseWriter, req *http.Reques
 	resp := &ChangefeedResp{}
 	if cfInfo != nil {
 		resp.FeedState = string(cfInfo.State)
-		resp.RunningError = cfInfo.Error
+		resp.RunningError = (*config.RunningError)(cfInfo.Error)
 	}
 	if cfStatus != nil {
 		resp.TSO = cfStatus.CheckpointTs

@@ -25,7 +25,6 @@ import (
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/orchestrator/util"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
 
@@ -223,7 +222,7 @@ func (s *ChangefeedReactorState) GetChangefeedStatus() *config.ChangeFeedStatus 
 }
 
 // SetWarning sets the warning to changefeed
-func (s *ChangefeedReactorState) SetWarning(lastError *model.RunningError) {
+func (s *ChangefeedReactorState) SetWarning(lastError *config.RunningError) {
 	s.PatchInfo(func(info *config.ChangeFeedInfo) (*config.ChangeFeedInfo, bool, error) {
 		if info == nil {
 			return nil, false, nil
@@ -234,7 +233,7 @@ func (s *ChangefeedReactorState) SetWarning(lastError *model.RunningError) {
 }
 
 // SetError sets the error to changefeed
-func (s *ChangefeedReactorState) SetError(lastError *model.RunningError) {
+func (s *ChangefeedReactorState) SetError(lastError *config.RunningError) {
 	s.PatchInfo(func(info *config.ChangeFeedInfo) (*config.ChangeFeedInfo, bool, error) {
 		if info == nil {
 			return nil, false, nil
@@ -302,12 +301,12 @@ func (s *ChangefeedReactorState) ResumeChangefeed(overwriteCheckpointTs uint64) 
 }
 
 // TakeProcessorErrors reuturns the error of the changefeed and clean the error.
-func (s *ChangefeedReactorState) TakeProcessorErrors() []*model.RunningError {
-	var runningErrors map[string]*model.RunningError
+func (s *ChangefeedReactorState) TakeProcessorErrors() []*config.RunningError {
+	var runningErrors map[string]*config.RunningError
 	for captureID, position := range s.TaskPositions {
 		if position.Error != nil {
 			if runningErrors == nil {
-				runningErrors = make(map[string]*model.RunningError)
+				runningErrors = make(map[string]*config.RunningError)
 			}
 			runningErrors[position.Error.Code] = position.Error
 			log.Error("processor reports an error",
@@ -327,7 +326,7 @@ func (s *ChangefeedReactorState) TakeProcessorErrors() []*model.RunningError {
 	if runningErrors == nil {
 		return nil
 	}
-	result := make([]*model.RunningError, 0, len(runningErrors))
+	result := make([]*config.RunningError, 0, len(runningErrors))
 	for _, err := range runningErrors {
 		result = append(result, err)
 	}
@@ -335,12 +334,12 @@ func (s *ChangefeedReactorState) TakeProcessorErrors() []*model.RunningError {
 }
 
 // TakeProcessorWarnings reuturns the warning of the changefeed and clean the warning.
-func (s *ChangefeedReactorState) TakeProcessorWarnings() []*model.RunningError {
-	var runningWarnings map[string]*model.RunningError
+func (s *ChangefeedReactorState) TakeProcessorWarnings() []*config.RunningError {
+	var runningWarnings map[string]*config.RunningError
 	for captureID, position := range s.TaskPositions {
 		if position.Warning != nil {
 			if runningWarnings == nil {
-				runningWarnings = make(map[string]*model.RunningError)
+				runningWarnings = make(map[string]*config.RunningError)
 			}
 			runningWarnings[position.Warning.Code] = position.Warning
 			log.Warn("processor reports a warning",
@@ -361,7 +360,7 @@ func (s *ChangefeedReactorState) TakeProcessorWarnings() []*model.RunningError {
 	if runningWarnings == nil {
 		return nil
 	}
-	result := make([]*model.RunningError, 0, len(runningWarnings))
+	result := make([]*config.RunningError, 0, len(runningWarnings))
 	for _, err := range runningWarnings {
 		result = append(result, err)
 	}

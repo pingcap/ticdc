@@ -26,12 +26,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/fsutil"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/upstream"
 	"github.com/pingcap/tidb/pkg/util/gctuner"
-	"github.com/pingcap/tiflow/cdc/model"
-	"github.com/pingcap/tiflow/pkg/fsutil"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -199,8 +198,8 @@ func (c *server) setUpDir() {
 
 // registerNodeToEtcd the server by put the server's information in etcd
 func (c *server) registerNodeToEtcd(ctx context.Context) error {
-	cInfo := &model.CaptureInfo{
-		ID:             model.CaptureID(c.info.ID),
+	cInfo := &config.CaptureInfo{
+		ID:             config.CaptureID(c.info.ID),
 		AdvertiseAddr:  c.info.AdvertiseAddr,
 		Version:        c.info.Version,
 		GitHash:        c.info.GitHash,

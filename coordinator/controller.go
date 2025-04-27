@@ -36,7 +36,6 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
-	"github.com/pingcap/tiflow/cdc/model"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -88,7 +87,7 @@ type ChangefeedChange struct {
 	changefeed   *changefeed.Changefeed
 	state        config.FeedState
 	changeType   ChangeType
-	err          *model.RunningError
+	err          *config.RunningError
 }
 
 func NewController(
@@ -413,7 +412,7 @@ func (c *Controller) updateChangefeedStatus(
 		return change
 	}
 	if err != nil {
-		change.err = &model.RunningError{
+		change.err = &config.RunningError{
 			Time:    time.Now(),
 			Addr:    err.Node,
 			Code:    err.Code,
