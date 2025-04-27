@@ -653,12 +653,6 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 						continue
 					}
 				}
-
-				if m.msgType == pevent.TypeDMLEvent {
-					log.Info("event broker send message", zap.Any("message type", m.msgType), zap.Any("dispatcherID", m.getDispatcherID()), zap.Any("seq", m.e.(*pevent.DMLEvent).Seq))
-				} else {
-					log.Info("event broker send message", zap.Any("message type", m.msgType), zap.Any("dispatcherID", m.getDispatcherID()))
-				}
 				tMsg := messaging.NewSingleTargetMessage(
 					m.serverID,
 					messaging.EventCollectorTopic,
