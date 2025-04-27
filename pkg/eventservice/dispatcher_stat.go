@@ -79,7 +79,11 @@ type dispatcherStat struct {
 	// taskScanning is used to indicate whether the scan task is running.
 	// If so, we should wait until it is done before we send next resolvedTs event of
 	// this dispatcher.
-	taskScanning atomic.Bool
+
+	taskScanning struct {
+		sync.RWMutex
+		state bool
+	}
 
 	// isRemoved is used to indicate whether the dispatcher is removed.
 	// If so, we should ignore the errors related to this dispatcher.
@@ -141,7 +145,11 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	a.sentResolvedTs.Store(resetTs)
 	a.resetTs.Store(resetTs)
 	a.seq.Store(0)
-	a.taskScanning.Store(false)
+
+	a.taskScanning.Lock()
+	a.taskScanning.state = false
+	a.taskScanning.Unlock()
+
 	a.isRunning.Store(true)
 }
 
@@ -178,7 +186,7 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 }
 
 func (a *dispatcherStat) IsRunning() bool {
-	return a.isRunning.Load() && a.changefeedStat.isRunning.Load()
+	return a.isRunning.Load() && a.changefeedStat.isRunning.Load() && a.isHandshaked.Load()
 }
 
 type scanTask = *dispatcherStat

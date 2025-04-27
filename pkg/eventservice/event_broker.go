@@ -157,8 +157,9 @@ func newEventBroker(
 	}
 
 	for i := 0; i < c.scanWorkerCount; i++ {
+		idx := i
 		g.Go(func() error {
-			c.runScanWorker(ctx)
+			c.runScanWorker(ctx, idx)
 			return nil
 		})
 	}
@@ -234,13 +235,13 @@ func (c *eventBroker) getMessageCh(workerIndex int) chan *wrapEvent {
 	return c.messageCh[workerIndex]
 }
 
-func (c *eventBroker) runScanWorker(ctx context.Context) {
+func (c *eventBroker) runScanWorker(ctx context.Context, idx int) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case task := <-c.taskChan:
-			c.doScan(ctx, task)
+			c.doScan(ctx, task, idx)
 		}
 	}
 }
@@ -334,9 +335,11 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e pevent.DD
 // If the dispatcher needs to scan the event store, it returns true.
 // If the dispatcher does not need to scan the event store, it send the watermark to the dispatcher
 func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common.DataRange) {
-	if !mustCheck && task.taskScanning.Load() {
+	task.taskScanning.RLock()
+	if !mustCheck && task.taskScanning.state {
 		return false, common.DataRange{}
 	}
+	task.taskScanning.RUnlock()
 
 	// If the dispatcher is not ready, we don't need to scan the event store.
 	if !c.checkAndSendReady(task) {
@@ -454,13 +457,15 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 }
 
 // TODO: handle error properly.
-func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
+func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	start := time.Now()
 	remoteID := node.ID(task.info.GetServerID())
 	dispatcherID := task.id
 
 	defer func() {
-		task.taskScanning.Store(false)
+		task.taskScanning.Lock()
+		task.taskScanning.state = false
+		task.taskScanning.Unlock()
 	}()
 
 	// If the target is not ready to send, we don't need to scan the event store.
@@ -469,7 +474,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		log.Info("The remote target is not ready, skip scan",
 			zap.String("changefeed", task.info.GetChangefeedID().String()),
 			zap.String("dispatcher", task.id.String()),
-			zap.String("remote", remoteID.String()))
+			zap.String("remote", remoteID.String()),
+			zap.Int("workerIndex", idx),
+		)
 		return
 	}
 
@@ -540,7 +547,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 					zap.Uint64("taskStartTs", dataRange.StartTs),
 					zap.Uint64("taskEndTs", dataRange.EndTs),
 					zap.Uint64("lastSentResolvedTs", task.sentResolvedTs.Load()),
-					zap.Uint64("lastSentDMLCommitTs", lastSentDMLCommitTs))
+					zap.Uint64("lastSentDMLCommitTs", lastSentDMLCommitTs),
+					zap.Int("workerIndex", idx),
+				)
 			}
 			return false
 		}
@@ -560,6 +569,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// 3. Send the events to the dispatcher.
 	var dml *pevent.DMLEvent
 	for {
+
+		if !task.IsRunning() {
+			return
+		}
 		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
 		if err != nil {
@@ -567,7 +580,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		}
 		if e == nil {
 			// Send the last dml to the dispatcher.
-			sendDML(dml)
+			ok := sendDML(dml)
+			if !ok {
+				return
+			}
+
 			sendRemainingDDLEvents()
 			metrics.EventServiceScanDuration.Observe(time.Since(start).Seconds())
 			return
@@ -584,11 +601,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			if !ok {
 				return
 			}
+
 			tableID := task.info.GetTableSpan().TableID
 			tableInfo, err := c.schemaStore.GetTableInfo(tableID, e.CRTs-1)
 			if err != nil {
 				if task.isRemoved.Load() {
-					log.Warn("get table info failed, since the dispatcher is removed", zap.Error(err))
+					log.Warn("get table info failed, since the dispatcher is removed", zap.Error(err), zap.Int("workerIndex", idx))
 					return
 				}
 				if errors.Is(err, &schemastore.TableDeletedError{}) {
@@ -596,7 +614,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 					// TODO: tables may be deleted in many ways, we need to check if it is safe to ignore later dmls in all cases.
 					// We must send the remaining ddl events to the dispatcher in this case.
 					sendRemainingDDLEvents()
-					log.Warn("get table info failed, since the table is deleted", zap.Error(err))
+					log.Warn("get table info failed, since the table is deleted", zap.Error(err), zap.Int("workerIndex", idx))
 					return
 				}
 				log.Panic("get table info failed, unknown reason", zap.Error(err))
@@ -717,10 +735,11 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
 			appErr, ok := err.(*apperror.AppError)
+			log.Info("fizz send msg failed", zap.Error(err), zap.Any("tMsg", tMsg))
+			time.Sleep(congestedRetryInterval)
 			if ok && appErr.Type == apperror.ErrorTypeMessageCongested {
 				log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))
 				// Wait for a while and retry to avoid the dropped message flood.
-				time.Sleep(congestedRetryInterval)
 				continue
 			} else {
 				// Drop the message, and return.
@@ -824,7 +843,9 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommi
 		d.onLatestCommitTs(latestCommitTs)
 		needScan, _ := c.checkNeedScan(d, false)
 		if needScan {
-			d.taskScanning.Store(true)
+			d.taskScanning.Lock()
+			d.taskScanning.state = true
+			d.taskScanning.Unlock()
 			c.taskChan <- d
 		}
 	}
@@ -949,6 +970,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 
 	stat.(*dispatcherStat).isRemoved.Store(true)
+	stat.(*dispatcherStat).isRunning.Store(false)
 	c.eventStore.UnregisterDispatcher(id)
 	c.schemaStore.UnregisterTable(dispatcherInfo.GetTableSpan().TableID)
 	c.dispatchers.Delete(id)
@@ -995,12 +1017,36 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	if !ok {
 		return
 	}
+
+	// Wait until the scan task goroutine return before reset the dispatcher.
+	for {
+		stat.taskScanning.RLock()
+		scanning := stat.taskScanning.state
+		stat.taskScanning.RUnlock()
+		if !scanning {
+			break
+		}
+		// Give other goroutines a chance to acquire the write lock
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	oldSeq := stat.seq.Load()
+	oldSentResolvedTs := stat.sentResolvedTs.Load()
 	stat.resetState(dispatcherInfo.GetStartTs())
+
+	// Reset the scan task state
+	stat.taskScanning.Lock()
+	stat.taskScanning.state = false
+	stat.taskScanning.Unlock()
 	log.Info("reset dispatcher",
 		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", stat.id),
 		zap.String("span", common.FormatTableSpan(stat.info.GetTableSpan())),
-		zap.Uint64("startTs", stat.info.GetStartTs()))
+		zap.Uint64("originStartTs", stat.info.GetStartTs()),
+		zap.Uint64("oldSeq", oldSeq),
+		zap.Uint64("newSeq", stat.seq.Load()),
+		zap.Uint64("oldSentResolvedTs", oldSentResolvedTs),
+		zap.Uint64("newSentResolvedTs", stat.sentResolvedTs.Load()))
 }
 
 func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
