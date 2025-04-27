@@ -50,7 +50,6 @@ func NewEventRouter(sinkConfig *config.SinkConfig, protocol config.Protocol, def
 	})
 
 	rules := make([]Rule, 0, len(ruleConfigs))
-
 	for _, ruleConfig := range ruleConfigs {
 		f, err := tableFilter.Parse(ruleConfig.Matcher)
 		if err != nil {
@@ -67,6 +66,10 @@ func NewEventRouter(sinkConfig *config.SinkConfig, protocol config.Protocol, def
 			return nil, err
 		}
 		rules = append(rules, Rule{partitionDispatcher: d, topicGenerator: topicGenerator, Filter: f})
+		log.Info("append dispatch rule",
+			zap.Strings("matcher", ruleConfig.Matcher),
+			zap.String("partitionRule", ruleConfig.PartitionRule),
+			zap.String("dispatcher", d.String()))
 	}
 
 	return &EventRouter{
@@ -153,6 +156,10 @@ func (s *EventRouter) matchPartitionGenerator(schema, table string) partition.Ge
 				zap.String("schema", schema), zap.String("table", table),
 				zap.String("dispatcher", rule.partitionDispatcher.String()))
 			return rule.partitionDispatcher
+		} else {
+			log.Info("cannot match the partition generator",
+				zap.String("schema", schema), zap.String("table", table),
+				zap.String("dispatcher", rule.partitionDispatcher.String()))
 		}
 	}
 	log.Panic("the dispatch rule must cover all tables")
