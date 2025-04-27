@@ -38,7 +38,8 @@ type EventRouter struct {
 }
 
 // NewEventRouter creates a new EventRouter.
-func NewEventRouter(sinkConfig *config.SinkConfig, protocol config.Protocol, defaultTopic, scheme string) (*EventRouter, error) {
+func NewEventRouter(sinkConfig *config.SinkConfig, defaultTopic string,
+	isPulsar bool, isAvro bool) (*EventRouter, error) {
 	// If an event does not match any dispatching rules in the config file,
 	// it will be dispatched by the default partition dispatcher and
 	// static topic dispatcher because it matches *.* rule.
@@ -58,10 +59,8 @@ func NewEventRouter(sinkConfig *config.SinkConfig, protocol config.Protocol, def
 		if !sinkConfig.CaseSensitive {
 			f = tableFilter.CaseInsensitive(f)
 		}
-
-		d := partition.GetPartitionGenerator(ruleConfig.PartitionRule, scheme, ruleConfig.IndexName, ruleConfig.Columns)
-
-		topicGenerator, err := topic.GetTopicGenerator(ruleConfig.TopicRule, defaultTopic, protocol, scheme)
+		d := partition.GetPartitionGenerator(ruleConfig.PartitionRule, isPulsar, ruleConfig.IndexName, ruleConfig.Columns)
+		topicGenerator, err := topic.GetTopicGenerator(ruleConfig.TopicRule, defaultTopic, isPulsar, isAvro)
 		if err != nil {
 			return nil, err
 		}

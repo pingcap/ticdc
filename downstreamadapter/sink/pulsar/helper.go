@@ -101,8 +101,7 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	scheme := helper.GetScheme(sinkURI)
-	pulsarComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, protocol, topic, scheme)
+	pulsarComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, topic, true, false)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
