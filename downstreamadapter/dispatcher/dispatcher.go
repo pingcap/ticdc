@@ -910,6 +910,7 @@ func (d *Dispatcher) isFirstEvent(event commonEvent.Event) bool {
 }
 
 func (d *Dispatcher) updateComponentStatus() {
+	log.Info("hyy update component status to working", zap.Any("dispatcherID", d.id))
 	d.componentStatus.Set(heartbeatpb.ComponentState_Working)
 	d.statusesChan <- TableSpanStatusWithSeq{
 		TableSpanStatus: &heartbeatpb.TableSpanStatus{
