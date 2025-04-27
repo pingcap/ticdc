@@ -40,7 +40,6 @@ type batchDecoder struct {
 	valueBytes []byte
 
 	nextKey *messageKey
-	nextRow *messageRow
 
 	storage storage.ExternalStorage
 
@@ -111,42 +110,20 @@ func (b *batchDecoder) hasNext() bool {
 	return false
 }
 
-func (b *batchDecoder) decodeNextKey() {
+// HasNext implements the RowEventDecoder interface
+func (b *batchDecoder) HasNext() (common.MessageType, bool) {
+	if !b.hasNext() {
+		return common.MessageTypeUnknown, false
+	}
+
 	keyLen := binary.BigEndian.Uint64(b.keyBytes[:8])
 	key := b.keyBytes[8 : keyLen+8]
 	msgKey := new(messageKey)
 	msgKey.Decode(key)
 	b.nextKey = msgKey
-
 	b.keyBytes = b.keyBytes[keyLen+8:]
-}
 
-// HasNext implements the RowEventDecoder interface
-func (b *batchDecoder) HasNext() (common.MessageType, bool) {
-	if !b.hasNext() {
-		return 0, false
-	}
-	b.decodeNextKey()
-
-	switch b.nextKey.Type {
-	case common.MessageTypeResolved, common.MessageTypeDDL:
-		return b.nextKey.Type, true
-	default:
-	}
-	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
-	value := b.valueBytes[8 : valueLen+8]
-	b.valueBytes = b.valueBytes[valueLen+8:]
-
-	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
-	if err != nil {
-		log.Panic("decompress failed",
-			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value), zap.Error(err))
-	}
-	b.nextRow = new(messageRow)
-	b.nextRow.decode(value)
-
-	return common.MessageTypeRow, true
+	return b.nextKey.Type, true
 }
 
 // NextResolvedEvent implements the RowEventDecoder interface
@@ -220,6 +197,20 @@ func (b *batchDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 		log.Panic("message type is not row", zap.Any("messageType", b.nextKey.Type))
 	}
 
+	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
+	value := b.valueBytes[8 : valueLen+8]
+	b.valueBytes = b.valueBytes[valueLen+8:]
+
+	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
+	if err != nil {
+		log.Panic("decompress failed",
+			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value), zap.Error(err))
+	}
+
+	nextRow := new(messageRow)
+	nextRow.decode(value)
+
 	ctx := context.Background()
 	// claim-check message found
 	if b.nextKey.ClaimCheckLocation != "" {
@@ -227,13 +218,11 @@ func (b *batchDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 	}
 
 	if b.nextKey.OnlyHandleKey && b.upstreamTiDB != nil {
-		return b.assembleHandleKeyOnlyDMLEvent(ctx)
+		return b.assembleHandleKeyOnlyDMLEvent(ctx, nextRow)
 	}
 
-	result := b.assembleDMLEvent()
-
+	result := b.assembleDMLEvent(nextRow)
 	b.nextKey = nil
-	b.nextRow = nil
 	return result
 }
 
@@ -269,9 +258,8 @@ func buildColumns(
 	return result
 }
 
-func (b *batchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context) *commonEvent.DMLEvent {
+func (b *batchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, row *messageRow) *commonEvent.DMLEvent {
 	key := b.nextKey
-	row := b.nextRow
 	var (
 		schema   = key.Schema
 		table    = key.Table
@@ -283,27 +271,26 @@ func (b *batchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context) *commo
 			conditions[name] = col.Value
 		}
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		columns := buildColumns(holder, row.Delete)
-		b.nextRow.Delete = columns
+		row.Delete = buildColumns(holder, row.Delete)
 	} else if len(row.PreColumns) != 0 {
 		for name, col := range row.PreColumns {
 			conditions[name] = col.Value
 		}
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		b.nextRow.PreColumns = buildColumns(holder, row.PreColumns)
+		row.PreColumns = buildColumns(holder, row.PreColumns)
 		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		b.nextRow.Update = buildColumns(holder, row.PreColumns)
+		row.Update = buildColumns(holder, row.PreColumns)
 	} else if len(row.Update) != 0 {
 		for name, col := range row.Update {
 			conditions[name] = col.Value
 		}
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		b.nextRow.Update = buildColumns(holder, row.Update)
+		row.Update = buildColumns(holder, row.Update)
 	} else {
 		log.Panic("unknown event type")
 	}
 	b.nextKey.OnlyHandleKey = false
-	return b.assembleDMLEvent()
+	return b.assembleDMLEvent(row)
 }
 
 func (b *batchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commonEvent.DMLEvent {
@@ -342,9 +329,7 @@ func (b *batchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) *
 	rowMsg.decode(value)
 
 	b.nextKey = msgKey
-	b.nextRow = rowMsg
-
-	return b.assembleDMLEvent()
+	return b.assembleDMLEvent(rowMsg)
 }
 
 func (b *batchDecoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
@@ -439,12 +424,9 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 	return result
 }
 
-func (b *batchDecoder) assembleDMLEvent() *commonEvent.DMLEvent {
+func (b *batchDecoder) assembleDMLEvent(value *messageRow) *commonEvent.DMLEvent {
 	key := b.nextKey
-	value := b.nextRow
-
 	b.nextKey = nil
-	b.nextRow = nil
 
 	tableInfo := b.queryTableInfo(key, value)
 	result := new(commonEvent.DMLEvent)

@@ -87,6 +87,10 @@ func TestEncodeFlag(t *testing.T) {
 	change, ok := decoded.GetNextRow()
 	require.True(t, ok)
 	common.CompareRow(t, insertEvent.Event, insertEvent.TableInfo, change, decoded.TableInfo)
+
+	messageType, hasNext = decoder.HasNext()
+	require.False(t, hasNext)
+	require.Equal(t, common.MessageTypeUnknown, messageType)
 }
 
 func TestIntegerTypes(t *testing.T) {
