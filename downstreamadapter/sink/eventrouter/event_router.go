@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	tableFilter "github.com/pingcap/tidb/pkg/util/table-filter"
+	"go.uber.org/zap"
 )
 
 type Rule struct {
@@ -148,6 +149,9 @@ func (s *EventRouter) matchTopicGenerator(schema, table string) topic.TopicGener
 func (s *EventRouter) matchPartitionGenerator(schema, table string) partition.Generator {
 	for _, rule := range s.rules {
 		if rule.MatchTable(schema, table) {
+			log.Info("partition generator found",
+				zap.String("schema", schema), zap.String("table", table),
+				zap.String("dispatcher", rule.partitionDispatcher.String()))
 			return rule.partitionDispatcher
 		}
 	}

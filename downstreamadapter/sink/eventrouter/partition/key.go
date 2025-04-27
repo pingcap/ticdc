@@ -14,6 +14,8 @@
 package partition
 
 import (
+	"fmt"
+
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 )
@@ -26,6 +28,10 @@ func newKeyPartitionGenerator(partitionKey string) *KeyPartitionGenerator {
 	return &KeyPartitionGenerator{
 		partitionKey: partitionKey,
 	}
+}
+
+func (t *KeyPartitionGenerator) String() string {
+	return fmt.Sprintf("key-partition-generator, partitionKey: %s", t.partitionKey)
 }
 
 func (t *KeyPartitionGenerator) GeneratePartitionIndexAndKey(row *commonEvent.RowChange,

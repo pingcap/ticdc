@@ -14,6 +14,7 @@
 package partition
 
 import (
+	"fmt"
 	"strconv"
 	"sync"
 
@@ -37,6 +38,10 @@ func newIndexValuePartitionGenerator(indexName string) *IndexValuePartitionGener
 		hasher:    hash.NewPositionInertia(),
 		IndexName: indexName,
 	}
+}
+
+func (r *IndexValuePartitionGenerator) String() string {
+	return fmt.Sprintf("index-value-partition-generator, indexName: %s", r.IndexName)
 }
 
 func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonEvent.RowChange,
