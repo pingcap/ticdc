@@ -337,6 +337,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e pevent.DD
 func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common.DataRange) {
 	task.taskScanning.RLock()
 	if !mustCheck && task.taskScanning.state {
+		task.taskScanning.RUnlock()
 		return false, common.DataRange{}
 	}
 	task.taskScanning.RUnlock()
