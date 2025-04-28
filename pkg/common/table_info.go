@@ -318,11 +318,7 @@ func (ti *TableInfo) GetColInfosForRowChangedEvent() []rowcodec.ColInfo {
 
 // IsColCDCVisible returns whether the col is visible for CDC
 func IsColCDCVisible(col *model.ColumnInfo) bool {
-	// this column is a virtual generated column
-	if col.IsGenerated() && !col.GeneratedStored {
-		return false
-	}
-	return true
+	return !col.IsGenerated() || col.GeneratedStored
 }
 
 // HasVirtualColumns returns whether the table has virtual columns
@@ -457,7 +453,9 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
 	cs := newColumnSchema4Decoder(tableInfo)
-	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
+	result := newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
+	result.InitPrivateFields()
+	return result
 }
 
 // BuildTiDBTableInfoWithoutVirtualColumns build a TableInfo without virual columns from the source table info

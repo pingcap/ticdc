@@ -113,6 +113,10 @@ func TestIntegerTypes(t *testing.T) {
 				require.Equal(t, event.CommitTs, decoded.GetCommitTs())
 			}
 
+			require.NotZero(t, decoded.TableInfo.GetPreInsertSQL())
+			require.NotZero(t, decoded.TableInfo.GetPreUpdateSQL())
+			require.NotZero(t, decoded.TableInfo.GetPreReplaceSQL())
+
 			change, ok := decoded.GetNextRow()
 			require.True(t, ok)
 

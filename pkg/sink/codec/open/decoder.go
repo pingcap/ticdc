@@ -414,13 +414,19 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 			})
 		}
 	}
+
+	result := make([]*timodel.IndexInfo, 0, 1)
+	if len(indexColumns) == 0 {
+		return result
+	}
 	indexInfo := &timodel.IndexInfo{
 		ID:      1,
 		Name:    pmodel.NewCIStr("primary"),
 		Columns: indexColumns,
 		Primary: true,
+		Unique:  true,
 	}
-	result := []*timodel.IndexInfo{indexInfo}
+	result = append(result, indexInfo)
 	return result
 }
 

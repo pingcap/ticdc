@@ -553,6 +553,7 @@ func newTableInfo(msg canalJSONMessageInterface, tableID int64) *commonType.Tabl
 	columns := newTiColumns(msg)
 	tableInfo.Columns = columns
 	tableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
+	tableInfo.PKIsHandle = len(tableInfo.Indices) != 0
 	return commonType.NewTableInfo4Decoder(*msg.getSchema(), tableInfo)
 }
 
@@ -615,12 +616,18 @@ func newTiIndices(columns []*timodel.ColumnInfo, keys map[string]struct{}) []*ti
 			})
 		}
 	}
+
+	result := make([]*timodel.IndexInfo, 0, len(indexColumns))
+	if len(indexColumns) == 0 {
+		return result
+	}
 	indexInfo := &timodel.IndexInfo{
 		ID:      1,
 		Name:    pmodel.NewCIStr("primary"),
 		Columns: indexColumns,
 		Primary: true,
+		Unique:  true,
 	}
-	result := []*timodel.IndexInfo{indexInfo}
+	result = append(result, indexInfo)
 	return result
 }

@@ -15,13 +15,13 @@ package causality
 
 import (
 	"context"
-	"github.com/pingcap/log"
-	"go.uber.org/zap"
 
+	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
+	"go.uber.org/zap"
 )
 
 // ConflictDetector implements a logic that dispatches transaction
