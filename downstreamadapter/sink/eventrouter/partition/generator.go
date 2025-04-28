@@ -47,7 +47,7 @@ func GetPartitionGenerator(rule string, isPulsar bool, indexName string, columns
 	if isPulsar {
 		return newKeyPartitionGenerator(rule)
 	}
-	
+
 	log.Warn("the partition dispatch rule is not default/ts/table/index-value/columns,"+
 		" use the default rule instead.", zap.String("rule", rule))
 	return newTablePartitionGenerator()

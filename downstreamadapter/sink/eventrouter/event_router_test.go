@@ -14,7 +14,6 @@
 package eventrouter
 
 import (
-	cmdUtil "github.com/pingcap/ticdc/cmd/util"
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
@@ -70,19 +69,6 @@ func newSinkConfig4Test() *config.SinkConfig {
 			},
 		},
 	}
-}
-
-func TestPartitionDispatcherMatch(t *testing.T) {
-	configFile := "/Users/edison/go/ticdc/tests/integration_tests/mq_sink_dispatcher/conf/new_changefeed.toml"
-	replicaConfig := config.GetDefaultReplicaConfig()
-	err := cmdUtil.StrictDecodeFile(configFile, "replica-config", &replicaConfig)
-	require.NoError(t, err)
-
-	router, err := NewEventRouter(replicaConfig.Sink, "test", false, false)
-	require.NoError(t, err)
-
-	partitionDispatcher := router.GetPartitionGenerator("dispatcher", "index")
-	require.IsType(t, &partition.IndexValuePartitionGenerator{}, partitionDispatcher)
 }
 
 func TestEventRouter(t *testing.T) {
@@ -179,29 +165,19 @@ func TestGetTopicForRowChange(t *testing.T) {
 	d, err := NewEventRouter(sinkConfig, "test", false, false)
 	require.NoError(t, err)
 
-	topicName := d.GetTopicForRowChange(&common.TableInfo{
-		TableName: common.TableName{Schema: "test_default1", Table: "table"},
-	})
+	topicName := d.GetTopicForRowChange("test_default1", "table")
 	require.Equal(t, "test", topicName)
 
-	topicName = d.GetTopicForRowChange(&common.TableInfo{
-		TableName: common.TableName{Schema: "test_default2", Table: "table"},
-	})
+	topicName = d.GetTopicForRowChange("test_default2", "table")
 	require.Equal(t, "test", topicName)
 
-	topicName = d.GetTopicForRowChange(&common.TableInfo{
-		TableName: common.TableName{Schema: "test_table", Table: "table"},
-	})
+	topicName = d.GetTopicForRowChange("test_table", "table")
 	require.Equal(t, "hello_test_table_world", topicName)
 
-	topicName = d.GetTopicForRowChange(&common.TableInfo{
-		TableName: common.TableName{Schema: "test_index_value", Table: "table"},
-	})
+	topicName = d.GetTopicForRowChange("test_index_value", "table")
 	require.Equal(t, "test_index_value_world", topicName)
 
-	topicName = d.GetTopicForRowChange(&common.TableInfo{
-		TableName: common.TableName{Schema: "a", Table: "table"},
-	})
+	topicName = d.GetTopicForRowChange("a", "table")
 	require.Equal(t, "a_table", topicName)
 }
 
