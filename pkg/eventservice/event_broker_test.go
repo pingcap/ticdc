@@ -76,14 +76,10 @@ func TestCheckNeedScan(t *testing.T) {
 	disp.latestCommitTs.Store(101)
 
 	// Case 1: Is scanning, and mustCheck is false, it should return false.
-	disp.taskScanning.Lock()
-	disp.taskScanning.state = true
-	disp.taskScanning.Unlock()
+	disp.isTaskScanning.Store(true)
 	needScan, _ := broker.checkNeedScan(disp, false)
 	require.False(t, needScan)
-	disp.taskScanning.Lock()
-	disp.taskScanning.state = false
-	disp.taskScanning.Unlock()
+	disp.isTaskScanning.Store(false)
 	log.Info("Pass case 1")
 
 	// Case 2: ResetTs is 0, it should return false.
@@ -142,9 +138,7 @@ func TestOnNotify(t *testing.T) {
 	notifyMsgs3 := notifyMsg{102, 101}
 	broker.onNotify(disp, notifyMsgs3.resolvedTs, notifyMsgs3.latestCommitTs)
 	require.Equal(t, uint64(102), disp.eventStoreResolvedTs.Load())
-	disp.taskScanning.RLock()
-	require.True(t, disp.taskScanning.state)
-	disp.taskScanning.RUnlock()
+	require.True(t, disp.isTaskScanning.Load())
 	task := <-broker.taskChan[disp.scanWorkerIndex]
 	require.Equal(t, task.id, disp.id)
 	log.Info("Pass case 3")
@@ -163,9 +157,7 @@ func TestOnNotify(t *testing.T) {
 
 	// Case 5: do scan and then onNotify again.
 	broker.doScan(context.TODO(), task, 0)
-	disp.taskScanning.RLock()
-	require.False(t, disp.taskScanning.state)
-	disp.taskScanning.RUnlock()
+	require.False(t, disp.isTaskScanning.Load())
 	require.Equal(t, notifyMsgs4.resolvedTs, disp.sentResolvedTs.Load())
 	notifyMsgs5 := notifyMsg{104, 101}
 	// Set the schemaStore's maxDDLCommitTs to the sentResolvedTs, so the broker will not scan the schemaStore.

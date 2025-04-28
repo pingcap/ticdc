@@ -82,10 +82,7 @@ type dispatcherStat struct {
 	// If so, we should wait until it is done before we send next resolvedTs event of
 	// this dispatcher.
 
-	taskScanning struct {
-		sync.RWMutex
-		state bool
-	}
+	isTaskScanning atomic.Bool
 
 	// isRemoved is used to indicate whether the dispatcher is removed.
 	// If so, we should ignore the errors related to this dispatcher.
@@ -150,9 +147,7 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	a.resetTs.Store(resetTs)
 	a.seq.Store(0)
 
-	a.taskScanning.Lock()
-	a.taskScanning.state = false
-	a.taskScanning.Unlock()
+	a.isTaskScanning.Store(false)
 
 	a.isRunning.Store(true)
 }

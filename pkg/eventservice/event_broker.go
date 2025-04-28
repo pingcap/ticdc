@@ -339,12 +339,10 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e pevent.DD
 // If the dispatcher needs to scan the event store, it returns true.
 // If the dispatcher does not need to scan the event store, it send the watermark to the dispatcher
 func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common.DataRange) {
-	task.taskScanning.RLock()
-	if !mustCheck && task.taskScanning.state {
-		task.taskScanning.RUnlock()
+	if !mustCheck && task.isTaskScanning.Load() {
+		log.Info("checkNeedScan false", zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex))
 		return false, common.DataRange{}
 	}
-	task.taskScanning.RUnlock()
 
 	// If the dispatcher is not ready, we don't need to scan the event store.
 	if !c.checkAndSendReady(task) {
@@ -467,10 +465,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	remoteID := node.ID(task.info.GetServerID())
 	dispatcherID := task.id
 
+	log.Info("doScan", zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.String("remote", remoteID.String()), zap.Int("workerIndex", idx), zap.Bool("isRunning", task.isRunning.Load()), zap.Bool("isTaskScanning", task.isTaskScanning.Load()))
+
 	defer func() {
-		task.taskScanning.Lock()
-		task.taskScanning.state = false
-		task.taskScanning.Unlock()
+		task.isTaskScanning.Store(false)
+		log.Info("doScan done", zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.String("remote", remoteID.String()), zap.Int("workerIndex", idx), zap.Bool("isRunning", task.isRunning.Load()), zap.Bool("isTaskScanning", task.isTaskScanning.Load()))
 	}()
 
 	// If the target is not ready to send, we don't need to scan the event store.
@@ -576,6 +575,16 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	for {
 
 		if !task.IsRunning() {
+			log.Info("The dispatcher is not running, skip the following scan",
+				zap.Uint64("clusterID", task.info.GetClusterID()),
+				zap.String("changefeed", task.info.GetChangefeedID().String()),
+				zap.String("dispatcher", task.id.String()),
+				zap.Uint64("taskStartTs", dataRange.StartTs),
+				zap.Uint64("taskEndTs", dataRange.EndTs),
+				zap.Uint64("lastSentResolvedTs", task.sentResolvedTs.Load()),
+				zap.Uint64("lastSentDMLCommitTs", lastSentDMLCommitTs),
+				zap.Int("workerIndex", idx),
+			)
 			return
 		}
 		// Node: The first event of the txn must return isNewTxn as true.
@@ -843,14 +852,16 @@ func (c *eventBroker) close() {
 }
 
 func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommitTs uint64) {
+	log.Info("onNotify", zap.String("changefeed", d.changefeedStat.changefeedID.String()), zap.String("dispatcher", d.id.String()), zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("latestCommitTs", latestCommitTs), zap.Bool("isRunning", d.isRunning.Load()), zap.Bool("isTaskScanning", d.isTaskScanning.Load()), zap.Any("workerIndex", d.scanWorkerIndex))
+
 	if d.onResolvedTs(resolvedTs) {
+		log.Info("onNotify onResolvedTs", zap.String("changefeed", d.changefeedStat.changefeedID.String()), zap.String("dispatcher", d.id.String()), zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("latestCommitTs", latestCommitTs), zap.Bool("isRunning", d.isRunning.Load()), zap.Bool("isTaskScanning", d.isTaskScanning.Load()), zap.Any("workerIndex", d.scanWorkerIndex))
 		metricEventStoreOutputResolved.Inc()
 		d.onLatestCommitTs(latestCommitTs)
 		needScan, _ := c.checkNeedScan(d, false)
 		if needScan {
-			d.taskScanning.Lock()
-			d.taskScanning.state = true
-			d.taskScanning.Unlock()
+			log.Info("onNotify needScan", zap.String("changefeed", d.changefeedStat.changefeedID.String()), zap.String("dispatcher", d.id.String()), zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("latestCommitTs", latestCommitTs), zap.Bool("isRunning", d.isRunning.Load()), zap.Bool("isTaskScanning", d.isTaskScanning.Load()), zap.Any("workerIndex", d.scanWorkerIndex))
+			d.isTaskScanning.Store(true)
 			c.taskChan[d.scanWorkerIndex] <- d
 		}
 	}
@@ -1024,26 +1035,23 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 		return
 	}
 
+	// Must set the isRunning to false before reset the dispatcher.
+	// Otherwise, the scan task goroutine will not return before reset the dispatcher.
+	stat.isRunning.Store(false)
+
 	// Wait until the scan task goroutine return before reset the dispatcher.
 	for {
-		stat.taskScanning.RLock()
-		scanning := stat.taskScanning.state
-		stat.taskScanning.RUnlock()
-		if !scanning {
+		if !stat.isTaskScanning.Load() {
 			break
 		}
 		// Give other goroutines a chance to acquire the write lock
-		time.Sleep(1 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	oldSeq := stat.seq.Load()
 	oldSentResolvedTs := stat.sentResolvedTs.Load()
 	stat.resetState(dispatcherInfo.GetStartTs())
 
-	// Reset the scan task state
-	stat.taskScanning.Lock()
-	stat.taskScanning.state = false
-	stat.taskScanning.Unlock()
 	log.Info("reset dispatcher",
 		zap.Stringer("changefeedID", stat.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", stat.id),
