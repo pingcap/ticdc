@@ -46,6 +46,9 @@ const (
 
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
+
+	// Limit the number of transactions that can be scanned in a single scan task.
+	singleScanTxnLimit = 256
 )
 
 var (
@@ -557,9 +560,24 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return true
 	}
 
+	sendWaterMark := func() {
+		if lastSentDMLCommitTs != 0 {
+			task.updateSentResolvedTs(lastSentDMLCommitTs)
+			c.sendWatermark(remoteID, task, lastSentDMLCommitTs)
+		}
+	}
+
 	// 3. Send the events to the dispatcher.
 	var dml *pevent.DMLEvent
+	dmlCount := 0
 	for {
+
+		// If the number of transactions that can be scanned in a single scan task is greater than the limit,
+		// we need to send a watermark to the dispatcher and stop the scan.
+		if dmlCount >= singleScanTxnLimit {
+			sendWaterMark()
+			return
+		}
 		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
 		if err != nil {
@@ -602,6 +620,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 				log.Panic("get table info failed, unknown reason", zap.Error(err))
 			}
 			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
+			dmlCount++
 		}
 		if err = dml.AppendRow(e, c.mounter.DecodeToChunk); err != nil {
 			log.Panic("append row failed", zap.Error(err))
