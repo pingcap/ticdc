@@ -25,8 +25,12 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
@@ -554,4 +558,79 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
+}
+
+func TestGenKeyAndHash(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	createTableSQL := `create table tp_real
+		(
+			id        int auto_increment,
+			c_float   float   null,
+			c_double  double  null,
+			c_decimal decimal null,
+			c_decimal_2 decimal(10, 4) null,
+			constraint pk
+		primary key (id)
+		)`
+
+	ddlEvent := helper.DDL2Event(createTableSQL)
+
+	insert := `	insert into tp_real() values ()`
+	insertEvent := helper.DML2Event("test", "tp_real", insert)
+
+	row, ok := insertEvent.GetNextRow()
+	require.True(t, ok)
+
+	insertRowEvent := &commonEvent.RowEvent{
+		TableInfo:      insertEvent.TableInfo,
+		CommitTs:       insertEvent.GetCommitTs(),
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := codecCommon.NewConfig(config.ProtocolCanalJSON)
+
+	encoder, err := canal.NewJSONRowEventEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	decoder, err := canal.NewDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	m, err := encoder.EncodeDDLEvent(ddlEvent)
+	require.NoError(t, err)
+
+	decoder.AddKeyValue(m.Key, m.Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, codecCommon.MessageTypeDDL, messageType)
+
+	_ = decoder.NextDDLEvent()
+
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	require.NoError(t, err)
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+	messageType, hasNext = decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, codecCommon.MessageTypeRow, messageType)
+
+	originalKey, originalHash := genKeyAndHash(&row.Row, insertRowEvent.TableInfo)
+
+	decodedDML := decoder.NextDMLEvent()
+	decodedRow, ok := decodedDML.GetNextRow()
+	require.True(t, ok)
+
+	decodedKey, decodedHash := genKeyAndHash(&decodedRow.Row, decodedDML.TableInfo)
+	require.Equal(t, originalKey, decodedKey)
+	require.Equal(t, originalHash, decodedHash)
 }
