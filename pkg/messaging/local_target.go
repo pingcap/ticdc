@@ -78,17 +78,11 @@ func (s *localMessageTarget) recordCongestedMessageError(typeE string) {
 }
 
 func (s *localMessageTarget) sendMsgToChan(ch chan *TargetMessage, msg ...*TargetMessage) error {
-	for i, m := range msg {
+	for _, m := range msg {
 		m.To = s.localId
 		m.From = s.localId
 		m.Sequence = s.sequence.Add(1)
-		select {
-		case ch <- m:
-		default:
-			remains := len(msg) - i
-			s.dropMessageCounter.Add(float64(remains))
-			return AppError{Type: ErrorTypeMessageCongested, Reason: "Send message is congested"}
-		}
+		ch <- m
 	}
 	return nil
 }
