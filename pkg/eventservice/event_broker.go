@@ -340,7 +340,6 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e pevent.DD
 // If the dispatcher does not need to scan the event store, it send the watermark to the dispatcher
 func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common.DataRange) {
 	if !mustCheck && task.isTaskScanning.Load() {
-		log.Info("checkNeedScan false", zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex))
 		return false, common.DataRange{}
 	}
 
@@ -353,7 +352,6 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 
 	// Only check scan when the dispatcher is running.
 	if !task.IsRunning() {
-		log.Info("checkNeedScan false, task is not running", zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex))
 		// If the dispatcher is not running, we also need to send the watermark to the dispatcher.
 		// And the resolvedTs should be the last sent watermark.
 		resolvedTs := task.sentResolvedTs.Load()
@@ -467,11 +465,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	remoteID := node.ID(task.info.GetServerID())
 	dispatcherID := task.id
 
-	log.Info("doScan", zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.String("remote", remoteID.String()), zap.Int("workerIndex", idx), zap.Bool("isRunning", task.isRunning.Load()), zap.Bool("isTaskScanning", task.isTaskScanning.Load()))
-
 	defer func() {
 		task.isTaskScanning.Store(false)
-		log.Info("doScan done", zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.String("remote", remoteID.String()), zap.Int("workerIndex", idx), zap.Bool("isRunning", task.isRunning.Load()), zap.Bool("isTaskScanning", task.isTaskScanning.Load()))
 	}()
 
 	// If the target is not ready to send, we don't need to scan the event store.
@@ -854,14 +849,11 @@ func (c *eventBroker) close() {
 }
 
 func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommitTs uint64) {
-	log.Info("onNotify", zap.String("changefeed", d.changefeedStat.changefeedID.String()), zap.String("dispatcher", d.id.String()), zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("latestCommitTs", latestCommitTs), zap.Bool("isRunning", d.isRunning.Load()), zap.Bool("isTaskScanning", d.isTaskScanning.Load()), zap.Any("workerIndex", d.scanWorkerIndex))
 
 	if d.onResolvedTs(resolvedTs) {
-		log.Info("onNotify onResolvedTs", zap.String("changefeed", d.changefeedStat.changefeedID.String()), zap.String("dispatcher", d.id.String()), zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("latestCommitTs", latestCommitTs), zap.Bool("isRunning", d.isRunning.Load()), zap.Bool("isTaskScanning", d.isTaskScanning.Load()), zap.Any("workerIndex", d.scanWorkerIndex))
 		metricEventStoreOutputResolved.Inc()
 		d.onLatestCommitTs(latestCommitTs)
 		needScan, _ := c.checkNeedScan(d, false)
-		log.Info("onNotify needScan", zap.String("changefeed", d.changefeedStat.changefeedID.String()), zap.String("dispatcher", d.id.String()), zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("latestCommitTs", latestCommitTs), zap.Bool("isRunning", d.isRunning.Load()), zap.Bool("isTaskScanning", d.isTaskScanning.Load()), zap.Any("workerIndex", d.scanWorkerIndex), zap.Bool("needScan", needScan))
 		if needScan {
 			d.isTaskScanning.Store(true)
 			c.taskChan[d.scanWorkerIndex] <- d

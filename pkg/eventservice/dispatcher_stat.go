@@ -185,7 +185,7 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 }
 
 func (a *dispatcherStat) IsRunning() bool {
-	return a.isRunning.Load() && a.changefeedStat.isRunning.Load() && a.isHandshaked.Load()
+	return a.isRunning.Load() && a.changefeedStat.isRunning.Load()
 }
 
 type scanTask = *dispatcherStat
