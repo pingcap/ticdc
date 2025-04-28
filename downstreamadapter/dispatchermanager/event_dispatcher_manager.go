@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -43,18 +44,19 @@ import (
 )
 
 /*
-EventDispatcherManager is responsible for managing the dispatchers of a changefeed in the instance.
-EventDispatcherManager is working on:
- 1. Init sink for the changefeed.
- 2. Register in the HeartBeatCollector, which is responsible for communication with the maintainer.
-    And collecting and batch the messages that need to communicate with the maintainer from all dispatchers,
-    These messages will be truly sent to the maintainer by heartbeat collector.
-    Messages include: 1. table status 2. block status 3. heartbeats.
- 3. Create and remove all dispatchers, including table trigger event dispatcher.
- 4. Collect the error from all the dispatchers and sink module, and report to the maintainer.
+EventDispatcherManager manages dispatchers for a changefeed instance with responsibilities including:
 
-One changefeed in one instance has one EventDispatcherManager.
-One EventDispatcherManager has one backend sink.
+1. Initializing and managing the sink for the changefeed.
+2. Communicating with the maintainer through the HeartBeatCollector by:
+  - Collecting and batching messages from all dispatchers
+  - Forwarding table status, block status, and heartbeat messages to the maintainer
+
+3. Creating and removing dispatchers, including the table trigger event dispatcher
+4. Collecting errors from all dispatchers and the sink module, reporting them to the maintainer
+
+Architecture:
+- Each changefeed in an instance has exactly one EventDispatcherManager
+- Each EventDispatcherManager has exactly one backend sink
 */
 type EventDispatcherManager struct {
 	changefeedID common.ChangeFeedID
@@ -243,9 +245,6 @@ func NewEventDispatcherManager(
 		manager.collectBlockStatusRequest(ctx)
 	}()
 
-	// Send register changefeedStat to eventService
-	// appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddChangefeedStat(manager)
-
 	log.Info("event dispatcher manager created",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("maintainerID", maintainerID),
@@ -294,11 +293,6 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 		zap.Stringer("changefeedID", e.changefeedID))
 
 	defer e.closing.Store(false)
-
-	// Remove changefeedStat from eventService,
-	// it will also remove all dispatcherStats of the changefeedStat in eventService
-	// appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveChangefeedStat(e)
-
 	e.closeAllDispatchers()
 
 	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveEventDispatcherManager(e)
@@ -703,6 +697,12 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	removedDispatcherSchemaIDs := make([]int64, 0)
 	heartBeatInfo := &dispatcher.HeartBeatInfo{}
 
+	eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{
+		Version:              event.DispatcherHeartbeatVersion,
+		DispatcherCount:      0,
+		DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
+	}
+
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.Dispatcher) {
 		dispatcherItem.GetHeartBeatInfo(heartBeatInfo)
 		// If the dispatcher is in removing state, we need to check if it's closed successfully.
@@ -732,6 +732,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 				CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
 				EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
 			})
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, heartBeatInfo.Watermark.CheckpointTs))
 		}
 	})
 	message.Watermark.Seq = seq
@@ -742,6 +743,11 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 		for idx, id := range toRemoveDispatcherIDs {
 			e.cleanDispatcher(id, removedDispatcherSchemaIDs[idx])
 		}
+	}
+
+	// If needCompleteStatus is true, we need to send the dispatcher heartbeat to the event service.
+	if needCompleteStatus {
+		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
 
 	e.metricCheckpointTs.Set(float64(message.Watermark.CheckpointTs))

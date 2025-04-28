@@ -102,8 +102,8 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		kafkaComponent.adminClient,
 	)
 
-	scheme := helper.GetScheme(sinkURI)
-	kafkaComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, protocol, topic, scheme)
+	kafkaComponent.eventRouter, err = eventrouter.NewEventRouter(
+		sinkConfig, topic, false, protocol == config.ProtocolAvro)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}

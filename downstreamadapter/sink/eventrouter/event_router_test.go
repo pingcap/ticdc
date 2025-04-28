@@ -18,7 +18,6 @@ import (
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/topic"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -76,7 +75,7 @@ func TestEventRouter(t *testing.T) {
 	t.Parallel()
 
 	sinkConfig := &config.SinkConfig{}
-	d, err := NewEventRouter(sinkConfig, config.ProtocolCanalJSON, "test", helper.KafkaScheme)
+	d, err := NewEventRouter(sinkConfig, "test", false, false)
 	require.NoError(t, err)
 	require.Equal(t, "test", d.GetDefaultTopic())
 
@@ -89,7 +88,7 @@ func TestEventRouter(t *testing.T) {
 	require.Equal(t, d.defaultTopic, actual)
 
 	sinkConfig = newSinkConfig4Test()
-	d, err = NewEventRouter(sinkConfig, config.ProtocolCanalJSON, "", helper.KafkaScheme)
+	d, err = NewEventRouter(sinkConfig, "", false, false)
 	require.NoError(t, err)
 
 	// no matched, use the default
@@ -145,7 +144,7 @@ func TestGetActiveTopics(t *testing.T) {
 	t.Parallel()
 
 	sinkConfig := newSinkConfig4Test()
-	d, err := NewEventRouter(sinkConfig, config.ProtocolCanalJSON, "test", helper.KafkaScheme)
+	d, err := NewEventRouter(sinkConfig, "test", false, false)
 	require.NoError(t, err)
 	names := []*commonEvent.SchemaTableName{
 		{SchemaName: "test_default1", TableName: "table"},
@@ -163,32 +162,22 @@ func TestGetTopicForRowChange(t *testing.T) {
 	t.Parallel()
 
 	sinkConfig := newSinkConfig4Test()
-	d, err := NewEventRouter(sinkConfig, config.ProtocolCanalJSON, "test", "kafka")
+	d, err := NewEventRouter(sinkConfig, "test", false, false)
 	require.NoError(t, err)
 
-	topicName := d.GetTopicForRowChange(&common.TableInfo{
-		TableName: common.TableName{Schema: "test_default1", Table: "table"},
-	})
+	topicName := d.GetTopicForRowChange("test_default1", "table")
 	require.Equal(t, "test", topicName)
 
-	topicName = d.GetTopicForRowChange(&common.TableInfo{
-		TableName: common.TableName{Schema: "test_default2", Table: "table"},
-	})
+	topicName = d.GetTopicForRowChange("test_default2", "table")
 	require.Equal(t, "test", topicName)
 
-	topicName = d.GetTopicForRowChange(&common.TableInfo{
-		TableName: common.TableName{Schema: "test_table", Table: "table"},
-	})
+	topicName = d.GetTopicForRowChange("test_table", "table")
 	require.Equal(t, "hello_test_table_world", topicName)
 
-	topicName = d.GetTopicForRowChange(&common.TableInfo{
-		TableName: common.TableName{Schema: "test_index_value", Table: "table"},
-	})
+	topicName = d.GetTopicForRowChange("test_index_value", "table")
 	require.Equal(t, "test_index_value_world", topicName)
 
-	topicName = d.GetTopicForRowChange(&common.TableInfo{
-		TableName: common.TableName{Schema: "a", Table: "table"},
-	})
+	topicName = d.GetTopicForRowChange("a", "table")
 	require.Equal(t, "a_table", topicName)
 }
 
@@ -196,7 +185,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	t.Parallel()
 
 	sinkConfig := newSinkConfig4Test()
-	d, err := NewEventRouter(sinkConfig, config.ProtocolCanalJSON, "test", helper.KafkaScheme)
+	d, err := NewEventRouter(sinkConfig, "test", false, false)
 	require.NoError(t, err)
 
 	// default partition
@@ -279,7 +268,7 @@ func TestGetTopicForDDL(t *testing.T) {
 		},
 	}
 
-	d, err := NewEventRouter(sinkConfig, config.ProtocolDefault, "test", "kafka")
+	d, err := NewEventRouter(sinkConfig, "test", false, false)
 	require.NoError(t, err)
 
 	tests := []struct {

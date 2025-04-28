@@ -28,6 +28,12 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// If the dispatcher doesn't send heartbeat to the event service for a long time,
+	// we consider it is in-active and remove it.
+	heartbeatTimeout = time.Second * 180
+)
+
 // Store the progress of the dispatcher, and the incremental events stats.
 // Those information will be used to decide when will the worker start to handle the push task of this dispatcher.
 type dispatcherStat struct {
@@ -71,6 +77,9 @@ type dispatcherStat struct {
 	// It will be set to true, after it sends the handshake event to the dispatcher.
 	// It will be set to false, after it receives the reset event from the dispatcher.
 	isHandshaked atomic.Bool
+
+	// lastReceivedHeartbeatTime is the time when the dispatcher last received the heartbeat from the event service.
+	lastReceivedHeartbeatTime atomic.Int64
 
 	// syncpoint related
 	enableSyncPoint   bool
@@ -116,6 +125,7 @@ func newDispatcherStat(
 	dispStat.checkpointTs.Store(startTs)
 	dispStat.sentResolvedTs.Store(startTs)
 	dispStat.isRunning.Store(true)
+	dispStat.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
 	return dispStat
 }
 
@@ -150,6 +160,7 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	a.isTaskScanning.Store(false)
 
 	a.isRunning.Store(true)
+	a.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
 }
 
 // onResolvedTs try to update the resolved ts of the dispatcher.

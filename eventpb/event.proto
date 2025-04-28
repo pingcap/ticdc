@@ -71,8 +71,6 @@ enum ActionType {
     ACTION_TYPE_PAUSE = 3;
     ACTION_TYPE_RESUME = 4;
     ACTION_TYPE_RESET = 5;
-    ACTION_TYPE_PAUSE_CHANGEFEED = 6;
-    ACTION_TYPE_RESUME_CHANGEFEED = 7;
 }
 
 message IntegrityConfig {
@@ -80,19 +78,23 @@ message IntegrityConfig {
 	string CorruptionHandleLevel  = 2;
 }
 
-message RegisterDispatcherRequest {
-    heartbeatpb.ChangefeedID changefeed_id = 1;
-    heartbeatpb.DispatcherID dispatcher_id = 2;
-    heartbeatpb.TableSpan table_span = 3;
-    uint64 start_ts = 4;
-    string server_id = 5;
-    ActionType action_type = 6;
-    FilterConfig filter_config = 7;
-    bool enable_sync_point = 8;
-    uint64 sync_point_ts = 9;
-    uint64 sync_point_interval = 10;
-    bool only_reuse = 11;
-    bool bdr_mode = 12;
-    IntegrityConfig integrity = 13;
-	string timezone = 14;
+// DispatcherRequest is used to send a dispatcher request to the event service.
+// A request can be a register, remove, pause, resume, reset dispatcher request.
+message DispatcherRequest {
+    // cluster_id is the id of the TiDB cluster that the dispatcher belongs to.
+    uint64 cluster_id = 1;
+    heartbeatpb.ChangefeedID changefeed_id = 2;
+    heartbeatpb.DispatcherID dispatcher_id = 3;
+    heartbeatpb.TableSpan table_span = 4;
+    uint64 start_ts = 5;
+    string server_id = 6;
+    ActionType action_type = 7;
+    FilterConfig filter_config = 8;
+    bool enable_sync_point = 9;
+    uint64 sync_point_ts = 10;
+    uint64 sync_point_interval = 11;
+    bool only_reuse = 12;
+    bool bdr_mode = 13;
+    IntegrityConfig integrity = 14;
+	string timezone = 15;
 }

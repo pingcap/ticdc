@@ -17,8 +17,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 )
 
@@ -85,7 +83,7 @@ func (e Expression) validateForAvro() error {
 }
 
 // PulsarValidate checks whether a pulsar topic name is valid or not.
-func (e Expression) validateForpulsar() error {
+func (e Expression) validateForPulsar() error {
 	// validate the topic expression
 	topicName := string(e)
 
@@ -142,16 +140,12 @@ func isHardCode(topicName string) bool {
 	return hardCodeTopicNameRe.MatchString(topicName)
 }
 
-func validateTopicExpression(expr Expression, scheme string, protocol config.Protocol) error {
-	if helper.IsPulsarScheme(scheme) {
-		return expr.validateForpulsar()
+func validateTopicExpression(expr Expression, isPulsar, isAvro bool) error {
+	if isPulsar {
+		return expr.validateForPulsar()
 	}
-
-	switch protocol {
-	case config.ProtocolAvro:
+	if isAvro {
 		return expr.validateForAvro()
-	default:
 	}
-
 	return expr.validate()
 }

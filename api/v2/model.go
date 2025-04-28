@@ -1189,9 +1189,9 @@ type Capture struct {
 	ID string `json:"id"`
 	// IsCoordinator is true if the capture is the coordinator of the TiCDC cluster
 	// We make its json key as `is-owner` to keep the compatibility with old TiCDC.
-	IsCoordinator bool   `json:"is-owner"`
+	IsCoordinator bool   `json:"is_owner"`
 	AdvertiseAddr string `json:"address"`
-	ClusterID     string `json:"cluster-id"`
+	ClusterID     string `json:"cluster_id"`
 }
 
 // CodecConfig represents a MQ codec configuration

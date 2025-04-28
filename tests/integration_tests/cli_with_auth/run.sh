@@ -157,7 +157,7 @@ EOF
 
 	# Check if the coordinator is online
 	for i in {1..100}; do
-		curl -s -X GET "http://127.0.0.1:8300/api/v2/captures" | grep -q "\"is-owner\":true"
+		curl -s -X GET "http://127.0.0.1:8300/api/v2/captures" | grep -q "\"is_owner\":true"
 		if [[ $? -eq 0 ]]; then
 			break
 		fi
