@@ -28,10 +28,6 @@ func newTsPartitionGenerator() *TsPartitionGenerator {
 	return &TsPartitionGenerator{}
 }
 
-func (t *TsPartitionGenerator) String() string {
-	return "ts-partition-generator"
-}
-
 func (t *TsPartitionGenerator) GeneratePartitionIndexAndKey(
 	row *commonEvent.RowChange,
 	partitionNum int32,

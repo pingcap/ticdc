@@ -25,24 +25,24 @@ import (
 	"go.uber.org/zap"
 )
 
-type canalJSONTxnEventDecoder struct {
+type txnDecoder struct {
 	data []byte
 
 	config *common.Config
 	msg    canalJSONMessageInterface
 }
 
-// NewCanalJSONTxnEventDecoder return a new CanalJSONTxnEventDecoder.
-func NewCanalJSONTxnEventDecoder(
+// NewTxnDecoder return a new CanalJSONTxnEventDecoder.
+func NewTxnDecoder(
 	codecConfig *common.Config,
-) *canalJSONTxnEventDecoder {
-	return &canalJSONTxnEventDecoder{
+) *txnDecoder {
+	return &txnDecoder{
 		config: codecConfig,
 	}
 }
 
 // AddKeyValue set the key value to the decoder
-func (d *canalJSONTxnEventDecoder) AddKeyValue(_, value []byte) {
+func (d *txnDecoder) AddKeyValue(_, value []byte) {
 	value, err := common.Decompress(d.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
 		log.Panic("decompress data failed",
@@ -54,7 +54,7 @@ func (d *canalJSONTxnEventDecoder) AddKeyValue(_, value []byte) {
 }
 
 // HasNext return true if there is any event can be returned.
-func (d *canalJSONTxnEventDecoder) HasNext() (common.MessageType, bool) {
+func (d *txnDecoder) HasNext() (common.MessageType, bool) {
 	if d.data == nil {
 		return common.MessageTypeUnknown, false
 	}
@@ -92,7 +92,7 @@ func (d *canalJSONTxnEventDecoder) HasNext() (common.MessageType, bool) {
 	return d.msg.messageType(), true
 }
 
-func (d *canalJSONTxnEventDecoder) NextDMLEvent() *commonEvent.DMLEvent {
+func (d *txnDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if d.msg == nil || d.msg.messageType() != common.MessageTypeRow {
 		log.Panic("message type is not row changed",
 			zap.Any("messageType", d.msg.messageType()), zap.Any("msg", d.msg))
@@ -102,7 +102,7 @@ func (d *canalJSONTxnEventDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 	return result
 }
 
-func (d *canalJSONTxnEventDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
+func (d *txnDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
 	msg := d.msg
 
 	tableInfo := newTableInfo(msg, 0)
@@ -148,12 +148,12 @@ func (d *canalJSONTxnEventDecoder) canalJSONMessage2RowChange() *commonEvent.DML
 	return result
 }
 
-// NextResolvedEvent implements the RowEventDecoder interface
-func (d *canalJSONTxnEventDecoder) NextResolvedEvent() uint64 {
+// NextResolvedEvent implements the Decoder interface
+func (d *txnDecoder) NextResolvedEvent() uint64 {
 	return 0
 }
 
-// NextDDLEvent implements the RowEventDecoder interface
-func (d *canalJSONTxnEventDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+// NextDDLEvent implements the Decoder interface
+func (d *txnDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
 }

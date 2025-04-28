@@ -43,10 +43,6 @@ func newColumnsPartitionGenerator(columns []string) *ColumnsPartitionGenerator {
 	}
 }
 
-func (r *ColumnsPartitionGenerator) String() string {
-	return "column-partition-generator"
-}
-
 func (r *ColumnsPartitionGenerator) GeneratePartitionIndexAndKey(row *commonEvent.RowChange, partitionNum int32, tableInfo *common.TableInfo, commitTs uint64) (int32, string, error) {
 	r.lock.Lock()
 	defer r.lock.Unlock()

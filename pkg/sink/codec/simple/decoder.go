@@ -40,7 +40,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Decoder implement the RowEventDecoder interface
+// Decoder implement the Decoder interface
 type Decoder struct {
 	config *common.Config
 
@@ -60,7 +60,7 @@ type Decoder struct {
 }
 
 // NewDecoder returns a new Decoder
-func NewDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.RowEventDecoder, error) {
+func NewDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.Decoder, error) {
 	var (
 		externalStorage storage.ExternalStorage
 		err             error

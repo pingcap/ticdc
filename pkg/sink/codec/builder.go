@@ -48,16 +48,16 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncod
 }
 
 // NewEventDecoder will create a new event decoder
-func NewEventDecoder(ctx context.Context, codecConfig *common.Config, upstreamTiDB *sql.DB) (common.RowEventDecoder, error) {
+func NewEventDecoder(ctx context.Context, codecConfig *common.Config, upstreamTiDB *sql.DB) (common.Decoder, error) {
 	var (
-		decoder common.RowEventDecoder
+		decoder common.Decoder
 		err     error
 	)
 	switch codecConfig.Protocol {
 	case config.ProtocolOpen, config.ProtocolDefault:
-		decoder, err = open.NewBatchDecoder(ctx, codecConfig, upstreamTiDB)
+		decoder, err = open.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	case config.ProtocolCanalJSON:
-		decoder, err = canal.NewCanalJSONDecoder(ctx, codecConfig, upstreamTiDB)
+		decoder, err = canal.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	// case config.ProtocolAvro:
 	//	schemaM, err := avro.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
 	//	if err != nil {

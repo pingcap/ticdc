@@ -40,10 +40,10 @@ type partitionProgress struct {
 	watermarkOffset kafka.Offset
 
 	eventGroups map[model.TableID]*eventsGroup
-	decoder     common.RowEventDecoder
+	decoder     common.Decoder
 }
 
-func newPartitionProgress(partition int32, decoder common.RowEventDecoder) *partitionProgress {
+func newPartitionProgress(partition int32, decoder common.Decoder) *partitionProgress {
 	return &partitionProgress{
 		partition:   partition,
 		eventGroups: make(map[model.TableID]*eventsGroup),

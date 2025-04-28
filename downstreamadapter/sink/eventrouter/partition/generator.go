@@ -14,7 +14,6 @@
 package partition
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/pingcap/log"
@@ -25,7 +24,6 @@ import (
 )
 
 type Generator interface {
-	fmt.Stringer
 	// GeneratePartitionIndexAndKey returns an index of partitions or a partition key for event.
 	// Concurrency Note: This method is thread-safe.
 	GeneratePartitionIndexAndKey(row *commonEvent.RowChange, partitionNum int32, tableInfo *common.TableInfo, commitTs uint64) (int32, string, error)

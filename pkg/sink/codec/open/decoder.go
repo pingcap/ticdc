@@ -35,7 +35,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type batchDecoder struct {
+type decoder struct {
 	keyBytes   []byte
 	valueBytes []byte
 
@@ -51,8 +51,8 @@ type batchDecoder struct {
 	tableInfoAccessor *common.TableInfoAccessor
 }
 
-// NewBatchDecoder creates a new BatchDecoder.
-func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.RowEventDecoder, error) {
+// NewDecoder creates a new decoder.
+func NewDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.Decoder, error) {
 	var (
 		externalStorage storage.ExternalStorage
 		err             error
@@ -71,7 +71,7 @@ func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (co
 		}
 	}
 
-	return &batchDecoder{
+	return &decoder{
 		config:            config,
 		storage:           externalStorage,
 		upstreamTiDB:      db,
@@ -80,8 +80,8 @@ func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (co
 	}, nil
 }
 
-// AddKeyValue implements the RowEventDecoder interface
-func (b *batchDecoder) AddKeyValue(key, value []byte) {
+// AddKeyValue implements the Decoder interface
+func (b *decoder) AddKeyValue(key, value []byte) {
 	if len(b.keyBytes) != 0 || len(b.valueBytes) != 0 {
 		log.Panic("add key / value to the decoder failed, since it's already set")
 	}
@@ -94,7 +94,7 @@ func (b *batchDecoder) AddKeyValue(key, value []byte) {
 	b.valueBytes = value
 }
 
-func (b *batchDecoder) hasNext() bool {
+func (b *decoder) hasNext() bool {
 	keyLen := len(b.keyBytes)
 	valueLen := len(b.valueBytes)
 
@@ -110,8 +110,8 @@ func (b *batchDecoder) hasNext() bool {
 	return false
 }
 
-// HasNext implements the RowEventDecoder interface
-func (b *batchDecoder) HasNext() (common.MessageType, bool) {
+// HasNext implements the Decoder interface
+func (b *decoder) HasNext() (common.MessageType, bool) {
 	if !b.hasNext() {
 		return common.MessageTypeUnknown, false
 	}
@@ -126,8 +126,8 @@ func (b *batchDecoder) HasNext() (common.MessageType, bool) {
 	return b.nextKey.Type, true
 }
 
-// NextResolvedEvent implements the RowEventDecoder interface
-func (b *batchDecoder) NextResolvedEvent() uint64 {
+// NextResolvedEvent implements the Decoder interface
+func (b *decoder) NextResolvedEvent() uint64 {
 	if b.nextKey.Type != common.MessageTypeResolved {
 		log.Panic("message type is not watermark", zap.Any("messageType", b.nextKey.Type))
 	}
@@ -143,8 +143,8 @@ type messageDDL struct {
 	Type  timodel.ActionType `json:"t"`
 }
 
-// NextDDLEvent implements the RowEventDecoder interface
-func (b *batchDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+// NextDDLEvent implements the Decoder interface
+func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if b.nextKey.Type != common.MessageTypeDDL {
 		log.Panic("message type is not DDL", zap.Any("messageType", b.nextKey.Type))
 	}
@@ -191,8 +191,8 @@ func (b *batchDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return result
 }
 
-// NextDMLEvent implements the RowEventDecoder interface
-func (b *batchDecoder) NextDMLEvent() *commonEvent.DMLEvent {
+// NextDMLEvent implements the Decoder interface
+func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if b.nextKey.Type != common.MessageTypeRow {
 		log.Panic("message type is not row", zap.Any("messageType", b.nextKey.Type))
 	}
@@ -258,7 +258,7 @@ func buildColumns(
 	return result
 }
 
-func (b *batchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, row *messageRow) *commonEvent.DMLEvent {
+func (b *decoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, row *messageRow) *commonEvent.DMLEvent {
 	key := b.nextKey
 	var (
 		schema   = key.Schema
@@ -293,7 +293,7 @@ func (b *batchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, row *m
 	return b.assembleDMLEvent(row)
 }
 
-func (b *batchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commonEvent.DMLEvent {
+func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(b.nextKey.ClaimCheckLocation)
 	b.nextKey = nil
 	data, err := b.storage.ReadFile(ctx, claimCheckFileName)
@@ -332,7 +332,7 @@ func (b *batchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) *
 	return b.assembleDMLEvent(rowMsg)
 }
 
-func (b *batchDecoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
 	tableInfo, ok := b.tableInfoAccessor.Get(key.Schema, key.Table)
 	if !ok {
 		tableInfo = b.newTableInfo(key, value)
@@ -341,7 +341,7 @@ func (b *batchDecoder) queryTableInfo(key *messageKey, value *messageRow) *commo
 	return tableInfo
 }
 
-func (b *batchDecoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = b.tableIDAllocator.AllocateTableID(key.Schema, key.Table)
 	tableInfo.Name = pmodel.NewCIStr(key.Table)
@@ -424,7 +424,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 	return result
 }
 
-func (b *batchDecoder) assembleDMLEvent(value *messageRow) *commonEvent.DMLEvent {
+func (b *decoder) assembleDMLEvent(value *messageRow) *commonEvent.DMLEvent {
 	key := b.nextKey
 	b.nextKey = nil
 

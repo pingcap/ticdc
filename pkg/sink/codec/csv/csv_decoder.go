@@ -40,7 +40,7 @@ import (
 
 const defaultIOConcurrency = 1
 
-type batchDecoder struct {
+type decoder struct {
 	codecConfig *common.Config
 	parser      *mydump.CSVParser
 	data        []byte
@@ -49,12 +49,12 @@ type batchDecoder struct {
 	closed      bool
 }
 
-// NewBatchDecoder creates a new BatchDecoder
-func NewBatchDecoder(ctx context.Context,
+// NewDecoder creates a new BatchDecoder
+func NewDecoder(ctx context.Context,
 	codecConfig *common.Config,
 	tableInfo *commonType.TableInfo,
 	value []byte,
-) (common.RowEventDecoder, error) {
+) (common.Decoder, error) {
 	var backslashEscape bool
 
 	// if quote is not set in config, we should unespace backslash
@@ -76,7 +76,7 @@ func NewBatchDecoder(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	return &batchDecoder{
+	return &decoder{
 		codecConfig: codecConfig,
 		tableInfo:   tableInfo,
 		data:        value,
@@ -85,11 +85,11 @@ func NewBatchDecoder(ctx context.Context,
 	}, nil
 }
 
-// AddKeyValue implements the RowEventDecoder interface.
-func (b *batchDecoder) AddKeyValue(_, _ []byte) {}
+// AddKeyValue implements the Decoder interface.
+func (b *decoder) AddKeyValue(_, _ []byte) {}
 
-// HasNext implements the RowEventDecoder interface.
-func (b *batchDecoder) HasNext() (common.MessageType, bool) {
+// HasNext implements the Decoder interface.
+func (b *decoder) HasNext() (common.MessageType, bool) {
 	err := b.parser.ReadRow()
 	if err != nil {
 		b.closed = true
@@ -107,13 +107,13 @@ func (b *batchDecoder) HasNext() (common.MessageType, bool) {
 	return common.MessageTypeRow, true
 }
 
-// NextResolvedEvent implements the RowEventDecoder interface.
-func (b *batchDecoder) NextResolvedEvent() uint64 {
+// NextResolvedEvent implements the Decoder interface.
+func (b *decoder) NextResolvedEvent() uint64 {
 	return 0
 }
 
-// NextDMLEvent implements the RowEventDecoder interface.
-func (b *batchDecoder) NextDMLEvent() *commonEvent.DMLEvent {
+// NextDMLEvent implements the Decoder interface.
+func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if b.closed {
 		log.Panic("batch decoder is closed, cannot fetch the next DML event")
 	}
@@ -125,8 +125,8 @@ func (b *batchDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 	return e
 }
 
-// NextDDLEvent implements the RowEventDecoder interface.
-func (b *batchDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+// NextDDLEvent implements the Decoder interface.
+func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return nil
 }
 

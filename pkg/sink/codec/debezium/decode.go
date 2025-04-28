@@ -36,8 +36,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// Decoder implement the RowEventDecoder interface
-type Decoder struct {
+// decoder implement the Decoder interface
+type decoder struct {
 	config *common.Config
 
 	upstreamTiDB     *sql.DB
@@ -53,16 +53,16 @@ type Decoder struct {
 func NewDecoder(
 	config *common.Config,
 	db *sql.DB,
-) common.RowEventDecoder {
-	return &Decoder{
+) common.Decoder {
+	return &decoder{
 		config:           config,
 		upstreamTiDB:     db,
 		tableIDAllocator: common.NewFakeTableIDAllocator(),
 	}
 }
 
-// AddKeyValue add the received key and values to the Decoder
-func (d *Decoder) AddKeyValue(key, value []byte) {
+// AddKeyValue add the received key and values to the decoder
+func (d *decoder) AddKeyValue(key, value []byte) {
 	if d.valuePayload != nil || d.valueSchema != nil {
 		log.Panic("add key / value to the decoder failed, since it's already set")
 	}
@@ -82,7 +82,7 @@ func (d *Decoder) AddKeyValue(key, value []byte) {
 }
 
 // HasNext returns whether there is any event need to be consumed
-func (d *Decoder) HasNext() (common.MessageType, bool) {
+func (d *decoder) HasNext() (common.MessageType, bool) {
 	if d.valuePayload == nil && d.valueSchema == nil {
 		log.Panic("has next failed, since key / value is not set")
 	}
@@ -105,7 +105,7 @@ func (d *Decoder) HasNext() (common.MessageType, bool) {
 }
 
 // NextResolvedEvent returns the next resolved event if exists
-func (d *Decoder) NextResolvedEvent() uint64 {
+func (d *decoder) NextResolvedEvent() uint64 {
 	if len(d.valuePayload) == 0 {
 		log.Panic("next resolved event failed, since value payload is empty")
 	}
@@ -115,7 +115,7 @@ func (d *Decoder) NextResolvedEvent() uint64 {
 }
 
 // NextDDLEvent returns the next DDL event if exists
-func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
+func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if len(d.valuePayload) == 0 {
 		log.Panic("next DDL event failed, since value payload is empty")
 	}
@@ -135,7 +135,7 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 }
 
 // NextDMLEvent returns the next dml event if exists
-func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
+func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if len(d.valuePayload) == 0 {
 		log.Panic("next DML event failed, since value payload is empty")
 	}
@@ -179,7 +179,7 @@ func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	return event
 }
 
-func (d *Decoder) getCommitTs() uint64 {
+func (d *decoder) getCommitTs() uint64 {
 	source := d.valuePayload["source"].(map[string]interface{})
 	commitTs, err := source["commit_ts"].(json.Number).Int64()
 	if err != nil {
@@ -188,26 +188,26 @@ func (d *Decoder) getCommitTs() uint64 {
 	return uint64(commitTs)
 }
 
-func (d *Decoder) getSchemaName() string {
+func (d *decoder) getSchemaName() string {
 	source := d.valuePayload["source"].(map[string]interface{})
 	schemaName := source["db"].(string)
 	return schemaName
 }
 
-func (d *Decoder) getTableName() string {
+func (d *decoder) getTableName() string {
 	source := d.valuePayload["source"].(map[string]interface{})
 	tableName := source["table"].(string)
 	return tableName
 }
 
-func (d *Decoder) clear() {
+func (d *decoder) clear() {
 	d.keyPayload = nil
 	d.keySchema = nil
 	d.valuePayload = nil
 	d.valueSchema = nil
 }
 
-func (d *Decoder) getTableInfo() *commonType.TableInfo {
+func (d *decoder) getTableInfo() *commonType.TableInfo {
 	tidbTableInfo := new(timodel.TableInfo)
 	tidbTableInfo.Name = pmodel.NewCIStr(d.getTableName())
 	fields := d.valueSchema["fields"].([]interface{})

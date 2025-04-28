@@ -74,8 +74,8 @@ func (b *bufferedJSONDecoder) Bytes() []byte {
 	return b.buf.Bytes()
 }
 
-// canalJSONDecoder decodes the byte into the original message.
-type canalJSONDecoder struct {
+// decoder decodes the byte into the original message.
+type decoder struct {
 	msg     canalJSONMessageInterface
 	decoder *bufferedJSONDecoder
 
@@ -88,10 +88,10 @@ type canalJSONDecoder struct {
 	tableInfoAccessor *common.TableInfoAccessor
 }
 
-// NewCanalJSONDecoder return a decoder for canal-json
-func NewCanalJSONDecoder(
+// NewDecoder return a decoder for canal-json
+func NewDecoder(
 	ctx context.Context, codecConfig *common.Config, db *sql.DB,
-) (common.RowEventDecoder, error) {
+) (common.Decoder, error) {
 	var (
 		externalStorage storage.ExternalStorage
 		err             error
@@ -110,7 +110,7 @@ func NewCanalJSONDecoder(
 		}
 	}
 
-	return &canalJSONDecoder{
+	return &decoder{
 		config:       codecConfig,
 		decoder:      newBufferedJSONDecoder(),
 		storage:      externalStorage,
@@ -121,8 +121,8 @@ func NewCanalJSONDecoder(
 	}, nil
 }
 
-// AddKeyValue implements the RowEventDecoder interface
-func (b *canalJSONDecoder) AddKeyValue(_, value []byte) {
+// AddKeyValue implements the Decoder interface
+func (b *decoder) AddKeyValue(_, value []byte) {
 	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
 		log.Panic("decompress data failed",
@@ -135,8 +135,8 @@ func (b *canalJSONDecoder) AddKeyValue(_, value []byte) {
 	}
 }
 
-// HasNext implements the RowEventDecoder interface
-func (b *canalJSONDecoder) HasNext() (common.MessageType, bool) {
+// HasNext implements the Decoder interface
+func (b *decoder) HasNext() (common.MessageType, bool) {
 	if b.decoder.Len() == 0 {
 		return common.MessageTypeUnknown, false
 	}
@@ -158,7 +158,7 @@ func (b *canalJSONDecoder) HasNext() (common.MessageType, bool) {
 	return b.msg.messageType(), true
 }
 
-func (b *canalJSONDecoder) assembleClaimCheckDMLEvent(
+func (b *decoder) assembleClaimCheckDMLEvent(
 	ctx context.Context, claimCheckLocation string,
 ) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
@@ -222,7 +222,7 @@ func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string
 	return data, mysqlTypeMap
 }
 
-func (b *canalJSONDecoder) assembleHandleKeyOnlyDMLEvent(
+func (b *decoder) assembleHandleKeyOnlyDMLEvent(
 	ctx context.Context, message *canalJSONMessageWithTiDBExtension,
 ) *commonEvent.DMLEvent {
 	var (
@@ -273,9 +273,9 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyDMLEvent(
 	return b.NextDMLEvent()
 }
 
-// NextDMLEvent implements the RowEventDecoder interface
+// NextDMLEvent implements the Decoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextDMLEvent() *commonEvent.DMLEvent {
+func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeRow {
 		log.Panic("message type is not row changed",
 			zap.Any("messageType", b.msg.messageType()), zap.Any("msg", b.msg))
@@ -294,7 +294,7 @@ func (b *canalJSONDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 	return b.canalJSONMessage2DMLEvent()
 }
 
-func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
+func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	msg := b.msg
 	tableInfo := b.queryTableInfo(msg)
 
@@ -338,9 +338,9 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	return result
 }
 
-// NextDDLEvent implements the RowEventDecoder interface
+// NextDDLEvent implements the Decoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeDDL {
 		log.Panic("message type is not DDL Event",
 			zap.Any("messageType", b.msg.messageType()), zap.Any("msg", b.msg))
@@ -350,9 +350,9 @@ func (b *canalJSONDecoder) NextDDLEvent() *commonEvent.DDLEvent {
 	return result
 }
 
-// NextResolvedEvent implements the RowEventDecoder interface
+// NextResolvedEvent implements the Decoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextResolvedEvent() uint64 {
+func (b *decoder) NextResolvedEvent() uint64 {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeResolved {
 		log.Panic("message type is not watermark", zap.Any("messageType", b.msg.messageType()))
 	}
@@ -365,7 +365,7 @@ func (b *canalJSONDecoder) NextResolvedEvent() uint64 {
 	return withExtensionEvent.Extensions.WatermarkTs
 }
 
-func (b *canalJSONDecoder) canalJSONMessage2DDLEvent() *commonEvent.DDLEvent {
+func (b *decoder) canalJSONMessage2DDLEvent() *commonEvent.DDLEvent {
 	result := new(commonEvent.DDLEvent)
 	result.FinishedTs = b.msg.getCommitTs()
 	result.SchemaName = *b.msg.getSchema()
@@ -532,7 +532,7 @@ func formatValue(value any, ft types.FieldType) any {
 	return nil
 }
 
-func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
+func (b *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	schema := *msg.getSchema()
 	table := *msg.getTable()
 

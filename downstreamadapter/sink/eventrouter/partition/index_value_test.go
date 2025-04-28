@@ -111,7 +111,7 @@ func TestXXX(t *testing.T) {
 	encoder, err := canal.NewJSONRowEventEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	decoder, err := canal.NewCanalJSONDecoder(ctx, codecConfig, nil)
+	decoder, err := canal.NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	createDB := helper.DDL2Event(`CREATE DATABASE dispatcher`)

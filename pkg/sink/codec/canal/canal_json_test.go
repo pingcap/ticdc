@@ -99,7 +99,7 @@ func TestIntegerTypes(t *testing.T) {
 			messages := encoder.Build()
 			require.Len(t, messages, 1)
 
-			decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+			decoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
 
 			decoder.AddKeyValue(messages[0].Key, messages[0].Value)
@@ -156,7 +156,7 @@ func TestFloatTypes(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -205,7 +205,7 @@ func TestTimeTypes(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -254,7 +254,7 @@ func TestStringTypes(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -304,7 +304,7 @@ func TestBlobTypes(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -354,7 +354,7 @@ func TestTextTypes(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -413,7 +413,7 @@ func TestOtherTypes(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -471,7 +471,7 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -530,7 +530,7 @@ func TestDMLMultiplePK(t *testing.T) {
 
 	m := encoder.Build()[0]
 
-	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -687,7 +687,7 @@ func TestMessageLargeHandleKeyOnly(t *testing.T) {
 	m := encoder.Build()[0]
 	require.NotNil(t, m.Callback)
 
-	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(m.Key, m.Value)
@@ -767,7 +767,7 @@ func TestDMLTypeEvent(t *testing.T) {
 	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	for _, event := range []*commonEvent.RowEvent{
@@ -804,7 +804,7 @@ func TestDMLTypeEvent(t *testing.T) {
 
 	message := encoder.Build()[0]
 
-	decoder, err = NewCanalJSONDecoder(ctx, codecConfig, nil)
+	decoder, err = NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(message.Key, message.Value)
@@ -830,7 +830,7 @@ func TestDDLSequence(t *testing.T) {
 	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	createDB := helper.DDL2Event(`create database abc`)
@@ -963,7 +963,7 @@ func TestCreateTableDDL(t *testing.T) {
 		message, err := encoder.EncodeDDLEvent(ddlEvent)
 		require.NoError(t, err)
 
-		decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+		decoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
 
 		decoder.AddKeyValue(message.Key, message.Value)
@@ -1003,7 +1003,7 @@ func TestCheckpointTs(t *testing.T) {
 	message, err = encoder.EncodeCheckpointEvent(watermark)
 	require.NoError(t, err)
 
-	decoder, err := NewCanalJSONDecoder(ctx, codecConfig, nil)
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	decoder.AddKeyValue(message.Key, message.Value)

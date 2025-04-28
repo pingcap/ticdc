@@ -55,7 +55,7 @@ func NewDecoder(
 	schemaM SchemaManager,
 	topic string,
 	db *sql.DB,
-) common.RowEventDecoder {
+) common.Decoder {
 	return &decoder{
 		config:           config,
 		topic:            topic,

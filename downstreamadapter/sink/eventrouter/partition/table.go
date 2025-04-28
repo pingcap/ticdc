@@ -34,10 +34,6 @@ func newTablePartitionGenerator() *TablePartitionGenerator {
 	}
 }
 
-func (t *TablePartitionGenerator) String() string {
-	return "table-partition-generator"
-}
-
 // GeneratePartitionIndexAndKey returns the target partition to which a row changed event should be dispatched.
 func (t *TablePartitionGenerator) GeneratePartitionIndexAndKey(
 	row *commonEvent.RowChange,
