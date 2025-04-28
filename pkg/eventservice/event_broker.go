@@ -49,7 +49,7 @@ const (
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
 	// Limit the number of transactions that can be scanned in a single scan task.
-	singleScanTxnLimit = 2048 // 2K transactions
+	singleScanTxnLimit = 256 // 256 transactions
 
 	// Sink manager schedules table tasks based on lag. Limit the max task range
 	// can be helpful to reduce changefeed latency for large initial data.
