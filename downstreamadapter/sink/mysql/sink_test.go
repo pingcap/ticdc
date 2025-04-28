@@ -38,7 +38,7 @@ func MysqlSinkForTest() (*sink, sqlmock.Sqlmock) {
 	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink := newMysqlSinkWithDBAndConfig(ctx, changefeedID, cfg, db)
+	sink := newMySQLSink(ctx, changefeedID, cfg, db)
 	go sink.Run(ctx)
 
 	return sink, mock

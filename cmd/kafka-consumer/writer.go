@@ -16,7 +16,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -128,7 +127,6 @@ func newWriter(ctx context.Context, o *option) *writer {
 	if err != nil {
 		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
-	w.mysqlSink.SetTableSchemaStore(util.NewTableSchemaStore())
 	return w
 }
 
