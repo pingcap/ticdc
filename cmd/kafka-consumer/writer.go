@@ -368,7 +368,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 
 func (w *writer) checkPartition(row *commonEvent.DMLEvent, partition int32, offset kafka.Offset) {
 	var (
-		partitioner  = w.eventRouter.GetPartitionGenerator(row.TableInfo.GetSchemaName(), row.TableInfo.GetSchemaName())
+		partitioner  = w.eventRouter.GetPartitionGenerator(row.TableInfo.GetSchemaName(), row.TableInfo.GetTableName())
 		partitionNum = int32(len(w.progresses))
 	)
 	for {

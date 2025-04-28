@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	tableFilter "github.com/pingcap/tidb/pkg/util/table-filter"
-	"go.uber.org/zap"
 )
 
 type Rule struct {
@@ -66,10 +65,6 @@ func NewEventRouter(sinkConfig *config.SinkConfig, protocol config.Protocol, def
 			return nil, err
 		}
 		rules = append(rules, Rule{partitionDispatcher: d, topicGenerator: topicGenerator, Filter: f})
-		log.Info("append dispatch rule",
-			zap.Strings("matcher", ruleConfig.Matcher),
-			zap.String("partitionRule", ruleConfig.PartitionRule),
-			zap.String("dispatcher", d.String()))
 	}
 
 	return &EventRouter{
@@ -130,7 +125,13 @@ func (s *EventRouter) GetActiveTopics(activeTables []*commonEvent.SchemaTableNam
 
 // GetPartitionGenerator returns the target partition by the table information.
 func (s *EventRouter) GetPartitionGenerator(schema, table string) partition.Generator {
-	return s.matchPartitionGenerator(schema, table)
+	for _, rule := range s.rules {
+		if rule.MatchTable(schema, table) {
+			return rule.partitionDispatcher
+		}
+	}
+	log.Panic("the dispatch rule must cover all tables")
+	return nil
 }
 
 // GetDefaultTopic returns the default topic name.
@@ -140,26 +141,8 @@ func (s *EventRouter) GetDefaultTopic() string {
 
 func (s *EventRouter) matchTopicGenerator(schema, table string) topic.TopicGenerator {
 	for _, rule := range s.rules {
-		if !rule.MatchTable(schema, table) {
-			continue
-		}
-		return rule.topicGenerator
-	}
-	log.Panic("the dispatch rule must cover all tables")
-	return nil
-}
-
-func (s *EventRouter) matchPartitionGenerator(schema, table string) partition.Generator {
-	for _, rule := range s.rules {
 		if rule.MatchTable(schema, table) {
-			log.Info("partition generator found",
-				zap.String("schema", schema), zap.String("table", table),
-				zap.String("dispatcher", rule.partitionDispatcher.String()))
-			return rule.partitionDispatcher
-		} else {
-			log.Info("cannot match the partition generator",
-				zap.String("schema", schema), zap.String("table", table),
-				zap.String("dispatcher", rule.partitionDispatcher.String()))
+			return rule.topicGenerator
 		}
 	}
 	log.Panic("the dispatch rule must cover all tables")
