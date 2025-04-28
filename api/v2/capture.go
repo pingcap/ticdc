@@ -38,7 +38,7 @@ func (h *OpenAPIV2) ListCaptures(c *gin.Context) {
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodes := nodeManager.GetAliveNodes()
 	captures := make([]Capture, 0, len(nodes))
-	for _, c := range nodeManager.GetAliveNodes() {
+	for _, c := range nodes {
 		captures = append(captures,
 			Capture{
 				ID:            c.ID.String(),

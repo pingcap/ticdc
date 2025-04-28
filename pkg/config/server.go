@@ -128,6 +128,7 @@ var defaultServerConfig = &ServerConfig{
 	},
 	ClusterID:              "default",
 	GcTunerMemoryThreshold: DisableMemoryLimit,
+	MemoryLimitPercentage:  0.75,
 }
 
 // ServerConfig represents a config for server
@@ -150,12 +151,14 @@ type ServerConfig struct {
 	OwnerFlushInterval     TomlDuration `toml:"owner-flush-interval" json:"owner-flush-interval"`
 	ProcessorFlushInterval TomlDuration `toml:"processor-flush-interval" json:"processor-flush-interval"`
 
-	Sorter                 *SorterConfig        `toml:"sorter" json:"sorter"`
-	Security               *security.Credential `toml:"security" json:"security"`
-	KVClient               *KVClientConfig      `toml:"kv-client" json:"kv-client"`
-	Debug                  *DebugConfig         `toml:"debug" json:"debug"`
-	ClusterID              string               `toml:"cluster-id" json:"cluster-id"`
-	GcTunerMemoryThreshold uint64               `toml:"gc-tuner-memory-threshold" json:"gc-tuner-memory-threshold"`
+	Sorter    *SorterConfig        `toml:"sorter" json:"sorter"`
+	Security  *security.Credential `toml:"security" json:"security"`
+	KVClient  *KVClientConfig      `toml:"kv-client" json:"kv-client"`
+	Debug     *DebugConfig         `toml:"debug" json:"debug"`
+	ClusterID string               `toml:"cluster-id" json:"cluster-id"`
+	// Deprecated: we don't use this field anymore.
+	GcTunerMemoryThreshold uint64  `toml:"gc-tuner-memory-threshold" json:"gc-tuner-memory-threshold"`
+	MemoryLimitPercentage  float64 `toml:"memory-limit-percentage" json:"memory-limit-percentage"`
 
 	// Deprecated: we don't use this field anymore.
 	PerTableMemoryQuota uint64 `toml:"per-table-memory-quota" json:"per-table-memory-quota"`

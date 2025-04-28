@@ -16,12 +16,13 @@ package server
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
-	"github.com/dustin/go-humanize"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -30,7 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/upstream"
-	"github.com/pingcap/tidb/pkg/util/gctuner"
+	"github.com/pingcap/tidb/pkg/util/memory"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -43,8 +44,6 @@ const (
 	defaultDataDir = "/tmp/cdc_data"
 	// dataDirThreshold is used to warn if the free space of the specified data-dir is lower than it, unit is GB
 	dataDirThreshold = 500
-	// maxGcTunerMemory is used to limit the max memory usage of cdc server. if the memory is larger than it, gc tuner will be disabled
-	maxGcTunerMemory = 512 * 1024 * 1024 * 1024
 )
 
 func (c *server) prepare(ctx context.Context) error {
@@ -146,24 +145,25 @@ func (c *server) prepare(ctx context.Context) error {
 	return nil
 }
 
+func calcMemoryLimit(percentage float64) int64 {
+	serverMemoryLimit, err := memory.MemTotal()
+	if err != nil {
+		log.Error("get system total memory fail", zap.Error(err))
+		return math.MaxInt64
+	}
+	memoryLimit := int64(float64(serverMemoryLimit) * percentage) // `server_memory_limit` * `gc_limit_percentage`
+	if memoryLimit == 0 {
+		memoryLimit = math.MaxInt64
+	}
+	return memoryLimit
+}
+
 func (c *server) setMemoryLimit() {
 	conf := config.GetGlobalServerConfig()
-	if conf.GcTunerMemoryThreshold > maxGcTunerMemory {
-		// If total memory is larger than 512GB, we will not set memory limit.
-		// Because the memory limit is not accurate, and it is not necessary to set memory limit.
-		log.Info("total memory is larger than 512GB, skip setting memory limit",
-			zap.Uint64("bytes", conf.GcTunerMemoryThreshold),
-			zap.String("memory", humanize.IBytes(conf.GcTunerMemoryThreshold)),
-		)
-		return
-	}
-	if conf.GcTunerMemoryThreshold > 0 {
-		gctuner.EnableGOGCTuner.Store(true)
-		gctuner.Tuning(conf.GcTunerMemoryThreshold)
-		log.Info("enable gctuner, set memory limit",
-			zap.Uint64("bytes", conf.GcTunerMemoryThreshold),
-			zap.String("memory", humanize.IBytes(conf.GcTunerMemoryThreshold)),
-		)
+	if conf.MemoryLimitPercentage > 0 {
+		memoryLimit := calcMemoryLimit(conf.MemoryLimitPercentage)
+		debug.SetMemoryLimit(memoryLimit)
+		log.Info("ticdc server set memory limit", zap.Int64("memoryLimit", memoryLimit))
 	}
 }
 
