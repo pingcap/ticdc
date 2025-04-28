@@ -650,7 +650,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			}
 
 			if e.CRTs == lastSentDMLCommitTs {
-				log.Panic("fizz should never happen", zap.Uint64("lastSentDMLCommitTs", lastSentDMLCommitTs), zap.Uint64("currentCRTs", e.CRTs))
+				log.Info("fizz should never happen", zap.Uint64("lastSentDMLCommitTs", lastSentDMLCommitTs), zap.Uint64("currentCRTs", e.CRTs))
 			}
 
 			// If the number of transactions that can be scanned in a single scan task is greater than the limit,
