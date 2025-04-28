@@ -588,12 +588,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		return true
 	}
 
-	sendWaterMark := func() {
-		if lastSentDMLCommitTs != 0 {
-			task.updateSentResolvedTs(lastSentDMLCommitTs)
-			c.sendWatermark(remoteID, task, lastSentDMLCommitTs)
-		}
-	}
+	// sendWaterMark := func() {
+	// 	if lastSentDMLCommitTs != 0 {
+	// 		task.updateSentResolvedTs(lastSentDMLCommitTs)
+	// 		c.sendWatermark(remoteID, task, lastSentDMLCommitTs)
+	// 	}
+	// }
 
 	// 3. Send the events to the dispatcher.
 	var dml *pevent.DMLEvent
@@ -602,10 +602,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 
 		// If the number of transactions that can be scanned in a single scan task is greater than the limit,
 		// we need to send a watermark to the dispatcher and stop the scan.
-		if dmlCount >= singleScanTxnLimit {
-			sendWaterMark()
-			return
-		}
+		// if dmlCount >= singleScanTxnLimit {
+		// 	sendWaterMark()
+		// 	return
+		// }
+
 		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
 		if err != nil {
