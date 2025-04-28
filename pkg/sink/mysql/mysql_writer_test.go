@@ -595,6 +595,8 @@ func TestGenKeyAndHash(t *testing.T) {
 
 	ctx := context.Background()
 	codecConfig := codecCommon.NewConfig(config.ProtocolCanalJSON)
+	codecConfig.EnableTiDBExtension = true
+	codecConfig.ContentCompatible = true
 
 	encoder, err := canal.NewJSONRowEventEncoder(ctx, codecConfig)
 	require.NoError(t, err)

@@ -46,11 +46,11 @@ func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte)
 
 func genKeyList(row *chunk.Row, tableInfo *common.TableInfo) []byte {
 	colIdx := tableInfo.GetPKIndex()
-	// log.Info("genKeyAndHash", zap.Any("idxCol", idxCol), zap.Any("iIdx", iIdx))
 	var key []byte
 	for _, colID := range colIdx {
 		info, ok := tableInfo.GetColumnInfo(colID)
 		if !ok || info == nil {
+			log.Warn("can't find column info", zap.Int64("colID", colID), zap.String("colName", info.Name.O))
 			return nil
 		}
 		i, ok1 := tableInfo.GetRowColumnsOffset()[colID]
@@ -62,6 +62,7 @@ func genKeyList(row *chunk.Row, tableInfo *common.TableInfo) []byte {
 		value := common.ExtractColVal(row, info, i)
 		// if a column value is null, we can ignore this index
 		if value == nil {
+			log.Warn("column value is nil", zap.Int64("colID", colID), zap.String("colName", info.Name.O))
 			return nil
 		}
 
