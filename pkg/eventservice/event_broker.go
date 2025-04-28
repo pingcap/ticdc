@@ -769,7 +769,7 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		// Send the message to the dispatcher.
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
-			_, ok := err.(*apperror.AppError)
+			_, ok := err.(apperror.AppError)
 			log.Info("fizz send msg failed", zap.Error(err), zap.Any("tMsg", tMsg), zap.Bool("castOk", ok))
 			if strings.Contains(err.Error(), "congested") {
 				log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))
