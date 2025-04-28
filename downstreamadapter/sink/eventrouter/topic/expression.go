@@ -83,7 +83,7 @@ func (e Expression) validateForAvro() error {
 }
 
 // PulsarValidate checks whether a pulsar topic name is valid or not.
-func (e Expression) validateForpulsar() error {
+func (e Expression) validateForPulsar() error {
 	// validate the topic expression
 	topicName := string(e)
 
@@ -142,7 +142,7 @@ func isHardCode(topicName string) bool {
 
 func validateTopicExpression(expr Expression, isPulsar, isAvro bool) error {
 	if isPulsar {
-		return expr.validateForpulsar()
+		return expr.validateForPulsar()
 	}
 	if isAvro {
 		return expr.validateForAvro()
