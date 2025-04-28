@@ -378,11 +378,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 			if rowType != prevType {
 				prevType = rowType
 			} else {
-				// use normal sql instead
-				query, args := w.generateNormalSQLs(events)
-				log.Error("Error prepareDMLs in batch sql in unsafe mode", zap.Any("targetQuery", query), zap.Any("targetArgs", args))
-				// log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges), zap.Any("prevType", prevType), zap.Any("currentType", rowType))
-				return query, args
+				log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges), zap.Any("prevType", prevType), zap.Any("currentType", rowType))
 			}
 		}
 		rowsList = append(rowsList, rowChanges[len(rowChanges)-1])

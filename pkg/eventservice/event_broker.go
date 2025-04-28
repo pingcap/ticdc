@@ -51,9 +51,6 @@ const (
 
 	// Limit the number of transactions that can be scanned in a single scan task.
 	singleScanTxnLimit = 256 // 256 transactions
-
-	// Rate limit the number of transactions that can be scanned in a single scan task.
-	rateLimit = 1024 * 1024 * 200 // 200MB
 )
 
 // Sink manager schedules table tasks based on lag. Limit the max task range
