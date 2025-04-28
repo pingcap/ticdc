@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -768,12 +769,12 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		// Send the message to the dispatcher.
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
-			appErr, ok := err.(*apperror.AppError)
-			log.Info("fizz send msg failed", zap.Error(err), zap.Any("tMsg", tMsg))
-			time.Sleep(congestedRetryInterval)
-			if ok && appErr.Type == apperror.ErrorTypeMessageCongested {
+			_, ok := err.(*apperror.AppError)
+			log.Info("fizz send msg failed", zap.Error(err), zap.Any("tMsg", tMsg), zap.Bool("castOk", ok))
+			if ok && strings.Contains(err.Error(), "MessageCongested") {
 				log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))
 				// Wait for a while and retry to avoid the dropped message flood.
+				time.Sleep(congestedRetryInterval)
 				continue
 			} else {
 				// Drop the message, and return.
