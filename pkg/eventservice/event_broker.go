@@ -51,9 +51,6 @@ const (
 
 	// Limit the number of transactions that can be scanned in a single scan task.
 	singleScanTxnLimit = 256 // 256 transactions
-
-	// Rate limit the number of transactions that can be scanned in a single scan task.
-	rateLimit = 1024 * 1024 * 200 // 200MB
 )
 
 // Sink manager schedules table tasks based on lag. Limit the max task range
@@ -772,7 +769,7 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
 			_, ok := err.(apperror.AppError)
-			log.Info("send msg failed, retry it later", zap.Error(err), zap.Any("tMsg", tMsg), zap.Bool("castOk", ok))
+			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Any("tMsg", tMsg), zap.Bool("castOk", ok))
 			if strings.Contains(err.Error(), "congested") {
 				log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))
 				// Wait for a while and retry to avoid the dropped message flood.
