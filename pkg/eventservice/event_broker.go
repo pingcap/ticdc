@@ -353,6 +353,7 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 
 	// Only check scan when the dispatcher is running.
 	if !task.IsRunning() {
+		log.Info("checkNeedScan false, task is not running", zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex))
 		// If the dispatcher is not running, we also need to send the watermark to the dispatcher.
 		// And the resolvedTs should be the last sent watermark.
 		resolvedTs := task.sentResolvedTs.Load()
@@ -417,6 +418,7 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 			task.startTableInfo.Load()),
 		msgType: pevent.TypeHandshakeEvent,
 		postSendFunc: func() {
+			log.Info("checkAndSendHandshake", zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex), zap.Bool("isHandshaked", task.isHandshaked.Load()))
 			task.isHandshaked.Store(true)
 		},
 	}
@@ -859,8 +861,8 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommi
 		metricEventStoreOutputResolved.Inc()
 		d.onLatestCommitTs(latestCommitTs)
 		needScan, _ := c.checkNeedScan(d, false)
+		log.Info("onNotify needScan", zap.String("changefeed", d.changefeedStat.changefeedID.String()), zap.String("dispatcher", d.id.String()), zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("latestCommitTs", latestCommitTs), zap.Bool("isRunning", d.isRunning.Load()), zap.Bool("isTaskScanning", d.isTaskScanning.Load()), zap.Any("workerIndex", d.scanWorkerIndex), zap.Bool("needScan", needScan))
 		if needScan {
-			log.Info("onNotify needScan", zap.String("changefeed", d.changefeedStat.changefeedID.String()), zap.String("dispatcher", d.id.String()), zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("latestCommitTs", latestCommitTs), zap.Bool("isRunning", d.isRunning.Load()), zap.Bool("isTaskScanning", d.isTaskScanning.Load()), zap.Any("workerIndex", d.scanWorkerIndex))
 			d.isTaskScanning.Store(true)
 			c.taskChan[d.scanWorkerIndex] <- d
 		}
