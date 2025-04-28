@@ -153,7 +153,7 @@ func newEventBroker(
 	}
 
 	for i := 0; i < scanWorkerCount; i++ {
-		c.taskChan[i] = make(chan scanTask, conf.ScanTaskQueueSize)
+		c.taskChan[i] = make(chan scanTask, conf.ScanTaskQueueSize/scanWorkerCount)
 	}
 
 	for i := 0; i < c.sendMessageWorkerCount; i++ {
