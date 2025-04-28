@@ -38,6 +38,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -53,6 +54,9 @@ const (
 	// Sink manager schedules table tasks based on lag. Limit the max task range
 	// can be helpful to reduce changefeed latency for large initial data.
 	maxTaskTimeRange = 15 * time.Minute
+
+	// Rate limit the number of transactions that can be scanned in a single scan task.
+	rateLimit = 1024 * 1024 * 200 // 200MB
 )
 
 var (
@@ -95,6 +99,8 @@ type eventBroker struct {
 	sendMessageWorkerCount int
 	// scanWorkerCount is the number of the scan workers to spawn.
 	scanWorkerCount int
+
+	rateLimiter *rate.Limiter
 
 	// messageCh is used to receive message from the scanWorker,
 	// and a goroutine is responsible for sending the message to the dispatchers.
@@ -152,6 +158,8 @@ func newEventBroker(
 		scanWorkerCount:         scanWorkerCount,
 		cancel:                  cancel,
 		g:                       g,
+
+		rateLimiter: rate.NewLimiter(rate.Limit(rateLimit), rateLimit),
 
 		metricDispatcherCount:                metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
 		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
@@ -611,6 +619,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			// there are some bugs in the eventStore.
 			log.Panic("should never Happen", zap.Uint64("commitTs", e.CRTs), zap.Uint64("dataRangeStartTs", dataRange.StartTs))
 		}
+
+		eSize := len(e.Key) + len(e.Value) + len(e.OldValue)
+		c.rateLimiter.WaitN(ctx, eSize)
 
 		if isNewTxn {
 			ok := sendDML(dml)
