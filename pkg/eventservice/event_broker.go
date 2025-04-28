@@ -48,7 +48,11 @@ const (
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
 	// Limit the number of transactions that can be scanned in a single scan task.
-	singleScanTxnLimit = 256
+	singleScanTxnLimit = 1024 * 128 // 128K transactions
+
+	// Sink manager schedules table tasks based on lag. Limit the max task range
+	// can be helpful to reduce changefeed latency for large initial data.
+	maxTaskTimeRange = 15 * time.Minute
 )
 
 var (
@@ -385,6 +389,17 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		c.sendWatermark(remoteID, task, dataRange.EndTs)
 		task.updateSentResolvedTs(dataRange.EndTs)
 		return false, common.DataRange{}
+	}
+
+	// Adjust the data range to avoid the time range of a task exceeds maxTaskTimeRange.
+	upperPhs := oracle.GetTimeFromTS(task.eventStoreResolvedTs.Load())
+	lowerPhs := oracle.GetTimeFromTS(task.sentResolvedTs.Load())
+
+	// The time range of a task should not exceed maxTaskTimeRange.
+	// This would help for reduce changefeed latency.
+	if upperPhs.Sub(lowerPhs) > maxTaskTimeRange {
+		newUpperCommitTs := oracle.GoTimeToTS(lowerPhs.Add(maxTaskTimeRange))
+		dataRange.EndTs = newUpperCommitTs
 	}
 
 	return true, dataRange
