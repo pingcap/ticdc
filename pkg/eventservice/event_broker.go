@@ -594,7 +594,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		if lastSentDMLCommitTs != 0 {
 			task.updateSentResolvedTs(lastSentDMLCommitTs)
 			c.sendWatermark(remoteID, task, lastSentDMLCommitTs)
-			log.Info("fizz send watermark in middle of scan", zap.Uint64("lastSentDMLCommitTs", lastSentDMLCommitTs), zap.Uint64("taskStartTs", dataRange.StartTs), zap.Uint64("taskEndTs", dataRange.EndTs), zap.Any("remainingDDLEvents", ddlEvents))
 		}
 	}
 
@@ -617,8 +616,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			sendRemainingDDLEvents()
 			return
 		}
-
-		log.Info("fizz scan event", zap.Uint64("commitTs", e.CRTs), zap.Uint64("startTs", e.StartTs), zap.Uint64("lastSentDMLCommitTs", lastSentDMLCommitTs))
 
 		if e.CRTs < dataRange.StartTs {
 			// If the commitTs of the event is less than the startTs of the data range,
@@ -647,10 +644,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 					return
 				}
 				log.Panic("get table info failed, unknown reason", zap.Error(err))
-			}
-
-			if e.CRTs == lastSentDMLCommitTs {
-				log.Info("fizz should never happen", zap.Uint64("lastSentDMLCommitTs", lastSentDMLCommitTs), zap.Uint64("currentCRTs", e.CRTs))
 			}
 
 			// If the number of transactions that can be scanned in a single scan task is greater than the limit,
