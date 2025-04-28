@@ -106,7 +106,7 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 		// first we check whether there is some async ddl executed now.
 		w.waitAsyncDDLDone(event)
 	}
-	if !(event.TiDBOnly && !w.cfg.IsTiDB) {
+	if w.cfg.IsTiDB || !event.TiDBOnly {
 		if w.cfg.IsTiDB {
 			// if downstream is tidb, we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
 			// to ensure the atomic with ddl writing when server is restarted.
