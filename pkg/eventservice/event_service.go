@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -54,6 +55,11 @@ type DispatcherInfo interface {
 	GetTimezone() *time.Location
 }
 
+type DispatcherHeartBeatWithServerID struct {
+	serverID  string
+	heartbeat *event.DispatcherHeartbeat
+}
+
 // EventService accepts the requests of pulling events.
 // The EventService is a singleton in the system.
 type eventService struct {
@@ -64,17 +70,19 @@ type eventService struct {
 	brokers map[uint64]*eventBroker
 
 	// TODO: use a better way to cache the acceptorInfos
-	dispatcherInfo chan DispatcherInfo
+	dispatcherInfoChan  chan DispatcherInfo
+	dispatcherHeartbeat chan *DispatcherHeartBeatWithServerID
 }
 
 func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) common.SubModule {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	es := &eventService{
-		mc:             mc,
-		eventStore:     eventStore,
-		schemaStore:    schemaStore,
-		brokers:        make(map[uint64]*eventBroker),
-		dispatcherInfo: make(chan DispatcherInfo, basicChannelSize*16),
+		mc:                  mc,
+		eventStore:          eventStore,
+		schemaStore:         schemaStore,
+		brokers:             make(map[uint64]*eventBroker),
+		dispatcherInfoChan:  make(chan DispatcherInfo, basicChannelSize*16),
+		dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, basicChannelSize),
 	}
 	es.mc.RegisterHandler(messaging.EventServiceTopic, es.handleMessage)
 	return es
@@ -93,7 +101,7 @@ func (s *eventService) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case info := <-s.dispatcherInfo:
+		case info := <-s.dispatcherInfoChan:
 			switch info.GetActionType() {
 			case eventpb.ActionType_ACTION_TYPE_REGISTER:
 				s.registerDispatcher(ctx, info)
@@ -105,13 +113,11 @@ func (s *eventService) Run(ctx context.Context) error {
 				s.resumeDispatcher(info)
 			case eventpb.ActionType_ACTION_TYPE_RESET:
 				s.resetDispatcher(info)
-			case eventpb.ActionType_ACTION_TYPE_PAUSE_CHANGEFEED:
-				s.pauseChangefeed(info)
-			case eventpb.ActionType_ACTION_TYPE_RESUME_CHANGEFEED:
-				s.resumeChangefeed(info)
 			default:
 				log.Panic("invalid action type", zap.Any("info", info))
 			}
+		case heartbeat := <-s.dispatcherHeartbeat:
+			s.handleDispatcherHeartbeat(ctx, heartbeat)
 		}
 	}
 }
@@ -126,12 +132,28 @@ func (s *eventService) Close(_ context.Context) error {
 }
 
 func (s *eventService) handleMessage(ctx context.Context, msg *messaging.TargetMessage) error {
-	infos := msgToDispatcherInfo(msg)
-	for _, info := range infos {
+	switch msg.Type {
+	case messaging.TypeDispatcherRequest:
+		infos := msgToDispatcherInfo(msg)
+		for _, info := range infos {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case s.dispatcherInfoChan <- info:
+			}
+		}
+	case messaging.TypeDispatcherHeartbeat:
+		if len(msg.Message) != 1 {
+			log.Panic("invalid dispatcher heartbeat", zap.Any("msg", msg))
+		}
+		heartbeat := msg.Message[0].(*event.DispatcherHeartbeat)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case s.dispatcherInfo <- info:
+		case s.dispatcherHeartbeat <- &DispatcherHeartBeatWithServerID{
+			serverID:  msg.From.String(),
+			heartbeat: heartbeat,
+		}:
 		}
 	}
 	return nil
@@ -183,28 +205,19 @@ func (s *eventService) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	c.resetDispatcher(dispatcherInfo)
 }
 
-func (s *eventService) pauseChangefeed(dispatcherInfo DispatcherInfo) {
-	clusterID := dispatcherInfo.GetClusterID()
+func (s *eventService) handleDispatcherHeartbeat(ctx context.Context, heartbeat *DispatcherHeartBeatWithServerID) {
+	clusterID := heartbeat.heartbeat.ClusterID
 	c, ok := s.brokers[clusterID]
 	if !ok {
 		return
 	}
-	c.pauseChangefeed(dispatcherInfo)
-}
-
-func (s *eventService) resumeChangefeed(dispatcherInfo DispatcherInfo) {
-	clusterID := dispatcherInfo.GetClusterID()
-	c, ok := s.brokers[clusterID]
-	if !ok {
-		return
-	}
-	c.resumeChangefeed(dispatcherInfo)
+	c.handleDispatcherHeartbeat(ctx, heartbeat)
 }
 
 func msgToDispatcherInfo(msg *messaging.TargetMessage) []DispatcherInfo {
 	res := make([]DispatcherInfo, 0, len(msg.Message))
 	for _, m := range msg.Message {
-		info, ok := m.(*messaging.RegisterDispatcherRequest)
+		info, ok := m.(*messaging.DispatcherRequest)
 		if !ok {
 			log.Panic("invalid dispatcher info", zap.Any("info", m))
 		}

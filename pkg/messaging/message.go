@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
@@ -64,13 +65,17 @@ const (
 	TypeReusableEventServiceRequest
 	TypeReusableEventServiceResponse
 
+	// EventCollector related
 	TypeHeartBeatRequest
 	TypeHeartBeatResponse
 	TypeScheduleDispatcherRequest
-	TypeRegisterDispatcherRequest
+	TypeDispatcherRequest
 	TypeCheckpointTsMessage
 	TypeBlockStatusRequest
+	TypeDispatcherHeartbeat
+	TypeDispatcherHeartbeatResponse
 
+	// Coordinator related
 	TypeCoordinatorBootstrapRequest
 	TypeCoordinatorBootstrapResponse
 	TypeAddMaintainerRequest
@@ -128,8 +133,8 @@ func (t IOType) String() string {
 		return "MaintainerHeartbeatRequest"
 	case TypeCoordinatorBootstrapResponse:
 		return "CoordinatorBootstrapResponse"
-	case TypeRegisterDispatcherRequest:
-		return "RegisterDispatcherRequest"
+	case TypeDispatcherRequest:
+		return "DispatcherRequest"
 	case TypeMaintainerBootstrapRequest:
 		return "BootstrapMaintainerRequest"
 	case TypeMaintainerBootstrapResponse:
@@ -146,95 +151,97 @@ func (t IOType) String() string {
 		return "MessageHandShake"
 	case TypeCheckpointTsMessage:
 		return "CheckpointTsMessage"
+	case TypeDispatcherHeartbeat:
+		return "DispatcherHeartbeat"
 	default:
 	}
 	return "Unknown"
 }
 
-type RegisterDispatcherRequest struct {
-	*eventpb.RegisterDispatcherRequest
+type DispatcherRequest struct {
+	*eventpb.DispatcherRequest
 }
 
-func (r RegisterDispatcherRequest) Marshal() ([]byte, error) {
-	return r.RegisterDispatcherRequest.Marshal()
+func (r DispatcherRequest) Marshal() ([]byte, error) {
+	return r.DispatcherRequest.Marshal()
 }
 
-func (r RegisterDispatcherRequest) Unmarshal(data []byte) error {
-	return r.RegisterDispatcherRequest.Unmarshal(data)
+func (r DispatcherRequest) Unmarshal(data []byte) error {
+	return r.DispatcherRequest.Unmarshal(data)
 }
 
-func (r RegisterDispatcherRequest) GetID() common.DispatcherID {
+func (r DispatcherRequest) GetID() common.DispatcherID {
 	return common.NewDispatcherIDFromPB(r.DispatcherId)
 }
 
-func (r RegisterDispatcherRequest) GetClusterID() uint64 {
-	return 0
+func (r DispatcherRequest) GetClusterID() uint64 {
+	return r.ClusterId
 }
 
-func (r RegisterDispatcherRequest) GetTopic() string {
+func (r DispatcherRequest) GetTopic() string {
 	return EventCollectorTopic
 }
 
-func (r RegisterDispatcherRequest) GetServerID() string {
+func (r DispatcherRequest) GetServerID() string {
 	return r.ServerId
 }
 
-func (r RegisterDispatcherRequest) GetTableSpan() *heartbeatpb.TableSpan {
+func (r DispatcherRequest) GetTableSpan() *heartbeatpb.TableSpan {
 	return r.TableSpan
 }
 
-func (r RegisterDispatcherRequest) GetStartTs() uint64 {
+func (r DispatcherRequest) GetStartTs() uint64 {
 	return r.StartTs
 }
 
-func (r RegisterDispatcherRequest) GetChangefeedID() common.ChangeFeedID {
+func (r DispatcherRequest) GetChangefeedID() common.ChangeFeedID {
 	return common.NewChangefeedIDFromPB(r.ChangefeedId)
 }
 
-func (r RegisterDispatcherRequest) GetFilter() filter.Filter {
+func (r DispatcherRequest) GetFilter() filter.Filter {
 	changefeedID := r.GetChangefeedID()
 	filter, err := filter.
 		GetSharedFilterStorage().
-		GetOrSetFilter(changefeedID, r.RegisterDispatcherRequest.FilterConfig, "", false)
+		GetOrSetFilter(changefeedID, r.DispatcherRequest.FilterConfig, "", false)
 	if err != nil {
-		log.Panic("create filter failed", zap.Error(err), zap.Any("filterConfig", r.RegisterDispatcherRequest.FilterConfig))
+		log.Panic("create filter failed", zap.Error(err), zap.Any("filterConfig", r.DispatcherRequest.FilterConfig))
 	}
 	return filter
 }
 
-func (r RegisterDispatcherRequest) SyncPointEnabled() bool {
+func (r DispatcherRequest) SyncPointEnabled() bool {
 	return r.EnableSyncPoint
 }
 
-func (r RegisterDispatcherRequest) GetSyncPointTs() uint64 {
+func (r DispatcherRequest) GetSyncPointTs() uint64 {
 	return r.SyncPointTs
 }
 
-func (r RegisterDispatcherRequest) GetSyncPointInterval() time.Duration {
+func (r DispatcherRequest) GetSyncPointInterval() time.Duration {
 	return time.Duration(r.SyncPointInterval) * time.Second
 }
 
-func (r RegisterDispatcherRequest) IsOnlyReuse() bool {
+func (r DispatcherRequest) IsOnlyReuse() bool {
 	return r.OnlyReuse
 }
 
-func (r RegisterDispatcherRequest) GetBdrMode() bool {
+func (r DispatcherRequest) GetBdrMode() bool {
 	return r.BdrMode
 }
 
-func (r RegisterDispatcherRequest) GetIntegrity() *integrity.Config {
-	if r.RegisterDispatcherRequest.Integrity == nil {
+func (r DispatcherRequest) GetIntegrity() *integrity.Config {
+	if r.DispatcherRequest.Integrity == nil {
 		return &integrity.Config{
 			IntegrityCheckLevel:   integrity.CheckLevelNone,
 			CorruptionHandleLevel: integrity.CorruptionHandleLevelWarn,
 		}
 	}
-	integrity := integrity.Config(*r.RegisterDispatcherRequest.Integrity)
+	integrity := integrity.Config(*r.DispatcherRequest.Integrity)
 	return &integrity
 }
 
-func (r RegisterDispatcherRequest) GetTimezone() *time.Location {
-	tz, err := util.GetTimezone(r.RegisterDispatcherRequest.GetTimezone())
+func (r DispatcherRequest) GetTimezone() *time.Location {
+	tz, err := util.GetTimezone(r.DispatcherRequest.GetTimezone())
 	if err != nil {
 		log.Panic("Can't load time zone from dispatcher info", zap.Error(err))
 	}
@@ -289,8 +296,8 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.MaintainerHeartbeat{}
 	case TypeCoordinatorBootstrapResponse:
 		m = &heartbeatpb.CoordinatorBootstrapResponse{}
-	case TypeRegisterDispatcherRequest:
-		m = &RegisterDispatcherRequest{}
+	case TypeDispatcherRequest:
+		m = &DispatcherRequest{}
 	case TypeMaintainerBootstrapResponse:
 		m = &heartbeatpb.MaintainerBootstrapResponse{}
 	case TypeMaintainerPostBootstrapRequest:
@@ -305,6 +312,10 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.MaintainerBootstrapRequest{}
 	case TypeCheckpointTsMessage:
 		m = &heartbeatpb.CheckpointTsMessage{}
+	case TypeDispatcherHeartbeat:
+		m = &event.DispatcherHeartbeat{}
+	case TypeDispatcherHeartbeatResponse:
+		m = &event.DispatcherHeartbeatResponse{}
 	default:
 		log.Panic("Unimplemented IOType", zap.Stringer("Type", ioType))
 	}
@@ -378,8 +389,8 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeMaintainerHeartbeatRequest
 	case *heartbeatpb.CoordinatorBootstrapResponse:
 		ioType = TypeCoordinatorBootstrapResponse
-	case *RegisterDispatcherRequest:
-		ioType = TypeRegisterDispatcherRequest
+	case *DispatcherRequest:
+		ioType = TypeDispatcherRequest
 	case *heartbeatpb.MaintainerBootstrapResponse:
 		ioType = TypeMaintainerBootstrapResponse
 	case *heartbeatpb.MaintainerPostBootstrapRequest:
@@ -392,6 +403,10 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeMaintainerCloseResponse
 	case *heartbeatpb.CheckpointTsMessage:
 		ioType = TypeCheckpointTsMessage
+	case *event.DispatcherHeartbeat:
+		ioType = TypeDispatcherHeartbeat
+	case *event.DispatcherHeartbeatResponse:
+		ioType = TypeDispatcherHeartbeatResponse
 	default:
 		panic("unknown io type")
 	}

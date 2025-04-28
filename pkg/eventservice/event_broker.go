@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/apperror"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
@@ -184,8 +185,9 @@ func newEventBroker(
 	})
 
 	for i := 0; i < c.sendMessageWorkerCount; i++ {
+		idx := i
 		g.Go(func() error {
-			c.runSendMessageWorker(ctx, i)
+			c.runSendMessageWorker(ctx, idx)
 			return nil
 		})
 	}
@@ -792,23 +794,33 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 // updateDispatcherSendTs updates the sendTs of the dispatcher periodically.
 // The eventStore need to know this to GC the stale data.
 func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) {
-	ticker := time.NewTicker(time.Second * 120)
+	ticker := time.NewTicker(time.Second * 10)
 	log.Info("update dispatcher send ts goroutine is started")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			inActiveDispatchers := make([]*dispatcherStat, 0)
+
 			c.dispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*dispatcherStat)
 				// FIXME: use checkpointTs instead after checkpointTs is correctly updated
-				checkpointTs := dispatcher.sentResolvedTs.Load()
+				checkpointTs := dispatcher.checkpointTs.Load()
 				// TODO: when use checkpointTs, this check can be removed
 				if checkpointTs > 0 {
 					c.eventStore.UpdateDispatcherCheckpointTs(dispatcher.id, checkpointTs)
 				}
+				if time.Since(time.Unix(dispatcher.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout {
+					inActiveDispatchers = append(inActiveDispatchers, dispatcher)
+				}
 				return true
 			})
+
+			for _, d := range inActiveDispatchers {
+				log.Info("remove in-active dispatcher", zap.Stringer("dispatcherID", d.id), zap.Time("lastReceivedHeartbeatTime", time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)))
+				c.removeDispatcher(d.info)
+			}
 		}
 	}
 }
@@ -928,6 +940,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	defer c.metricDispatcherCount.Dec()
 	id := dispatcherInfo.GetID()
+
 	stat, ok := c.dispatchers.Load(id)
 	if !ok {
 		stat, ok = c.tableTriggerDispatchers.Load(id)
@@ -938,9 +951,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 
 	stat.(*dispatcherStat).changefeedStat.removeDispatcher()
-	// FIXME: this is a workaround to remove the changefeed status when all dispatchers are removed.
-	// But some remove dispatcher events missing during the changefeed pausing process, the changefeed status will not be removed expectedly.
-	// So, we need to find a permanent solution to fix this problem.
+
 	if stat.(*dispatcherStat).changefeedStat.dispatcherCount.Load() == 0 {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
 			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
@@ -993,6 +1004,8 @@ func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
 	if !ok {
+		// The dispatcher is not registered, register it.
+		c.addDispatcher(dispatcherInfo)
 		return
 	}
 	stat.resetState(dispatcherInfo.GetStartTs())
@@ -1016,22 +1029,33 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 	return stat.(*changefeedStatus)
 }
 
-func (c *eventBroker) pauseChangefeed(dispatcherInfo DispatcherInfo) {
-	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
-	if !ok {
-		return
+func (c *eventBroker) handleDispatcherHeartbeat(ctx context.Context, heartbeat *DispatcherHeartBeatWithServerID) {
+	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
+	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
+		dispatcher, ok := c.getDispatcher(dp.DispatcherID)
+		// Can't find the dispatcher, it means the dispatcher is removed.
+		if !ok {
+			response, ok := responseMap[heartbeat.serverID]
+			if !ok {
+				response = event.NewDispatcherHeartbeatResponse(32)
+				responseMap[heartbeat.serverID] = response
+			}
+			response.Append(event.NewDispatcherState(dp.DispatcherID, event.DSStateRemoved))
+			continue
+		}
+		// TODO: Should we check if the dispatcher's serverID is the same as the heartbeat's serverID?
+		if dispatcher.checkpointTs.Load() < dp.CheckpointTs {
+			dispatcher.checkpointTs.Store(dp.CheckpointTs)
+		}
+		// Update the last received heartbeat time to the current time.
+		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
 	}
-	log.Info("pause changefeed",
-		zap.Any("changefeedID", stat.changefeedStat.changefeedID.String()))
-	stat.changefeedStat.isRunning.Store(false)
+	c.sendDispatcherResponse(ctx, responseMap)
 }
 
-func (c *eventBroker) resumeChangefeed(dispatcherInfo DispatcherInfo) {
-	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
-	if !ok {
-		return
+func (c *eventBroker) sendDispatcherResponse(ctx context.Context, responseMap map[string]*event.DispatcherHeartbeatResponse) {
+	for serverID, response := range responseMap {
+		msg := messaging.NewSingleTargetMessage(node.ID(serverID), messaging.EventCollectorTopic, response)
+		c.msgSender.SendCommand(msg)
 	}
-	log.Info("resume changefeed",
-		zap.Any("changefeedID", stat.changefeedStat.changefeedID.String()))
-	stat.changefeedStat.isRunning.Store(true)
 }

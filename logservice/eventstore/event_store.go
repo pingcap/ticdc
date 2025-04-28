@@ -517,45 +517,46 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	dispatcherID common.DispatcherID,
 	checkpointTs uint64,
 ) error {
-	// e.dispatcherMeta.RLock()
-	// defer e.dispatcherMeta.RUnlock()
-	// if stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]; ok {
-	// 	stat.checkpointTs = checkpointTs
-	// 	subscriptionStat := e.dispatcherMeta.subscriptionStats[stat.subID]
-	// 	// calculate the new checkpoint ts of the subscription
-	// 	newCheckpointTs := uint64(0)
-	// 	for dispatcherID := range subscriptionStat.ids {
-	// 		dispatcherStat := e.dispatcherMeta.dispatcherStats[dispatcherID]
-	// 		if newCheckpointTs == 0 || dispatcherStat.checkpointTs < newCheckpointTs {
-	// 			newCheckpointTs = dispatcherStat.checkpointTs
-	// 		}
-	// 	}
-	// 	if newCheckpointTs == 0 {
-	// 		return nil
-	// 	}
-	// 	if newCheckpointTs < subscriptionStat.checkpointTs {
-	// 		log.Panic("should not happen",
-	// 			zap.Uint64("newCheckpointTs", newCheckpointTs),
-	// 			zap.Uint64("oldCheckpointTs", subscriptionStat.checkpointTs))
-	// 	}
-	// 	if subscriptionStat.checkpointTs < newCheckpointTs {
-	// 		e.gcManager.addGCItem(
-	// 			subscriptionStat.chIndex,
-	// 			subscriptionStat.uniqueKeyID,
-	// 			stat.tableSpan.TableID,
-	// 			subscriptionStat.checkpointTs,
-	// 			newCheckpointTs,
-	// 		)
-	// 		if log.GetLevel() <= zap.DebugLevel {
-	// 			log.Debug("update checkpoint ts",
-	// 				zap.Any("dispatcherID", dispatcherID),
-	// 				zap.Uint64("subID", uint64(stat.subID)),
-	// 				zap.Uint64("newCheckpointTs", newCheckpointTs),
-	// 				zap.Uint64("oldCheckpointTs", subscriptionStat.checkpointTs))
-	// 			subscriptionStat.checkpointTs = newCheckpointTs
-	// 		}
-	// 	}
-	// }
+	e.dispatcherMeta.RLock()
+	defer e.dispatcherMeta.RUnlock()
+	if stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]; ok {
+		stat.checkpointTs = checkpointTs
+		subscriptionStat := e.dispatcherMeta.subscriptionStats[stat.subID]
+		// calculate the new checkpoint ts of the subscription
+		newCheckpointTs := uint64(0)
+		for dispatcherID := range subscriptionStat.dispatchers.notifiers {
+			dispatcherStat := e.dispatcherMeta.dispatcherStats[dispatcherID]
+			if newCheckpointTs == 0 || dispatcherStat.checkpointTs < newCheckpointTs {
+				newCheckpointTs = dispatcherStat.checkpointTs
+			}
+		}
+		if newCheckpointTs == 0 {
+			return nil
+		}
+		if newCheckpointTs < subscriptionStat.checkpointTs.Load() {
+			log.Panic("should not happen",
+				zap.Uint64("newCheckpointTs", newCheckpointTs),
+				zap.Uint64("oldCheckpointTs", subscriptionStat.checkpointTs.Load()))
+		}
+
+		if subscriptionStat.checkpointTs.Load() < newCheckpointTs {
+			e.gcManager.addGCItem(
+				subscriptionStat.dbIndex,
+				uint64(subscriptionStat.subID),
+				stat.tableSpan.TableID,
+				subscriptionStat.checkpointTs.Load(),
+				newCheckpointTs,
+			)
+			subscriptionStat.checkpointTs.CompareAndSwap(subscriptionStat.checkpointTs.Load(), newCheckpointTs)
+			if log.GetLevel() <= zap.DebugLevel {
+				log.Debug("update checkpoint ts",
+					zap.Any("dispatcherID", dispatcherID),
+					zap.Uint64("subID", uint64(stat.subID)),
+					zap.Uint64("newCheckpointTs", newCheckpointTs),
+					zap.Uint64("oldCheckpointTs", subscriptionStat.checkpointTs.Load()))
+			}
+		}
+	}
 	return nil
 }
 
