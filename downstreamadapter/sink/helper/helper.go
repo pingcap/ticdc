@@ -17,8 +17,11 @@ import (
 	"net/url"
 	"strings"
 
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 )
 
 // DDLDispatchRule is the dispatch rule for DDL event.
@@ -39,6 +42,38 @@ func GetDDLDispatchRule(protocol config.Protocol) DDLDispatchRule {
 	default:
 	}
 	return PartitionAll
+}
+
+// GetEncoderConfig returns the encoder config and validates the config.
+func GetEncoderConfig(
+	changefeedID commonType.ChangeFeedID,
+	sinkURI *url.URL,
+	protocol config.Protocol,
+	sinkConfig *config.SinkConfig,
+	maxMsgBytes int,
+) (*common.Config, error) {
+	encoderConfig := common.NewConfig(protocol)
+	if err := encoderConfig.Apply(sinkURI, sinkConfig); err != nil {
+		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
+	}
+	// Always set encoder's `MaxMessageBytes` equal to producer's `MaxMessageBytes`
+	// to prevent that the encoder generate batched message too large
+	// then cause producer meet `message too large`.
+	encoderConfig = encoderConfig.
+		WithMaxMessageBytes(maxMsgBytes).
+		WithChangefeedID(changefeedID)
+
+	tz, err := util.GetTimezone(config.GetGlobalServerConfig().TZ)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
+	}
+	encoderConfig.TimeZone = tz
+
+	if err = encoderConfig.Validate(); err != nil {
+		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
+	}
+
+	return encoderConfig, nil
 }
 
 // GetTopic returns the topic name from the sink URI.

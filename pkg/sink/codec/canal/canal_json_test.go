@@ -471,14 +471,14 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 			Columns: []string{"a"},
 		},
 	}
-	selectors, err := columnselector.NewColumnSelectors(replicaConfig.Sink)
+	selectors, err := columnselector.New(replicaConfig.Sink)
 	require.NoError(t, err)
 
 	rowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
 		CommitTs:       1,
 		Event:          row,
-		ColumnSelector: selectors.GetSelector("test", "t"),
+		ColumnSelector: selectors.Get("test", "t"),
 		Callback:       func() {},
 	}
 
