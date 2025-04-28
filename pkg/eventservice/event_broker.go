@@ -580,6 +580,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			c.sendDDL(ctx, remoteID, ddlEvents[0], task)
 			ddlEvents = ddlEvents[1:]
 		}
+
 		dml.Seq = task.seq.Add(1)
 		c.emitSyncPointEventIfNeeded(dml.CommitTs, task, remoteID)
 		c.getMessageCh(task.messageWorkerIndex) <- newWrapDMLEvent(remoteID, dml, task.getEventSenderState())
@@ -599,14 +600,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	var dml *pevent.DMLEvent
 	dmlCount := 0
 	for {
-
-		// If the number of transactions that can be scanned in a single scan task is greater than the limit,
-		// we need to send a watermark to the dispatcher and stop the scan.
-		if dmlCount >= singleScanTxnLimit {
-			sendWaterMark()
-			return
-		}
-
 		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
 		if err != nil {
@@ -635,7 +628,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			if !ok {
 				return
 			}
-
 			tableID := task.info.GetTableSpan().TableID
 			tableInfo, err := c.schemaStore.GetTableInfo(tableID, e.CRTs-1)
 			if err != nil {
@@ -653,6 +645,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				}
 				log.Panic("get table info failed, unknown reason", zap.Error(err))
 			}
+
+			// If the number of transactions that can be scanned in a single scan task is greater than the limit,
+			// we need to send a watermark to the dispatcher and stop the scan.
+			if dmlCount >= singleScanTxnLimit {
+				sendWaterMark()
+				return
+			}
+
 			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
 			dmlCount++
 		}
