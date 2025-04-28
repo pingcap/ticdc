@@ -197,14 +197,14 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case event := <-s.eventChan:
-			topic := s.comp.eventRouter.GetTopicForRowChange(event.TableInfo)
+			schema := event.TableInfo.GetSchemaName()
+			table := event.TableInfo.GetTableName()
+			topic := s.comp.eventRouter.GetTopicForRowChange(schema, table)
 			partitionNum, err := s.comp.topicManager.GetPartitionNum(ctx, topic)
 			if err != nil {
 				return err
 			}
 
-			schema := event.TableInfo.GetSchemaName()
-			table := event.TableInfo.GetTableName()
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
 			selector := s.comp.columnSelector.GetSelector(schema, table)
 			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {

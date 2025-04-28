@@ -17,7 +17,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/topic"
-	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -38,7 +37,9 @@ type EventRouter struct {
 }
 
 // NewEventRouter creates a new EventRouter.
-func NewEventRouter(sinkConfig *config.SinkConfig, protocol config.Protocol, defaultTopic, scheme string) (*EventRouter, error) {
+func NewEventRouter(
+	sinkConfig *config.SinkConfig, defaultTopic string, isPulsar bool, isAvro bool,
+) (*EventRouter, error) {
 	// If an event does not match any dispatching rules in the config file,
 	// it will be dispatched by the default partition dispatcher and
 	// static topic dispatcher because it matches *.* rule.
@@ -57,14 +58,15 @@ func NewEventRouter(sinkConfig *config.SinkConfig, protocol config.Protocol, def
 		if !sinkConfig.CaseSensitive {
 			f = tableFilter.CaseInsensitive(f)
 		}
-
-		d := partition.NewGenerator(ruleConfig.PartitionRule, scheme, ruleConfig.IndexName, ruleConfig.Columns)
-
-		topicGenerator, err := topic.GetTopicGenerator(ruleConfig.TopicRule, defaultTopic, protocol, scheme)
+		topicGenerator, err := topic.GetTopicGenerator(ruleConfig.TopicRule, defaultTopic, isPulsar, isAvro)
 		if err != nil {
 			return nil, err
 		}
-		rules = append(rules, Rule{partitionDispatcher: d, topicGenerator: topicGenerator, Filter: f})
+		rules = append(rules, Rule{
+			partitionDispatcher: partition.NewGenerator(ruleConfig.PartitionRule, isPulsar, ruleConfig.IndexName, ruleConfig.Columns),
+			topicGenerator:      topicGenerator,
+			Filter:              f,
+		})
 	}
 
 	return &EventRouter{
@@ -74,9 +76,9 @@ func NewEventRouter(sinkConfig *config.SinkConfig, protocol config.Protocol, def
 }
 
 // GetTopicForRowChange returns the target topic for row changes.
-func (s *EventRouter) GetTopicForRowChange(tableInfo *common.TableInfo) string {
-	topicGenerator := s.matchTopicGenerator(tableInfo.TableName.Schema, tableInfo.TableName.Table)
-	return topicGenerator.Substitute(tableInfo.TableName.Schema, tableInfo.TableName.Table)
+func (s *EventRouter) GetTopicForRowChange(schema, table string) string {
+	topicGenerator := s.matchTopicGenerator(schema, table)
+	return topicGenerator.Substitute(schema, table)
 }
 
 // GetTopicForDDL returns the target topic for DDL.
@@ -104,7 +106,7 @@ func (s *EventRouter) GetTopicForDDL(ddl *commonEvent.DDLEvent) string {
 // GetActiveTopics returns a list of the corresponding topics
 // for the tables that are actively synchronized.
 func (s *EventRouter) GetActiveTopics(activeTables []*commonEvent.SchemaTableName) []string {
-	topics := make([]string, 0)
+	topics := make([]string, 0, len(activeTables))
 	topicsMap := make(map[string]bool, len(activeTables))
 	for _, tableName := range activeTables {
 		topicDispatcher := s.matchTopicGenerator(tableName.SchemaName, tableName.TableName)
