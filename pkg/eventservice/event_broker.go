@@ -772,14 +772,19 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
 			_, ok := err.(apperror.AppError)
-			log.Info("send msg failed, retry it later", zap.Error(err), zap.Any("tMsg", tMsg), zap.Bool("castOk", ok))
+			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Any("tMsg", tMsg), zap.Bool("castOk", ok))
 			if strings.Contains(err.Error(), "congested") {
 				log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))
 				// Wait for a while and retry to avoid the dropped message flood.
 				time.Sleep(congestedRetryInterval)
 				continue
 			} else {
+				eb := tMsg.Message[0]
+				event, ok := eb.(pevent.Event)
 				log.Info("send message failed, drop it", zap.Error(err), zap.Any("tMsg", tMsg))
+				if ok {
+					log.Info("event is dropped", zap.Any("event", event), zap.Any("Sequence", event.GetSeq()), zap.Uint64("CommitTs", event.GetCommitTs()))
+				}
 				// Drop the message, and return.
 				// If the dispatcher finds the events are not continuous, it will send a reset message.
 				// And the broker will send the missed events to the dispatcher again.
