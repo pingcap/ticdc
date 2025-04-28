@@ -655,7 +655,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 
 			// If the number of transactions that can be scanned in a single scan task is greater than the limit,
 			// we need to send a watermark to the dispatcher and stop the scan.
-			if dmlCount >= singleScanTxnLimit {
+			if dmlCount >= singleScanTxnLimit && e.CRTs > lastSentDMLCommitTs {
 				sendWaterMark()
 				return
 			}
