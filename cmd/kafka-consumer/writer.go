@@ -345,11 +345,13 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 
 		w.appendRow2Group(row, progress, offset)
 		counter++
-		for _, hasNext = progress.decoder.HasNext(); hasNext; {
-			row = progress.decoder.NextDMLEvent()
-			if row != nil {
-				w.appendRow2Group(row, progress, offset)
+		for {
+			_, hasNext = progress.decoder.HasNext()
+			if !hasNext {
+				break
 			}
+			row = progress.decoder.NextDMLEvent()
+			w.appendRow2Group(row, progress, offset)
 			counter++
 		}
 		if counter > w.maxBatchSize {
@@ -413,7 +415,16 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 		return
 	}
 	if commitTs >= group.highWatermark {
-		group.Append(dml, offset)
+		group.Append(dml)
+		log.Info("DML event append to the group",
+			zap.Int32("partition", group.partition),
+			zap.Any("offset", offset),
+			zap.Uint64("commitTs", dml.GetCommitTs()),
+			zap.Uint64("highWatermark", group.highWatermark),
+			zap.Int64("tableID", dml.GetTableID()),
+			zap.String("schema", dml.TableInfo.GetSchemaName()),
+			zap.String("table", dml.TableInfo.GetTableName()))
+		// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns))
 		return
 	}
 	switch w.protocol {
@@ -434,7 +445,8 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 		return
 	default:
 	}
-	log.Warn("DML event fallback row, since less than the group high watermark, do not ignore it",
+	group.Append(dml)
+	log.Warn("DML event fallback, still append to the group, since less than the group high watermark, do not ignore it",
 		zap.Int64("tableID", tableID), zap.Int32("partition", progress.partition),
 		zap.Uint64("commitTs", commitTs), zap.Any("offset", offset),
 		zap.Uint64("highWatermark", group.highWatermark),
@@ -442,7 +454,6 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 		zap.String("schema", dml.TableInfo.GetSchemaName()), zap.String("table", dml.TableInfo.GetTableName()),
 		// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 		zap.Any("protocol", w.protocol))
-	group.Append(dml, offset)
 }
 
 func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
