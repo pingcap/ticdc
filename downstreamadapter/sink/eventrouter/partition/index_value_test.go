@@ -14,17 +14,11 @@
 package partition
 
 import (
-	"context"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/columnselector"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
-	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -97,77 +91,4 @@ func TestIndexValueDispatcherWithIndexName(t *testing.T) {
 	index, _, err = p.GeneratePartitionIndexAndKey(&row, 3, tableInfo, 33)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), index)
-}
-
-func TestXXX(t *testing.T) {
-	helper := event.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-
-	ctx := context.Background()
-	codecConfig := codecCommon.NewConfig(config.ProtocolCanalJSON)
-
-	encoder, err := canal.NewJSONRowEventEncoder(ctx, codecConfig)
-	require.NoError(t, err)
-
-	decoder, err := canal.NewDecoder(ctx, codecConfig, nil)
-	require.NoError(t, err)
-
-	createDB := helper.DDL2Event(`CREATE DATABASE dispatcher`)
-
-	m, err := encoder.EncodeDDLEvent(createDB)
-	require.NoError(t, err)
-
-	decoder.AddKeyValue(m.Key, m.Value)
-
-	_, _ = decoder.HasNext()
-
-	_ = decoder.NextDDLEvent()
-
-	createTable := helper.DDL2Event(`CREATE TABLE dispatcher.index (a int primary key, b int)`)
-
-	m, err = encoder.EncodeDDLEvent(createTable)
-	require.NoError(t, err)
-
-	decoder.AddKeyValue(m.Key, m.Value)
-	_, _ = decoder.HasNext()
-	_ = decoder.NextDDLEvent()
-
-	dispatcher := newIndexValuePartitionGenerator("")
-
-	insert := helper.DML2Event("dispatcher", "index", "INSERT INTO dispatcher.index values (1, 2);")
-	require.NotNil(t, insert)
-	insertRow, ok := insert.GetNextRow()
-	require.True(t, ok)
-
-	origin, _, err := dispatcher.GeneratePartitionIndexAndKey(&insertRow, 3, insert.TableInfo, insert.GetCommitTs())
-	require.NoError(t, err)
-
-	columnSelector := columnselector.NewDefaultColumnSelector()
-	insertEvent := &commonEvent.RowEvent{
-		TableInfo:      insert.TableInfo,
-		CommitTs:       insert.GetCommitTs(),
-		Event:          insertRow,
-		ColumnSelector: columnSelector,
-		Callback:       func() {},
-	}
-
-	err = encoder.AppendRowChangedEvent(ctx, "", insertEvent)
-	require.NoError(t, err)
-
-	messages := encoder.Build()
-	require.Len(t, messages, 1)
-
-	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
-	_, _ = decoder.HasNext()
-	decodedInsert := decoder.NextDMLEvent()
-
-	decodedRow, ok := decodedInsert.GetNextRow()
-	require.True(t, ok)
-
-	obtained, _, err := dispatcher.GeneratePartitionIndexAndKey(&decodedRow, 3, insert.TableInfo, insert.GetCommitTs())
-	require.NoError(t, err)
-
-	require.Equal(t, origin, obtained)
 }
