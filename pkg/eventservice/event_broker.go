@@ -157,7 +157,7 @@ func newEventBroker(
 		scanWorkerCount:         scanWorkerCount,
 		cancel:                  cancel,
 		g:                       g,
-		rateLimiter:             rate.NewLimiter(rate.Limit(rateLimit), rateLimit),
+		rateLimiter:             rate.NewLimiter(rate.Limit(rateLimit), rateLimit/4),
 
 		metricDispatcherCount:                metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
 		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
