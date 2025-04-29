@@ -151,11 +151,11 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 			for _, row := range rows {
 				rowChangeWithKeys := RowChangeWithKeys{RowChange: &row}
 				if !row.Row.IsEmpty() {
-					_, keys := genKeyAndHash(&row.Row, tableInfo)
+					_, keys := genKeyAndHash(&row.Row, row.Offset, tableInfo)
 					rowChangeWithKeys.RowKeys = keys
 				}
 				if !row.PreRow.IsEmpty() {
-					_, keys := genKeyAndHash(&row.PreRow, tableInfo)
+					_, keys := genKeyAndHash(&row.PreRow, row.Offset, tableInfo)
 					rowChangeWithKeys.PreRowKeys = keys
 				}
 				rowLists = append(rowLists, rowChangeWithKeys)
@@ -302,7 +302,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 				case commonEvent.RowTypeUpdate:
 					{
 						deleteRow := commonEvent.RowChange{RowType: commonEvent.RowTypeDelete, PreRow: row.PreRow}
-						hashValue, keyValue := genKeyAndHash(&row.PreRow, tableInfo)
+						hashValue, keyValue := genKeyAndHash(&row.PreRow, row.Offset, tableInfo)
 						if _, ok := hashToKeyMap[hashValue]; !ok {
 							hashToKeyMap[hashValue] = keyValue
 						} else {
@@ -318,7 +318,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 
 					{
 						insertRow := commonEvent.RowChange{RowType: commonEvent.RowTypeInsert, Row: row.Row}
-						hashValue, keyValue := genKeyAndHash(&row.Row, tableInfo)
+						hashValue, keyValue := genKeyAndHash(&row.Row, row.Offset, tableInfo)
 						if _, ok := hashToKeyMap[hashValue]; !ok {
 							hashToKeyMap[hashValue] = keyValue
 						} else {
@@ -329,11 +329,10 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 								return w.generateNormalSQLs(events)
 							}
 						}
-
 						rowsMap[hashValue] = append(rowsMap[hashValue], &insertRow)
 					}
 				case commonEvent.RowTypeDelete:
-					hashValue, keyValue := genKeyAndHash(&row.PreRow, tableInfo)
+					hashValue, keyValue := genKeyAndHash(&row.PreRow, row.Offset, tableInfo)
 					if _, ok := hashToKeyMap[hashValue]; !ok {
 						hashToKeyMap[hashValue] = keyValue
 					} else {
@@ -346,7 +345,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 					}
 					rowsMap[hashValue] = append(rowsMap[hashValue], &row)
 				case commonEvent.RowTypeInsert:
-					hashValue, keyValue := genKeyAndHash(&row.Row, tableInfo)
+					hashValue, keyValue := genKeyAndHash(&row.Row, row.Offset, tableInfo)
 					if _, ok := hashToKeyMap[hashValue]; !ok {
 						hashToKeyMap[hashValue] = keyValue
 					} else {
@@ -377,6 +376,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 		// should not happen 'insert / insert' or 'delete / delete'
 		// so only the last one can be the final row changes
 		prevType := rowChanges[0].RowType
+		log.Error("rowChanges", zap.Any("rowChanges", rowChanges))
 		for i := 1; i < len(rowChanges); i++ {
 			rowType := rowChanges[i].RowType
 			if rowType != prevType {

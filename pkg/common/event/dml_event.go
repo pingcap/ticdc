@@ -186,15 +186,15 @@ func (t *DMLEvent) Rewind() {
 func (t *DMLEvent) GetNextTxn() []RowChange {
 	rows := make([]RowChange, 0, len(t.RowTypes)/len(t.Txns))
 	for {
-		row, ok := t.getNextRow()
-		if !ok {
-			return rows
-		}
-		rows = append(rows, row)
-		if t.offset > t.Txns[t.txnOffset].offset {
+		if t.txnOffset+1 < len(t.Txns) && t.offset >= t.Txns[t.txnOffset+1].offset {
 			t.txnOffset += 1
 			break
 		}
+		row, ok := t.getNextRow()
+		if !ok {
+			break
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }
@@ -218,6 +218,7 @@ func (t *DMLEvent) getNextRow() (RowChange, bool) {
 			Row:      t.Rows.GetRow(t.offset),
 			RowType:  rowType,
 			Checksum: checksum,
+			Offset:   t.txnOffset,
 		}
 		t.offset++
 		return row, true
@@ -226,6 +227,7 @@ func (t *DMLEvent) getNextRow() (RowChange, bool) {
 			PreRow:   t.Rows.GetRow(t.offset),
 			RowType:  rowType,
 			Checksum: checksum,
+			Offset:   t.txnOffset,
 		}
 		t.offset++
 		return row, true
@@ -235,6 +237,7 @@ func (t *DMLEvent) getNextRow() (RowChange, bool) {
 			Row:      t.Rows.GetRow(t.offset + 1),
 			RowType:  rowType,
 			Checksum: checksum,
+			Offset:   t.txnOffset,
 		}
 		t.offset += 2
 		return row, true
@@ -431,6 +434,7 @@ type RowChange struct {
 	Row      chunk.Row
 	RowType  RowType
 	Checksum *integrity.Checksum
+	Offset   int
 }
 
 type RowType byte
