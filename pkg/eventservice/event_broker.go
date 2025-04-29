@@ -50,7 +50,7 @@ const (
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
 	// Limit the number of transactions that can be scanned in a single scan task.
-	singleScanTxnLimit = 256 // 256 transactions
+	singleScanRowLimit = 32 * 1024
 )
 
 // Sink manager schedules table tasks based on lag. Limit the max task range
@@ -485,9 +485,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	start := time.Now()
 	remoteID := node.ID(task.info.GetServerID())
 	dispatcherID := task.id
+	pushBack := false
 
 	defer func() {
-		task.isTaskScanning.Store(false)
+		if !pushBack {
+			task.isTaskScanning.Store(false)
+		}
 	}()
 
 	// If the target is not ready to send, we don't need to scan the event store.
@@ -598,19 +601,24 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 
 	putTaskBack := func() {
+		task.isTaskScanning.Store(false)
 		needScan, _ := c.checkNeedScan(task, false)
 		if needScan {
 			timeout := time.After(10 * time.Second)
 			select {
 			case c.taskChan[task.scanWorkerIndex] <- task:
+				task.isTaskScanning.Store(true)
+				pushBack = true
 			case <-timeout:
+				task.isTaskScanning.Store(false)
+				pushBack = false
 			}
 		}
 	}
 
 	// 3. Send the events to the dispatcher.
 	var dml *pevent.DMLEvent
-	dmlCount := 0
+	rowCount := 0
 	for {
 		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
@@ -633,6 +641,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			// there are some bugs in the eventStore.
 			log.Panic("should never Happen", zap.Uint64("commitTs", e.CRTs), zap.Uint64("dataRangeStartTs", dataRange.StartTs))
 		}
+		rowCount++
 
 		if isNewTxn {
 			ok := sendDML(dml)
@@ -659,14 +668,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 
 			// If the number of transactions that can be scanned in a single scan task is greater than the limit,
 			// we need to send a watermark to the dispatcher and stop the scan.
-			if dmlCount >= singleScanTxnLimit && e.CRTs > lastSentDMLCommitTs {
+			if rowCount >= singleScanRowLimit && e.CRTs > lastSentDMLCommitTs {
 				sendWaterMark()
 				putTaskBack()
 				return
 			}
 
 			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
-			dmlCount++
 		}
 		if err = dml.AppendRow(e, c.mounter.DecodeToChunk); err != nil {
 			log.Panic("append row failed", zap.Error(err))
