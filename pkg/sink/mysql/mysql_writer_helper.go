@@ -62,7 +62,8 @@ func genKeyList(row *chunk.Row, tableInfo *common.TableInfo) []byte {
 		value := common.ExtractColVal(row, info, i)
 		// if a column value is null, we can ignore this index
 		if value == nil {
-			log.Warn("column value is nil", zap.Int64("colID", colID), zap.String("colName", info.Name.O))
+			log.Warn("column value is nil", zap.Int("offset", i),
+				zap.Int64("colID", colID), zap.String("colName", info.Name.O))
 			return nil
 		}
 
