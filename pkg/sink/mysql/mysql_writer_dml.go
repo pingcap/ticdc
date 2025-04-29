@@ -143,25 +143,23 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 	rowLists := make([]RowChangeWithKeys, 0)
 	for _, event := range events {
 		for {
-			rows, ok := event.GetNextTxn()
+			rows := event.GetNextTxn()
 			if len(rows) == 0 {
-				break
-			}
-			row, ok := event.GetNextRow()
-			if !ok {
 				event.Rewind()
 				break
 			}
-			rowChangeWithKeys := RowChangeWithKeys{RowChange: &row}
-			if !row.Row.IsEmpty() {
-				_, keys := genKeyAndHash(&row.Row, tableInfo)
-				rowChangeWithKeys.RowKeys = keys
+			for _, row := range rows {
+				rowChangeWithKeys := RowChangeWithKeys{RowChange: &row}
+				if !row.Row.IsEmpty() {
+					_, keys := genKeyAndHash(&row.Row, tableInfo)
+					rowChangeWithKeys.RowKeys = keys
+				}
+				if !row.PreRow.IsEmpty() {
+					_, keys := genKeyAndHash(&row.PreRow, tableInfo)
+					rowChangeWithKeys.PreRowKeys = keys
+				}
+				rowLists = append(rowLists, rowChangeWithKeys)
 			}
-			if !row.PreRow.IsEmpty() {
-				_, keys := genKeyAndHash(&row.PreRow, tableInfo)
-				rowChangeWithKeys.PreRowKeys = keys
-			}
-			rowLists = append(rowLists, rowChangeWithKeys)
 		}
 	}
 
@@ -294,15 +292,47 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 	// TODO: extract a function here to clean code
 	for _, event := range events {
 		for {
-			row, ok := event.GetNextRow()
-			if !ok {
+			rows := event.GetNextTxn()
+			if len(rows) == 0 {
 				event.Rewind()
 				break
 			}
-			switch row.RowType {
-			case commonEvent.RowTypeUpdate:
-				{
-					deleteRow := commonEvent.RowChange{RowType: commonEvent.RowTypeDelete, PreRow: row.PreRow}
+			for _, row := range rows {
+				switch row.RowType {
+				case commonEvent.RowTypeUpdate:
+					{
+						deleteRow := commonEvent.RowChange{RowType: commonEvent.RowTypeDelete, PreRow: row.PreRow}
+						hashValue, keyValue := genKeyAndHash(&row.PreRow, tableInfo)
+						if _, ok = hashToKeyMap[hashValue]; !ok {
+							hashToKeyMap[hashValue] = keyValue
+						} else {
+							if !compareKeys(hashToKeyMap[hashValue], keyValue) {
+								log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
+								event.Rewind() // reset event
+								// use normal sql instead
+								return w.generateNormalSQLs(events)
+							}
+						}
+						rowsMap[hashValue] = append(rowsMap[hashValue], &deleteRow)
+					}
+
+					{
+						insertRow := commonEvent.RowChange{RowType: commonEvent.RowTypeInsert, Row: row.Row}
+						hashValue, keyValue := genKeyAndHash(&row.Row, tableInfo)
+						if _, ok = hashToKeyMap[hashValue]; !ok {
+							hashToKeyMap[hashValue] = keyValue
+						} else {
+							if !compareKeys(hashToKeyMap[hashValue], keyValue) {
+								log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
+								event.Rewind() // reset event
+								// use normal sql instead
+								return w.generateNormalSQLs(events)
+							}
+						}
+
+						rowsMap[hashValue] = append(rowsMap[hashValue], &insertRow)
+					}
+				case commonEvent.RowTypeDelete:
 					hashValue, keyValue := genKeyAndHash(&row.PreRow, tableInfo)
 					if _, ok = hashToKeyMap[hashValue]; !ok {
 						hashToKeyMap[hashValue] = keyValue
@@ -314,11 +344,8 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 							return w.generateNormalSQLs(events)
 						}
 					}
-					rowsMap[hashValue] = append(rowsMap[hashValue], &deleteRow)
-				}
-
-				{
-					insertRow := commonEvent.RowChange{RowType: commonEvent.RowTypeInsert, Row: row.Row}
+					rowsMap[hashValue] = append(rowsMap[hashValue], &row)
+				case commonEvent.RowTypeInsert:
 					hashValue, keyValue := genKeyAndHash(&row.Row, tableInfo)
 					if _, ok = hashToKeyMap[hashValue]; !ok {
 						hashToKeyMap[hashValue] = keyValue
@@ -330,35 +357,8 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 							return w.generateNormalSQLs(events)
 						}
 					}
-
-					rowsMap[hashValue] = append(rowsMap[hashValue], &insertRow)
+					rowsMap[hashValue] = append(rowsMap[hashValue], &row)
 				}
-			case commonEvent.RowTypeDelete:
-				hashValue, keyValue := genKeyAndHash(&row.PreRow, tableInfo)
-				if _, ok = hashToKeyMap[hashValue]; !ok {
-					hashToKeyMap[hashValue] = keyValue
-				} else {
-					if !compareKeys(hashToKeyMap[hashValue], keyValue) {
-						log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
-						event.Rewind() // reset event
-						// use normal sql instead
-						return w.generateNormalSQLs(events)
-					}
-				}
-				rowsMap[hashValue] = append(rowsMap[hashValue], &row)
-			case commonEvent.RowTypeInsert:
-				hashValue, keyValue := genKeyAndHash(&row.Row, tableInfo)
-				if _, ok = hashToKeyMap[hashValue]; !ok {
-					hashToKeyMap[hashValue] = keyValue
-				} else {
-					if !compareKeys(hashToKeyMap[hashValue], keyValue) {
-						log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
-						event.Rewind() // reset event
-						// use normal sql instead
-						return w.generateNormalSQLs(events)
-					}
-				}
-				rowsMap[hashValue] = append(rowsMap[hashValue], &row)
 			}
 		}
 	}
@@ -426,31 +426,33 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 		args  []interface{}
 	)
 	for {
-		row, ok := event.GetNextRow()
-		if !ok {
+		rows := event.GetNextTxn()
+		if len(rows) == 0 {
 			break
 		}
-		switch row.RowType {
-		case commonEvent.RowTypeUpdate:
-			if inSafeMode {
-				query, args = buildUpdate(event.TableInfo, row, w.cfg.ForceReplicate)
-			} else {
-				query, args = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
-				if query != "" {
-					queryList = append(queryList, query)
-					argsList = append(argsList, args)
+		for _, row := range rows {
+			switch row.RowType {
+			case commonEvent.RowTypeUpdate:
+				if inSafeMode {
+					query, args = buildUpdate(event.TableInfo, row, w.cfg.ForceReplicate)
+				} else {
+					query, args = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
+					if query != "" {
+						queryList = append(queryList, query)
+						argsList = append(argsList, args)
+					}
+					query, args = buildInsert(event.TableInfo, row, inSafeMode)
 				}
+			case commonEvent.RowTypeDelete:
+				query, args = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
+			case commonEvent.RowTypeInsert:
 				query, args = buildInsert(event.TableInfo, row, inSafeMode)
 			}
-		case commonEvent.RowTypeDelete:
-			query, args = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
-		case commonEvent.RowTypeInsert:
-			query, args = buildInsert(event.TableInfo, row, inSafeMode)
-		}
 
-		if query != "" {
-			queryList = append(queryList, query)
-			argsList = append(argsList, args)
+			if query != "" {
+				queryList = append(queryList, query)
+				argsList = append(argsList, args)
+			}
 		}
 	}
 	return queryList, argsList
