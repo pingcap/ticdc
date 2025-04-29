@@ -190,11 +190,11 @@ func (t *DMLEvent) GetNextTxn() []RowChange {
 		if !ok {
 			return rows
 		}
+		rows = append(rows, row)
 		if t.offset > t.Txns[t.txnOffset].offset {
 			t.txnOffset += 1
 			break
 		}
-		rows = append(rows, row)
 	}
 	return rows
 }

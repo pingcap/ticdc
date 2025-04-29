@@ -230,13 +230,14 @@ func TestGetPartitionForRowChange(t *testing.T) {
 	require.NotNil(t, job)
 
 	dmlEvent := helper.DML2Event("test_index_value", "table1", "insert into table1 values (11, 22)")
-	// dmlEvent.CommitTs = 2
 
-	row, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	commitTs := dmlEvent.GetCommitTs()
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	row := rows[0]
 
 	partitionGenerator = d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
-	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&row, 10, dmlEvent.TableInfo, dmlEvent.GetCommitTs())
+	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&row, 10, dmlEvent.TableInfo, commitTs)
 	require.NoError(t, err)
 	require.Equal(t, int32(9), p)
 
