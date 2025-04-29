@@ -40,6 +40,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -49,6 +50,7 @@ const (
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
+	rateLimit = 200 * 1024 * 1024 // 200MB/s
 	// Limit the number of transactions that can be scanned in a single scan task.
 	singleScanRowLimit = 32 * 1024
 )
@@ -100,7 +102,8 @@ type eventBroker struct {
 
 	// messageCh is used to receive message from the scanWorker,
 	// and a goroutine is responsible for sending the message to the dispatchers.
-	messageCh []chan *wrapEvent
+	messageCh   []chan *wrapEvent
+	rateLimiter *rate.Limiter
 
 	// cancel is used to cancel the goroutines spawned by the eventBroker.
 	cancel context.CancelFunc
@@ -154,6 +157,7 @@ func newEventBroker(
 		scanWorkerCount:         scanWorkerCount,
 		cancel:                  cancel,
 		g:                       g,
+		rateLimiter:             rate.NewLimiter(rate.Limit(rateLimit), rateLimit),
 
 		metricDispatcherCount:                metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
 		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
@@ -601,18 +605,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 
 	putTaskBack := func() {
-		task.isTaskScanning.Store(false)
-		needScan, _ := c.checkNeedScan(task, false)
-		if needScan {
-			timeout := time.After(10 * time.Second)
-			select {
-			case c.taskChan[task.scanWorkerIndex] <- task:
-				task.isTaskScanning.Store(true)
-				pushBack = true
-			case <-timeout:
-				task.isTaskScanning.Store(false)
-				pushBack = false
-			}
+		timeout := time.After(10 * time.Second)
+		select {
+		case c.taskChan[task.scanWorkerIndex] <- task:
+			task.isTaskScanning.Store(true)
+			pushBack = true
+		case <-timeout:
+			task.isTaskScanning.Store(false)
+			pushBack = false
 		}
 	}
 
@@ -633,6 +633,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			}
 
 			sendRemainingDDLEvents()
+			return
+		}
+
+		eSize := len(e.Key) + len(e.Value) + len(e.OldValue)
+		err = c.rateLimiter.WaitN(ctx, eSize)
+		if err != nil {
+			log.Error("Get rate limit error", zap.Error(err))
 			return
 		}
 
