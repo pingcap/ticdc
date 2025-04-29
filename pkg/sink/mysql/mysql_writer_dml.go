@@ -303,7 +303,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 					{
 						deleteRow := commonEvent.RowChange{RowType: commonEvent.RowTypeDelete, PreRow: row.PreRow}
 						hashValue, keyValue := genKeyAndHash(&row.PreRow, tableInfo)
-						if _, ok = hashToKeyMap[hashValue]; !ok {
+						if _, ok := hashToKeyMap[hashValue]; !ok {
 							hashToKeyMap[hashValue] = keyValue
 						} else {
 							if !compareKeys(hashToKeyMap[hashValue], keyValue) {
@@ -319,7 +319,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 					{
 						insertRow := commonEvent.RowChange{RowType: commonEvent.RowTypeInsert, Row: row.Row}
 						hashValue, keyValue := genKeyAndHash(&row.Row, tableInfo)
-						if _, ok = hashToKeyMap[hashValue]; !ok {
+						if _, ok := hashToKeyMap[hashValue]; !ok {
 							hashToKeyMap[hashValue] = keyValue
 						} else {
 							if !compareKeys(hashToKeyMap[hashValue], keyValue) {
@@ -334,7 +334,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 					}
 				case commonEvent.RowTypeDelete:
 					hashValue, keyValue := genKeyAndHash(&row.PreRow, tableInfo)
-					if _, ok = hashToKeyMap[hashValue]; !ok {
+					if _, ok := hashToKeyMap[hashValue]; !ok {
 						hashToKeyMap[hashValue] = keyValue
 					} else {
 						if !compareKeys(hashToKeyMap[hashValue], keyValue) {
@@ -347,7 +347,7 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 					rowsMap[hashValue] = append(rowsMap[hashValue], &row)
 				case commonEvent.RowTypeInsert:
 					hashValue, keyValue := genKeyAndHash(&row.Row, tableInfo)
-					if _, ok = hashToKeyMap[hashValue]; !ok {
+					if _, ok := hashToKeyMap[hashValue]; !ok {
 						hashToKeyMap[hashValue] = keyValue
 					} else {
 						if !compareKeys(hashToKeyMap[hashValue], keyValue) {
