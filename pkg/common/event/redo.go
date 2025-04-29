@@ -105,8 +105,8 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 	redoLog := &RedoLog{
 		RedoRow: RedoDMLEvent{
 			Row: &DMLEventInRedoLog{
-				StartTs:      r.StartTs,
-				CommitTs:     r.CommitTs,
+				StartTs:      r.GetStartTs(),
+				CommitTs:     r.GetCommitTs(),
 				Table:        nil,
 				Columns:      nil,
 				PreColumns:   nil,

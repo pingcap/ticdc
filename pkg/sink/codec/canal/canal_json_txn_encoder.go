@@ -34,11 +34,6 @@ type JSONTxnEventEncoder struct {
 	batchSize  int
 	callback   func()
 
-	// Store some fields of the txn event.
-	txnCommitTs uint64
-	txnSchema   *string
-	txnTable    *string
-
 	columnSelector columnselector.Selector
 }
 
@@ -61,7 +56,7 @@ func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error 
 		}
 		value, err := newJSONMessageForDML(&commonEvent.RowEvent{
 			TableInfo:      event.TableInfo,
-			CommitTs:       event.CommitTs,
+			CommitTs:       event.GetCommitTs(),
 			Event:          row,
 			ColumnSelector: j.columnSelector,
 		}, j.config, false, "")
@@ -82,9 +77,6 @@ func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error 
 		j.batchSize++
 	}
 	j.callback = event.PostFlush
-	j.txnCommitTs = event.CommitTs
-	j.txnSchema = event.TableInfo.GetSchemaNamePtr()
-	j.txnTable = event.TableInfo.GetTableNamePtr()
 	return nil
 }
 
@@ -104,9 +96,6 @@ func (j *JSONTxnEventEncoder) Build() []*common.Message {
 	}
 	j.callback = nil
 	j.batchSize = 0
-	j.txnCommitTs = 0
-	j.txnSchema = nil
-	j.txnTable = nil
 
 	return []*common.Message{ret}
 }

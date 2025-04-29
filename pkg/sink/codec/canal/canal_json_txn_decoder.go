@@ -112,12 +112,11 @@ func (d *canalJSONTxnEventDecoder) canalJSONMessage2RowChange() *commonEvent.DML
 
 	tableInfo := newTableInfo(msg, 0)
 	result := new(commonEvent.DMLEvent)
-	result.Length++                    // todo: set this field correctly
-	result.StartTs = msg.getCommitTs() // todo: how to set this correctly?
+	result.AppendTxn(msg.getCommitTs(), msg.getCommitTs())
+	result.Length++ // todo: set this field correctly
 	result.ApproximateSize = 0
 	result.TableInfo = tableInfo
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
-	result.CommitTs = msg.getCommitTs()
 
 	columns := tableInfo.GetColumns()
 	switch msg.eventType() {

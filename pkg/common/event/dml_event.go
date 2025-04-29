@@ -36,8 +36,6 @@ type DMLEvent struct {
 	Version          byte                `json:"version"`
 	DispatcherID     common.DispatcherID `json:"dispatcher_id"`
 	PhysicalTableID  int64               `json:"physical_table_id"`
-	StartTs          uint64              `json:"start_ts"`
-	CommitTs         uint64              `json:"commit_ts"`
 	TableInfoVersion uint64              `json:"table_info_version"`
 	// The seq of the event. It is set by event service.
 	Seq uint64 `json:"seq"`
@@ -50,7 +48,9 @@ type DMLEvent struct {
 	// ApproximateSize is the approximate size of all rows in the transaction.
 	ApproximateSize int64     `json:"approximate_size"`
 	RowTypes        []RowType `json:"row_types"`
-	// Rows is the rows of the transaction.
+	// Txns store startTs and commitTs of the transaction.
+	Txns []Txn `json:"txns"`
+	// Rows is the rows of the transactions.
 	Rows *chunk.Chunk `json:"rows"`
 	// RawRows is the raw bytes of the rows.
 	// When the DMLEvent is received from a remote eventService, the Rows is nil.
@@ -71,7 +71,8 @@ type DMLEvent struct {
 	eventSize int64 `json:"-"`
 	// offset is the offset of the current row in the transaction.
 	// It is internal field, not exported. So it doesn't need to be marshalled.
-	offset int `json:"-"`
+	offset    int `json:"-"`
+	txnOffset int `json:"-"`
 
 	// Checksum for the event, only not nil if the upstream TiDB enable the row level checksum
 	// and TiCDC set the integrity check level to the correctness.
@@ -82,23 +83,28 @@ type DMLEvent struct {
 func NewDMLEvent(
 	dispatcherID common.DispatcherID,
 	tableID int64,
-	startTs,
-	commitTs uint64,
 	tableInfo *common.TableInfo,
 ) *DMLEvent {
 	// FIXME: check if chk isFull in the future
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount)
-	return &DMLEvent{
+	event := &DMLEvent{
 		Version:          DMLEventVersion,
 		DispatcherID:     dispatcherID,
 		PhysicalTableID:  tableID,
-		StartTs:          startTs,
-		CommitTs:         commitTs,
 		TableInfoVersion: tableInfo.UpdateTS(),
 		TableInfo:        tableInfo,
 		Rows:             chk,
 		RowTypes:         make([]RowType, 0, 1),
 	}
+	return event
+}
+
+func (t *DMLEvent) AppendTxn(startTs, commitTs uint64) {
+	t.Txns = append(t.Txns, Txn{
+		StartTs:  startTs,
+		CommitTs: commitTs,
+		offset:   len(t.RowTypes),
+	})
 }
 
 func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
@@ -141,11 +147,11 @@ func (t *DMLEvent) GetDispatcherID() common.DispatcherID {
 }
 
 func (t *DMLEvent) GetCommitTs() common.Ts {
-	return t.CommitTs
+	return t.Txns[t.txnOffset].CommitTs
 }
 
 func (t *DMLEvent) GetStartTs() common.Ts {
-	return t.StartTs
+	return t.Txns[t.txnOffset].StartTs
 }
 
 func (t *DMLEvent) PostFlush() {
@@ -174,6 +180,7 @@ func (t *DMLEvent) AddPostFlushFunc(f func()) {
 func (t *DMLEvent) Rewind() {
 	t.offset = 0
 	t.checksumOffset = 0
+	t.txnOffset = 0
 }
 
 func (t *DMLEvent) GetNextRow() (RowChange, bool) {
@@ -217,6 +224,9 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		return row, true
 	default:
 		log.Panic("TEvent.GetNextRow: invalid row type")
+	}
+	if t.offset > t.Txns[t.txnOffset].offset {
+		t.txnOffset += 1
 	}
 	return RowChange{}, false
 }
@@ -287,12 +297,6 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	// PhysicalTableID
 	binary.LittleEndian.PutUint64(buf[offset:], uint64(t.PhysicalTableID))
 	offset += 8
-	// StartTs
-	binary.LittleEndian.PutUint64(buf[offset:], t.StartTs)
-	offset += 8
-	// CommitTs
-	binary.LittleEndian.PutUint64(buf[offset:], t.CommitTs)
-	offset += 8
 	// TableInfoVersion
 	binary.LittleEndian.PutUint64(buf[offset:], t.TableInfoVersion)
 	offset += 8
@@ -312,6 +316,14 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	for _, rowType := range t.RowTypes {
 		buf[offset] = byte(rowType)
 		offset++
+	}
+	for _, txn := range t.Txns {
+		// StartTs
+		binary.LittleEndian.PutUint64(buf[offset:], txn.StartTs)
+		offset += 8
+		// CommitTs
+		binary.LittleEndian.PutUint64(buf[offset:], txn.CommitTs)
+		offset += 8
 	}
 
 	encoder := chunk.NewCodec(t.TableInfo.GetFieldSlice())
@@ -342,10 +354,6 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	offset += t.DispatcherID.GetSize()
 	t.PhysicalTableID = int64(binary.LittleEndian.Uint64(data[offset:]))
 	offset += 8
-	t.StartTs = binary.LittleEndian.Uint64(data[offset:])
-	offset += 8
-	t.CommitTs = binary.LittleEndian.Uint64(data[offset:])
-	offset += 8
 	t.TableInfoVersion = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
 	t.Seq = binary.LittleEndian.Uint64(data[offset:])
@@ -361,6 +369,13 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 		t.RowTypes[i] = RowType(data[offset])
 		offset++
 	}
+	for i := 0; i < len(t.Txns); i++ {
+		t.Txns[i].StartTs = binary.LittleEndian.Uint64(data[offset:])
+		offset += 8
+		t.Txns[i].CommitTs = binary.LittleEndian.Uint64(data[offset:])
+		offset += 8
+	}
+
 	t.RawRows = data[offset:]
 	return nil
 }
@@ -390,6 +405,12 @@ func (t *DMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	t.Rows, _ = decoder.Decode(t.RawRows)
 	t.TableInfo = tableInfo
 	t.RawRows = nil
+}
+
+type Txn struct {
+	StartTs  uint64 `json:"start_ts"`
+	CommitTs uint64 `json:"commit_ts"`
+	offset   int    `json:"-"`
 }
 
 type RowChange struct {

@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -213,7 +214,8 @@ func (s *EventTestHelper) DML2Event(schema, table string, dml ...string) *DMLEve
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
-	dmlEvent := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+	dmlEvent := NewDMLEvent(did, tableInfo.TableName.TableID, tableInfo)
+	dmlEvent.AppendTxn(ts-1, ts+1)
 	rawKvs := s.DML2RawKv(schema, table, dml...)
 	for _, rawKV := range rawKvs {
 		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)

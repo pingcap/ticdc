@@ -321,7 +321,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					break
 				}
 
-				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.CommitTs)
+				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.GetCommitTs())
 				if err != nil {
 					return errors.Trace(err)
 				}
@@ -336,7 +336,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					RowEvent: commonEvent.RowEvent{
 						PhysicalTableID: event.PhysicalTableID,
 						TableInfo:       event.TableInfo,
-						CommitTs:        event.CommitTs,
+						CommitTs:        event.GetCommitTs(),
 						Event:           row,
 						Callback:        rowCallback,
 						ColumnSelector:  selector,

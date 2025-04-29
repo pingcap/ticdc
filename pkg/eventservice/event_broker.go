@@ -577,16 +577,16 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			return false
 		}
 
-		for len(ddlEvents) > 0 && dml.CommitTs > ddlEvents[0].FinishedTs {
+		for len(ddlEvents) > 0 && dml.Txns[0].CommitTs > ddlEvents[0].FinishedTs {
 			c.sendDDL(ctx, remoteID, ddlEvents[0], task)
 			ddlEvents = ddlEvents[1:]
 		}
 
 		dml.Seq = task.seq.Add(1)
-		c.emitSyncPointEventIfNeeded(dml.CommitTs, task, remoteID)
+		c.emitSyncPointEventIfNeeded(dml.Txns[0].CommitTs, task, remoteID)
 		c.getMessageCh(task.messageWorkerIndex) <- newWrapDMLEvent(remoteID, dml, task.getEventSenderState())
 		metricEventServiceSendKvCount.Add(float64(dml.Len()))
-		lastSentDMLCommitTs = dml.CommitTs
+		lastSentDMLCommitTs = dml.Txns[0].CommitTs
 		return true
 	}
 
@@ -599,6 +599,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 
 	// 3. Send the events to the dispatcher.
 	var dml *pevent.DMLEvent
+	var updateTs uint64
 	dmlCount := 0
 	for {
 		// Node: The first event of the txn must return isNewTxn as true.
@@ -653,7 +654,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				return
 			}
 
-			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
+			if tableInfo.UpdateTS() != updateTs {
+				updateTs = tableInfo.UpdateTS()
+				dml = pevent.NewDMLEvent(dispatcherID, tableID, tableInfo)
+			}
+			dml.AppendTxn(e.StartTs, e.CRTs)
 			dmlCount++
 		}
 		if err = dml.AppendRow(e, c.mounter.DecodeToChunk); err != nil {

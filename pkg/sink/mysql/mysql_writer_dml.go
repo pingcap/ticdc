@@ -54,8 +54,8 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	for _, event := range events {
 		// calculate for metrics
 		dmls.rowCount += int(event.Len())
-		if len(dmls.startTs) == 0 || dmls.startTs[len(dmls.startTs)-1] != event.StartTs {
-			dmls.startTs = append(dmls.startTs, event.StartTs)
+		if len(dmls.startTs) == 0 || dmls.startTs[len(dmls.startTs)-1] != event.GetStartTs() {
+			dmls.startTs = append(dmls.startTs, event.GetStartTs())
 		}
 		dmls.approximateSize += event.GetRowsSize()
 		// group by dispatcherID
@@ -81,8 +81,8 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 		} else if len(eventsInGroup) > 0 {
 			// if the events are in different safe mode, we can't use the batch dml generate
-			firstEventSafeMode := !w.cfg.SafeMode && eventsInGroup[0].CommitTs > eventsInGroup[0].ReplicatingTs
-			finalEventSafeMode := !w.cfg.SafeMode && eventsInGroup[len(eventsInGroup)-1].CommitTs > eventsInGroup[len(eventsInGroup)-1].ReplicatingTs
+			firstEventSafeMode := !w.cfg.SafeMode && eventsInGroup[0].GetCommitTs() > eventsInGroup[0].ReplicatingTs
+			finalEventSafeMode := !w.cfg.SafeMode && eventsInGroup[len(eventsInGroup)-1].GetCommitTs() > eventsInGroup[len(eventsInGroup)-1].ReplicatingTs
 			if firstEventSafeMode != finalEventSafeMode {
 				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 			} else {
@@ -124,7 +124,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 // For these all changes to row, we will continue to compare from the beginnning to the end, until there is no change.
 // Then we can generate the final sql of delete/update/insert.
 func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	inSafeMode := !w.cfg.SafeMode && events[0].CommitTs > events[0].ReplicatingTs
+	inSafeMode := !w.cfg.SafeMode && events[0].GetCommitTs() > events[0].ReplicatingTs
 	if inSafeMode {
 		return w.generateBatchSQLInSafeMode(events)
 	}
@@ -410,10 +410,10 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 	var queryList []string
 	var argsList [][]interface{}
 
-	inSafeMode := !w.cfg.SafeMode && event.CommitTs > event.ReplicatingTs
+	inSafeMode := !w.cfg.SafeMode && event.GetCommitTs() > event.ReplicatingTs
 	log.Debug("inSafeMode",
 		zap.Bool("inSafeMode", inSafeMode),
-		zap.Uint64("firstRowCommitTs", event.CommitTs),
+		zap.Uint64("firstRowCommitTs", event.GetCommitTs()),
 		zap.Uint64("firstRowReplicatingTs", event.ReplicatingTs),
 		zap.Bool("safeMode", w.cfg.SafeMode))
 

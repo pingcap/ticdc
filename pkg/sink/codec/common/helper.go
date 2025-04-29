@@ -194,7 +194,7 @@ func queryRowChecksum(
 	var (
 		schema   = event.TableInfo.GetSchemaName()
 		table    = event.TableInfo.GetTableName()
-		commitTs = event.CommitTs
+		commitTs = event.GetCommitTs()
 	)
 
 	pkNames := event.TableInfo.GetPrimaryKeyColumnNames()
