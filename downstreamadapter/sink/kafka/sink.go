@@ -221,36 +221,36 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 
 			rowsCount := uint64(event.Len())
 			rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
-
 			for {
-				row, ok := event.GetNextRow()
-				if !ok {
+				rows := event.GetNextTxn()
+				if len(rows) == 0 {
 					break
 				}
+				for _, row := range rows {
+					index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.GetCommitTs())
+					if err != nil {
+						return errors.Trace(err)
+					}
 
-				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.GetCommitTs())
-				if err != nil {
-					return errors.Trace(err)
+					mqEvent := &commonEvent.MQRowEvent{
+						Key: commonEvent.TopicPartitionKey{
+							Topic:          topic,
+							Partition:      index,
+							PartitionKey:   key,
+							TotalPartition: partitionNum,
+						},
+						RowEvent: commonEvent.RowEvent{
+							PhysicalTableID: event.PhysicalTableID,
+							TableInfo:       event.TableInfo,
+							CommitTs:        event.GetCommitTs(),
+							Event:           row,
+							Callback:        rowCallback,
+							ColumnSelector:  selector,
+							Checksum:        row.Checksum,
+						},
+					}
+					s.rowChan <- mqEvent
 				}
-
-				mqEvent := &commonEvent.MQRowEvent{
-					Key: commonEvent.TopicPartitionKey{
-						Topic:          topic,
-						Partition:      index,
-						PartitionKey:   key,
-						TotalPartition: partitionNum,
-					},
-					RowEvent: commonEvent.RowEvent{
-						PhysicalTableID: event.PhysicalTableID,
-						TableInfo:       event.TableInfo,
-						CommitTs:        event.GetCommitTs(),
-						Event:           row,
-						Callback:        rowCallback,
-						ColumnSelector:  selector,
-						Checksum:        row.Checksum,
-					},
-				}
-				s.rowChan <- mqEvent
 			}
 		}
 	}

@@ -143,6 +143,10 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 	rowLists := make([]RowChangeWithKeys, 0)
 	for _, event := range events {
 		for {
+			rows, ok := event.GetNextTxn()
+			if len(rows) == 0 {
+				break
+			}
 			row, ok := event.GetNextRow()
 			if !ok {
 				event.Rewind()

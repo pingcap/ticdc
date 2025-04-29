@@ -50,31 +50,33 @@ func NewJSONTxnEventEncoder(config *common.Config) common.TxnEventEncoder {
 // AppendTxnEvent appends a txn event to the encoder.
 func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error {
 	for {
-		row, ok := event.GetNextRow()
-		if !ok {
+		rows := event.GetNextTxn()
+		if len(rows) == 0 {
 			break
 		}
-		value, err := newJSONMessageForDML(&commonEvent.RowEvent{
-			TableInfo:      event.TableInfo,
-			CommitTs:       event.GetCommitTs(),
-			Event:          row,
-			ColumnSelector: j.columnSelector,
-		}, j.config, false, "")
-		if err != nil {
-			return err
+		for _, row := range rows {
+			value, err := newJSONMessageForDML(&commonEvent.RowEvent{
+				TableInfo:      event.TableInfo,
+				CommitTs:       event.GetCommitTs(),
+				Event:          row,
+				ColumnSelector: j.columnSelector,
+			}, j.config, false, "")
+			if err != nil {
+				return err
+			}
+			length := len(value) + common.MaxRecordOverhead
+			// For single message that is longer than max-message-bytes, do not send it.
+			if length > j.config.MaxMessageBytes {
+				log.Warn("Single message is too large for canal-json",
+					zap.Int("maxMessageBytes", j.config.MaxMessageBytes),
+					zap.Int("length", length),
+					zap.Any("table", event.TableInfo.TableName))
+				return errors.ErrMessageTooLarge.GenWithStackByArgs()
+			}
+			j.valueBuf.Write(value)
+			j.valueBuf.Write(j.terminator)
+			j.batchSize++
 		}
-		length := len(value) + common.MaxRecordOverhead
-		// For single message that is longer than max-message-bytes, do not send it.
-		if length > j.config.MaxMessageBytes {
-			log.Warn("Single message is too large for canal-json",
-				zap.Int("maxMessageBytes", j.config.MaxMessageBytes),
-				zap.Int("length", length),
-				zap.Any("table", event.TableInfo.TableName))
-			return errors.ErrMessageTooLarge.GenWithStackByArgs()
-		}
-		j.valueBuf.Write(value)
-		j.valueBuf.Write(j.terminator)
-		j.batchSize++
 	}
 	j.callback = event.PostFlush
 	return nil

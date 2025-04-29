@@ -183,7 +183,23 @@ func (t *DMLEvent) Rewind() {
 	t.txnOffset = 0
 }
 
-func (t *DMLEvent) GetNextRow() (RowChange, bool) {
+func (t *DMLEvent) GetNextTxn() []RowChange {
+	rows := make([]RowChange, 0, len(t.RowTypes)/len(t.Txns))
+	for {
+		row, ok := t.getNextRow()
+		if !ok {
+			return rows
+		}
+		if t.offset > t.Txns[t.txnOffset].offset {
+			t.txnOffset += 1
+			break
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func (t *DMLEvent) getNextRow() (RowChange, bool) {
 	if t.offset >= len(t.RowTypes) {
 		return RowChange{}, false
 	}
@@ -224,9 +240,6 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		return row, true
 	default:
 		log.Panic("TEvent.GetNextRow: invalid row type")
-	}
-	if t.offset > t.Txns[t.txnOffset].offset {
-		t.txnOffset += 1
 	}
 	return RowChange{}, false
 }

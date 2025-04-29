@@ -143,8 +143,9 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEv
 		'{"key1": "value1"}')`
 	dmlEvent := helper.DML2Event("test", "t", sql)
 
-	insert, ok := dmlEvent.GetNextRow()
-	require.Equal(t, ok, true)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	insert := rows[0]
 	insertEvent := &commonEvent.RowEvent{
 		PhysicalTableID: dmlEvent.PhysicalTableID,
 		CommitTs:        dmlEvent.GetCommitTs(),
