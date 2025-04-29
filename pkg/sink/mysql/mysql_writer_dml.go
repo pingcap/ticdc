@@ -376,7 +376,6 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 		// should not happen 'insert / insert' or 'delete / delete'
 		// so only the last one can be the final row changes
 		prevType := rowChanges[0].RowType
-		log.Error("rowChanges", zap.Any("rowChanges", rowChanges))
 		for i := 1; i < len(rowChanges); i++ {
 			rowType := rowChanges[i].RowType
 			if rowType != prevType {
