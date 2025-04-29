@@ -183,9 +183,8 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 						close(done)
 					}
 				})
+				w.mysqlSink.AddDMLEvent(e)
 			}
-			event := mergeDMLEvent(events)
-			w.mysqlSink.AddDMLEvent(event)
 		}
 	}
 	if total != 0 {
@@ -204,19 +203,26 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	return w.mysqlSink.WriteBlockEvent(ddl)
 }
 
-func mergeDMLEvent(events []*commonEvent.DMLEvent) *commonEvent.DMLEvent {
+func mergeDMLEvent(events []*commonEvent.DMLEvent) []*commonEvent.DMLEvent {
 	if len(events) == 0 {
 		log.Panic("DMLEvent: empty events")
 	}
-	event := events[0]
-	for _, e := range events[1:] {
-		event.Rows.Append(e.Rows, 0, e.Rows.NumRows())
-		event.RowTypes = append(event.RowTypes, e.RowTypes...)
-		event.Length += e.Length
-		event.PostTxnFlushed = append(event.PostTxnFlushed, e.PostTxnFlushed...)
-		event.ApproximateSize += e.ApproximateSize
+	var current int
+	for i := 1; i < len(events); i++ {
+		if events[current].GetCommitTs() == events[i].GetCommitTs() {
+			events[current].Rows.Append(events[i].Rows, 0, events[i].Rows.NumRows())
+			events[current].RowTypes = append(events[current].RowTypes, events[i].RowTypes...)
+			events[current].Length += events[i].Length
+			events[current].PostTxnFlushed = append(events[current].PostTxnFlushed, events[i].PostTxnFlushed...)
+			events[current].ApproximateSize += events[i].ApproximateSize
+			continue
+		}
+		current++
+		if current != i {
+			events[current] = events[i]
+		}
 	}
-	return event
+	return events[:current+1]
 }
 
 func (w *writer) flushDMLEventsByWatermark(ctx context.Context, progress *partitionProgress) error {
@@ -240,9 +246,9 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context, progress *partit
 					close(done)
 				}
 			})
+			w.mysqlSink.AddDMLEvent(e)
+
 		}
-		e := mergeDMLEvent(events)
-		w.mysqlSink.AddDMLEvent(e)
 	}
 	if total == 0 {
 		return nil

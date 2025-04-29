@@ -577,6 +577,7 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 		CommitTs:        msg.CommitTs,
 		PhysicalTableID: msg.TableID,
 		TableInfo:       tableInfo,
+		Length:          1,
 	}
 
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
@@ -586,12 +587,10 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 		data := formatAllColumnsValue(msg.Old, columns)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
-		result.Length += 1
 	case DMLTypeInsert:
 		data := formatAllColumnsValue(msg.Data, columns)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
-		result.Length += 1
 	case DMLTypeUpdate:
 		previous := formatAllColumnsValue(msg.Old, columns)
 		data := formatAllColumnsValue(msg.Data, columns)
@@ -604,7 +603,6 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
-		result.Length += 1
 	default:
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.Type))
 	}

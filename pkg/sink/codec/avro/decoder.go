@@ -269,7 +269,7 @@ func assembleEvent(
 	} else {
 		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeInsert)
 	}
-	event.Length += 1
+	event.Length++
 	return event, nil
 }
 

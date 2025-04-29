@@ -28,6 +28,66 @@ import (
 
 // TODO: claim check
 
+func TestIntegerContentCompatible(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	createTableSQL := `	create table tp_int
+	(
+		id          int auto_increment,
+		c_tinyint   tinyint   null,
+		c_smallint  smallint  null,
+		c_mediumint mediumint null,
+		c_int       int       null,
+		c_bigint    bigint    null,
+		constraint pk
+	primary key (id)
+	)`
+	_ = helper.DDL2Event(createTableSQL)
+
+	insertSQL := `insert into tp_int() values ()`
+	insertDMLEvent := helper.DML2Event("test", "tp_int", insertSQL)
+
+	insertRow, ok := insertDMLEvent.GetNextRow()
+	require.True(t, ok)
+
+	insertRowEvent := &commonEvent.RowEvent{
+		TableInfo:      insertDMLEvent.TableInfo,
+		CommitTs:       insertDMLEvent.GetCommitTs(),
+		Event:          insertRow,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+	codecConfig.EnableTiDBExtension = true
+	codecConfig.ContentCompatible = true
+	codecConfig.OnlyOutputUpdatedColumns = true
+
+	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	require.NoError(t, err)
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decodedInsert := decoder.NextDMLEvent()
+	require.NotNil(t, decodedInsert)
+}
+
 func TestIntegerTypes(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -87,6 +147,7 @@ func TestIntegerTypes(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	codecConfig.ContentCompatible = true
+	codecConfig.OnlyOutputUpdatedColumns = true
 	for _, enableTiDBExtension := range []bool{true, false} {
 		for _, event := range []*commonEvent.RowEvent{minValueEvent, maxValueEvent} {
 			codecConfig.EnableTiDBExtension = enableTiDBExtension

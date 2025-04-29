@@ -32,8 +32,7 @@ func compareKeys(firstKey, secondKey []byte) bool {
 func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte) {
 	key := genKeyList(row, tableInfo)
 	if len(key) == 0 {
-		log.Panic("the table has no primary key",
-			zap.String("row", row.ToString(tableInfo.GetFieldSlice())), zap.Any("tableInfo", tableInfo))
+		log.Panic("the table has no primary key", zap.Any("tableInfo", tableInfo))
 	}
 
 	hasher := fnv.New32a()
@@ -62,8 +61,6 @@ func genKeyList(row *chunk.Row, tableInfo *common.TableInfo) []byte {
 		value := common.ExtractColVal(row, info, i)
 		// if a column value is null, we can ignore this index
 		if value == nil {
-			log.Warn("column value is nil", zap.Int("offset", i),
-				zap.Int64("colID", colID), zap.String("colName", info.Name.O))
 			return nil
 		}
 
