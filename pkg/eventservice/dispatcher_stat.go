@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -96,6 +97,8 @@ type dispatcherStat struct {
 	// isRemoved is used to indicate whether the dispatcher is removed.
 	// If so, we should ignore the errors related to this dispatcher.
 	isRemoved atomic.Bool
+
+	scanRateLimiter *rate.Limiter
 }
 
 func newDispatcherStat(
@@ -113,6 +116,7 @@ func newDispatcherStat(
 		messageWorkerIndex: messageWorkerIndex,
 		info:               info,
 		filter:             filter,
+		scanRateLimiter:    rate.NewLimiter(rate.Limit(25), 1),
 	}
 	changefeedStatus.addDispatcher()
 
