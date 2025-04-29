@@ -203,28 +203,6 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	return w.mysqlSink.WriteBlockEvent(ddl)
 }
 
-func mergeDMLEvent(events []*commonEvent.DMLEvent) []*commonEvent.DMLEvent {
-	if len(events) == 0 {
-		log.Panic("DMLEvent: empty events")
-	}
-	var current int
-	for i := 1; i < len(events); i++ {
-		if events[current].GetCommitTs() == events[i].GetCommitTs() {
-			events[current].Rows.Append(events[i].Rows, 0, events[i].Rows.NumRows())
-			events[current].RowTypes = append(events[current].RowTypes, events[i].RowTypes...)
-			events[current].Length += events[i].Length
-			events[current].PostTxnFlushed = append(events[current].PostTxnFlushed, events[i].PostTxnFlushed...)
-			events[current].ApproximateSize += events[i].ApproximateSize
-			continue
-		}
-		current++
-		if current != i {
-			events[current] = events[i]
-		}
-	}
-	return events[:current+1]
-}
-
 func (w *writer) flushDMLEventsByWatermark(ctx context.Context, progress *partitionProgress) error {
 	var (
 		done = make(chan struct{}, 1)

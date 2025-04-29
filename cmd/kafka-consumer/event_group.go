@@ -41,10 +41,32 @@ func NewEventsGroup(partition int32, tableID int64) *eventsGroup {
 
 // Append will append an event to event groups.
 func (g *eventsGroup) Append(row *commonEvent.DMLEvent) {
-	g.events = append(g.events, row)
 	if row.CommitTs > g.highWatermark {
 		g.highWatermark = row.CommitTs
 	}
+
+	var lastDMLEvent *commonEvent.DMLEvent
+	if len(g.events) > 0 {
+		lastDMLEvent = g.events[len(g.events)-1]
+	}
+
+	if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() < row.GetCommitTs() {
+		g.events = append(g.events, row)
+		return
+	}
+
+	if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
+		lastDMLEvent.Rows.Append(row.Rows, 0, row.Rows.NumRows())
+		lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
+		lastDMLEvent.Length += row.Length
+		lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
+		lastDMLEvent.ApproximateSize += row.ApproximateSize
+		return
+	}
+
+	log.Panic("append event with smaller commit ts",
+		zap.Int32("partition", g.partition), zap.Int64("tableID", g.tableID),
+		zap.Uint64("lastCommitTs", lastDMLEvent.GetCommitTs()), zap.Uint64("commitTs", row.GetCommitTs()))
 }
 
 // Resolve will get events where CommitTs is less than resolveTs.
