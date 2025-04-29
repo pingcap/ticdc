@@ -40,6 +40,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -49,9 +50,11 @@ const (
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
-	//rateLimit = 200 * 1024 * 1024 // 200MB/s
 	// Limit the number of rows that can be scanned in a single scan task.
 	singleScanRowLimit = 8 * 1024
+
+	// Limit the throughput of the eventBroker.
+	throughputLimit = 240 * 1024 * 1024 // 240MB/s
 )
 
 // Sink manager schedules table tasks based on lag. Limit the max task range
@@ -101,7 +104,8 @@ type eventBroker struct {
 
 	// messageCh is used to receive message from the scanWorker,
 	// and a goroutine is responsible for sending the message to the dispatchers.
-	messageCh []chan *wrapEvent
+	messageCh         []chan *wrapEvent
+	throughputLimiter *rate.Limiter
 
 	// cancel is used to cancel the goroutines spawned by the eventBroker.
 	cancel context.CancelFunc
@@ -155,6 +159,7 @@ func newEventBroker(
 		scanWorkerCount:         scanWorkerCount,
 		cancel:                  cancel,
 		g:                       g,
+		throughputLimiter:       rate.NewLimiter(rate.Limit(throughputLimit), 1),
 
 		metricDispatcherCount:                metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
 		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
@@ -633,6 +638,16 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			return
 		}
 
+		eSize := len(e.Key) + len(e.Value) + len(e.OldValue)
+		// If the number of transactions that can be scanned in a single scan task is greater than the limit,
+		// we need to send a watermark to the dispatcher and stop the scan.
+		if (rowCount >= singleScanRowLimit || !c.throughputLimiter.AllowN(time.Now(), eSize)) &&
+			e.CRTs > lastSentDMLCommitTs {
+			sendWaterMark()
+			putTaskBack()
+			return
+		}
+
 		if e.CRTs < dataRange.StartTs {
 			// If the commitTs of the event is less than the startTs of the data range,
 			// there are some bugs in the eventStore.
@@ -661,14 +676,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 					return
 				}
 				log.Panic("get table info failed, unknown reason", zap.Error(err))
-			}
-
-			// If the number of transactions that can be scanned in a single scan task is greater than the limit,
-			// we need to send a watermark to the dispatcher and stop the scan.
-			if rowCount >= singleScanRowLimit && e.CRTs > lastSentDMLCommitTs {
-				sendWaterMark()
-				putTaskBack()
-				return
 			}
 
 			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
