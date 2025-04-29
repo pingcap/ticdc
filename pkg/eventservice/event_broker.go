@@ -597,6 +597,17 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		}
 	}
 
+	putTaskBack := func() {
+		needScan, _ := c.checkNeedScan(task, false)
+		if needScan {
+			timeout := time.After(10 * time.Second)
+			select {
+			case c.taskChan[task.scanWorkerIndex] <- task:
+			case <-timeout:
+			}
+		}
+	}
+
 	// 3. Send the events to the dispatcher.
 	var dml *pevent.DMLEvent
 	dmlCount := 0
@@ -650,6 +661,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			// we need to send a watermark to the dispatcher and stop the scan.
 			if dmlCount >= singleScanTxnLimit && e.CRTs > lastSentDMLCommitTs {
 				sendWaterMark()
+				putTaskBack()
 				return
 			}
 
