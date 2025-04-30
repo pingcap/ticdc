@@ -47,8 +47,9 @@ func TestEncodeFlag(t *testing.T) {
 
 	dmlEvent := helper.DML2Event("test", "t",
 		`insert into t values (1, 2, 3, 4, "0x010201")`)
-	row, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	row := rows[0]
 
 	columnSelector := columnselector.NewDefaultColumnSelector()
 
@@ -87,8 +88,9 @@ func TestEncodeFlag(t *testing.T) {
 	decoded, err := decoder.NextDMLEvent()
 	require.NoError(t, err)
 
-	change, ok := decoded.GetNextRow()
-	require.True(t, ok)
+	rows = decoded.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change := rows[0]
 	common.CompareRow(t, insertEvent.Event, insertEvent.TableInfo, change, decoded.TableInfo)
 }
 
@@ -117,8 +119,9 @@ func TestIntegerTypes(t *testing.T) {
 		-2147483648, 0,
 		-9223372036854775808, 0)`
 	minValues := helper.DML2Event("test", "t", sql)
-	minRow, ok := minValues.GetNextRow()
-	require.True(t, ok)
+	rows := minValues.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	minRow := rows[0]
 
 	columnSelector := columnselector.NewDefaultColumnSelector()
 
@@ -138,7 +141,9 @@ func TestIntegerTypes(t *testing.T) {
 		2147483647, 4294967295,
 	9223372036854775807, 18446744073709551615)`
 	maxValues := helper.DML2Event("test", "t", sql)
-	maxRow, ok := maxValues.GetNextRow()
+	rows = maxValues.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	maxRow := rows[0]
 
 	maxValueEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
@@ -176,8 +181,9 @@ func TestIntegerTypes(t *testing.T) {
 
 		require.Equal(t, event.CommitTs, decoded.GetCommitTs())
 
-		change, ok := decoded.GetNextRow()
-		require.True(t, ok)
+		rows := decoded.GetNextTxn()
+		require.Equal(t, len(rows), 1)
+		change := rows[0]
 
 		common.CompareRow(t, event.Event, event.TableInfo, change, decoded.TableInfo)
 	}
@@ -195,8 +201,9 @@ func TestFloatTypes(t *testing.T) {
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d,e) values (1.23, 4.56, 7.89, 10.11, 12.13)`)
 	require.NotNil(t, dmlEvent)
-	row, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	row := rows[0]
 
 	tableInfo := helper.GetTableInfo(job)
 	rowEvent := &commonEvent.RowEvent{
@@ -231,8 +238,9 @@ func TestFloatTypes(t *testing.T) {
 
 	event, err := decoder.NextDMLEvent()
 	require.NoError(t, err)
-	change, ok := event.GetNextRow()
-	require.True(t, ok)
+	rows = event.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change := rows[0]
 
 	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
@@ -247,8 +255,9 @@ func TestTimeTypes(t *testing.T) {
 	dmlEvent := helper.DML2Event("test", "t",
 		`insert into test.t(a,b,c,d) values ("2020-01-01 12:00:00", "2020-01-01 12:00:00", "2020-01-01", "12:00:00")`)
 	require.NotNil(t, dmlEvent)
-	row, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	row := rows[0]
 
 	tableInfo := helper.GetTableInfo(job)
 	rowEvent := &commonEvent.RowEvent{
@@ -283,8 +292,9 @@ func TestTimeTypes(t *testing.T) {
 
 	event, err := decoder.NextDMLEvent()
 	require.NoError(t, err)
-	change, ok := event.GetNextRow()
-	require.True(t, ok)
+	rows = event.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change := rows[0]
 
 	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
@@ -299,8 +309,9 @@ func TestStringTypes(t *testing.T) {
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d) values ("char","varchar","binary","varbinary")`)
 	require.NotNil(t, dmlEvent)
-	row, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	row := rows[0]
 
 	tableInfo := helper.GetTableInfo(job)
 	rowEvent := &commonEvent.RowEvent{
@@ -335,8 +346,9 @@ func TestStringTypes(t *testing.T) {
 
 	event, err := decoder.NextDMLEvent()
 	require.NoError(t, err)
-	change, ok := event.GetNextRow()
-	require.True(t, ok)
+	rows = event.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change := rows[0]
 
 	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
@@ -352,8 +364,9 @@ func TestBlobTypes(t *testing.T) {
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d) values (0x010201,0x010202,0x010203,0x010204)`)
 	require.NotNil(t, dmlEvent)
-	row, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	row := rows[0]
 
 	tableInfo := helper.GetTableInfo(job)
 	rowEvent := &commonEvent.RowEvent{
@@ -388,8 +401,9 @@ func TestBlobTypes(t *testing.T) {
 
 	event, err := decoder.NextDMLEvent()
 	require.NoError(t, err)
-	change, ok := event.GetNextRow()
-	require.True(t, ok)
+	rows = event.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change := rows[0]
 
 	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
@@ -405,8 +419,9 @@ func TestTextTypes(t *testing.T) {
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d) values ("tinytext","text","mediumtext","longtext")`)
 	require.NotNil(t, dmlEvent)
-	row, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	row := rows[0]
 
 	tableInfo := helper.GetTableInfo(job)
 	rowEvent := &commonEvent.RowEvent{
@@ -441,8 +456,9 @@ func TestTextTypes(t *testing.T) {
 
 	event, err := decoder.NextDMLEvent()
 	require.NoError(t, err)
-	change, ok := event.GetNextRow()
-	require.True(t, ok)
+	rows = event.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change := rows[0]
 
 	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
@@ -467,8 +483,9 @@ func TestOtherTypes(t *testing.T) {
 	    'a', 'a,b')`)
 
 	require.NotNil(t, dmlEvent)
-	row, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	row := rows[0]
 
 	rowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
@@ -503,8 +520,9 @@ func TestOtherTypes(t *testing.T) {
 
 	event, err := decoder.NextDMLEvent()
 	require.NoError(t, err)
-	change, ok := event.GetNextRow()
-	require.True(t, ok)
+	rows = event.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change := rows[0]
 
 	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
@@ -597,8 +615,9 @@ func TestEncoderOneMessage(t *testing.T) {
 	tableInfo := helper.GetTableInfo(job)
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 123)`)
 	require.NotNil(t, dmlEvent)
-	insertRow, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	insertRow := rows[0]
 
 	count := 0
 
@@ -635,8 +654,9 @@ func TestEncoderOneMessage(t *testing.T) {
 
 	decoded, err := decoder.NextDMLEvent()
 	require.NoError(t, err)
-	change, ok := decoded.GetNextRow()
-	require.True(t, ok)
+	rows = decoded.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change := rows[0]
 
 	common.CompareRow(t, insertRowEvent.Event, insertRowEvent.TableInfo, change, decoded.TableInfo)
 }
@@ -663,22 +683,22 @@ func TestEncoderMultipleMessage(t *testing.T) {
 	columnSelector := columnselector.NewDefaultColumnSelector()
 	count := 0
 	for {
-		insertRow, ok := dmlEvent.GetNextRow()
-		if !ok {
+		rows := dmlEvent.GetNextTxn()
+		if len(rows) == 0 {
 			break
 		}
-
-		insertRowEvent := &commonEvent.RowEvent{
-			TableInfo:      tableInfo,
-			CommitTs:       dmlEvent.GetCommitTs(),
-			Event:          insertRow,
-			ColumnSelector: columnSelector,
-			Callback:       func() { count += 1 },
+		for _, insertRow := range rows {
+			insertRowEvent := &commonEvent.RowEvent{
+				TableInfo:      tableInfo,
+				CommitTs:       dmlEvent.GetCommitTs(),
+				Event:          insertRow,
+				ColumnSelector: columnSelector,
+				Callback:       func() { count += 1 },
+			}
+			insertEvents = append(insertEvents, insertRowEvent)
+			err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+			require.NoError(t, err)
 		}
-		insertEvents = append(insertEvents, insertRowEvent)
-
-		err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
-		require.NoError(t, err)
 	}
 	messages := encoder.Build()
 
@@ -705,8 +725,9 @@ func TestEncoderMultipleMessage(t *testing.T) {
 
 	decoded, err := decoder.NextDMLEvent()
 	require.NoError(t, err)
-	change, ok := decoded.GetNextRow()
-	require.True(t, ok)
+	rows := decoded.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change := rows[0]
 
 	common.CompareRow(t, insertEvents[0].Event, insertEvents[0].TableInfo, change, decoded.TableInfo)
 
@@ -717,8 +738,9 @@ func TestEncoderMultipleMessage(t *testing.T) {
 
 	decoded, err = decoder.NextDMLEvent()
 	require.NoError(t, err)
-	change, ok = decoded.GetNextRow()
-	require.True(t, ok)
+	rows = decoded.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change = rows[0]
 
 	common.CompareRow(t, insertEvents[1].Event, insertEvents[1].TableInfo, change, decoded.TableInfo)
 
@@ -732,8 +754,9 @@ func TestEncoderMultipleMessage(t *testing.T) {
 
 	decoded, err = decoder.NextDMLEvent()
 	require.NoError(t, err)
-	change, ok = decoded.GetNextRow()
-	require.True(t, ok)
+	rows = decoded.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change = rows[0]
 
 	common.CompareRow(t, insertEvents[2].Event, insertEvents[2].TableInfo, change, decoded.TableInfo)
 }
@@ -753,8 +776,9 @@ func TestMessageTooLarge(t *testing.T) {
 	tableInfo := helper.GetTableInfo(job)
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 123)`)
 	require.NotNil(t, dmlEvent)
-	insertRow, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	insertRow := rows[0]
 
 	count := 0
 	insertRowEvent := &commonEvent.RowEvent{
@@ -780,8 +804,9 @@ func TestLargeMessageWithHandleEnableHandleKeyOnly(t *testing.T) {
 	tableInfo := helper.GetTableInfo(job)
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 123)`)
 	require.NotNil(t, dmlEvent)
-	insertRow, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	insertRow := rows[0]
 
 	insertRowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
@@ -819,8 +844,9 @@ func TestLargeMessageWithHandleEnableHandleKeyOnly(t *testing.T) {
 
 	decoded, err := decoder.NextDMLEvent()
 	require.NoError(t, err)
-	change, ok := decoded.GetNextRow()
-	require.True(t, ok)
+	rows = decoded.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change := rows[0]
 
 	require.Len(t, decoded.TableInfo.GetColumns(), 1)
 	require.Equal(t, "a", decoded.TableInfo.GetColumns()[0].Name.O)
@@ -849,8 +875,9 @@ func TestLargeMessageWithoutHandle(t *testing.T) {
 	tableInfo := helper.GetTableInfo(job)
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 123)`)
 	require.NotNil(t, dmlEvent)
-	insertRow, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	insertRow := rows[0]
 
 	insertRowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
@@ -873,8 +900,9 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a) values (1)`)
 	require.NotNil(t, dmlEvent)
-	row, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	row := rows[0]
 	tableInfo := helper.GetTableInfo(job)
 
 	replicaConfig := config.GetDefaultReplicaConfig()
@@ -919,8 +947,9 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 
 	event, err := decoder.NextDMLEvent()
 	require.NoError(t, err)
-	change, ok := event.GetNextRow()
-	require.True(t, ok)
+	rows = event.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change := rows[0]
 
 	require.Len(t, event.TableInfo.GetColumns(), 1)
 	require.Equal(t, "a", event.TableInfo.GetColumns()[0].Name.O)
@@ -948,8 +977,9 @@ func TestDMLEvent(t *testing.T) {
 	// Insert
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 123)`)
 	require.NotNil(t, dmlEvent)
-	insertRow, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	insertRow := rows[0]
 
 	insertRowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
@@ -962,9 +992,10 @@ func TestDMLEvent(t *testing.T) {
 	// Update
 	dmlEvent = helper.DML2Event("test", "t", `update test.t set b = 456 where a = 1`)
 	require.NotNil(t, dmlEvent)
-	updateRow, ok := dmlEvent.GetNextRow()
+	rows = dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	updateRow := rows[0]
 	updateRow.PreRow = insertRow.Row
-	require.True(t, ok)
 
 	updateRowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
@@ -977,7 +1008,6 @@ func TestDMLEvent(t *testing.T) {
 	deleteRow := updateRow
 	deleteRow.PreRow = updateRow.Row
 	deleteRow.Row = chunk.Row{}
-	require.True(t, ok)
 
 	deleteEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
@@ -1015,8 +1045,9 @@ func TestDMLEvent(t *testing.T) {
 
 		decoded, err := decoder.NextDMLEvent()
 		require.NoError(t, err)
-		change, ok := decoded.GetNextRow()
-		require.True(t, ok)
+		rows = decoded.GetNextTxn()
+		require.Equal(t, len(rows), 1)
+		change := rows[0]
 
 		common.CompareRow(t, origin.Event, origin.TableInfo, change, decoded.TableInfo)
 	}
@@ -1033,8 +1064,13 @@ func TestOnlyOutputUpdatedEvent(t *testing.T) {
 	eventNew := helper.DML2Event("test", "t", `update test.t set b = 456,c = 456.45 where a = 1`)
 	tableInfo := helper.GetTableInfo(job)
 
-	preRow, _ := event.GetNextRow()
-	row, _ := eventNew.GetNextRow()
+	rows := event.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	preRow := rows[0]
+
+	rows = eventNew.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	row := rows[0]
 	row.PreRow = preRow.Row
 
 	updateRowEvent := &commonEvent.RowEvent{
@@ -1070,8 +1106,9 @@ func TestOnlyOutputUpdatedEvent(t *testing.T) {
 
 	decoded, err := decoder.NextDMLEvent()
 	require.NoError(t, err)
-	change, ok := decoded.GetNextRow()
-	require.True(t, ok)
+	rows = decoded.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change := rows[0]
 
 	common.CompareRow(t, updateRowEvent.Event, updateRowEvent.TableInfo, change, decoded.TableInfo)
 }
@@ -1088,8 +1125,9 @@ func TestHandleOnlyEvent(t *testing.T) {
 	// Insert
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 123)`)
 	require.NotNil(t, dmlEvent)
-	insertRow, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	insertRow := rows[0]
 
 	insertRowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
@@ -1123,8 +1161,9 @@ func TestHandleOnlyEvent(t *testing.T) {
 
 	decoded, err := decoder.NextDMLEvent()
 	require.NoError(t, err)
-	change, ok := decoded.GetNextRow()
-	require.True(t, ok)
+	rows = decoded.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	change := rows[0]
 
 	common.CompareRow(t, insertRowEvent.Event, insertRowEvent.TableInfo, change, decoded.TableInfo)
 

@@ -130,7 +130,7 @@ func TestEventServiceBasic(t *testing.T) {
 				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
 				require.Equal(t, int32(len(kvEvents)), e.Len())
-				require.Equal(t, kvEvents[0].CRTs, e.CommitTs)
+				require.Equal(t, kvEvents[0].CRTs, e.GetCommitTs())
 				require.Equal(t, uint64(3), e.Seq)
 			case *commonEvent.DDLEvent:
 				require.NotNil(t, msg)
