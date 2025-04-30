@@ -51,7 +51,7 @@ const (
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
 	// Limit the number of rows that can be scanned in a single scan task.
-	singleScanRowLimit = 8 * 1024
+	singleScanRowLimit = 4 * 1024
 
 	// Limit the throughput of the eventBroker.
 	throughputLimit = 240 * 1024 * 1024 // 240MB/s
