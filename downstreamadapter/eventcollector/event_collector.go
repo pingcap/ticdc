@@ -444,7 +444,7 @@ func (c *EventCollector) sendDispatcherHeartbeat(heartbeat *DispatcherHeartbeatW
 	if err != nil {
 		if heartbeat.shouldRetry() {
 			heartbeat.incRetryCounter()
-			log.Info("failed to send dispatcher heartbeat message to event service, try again later", zap.Error(err))
+			log.Info("failed to send dispatcher heartbeat message to event service, try again later", zap.Error(err), zap.Stringer("target", heartbeat.Target))
 			c.dispatcherHeartbeatChan.In() <- heartbeat
 		}
 		return err
