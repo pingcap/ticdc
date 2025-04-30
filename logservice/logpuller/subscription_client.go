@@ -41,7 +41,6 @@ import (
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/time/rate"
 )
 
 const (
@@ -202,8 +201,6 @@ type SubscriptionClient struct {
 	// errCh is used to receive region errors.
 	// The errors will be handled in `handleErrors` goroutine.
 	errCache *errCache
-
-	rateLimiter *rate.Limiter
 }
 
 // NewSubscriptionClient creates a client.
