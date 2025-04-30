@@ -40,7 +40,6 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
-	"golang.org/x/time/rate"
 )
 
 const (
@@ -104,8 +103,7 @@ type eventBroker struct {
 
 	// messageCh is used to receive message from the scanWorker,
 	// and a goroutine is responsible for sending the message to the dispatchers.
-	messageCh         []chan *wrapEvent
-	throughputLimiter *rate.Limiter
+	messageCh []chan *wrapEvent
 
 	// cancel is used to cancel the goroutines spawned by the eventBroker.
 	cancel context.CancelFunc
@@ -159,7 +157,6 @@ func newEventBroker(
 		scanWorkerCount:         scanWorkerCount,
 		cancel:                  cancel,
 		g:                       g,
-		throughputLimiter:       rate.NewLimiter(rate.Limit(throughputLimit), 1),
 
 		metricDispatcherCount:                metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
 		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
@@ -638,8 +635,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			return
 		}
 
-		eSize := len(e.Key) + len(e.Value) + len(e.OldValue)
-		c.throughputLimiter.WaitN(ctx, eSize)
+		//eSize := len(e.Key) + len(e.Value) + len(e.OldValue)
 
 		// If the number of transactions that can be scanned in a single scan task is greater than the limit,
 		// we need to send a watermark to the dispatcher and stop the scan.
