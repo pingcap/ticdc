@@ -99,6 +99,8 @@ type dispatcherStat struct {
 	isRemoved atomic.Bool
 
 	scanRateLimiter *rate.Limiter
+
+	isReceivedFirstResolvedTs atomic.Bool
 }
 
 func newDispatcherStat(
@@ -171,6 +173,10 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
 	if resolvedTs < a.eventStoreResolvedTs.Load() {
 		log.Panic("resolved ts should not fallback")
+	}
+	if !a.isReceivedFirstResolvedTs.Load() {
+		log.Info("received first resolved ts from event service", zap.Uint64("resolvedTs", resolvedTs), zap.Stringer("dispatcherID", a.id))
+		a.isReceivedFirstResolvedTs.Store(true)
 	}
 	return util.CompareAndMonotonicIncrease(&a.eventStoreResolvedTs, resolvedTs)
 }
