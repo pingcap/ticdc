@@ -229,6 +229,7 @@ func (o *Option) fix() {
 }
 
 type AreaSettings struct {
+	component      string
 	maxPendingSize uint64 // The max memory usage of the pending events of the area. Must be larger than 0. By default 128 MB.
 
 	// Remove it when we determine the v2 is working well.
@@ -245,8 +246,9 @@ func (s *AreaSettings) fix() {
 	}
 }
 
-func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithmVersion string) AreaSettings {
+func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithmVersion string, component string) AreaSettings {
 	return AreaSettings{
+		component:      component,
 		maxPendingSize: size,
 		algorithm:      memoryControlAlgorithmVersion,
 	}
