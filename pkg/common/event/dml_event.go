@@ -146,10 +146,20 @@ func (t *DMLEvent) GetDispatcherID() common.DispatcherID {
 	return t.DispatcherID
 }
 
+func (t *DMLEvent) GetFirstCommitTs() common.Ts {
+	return t.Txns[0].CommitTs
+}
+
+func (t *DMLEvent) GetLastCommitTs() common.Ts {
+	return t.Txns[len(t.Txns)-1].CommitTs
+}
+
+// GetCommitTs returns current transaction commitTs
 func (t *DMLEvent) GetCommitTs() common.Ts {
 	return t.Txns[t.txnOffset].CommitTs
 }
 
+// GetStartTs returns current transaction startTs
 func (t *DMLEvent) GetStartTs() common.Ts {
 	return t.Txns[t.txnOffset].StartTs
 }
