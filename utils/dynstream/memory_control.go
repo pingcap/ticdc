@@ -126,8 +126,7 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 		now := time.Now()
 		lastTime := path.lastSendFeedbackTime.Load().(time.Time)
 
-		// Fast pause, lazy resume.
-		if !pause && time.Since(lastTime) < as.settings.Load().feedbackInterval {
+		if !pause {
 			return
 		}
 
@@ -189,8 +188,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 		now := time.Now()
 		lastTime := as.lastSendFeedbackTime.Load().(time.Time)
 
-		// Fast pause, lazy resume.
-		if !pause && time.Since(lastTime) < as.settings.Load().feedbackInterval {
+		if !pause {
 			return
 		}
 
