@@ -35,8 +35,6 @@ func TestTableProgress(t *testing.T) {
 	require.NotNil(t, job)
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')")
-	dmlEvent.StartTs = 1
-	dmlEvent.CommitTs = 2
 
 	// Add an event
 	tp.Add(dmlEvent)

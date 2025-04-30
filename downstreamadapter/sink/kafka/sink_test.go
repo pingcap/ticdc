@@ -137,7 +137,6 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	dmlEvent.PostTxnFlushed = []func(){
 		func() { count.Add(1) },
 	}
-	dmlEvent.CommitTs = 2
 
 	kafkaSink, err := newKafkaSinkForTest()
 	require.NoError(t, err)

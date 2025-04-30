@@ -144,7 +144,6 @@ func TestDispatcherHandleEvents(t *testing.T) {
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values(1, 1)")
 	require.NotNil(t, dmlEvent)
-	dmlEvent.CommitTs = 2
 	dmlEvent.Length = 1
 
 	tableInfo := dmlEvent.TableInfo
@@ -661,7 +660,6 @@ func TestDispatcherClose(t *testing.T) {
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values(1, 1)")
 	require.NotNil(t, dmlEvent)
-	dmlEvent.CommitTs = 2
 	dmlEvent.Length = 1
 
 	tableInfo := dmlEvent.TableInfo
