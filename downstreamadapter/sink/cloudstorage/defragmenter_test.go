@@ -101,6 +101,7 @@ func TestDeframenter(t *testing.T) {
 				PhysicalTableID: 100,
 				TableInfo:       tableInfo,
 				Rows:            chunk.MutRowFromValues(vals...).ToRow().Chunk(),
+				Txns:            []commonEvent.Txn{{CommitTs: 1}},
 			}
 			encoder, err := codec.NewTxnEventEncoder(encoderConfig)
 			require.Nil(t, err)

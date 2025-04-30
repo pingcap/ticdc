@@ -99,6 +99,7 @@ func TestWriterRun(t *testing.T) {
 				PhysicalTableID: 100,
 				TableInfo:       tableInfo,
 				Rows:            chunk.MutRowFromValues(100, "hello world").ToRow().Chunk(),
+				Txns:            []commonEvent.Txn{{CommitTs: 1}},
 			},
 			encodedMsgs: []*common.Message{
 				{

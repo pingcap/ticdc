@@ -168,7 +168,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, false, isEmpty)
-	require.Equal(t, uint64(1), checkpointTs)
+	require.Equal(t, dmlEvent.GetCommitTs()-1, checkpointTs)
 	require.Equal(t, 0, count)
 
 	// flush
@@ -176,7 +176,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, 0, len(sink.dmls))
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
-	require.Equal(t, uint64(1), checkpointTs)
+	require.Equal(t, dmlEvent.GetCommitTs()-1, checkpointTs)
 	require.Equal(t, 1, count)
 
 	// ===== ddl event =====
@@ -350,7 +350,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
-	require.Equal(t, uint64(4), checkpointTs)
+	require.Equal(t, ddlEvent3.GetCommitTs()-1, checkpointTs)
 
 	// clear pending event(TODO:add a check for the middle status)
 	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
@@ -682,7 +682,7 @@ func TestDispatcherClose(t *testing.T) {
 
 		watermark, ok := dispatcher.TryClose()
 		require.Equal(t, true, ok)
-		require.Equal(t, uint64(1), watermark.CheckpointTs)
+		require.Equal(t, dmlEvent.GetCommitTs()-1, watermark.CheckpointTs)
 		require.Equal(t, uint64(0), watermark.ResolvedTs)
 	}
 
@@ -704,7 +704,7 @@ func TestDispatcherClose(t *testing.T) {
 
 		watermark, ok := dispatcher.TryClose()
 		require.Equal(t, true, ok)
-		require.Equal(t, uint64(1), watermark.CheckpointTs)
+		require.Equal(t, dmlEvent.GetCommitTs()-1, watermark.CheckpointTs)
 		require.Equal(t, uint64(0), watermark.ResolvedTs)
 	}
 }
