@@ -631,10 +631,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		}
 
 		if isNewTxn {
-			ok := sendDML(dml)
-			if !ok {
-				return
-			}
 			tableID := task.info.GetTableSpan().TableID
 			tableInfo, err := c.schemaStore.GetTableInfo(tableID, e.CRTs-1)
 			if err != nil {
@@ -656,11 +652,19 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			// If the number of transactions that can be scanned in a single scan task is greater than the limit,
 			// we need to send a watermark to the dispatcher and stop the scan.
 			if dmlCount >= singleScanTxnLimit && e.CRTs > lastSentDMLCommitTs {
+				ok := sendDML(dml)
+				if !ok {
+					return
+				}
 				sendWaterMark()
 				return
 			}
 
 			if tableInfo.UpdateTS() != updateTs {
+				ok := sendDML(dml)
+				if !ok {
+					return
+				}
 				updateTs = tableInfo.UpdateTS()
 				dml = pevent.NewDMLEvent(dispatcherID, tableID, tableInfo)
 			}
