@@ -50,7 +50,7 @@ const (
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 
 	// Limit the number of rows that can be scanned in a single scan task.
-	singleScanRowLimit = 2 * 1024
+	singleScanRowLimit = 8 * 1024
 )
 
 // Sink manager schedules table tasks based on lag. Limit the max task range
