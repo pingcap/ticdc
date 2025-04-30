@@ -577,11 +577,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			return false
 		}
 
-		idx := 0
-		for len(ddlEvents) > 0 && idx < len(dml.Txns) && dml.Txns[idx].CommitTs > ddlEvents[0].FinishedTs {
-			c.sendDDL(ctx, remoteID, ddlEvents[0], task)
-			ddlEvents = ddlEvents[1:]
-			idx++
+		for idx := 0; len(ddlEvents) > 0 && idx < len(dml.Txns); idx++ {
+			if len(ddlEvents) == 0 {
+				break
+			}
+			commitTs := dml.Txns[idx].CommitTs
+			for len(ddlEvents) > 0 && commitTs > ddlEvents[0].FinishedTs {
+				c.sendDDL(ctx, remoteID, ddlEvents[0], task)
+				ddlEvents = ddlEvents[1:]
+			}
 		}
 
 		dml.Seq = task.seq.Add(1)
