@@ -639,11 +639,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		}
 
 		eSize := len(e.Key) + len(e.Value) + len(e.OldValue)
-		ctx, cancel := context.WithTimeout(ctx, time.Millisecond*100)
-		defer cancel()
-		if err := c.throughputLimiter.WaitN(ctx, eSize); err != nil {
-			return
-		}
+		c.throughputLimiter.WaitN(ctx, eSize)
 
 		// If the number of transactions that can be scanned in a single scan task is greater than the limit,
 		// we need to send a watermark to the dispatcher and stop the scan.
