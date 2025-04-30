@@ -84,13 +84,11 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 	require.NotNil(t, job)
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
-	dmlEvent.CommitTs = 2
-	dmlEvent.ReplicatingTs = 1
+	dmlEvent.ReplicatingTs = dmlEvent.GetCommitTs() - 1
 	dmlEvent.DispatcherID = common.NewDispatcherID()
 
 	dmlEvent2 := helper.DML2Event("test", "t", "insert into t values (3, 'test3');")
-	dmlEvent2.CommitTs = 3
-	dmlEvent2.ReplicatingTs = 1
+	dmlEvent.ReplicatingTs = dmlEvent.GetCommitTs() - 2
 	dmlEvent2.DispatcherID = dmlEvent.DispatcherID
 
 	mock.ExpectBegin()
@@ -120,10 +118,8 @@ func TestMysqlWriter_FlushMultiDML(t *testing.T) {
 
 	// case	1: insert + insert
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')")
-	dmlEvent.CommitTs = 2
 	dmlEvent.DispatcherID = common.NewDispatcherID()
 	dmlEvent2 := helper.DML2Event("test", "t", "insert into t values (2, 'test2');")
-	dmlEvent2.CommitTs = 3
 	dmlEvent2.DispatcherID = dmlEvent.DispatcherID
 
 	mock.ExpectBegin()
@@ -501,8 +497,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	{
 		// ensure the dml can be writen succesfully before add index finished
 		dmlEvent := helper.DML2Event("test", "t", "insert into t values (3, 'test3');")
-		dmlEvent.CommitTs = 3
-		dmlEvent.ReplicatingTs = 4
+		dmlEvent.ReplicatingTs = dmlEvent.GetCommitTs() + 1
 
 		err = writer.Flush([]*commonEvent.DMLEvent{dmlEvent})
 		require.NoError(t, err)

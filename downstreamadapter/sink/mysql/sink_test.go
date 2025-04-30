@@ -92,7 +92,6 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	dmlEvent.PostTxnFlushed = []func(){
 		func() { count.Add(1) },
 	}
-	dmlEvent.CommitTs = 2
 
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -160,7 +159,6 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 	dmlEvent.PostTxnFlushed = []func(){
 		func() { count.Add(1) },
 	}
-	dmlEvent.CommitTs = 2
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)").

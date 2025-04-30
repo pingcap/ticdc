@@ -191,9 +191,7 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 		}
 	}
 	for _, event := range events {
-		for _, callback := range event.PostTxnFlushed {
-			callback()
-		}
+		event.PostFlush()
 	}
 	return nil
 }

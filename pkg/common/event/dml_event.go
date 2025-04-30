@@ -48,7 +48,7 @@ type DMLEvent struct {
 	// ApproximateSize is the approximate size of all rows in the transaction.
 	ApproximateSize int64     `json:"approximate_size"`
 	RowTypes        []RowType `json:"row_types"`
-	// Txns store startTs and commitTs of the transaction.
+	// Txns stores startTs and commitTs of the transaction.
 	Txns []Txn `json:"txns"`
 	// Rows is the rows of the transactions.
 	Rows *chunk.Chunk `json:"rows"`
@@ -155,8 +155,10 @@ func (t *DMLEvent) GetStartTs() common.Ts {
 }
 
 func (t *DMLEvent) PostFlush() {
-	for _, f := range t.PostTxnFlushed {
-		f()
+	for range len(t.Txns) {
+		for _, f := range t.PostTxnFlushed {
+			f()
+		}
 	}
 }
 
@@ -294,7 +296,7 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		return nil, nil
 	}
 	// Calculate the total size needed for the encoded data
-	size := 1 + t.DispatcherID.GetSize() + 6*8 + 4 + t.State.GetSize() + int(t.Length)
+	size := 1 + t.DispatcherID.GetSize() + 4*8 + 4 + t.State.GetSize() + int(t.Length) + 4 + len(t.Txns)*16
 
 	// Allocate a buffer with the calculated size
 	buf := make([]byte, size)
@@ -333,6 +335,9 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		buf[offset] = byte(rowType)
 		offset++
 	}
+	// Txns
+	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(t.Txns)))
+	offset += 4
 	for _, txn := range t.Txns {
 		// StartTs
 		binary.LittleEndian.PutUint64(buf[offset:], txn.StartTs)
@@ -385,6 +390,9 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 		t.RowTypes[i] = RowType(data[offset])
 		offset++
 	}
+	txnLength := binary.LittleEndian.Uint32(data[offset:])
+	offset += 4
+	t.Txns = make([]Txn, txnLength)
 	for i := 0; i < len(t.Txns); i++ {
 		t.Txns[i].StartTs = binary.LittleEndian.Uint64(data[offset:])
 		offset += 8

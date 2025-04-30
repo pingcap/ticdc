@@ -563,8 +563,9 @@ func TestTimezoneDefaultValue(t *testing.T) {
 	_ = helper.DDL2Job(`create table test.t(a int primary key, b timestamp default '2023-02-09 13:00:00')`)
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a) values (1)`)
 	require.NotNil(t, dmlEvent)
-	row, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	row := rows[0]
 	require.Equal(t, RowTypeInsert, row.RowType)
 	require.Equal(t, int64(1), row.Row.GetInt64(0))
 	require.Equal(t, "2023-02-09 13:00:00", row.Row.GetTime(1).String())
@@ -580,8 +581,9 @@ func TestAllTypes(t *testing.T) {
 	dmlEvent := helper.DML2Event("test", "t", insertDataSQL)
 	require.NotNil(t, dmlEvent)
 
-	row, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	row := rows[0]
 	require.Equal(t, RowTypeInsert, row.RowType)
 	require.Equal(t, int64(2), row.Row.GetInt64(0))
 	require.Equal(t, int64(1), row.Row.GetInt64(1))
@@ -674,8 +676,9 @@ func TestNullColumn(t *testing.T) {
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,c,e,g,i,k,m,o,q,s,u,w,y,aa,ac,ae,ag,ai) values (1, true, -1, 123, 153.123,153.123,"1973-12-30 15:30:00",123,123,"2000-01-01","23:59:59","2015-12-20 23:58:58",1970,"测试","测试",81,'{"key1": "value1"}', 129012.12)`)
 	require.NotNil(t, dmlEvent)
 
-	row, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	row := rows[0]
 	require.Equal(t, RowTypeInsert, row.RowType)
 
 	tableInfo := helper.GetTableInfo(job)
@@ -714,8 +717,9 @@ func TestBinary(t *testing.T) {
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t (a) values (0x0102030405060708090A)`)
 	require.NotNil(t, dmlEvent)
 
-	row, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
+	rows := dmlEvent.GetNextTxn()
+	require.Equal(t, len(rows), 1)
+	row := rows[0]
 	require.Equal(t, RowTypeInsert, row.RowType)
 	tableInfo := helper.GetTableInfo(job)
 	v := common.ExtractColVal(&row.Row, tableInfo.GetColumns()[0], 0)
