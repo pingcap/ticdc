@@ -354,6 +354,7 @@ func (s *remoteMessageTarget) connect() error {
 				Type:   ErrorTypeMessageSendFailed,
 				Reason: fmt.Sprintf("Failed to send handshake, error: %s", errors.Trace(err).Error()),
 			}
+			outerErr = err
 			return false
 		}
 
