@@ -15,7 +15,6 @@ package mysql
 
 import (
 	"bytes"
-	"encoding/binary"
 	"hash/fnv"
 	"strings"
 
@@ -30,7 +29,7 @@ func compareKeys(firstKey, secondKey []byte) bool {
 	return bytes.Equal(firstKey, secondKey)
 }
 
-func genKeyAndHash(row *chunk.Row, offset int, tableInfo *common.TableInfo) (uint64, []byte) {
+func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte) {
 	idxCol := tableInfo.GetPKIndex()
 	// log.Info("genKeyAndHash", zap.Any("idxCol", idxCol), zap.Any("iIdx", iIdx))
 	key := genKeyList(row, idxCol, tableInfo)
@@ -42,9 +41,6 @@ func genKeyAndHash(row *chunk.Row, offset int, tableInfo *common.TableInfo) (uin
 	if n, err := hasher.Write(key); n != len(key) || err != nil {
 		log.Panic("transaction key hash fail")
 	}
-	idx := make([]byte, 4)
-	binary.BigEndian.PutUint32(idx, uint32(offset))
-	hasher.Write(idx)
 
 	return uint64(hasher.Sum32()), key
 }

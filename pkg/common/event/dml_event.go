@@ -159,9 +159,9 @@ func (t *DMLEvent) GetCommitTs() common.Ts {
 	return t.Txns[t.txnOffset].CommitTs
 }
 
-// GetStartTs returns current transaction startTs
+// GetStartTs returns the first transaction startTs
 func (t *DMLEvent) GetStartTs() common.Ts {
-	return t.Txns[t.txnOffset].StartTs
+	return t.Txns[0].StartTs
 }
 
 func (t *DMLEvent) PostFlush() {
@@ -230,7 +230,6 @@ func (t *DMLEvent) getNextRow() (RowChange, bool) {
 			Row:      t.Rows.GetRow(t.offset),
 			RowType:  rowType,
 			Checksum: checksum,
-			Offset:   t.txnOffset,
 		}
 		t.offset++
 		return row, true
@@ -239,7 +238,6 @@ func (t *DMLEvent) getNextRow() (RowChange, bool) {
 			PreRow:   t.Rows.GetRow(t.offset),
 			RowType:  rowType,
 			Checksum: checksum,
-			Offset:   t.txnOffset,
 		}
 		t.offset++
 		return row, true
@@ -249,7 +247,6 @@ func (t *DMLEvent) getNextRow() (RowChange, bool) {
 			Row:      t.Rows.GetRow(t.offset + 1),
 			RowType:  rowType,
 			Checksum: checksum,
-			Offset:   t.txnOffset,
 		}
 		t.offset += 2
 		return row, true
@@ -452,7 +449,6 @@ type RowChange struct {
 	Row      chunk.Row
 	RowType  RowType
 	Checksum *integrity.Checksum
-	Offset   int
 }
 
 type RowType byte
