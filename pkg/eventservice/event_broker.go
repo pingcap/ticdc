@@ -54,7 +54,7 @@ const (
 	singleScanRowLimit = 4 * 1024
 
 	// Limit the throughput of the eventBroker.
-	throughputLimit = 240 * 1024 * 1024 // 240MB/s
+	throughputLimit = 200 * 1024 * 1024 // 200MB/s
 )
 
 // Sink manager schedules table tasks based on lag. Limit the max task range
@@ -635,6 +635,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			}
 
 			sendRemainingDDLEvents()
+			return
+		}
+
+		eSize := len(e.Key) + len(e.Value) + len(e.OldValue)
+		ctx, cancel := context.WithTimeout(ctx, time.Millisecond*100)
+		defer cancel()
+		if err := c.throughputLimiter.WaitN(ctx, eSize); err != nil {
 			return
 		}
 
