@@ -339,11 +339,6 @@ func TestUpdateAreaPauseState(t *testing.T) {
 
 	areaMemStat.totalPendingSize.Store(int64(30))
 	areaMemStat.updateAreaPauseState(path)
-	require.True(t, areaMemStat.paused.Load())
-
-	// Wait feedback interval, the area should be resumed
-	time.Sleep(settings.feedbackInterval)
-	areaMemStat.updateAreaPauseState(path)
 	require.False(t, areaMemStat.paused.Load())
 	fb = <-feedbackChan
 	require.Equal(t, ResumeArea, fb.FeedbackType)

@@ -126,7 +126,8 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 		now := time.Now()
 		lastTime := path.lastSendFeedbackTime.Load().(time.Time)
 
-		if !pause {
+		// fast pause and lazy resume path
+		if !pause && time.Since(lastTime) < as.settings.Load().feedbackInterval {
 			return
 		}
 
@@ -187,10 +188,6 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 	sendFeedback := func(pause bool) {
 		now := time.Now()
 		lastTime := as.lastSendFeedbackTime.Load().(time.Time)
-
-		if !pause {
-			return
-		}
 
 		if !as.lastSendFeedbackTime.CompareAndSwap(lastTime, now) {
 			return // Another goroutine already updated the time
