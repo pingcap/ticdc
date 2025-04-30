@@ -359,7 +359,6 @@ func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
 }
 
 func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
-
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)
