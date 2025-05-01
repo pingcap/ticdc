@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
-	"golang.org/x/time/rate"
 )
 
 const (
@@ -98,7 +97,7 @@ type dispatcherStat struct {
 	// If so, we should ignore the errors related to this dispatcher.
 	isRemoved atomic.Bool
 
-	scanRateLimiter *rate.Limiter
+	// scanRateLimiter *rate.Limiter
 
 	isReceivedFirstResolvedTs atomic.Bool
 }
@@ -118,7 +117,7 @@ func newDispatcherStat(
 		messageWorkerIndex: messageWorkerIndex,
 		info:               info,
 		filter:             filter,
-		scanRateLimiter:    rate.NewLimiter(rate.Limit(25), 25),
+		// scanRateLimiter:    rate.NewLimiter(rate.Limit(25), 25),
 	}
 	changefeedStatus.addDispatcher()
 

@@ -353,9 +353,9 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		return false, common.DataRange{}
 	}
 
-	if !mustCheck && !task.scanRateLimiter.Allow() {
-		return false, common.DataRange{}
-	}
+	// if !mustCheck && !task.scanRateLimiter.Allow() {
+	// 	return false, common.DataRange{}
+	// }
 
 	// If the dispatcher is not ready, we don't need to scan the event store.
 	if !c.checkAndSendReady(task) {
@@ -494,6 +494,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	defer func() {
 		if !pushBack {
 			task.isTaskScanning.Store(false)
+		} else {
+			log.Info("fizz push back the task", zap.String("task", task.id.String()), zap.Any("resolvedTs", task.eventStoreResolvedTs.Load()), zap.Any("latestCommitTs", task.latestCommitTs.Load()), zap.Any("isTaskScanning", task.isTaskScanning.Load()))
 		}
 	}()
 
