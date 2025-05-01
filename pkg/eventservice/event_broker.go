@@ -349,7 +349,11 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e pevent.DD
 // If the dispatcher needs to scan the event store, it returns true.
 // If the dispatcher does not need to scan the event store, it send the watermark to the dispatcher
 func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common.DataRange) {
-	if !mustCheck && task.isTaskScanning.Load() && task.scanRateLimiter.Allow() {
+	if !mustCheck && task.isTaskScanning.Load() {
+		return false, common.DataRange{}
+	}
+
+	if !mustCheck && !task.scanRateLimiter.Allow() {
 		return false, common.DataRange{}
 	}
 

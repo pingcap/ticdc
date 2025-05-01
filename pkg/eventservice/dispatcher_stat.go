@@ -118,7 +118,7 @@ func newDispatcherStat(
 		messageWorkerIndex: messageWorkerIndex,
 		info:               info,
 		filter:             filter,
-		scanRateLimiter:    rate.NewLimiter(rate.Limit(25), 1),
+		scanRateLimiter:    rate.NewLimiter(rate.Limit(25), 25),
 	}
 	changefeedStatus.addDispatcher()
 
