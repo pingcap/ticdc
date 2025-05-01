@@ -638,14 +638,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			return
 		}
 
-		// If the number of transactions that can be scanned in a single scan task is greater than the limit,
-		// we need to send a watermark to the dispatcher and stop the scan.
-		if rowCount >= singleScanRowLimit && e.CRTs > lastSentDMLCommitTs {
-			sendWaterMark()
-			putTaskBack()
-			return
-		}
-
 		if e.CRTs < dataRange.StartTs {
 			// If the commitTs of the event is less than the startTs of the data range,
 			// there are some bugs in the eventStore.
@@ -654,6 +646,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		rowCount++
 
 		if isNewTxn {
+
+			// If the number of transactions that can be scanned in a single scan task is greater than the limit,
+			// we need to send a watermark to the dispatcher and stop the scan.
+			if rowCount >= singleScanRowLimit && e.CRTs > lastSentDMLCommitTs {
+				sendWaterMark()
+				putTaskBack()
+				return
+			}
+
 			ok := sendDML(dml)
 			if !ok {
 				return
