@@ -607,7 +607,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 
 	putTaskBack := func() {
-		timeout := time.After(10 * time.Second)
+		timeout := time.After(10 * time.Millisecond)
 		select {
 		case c.taskChan[task.scanWorkerIndex] <- task:
 			task.isTaskScanning.Store(true)
@@ -646,7 +646,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		rowCount++
 
 		if isNewTxn {
-
 			// If the number of transactions that can be scanned in a single scan task is greater than the limit,
 			// we need to send a watermark to the dispatcher and stop the scan.
 			if rowCount >= singleScanRowLimit && e.CRTs > lastSentDMLCommitTs {
