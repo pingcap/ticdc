@@ -53,9 +53,8 @@ const (
 	singleScanRowLimit = 4 * 1024
 )
 
-// Sink manager schedules table tasks based on lag. Limit the max task range
-// can be helpful to reduce changefeed latency for large initial data.
-var maxTaskTimeRange = 15 * time.Minute
+// Limit the max time range of a scan task to avoid too many rows in a single scan task.
+var maxTaskTimeRange = 3 * time.Minute
 
 var (
 	metricEventServiceSendEventDuration   = metrics.EventServiceSendEventDuration.WithLabelValues("txn")
@@ -353,10 +352,6 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		return false, common.DataRange{}
 	}
 
-	// if !mustCheck && !task.scanRateLimiter.Allow() {
-	// 	return false, common.DataRange{}
-	// }
-
 	// If the dispatcher is not ready, we don't need to scan the event store.
 	if !c.checkAndSendReady(task) {
 		return false, common.DataRange{}
@@ -489,14 +484,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	start := time.Now()
 	remoteID := node.ID(task.info.GetServerID())
 	dispatcherID := task.id
-	pushBack := false
 
 	defer func() {
-		if !pushBack {
-			task.isTaskScanning.Store(false)
-		} else {
-			log.Info("fizz push back the task", zap.String("task", task.id.String()), zap.Any("resolvedTs", task.eventStoreResolvedTs.Load()), zap.Any("latestCommitTs", task.latestCommitTs.Load()), zap.Any("isTaskScanning", task.isTaskScanning.Load()))
-		}
+		task.isTaskScanning.Store(false)
 	}()
 
 	// If the target is not ready to send, we don't need to scan the event store.
@@ -606,18 +596,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		}
 	}
 
-	putTaskBack := func() {
-		timeout := time.After(10 * time.Millisecond)
-		select {
-		case c.taskChan[task.scanWorkerIndex] <- task:
-			task.isTaskScanning.Store(true)
-			pushBack = true
-		case <-timeout:
-			task.isTaskScanning.Store(false)
-			pushBack = false
-		}
-	}
-
 	// 3. Send the events to the dispatcher.
 	var dml *pevent.DMLEvent
 	rowCount := 0
@@ -646,12 +624,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		rowCount++
 
 		if isNewTxn {
-			// If the number of transactions that can be scanned in a single scan task is greater than the limit,
-			// we need to send a watermark to the dispatcher and stop the scan.
+			// If the number of rows is greater than the limit, we need to send a watermark to the dispatcher.
 			if rowCount >= singleScanRowLimit && e.CRTs > lastSentDMLCommitTs {
 				sendWaterMark()
-				putTaskBack()
-				return
+				//putTaskBack()
+				//return
 			}
 
 			ok := sendDML(dml)
