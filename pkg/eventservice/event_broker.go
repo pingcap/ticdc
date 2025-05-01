@@ -627,8 +627,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			// If the number of rows is greater than the limit, we need to send a watermark to the dispatcher.
 			if rowCount >= singleScanRowLimit && e.CRTs > lastSentDMLCommitTs {
 				sendWaterMark()
-				//putTaskBack()
-				//return
+				// putTaskBack()
+				// return
 			}
 
 			ok := sendDML(dml)
