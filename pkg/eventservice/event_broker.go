@@ -602,7 +602,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	// 3. Send the events to the dispatcher.
 	var dml *pevent.DMLEvent
 	var updateTs uint64
-	dmlCount := 0
 	rowCount := 0
 	for {
 		// Node: The first event of the txn must return isNewTxn as true.
@@ -665,7 +664,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				log.Panic("table info updateTs less than previous", zap.Uint64("previousUpdateTs", updateTs), zap.Uint64("updateTs", tableInfo.UpdateTS()))
 			}
 			dml.AppendTxn(e.StartTs, e.CRTs)
-			dmlCount++
 		}
 		if err = dml.AppendRow(e, c.mounter.DecodeToChunk); err != nil {
 			log.Panic("append row failed", zap.Error(err))
