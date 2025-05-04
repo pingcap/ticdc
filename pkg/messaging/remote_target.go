@@ -213,7 +213,11 @@ func newRemoteMessageTarget(
 	rt.streams.Store(streamTypeEvent, nil)
 	rt.streams.Store(streamTypeCommand, nil)
 
-	rt.connect()
+	err := rt.connect()
+	if err != nil {
+		log.Error("Failed to connect to remote target", zap.Error(err))
+		rt.collectErr(err)
+	}
 
 	return rt
 }
@@ -285,7 +289,8 @@ func (s *remoteMessageTarget) connect() error {
 	}
 
 	client := proto.NewMessageServiceClient(conn)
-	err = nil
+
+	var outerErr error
 
 	s.streams.Range(func(key, value interface{}) bool {
 		streamType := key.(string)
@@ -310,8 +315,9 @@ func (s *remoteMessageTarget) connect() error {
 
 			err = AppError{
 				Type:   ErrorTypeConnectionFailed,
-				Reason: fmt.Sprintf("Cannot open bidirectional grpc stream, error: %s", err.Error()),
+				Reason: fmt.Sprintf("Cannot open bidirectional grpc stream, error: %s", errors.Trace(err).Error()),
 			}
+			outerErr = err
 			return false
 		}
 
@@ -324,7 +330,8 @@ func (s *remoteMessageTarget) connect() error {
 		hsBytes, err := handshake.Marshal()
 		if err != nil {
 			log.Error("Failed to marshal handshake message", zap.Error(err))
-			err = AppError{Type: ErrorTypeMessageSendFailed, Reason: err.Error()}
+			err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
+			outerErr = err
 			return false
 		}
 
@@ -345,13 +352,21 @@ func (s *remoteMessageTarget) connect() error {
 				zap.Error(err))
 			err = AppError{
 				Type:   ErrorTypeMessageSendFailed,
-				Reason: fmt.Sprintf("Failed to send handshake, error: %s", err.Error()),
+				Reason: fmt.Sprintf("Failed to send handshake, error: %s", errors.Trace(err).Error()),
 			}
+			outerErr = err
 			return false
 		}
+
 		s.streams.Store(streamType, gs)
 		return true
 	})
+
+	if outerErr != nil {
+		log.Error("Failed to connect to remote target", zap.Error(outerErr))
+		return outerErr
+	}
+
 	s.setConn(conn)
 
 	// Start goroutines for sending messages
@@ -395,7 +410,11 @@ LOOP:
 		}
 	}
 	// Reconnect
-	s.connect()
+	err := s.connect()
+	if err != nil {
+		log.Error("Failed to connect to remote target", zap.Error(err))
+		s.collectErr(err)
+	}
 
 	log.Info("reset connection to remote target done",
 		zap.Any("localID", s.messageCenterID),

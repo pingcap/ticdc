@@ -186,6 +186,11 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 				},
 			)
 		}
+		log.Info("received ready signal from local event service, prepare to reset the dispatcher",
+			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Stringer("dispatcher", d.target.GetId()),
+			zap.Stringer("server", server))
+
 		d.eventServiceInfo.serverID = server
 		d.eventServiceInfo.readyEventReceived = true
 		d.eventServiceInfo.remoteCandidates = nil

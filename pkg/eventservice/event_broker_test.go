@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func newTableSpan(tableID int64, start, end string) *heartbeatpb.TableSpan {
@@ -150,7 +151,8 @@ func TestOnNotify(t *testing.T) {
 	after := time.After(50 * time.Millisecond)
 	select {
 	case <-after:
-	case <-broker.taskChan[disp.scanWorkerIndex]:
+	case task := <-broker.taskChan[disp.scanWorkerIndex]:
+		log.Info("trigger a new scan task", zap.Any("task", task.id.String()), zap.Any("resolvedTs", task.eventStoreResolvedTs.Load()), zap.Any("latestCommitTs", task.latestCommitTs.Load()), zap.Any("isTaskScanning", task.isTaskScanning.Load()))
 		require.Fail(t, "should not trigger a new scan task")
 	}
 	log.Info("Pass case 4")
@@ -159,12 +161,15 @@ func TestOnNotify(t *testing.T) {
 	broker.doScan(context.TODO(), task, 0)
 	require.False(t, disp.isTaskScanning.Load())
 	require.Equal(t, notifyMsgs4.resolvedTs, disp.sentResolvedTs.Load())
+	log.Info("pass case 5")
+
 	notifyMsgs5 := notifyMsg{104, 101}
 	// Set the schemaStore's maxDDLCommitTs to the sentResolvedTs, so the broker will not scan the schemaStore.
 	ss.maxDDLCommitTs = disp.sentResolvedTs.Load()
 	broker.onNotify(disp, notifyMsgs5.resolvedTs, notifyMsgs5.latestCommitTs)
+	broker.doScan(context.TODO(), task, 0)
 	require.Equal(t, notifyMsgs5.resolvedTs, disp.sentResolvedTs.Load())
-	log.Info("Pass case 5")
+	log.Info("Pass case 6")
 }
 
 func TestCURDDispatcher(t *testing.T) {
