@@ -578,9 +578,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		}
 
 		for idx := 0; len(ddlEvents) > 0 && idx < len(dml.Txns); idx++ {
-			if len(ddlEvents) == 0 {
-				break
-			}
 			commitTs := dml.Txns[idx].CommitTs
 			for len(ddlEvents) > 0 && commitTs > ddlEvents[0].FinishedTs {
 				c.sendDDL(ctx, remoteID, ddlEvents[0], task)
@@ -660,13 +657,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				return
 			}
 
-			if tableInfo.UpdateTS() != updateTs {
+			if tableInfo.UpdateTS() >= updateTs {
 				ok := sendDML(dml)
 				if !ok {
 					return
 				}
 				updateTs = tableInfo.UpdateTS()
 				dml = pevent.NewDMLEvent(dispatcherID, tableID, tableInfo)
+			} else {
+				log.Panic("table info updateTs less than previous", zap.Uint64("previousUpdateTs", updateTs), zap.Uint64("updateTs", tableInfo.UpdateTS()))
 			}
 			dml.AppendTxn(e.StartTs, e.CRTs)
 			dmlCount++
