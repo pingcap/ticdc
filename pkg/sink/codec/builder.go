@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/debezium"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
+	cerror "github.com/pingcap/tiflow/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -48,7 +49,7 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncod
 }
 
 // NewEventDecoder will create a new event decoder
-func NewEventDecoder(ctx context.Context, codecConfig *common.Config, upstreamTiDB *sql.DB) (common.Decoder, error) {
+func NewEventDecoder(ctx context.Context, codecConfig *common.Config, topic string, upstreamTiDB *sql.DB) (common.Decoder, error) {
 	var (
 		decoder common.Decoder
 		err     error
@@ -58,14 +59,14 @@ func NewEventDecoder(ctx context.Context, codecConfig *common.Config, upstreamTi
 		decoder, err = open.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	case config.ProtocolCanalJSON:
 		decoder, err = canal.NewDecoder(ctx, codecConfig, upstreamTiDB)
-	// case config.ProtocolAvro:
-	//	schemaM, err := avro.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
-	//	if err != nil {
-	//		return decoder, cerror.Trace(err)
-	//	}
-	//	decoder = avro.NewDecoder(codecConfig, schemaM, option.topic, upstreamTiDB)
-	// case config.ProtocolSimple:
-	//	decoder, err = simple.NewDecoder(ctx, codecConfig, upstreamTiDB)
+	case config.ProtocolAvro:
+		schemaM, err := avro.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
+		if err != nil {
+			return decoder, cerror.Trace(err)
+		}
+		decoder = avro.NewDecoder(codecConfig, schemaM, topic, upstreamTiDB)
+	case config.ProtocolSimple:
+		decoder, err = simple.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	default:
 		log.Panic("Protocol not supported", zap.Any("Protocol", codecConfig.Protocol))
 	}
