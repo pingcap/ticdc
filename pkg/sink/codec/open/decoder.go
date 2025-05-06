@@ -234,7 +234,20 @@ func buildColumns(
 	for i := 0; i < columnsCount; i++ {
 		columnType := holder.Types[i]
 		name := columnType.Name()
-		mysqlType := types.StrToType(strings.ToLower(columnType.DatabaseTypeName()))
+
+		var flag uint64
+		if _, ok := handleKeyColumns[name]; ok {
+			flag |= binaryFlag
+		}
+		// todo: we can extract more detailed type information here.
+		dataType := strings.ToLower(columnType.DatabaseTypeName())
+		if common.IsUnsignedMySQLType(dataType) {
+			flag |= unsignedFlag
+		}
+		if nullable, _ := columnType.Nullable(); nullable {
+			flag |= nullableFlag
+		}
+		mysqlType := common.ExtractBasicMySQLType(dataType)
 
 		var value interface{}
 		value = holder.Values[i].([]uint8)
@@ -246,14 +259,11 @@ func buildColumns(
 			value = common.MustBinaryLiteralToInt(value.([]uint8))
 		}
 
-		col := column{
+		result[name] = column{
 			Type:  mysqlType,
+			Flag:  flag,
 			Value: value,
 		}
-		if _, ok := handleKeyColumns[name]; ok {
-			col.Flag |= binaryFlag
-		}
-		result[name] = col
 	}
 	return result
 }
@@ -380,6 +390,9 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 			col.SetCharset("binary")
 			col.SetCollate("binary")
 		}
+		if isNullable(raw.Flag) {
+			col.AddFlag(mysql.NotNullFlag)
+		}
 
 		switch col.GetType() {
 		case mysql.TypeVarchar, mysql.TypeString,
@@ -391,7 +404,7 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		case mysql.TypeDuration:
 			// todo: how to find the correct decimal for the duration type ?
 			_, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(col.GetType())
-			col.FieldType.SetDecimal(defaultDecimal)
+			col.SetDecimal(defaultDecimal)
 		case mysql.TypeEnum, mysql.TypeSet:
 			col.SetCharset("utf8mb4")
 			col.SetCollate("utf8mb4_bin")

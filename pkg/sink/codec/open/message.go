@@ -171,16 +171,6 @@ func formatColumn(c column, ft types.FieldType) column {
 		if err != nil {
 			log.Panic("invalid column value for decimal", zap.Any("value", c.Value), zap.Error(err))
 		}
-		//dec.GetDigitsFrac()
-		//// workaround the decimal `digitInt` field incorrect problem.
-		//bin, err := dec.ToBin(ft.GetFlen(), ft.GetDecimal())
-		//if err != nil {
-		//	log.Panic("convert decimal to binary failed", zap.Any("value", c.Value), zap.Error(err))
-		//}
-		//_, err = dec.FromBin(bin, ft.GetFlen(), ft.GetDecimal())
-		//if err != nil {
-		//	log.Panic("convert binary to decimal failed", zap.Any("value", c.Value), zap.Error(err))
-		//}
 		c.Value = dec
 	case mysql.TypeTiDBVectorFloat32:
 		c.Value, err = tiTypes.ParseVectorFloat32(c.Value.(string))

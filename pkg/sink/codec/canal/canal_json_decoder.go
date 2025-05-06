@@ -571,7 +571,7 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 			col.AddFlag(mysql.UniqueKeyFlag)
 			col.AddFlag(mysql.NotNullFlag)
 		}
-		if common.IsUnsignedFlag(mysqlType) {
+		if common.IsUnsignedMySQLType(mysqlType) {
 			col.AddFlag(mysql.UnsignedFlag)
 		}
 		flen, decimal := common.ExtractFlenDecimal(mysqlType, col.GetType())

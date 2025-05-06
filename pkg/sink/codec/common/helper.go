@@ -76,7 +76,7 @@ func ExtractBasicMySQLType(mysqlType string) byte {
 	return ptypes.StrToType(mysqlType)
 }
 
-func IsUnsignedFlag(mysqlType string) bool {
+func IsUnsignedMySQLType(mysqlType string) bool {
 	return strings.Contains(mysqlType, "unsigned")
 }
 
