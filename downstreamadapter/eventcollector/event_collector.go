@@ -222,7 +222,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2)
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2, "eventCollector")
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
@@ -444,7 +444,7 @@ func (c *EventCollector) sendDispatcherHeartbeat(heartbeat *DispatcherHeartbeatW
 	if err != nil {
 		if heartbeat.shouldRetry() {
 			heartbeat.incRetryCounter()
-			log.Info("failed to send dispatcher heartbeat message to event service, try again later", zap.Error(err))
+			log.Info("failed to send dispatcher heartbeat message to event service, try again later", zap.Error(err), zap.Stringer("target", heartbeat.Target))
 			c.dispatcherHeartbeatChan.In() <- heartbeat
 		}
 		return err

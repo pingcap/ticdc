@@ -96,6 +96,10 @@ type dispatcherStat struct {
 	// isRemoved is used to indicate whether the dispatcher is removed.
 	// If so, we should ignore the errors related to this dispatcher.
 	isRemoved atomic.Bool
+
+	// scanRateLimiter *rate.Limiter
+
+	isReceivedFirstResolvedTs atomic.Bool
 }
 
 func newDispatcherStat(
@@ -113,6 +117,7 @@ func newDispatcherStat(
 		messageWorkerIndex: messageWorkerIndex,
 		info:               info,
 		filter:             filter,
+		// scanRateLimiter:    rate.NewLimiter(rate.Limit(25), 25),
 	}
 	changefeedStatus.addDispatcher()
 
@@ -167,6 +172,10 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
 	if resolvedTs < a.eventStoreResolvedTs.Load() {
 		log.Panic("resolved ts should not fallback")
+	}
+	if !a.isReceivedFirstResolvedTs.Load() {
+		log.Info("received first resolved ts from event service", zap.Uint64("resolvedTs", resolvedTs), zap.Stringer("dispatcherID", a.id))
+		a.isReceivedFirstResolvedTs.Store(true)
 	}
 	return util.CompareAndMonotonicIncrease(&a.eventStoreResolvedTs, resolvedTs)
 }
