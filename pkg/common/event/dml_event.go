@@ -196,6 +196,9 @@ func (t *DMLEvent) Rewind() {
 }
 
 func (t *DMLEvent) GetNextTxn() []RowChange {
+	if t.offset >= len(t.RowTypes) {
+		return nil
+	}
 	rows := make([]RowChange, 0, len(t.RowTypes)/len(t.Txns))
 	for {
 		if t.txnOffset+1 < len(t.Txns) && t.offset >= t.Txns[t.txnOffset+1].offset {

@@ -599,8 +599,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 
 	// 3. Send the events to the dispatcher.
 	var dml *pevent.DMLEvent
-	updateTsMap := make(map[int64]uint64)
+	var updateTs uint64
 	rowCount := 0
+	tableID := task.info.GetTableSpan().TableID
 	for {
 		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
@@ -633,7 +634,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				// return
 			}
 
-			tableID := task.info.GetTableSpan().TableID
 			tableInfo, err := c.schemaStore.GetTableInfo(tableID, e.CRTs-1)
 			if err != nil {
 				if task.isRemoved.Load() {
@@ -653,12 +653,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 
 			// updateTs may be less than the previous updateTs
 			hasDDL := dml != nil && len(ddlEvents) > 0 && dml.GetLastCommitTs() > ddlEvents[0].FinishedTs
-			if tableInfo.UpdateTS() != updateTsMap[tableID] || hasDDL {
+			if tableInfo.UpdateTS() != updateTs || hasDDL {
 				ok := sendDML(dml)
 				if !ok {
 					return
 				}
-				updateTsMap[tableID] = tableInfo.UpdateTS()
+				updateTs = tableInfo.UpdateTS()
 				dml = pevent.NewDMLEvent(dispatcherID, tableID, tableInfo)
 			}
 			dml.AppendTxn(e.StartTs, e.CRTs)
