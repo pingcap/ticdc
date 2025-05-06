@@ -653,15 +653,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				log.Panic("get table info failed, unknown reason", zap.Error(err))
 			}
 
-			if tableInfo.UpdateTS() >= updateTsMap[tableID] {
+			// updateTs may be less than the previous updateTs
+			if tableInfo.UpdateTS() != updateTsMap[tableID] {
 				ok := sendDML(dml)
 				if !ok {
 					return
 				}
 				updateTsMap[tableID] = tableInfo.UpdateTS()
 				dml = pevent.NewDMLEvent(dispatcherID, tableID, tableInfo)
-			} else {
-				log.Panic("table info updateTs less than previous", zap.Uint64("previousUpdateTs", updateTsMap[tableID]), zap.Uint64("updateTs", tableInfo.UpdateTS()))
 			}
 			dml.AppendTxn(e.StartTs, e.CRTs)
 		}
