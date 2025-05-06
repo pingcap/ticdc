@@ -576,12 +576,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			return false
 		}
 
-		for idx := 0; len(ddlEvents) > 0 && idx < len(dml.Txns); idx++ {
-			commitTs := dml.Txns[idx].CommitTs
-			for len(ddlEvents) > 0 && commitTs > ddlEvents[0].FinishedTs {
-				c.sendDDL(ctx, remoteID, ddlEvents[0], task)
-				ddlEvents = ddlEvents[1:]
-			}
+		commitTs := dml.GetLastCommitTs()
+		for len(ddlEvents) > 0 && commitTs > ddlEvents[0].FinishedTs {
+			c.sendDDL(ctx, remoteID, ddlEvents[0], task)
+			ddlEvents = ddlEvents[1:]
 		}
 
 		dml.Seq = task.seq.Add(1)
@@ -654,7 +652,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			}
 
 			// updateTs may be less than the previous updateTs
-			if tableInfo.UpdateTS() != updateTsMap[tableID] {
+			hasDDL := dml != nil && len(ddlEvents) > 0 && dml.GetLastCommitTs() > ddlEvents[0].FinishedTs
+			if tableInfo.UpdateTS() != updateTsMap[tableID] || hasDDL {
 				ok := sendDML(dml)
 				if !ok {
 					return
