@@ -111,10 +111,17 @@ func formatColumn(c column, ft types.FieldType) column {
 			}
 		}
 	case mysql.TypeYear:
-		c.Value, err = c.Value.(json.Number).Int64()
+		var value int64
+		switch v := c.Value.(type) {
+		case json.Number:
+			value, err = v.Int64()
+		case []uint8:
+			value, err = strconv.ParseInt(string(v), 10, 64)
+		}
 		if err != nil {
 			log.Panic("invalid column value for year", zap.Any("value", c.Value), zap.Error(err))
 		}
+		c.Value = value
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
 		c.Value, err = tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, c.Value.(string), ft.GetType(), ft.GetDecimal())
 		if err != nil {
