@@ -391,6 +391,7 @@ func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) m
 		if !ok {
 			continue
 		}
+		log.Info("format column value", zap.String("column", col.Name.O), zap.Any("raw", raw))
 		data[col.Name.O] = formatValue(raw, col.FieldType)
 	}
 	return data
@@ -551,6 +552,7 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 		col.ID = nextColumnID
 		col.Name = pmodel.NewCIStr(name)
 		basicType := common.ExtractBasicMySQLType(mysqlType)
+		log.Info("build column info", zap.String("mysqlType", mysqlType), zap.Any("basicType", basicType))
 		col.FieldType = *types.NewFieldType(basicType)
 		if common.IsBinaryMySQLType(mysqlType) {
 			col.AddFlag(mysql.BinaryFlag)
