@@ -14,53 +14,14 @@
 package util
 
 import (
-	"net/url"
 	"sync"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
-	ticonfig "github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
-
-// GetEncoderConfig returns the encoder config and validates the config.
-func GetEncoderConfig(
-	changefeedID commonType.ChangeFeedID,
-	sinkURI *url.URL,
-	protocol config.Protocol,
-	sinkConfig *ticonfig.SinkConfig,
-	maxMsgBytes int,
-) (*common.Config, error) {
-	encoderConfig := common.NewConfig(protocol)
-	if err := encoderConfig.Apply(sinkURI, sinkConfig); err != nil {
-		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
-	}
-	// Always set encoder's `MaxMessageBytes` equal to producer's `MaxMessageBytes`
-	// to prevent that the encoder generate batched message too large
-	// then cause producer meet `message too large`.
-	encoderConfig = encoderConfig.
-		WithMaxMessageBytes(maxMsgBytes).
-		WithChangefeedID(changefeedID)
-
-	tz, err := util.GetTimezone(config.GetGlobalServerConfig().TZ)
-	if err != nil {
-		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
-	}
-	encoderConfig.TimeZone = tz
-
-	if err = encoderConfig.Validate(); err != nil {
-		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
-	}
-
-	return encoderConfig, nil
-}
 
 // TableSchemaStore is store some schema info for dispatchers.
 // It is responsible for
@@ -77,15 +38,15 @@ type TableSchemaStore struct {
 }
 
 func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonType.SinkType) *TableSchemaStore {
-	var tableSchemaStore *TableSchemaStore
-	if sinkType == commonType.MysqlSinkType {
-		tableSchemaStore = &TableSchemaStore{
-			sinkType: sinkType,
-			tableIDStore: &TableIDStore{
-				schemaIDToTableIDs: make(map[int64]map[int64]interface{}),
-				tableIDToSchemaID:  make(map[int64]int64),
-			},
-		}
+	tableSchemaStore := &TableSchemaStore{
+		sinkType: sinkType,
+		tableIDStore: &TableIDStore{
+			schemaIDToTableIDs: make(map[int64]map[int64]interface{}),
+			tableIDToSchemaID:  make(map[int64]int64),
+		},
+	}
+	switch sinkType {
+	case commonType.MysqlSinkType:
 		for _, schema := range schemaInfo {
 			schemaID := schema.SchemaID
 			for _, table := range schema.Tables {
@@ -93,17 +54,10 @@ func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonTy
 				tableSchemaStore.tableIDStore.Add(schemaID, tableID)
 			}
 		}
-	} else {
-		tableSchemaStore = &TableSchemaStore{
-			sinkType: sinkType,
-			tableIDStore: &TableIDStore{
-				schemaIDToTableIDs: make(map[int64]map[int64]interface{}),
-				tableIDToSchemaID:  make(map[int64]int64),
-			},
-			tableNameStore: &TableNameStore{
-				existingTables:         make(map[string]map[string]*commonEvent.SchemaTableName),
-				latestTableNameChanges: &LatestTableNameChanges{m: make(map[uint64]*commonEvent.TableNameChange)},
-			},
+	default:
+		tableSchemaStore.tableNameStore = &TableNameStore{
+			existingTables:         make(map[string]map[string]*commonEvent.SchemaTableName),
+			latestTableNameChanges: &LatestTableNameChanges{m: make(map[uint64]*commonEvent.TableNameChange)},
 		}
 		for _, schema := range schemaInfo {
 			schemaName := schema.SchemaName
@@ -115,7 +69,6 @@ func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonTy
 				tableSchemaStore.tableIDStore.Add(schemaID, tableID)
 			}
 		}
-
 	}
 	return tableSchemaStore
 }
@@ -364,14 +317,4 @@ func (s *TableIDStore) GetAllTableIds() []int64 {
 	// Each influence-DB ddl must have table trigger event dispatcher's participation
 	tableIds = append(tableIds, heartbeatpb.DDLSpan.TableID)
 	return tableIds
-}
-
-// IsMysqlCompatibleBackend returns true if the sinkURIStr is mysql compatible.
-func IsMysqlCompatibleBackend(sinkURIStr string) (bool, error) {
-	sinkURI, err := url.Parse(sinkURIStr)
-	if err != nil {
-		return false, errors.WrapError(errors.ErrSinkURIInvalid, err)
-	}
-	scheme := helper.GetScheme(sinkURI)
-	return helper.IsMySQLCompatibleScheme(scheme), nil
 }

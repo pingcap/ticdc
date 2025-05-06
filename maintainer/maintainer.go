@@ -17,11 +17,13 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"net/url"
 	"sync"
 	"time"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/split"
@@ -34,7 +36,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -668,16 +669,26 @@ func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMess
 	m.postBootstrapMsg = nil
 }
 
+// isMysqlCompatible returns true if the sinkURIStr is mysql compatible.
+func isMysqlCompatible(sinkURIStr string) (bool, error) {
+	sinkURI, err := url.Parse(sinkURIStr)
+	if err != nil {
+		return false, errors.WrapError(errors.ErrSinkURIInvalid, err)
+	}
+	scheme := helper.GetScheme(sinkURI)
+	return helper.IsMySQLCompatibleScheme(scheme), nil
+}
+
 func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
 	if cachedResp == nil {
 		return
 	}
-	isMysqlCompatibleBackend, err := util.IsMysqlCompatibleBackend(m.config.SinkURI)
+	isMySQLCompatible, err := isMysqlCompatible(m.config.SinkURI)
 	if err != nil {
 		m.handleError(err)
 		return
 	}
-	barrier, msg, err := m.controller.FinishBootstrap(cachedResp, isMysqlCompatibleBackend)
+	barrier, msg, err := m.controller.FinishBootstrap(cachedResp, isMySQLCompatible)
 	if err != nil {
 		m.handleError(err)
 		return

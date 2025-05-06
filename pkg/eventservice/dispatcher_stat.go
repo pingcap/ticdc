@@ -40,9 +40,11 @@ type dispatcherStat struct {
 	id common.DispatcherID
 	// reverse pointer to the changefeed status this dispatcher belongs to.
 	changefeedStat *changefeedStatus
-	// workerIndex is the index of the worker that this dispatcher belongs to.
-	workerIndex int
-	info        DispatcherInfo
+	// scanWorkerIndex is the index of the worker that this dispatcher belongs to.
+	scanWorkerIndex int
+	// messageWorkerIndex is the index of the worker that this dispatcher belongs to.
+	messageWorkerIndex int
+	info               DispatcherInfo
 	// startTableInfo is the table info of the dispatcher when it is registered or reset.
 	startTableInfo atomic.Pointer[common.TableInfo]
 	filter         filter.Filter
@@ -88,7 +90,8 @@ type dispatcherStat struct {
 	// taskScanning is used to indicate whether the scan task is running.
 	// If so, we should wait until it is done before we send next resolvedTs event of
 	// this dispatcher.
-	taskScanning atomic.Bool
+
+	isTaskScanning atomic.Bool
 
 	// isRemoved is used to indicate whether the dispatcher is removed.
 	// If so, we should ignore the errors related to this dispatcher.
@@ -99,15 +102,17 @@ func newDispatcherStat(
 	startTs uint64,
 	info DispatcherInfo,
 	filter filter.Filter,
-	workerIndex int,
+	scanWorkerIndex int,
+	messageWorkerIndex int,
 	changefeedStatus *changefeedStatus,
 ) *dispatcherStat {
 	dispStat := &dispatcherStat{
-		id:             info.GetID(),
-		changefeedStat: changefeedStatus,
-		workerIndex:    workerIndex,
-		info:           info,
-		filter:         filter,
+		id:                 info.GetID(),
+		changefeedStat:     changefeedStatus,
+		scanWorkerIndex:    scanWorkerIndex,
+		messageWorkerIndex: messageWorkerIndex,
+		info:               info,
+		filter:             filter,
 	}
 	changefeedStatus.addDispatcher()
 
@@ -151,7 +156,9 @@ func (a *dispatcherStat) resetState(resetTs uint64) {
 	a.sentResolvedTs.Store(resetTs)
 	a.resetTs.Store(resetTs)
 	a.seq.Store(0)
-	a.taskScanning.Store(false)
+
+	a.isTaskScanning.Store(false)
+
 	a.isRunning.Store(true)
 	a.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
 }

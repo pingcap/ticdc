@@ -21,12 +21,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
@@ -57,9 +57,9 @@ func TestDeframenter(t *testing.T) {
 
 	replicaConfig := config.GetDefaultReplicaConfig()
 	changefeedID := common.NewChangefeedID4Test("test", "table1")
-	encoderConfig, err := util.GetEncoderConfig(changefeedID, sinkURI, config.ProtocolCsv,
+	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, config.ProtocolCsv,
 		replicaConfig.Sink, config.DefaultMaxMessageBytes)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	var seqNumbers []uint64
 	for i := 0; i < txnCnt; i++ {

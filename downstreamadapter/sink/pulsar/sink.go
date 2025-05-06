@@ -299,7 +299,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			}
 
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
-			selector := s.comp.columnSelector.GetSelector(schema, table)
+			selector := s.comp.columnSelector.Get(schema, table)
 			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
 				var calledCount atomic.Uint64
 				// The callback of the last row will trigger the callback of the txn.

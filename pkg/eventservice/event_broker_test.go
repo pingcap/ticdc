@@ -69,17 +69,17 @@ func TestCheckNeedScan(t *testing.T) {
 	disInfo := newMockDispatcherInfoForTest(t)
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 
-	disp := newDispatcherStat(100, newMockDispatcherInfoForTest(t), nil, 0, changefeedStatus)
+	disp := newDispatcherStat(100, newMockDispatcherInfoForTest(t), nil, 0, 0, changefeedStatus)
 	// Set the eventStoreResolvedTs and latestCommitTs to 102 and 101.
 	// To simulate the eventStore has just notified the broker.
 	disp.eventStoreResolvedTs.Store(102)
 	disp.latestCommitTs.Store(101)
 
 	// Case 1: Is scanning, and mustCheck is false, it should return false.
-	disp.taskScanning.Store(true)
+	disp.isTaskScanning.Store(true)
 	needScan, _ := broker.checkNeedScan(disp, false)
 	require.False(t, needScan)
-	disp.taskScanning.Store(false)
+	disp.isTaskScanning.Store(false)
 	log.Info("Pass case 1")
 
 	// Case 2: ResetTs is 0, it should return false.
@@ -118,7 +118,7 @@ func TestOnNotify(t *testing.T) {
 	workerIndex := 0
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 
-	disp := newDispatcherStat(startTs, disInfo, nil, workerIndex, changefeedStatus)
+	disp := newDispatcherStat(startTs, disInfo, nil, workerIndex, workerIndex, changefeedStatus)
 	// Make the dispatcher is reset.
 	disp.resetState(100)
 	disp.isHandshaked.Store(true)
@@ -138,8 +138,8 @@ func TestOnNotify(t *testing.T) {
 	notifyMsgs3 := notifyMsg{102, 101}
 	broker.onNotify(disp, notifyMsgs3.resolvedTs, notifyMsgs3.latestCommitTs)
 	require.Equal(t, uint64(102), disp.eventStoreResolvedTs.Load())
-	require.True(t, disp.taskScanning.Load())
-	task := <-broker.taskChan
+	require.True(t, disp.isTaskScanning.Load())
+	task := <-broker.taskChan[disp.scanWorkerIndex]
 	require.Equal(t, task.id, disp.id)
 	log.Info("Pass case 3")
 	// Case 4: When the scan task is running, even there is a large latestCommitTs,
@@ -150,14 +150,14 @@ func TestOnNotify(t *testing.T) {
 	after := time.After(50 * time.Millisecond)
 	select {
 	case <-after:
-	case <-broker.taskChan:
+	case <-broker.taskChan[disp.scanWorkerIndex]:
 		require.Fail(t, "should not trigger a new scan task")
 	}
 	log.Info("Pass case 4")
 
 	// Case 5: do scan and then onNotify again.
-	broker.doScan(context.TODO(), task)
-	require.False(t, disp.taskScanning.Load())
+	broker.doScan(context.TODO(), task, 0)
+	require.False(t, disp.isTaskScanning.Load())
 	require.Equal(t, notifyMsgs4.resolvedTs, disp.sentResolvedTs.Load())
 	notifyMsgs5 := notifyMsg{104, 101}
 	// Set the schemaStore's maxDDLCommitTs to the sentResolvedTs, so the broker will not scan the schemaStore.
@@ -226,7 +226,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	}
 	// handle resolvedTsCacheSize resolvedTs events, so the cache is full.
 	for i := 0; i < resolvedTsCacheSize+1; i++ {
-		broker.handleResolvedTs(ctx, cacheMap, wrapEvent, disp.workerIndex)
+		broker.handleResolvedTs(ctx, cacheMap, wrapEvent, disp.messageWorkerIndex)
 	}
 
 	msg := <-mc.messageCh

@@ -221,7 +221,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 //
 // Parameters:
 //   - allNodesResp: Bootstrap responses from all nodes containing their current state
-//   - isMysqlCompatibleBackend: Flag indicating if using MySQL-compatible backend
+//   - isMysqlCompatible: Flag indicating if using MySQL-compatible backend
 //
 // Returns:
 //   - *Barrier: Initialized barrier for consistency tracking

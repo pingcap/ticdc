@@ -64,6 +64,9 @@ func TestEventServiceBasic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Set the max task time range to a very large value to avoid the test case being blocked.
+	maxTaskTimeRange = time.Duration(math.MaxInt64)
+
 	mockStore := newMockEventStore(100)
 	mockStore.Run(ctx)
 

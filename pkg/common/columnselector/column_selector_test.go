@@ -25,7 +25,7 @@ import (
 func TestNewColumnSelector(t *testing.T) {
 	// the column selector is not set
 	replicaConfig := config.GetDefaultReplicaConfig()
-	selectors, err := NewColumnSelectors(replicaConfig.Sink)
+	selectors, err := New(replicaConfig.Sink)
 	require.NoError(t, err)
 	require.NotNil(t, selectors)
 	require.Len(t, selectors.selectors, 0)
@@ -48,7 +48,7 @@ func TestNewColumnSelector(t *testing.T) {
 			Columns: []string{"co?1"},
 		},
 	}
-	selectors, err = NewColumnSelectors(replicaConfig.Sink)
+	selectors, err = New(replicaConfig.Sink)
 	require.NoError(t, err)
 	require.Len(t, selectors.selectors, 4)
 }
@@ -73,11 +73,11 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 			Columns: []string{"co?1"},
 		},
 	}
-	selectors, err := NewColumnSelectors(replicaConfig.Sink)
+	selectors, err := New(replicaConfig.Sink)
 	require.NoError(t, err)
 
 	{
-		selector := selectors.GetSelector("test", "t1")
+		selector := selectors.Get("test", "t1")
 		columns := []*model.ColumnInfo{
 			{
 				Name: pmodel.NewCIStr("a"),
@@ -99,7 +99,7 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 	}
 
 	{
-		selector := selectors.GetSelector("test1", "aaa")
+		selector := selectors.Get("test1", "aaa")
 		columns := []*model.ColumnInfo{
 			{
 				Name: pmodel.NewCIStr("a"),
@@ -121,7 +121,7 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 	}
 
 	{
-		selector := selectors.GetSelector("test2", "t2")
+		selector := selectors.Get("test2", "t2")
 		columns := []*model.ColumnInfo{
 			{
 				Name: pmodel.NewCIStr("a"),
@@ -143,7 +143,7 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 	}
 
 	{
-		selector := selectors.GetSelector("test3", "t3")
+		selector := selectors.Get("test3", "t3")
 		columns := []*model.ColumnInfo{
 			{
 				Name: pmodel.NewCIStr("a"),
@@ -165,7 +165,7 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 	}
 
 	{
-		selector := selectors.GetSelector("test4", "t4")
+		selector := selectors.Get("test4", "t4")
 		columns := []*model.ColumnInfo{
 			{
 				Name: pmodel.NewCIStr("a"),

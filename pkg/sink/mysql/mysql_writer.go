@@ -179,22 +179,20 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 		return nil
 	}
 
+	var err error
 	if !w.cfg.DryRun {
-		if err := w.execDMLWithMaxRetries(dmls); err != nil {
-			return errors.Trace(err)
-		}
+		err = w.execDMLWithMaxRetries(dmls)
 	} else {
 		w.tryDryRunBlock()
-		if err := w.statistics.RecordBatchExecution(func() (int, int64, error) {
+		err = w.statistics.RecordBatchExecution(func() (int, int64, error) {
 			return dmls.rowCount, dmls.approximateSize, nil
-		}); err != nil {
-			return errors.Trace(err)
-		}
+		})
+	}
+	if err != nil {
+		return errors.Trace(err)
 	}
 	for _, event := range events {
-		for _, callback := range event.PostTxnFlushed {
-			callback()
-		}
+		event.PostFlush()
 	}
 	return nil
 }
@@ -215,5 +213,8 @@ func (w *Writer) tryDryRunBlock() {
 func (w *Writer) Close() {
 	if w.stmtCache != nil {
 		w.stmtCache.Purge()
+	}
+	if w.blockerTicker != nil {
+		w.blockerTicker.Stop()
 	}
 }

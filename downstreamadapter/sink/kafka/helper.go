@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/br/pkg/utils"
 )
 
@@ -108,12 +107,12 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	kafkaComponent.columnSelector, err = columnselector.NewColumnSelectors(sinkConfig)
+	kafkaComponent.columnSelector, err = columnselector.New(sinkConfig)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	encoderConfig, err := util.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, options.MaxMessageBytes)
+	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, options.MaxMessageBytes)
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}

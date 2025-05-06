@@ -74,7 +74,7 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 
 		s.eventChan = s.outChan
 	} else {
-		s.eventChan = make(chan eventWrap[A, P, T, D, H], 64)
+		s.eventChan = make(chan eventWrap[A, P, T, D, H], 1024*16)
 	}
 	return s
 }
@@ -331,6 +331,7 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 		return false
 	} else {
 		pi.pendingQueue.PushBack(event)
+		pi.updatePendingSize(int64(event.eventSize))
 		return true
 	}
 }
