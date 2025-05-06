@@ -456,17 +456,23 @@ func formatValue(value any, ft types.FieldType) any {
 		// workaround the decimal `digitInt` field incorrect problem.
 		bin, err := result.ToBin(ft.GetFlen(), ft.GetDecimal())
 		if err != nil {
-			log.Panic("convert decimal to binary failed", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("convert decimal to binary failed",
+				zap.Any("rawValue", rawValue), zap.Int("flen", ft.GetFlen()),
+				zap.Int("decimal", ft.GetDecimal()), zap.Error(err))
 		}
 		_, err = result.FromBin(bin, ft.GetFlen(), ft.GetDecimal())
 		if err != nil {
-			log.Panic("convert binary to decimal failed", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("convert binary to decimal failed",
+				zap.Any("rawValue", rawValue), zap.Int("flen", ft.GetFlen()),
+				zap.Int("decimal", ft.GetDecimal()), zap.Error(err))
 		}
 		return result
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
 		result, err := tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, rawValue, ft.GetType(), ft.GetDecimal())
 		if err != nil {
-			log.Panic("invalid column value for time", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value for time", zap.Any("rawValue", rawValue),
+				zap.Int("flen", ft.GetFlen()), zap.Int("decimal", ft.GetDecimal()),
+				zap.Error(err))
 		}
 		// todo: shall we also convert timezone for the mysql.TypeTimestamp ?
 		//if mysqlType == mysql.TypeTimestamp && decoder.loc != nil && !t.IsZero() {
