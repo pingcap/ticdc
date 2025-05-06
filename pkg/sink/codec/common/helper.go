@@ -67,6 +67,7 @@ func IsBinaryMySQLType(mysqlType string) bool {
 
 // ExtractBasicMySQLType return the mysql type
 func ExtractBasicMySQLType(mysqlType string) byte {
+	strings.TrimLeft(mysqlType, "unsigned ")
 	for i := 0; i < len(mysqlType); i++ {
 		if mysqlType[i] == '(' || mysqlType[i] == ' ' {
 			return ptypes.StrToType(mysqlType[:i])
