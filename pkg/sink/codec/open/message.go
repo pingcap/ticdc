@@ -64,21 +64,27 @@ func formatColumn(c column, ft types.FieldType) column {
 	var err error
 	switch c.Type {
 	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
-		str := c.Value.(string)
+		var raw string
+		switch v := c.Value.(type) {
+		case []uint8:
+			raw = string(v)
+		case string:
+			raw = v
+		default:
+			log.Panic("invalid column value, please report a bug", zap.Any("value", c.Value), zap.Any("type", v))
+		}
 		if isBinary(c.Flag) {
-			str, err = strconv.Unquote("\"" + str + "\"")
+			raw, err = strconv.Unquote("\"" + raw + "\"")
 			if err != nil {
-				log.Panic("invalid column value, please report a bug", zap.Any("value", str), zap.Error(err))
+				log.Panic("invalid column value, please report a bug", zap.Any("value", raw), zap.Error(err))
 			}
 		}
-		c.Value = []byte(str)
+		c.Value = []byte(raw)
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob,
 		mysql.TypeLongBlob, mysql.TypeBlob:
-		if s, ok := c.Value.(string); ok {
-			c.Value, err = base64.StdEncoding.DecodeString(s)
-			if err != nil {
-				log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
-			}
+		c.Value, err = base64.StdEncoding.DecodeString(c.Value.(string))
+		if err != nil {
+			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
 		}
 	case mysql.TypeFloat, mysql.TypeDouble:
 		s, ok := c.Value.(json.Number)
@@ -93,22 +99,20 @@ func formatColumn(c column, ft types.FieldType) column {
 			c.Value = float32(c.Value.(float64))
 		}
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeLonglong, mysql.TypeInt24:
-		if s, ok := c.Value.(json.Number); ok {
-			if isUnsigned(c.Flag) {
-				c.Value, err = strconv.ParseUint(s.String(), 10, 64)
-			} else {
-				c.Value, err = strconv.ParseInt(s.String(), 10, 64)
-			}
-			if err != nil {
-				log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
-			}
-			// is it possible be the float64?
-		} else if f, ok := c.Value.(float64); ok {
-			if isUnsigned(c.Flag) {
-				c.Value = uint64(f)
-			} else {
-				c.Value = int64(f)
-			}
+		var raw string
+		switch v := c.Value.(type) {
+		case json.Number:
+			raw = string(v)
+		case []uint8:
+			raw = string(v)
+		}
+		if isUnsigned(c.Flag) {
+			c.Value, err = strconv.ParseUint(raw, 10, 64)
+		} else {
+			c.Value, err = strconv.ParseInt(raw, 10, 64)
+		}
+		if err != nil {
+			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
 		}
 	case mysql.TypeYear:
 		var value int64
@@ -140,13 +144,18 @@ func formatColumn(c column, ft types.FieldType) column {
 			log.Panic("invalid column value for duration", zap.Any("value", c.Value), zap.Error(err))
 		}
 	case mysql.TypeBit:
-		intVal, err := c.Value.(json.Number).Int64()
-		if err != nil {
-			log.Panic("invalid column value for the bit type", zap.Any("value", c.Value), zap.Error(err))
+		var intVal uint64
+		switch v := c.Value.(type) {
+		case []uint8:
+			intVal = common.MustBinaryLiteralToInt(v)
+		case json.Number:
+			a, err := v.Int64()
+			if err != nil {
+				log.Panic("invalid column value for the bit type", zap.Any("value", c.Value), zap.Error(err))
+			}
+			intVal = uint64(a)
 		}
-		// todo: shall we get the flen to make it compatible to the MySQL Sink?
-		// byteSize := (ft.GetFlen() + 7) >> 3
-		c.Value = tiTypes.NewBinaryLiteralFromUint(uint64(intVal), -1)
+		c.Value = tiTypes.NewBinaryLiteralFromUint(intVal, -1)
 	case mysql.TypeEnum:
 		var enumValue int64
 		enumValue, err = c.Value.(json.Number).Int64()
@@ -168,7 +177,16 @@ func formatColumn(c column, ft types.FieldType) column {
 			Value: uint64(setValue),
 		}
 	case mysql.TypeJSON:
-		c.Value, err = tiTypes.ParseBinaryJSONFromString(c.Value.(string))
+		var rawValue string
+		switch v := c.Value.(type) {
+		case []uint8:
+			rawValue = string(v)
+		case string:
+			rawValue = v
+		default:
+			log.Panic("invalid column value for JSON", zap.Any("value", c.Value), zap.Any("type", v))
+		}
+		c.Value, err = tiTypes.ParseBinaryJSONFromString(rawValue)
 		if err != nil {
 			log.Panic("invalid column value for json", zap.Any("value", c.Value), zap.Error(err))
 		}

@@ -247,22 +247,10 @@ func buildColumns(
 		if nullable, _ := columnType.Nullable(); nullable {
 			flag |= nullableFlag
 		}
-		mysqlType := common.ExtractBasicMySQLType(dataType)
-
-		var value interface{}
-		value = holder.Values[i].([]uint8)
-
-		switch mysqlType {
-		case mysql.TypeJSON:
-			value = string(value.([]uint8))
-		case mysql.TypeBit:
-			value = common.MustBinaryLiteralToInt(value.([]uint8))
-		}
-
 		result[name] = column{
-			Type:  mysqlType,
+			Type:  common.ExtractBasicMySQLType(dataType),
 			Flag:  flag,
-			Value: value,
+			Value: holder.Values[i],
 		}
 	}
 	return result
