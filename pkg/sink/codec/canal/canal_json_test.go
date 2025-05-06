@@ -26,8 +26,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TODO: claim check
-
 func TestIntegerContentCompatible(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -677,6 +675,125 @@ func TestDMLMessageTooLarge(t *testing.T) {
 	require.NoError(t, err)
 	err = encoder.AppendRowChangedEvent(context.Background(), "", rowEvent)
 	require.ErrorIs(t, err, errors.ErrMessageTooLarge)
+}
+
+func TestLargeMessageClaimCheck(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	_ = helper.DDL2Event(`create table t (
+		id          int primary key auto_increment,
+	
+		c_tinyint   tinyint   null,
+		c_smallint  smallint  null,
+		c_mediumint mediumint null,
+		c_int       int       null,
+		c_bigint    bigint    null,
+	
+		c_unsigned_tinyint   tinyint   unsigned null,
+		c_unsigned_smallint  smallint  unsigned null,
+		c_unsigned_mediumint mediumint unsigned null,
+		c_unsigned_int       int       unsigned null,
+		c_unsigned_bigint    bigint    unsigned null,
+	
+		c_float   float   null,
+		c_double  double  null,
+		c_decimal decimal null,
+		c_decimal_2 decimal(10, 4) null,
+	
+		c_unsigned_float     float unsigned   null,
+		c_unsigned_double    double unsigned  null,
+		c_unsigned_decimal   decimal unsigned null,
+		c_unsigned_decimal_2 decimal(10, 4) unsigned null,
+	
+		c_date      date      null,
+		c_datetime  datetime  null,
+		c_timestamp timestamp null,
+		c_time      time      null,
+		c_year      year      null,
+	
+		c_tinytext   tinytext      null,
+		c_text       text          null,
+		c_mediumtext mediumtext    null,
+		c_longtext   longtext      null,
+	
+		c_tinyblob   tinyblob      null,
+		c_blob       blob          null,
+		c_mediumblob mediumblob    null,
+		c_longblob   longblob      null,
+	
+		c_char       char(16)      null,
+		c_varchar    varchar(16)   null,
+		c_binary     binary(16)    null,
+		c_varbinary  varbinary(16) null,
+	
+		c_enum enum ('a','b','c') null,
+		c_set  set ('a','b','c')  null,
+		c_bit  bit(64)            null,
+		c_json json               null
+	);`)
+
+	dmlEvent := helper.DML2Event("test", "t", `insert into t values (
+		1,
+		1, 2, 3, 4, 5,
+		1, 2, 3, 4, 5,
+		2020.0202, 2020.0303, 2020.0404, 2021.1208,
+		3.1415, 2.7182, 8000, 179394.233,
+		'2020-02-20', '2020-02-20 02:20:20', '2020-02-20 02:20:20', '02:20:20', '2020',
+		'89504E470D0A1A0A', '89504E470D0A1A0A', '89504E470D0A1A0A', '89504E470D0A1A0A',
+		x'89504E470D0A1A0A', x'89504E470D0A1A0A', x'89504E470D0A1A0A', x'89504E470D0A1A0A',
+		'89504E470D0A1A0A', '89504E470D0A1A0A', x'89504E470D0A1A0A', x'89504E470D0A1A0A',
+		'b', 'b,c', b'1000001', '{
+			"key1": "value1",
+			"key2": "value2",
+			"key3": "123"
+		}'
+	);`)
+
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+	insertEvent := &commonEvent.RowEvent{
+		TableInfo:      dmlEvent.TableInfo,
+		CommitTs:       1,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON).WithMaxMessageBytes(1000)
+	codecConfig.EnableTiDBExtension = true
+	codecConfig.LargeMessageHandle.LargeMessageHandleOption = config.LargeMessageHandleOptionClaimCheck
+	codecConfig.LargeMessageHandle.LargeMessageHandleCompression = "snappy"
+	codecConfig.LargeMessageHandle.ClaimCheckStorageURI = "file:///tmp/canal-json-claim-check"
+
+	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", insertEvent)
+	require.NoError(t, err)
+
+	m := encoder.Build()[0]
+	require.NotNil(t, m.Callback)
+
+	dec, err := NewDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+
+	messageType, hasNext := dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decodedInsert := dec.NextDMLEvent()
+	require.NotNil(t, decodedInsert)
+
+	change, ok := decodedInsert.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, insertEvent.Event, insertEvent.TableInfo, change, decodedInsert.TableInfo)
 }
 
 func TestMessageLargeHandleKeyOnly(t *testing.T) {

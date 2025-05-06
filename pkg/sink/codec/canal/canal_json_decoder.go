@@ -453,19 +453,6 @@ func formatValue(value any, ft types.FieldType) any {
 		if err != nil {
 			log.Panic("invalid column value for decimal", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		// workaround the decimal `digitInt` field incorrect problem.
-		bin, err := result.ToBin(ft.GetFlen(), ft.GetDecimal())
-		if err != nil {
-			log.Panic("convert decimal to binary failed",
-				zap.Any("rawValue", rawValue), zap.Int("flen", ft.GetFlen()),
-				zap.Int("decimal", ft.GetDecimal()), zap.Error(err))
-		}
-		_, err = result.FromBin(bin, ft.GetFlen(), ft.GetDecimal())
-		if err != nil {
-			log.Panic("convert binary to decimal failed",
-				zap.Any("rawValue", rawValue), zap.Int("flen", ft.GetFlen()),
-				zap.Int("decimal", ft.GetDecimal()), zap.Error(err))
-		}
 		return result
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
 		result, err := tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, rawValue, ft.GetType(), ft.GetDecimal())
@@ -493,23 +480,19 @@ func formatValue(value any, ft types.FieldType) any {
 		if err != nil {
 			log.Panic("invalid column value for enum", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		result, err := tiTypes.ParseEnumValue(ft.GetElems(), enumValue)
-		if err != nil {
-			log.Panic("parse enum value failed", zap.Any("rawValue", rawValue),
-				zap.Any("enumValue", enumValue), zap.Error(err))
+		return tiTypes.Enum{
+			Name:  "",
+			Value: enumValue,
 		}
-		return result
 	case mysql.TypeSet:
 		setValue, err := strconv.ParseUint(rawValue, 10, 64)
 		if err != nil {
 			log.Panic("invalid column value for set", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		result, err := tiTypes.ParseSetValue(ft.GetElems(), setValue)
-		if err != nil {
-			log.Panic("parse set value failed", zap.Any("rawValue", rawValue),
-				zap.Any("setValue", setValue), zap.Error(err))
+		return tiTypes.Set{
+			Name:  "",
+			Value: setValue,
 		}
-		return result
 	case mysql.TypeBit:
 		data, err := strconv.ParseUint(rawValue, 10, 64)
 		if err != nil {
@@ -591,7 +574,7 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 		if common.IsUnsignedFlag(mysqlType) {
 			col.AddFlag(mysql.UnsignedFlag)
 		}
-		flen, decimal := common.ExtractFlenDecimal(mysqlType)
+		flen, decimal := common.ExtractFlenDecimal(mysqlType, col.GetType())
 		col.FieldType.SetFlen(flen)
 		col.FieldType.SetDecimal(decimal)
 		switch basicType {

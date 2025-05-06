@@ -80,14 +80,17 @@ func IsUnsignedFlag(mysqlType string) bool {
 	return strings.Contains(mysqlType, "unsigned")
 }
 
-func ExtractFlenDecimal(mysqlType string) (int, int) {
+func ExtractFlenDecimal(mysqlType string, tp byte) (int, int) {
 	if strings.HasPrefix(mysqlType, "enum") || strings.HasPrefix(mysqlType, "set") {
 		return 0, 0
 	}
 	start := strings.Index(mysqlType, "(")
 	end := strings.Index(mysqlType, ")")
 	if start == -1 || end == -1 {
-		return -1, types.UnspecifiedLength
+		if strings.HasPrefix("mysqlType", "bit") {
+			return 8, 0
+		}
+		return mysql.GetDefaultFieldLengthAndDecimal(tp)
 	}
 
 	data := strings.Split(mysqlType[start+1:end], ",")
