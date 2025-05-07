@@ -399,14 +399,13 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 	}
 
 	// Adjust the data range to avoid the time range of a task exceeds maxTaskTimeRange.
-	upperPhs := oracle.GetTimeFromTS(task.eventStoreResolvedTs.Load())
-	lowerPhs := oracle.GetTimeFromTS(task.sentResolvedTs.Load())
+	upperPhs := oracle.GetTimeFromTS(dataRange.EndTs)
+	lowerPhs := oracle.GetTimeFromTS(dataRange.StartTs)
 
 	// The time range of a task should not exceed maxTaskTimeRange.
 	// This would help for reduce changefeed latency.
 	if upperPhs.Sub(lowerPhs) > maxTaskTimeRange {
-		newUpperCommitTs := oracle.GoTimeToTS(lowerPhs.Add(maxTaskTimeRange))
-		dataRange.EndTs = newUpperCommitTs
+		dataRange.EndTs = oracle.GoTimeToTS(lowerPhs.Add(maxTaskTimeRange))
 	}
 
 	return true, dataRange
