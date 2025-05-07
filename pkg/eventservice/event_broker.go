@@ -558,9 +558,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		// Check if the dispatcher is running.
 		// If not, we don't need to send the dml event.
 		if !task.IsRunning() {
-			if lastSentDMLCommitTs != 0 {
-				task.updateSentResolvedTs(lastSentDMLCommitTs)
+			// If the dml.CommitTs is equal to the lastSentDMLCommitTs, we can not skip.
+			if lastSentDMLCommitTs != 0 && dml.CommitTs != lastSentDMLCommitTs {
 				c.sendWatermark(remoteID, task, lastSentDMLCommitTs)
+				task.updateSentResolvedTs(lastSentDMLCommitTs)
 				log.Info("The dispatcher is not running, skip the following scan",
 					zap.Uint64("clusterID", task.info.GetClusterID()),
 					zap.String("changefeed", task.info.GetChangefeedID().String()),
