@@ -64,22 +64,22 @@ func formatColumn(c column, ft types.FieldType) column {
 	var err error
 	switch c.Type {
 	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
-		var data string
+		var data []byte
 		switch v := c.Value.(type) {
 		case []uint8:
-			data = string(v)
-		case string:
 			data = v
+		case string:
+			if isBinary(c.Flag) {
+				v, err = strconv.Unquote("\"" + v + "\"")
+				if err != nil {
+					log.Panic("invalid column value, please report a bug", zap.Any("value", data), zap.Error(err))
+				}
+			}
+			data = []byte(v)
 		default:
 			log.Panic("invalid column value, please report a bug", zap.Any("value", c.Value), zap.Any("type", v))
 		}
-		if isBinary(c.Flag) {
-			data, err = strconv.Unquote("\"" + data + "\"")
-			if err != nil {
-				log.Panic("invalid column value, please report a bug", zap.Any("value", data), zap.Error(err))
-			}
-		}
-		c.Value = []byte(data)
+		c.Value = data
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob,
 		mysql.TypeLongBlob, mysql.TypeBlob:
 		var data []byte
