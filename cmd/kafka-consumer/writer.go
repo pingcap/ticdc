@@ -226,8 +226,6 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context, progress *partit
 		}
 	}
 	if total == 0 {
-		log.Warn("flush DML by watermark, but no events found",
-			zap.Int32("partition", progress.partition), zap.Uint64("watermark", progress.watermark), zap.Int("total", total))
 		return nil
 	}
 
