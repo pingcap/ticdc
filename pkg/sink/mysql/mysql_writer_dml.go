@@ -49,8 +49,8 @@ import (
 func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
-	// Step 1: group the events by dispatcher id
-	eventsGroup := make(map[common.DispatcherID][]*commonEvent.DMLEvent) // dispatcherID--> events
+	// Step 1: group the events by table ID
+	eventsGroup := make(map[int64][]*commonEvent.DMLEvent) // tableID --> events
 	for _, event := range events {
 		// calculate for metrics
 		dmls.rowCount += int(event.Len())
@@ -58,12 +58,11 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 			dmls.startTs = append(dmls.startTs, event.GetStartTs())
 		}
 		dmls.approximateSize += event.GetRowsSize()
-		// group by dispatcherID
-		dispatcherID := event.DispatcherID
-		if _, ok := eventsGroup[dispatcherID]; !ok {
-			eventsGroup[dispatcherID] = make([]*commonEvent.DMLEvent, 0)
+		tableID := event.GetTableID()
+		if _, ok := eventsGroup[tableID]; !ok {
+			eventsGroup[tableID] = make([]*commonEvent.DMLEvent, 0)
 		}
-		eventsGroup[dispatcherID] = append(eventsGroup[dispatcherID], event)
+		eventsGroup[tableID] = append(eventsGroup[tableID], event)
 	}
 
 	// Step 2: prepare the dmls for each group
@@ -130,7 +129,6 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 }
 
 func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	inSafeMode := true
 	tableInfo := events[0].TableInfo
 	type RowChangeWithKeys struct {
 		RowChange  *commonEvent.RowChange
@@ -277,11 +275,10 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 	}
 
 	// step 2. generate sqls
-	return w.batchSingleTxnDmls(finalRowLists, tableInfo, inSafeMode)
+	return w.batchSingleTxnDmls(finalRowLists, tableInfo, true)
 }
 
 func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	inSafeMode := false
 	tableInfo := events[0].TableInfo
 	// step 1. divide update row to delete row and insert row, and set into map based on the key hash
 	rowsMap := make(map[uint64][]*commonEvent.RowChange)
@@ -386,12 +383,14 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 	}
 
 	// step 3. generate sqls
-	return w.batchSingleTxnDmls(rowsList, tableInfo, inSafeMode)
+	return w.batchSingleTxnDmls(rowsList, tableInfo, false)
 }
 
 func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	var querys []string
-	var args [][]interface{}
+	var (
+		queries []string
+		args    [][]interface{}
+	)
 
 	for _, event := range events {
 		if event.Len() == 0 {
@@ -399,16 +398,13 @@ func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [
 		}
 
 		queryList, argsList := w.generateNormalSQL(event)
-		querys = append(querys, queryList...)
+		queries = append(queries, queryList...)
 		args = append(args, argsList...)
 	}
-	return querys, args
+	return queries, args
 }
 
 func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	var queryList []string
-	var argsList [][]interface{}
-
 	inSafeMode := !w.cfg.SafeMode && event.GetCommitTs() > event.ReplicatingTs
 	log.Debug("inSafeMode",
 		zap.Bool("inSafeMode", inSafeMode),
@@ -417,14 +413,18 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 		zap.Bool("safeMode", w.cfg.SafeMode))
 
 	var (
-		query string
-		args  []interface{}
+		queries  []string
+		argsList [][]interface{}
 	)
 	for {
 		rows := event.GetNextTxn()
 		if len(rows) == 0 {
 			break
 		}
+		var (
+			query string
+			args  []interface{}
+		)
 		for _, row := range rows {
 			switch row.RowType {
 			case commonEvent.RowTypeUpdate:
@@ -433,10 +433,9 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 				} else {
 					query, args = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
 					if query != "" {
-						queryList = append(queryList, query)
+						queries = append(queries, query)
 						argsList = append(argsList, args)
 					}
-					query, args = buildInsert(event.TableInfo, row, inSafeMode)
 				}
 			case commonEvent.RowTypeDelete:
 				query, args = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)
@@ -445,12 +444,12 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 			}
 
 			if query != "" {
-				queryList = append(queryList, query)
+				queries = append(queries, query)
 				argsList = append(argsList, args)
 			}
 		}
 	}
-	return queryList, argsList
+	return queries, argsList
 }
 
 func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
