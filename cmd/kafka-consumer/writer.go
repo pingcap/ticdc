@@ -144,9 +144,6 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 		total   int
 		flushed atomic.Int64
 	)
-	log.Info("try to flush ddl event",
-		zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query),
-		zap.Any("blockedTables", ddl.GetBlockedTables()), zap.Any("DDL", ddl))
 	// if block the whole database, flush all tables, otherwise flush the blocked tables.
 	tableIDs := make(map[model.TableID]struct{})
 	switch ddl.GetBlockedTables().InfluenceType {
@@ -290,7 +287,6 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		// but all DDL event messages should be consumed.
 		ddl := progress.decoder.NextDDLEvent()
 
-		// todo: enable this logic, after simple decoder is supported.
 		if dec, ok := progress.decoder.(*simple.Decoder); ok {
 			cachedEvents := dec.GetCachedEvents()
 			for _, row := range cachedEvents {
@@ -301,14 +297,20 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			}
 		}
 
+		// DDL is broadcast to all partitions, but only handle the DDL from partition-0.
+		if partition != 0 {
+			return false
+		}
+
 		// the Query maybe empty if using simple protocol, it's comes from `bootstrap` event, no need to handle it.
 		if ddl.Query == "" {
 			return false
 		}
 
-		if partition != 0 {
-			return false
-		}
+		log.Info("DDL event received",
+			zap.Int32("partition", partition), zap.Any("offset", offset),
+			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query),
+			zap.Any("blockedTables", ddl.GetBlockedTables()), zap.Any("DDL", ddl))
 
 		err := w.flushDDLEvent(ctx, ddl)
 		if err != nil {

@@ -377,7 +377,7 @@ func (b *decoder) canalJSONMessage2DDLEvent() *commonEvent.DDLEvent {
 		tableID = tableInfo.TableName.TableID
 	}
 	result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
-	log.Info("set blocked tables for the DDL event",
+	log.Debug("set blocked tables for the DDL event",
 		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
 		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
 
