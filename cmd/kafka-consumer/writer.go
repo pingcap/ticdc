@@ -226,17 +226,26 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context, progress *partit
 		}
 	}
 	if total == 0 {
+		log.Warn("flush DML by watermark, but no events found",
+			zap.Int32("partition", progress.partition), zap.Uint64("watermark", progress.watermark), zap.Int("total", total))
 		return nil
 	}
 
+	log.Info("flush DML events by watermark",
+		zap.Int32("partition", progress.partition), zap.Uint64("watermark", progress.watermark), zap.Int("total", total))
+	start := time.Now()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	select {
 	case <-ctx.Done():
 		return context.Cause(ctx)
 	case <-done:
+		log.Info("flush DML events done",
+			zap.Int32("partition", progress.partition), zap.Uint64("watermark", progress.watermark),
+			zap.Int("total", total), zap.Duration("duration", time.Since(start)))
 	case <-ticker.C:
-		log.Panic("DDL event timeout, since the DML events are not flushed in time",
+		log.Panic("DML events cannot be flushed in 1 minute",
+			zap.Int32("partition", progress.partition), zap.Uint64("watermark", progress.watermark),
 			zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 	}
 	return nil
