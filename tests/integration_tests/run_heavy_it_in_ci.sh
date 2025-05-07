@@ -42,7 +42,7 @@ mysql_groups=(
 	# G05
 	'move_table'
 	# G06
-	'cdc'
+	'cdc pause_dispatcher'
 	# G07
 	'resolve_lock'
 	# G08

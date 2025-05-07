@@ -14,6 +14,7 @@
 package dynstream
 
 import (
+	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -154,8 +155,9 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 	}
 
 	failpoint.Inject("PausePath", func() {
-		log.Warn("inject PausePath")
-		sendFeedback(true)
+		if rand.Float64() < 0.05 {
+			pause = true
+		}
 	})
 
 	switch {
