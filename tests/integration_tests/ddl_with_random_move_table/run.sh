@@ -27,7 +27,7 @@ function prepare() {
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
-    run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "2" --addr "127.0.0.1:8302"
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "2" --addr "127.0.0.1:8302"
 
 	TOPIC_NAME="ticdc-failover-ddl-test-mix-$RANDOM"
 	SINK_URI="mysql://root@127.0.0.1:3306/"
@@ -64,19 +64,19 @@ function execute_ddls() {
 			echo "DDL: Truncating $table_name..."
 			run_sql "TRUNCATE TABLE test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 			;;
-        3)
-            echo "DDL: Renaming $table_name..."
-            new_table_name="table_$(($table_num + 100))"
-            run_sql "RENAME TABLE test.$table_name TO test.$new_table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT};
-            sleep 0.5
-            run_sql "RENAME TABLE test.$new_table_name TO test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT};
-            ;;
-        4)
-            echo "DDL: Adding column to $table_name..."
-            run_sql "ALTER TABLE test.$table_name ADD COLUMN new_col INT;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-            sleep 0.5
-            run_sql "ALTER TABLE test.$table_name DROP COLUMN new_col;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-            ;;
+		3)
+			echo "DDL: Renaming $table_name..."
+			new_table_name="table_$(($table_num + 100))"
+			run_sql "RENAME TABLE test.$table_name TO test.$new_table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			sleep 0.5
+			run_sql "RENAME TABLE test.$new_table_name TO test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			;;
+		4)
+			echo "DDL: Adding column to $table_name..."
+			run_sql "ALTER TABLE test.$table_name ADD COLUMN new_col INT;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			sleep 0.5
+			run_sql "ALTER TABLE test.$table_name DROP COLUMN new_col;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			;;
 		esac
 
 		sleep 1
@@ -93,14 +93,14 @@ function execute_dml() {
 
 function move_table() {
 	while true; do
-        table_num=$((RANDOM % 10 + 1))
+		table_num=$((RANDOM % 10 + 1))
 		table_name="table_$table_num"
-        port=$((RANDOM % 3 + 8300))
-        
-        # move table to a random node
-        table_id=$(get_table_id "test" "$table_name")
-        move_table_with_retry "127.0.0.1:$port" $table_id "test" 10 || true
-        sleep 1
+		port=$((RANDOM % 3 + 8300))
+
+		# move table to a random node
+		table_id=$(get_table_id "test" "$table_name")
+		move_table_with_retry "127.0.0.1:$port" $table_id "test" 10 || true
+		sleep 1
 	done
 }
 
@@ -111,21 +111,21 @@ main() {
 	execute_ddls &
 	NORMAL_TABLE_DDL_PID=$!
 
-    # do execute dml for 100 tables, and store the pid for each thread
-    declare -a pids=()
+	# do execute dml for 100 tables, and store the pid for each thread
+	declare -a pids=()
 
-    for i in {1..10}; do
-        execute_dml $i &
-        pids+=("$!")   # 将进程 PID 添加到数组
-    done
+	for i in {1..10}; do
+		execute_dml $i &
+		pids+=("$!") # 将进程 PID 添加到数组
+	done
 
-    move_table &
-    MOVE_TABLE_PID=$!
+	move_table &
+	MOVE_TABLE_PID=$!
 
 	sleep 500
 
-    kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MOVE_TABLE_PID
-    # wait for all dml threads to finish
+	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MOVE_TABLE_PID
+	# wait for all dml threads to finish
 
 	sleep 10
 
