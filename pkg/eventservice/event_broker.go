@@ -651,8 +651,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				log.Panic("get table info failed, unknown reason", zap.Error(err))
 			}
 
+			hasDDL := dml != nil && len(ddlEvents) > 0 && e.CRTs > ddlEvents[0].FinishedTs
 			// updateTs may be less than the previous updateTs
-			hasDDL := dml != nil && len(ddlEvents) > 0 && dml.GetLastCommitTs() > ddlEvents[0].FinishedTs
 			if tableInfo.UpdateTS() != updateTs || hasDDL {
 				ok := sendDML(dml)
 				if !ok {

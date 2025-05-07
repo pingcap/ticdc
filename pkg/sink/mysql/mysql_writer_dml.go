@@ -405,10 +405,10 @@ func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [
 }
 
 func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	inSafeMode := !w.cfg.SafeMode && event.GetCommitTs() > event.ReplicatingTs
+	inSafeMode := !w.cfg.SafeMode && event.GetFirstCommitTs() > event.ReplicatingTs
 	log.Debug("inSafeMode",
 		zap.Bool("inSafeMode", inSafeMode),
-		zap.Uint64("firstRowCommitTs", event.GetCommitTs()),
+		zap.Uint64("firstRowCommitTs", event.GetFirstCommitTs()),
 		zap.Uint64("firstRowReplicatingTs", event.ReplicatingTs),
 		zap.Bool("safeMode", w.cfg.SafeMode))
 
@@ -436,6 +436,7 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 						queries = append(queries, query)
 						argsList = append(argsList, args)
 					}
+					query, args = buildInsert(event.TableInfo, row, inSafeMode)
 				}
 			case commonEvent.RowTypeDelete:
 				query, args = buildDelete(event.TableInfo, row, w.cfg.ForceReplicate)

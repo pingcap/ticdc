@@ -188,7 +188,7 @@ func (t *DMLEvent) AddPostFlushFunc(f func()) {
 	t.PostTxnFlushed = append(t.PostTxnFlushed, f)
 }
 
-// Rewind reset the offset to 0, So that the next GetNextRow will return the first row
+// Rewind reset the offset to 0, So that the next getNextRow will return the first row
 func (t *DMLEvent) Rewind() {
 	t.offset = 0
 	t.checksumOffset = 0
