@@ -211,7 +211,6 @@ func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, e *pevent.D
 	// Send the DML event
 	c.getMessageCh(d.messageWorkerIndex) <- newWrapDMLEvent(remoteID, e, d.getEventSenderState())
 	metricEventServiceSendKvCount.Add(float64(e.Len()))
-
 }
 
 func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.DDLEvent, d *dispatcherStat) {
