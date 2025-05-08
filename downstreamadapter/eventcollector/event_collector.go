@@ -539,6 +539,21 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						c.metricDispatcherReceivedKVEventCount.Add(float64(event.Len()))
 						c.ds.Push(event.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, event))
 					}
+				case commonEvent.BatchEvent:
+					event := msg.(commonEvent.BatchEvent)
+					switch event.GetType() {
+					case commonEvent.TypeBatchDMLEvent:
+						events := event.(*commonEvent.BatchDMLEvent)
+						events.AssembleRows()
+						from := &targetMessage.From
+						event := dispatcher.DispatcherEvent{}
+						for _, e := range events.DMLEvents {
+							event.From = from
+							event.Event = e
+							c.ds.Push(e.DispatcherID, event)
+						}
+						c.metricDispatcherReceivedKVEventCount.Add(float64(event.Len()))
+					}
 				default:
 					log.Panic("invalid message type", zap.Any("msg", msg))
 				}

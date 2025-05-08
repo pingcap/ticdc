@@ -213,11 +213,11 @@ func queryRowChecksum(
 	defer conn.Close()
 
 	event.Rewind()
-	rows := event.GetNextTxn()
-	if len(rows) == 0 {
-		log.Error("")
-	}
-	for _, row := range rows {
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			break
+		}
 		columns := event.TableInfo.GetColumns()
 		if row.Checksum.Current != 0 {
 			conditions := make(map[string]any)

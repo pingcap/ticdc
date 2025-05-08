@@ -573,10 +573,10 @@ func parseValue(
 
 func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowChecksum bool, db *sql.DB) (*commonEvent.DMLEvent, error) {
 	result := &commonEvent.DMLEvent{
+		CommitTs:        msg.CommitTs,
 		PhysicalTableID: msg.TableID,
 		TableInfo:       tableInfo,
 	}
-	result.AppendTxn(msg.CommitTs, msg.CommitTs)
 
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	columns := tableInfo.GetColumns()

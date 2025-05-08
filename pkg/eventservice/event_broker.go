@@ -551,8 +551,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	// sendDML is used to send the dml event to the dispatcher.
 	// It returns true if the dml event is sent successfully.
 	// Otherwise, it returns false.
-	sendDML := func(dml *pevent.DMLEvent) bool {
-		if dml == nil {
+	sendDML := func(dmls *pevent.BatchDMLEvent) bool {
+		if dmls == nil {
 			return true
 		}
 
@@ -576,17 +576,16 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			return false
 		}
 
-		commitTs := dml.GetLastCommitTs()
+		commitTs := dmls.GetLastCommitTs()
 		for len(ddlEvents) > 0 && commitTs > ddlEvents[0].FinishedTs {
 			c.sendDDL(ctx, remoteID, ddlEvents[0], task)
 			ddlEvents = ddlEvents[1:]
 		}
 
-		dml.Seq = task.seq.Add(1)
-		c.emitSyncPointEventIfNeeded(dml.GetLastCommitTs(), task, remoteID)
-		c.getMessageCh(task.messageWorkerIndex) <- newWrapDMLEvent(remoteID, dml, task.getEventSenderState())
-		metricEventServiceSendKvCount.Add(float64(dml.Len()))
-		lastSentDMLCommitTs = dml.GetLastCommitTs()
+		c.emitSyncPointEventIfNeeded(dmls.GetLastCommitTs(), task, remoteID)
+		c.getMessageCh(task.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, dmls, task.getEventSenderState())
+		metricEventServiceSendKvCount.Add(float64(dmls.Len()))
+		lastSentDMLCommitTs = dmls.GetLastCommitTs()
 		return true
 	}
 
@@ -598,7 +597,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 
 	// 3. Send the events to the dispatcher.
-	var dml *pevent.DMLEvent
+	var dmls *pevent.BatchDMLEvent
 	var updateTs uint64
 	rowCount := 0
 	tableID := task.info.GetTableSpan().TableID
@@ -610,7 +609,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		}
 		if e == nil {
 			// Send the last dml to the dispatcher.
-			ok := sendDML(dml)
+			ok := sendDML(dmls)
 			if !ok {
 				return
 			}
@@ -651,19 +650,20 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				log.Panic("get table info failed, unknown reason", zap.Error(err))
 			}
 
-			hasDDL := dml != nil && len(ddlEvents) > 0 && e.CRTs > ddlEvents[0].FinishedTs
+			hasDDL := dmls != nil && len(ddlEvents) > 0 && e.CRTs > ddlEvents[0].FinishedTs
 			// updateTs may be less than the previous updateTs
 			if tableInfo.UpdateTS() != updateTs || hasDDL {
-				ok := sendDML(dml)
+				ok := sendDML(dmls)
 				if !ok {
 					return
 				}
 				updateTs = tableInfo.UpdateTS()
-				dml = pevent.NewDMLEvent(dispatcherID, tableID, tableInfo)
+				dmls = new(pevent.BatchDMLEvent)
 			}
-			dml.AppendTxn(e.StartTs, e.CRTs)
+			dml := pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
+			dmls.AppendDMLEvent(dml)
 		}
-		if err = dml.AppendRow(e, c.mounter.DecodeToChunk); err != nil {
+		if err = dmls.AppendRow(e, c.mounter.DecodeToChunk); err != nil {
 			log.Panic("append row failed", zap.Error(err))
 		}
 	}

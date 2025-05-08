@@ -148,10 +148,9 @@ func (d *Decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	tableInfo := d.getTableInfo()
 	commitTs := d.getCommitTs()
 	event := &commonEvent.DMLEvent{
+		CommitTs:  commitTs,
 		TableInfo: tableInfo,
 	}
-	event.AppendTxn(commitTs, commitTs)
-
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	columns := tableInfo.GetColumns()
 	before, ok1 := d.valuePayload["before"].(map[string]interface{})

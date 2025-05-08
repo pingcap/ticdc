@@ -126,12 +126,12 @@ func TestEventServiceBasic(t *testing.T) {
 				require.Equal(t, dispatcherInfo.startTs, e.GetStartTs())
 				require.Equal(t, uint64(1), e.Seq)
 				log.Info("receive handshake event", zap.Any("event", e))
-			case *commonEvent.DMLEvent:
+			case *commonEvent.BatchDMLEvent:
 				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
 				require.Equal(t, int32(len(kvEvents)), e.Len())
-				require.Equal(t, kvEvents[0].CRTs, e.GetCommitTs())
-				require.Equal(t, uint64(3), e.Seq)
+				require.Equal(t, kvEvents[0].CRTs, e.DMLEvents[0].GetCommitTs())
+				require.Equal(t, uint64(3), e.DMLEvents[0].Seq)
 			case *commonEvent.DDLEvent:
 				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)

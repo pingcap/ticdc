@@ -444,10 +444,11 @@ func (b *BatchDecoder) assembleDMLEvent() *commonEvent.DMLEvent {
 
 	tableInfo := b.queryTableInfo(key, value)
 	result := new(commonEvent.DMLEvent)
-	result.AppendTxn(key.Ts, key.Ts)
 	result.Length++
+	result.StartTs = key.Ts
 	result.ApproximateSize = 0
 	result.TableInfo = tableInfo
+	result.CommitTs = key.Ts
 	if key.Partition != nil {
 		result.PhysicalTableID = *key.Partition
 		result.TableInfo.TableName.IsPartition = true

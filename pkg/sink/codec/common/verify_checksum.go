@@ -36,11 +36,12 @@ func VerifyChecksum(event *commonEvent.DMLEvent, db *sql.DB) error {
 	// the data maybe restored by br, and the checksum is not enabled, so no expected here.
 	columns := event.TableInfo.GetColumns()
 	event.Rewind()
-	rows := event.GetNextTxn()
-	if len(rows) == 0 {
-		log.Error("get RowChange failed")
-	}
-	for _, row := range rows {
+
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			break
+		}
 		if row.Checksum.Current != 0 {
 			checksum, err := calculateChecksum(row.Row, columns)
 			if err != nil {

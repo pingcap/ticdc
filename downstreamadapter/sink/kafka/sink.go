@@ -207,48 +207,50 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
 			selector := s.comp.columnSelector.Get(schema, table)
-			toRowCallback := func(postFlush func(), totalCount uint64) func() {
+			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
 				var calledCount atomic.Uint64
 				// The callback of the last row will trigger the callback of the txn.
 				return func() {
 					if calledCount.Inc() == totalCount {
-						postFlush()
+						for _, callback := range postTxnFlushed {
+							callback()
+						}
 					}
 				}
 			}
 
 			rowsCount := uint64(event.Len())
-			rowCallback := toRowCallback(event.PostFlush, rowsCount)
+			rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
+
 			for {
-				rows := event.GetNextTxn()
-				if len(rows) == 0 {
+				row, ok := event.GetNextRow()
+				if !ok {
 					break
 				}
-				for _, row := range rows {
-					index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.GetCommitTs())
-					if err != nil {
-						return errors.Trace(err)
-					}
 
-					mqEvent := &commonEvent.MQRowEvent{
-						Key: commonEvent.TopicPartitionKey{
-							Topic:          topic,
-							Partition:      index,
-							PartitionKey:   key,
-							TotalPartition: partitionNum,
-						},
-						RowEvent: commonEvent.RowEvent{
-							PhysicalTableID: event.PhysicalTableID,
-							TableInfo:       event.TableInfo,
-							CommitTs:        event.GetCommitTs(),
-							Event:           row,
-							Callback:        rowCallback,
-							ColumnSelector:  selector,
-							Checksum:        row.Checksum,
-						},
-					}
-					s.rowChan <- mqEvent
+				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.CommitTs)
+				if err != nil {
+					return errors.Trace(err)
 				}
+
+				mqEvent := &commonEvent.MQRowEvent{
+					Key: commonEvent.TopicPartitionKey{
+						Topic:          topic,
+						Partition:      index,
+						PartitionKey:   key,
+						TotalPartition: partitionNum,
+					},
+					RowEvent: commonEvent.RowEvent{
+						PhysicalTableID: event.PhysicalTableID,
+						TableInfo:       event.TableInfo,
+						CommitTs:        event.CommitTs,
+						Event:           row,
+						Callback:        rowCallback,
+						ColumnSelector:  selector,
+						Checksum:        row.Checksum,
+					},
+				}
+				s.rowChan <- mqEvent
 			}
 		}
 	}

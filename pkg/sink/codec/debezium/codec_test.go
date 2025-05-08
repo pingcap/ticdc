@@ -740,10 +740,8 @@ func TestEncodeInsert(t *testing.T) {
 	job := helper.DDL2Job(`create table test.table1(tiny tinyint primary key)`)
 	dmlEvent := helper.DML2Event("test", "table1", `insert into test.table1 values (1)`)
 	require.NotNil(t, dmlEvent)
-
-	rows := dmlEvent.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	row := rows[0]
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
 	tableInfo := helper.GetTableInfo(job)
 
 	e := &commonEvent.RowEvent{
@@ -943,16 +941,13 @@ func TestEncodeUpdate(t *testing.T) {
 	job := helper.DDL2Job(`create table test.table1(tiny tinyint primary key)`)
 	dmlEvent := helper.DML2Event("test", "table1", `insert into test.table1 values (2)`)
 	require.NotNil(t, dmlEvent)
-
-	rows := dmlEvent.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	insertRow := rows[0]
+	insertRow, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
 	dmlEvent = helper.DML2Event("test", "table1", `update test.table1 set tiny=1 where tiny=2`)
 	require.NotNil(t, dmlEvent)
-	rows = dmlEvent.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	row := rows[0]
+	row, ok := dmlEvent.GetNextRow()
 	row.PreRow = insertRow.Row
+	require.True(t, ok)
 	tableInfo := helper.GetTableInfo(job)
 
 	e := &commonEvent.RowEvent{
@@ -1203,9 +1198,8 @@ func TestEncodeDelete(t *testing.T) {
 	job := helper.DDL2Job(`create table test.table1(tiny tinyint primary key)`)
 	dmlEvent := helper.DML2Event("test", "table1", `insert into test.table1 values (2)`)
 	require.NotNil(t, dmlEvent)
-	rows := dmlEvent.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	row := rows[0]
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
 	tableInfo := helper.GetTableInfo(job)
 	tmpRow := row.Row
 	row.Row = row.PreRow
@@ -1409,9 +1403,7 @@ func BenchmarkEncodeOneTinyColumn(b *testing.B) {
 
 	job := helper.DDL2Job(`create table test.table1(tiny tinyint primary key)`)
 	dmlEvent := helper.DML2Event("test", "table1", `insert into test.table1 values (10)`)
-	rows := dmlEvent.GetNextTxn()
-	require.Equal(b, len(rows), 1)
-	row := rows[0]
+	row, _ := dmlEvent.GetNextRow()
 	tableInfo := helper.GetTableInfo(job)
 
 	e := &commonEvent.RowEvent{
@@ -1449,9 +1441,7 @@ func BenchmarkEncodeLargeText(b *testing.B) {
 
 	job := helper.DDL2Job(`create table test.table1(str varchar(1024))`)
 	dmlEvent := helper.DML2Event("test", "table1", `insert into test.table1 values ("`+randstr.String(1024)+`")`)
-	rows := dmlEvent.GetNextTxn()
-	require.Equal(b, len(rows), 1)
-	row := rows[0]
+	row, _ := dmlEvent.GetNextRow()
 	tableInfo := helper.GetTableInfo(job)
 
 	e := &commonEvent.RowEvent{
@@ -1488,9 +1478,7 @@ func BenchmarkEncodeLargeBinary(b *testing.B) {
 
 	job := helper.DDL2Job(`create table test.table1(tiny varbinary(1024))`)
 	dmlEvent := helper.DML2Event("test", "table1", `insert into test.table1 values ("`+randstr.String(1024)+`")`)
-	rows := dmlEvent.GetNextTxn()
-	require.Equal(b, len(rows), 1)
-	row := rows[0]
+	row, _ := dmlEvent.GetNextRow()
 	tableInfo := helper.GetTableInfo(job)
 
 	e := &commonEvent.RowEvent{

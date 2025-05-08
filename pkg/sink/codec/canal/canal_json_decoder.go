@@ -316,10 +316,11 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	tableInfo := b.queryTableInfo(msg)
 
 	result := new(commonEvent.DMLEvent)
-	result.AppendTxn(msg.getCommitTs(), msg.getCommitTs())
 	result.Length++
+	result.StartTs = msg.getCommitTs()
 	result.ApproximateSize = 0
 	result.TableInfo = tableInfo
+	result.CommitTs = msg.getCommitTs()
 
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	columns := tableInfo.GetColumns()

@@ -136,20 +136,18 @@ func (s *debeziumSuite) TestDataTypes() {
 	cfg.DebeziumDisableSchema = s.disableSchema
 	encoder := NewBatchEncoder(cfg, "dbserver1")
 	for {
-		rows := dmls.GetNextTxn()
-		if len(rows) == 0 {
+		row, ok := dmls.GetNextRow()
+		if !ok {
 			break
 		}
-		for _, row := range rows {
-			err := encoder.AppendRowChangedEvent(context.Background(), "", &commonEvent.RowEvent{
-				TableInfo:      helper.tableInfo,
-				CommitTs:       1,
-				Event:          row,
-				ColumnSelector: columnselector.NewDefaultColumnSelector(),
-				Callback:       func() {},
-			})
-			s.Require().Nil(err)
-		}
+		err := encoder.AppendRowChangedEvent(context.Background(), "", &commonEvent.RowEvent{
+			TableInfo:      helper.tableInfo,
+			CommitTs:       1,
+			Event:          row,
+			ColumnSelector: columnselector.NewDefaultColumnSelector(),
+			Callback:       func() {},
+		})
+		s.Require().Nil(err)
 	}
 
 	messages := encoder.Build()

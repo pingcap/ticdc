@@ -165,9 +165,8 @@ func TestArvoAppendDMLEventWithCallback(t *testing.T) {
 	sql = `insert into test.t values ('aa')`
 	event := helper.DML2Event("test", "t", sql)
 
-	rows := event.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	row := rows[0]
+	row, ok := event.GetNextRow()
+	require.True(t, ok)
 	expected := 0
 	count := 0
 	for i := 0; i < 5; i++ {
@@ -176,7 +175,7 @@ func TestArvoAppendDMLEventWithCallback(t *testing.T) {
 		err := encoder.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
 			TableInfo:      event.TableInfo,
 			Event:          row,
-			CommitTs:       event.GetCommitTs(),
+			CommitTs:       event.CommitTs,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),
 			Callback: func() {
 				count += bit

@@ -143,12 +143,11 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEv
 		'{"key1": "value1"}')`
 	dmlEvent := helper.DML2Event("test", "t", sql)
 
-	rows := dmlEvent.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	insert := rows[0]
+	insert, ok := dmlEvent.GetNextRow()
+	require.Equal(t, ok, true)
 	insertEvent := &commonEvent.RowEvent{
 		PhysicalTableID: dmlEvent.PhysicalTableID,
-		CommitTs:        dmlEvent.GetCommitTs(),
+		CommitTs:        dmlEvent.CommitTs,
 		TableInfo:       dmlEvent.TableInfo,
 		Event:           insert,
 		ColumnSelector:  columnselector.NewDefaultColumnSelector(),
@@ -160,7 +159,7 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEv
 	}
 	updateEvent := &commonEvent.RowEvent{
 		PhysicalTableID: dmlEvent.PhysicalTableID,
-		CommitTs:        dmlEvent.GetCommitTs(),
+		CommitTs:        dmlEvent.CommitTs,
 		TableInfo:       dmlEvent.TableInfo,
 		Event:           update,
 		ColumnSelector:  columnselector.NewDefaultColumnSelector(),
@@ -172,7 +171,7 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEv
 	}
 	deleteEvent := &commonEvent.RowEvent{
 		PhysicalTableID: dmlEvent.PhysicalTableID,
-		CommitTs:        dmlEvent.GetCommitTs(),
+		CommitTs:        dmlEvent.CommitTs,
 		TableInfo:       dmlEvent.TableInfo,
 		Event:           delete,
 		ColumnSelector:  columnselector.NewDefaultColumnSelector(),

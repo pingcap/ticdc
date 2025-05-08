@@ -261,7 +261,7 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 // 			err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
 // 				TableInfo:      tableInfo,
 // 				Event:          row,
-// 				CommitTs:       event.GetCommitTs(),
+// 				CommitTs:       event.CommitTs,
 // 				ColumnSelector: columnselector.NewDefaultColumnSelector(),
 // 			})
 // 			require.NoError(t, err)
@@ -917,13 +917,12 @@ func TestEncodeDDLEvent(t *testing.T) {
 				createTableDDLEvent.TableInfo.TableName.Table, createTableDDLEvent.TableInfo.UpdateTS())
 			require.NotNil(t, item)
 
-			rows := insertEvent.GetNextTxn()
-			require.Equal(t, len(rows), 1)
-			row := rows[0]
+			row, ok := insertEvent.GetNextRow()
+			require.True(t, ok)
 
 			err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
 				TableInfo:      insertEvent.TableInfo,
-				CommitTs:       insertEvent.GetCommitTs(),
+				CommitTs:       insertEvent.CommitTs,
 				Event:          row,
 				ColumnSelector: columnselector.NewDefaultColumnSelector(),
 			})
@@ -943,7 +942,7 @@ func TestEncodeDDLEvent(t *testing.T) {
 
 			decodedRow, err := dec.NextDMLEvent()
 			require.NoError(t, err)
-			require.Equal(t, decodedRow.GetCommitTs(), insertEvent.GetCommitTs())
+			require.Equal(t, decodedRow.CommitTs, insertEvent.GetCommitTs())
 			require.Equal(t, decodedRow.TableInfo.GetSchemaName(), insertEvent.TableInfo.GetSchemaName())
 			require.Equal(t, decodedRow.TableInfo.GetTableName(), insertEvent.TableInfo.GetTableName())
 
@@ -973,9 +972,8 @@ func TestEncodeDDLEvent(t *testing.T) {
 				renameTableDDLEvent.TableInfo.TableName.Table, renameTableDDLEvent.TableInfo.UpdateTS())
 			require.NotNil(t, item)
 
-			rows = insertEvent2.GetNextTxn()
-			require.Equal(t, len(rows), 1)
-			row = rows[0]
+			row, ok = insertEvent2.GetNextRow()
+			require.True(t, ok)
 
 			err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
 				TableInfo:      insertEvent2.TableInfo,
@@ -1139,13 +1137,12 @@ func TestEncodeIntegerTypes(t *testing.T) {
 			minValues,
 			maxValues,
 		} {
-			rows := event.GetNextTxn()
-			require.Equal(t, len(rows), 1)
-			rowChange := rows[0]
+			rowChange, ok := event.GetNextRow()
+			require.True(t, ok)
 			e := &commonEvent.RowEvent{
 				PhysicalTableID: event.PhysicalTableID,
 				Event:           rowChange,
-				CommitTs:        event.GetCommitTs(),
+				CommitTs:        event.CommitTs,
 				TableInfo:       event.TableInfo,
 				ColumnSelector:  columnselector.NewDefaultColumnSelector(),
 			}
@@ -1163,13 +1160,12 @@ func TestEncodeIntegerTypes(t *testing.T) {
 
 			decodedRow, err := dec.NextDMLEvent()
 			require.NoError(t, err)
-			require.Equal(t, decodedRow.GetCommitTs(), event.GetCommitTs())
+			require.Equal(t, decodedRow.CommitTs, event.GetCommitTs())
 
-			rows = decodedRow.GetNextTxn()
-			require.Equal(t, len(rows), 1)
-			decode := rows[0]
+			deocde, ok := decodedRow.GetNextRow()
+			require.True(t, ok)
 
-			common.CompareRow(t, rowChange, event.TableInfo, decode, decodedRow.TableInfo)
+			common.CompareRow(t, rowChange, event.TableInfo, deocde, decodedRow.TableInfo)
 		}
 	}
 }
@@ -1222,13 +1218,12 @@ func TestEncoderOtherTypes(t *testing.T) {
 		_, err = dec.NextDDLEvent()
 		require.NoError(t, err)
 
-		rows := event.GetNextTxn()
-		require.Equal(t, len(rows), 1)
-		row := rows[0]
+		row, ok := event.GetNextRow()
+		require.True(t, ok)
 		err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
 			TableInfo:      event.TableInfo,
 			Event:          row,
-			CommitTs:       event.GetCommitTs(),
+			CommitTs:       event.CommitTs,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),
 		})
 		require.NoError(t, err)
@@ -1246,12 +1241,10 @@ func TestEncoderOtherTypes(t *testing.T) {
 
 		decodedRow, err := dec.NextDMLEvent()
 		require.NoError(t, err)
+		deocde, ok := decodedRow.GetNextRow()
+		require.True(t, ok)
 
-		rows = decodedRow.GetNextTxn()
-		require.Equal(t, len(rows), 1)
-		decode := rows[0]
-
-		common.CompareRow(t, row, event.TableInfo, decode, decodedRow.TableInfo)
+		common.CompareRow(t, row, event.TableInfo, deocde, decodedRow.TableInfo)
 	}
 }
 
@@ -1303,7 +1296,7 @@ func TestEncoderOtherTypes(t *testing.T) {
 // 			err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
 // 				TableInfo:      event.TableInfo,
 // 				Event:          row,
-// 				CommitTs:       event.GetCommitTs(),
+// 				CommitTs:       event.CommitTs,
 // 				ColumnSelector: columnselector.NewDefaultColumnSelector(),
 // 			})
 // 			require.NoError(t, err)
@@ -1360,13 +1353,12 @@ func TestEncodeDMLBeforeDDL(t *testing.T) {
 	enc, err := NewEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	rows := event.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	row := rows[0]
+	row, ok := event.GetNextRow()
+	require.True(t, ok)
 	err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
 		TableInfo:      event.TableInfo,
 		Event:          row,
-		CommitTs:       event.GetCommitTs(),
+		CommitTs:       event.CommitTs,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	})
 	require.NoError(t, err)
@@ -1479,14 +1471,12 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 				ddlEvent.TableInfo.TableName.Table, ddlEvent.TableInfo.UpdateTS())
 			require.NotNil(t, item)
 
-			rows := dmlEvent.GetNextTxn()
-			require.Equal(t, len(rows), 1)
-			row := rows[0]
+			row, ok := dmlEvent.GetNextRow()
 			require.True(t, ok)
 			err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
 				TableInfo:      dmlEvent.TableInfo,
 				Event:          row,
-				CommitTs:       dmlEvent.GetCommitTs(),
+				CommitTs:       dmlEvent.CommitTs,
 				ColumnSelector: columnselector.NewDefaultColumnSelector(),
 			})
 			require.NoError(t, err)
@@ -1505,10 +1495,9 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 
 			decodedRow, err := dec.NextDMLEvent()
 			require.NoError(t, err)
-			rows = decodedRow.GetNextTxn()
-			require.Equal(t, len(rows), 1)
-			decode := rows[0]
-			require.Equal(t, decodedRow.GetCommitTs(), dmlEvent.GetCommitTs())
+			decode, ok := decodedRow.GetNextRow()
+			require.True(t, ok)
+			require.Equal(t, decodedRow.CommitTs, dmlEvent.CommitTs)
 			require.Equal(t, decodedRow.TableInfo.GetSchemaName(), dmlEvent.TableInfo.GetSchemaName())
 			require.Equal(t, decodedRow.TableInfo.GetTableName(), dmlEvent.TableInfo.GetTableName())
 			require.True(t, decode.PreRow.IsEmpty())
@@ -1597,16 +1586,15 @@ func TestEncodeLargeEventsNormal(t *testing.T) {
 				decodedRow, err := dec.NextDMLEvent()
 				require.NoError(t, err)
 
-				require.Equal(t, decodedRow.GetCommitTs(), event.CommitTs)
+				require.Equal(t, decodedRow.CommitTs, event.CommitTs)
 				require.Equal(t, decodedRow.TableInfo.GetSchemaName(), event.TableInfo.GetSchemaName())
 				require.Equal(t, decodedRow.TableInfo.GetTableName(), event.TableInfo.GetTableName())
 				require.Equal(t, decodedRow.GetTableID(), event.GetTableID())
 
-				rows := decodedRow.GetNextTxn()
-				require.Equal(t, len(rows), 1)
-				decode := rows[0]
+				deocde, ok := decodedRow.GetNextRow()
+				require.True(t, ok)
 
-				common.CompareRow(t, event.Event, event.TableInfo, decode, decodedRow.TableInfo)
+				common.CompareRow(t, event.Event, event.TableInfo, deocde, decodedRow.TableInfo)
 			}
 		}
 	}
@@ -1730,15 +1718,14 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 				decodedRow, err := dec.NextDMLEvent()
 				require.NoError(t, err)
 
-				require.Equal(t, decodedRow.GetCommitTs(), updateEvent.CommitTs)
+				require.Equal(t, decodedRow.CommitTs, updateEvent.CommitTs)
 				require.Equal(t, decodedRow.TableInfo.GetSchemaName(), updateEvent.TableInfo.GetSchemaName())
 				require.Equal(t, decodedRow.TableInfo.GetTableName(), updateEvent.TableInfo.GetTableName())
 
-				rows := decodedRow.GetNextTxn()
-				require.Equal(t, len(rows), 1)
-				decode := rows[0]
+				deocde, ok := decodedRow.GetNextRow()
+				require.True(t, ok)
 
-				common.CompareRow(t, updateEvent.Event, updateEvent.TableInfo, decode, decodedRow.TableInfo)
+				common.CompareRow(t, updateEvent.Event, updateEvent.TableInfo, deocde, decodedRow.TableInfo)
 			}
 		}
 	}
@@ -1846,15 +1833,14 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 			for idx, decodedRow := range decodedRows {
 				event := events[idx]
 
-				require.Equal(t, decodedRow.GetCommitTs(), event.CommitTs)
+				require.Equal(t, decodedRow.CommitTs, event.CommitTs)
 				require.Equal(t, decodedRow.TableInfo.GetSchemaName(), event.TableInfo.GetSchemaName())
 				require.Equal(t, decodedRow.TableInfo.GetTableName(), event.TableInfo.GetTableName())
 
-				rows := decodedRow.GetNextTxn()
-				require.Equal(t, len(rows), 1)
-				decode := rows[0]
+				deocde, ok := decodedRow.GetNextRow()
+				require.True(t, ok)
 
-				common.CompareRow(t, event.Event, event.TableInfo, decode, decodedRow.TableInfo)
+				common.CompareRow(t, event.Event, event.TableInfo, deocde, decodedRow.TableInfo)
 			}
 		}
 	}

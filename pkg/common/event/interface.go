@@ -33,6 +33,11 @@ type Event interface {
 	Len() int32
 }
 
+type BatchEvent interface {
+	GetType() int
+	Len() int32
+}
+
 // FlushableEvent is an event that can be flushed to downstream by a dispatcher.
 type FlushableEvent interface {
 	Event
@@ -53,8 +58,10 @@ type BlockEvent interface {
 }
 
 const (
-	// TEvent is the event type of a transaction.
+	// DMLEvent is the event type of a transaction.
 	TypeDMLEvent = iota
+	// BatchDMLEvent is the event type of a batch transactions.
+	TypeBatchDMLEvent
 	// DDLEvent is the event type of a DDL.
 	TypeDDLEvent
 	// ResolvedEvent is the event type of a resolvedTs.

@@ -236,12 +236,12 @@ type wrapEvent struct {
 	postSendFunc func()
 }
 
-func newWrapDMLEvent(serverID node.ID, e *pevent.DMLEvent, state pevent.EventSenderState) *wrapEvent {
-	e.State = state
+func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent, state pevent.EventSenderState) *wrapEvent {
+	e.SetState(state)
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = e
-	w.msgType = pevent.TypeDMLEvent
+	w.msgType = e.GetType()
 	return w
 }
 

@@ -39,22 +39,20 @@ func NewTxnEventEncoder(config *common.Config) common.TxnEventEncoder {
 // AppendTxnEvent implements the TxnEventEncoder interface
 func (b *batchEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error {
 	for {
-		rows := event.GetNextTxn()
-		if len(rows) == 0 {
+		row, ok := event.GetNextRow()
+		if !ok {
 			break
 		}
-		for _, row := range rows {
-			msg, err := rowChangedEvent2CSVMsg(b.config, &commonEvent.RowEvent{
-				TableInfo: event.TableInfo,
-				CommitTs:  event.GetCommitTs(),
-				Event:     row,
-			})
-			if err != nil {
-				return err
-			}
-			b.valueBuf.Write(msg.encode())
-			b.batchSize++
+		msg, err := rowChangedEvent2CSVMsg(b.config, &commonEvent.RowEvent{
+			TableInfo: event.TableInfo,
+			CommitTs:  event.CommitTs,
+			Event:     row,
+		})
+		if err != nil {
+			return err
 		}
+		b.valueBuf.Write(msg.encode())
+		b.batchSize++
 	}
 	b.callback = event.PostFlush
 	return nil

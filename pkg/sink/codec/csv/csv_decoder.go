@@ -198,7 +198,7 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 	}
 
 	e := new(commonEvent.DMLEvent)
-	e.AppendTxn(csvMsg.commitTs, csvMsg.commitTs)
+	e.CommitTs = csvMsg.commitTs
 	e.TableInfo = tableInfo
 
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)

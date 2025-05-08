@@ -211,16 +211,17 @@ func (s *EventTestHelper) DML2Event(schema, table string, dml ...string) *DMLEve
 	log.Info("dml2event", zap.String("key", key))
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
+	dmlEvent := new(BatchDMLEvent)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
-	dmlEvent := NewDMLEvent(did, tableInfo.TableName.TableID, tableInfo)
-	dmlEvent.AppendTxn(ts-1, ts+1)
+	event := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+	dmlEvent.AppendDMLEvent(event)
 	rawKvs := s.DML2RawKv(schema, table, dml...)
 	for _, rawKV := range rawKvs {
 		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
 		require.NoError(s.t, err)
 	}
-	return dmlEvent
+	return dmlEvent.DMLEvents[0]
 }
 
 func (s *EventTestHelper) DML2RawKv(schema, table string, dml ...string) []*common.RawKVEntry {
@@ -322,4 +323,12 @@ func SplitQueries(queries string) ([]string, error) {
 	}
 
 	return res, nil
+}
+
+func BatchDML(dml *DMLEvent) *BatchDMLEvent {
+	return &BatchDMLEvent{
+		DMLEvents: []*DMLEvent{dml},
+		TableInfo: dml.TableInfo,
+		Rows:      dml.Rows,
+	}
 }

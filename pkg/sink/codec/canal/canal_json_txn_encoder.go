@@ -34,6 +34,11 @@ type JSONTxnEventEncoder struct {
 	batchSize  int
 	callback   func()
 
+	// Store some fields of the txn event.
+	txnCommitTs uint64
+	txnSchema   *string
+	txnTable    *string
+
 	columnSelector columnselector.Selector
 }
 
@@ -50,35 +55,36 @@ func NewJSONTxnEventEncoder(config *common.Config) common.TxnEventEncoder {
 // AppendTxnEvent appends a txn event to the encoder.
 func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error {
 	for {
-		rows := event.GetNextTxn()
-		if len(rows) == 0 {
+		row, ok := event.GetNextRow()
+		if !ok {
 			break
 		}
-		for _, row := range rows {
-			value, err := newJSONMessageForDML(&commonEvent.RowEvent{
-				TableInfo:      event.TableInfo,
-				CommitTs:       event.GetCommitTs(),
-				Event:          row,
-				ColumnSelector: j.columnSelector,
-			}, j.config, false, "")
-			if err != nil {
-				return err
-			}
-			length := len(value) + common.MaxRecordOverhead
-			// For single message that is longer than max-message-bytes, do not send it.
-			if length > j.config.MaxMessageBytes {
-				log.Warn("Single message is too large for canal-json",
-					zap.Int("maxMessageBytes", j.config.MaxMessageBytes),
-					zap.Int("length", length),
-					zap.Any("table", event.TableInfo.TableName))
-				return errors.ErrMessageTooLarge.GenWithStackByArgs()
-			}
-			j.valueBuf.Write(value)
-			j.valueBuf.Write(j.terminator)
-			j.batchSize++
+		value, err := newJSONMessageForDML(&commonEvent.RowEvent{
+			TableInfo:      event.TableInfo,
+			CommitTs:       event.CommitTs,
+			Event:          row,
+			ColumnSelector: j.columnSelector,
+		}, j.config, false, "")
+		if err != nil {
+			return err
 		}
+		length := len(value) + common.MaxRecordOverhead
+		// For single message that is longer than max-message-bytes, do not send it.
+		if length > j.config.MaxMessageBytes {
+			log.Warn("Single message is too large for canal-json",
+				zap.Int("maxMessageBytes", j.config.MaxMessageBytes),
+				zap.Int("length", length),
+				zap.Any("table", event.TableInfo.TableName))
+			return errors.ErrMessageTooLarge.GenWithStackByArgs()
+		}
+		j.valueBuf.Write(value)
+		j.valueBuf.Write(j.terminator)
+		j.batchSize++
 	}
 	j.callback = event.PostFlush
+	j.txnCommitTs = event.CommitTs
+	j.txnSchema = event.TableInfo.GetSchemaNamePtr()
+	j.txnTable = event.TableInfo.GetTableNamePtr()
 	return nil
 }
 
@@ -98,6 +104,9 @@ func (j *JSONTxnEventEncoder) Build() []*common.Message {
 	}
 	j.callback = nil
 	j.batchSize = 0
+	j.txnCommitTs = 0
+	j.txnSchema = nil
+	j.txnTable = nil
 
 	return []*common.Message{ret}
 }

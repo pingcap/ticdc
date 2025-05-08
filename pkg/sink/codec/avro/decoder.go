@@ -262,7 +262,7 @@ func assembleEvent(
 	}
 
 	event := new(commonEvent.DMLEvent)
-	event.AppendTxn(uint64(commitTs), uint64(commitTs))
+	event.CommitTs = uint64(commitTs)
 	event.TableInfo = newTableInfo(schemaName, tableName, columns, keyMap)
 
 	chk := chunk.NewChunkWithCapacity(event.TableInfo.GetFieldSlice(), 1)

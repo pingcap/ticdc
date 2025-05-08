@@ -31,22 +31,22 @@ func ConflictKeys(event *commonEvent.DMLEvent) []uint64 {
 	if event.Len() == 0 {
 		return nil
 	}
+
 	hashRes := make(map[uint64]struct{}, event.Len())
 	hasher := fnv.New32a()
+
 	for {
-		rows := event.GetNextTxn()
-		if len(rows) == 0 {
+		row, ok := event.GetNextRow()
+		if !ok {
 			break
 		}
-		for _, row := range rows {
-			keys := genRowKeys(row, event.TableInfo, event.DispatcherID)
-			for _, key := range keys {
-				if n, err := hasher.Write(key); n != len(key) || err != nil {
-					log.Panic("transaction key hash fail")
-				}
-				hashRes[uint64(hasher.Sum32())] = struct{}{}
-				hasher.Reset()
+		keys := genRowKeys(row, event.TableInfo, event.DispatcherID)
+		for _, key := range keys {
+			if n, err := hasher.Write(key); n != len(key) || err != nil {
+				log.Panic("transaction key hash fail")
 			}
+			hashRes[uint64(hasher.Sum32())] = struct{}{}
+			hasher.Reset()
 		}
 	}
 

@@ -29,9 +29,8 @@ func TestColumnsDispatcher(t *testing.T) {
 	require.NotNil(t, job)
 	tableInfo := helper.GetTableInfo(job)
 	dml := helper.DML2Event("test", "t1", "insert into t1 values(22, 11, 33)")
-	rows := dml.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	row := rows[0]
+	row, exist := dml.GetNextRow()
+	require.True(t, exist)
 
 	p := newColumnsPartitionGenerator([]string{"col-2", "col-not-found"})
 	_, _, err := p.GeneratePartitionIndexAndKey(&row, 16, tableInfo, 1)
