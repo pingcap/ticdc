@@ -699,6 +699,7 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			receivedMinResolvedTs := uint64(math.MaxUint64)
 			sentMinResolvedTs := uint64(math.MaxUint64)
 			dispatcherCount := 0
+			var slowestDispatchers *dispatcherStat
 
 			c.dispatchers.Range(func(key, value any) bool {
 				dispatcherCount++
@@ -711,6 +712,11 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 				if watermark < sentMinResolvedTs {
 					sentMinResolvedTs = watermark
 				}
+
+				if slowestDispatchers == nil || slowestDispatchers.sentResolvedTs.Load() < watermark {
+					slowestDispatchers = dispatcher
+				}
+
 				return true
 			})
 
@@ -725,6 +731,11 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 				if watermark < sentMinResolvedTs {
 					sentMinResolvedTs = watermark
 				}
+
+				if slowestDispatchers == nil || slowestDispatchers.sentResolvedTs.Load() < watermark {
+					slowestDispatchers = dispatcher
+				}
+
 				return true
 			})
 
@@ -748,6 +759,19 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 				pendingTaskCount += len(c.taskChan[i])
 			}
 			metricEventBrokerPendingScanTaskCount.Set(float64(pendingTaskCount))
+
+			if slowestDispatchers != nil {
+				lag := time.Since(oracle.GetTimeFromTS(slowestDispatchers.sentResolvedTs.Load()))
+				if lag > 30*time.Second {
+					log.Warn("slowest dispatcher", zap.Stringer("dispatcherID", slowestDispatchers.id),
+						zap.Uint64("sentResolvedTs", slowestDispatchers.sentResolvedTs.Load()),
+						zap.Uint64("receivedResolvedTs", slowestDispatchers.eventStoreResolvedTs.Load()),
+						zap.Duration("lag", lag),
+						zap.Bool("isPaused", slowestDispatchers.isRunning.Load()),
+						zap.Bool("isHandshaked", slowestDispatchers.isHandshaked.Load()),
+					)
+				}
+			}
 		}
 	}
 }
