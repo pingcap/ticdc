@@ -125,12 +125,12 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 
 func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messaging.TargetMessage) error {
 	for _, msg := range targetMessage.Message {
-		switch msg.(type) {
+		switch msg := msg.(type) {
 		case *logservicepb.EventStoreState:
-			c.updateEventStoreState(targetMessage.From, msg.(*logservicepb.EventStoreState))
+			c.updateEventStoreState(targetMessage.From, msg)
 		case *logservicepb.ReusableEventServiceRequest:
 			c.requestChan.In() <- requestAndTarget{
-				req:    msg.(*logservicepb.ReusableEventServiceRequest),
+				req:    msg,
 				target: targetMessage.From,
 			}
 		default:
@@ -213,6 +213,7 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 		var maxResolvedTs uint64
 		found := false
 		for _, subscriptionState := range subscriptionStates {
+			// FIXME: check table span
 			if subscriptionState.checkpointTs <= startTs {
 				if !found || subscriptionState.resolvedTs > maxResolvedTs {
 					maxResolvedTs = subscriptionState.resolvedTs
@@ -230,10 +231,10 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 		}
 	}
 
+	// return candidate nodes sorted by resolvedTs in descending order
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].resolvedTs > candidates[j].resolvedTs
 	})
-
 	var candidateNodes []string
 	for _, candidate := range candidates {
 		candidateNodes = append(candidateNodes, string(candidate.nodeID))

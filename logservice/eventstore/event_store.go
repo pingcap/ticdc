@@ -779,8 +779,24 @@ func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.T
 	return nil
 }
 
+type SubscriptionChangeType int
+
+const (
+	SubscriptionChangeTypeAdd    SubscriptionChangeType = 1
+	SubscriptionChangeTypeRemove SubscriptionChangeType = 2
+	SubscriptionChangeTypeUpdate SubscriptionChangeType = 3
+)
+
+type SubscriptionChange struct {
+	ChangeType   SubscriptionChangeType
+	SubID        logpuller.SubscriptionID
+	Span         *heartbeatpb.TableSpan
+	CheckpointTs uint64
+	ResolvedTs   uint64
+}
+
 func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
-	tick := time.NewTicker(30 * time.Second)
+	tick := time.NewTicker(10 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
