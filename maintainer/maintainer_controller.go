@@ -536,10 +536,7 @@ func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
 	return tables, err
 }
 
-// only for test
-// moveTable is used for inner api(which just for make test cases convience) to force move a table to a target node.
-// moveTable only works for the complete table, not for the table splited.
-func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
+func (c *Controller) checkParams(tableId int64, targetNode node.ID) error {
 	if !c.replicationDB.IsTableExists(tableId) {
 		// the table is not exist in this node
 		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableId)
@@ -559,6 +556,17 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 	}
 	if !hasNode {
 		return apperror.ErrNodeIsNotFound.GenWithStackByArgs("targetNode", targetNode)
+	}
+
+	return nil
+}
+
+// only for test
+// moveTable is used for inner api(which just for make test cases convience) to force move a table to a target node.
+// moveTable only works for the complete table, not for the table splited.
+func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
+	if err := c.checkParams(tableId, targetNode); err != nil {
+		return err
 	}
 
 	replications := c.replicationDB.GetTasksByTableID(tableId)
@@ -590,25 +598,8 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 // only for test
 // moveSplitTable is used for inner api(which just for make test cases convience) to force move the dispatchers in a split table to a target node.
 func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID) error {
-	if !c.replicationDB.IsTableExists(tableId) {
-		// the table is not exist in this node
-		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableId)
-	}
-
-	if tableId == 0 {
-		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableId)
-	}
-
-	nodes := c.nodeManager.GetAliveNodes()
-	hasNode := false
-	for _, node := range nodes {
-		if node.ID == targetNode {
-			hasNode = true
-			break
-		}
-	}
-	if !hasNode {
-		return apperror.ErrNodeIsNotFound.GenWithStackByArgs("targetNode", targetNode)
+	if err := c.checkParams(tableId, targetNode); err != nil {
+		return err
 	}
 
 	replications := c.replicationDB.GetTasksByTableID(tableId)

@@ -116,7 +116,7 @@ main() {
 
 	for i in {1..10}; do
 		execute_dml $i &
-		pids+=("$!") # 将进程 PID 添加到数组
+		pids+=("$!")
 	done
 
 	move_table &
