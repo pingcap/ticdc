@@ -76,8 +76,8 @@ func pushDataIntoDispatchers(dispatcherIDSet map[common.DispatcherID]interface{}
 				mutex.Unlock()
 				event.DispatcherID = id
 				event.PhysicalTableID = int64(idx)
-				event.Txns[0].StartTs = uint64(count) + 10
-				event.Txns[0].CommitTs = uint64(count) + 11
+				event.StartTs = uint64(count) + 10
+				event.CommitTs = uint64(count) + 11
 
 				listMutex.Lock()
 				eventList = append(eventList, event)
