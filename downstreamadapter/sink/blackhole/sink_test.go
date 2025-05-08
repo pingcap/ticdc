@@ -70,6 +70,7 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 	dmlEvent.PostTxnFlushed = []func(){
 		func() { count++ },
 	}
+	dmlEvent.CommitTs = 2
 
 	err = sink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)

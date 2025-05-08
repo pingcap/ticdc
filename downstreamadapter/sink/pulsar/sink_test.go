@@ -116,6 +116,7 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	dmlEvent.PostTxnFlushed = []func(){
 		func() { count.Add(1) },
 	}
+	dmlEvent.CommitTs = 2
 
 	err = pulsarSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)

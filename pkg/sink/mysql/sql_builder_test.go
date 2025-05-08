@@ -110,17 +110,15 @@ func getRowForTest(t testing.TB) (insert, delete, update pevent.RowChange, table
 
 	event := helper.DML2Event("test", "t", preInsertDataSQL)
 	require.NotNil(t, event)
-	rows := event.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	insert = rows[0]
+	insert, ok := event.GetNextRow()
+	require.True(t, ok)
 	require.NotNil(t, insert)
 
 	updateSQL := "update t set c_varchar = 'test2' where id = 1;"
 	event = helper.DML2Event("test", "t", updateSQL)
 	require.NotNil(t, event)
-	rows = event.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	update = rows[0]
+	update, ok = event.GetNextRow()
+	require.True(t, ok)
 	require.NotNil(t, update)
 	update.PreRow = insert.Row
 	update.RowType = pevent.RowTypeUpdate
@@ -198,9 +196,8 @@ func TestBuildDelete(t *testing.T) {
 	insertDataSQL := "insert into t values (1, 'test');"
 	event := helper.DML2Event("test", "t", insertDataSQL)
 	require.NotNil(t, event)
-	rows := event.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	row := rows[0]
+	row, ok := event.GetNextRow()
+	require.True(t, ok)
 	require.NotNil(t, row)
 	// Manually change row type to delete and set PreRow
 	// We do this because the helper does not support delete operation
@@ -222,9 +219,8 @@ func TestBuildDelete(t *testing.T) {
 	insertDataSQL = "insert into t2 values (1, 'test');"
 	event = helper.DML2Event("test", "t2", insertDataSQL)
 	require.NotNil(t, event)
-	rows = event.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	row = rows[0]
+	row, ok = event.GetNextRow()
+	require.True(t, ok)
 	require.NotNil(t, row)
 	row.RowType = pevent.RowTypeDelete
 	row.PreRow = row.Row
@@ -245,9 +241,8 @@ func TestBuildDelete(t *testing.T) {
 	insertDataSQL = "insert into t3 values (1, 'test');"
 	event = helper.DML2Event("test", "t3", insertDataSQL)
 	require.NotNil(t, event)
-	rows = event.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	row = rows[0]
+	row, ok = event.GetNextRow()
+	require.True(t, ok)
 	require.NotNil(t, row)
 	row.RowType = pevent.RowTypeDelete
 	row.PreRow = row.Row
@@ -268,9 +263,8 @@ func TestBuildDelete(t *testing.T) {
 	insertDataSQL = "insert into t4 values (1, 'test', 20);"
 	event = helper.DML2Event("test", "t4", insertDataSQL)
 	require.NotNil(t, event)
-	rows = event.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	row = rows[0]
+	row, ok = event.GetNextRow()
+	require.True(t, ok)
 	require.NotNil(t, row)
 	row.RowType = pevent.RowTypeDelete
 	row.PreRow = row.Row
@@ -291,9 +285,8 @@ func TestBuildDelete(t *testing.T) {
 	insertDataSQL = "insert into t5 values (1, 'test', 20);"
 	event = helper.DML2Event("test", "t5", insertDataSQL)
 	require.NotNil(t, event)
-	rows = event.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	row = rows[0]
+	row, ok = event.GetNextRow()
+	require.True(t, ok)
 	require.NotNil(t, row)
 	row.RowType = pevent.RowTypeDelete
 	row.PreRow = row.Row
@@ -321,17 +314,15 @@ func TestBuildUpdate(t *testing.T) {
 	insertDataSQL := "insert into t values (1, 'test');"
 	event := helper.DML2Event("test", "t", insertDataSQL)
 	require.NotNil(t, event)
-	rows := event.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	oldRow := rows[0]
+	oldRow, ok := event.GetNextRow()
+	require.True(t, ok)
 	require.NotNil(t, oldRow)
 
 	updateDataSQL := "update t set name = 'test2' where id = 1;"
 	event = helper.DML2Event("test", "t", updateDataSQL)
 	require.NotNil(t, event)
-	rows = event.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	row := rows[0]
+	row, ok := event.GetNextRow()
+	require.True(t, ok)
 	// Manually change row type to update and set PreRow
 	row.PreRow = oldRow.Row
 	row.RowType = pevent.RowTypeUpdate
@@ -351,17 +342,15 @@ func TestBuildUpdate(t *testing.T) {
 	insertDataSQL = "insert into t2 values (1, 'test', 20);"
 	event = helper.DML2Event("test", "t2", insertDataSQL)
 	require.NotNil(t, event)
-	rows = event.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	oldRow = rows[0]
+	oldRow, ok = event.GetNextRow()
+	require.True(t, ok)
 	require.NotNil(t, oldRow)
 
 	updateDataSQL = "update t2 set name = 'test2' where id = 1;"
 	event = helper.DML2Event("test", "t2", updateDataSQL)
 	require.NotNil(t, event)
-	rows = event.GetNextTxn()
-	require.Equal(t, len(rows), 1)
-	row = rows[0]
+	row, ok = event.GetNextRow()
+	require.True(t, ok)
 	// Manually change row type to update and set PreRow
 	row.PreRow = oldRow.Row
 	row.RowType = pevent.RowTypeUpdate
