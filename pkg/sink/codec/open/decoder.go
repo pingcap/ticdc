@@ -35,6 +35,11 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	tableIDAllocator  = common.NewFakeTableIDAllocator()
+	tableInfoAccessor = common.NewTableInfoAccessor()
+)
+
 type decoder struct {
 	keyBytes   []byte
 	valueBytes []byte
@@ -46,9 +51,6 @@ type decoder struct {
 	config *common.Config
 
 	upstreamTiDB *sql.DB
-
-	tableIDAllocator  *common.FakeTableIDAllocator
-	tableInfoAccessor *common.TableInfoAccessor
 }
 
 // NewDecoder creates a new decoder.
@@ -71,12 +73,12 @@ func NewDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.
 		}
 	}
 
+	tableIDAllocator.Clean()
+	tableInfoAccessor.Clean()
 	return &decoder{
-		config:            config,
-		storage:           externalStorage,
-		upstreamTiDB:      db,
-		tableInfoAccessor: common.NewTableInfoAccessor(),
-		tableIDAllocator:  common.NewFakeTableIDAllocator(),
+		config:       config,
+		storage:      externalStorage,
+		upstreamTiDB: db,
 	}, nil
 }
 
@@ -175,7 +177,7 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.Type = byte(actionType)
 
 	var tableID int64
-	tableInfo, ok := b.tableInfoAccessor.Get(result.SchemaName, result.TableName)
+	tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
 	if ok {
 		tableID = tableInfo.TableName.TableID
 	}
@@ -184,7 +186,7 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
 		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
 
-	b.tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
+	tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
 
 	b.nextKey = nil
 	b.valueBytes = nil
@@ -329,17 +331,17 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commo
 }
 
 func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	tableInfo, ok := b.tableInfoAccessor.Get(key.Schema, key.Table)
+	tableInfo, ok := tableInfoAccessor.Get(key.Schema, key.Table)
 	if !ok {
 		tableInfo = b.newTableInfo(key, value)
-		b.tableInfoAccessor.Add(key.Schema, key.Table, tableInfo)
+		tableInfoAccessor.Add(key.Schema, key.Table, tableInfo)
 	}
 	return tableInfo
 }
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
 	tableInfo := new(timodel.TableInfo)
-	tableInfo.ID = b.tableIDAllocator.AllocateTableID(key.Schema, key.Table)
+	tableInfo.ID = tableIDAllocator.AllocateTableID(key.Schema, key.Table)
 	tableInfo.Name = pmodel.NewCIStr(key.Table)
 
 	var rawColumns map[string]column

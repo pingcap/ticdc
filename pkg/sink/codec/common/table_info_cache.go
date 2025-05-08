@@ -64,6 +64,10 @@ func (a *TableInfoAccessor) Remove(schema, table string) {
 	delete(a.memo, key)
 }
 
+func (a *TableInfoAccessor) Clean() {
+	clear(a.memo)
+}
+
 // FakeTableIDAllocator is a fake table id allocator
 type FakeTableIDAllocator struct {
 	tableIDs       map[string]int64
@@ -96,4 +100,9 @@ func (g *FakeTableIDAllocator) AllocateTableID(schema, table string) int64 {
 func (g *FakeTableIDAllocator) AllocatePartitionID(schema, table, name string) int64 {
 	key := fmt.Sprintf("`%s`.`%s`.`%s`", commonType.EscapeName(schema), commonType.EscapeName(table), commonType.EscapeName(name))
 	return g.allocateByKey(key)
+}
+
+func (g *FakeTableIDAllocator) Clean() {
+	g.currentTableID = 0
+	clear(g.tableIDs)
 }

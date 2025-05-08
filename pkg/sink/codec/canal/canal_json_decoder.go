@@ -112,6 +112,9 @@ func NewDecoder(
 		}
 	}
 
+	tableIDAllocator.Clean()
+	tableInfoAccessor.Clean()
+
 	return &decoder{
 		config:       codecConfig,
 		decoder:      newBufferedJSONDecoder(),
