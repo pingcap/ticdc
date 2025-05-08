@@ -83,10 +83,12 @@ type decoder struct {
 
 	storage      storage.ExternalStorage
 	upstreamTiDB *sql.DB
-
-	tableIDAllocator  *common.FakeTableIDAllocator
-	tableInfoAccessor *common.TableInfoAccessor
 }
+
+var (
+	tableIDAllocator  = common.NewFakeTableIDAllocator()
+	tableInfoAccessor = common.NewTableInfoAccessor()
+)
 
 // NewDecoder return a decoder for canal-json
 func NewDecoder(
@@ -115,9 +117,6 @@ func NewDecoder(
 		decoder:      newBufferedJSONDecoder(),
 		storage:      externalStorage,
 		upstreamTiDB: db,
-
-		tableIDAllocator:  common.NewFakeTableIDAllocator(),
-		tableInfoAccessor: common.NewTableInfoAccessor(),
 	}, nil
 }
 
@@ -372,7 +371,7 @@ func (b *decoder) canalJSONMessage2DDLEvent() *commonEvent.DDLEvent {
 	result.Type = byte(actionType)
 
 	var tableID int64
-	tableInfo, ok := b.tableInfoAccessor.Get(result.SchemaName, result.TableName)
+	tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
 	if ok {
 		tableID = tableInfo.TableName.TableID
 	}
@@ -381,7 +380,7 @@ func (b *decoder) canalJSONMessage2DDLEvent() *commonEvent.DDLEvent {
 		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
 		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
 
-	b.tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
+	tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
 	return result
 }
 
@@ -391,7 +390,6 @@ func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) m
 		if !ok {
 			continue
 		}
-		log.Info("format column value", zap.String("column", col.Name.O), zap.Any("raw", raw))
 		data[col.Name.O] = formatValue(raw, col.FieldType)
 	}
 	return data
@@ -523,11 +521,11 @@ func (b *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 	schema := *msg.getSchema()
 	table := *msg.getTable()
 
-	tableInfo, ok := b.tableInfoAccessor.Get(schema, table)
+	tableInfo, ok := tableInfoAccessor.Get(schema, table)
 	if !ok {
-		tableID := b.tableIDAllocator.AllocateTableID(schema, table)
+		tableID := tableIDAllocator.AllocateTableID(schema, table)
 		tableInfo = newTableInfo(msg, tableID)
-		b.tableInfoAccessor.Add(schema, table, tableInfo)
+		tableInfoAccessor.Add(schema, table, tableInfo)
 	}
 	return tableInfo
 }
@@ -552,7 +550,6 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 		col.ID = nextColumnID
 		col.Name = pmodel.NewCIStr(name)
 		basicType := common.ExtractBasicMySQLType(mysqlType)
-		log.Info("build column info", zap.String("mysqlType", mysqlType), zap.Any("basicType", basicType))
 		col.FieldType = *types.NewFieldType(basicType)
 		if common.IsBinaryMySQLType(mysqlType) {
 			col.AddFlag(mysql.BinaryFlag)

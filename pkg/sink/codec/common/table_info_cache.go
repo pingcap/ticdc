@@ -16,7 +16,9 @@ package common
 import (
 	"fmt"
 
+	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"go.uber.org/zap"
 )
 
 type accessKey struct {
@@ -50,6 +52,8 @@ func (a *TableInfoAccessor) Add(schema, table string, tableInfo *commonType.Tabl
 	if _, ok := a.memo[key]; !ok {
 		a.memo[key] = tableInfo
 	}
+	log.Info("add table info to cache", zap.String("schema", schema), zap.String("table", table),
+		zap.Int64("tableID", tableInfo.TableName.TableID))
 }
 
 func (a *TableInfoAccessor) Remove(schema, table string) {
