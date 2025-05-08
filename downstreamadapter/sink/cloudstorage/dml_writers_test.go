@@ -272,7 +272,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	cloudStorageSink.AddDMLEvent(event)
 	time.Sleep(5 * time.Second)
 
-	tableDir = path.Join(parentDir, "test/table1/33/2023-03-09")
+	tableDir = path.Join(parentDir, fmt.Sprintf("test/table1/%d/2023-03-09", event.TableInfo.UpdateTS()))
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{"CDC000001.csv", "CDC.index"}, fileNames)
