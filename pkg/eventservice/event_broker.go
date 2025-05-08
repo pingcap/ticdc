@@ -15,7 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"errors"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,9 +47,6 @@ const (
 
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
-
-	// Limit the number of rows that can be scanned in a single scan task.
-	singleScanRowLimit = 4 * 1024
 )
 
 // Limit the max time range of a scan task to avoid too many rows in a single scan task.
@@ -207,6 +203,37 @@ func newEventBroker(
 	return c
 }
 
+func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, e *pevent.DMLEvent, d *dispatcherStat) {
+	// Set sequence number for the event
+	e.Seq = d.seq.Add(1)
+	// Emit sync point event if needed
+	c.emitSyncPointEventIfNeeded(e.CommitTs, d, remoteID)
+	// Send the DML event
+	c.getMessageCh(d.messageWorkerIndex) <- newWrapDMLEvent(remoteID, e, d.getEventSenderState())
+	metricEventServiceSendKvCount.Add(float64(e.Len()))
+
+}
+
+func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.DDLEvent, d *dispatcherStat) {
+	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
+	e.DispatcherID = d.id
+	e.Seq = d.seq.Add(1)
+	log.Info("send ddl event to dispatcher",
+		zap.Stringer("dispatcher", d.id),
+		zap.Int64("dispatcherTableID", d.info.GetTableSpan().TableID),
+		zap.String("query", e.Query),
+		zap.Int64("eventTableID", e.TableID),
+		zap.Uint64("commitTs", e.FinishedTs),
+		zap.Uint64("seq", e.Seq))
+	ddlEvent := newWrapDDLEvent(remoteID, e, d.getEventSenderState())
+	select {
+	case <-ctx.Done():
+		return
+	case c.getMessageCh(d.messageWorkerIndex) <- ddlEvent:
+		metricEventServiceSendDDLCount.Inc()
+	}
+}
+
 func (c *eventBroker) sendWatermark(
 	server node.ID,
 	d *dispatcherStat,
@@ -285,7 +312,8 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) {
 					log.Panic("get table trigger events failed", zap.Error(err))
 				}
 				for _, e := range ddlEvents {
-					c.sendDDL(ctx, remoteID, e, dispatcherStat)
+					ep := &e
+					c.sendDDL(ctx, remoteID, ep, dispatcherStat)
 				}
 				if endTs > startTs {
 					// After all the events are sent, we send the watermark to the dispatcher.
@@ -321,26 +349,6 @@ func (c *eventBroker) logUnresetDispatchers(ctx context.Context) {
 				return true
 			})
 		}
-	}
-}
-
-func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e pevent.DDLEvent, d *dispatcherStat) {
-	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
-	e.DispatcherID = d.id
-	e.Seq = d.seq.Add(1)
-	log.Info("send ddl event to dispatcher",
-		zap.Stringer("dispatcher", d.id),
-		zap.Int64("dispatcherTableID", d.info.GetTableSpan().TableID),
-		zap.String("query", e.Query),
-		zap.Int64("eventTableID", e.TableID),
-		zap.Uint64("commitTs", e.FinishedTs),
-		zap.Uint64("seq", e.Seq))
-	ddlEvent := newWrapDDLEvent(remoteID, &e, d.getEventSenderState())
-	select {
-	case <-ctx.Done():
-		return
-	case c.getMessageCh(d.messageWorkerIndex) <- ddlEvent:
-		metricEventServiceSendDDLCount.Inc()
 	}
 }
 
@@ -480,9 +488,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 
 // TODO: handle error properly.
 func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
-	start := time.Now()
 	remoteID := node.ID(task.info.GetServerID())
-	dispatcherID := task.id
 
 	defer func() {
 		task.isTaskScanning.Store(false)
@@ -505,159 +511,57 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		return
 	}
 
-	// TODO: distinguish only dml or only ddl scenario
-	ddlEvents, err := c.schemaStore.
-		FetchTableDDLEvents(
-			dataRange.Span.TableID,
-			task.filter,
-			dataRange.StartTs,
-			dataRange.EndTs,
-		)
-	if err != nil {
-		log.Panic("get ddl events failed", zap.Error(err))
+	// Create a scanner to handle the scanning logic
+	scanner := NewEventScanner(c.eventStore, c.schemaStore, c.mounter)
+	scanLimit := ScanLimit{
+		MaxBytes: 1024 * 1024 * 8,         // 8 MB
+		Timeout:  time.Millisecond * 1000, // 1 Second
 	}
 
-	// After all the events are sent, we need to drain the remaining ddlEvents.
-	sendRemainingDDLEvents := func() {
-		for _, e := range ddlEvents {
-			c.sendDDL(ctx, remoteID, e, task)
+	// Use the scanner to get events
+	events, lastCommitTs, err := scanner.Scan(ctx, task, dataRange, scanLimit)
+	if err != nil {
+		log.Panic("scan events failed", zap.Error(err))
+	}
+
+	// Process and send events
+	for _, e := range events {
+		switch e.GetType() {
+		case pevent.TypeDMLEvent:
+			dml, ok := e.(*pevent.DMLEvent)
+			if !ok {
+				log.Error("expect a DMLEvent, but got", zap.Any("event", e))
+				continue
+			}
+			c.sendDML(ctx, remoteID, dml, task)
+		case pevent.TypeDDLEvent:
+			ddl, ok := e.(*pevent.DDLEvent)
+			if !ok {
+				log.Error("expect a DDLEvent, but got", zap.Any("event", e))
+				continue
+			}
+			// Send DDL event using the existing method
+			c.sendDDL(ctx, remoteID, ddl, task)
+		case pevent.TypeResolvedEvent:
+			re, ok := e.(*pevent.ResolvedEvent)
+			if !ok {
+				log.Error("expect a ResolvedEvent, but got", zap.Any("event", e))
+				continue
+			}
+			// Send watermark using the existing method
+			c.sendWatermark(remoteID, task, re.ResolvedTs)
 		}
-		c.sendWatermark(remoteID, task, dataRange.EndTs)
+	}
+
+	// Update the sentResolvedTs of the task
+	if lastCommitTs > 0 {
+		task.updateSentResolvedTs(lastCommitTs)
+	} else {
 		task.updateSentResolvedTs(dataRange.EndTs)
 	}
 
-	// 2. Get event iterator from eventStore.
-	iter, err := c.eventStore.GetIterator(dispatcherID, dataRange)
-	if err != nil {
-		log.Panic("read events failed", zap.Error(err))
-	}
-
-	if iter == nil {
-		sendRemainingDDLEvents()
-		return
-	}
-
-	defer func() {
-		eventCount, _ := iter.Close()
-		if eventCount != 0 {
-			metricEventStoreOutputKv.Add(float64(eventCount))
-		}
-		metricEventBrokerScanTaskCount.Inc()
-		metrics.EventServiceScanDuration.Observe(time.Since(start).Seconds())
-	}()
-
-	lastSentDMLCommitTs := uint64(0)
-	// sendDML is used to send the dml event to the dispatcher.
-	// It returns true if the dml event is sent successfully.
-	// Otherwise, it returns false.
-	sendDML := func(dml *pevent.DMLEvent) bool {
-		if dml == nil {
-			return true
-		}
-
-		// Check if the dispatcher is running.
-		// If not, we don't need to send the dml event.
-		if !task.IsRunning() {
-			if lastSentDMLCommitTs != 0 {
-				task.updateSentResolvedTs(lastSentDMLCommitTs)
-				c.sendWatermark(remoteID, task, lastSentDMLCommitTs)
-				log.Info("The dispatcher is not running, skip the following scan",
-					zap.Uint64("clusterID", task.info.GetClusterID()),
-					zap.String("changefeed", task.info.GetChangefeedID().String()),
-					zap.String("dispatcher", task.id.String()),
-					zap.Uint64("taskStartTs", dataRange.StartTs),
-					zap.Uint64("taskEndTs", dataRange.EndTs),
-					zap.Uint64("lastSentResolvedTs", task.sentResolvedTs.Load()),
-					zap.Uint64("lastSentDMLCommitTs", lastSentDMLCommitTs),
-					zap.Int("workerIndex", idx),
-				)
-			}
-			return false
-		}
-
-		for len(ddlEvents) > 0 && dml.CommitTs > ddlEvents[0].FinishedTs {
-			c.sendDDL(ctx, remoteID, ddlEvents[0], task)
-			ddlEvents = ddlEvents[1:]
-		}
-
-		dml.Seq = task.seq.Add(1)
-		c.emitSyncPointEventIfNeeded(dml.CommitTs, task, remoteID)
-		c.getMessageCh(task.messageWorkerIndex) <- newWrapDMLEvent(remoteID, dml, task.getEventSenderState())
-		metricEventServiceSendKvCount.Add(float64(dml.Len()))
-		lastSentDMLCommitTs = dml.CommitTs
-		return true
-	}
-
-	sendWaterMark := func() {
-		if lastSentDMLCommitTs != 0 {
-			task.updateSentResolvedTs(lastSentDMLCommitTs)
-			c.sendWatermark(remoteID, task, lastSentDMLCommitTs)
-		}
-	}
-
-	// 3. Send the events to the dispatcher.
-	var dml *pevent.DMLEvent
-	rowCount := 0
-	for {
-		// Node: The first event of the txn must return isNewTxn as true.
-		e, isNewTxn, err := iter.Next()
-		if err != nil {
-			log.Panic("read events failed", zap.Error(err))
-		}
-		if e == nil {
-			// Send the last dml to the dispatcher.
-			ok := sendDML(dml)
-			if !ok {
-				return
-			}
-
-			sendRemainingDDLEvents()
-			return
-		}
-
-		if e.CRTs < dataRange.StartTs {
-			// If the commitTs of the event is less than the startTs of the data range,
-			// there are some bugs in the eventStore.
-			log.Panic("should never Happen", zap.Uint64("commitTs", e.CRTs), zap.Uint64("dataRangeStartTs", dataRange.StartTs))
-		}
-		rowCount++
-
-		if isNewTxn {
-			// If the number of rows is greater than the limit, we need to send a watermark to the dispatcher.
-			if rowCount >= singleScanRowLimit && e.CRTs > lastSentDMLCommitTs {
-				sendWaterMark()
-				// putTaskBack()
-				// return
-			}
-
-			ok := sendDML(dml)
-			if !ok {
-				return
-			}
-			tableID := task.info.GetTableSpan().TableID
-			tableInfo, err := c.schemaStore.GetTableInfo(tableID, e.CRTs-1)
-			if err != nil {
-				if task.isRemoved.Load() {
-					log.Warn("get table info failed, since the dispatcher is removed", zap.Error(err), zap.Int("workerIndex", idx))
-					return
-				}
-				if errors.Is(err, &schemastore.TableDeletedError{}) {
-					// After a table is truncated, it is possible to receive more dml events, just ignore is ok.
-					// TODO: tables may be deleted in many ways, we need to check if it is safe to ignore later dmls in all cases.
-					// We must send the remaining ddl events to the dispatcher in this case.
-					sendRemainingDDLEvents()
-					log.Warn("get table info failed, since the table is deleted", zap.Error(err), zap.Int("workerIndex", idx))
-					return
-				}
-				log.Panic("get table info failed, unknown reason", zap.Error(err))
-			}
-
-			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
-		}
-		if err = dml.AppendRow(e, c.mounter.DecodeToChunk); err != nil {
-			log.Panic("append row failed", zap.Error(err))
-		}
-	}
+	// Update metrics
+	metricEventBrokerScanTaskCount.Inc()
 }
 
 func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int) {
