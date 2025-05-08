@@ -227,18 +227,16 @@ func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 }
 
 func buildColumns(
-	holder *common.ColumnsHolder, handleKeyColumns map[string]column,
+	holder *common.ColumnsHolder, columns map[string]column,
 ) map[string]column {
 	columnsCount := holder.Length()
-	result := make(map[string]column, columnsCount)
 	for i := 0; i < columnsCount; i++ {
 		columnType := holder.Types[i]
 		name := columnType.Name()
-
-		var flag uint64
-		if _, ok := handleKeyColumns[name]; ok {
-			flag |= binaryFlag
+		if _, ok := columns[name]; ok {
+			continue
 		}
+		var flag uint64
 		// todo: we can extract more detailed type information here.
 		dataType := strings.ToLower(columnType.DatabaseTypeName())
 		if common.IsUnsignedMySQLType(dataType) {
@@ -247,13 +245,13 @@ func buildColumns(
 		if nullable, _ := columnType.Nullable(); nullable {
 			flag |= nullableFlag
 		}
-		result[name] = column{
+		columns[name] = column{
 			Type:  common.ExtractBasicMySQLType(dataType),
 			Flag:  flag,
 			Value: holder.Values[i],
 		}
 	}
-	return result
+	return columns
 }
 
 func (b *decoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, row *messageRow) *commonEvent.DMLEvent {
