@@ -68,7 +68,7 @@ func (b *BatchDMLEvent) AppendRow(raw *common.RawKVEntry,
 	return b.DMLEvents[len(b.DMLEvents)-1].AppendRow(raw, decode)
 }
 
-func (b *BatchDMLEvent) GetLastCommitTs() uint64 {
+func (b *BatchDMLEvent) GetCommitTs() uint64 {
 	return b.DMLEvents[len(b.DMLEvents)-1].GetCommitTs()
 }
 
@@ -83,12 +83,6 @@ func (b *BatchDMLEvent) Len() int32 {
 
 func (b *BatchDMLEvent) GetType() int {
 	return TypeBatchDMLEvent
-}
-
-func (b *BatchDMLEvent) SetState(state EventSenderState) {
-	for _, dml := range b.DMLEvents {
-		dml.State = state
-	}
 }
 
 func (b *BatchDMLEvent) Unmarshal(data []byte) error {

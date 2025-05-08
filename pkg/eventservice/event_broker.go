@@ -576,16 +576,19 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			return false
 		}
 
-		commitTs := dmls.GetLastCommitTs()
+		commitTs := dmls.GetCommitTs()
 		for len(ddlEvents) > 0 && commitTs > ddlEvents[0].FinishedTs {
 			c.sendDDL(ctx, remoteID, ddlEvents[0], task)
 			ddlEvents = ddlEvents[1:]
 		}
 
-		c.emitSyncPointEventIfNeeded(dmls.GetLastCommitTs(), task, remoteID)
+		for _, dml := range dmls.DMLEvents {
+			dml.Seq = task.seq.Add(1)
+		}
+		c.emitSyncPointEventIfNeeded(commitTs, task, remoteID)
 		c.getMessageCh(task.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, dmls, task.getEventSenderState())
 		metricEventServiceSendKvCount.Add(float64(dmls.Len()))
-		lastSentDMLCommitTs = dmls.GetLastCommitTs()
+		lastSentDMLCommitTs = commitTs
 		return true
 	}
 

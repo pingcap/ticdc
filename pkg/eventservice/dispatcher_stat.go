@@ -237,7 +237,9 @@ type wrapEvent struct {
 }
 
 func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent, state pevent.EventSenderState) *wrapEvent {
-	e.SetState(state)
+	for _, dml := range e.DMLEvents {
+		dml.State = state
+	}
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = e
