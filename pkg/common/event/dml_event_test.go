@@ -175,7 +175,7 @@ var dml = `insert into t values (
 	'测试', "中国", "上海", "你好,世界", 0xC4E3BAC3CAC0BDE7
 );`
 
-func createBatchDMLEvent(b *testing.B, dmlNum, rowsNum int) *BatchDMLEvent {
+func createBatchDMLEvent(b *testing.B, dmlNum int) {
 	helper := NewEventTestHelper(b)
 	defer helper.Close()
 
@@ -186,108 +186,66 @@ func createBatchDMLEvent(b *testing.B, dmlNum, rowsNum int) *BatchDMLEvent {
 	tableInfo := helper.GetTableInfo(ddlJob)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
-	for i := 0; i < dmlNum; i++ {
-		event := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
-		batchDMLEvent.AppendDMLEvent(event)
-		for j := 0; j < rowsNum; j++ {
-			rawKvs := helper.DML2RawKv("test", "t", dml)
+	rawKvs := helper.DML2RawKv("test", "t", dml)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for k := 0; k < b.N; k++ {
+		for i := 0; i < dmlNum; i++ {
+			event := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+			batchDMLEvent.AppendDMLEvent(event)
 			for _, rawKV := range rawKvs {
 				err := batchDMLEvent.AppendRow(rawKV, helper.mounter.DecodeToChunk)
 				require.NoError(b, err)
 			}
 		}
 	}
-	return batchDMLEvent
 }
 
-func createDMLEvents(b *testing.B, dmlNum, rowsNum int) []*DMLEvent {
+func createDMLEvents(b *testing.B, dmlNum int) {
 	helper := NewEventTestHelper(b)
 	defer helper.Close()
 
 	helper.tk.MustExec("use test")
 	ddlJob := helper.DDL2Job(ddl)
 	require.NotNil(b, ddlJob)
-	dmlEvents := make([]*DMLEvent, 0, dmlNum)
 	tableInfo := helper.GetTableInfo(ddlJob)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
-	for i := 0; i < dmlNum; i++ {
-		event := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
-		event.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount)
-		for j := 0; j < rowsNum; j++ {
-			rawKvs := helper.DML2RawKv("test", "t", dml)
+	rawKvs := helper.DML2RawKv("test", "t", dml)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for k := 0; k < b.N; k++ {
+		for i := 0; i < dmlNum; i++ {
+			event := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+			event.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount)
 			for _, rawKV := range rawKvs {
 				err := event.AppendRow(rawKV, helper.mounter.DecodeToChunk)
 				require.NoError(b, err)
 			}
 		}
-		dmlEvents = append(dmlEvents, event)
-	}
-	return dmlEvents
-}
-
-// cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
-// BenchmarkBatchDMLEvent_10x100-72    	       1	9149234977 ns/op	871514104 B/op	 5857191 allocs/op
-func BenchmarkBatchDMLEvent_10x100(b *testing.B) {
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		createBatchDMLEvent(b, 10, 100)
-	}
-}
-
-// BenchmarkBatchDMLEvent_100x1-72    	       1	3566853403 ns/op	272869856 B/op	 1310711 allocs/op
-func BenchmarkBatchDMLEvent_100x1(b *testing.B) {
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		createBatchDMLEvent(b, 100, 1)
-	}
-}
-
-// BenchmarkBatchDMLEvent_1000x1-72    	       1	9537108405 ns/op	875037128 B/op	 5881643 allocs/op
-func BenchmarkBatchDMLEvent_1000x1(b *testing.B) {
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		createBatchDMLEvent(b, 1000, 1)
 	}
 }
 
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
-// BenchmarkBatchDMLEvent_10000x1-72    	       1	322898121910 ns/op	46365201192 B/op	344590675 allocs/op
-func BenchmarkBatchDMLEvent_10000x1(b *testing.B) {
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		createBatchDMLEvent(b, 10000, 1)
-	}
-}
-
-func BenchmarkDMLEvents_100x1(b *testing.B) {
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		createDMLEvents(b, 100, 1)
-	}
+// BenchmarkBatchDMLEvent_100000-72    	       1	5509822685 ns/op	517733800 B/op	 1483694 allocs/op
+func BenchmarkBatchDMLEvent_100000(b *testing.B) {
+	createBatchDMLEvent(b, 100000)
 }
 
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
-// BenchmarkDMLEvents_1000x1-72    	       1	9304230708 ns/op	875918640 B/op	 6032678 allocs/op
-func BenchmarkDMLEvents_1000x1(b *testing.B) {
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		createDMLEvents(b, 1000, 1)
-	}
+// BenchmarkBatchDMLEvent_1000000-72    	       1	55271596300 ns/op	5128786216 B/op	14807291 allocs/op
+func BenchmarkBatchDMLEvent_1000000(b *testing.B) {
+	createBatchDMLEvent(b, 1000000)
 }
 
 // cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
-// BenchmarkDMLEvents_10000x1-72    	       1	328285483293 ns/op	46424896304 B/op	346822452 allocs/op
-func BenchmarkDMLEvents_10000x1(b *testing.B) {
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		createDMLEvents(b, 10000, 1)
-	}
+// BenchmarkDMLEvents_100000-72    	       1	6356767072 ns/op	912358968 B/op	20444518 allocs/op
+func BenchmarkDMLEvents_100000(b *testing.B) {
+	createDMLEvents(b, 100000)
+}
+
+// cpu: Intel(R) Xeon(R) Gold 6240 CPU @ 2.60GHz
+// BenchmarkDMLEvents_1000000-72    	       1	59282774010 ns/op	8879427720 B/op	203074980 allocs/op
+func BenchmarkDMLEvents_1000000(b *testing.B) {
+	createDMLEvents(b, 1000000)
 }
