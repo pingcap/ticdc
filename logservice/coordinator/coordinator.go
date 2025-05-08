@@ -105,7 +105,10 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 				ID:    req.req.GetID(),
 				Nodes: nodes,
 			}
-			c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(req.target, messaging.EventCollectorTopic, response))
+			err := c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(req.target, messaging.EventCollectorTopic, response))
+			if err != nil {
+				log.Warn("send reusable event service response failed", zap.Error(err))
+			}
 		}
 	}
 }
