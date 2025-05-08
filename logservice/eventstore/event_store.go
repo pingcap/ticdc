@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -159,6 +158,7 @@ type eventStore struct {
 		sync.RWMutex
 		id node.ID
 	}
+	subscriptionChangeCh *chann.DrainableChann[SubscriptionChange]
 
 	// To manage background goroutines.
 	wg sync.WaitGroup
@@ -789,54 +789,93 @@ const (
 
 type SubscriptionChange struct {
 	ChangeType   SubscriptionChangeType
-	SubID        logpuller.SubscriptionID
-	Span         *heartbeatpb.TableSpan
-	CheckpointTs uint64
-	ResolvedTs   uint64
+	SubID        uint64
+	Span         *heartbeatpb.TableSpan // only valid for SubscriptionChangeTypeAdd
+	CheckpointTs uint64                 // only valid for SubscriptionChangeTypeAdd/SubscriptionChangeTypeUpdate
+	ResolvedTs   uint64                 // only valid for SubscriptionChangeTypeAdd/SubscriptionChangeTypeUpdate
 }
 
 func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 	tick := time.NewTicker(10 * time.Second)
+	state := &logservicepb.EventStoreState{
+		TableStates: make(map[int64]*logservicepb.TableState),
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-tick.C:
-			e.dispatcherMeta.RLock()
-			state := &logservicepb.EventStoreState{
-				Subscriptions: make(map[int64]*logservicepb.SubscriptionStates),
-			}
-			for tableID, dispatcherIDs := range e.dispatcherMeta.tableToDispatchers {
-				subStates := make([]*logservicepb.SubscriptionState, 0, len(dispatcherIDs))
-				subIDs := make(map[logpuller.SubscriptionID]bool)
-				for dispatcherID := range dispatcherIDs {
-					dispatcherStat := e.dispatcherMeta.dispatcherStats[dispatcherID]
-					subID := dispatcherStat.subID
-					subStat := e.dispatcherMeta.subscriptionStats[subID]
-					if _, ok := subIDs[subID]; ok {
-						continue
-					}
-					subStates = append(subStates, &logservicepb.SubscriptionState{
-						SubID:        uint64(subID),
-						Span:         dispatcherStat.tableSpan,
-						CheckpointTs: subStat.checkpointTs.Load(),
-						ResolvedTs:   subStat.resolvedTs.Load(),
+		case change := <-e.subscriptionChangeCh.Out():
+			switch change.ChangeType {
+			case SubscriptionChangeTypeAdd:
+				if tableState, ok := state.TableStates[change.Span.TableID]; ok {
+					tableState.Subscriptions = append(tableState.Subscriptions, &logservicepb.SubscriptionState{
+						SubID:        change.SubID,
+						Span:         change.Span,
+						CheckpointTs: change.CheckpointTs,
+						ResolvedTs:   change.ResolvedTs,
 					})
-					subIDs[subID] = true
+				} else {
+					state.TableStates[change.Span.TableID] = &logservicepb.TableState{
+						Subscriptions: []*logservicepb.SubscriptionState{
+							{
+								SubID:        change.SubID,
+								Span:         change.Span,
+								CheckpointTs: change.CheckpointTs,
+								ResolvedTs:   change.ResolvedTs,
+							},
+						},
+					}
 				}
-				sort.Slice(subStates, func(i, j int) bool {
-					return subStates[i].SubID < subStates[j].SubID
-				})
-				state.Subscriptions[tableID] = &logservicepb.SubscriptionStates{
-					Subscriptions: subStates,
+			case SubscriptionChangeTypeRemove:
+				tableState, ok := state.TableStates[change.Span.TableID]
+				if !ok {
+					log.Panic("cannot find table state", zap.Int64("tableID", change.Span.TableID))
 				}
+				targetIndex := -1
+				for i := 0; i < len(tableState.Subscriptions); i++ {
+					if tableState.Subscriptions[i].SubID == change.SubID {
+						targetIndex = i
+						break
+					}
+				}
+				if targetIndex == -1 {
+					log.Panic("cannot find subscription state", zap.Uint64("subID", change.SubID))
+				}
+				tableState.Subscriptions = append(tableState.Subscriptions[:targetIndex], tableState.Subscriptions[targetIndex+1:]...)
+			case SubscriptionChangeTypeUpdate:
+				tableState, ok := state.TableStates[change.Span.TableID]
+				if !ok {
+					log.Panic("cannot find table state", zap.Int64("tableID", change.Span.TableID))
+				}
+				targetIndex := -1
+				for i := 0; i < len(tableState.Subscriptions); i++ {
+					if tableState.Subscriptions[i].SubID == change.SubID {
+						targetIndex = i
+						break
+					}
+				}
+				if targetIndex == -1 {
+					log.Panic("cannot find subscription state", zap.Uint64("subID", change.SubID))
+				}
+				if change.CheckpointTs < tableState.Subscriptions[targetIndex].CheckpointTs ||
+					change.ResolvedTs < tableState.Subscriptions[targetIndex].ResolvedTs {
+					log.Panic("should not happen",
+						zap.Uint64("subID", change.SubID),
+						zap.Uint64("oldCheckpointTs", tableState.Subscriptions[targetIndex].CheckpointTs),
+						zap.Uint64("oldResolvedTs", tableState.Subscriptions[targetIndex].ResolvedTs),
+						zap.Uint64("newCheckpointTs", change.CheckpointTs),
+						zap.Uint64("newResolvedTs", change.ResolvedTs))
+				}
+				tableState.Subscriptions[targetIndex].CheckpointTs = change.CheckpointTs
+				tableState.Subscriptions[targetIndex].ResolvedTs = change.ResolvedTs
+			default:
+				log.Panic("invalid subscription change type", zap.Int("changeType", int(change.ChangeType)))
 			}
-
+		case <-tick.C:
 			message := messaging.NewSingleTargetMessage(e.getCoordinatorInfo(), messaging.LogCoordinatorTopic, state)
-			e.dispatcherMeta.RUnlock()
 			// just ignore messagees fail to send
 			if err := e.messageCenter.SendEvent(message); err != nil {
-				log.Debug("send broadcast message to node failed", zap.Error(err))
+				log.Warn("send broadcast message to coordinator failed", zap.Error(err))
 			}
 		}
 	}
