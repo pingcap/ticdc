@@ -244,7 +244,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	m.mutex.Unlock()
 
 	log.Info("try close dispatcher manager",
-		zap.String("changefeed", cfId.Name()), zap.Bool("success", response.Success))
+		zap.String("changefeed", cfId.String()), zap.Bool("success", response.Success))
 	return m.sendResponse(from, messaging.MaintainerTopic, response)
 }
 
