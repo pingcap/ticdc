@@ -488,8 +488,13 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	remoteID := node.ID(task.info.GetServerID())
 
+	isBroken := false
 	defer func() {
-		task.isTaskScanning.Store(false)
+		if isBroken {
+			c.pushTask(task, false)
+		} else {
+			task.isTaskScanning.Store(false)
+		}
 	}()
 
 	// If the target is not ready to send, we don't need to scan the event store.
@@ -517,7 +522,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 
 	// Use the scanner to get events
-	events, err := scanner.Scan(ctx, task, dataRange, scanLimit)
+	events, isBroken, err := scanner.Scan(ctx, task, dataRange, scanLimit)
 	if err != nil {
 		log.Panic("scan events failed", zap.Error(err))
 	}
@@ -785,8 +790,20 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommi
 		d.onLatestCommitTs(latestCommitTs)
 		needScan, _ := c.checkNeedScan(d, false)
 		if needScan {
-			d.isTaskScanning.Store(true)
-			c.taskChan[d.scanWorkerIndex] <- d
+			c.pushTask(d, true)
+		}
+	}
+}
+
+func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
+	d.isTaskScanning.Store(true)
+	if force {
+		c.taskChan[d.scanWorkerIndex] <- d
+	} else {
+		timer := time.NewTimer(time.Millisecond * 10)
+		select {
+		case c.taskChan[d.scanWorkerIndex] <- d:
+		case <-timer.C:
 		}
 	}
 }

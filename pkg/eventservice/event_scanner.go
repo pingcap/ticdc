@@ -59,12 +59,13 @@ func NewEventScanner(
 // Scan scans events from eventStore and schemaStore according to the given scanTask and limits
 // It returns events in order (DDL and DML events are sorted by their commit timestamp)
 // If scan hits any limit (bytes, rows, timeout), it will break if current event.CommitTs is larger than lastCommitTs
+// Return true if the scan is broken, otherwise return false
 func (s *EventScanner) Scan(
 	ctx context.Context,
 	dispatcherStat *dispatcherStat,
 	dataRange common.DataRange,
 	limit ScanLimit,
-) ([]event.Event, error) {
+) ([]event.Event, bool, error) {
 	startTime := time.Now()
 	var events []event.Event
 	var totalBytes int64
@@ -84,14 +85,14 @@ func (s *EventScanner) Scan(
 	)
 	if err != nil {
 		log.Error("get ddl events failed", zap.Error(err))
-		return nil, err
+		return nil, false, err
 	}
 
 	// 2. Get event iterator from eventStore
 	iter, err := s.eventStore.GetIterator(dispatcherID, dataRange)
 	if err != nil {
 		log.Error("read events failed", zap.Error(err))
-		return nil, err
+		return nil, false, err
 	}
 
 	// After all the events are sent, we need to drain the remaining ddlEvents.
@@ -105,7 +106,7 @@ func (s *EventScanner) Scan(
 
 	if iter == nil {
 		appendRemainingDDLEvents()
-		return events, nil
+		return events, false, nil
 	}
 
 	defer func() {
@@ -149,7 +150,7 @@ func (s *EventScanner) Scan(
 		select {
 		case <-ctx.Done():
 			log.Warn("scan exits since context done", zap.Error(ctx.Err()))
-			return events, ctx.Err()
+			return events, false, ctx.Err()
 		default:
 		}
 
@@ -164,7 +165,7 @@ func (s *EventScanner) Scan(
 			appendDML(dml)
 			appendRemainingDDLEvents()
 			appendWaterMark(dataRange.EndTs)
-			return events, nil
+			return events, false, nil
 		}
 
 		eSize := len(e.Key) + len(e.Value) + len(e.OldValue)
@@ -173,7 +174,7 @@ func (s *EventScanner) Scan(
 
 		if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs {
 			appendWaterMark(lastCommitTs)
-			return events, nil
+			return events, true, nil
 		}
 
 		if isNewTxn {
@@ -183,7 +184,7 @@ func (s *EventScanner) Scan(
 			if err != nil {
 				if dispatcherStat.isRemoved.Load() {
 					log.Warn("get table info failed, since the dispatcher is removed", zap.Error(err))
-					return events, nil
+					return events, false, nil
 				}
 
 				if errors.Is(err, &schemastore.TableDeletedError{}) {
@@ -192,7 +193,7 @@ func (s *EventScanner) Scan(
 					// We must send the remaining ddl events to the dispatcher in this case.
 					appendRemainingDDLEvents()
 					log.Warn("get table info failed, since the table is deleted", zap.Error(err))
-					return events, nil
+					return events, false, nil
 				}
 				log.Panic("get table info failed, unknown reason", zap.Error(err))
 			}
