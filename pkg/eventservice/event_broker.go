@@ -540,7 +540,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			}
 			c.sendDDL(ctx, remoteID, ddl, task)
 		case pevent.TypeResolvedEvent:
-			re, ok := e.(*pevent.ResolvedEvent)
+			re, ok := e.(pevent.ResolvedEvent)
 			if !ok {
 				log.Error("expect a ResolvedEvent, but got", zap.Any("event", e))
 				continue
@@ -754,13 +754,10 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) {
 			return
 		case <-ticker.C:
 			inActiveDispatchers := make([]*dispatcherStat, 0)
-
 			c.dispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*dispatcherStat)
-				// FIXME: use checkpointTs instead after checkpointTs is correctly updated
 				checkpointTs := dispatcher.checkpointTs.Load()
-				// TODO: when use checkpointTs, this check can be removed
-				if checkpointTs > 0 {
+				if checkpointTs > 0 && checkpointTs < dispatcher.sentResolvedTs.Load() {
 					c.eventStore.UpdateDispatcherCheckpointTs(dispatcher.id, checkpointTs)
 				}
 				if time.Since(time.Unix(dispatcher.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout {
