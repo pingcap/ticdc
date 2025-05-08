@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
+	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
@@ -584,6 +585,68 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 	}
 
 	return nil
+}
+
+// only for test
+// moveSplitTable is used for inner api(which just for make test cases convience) to force move the dispatchers in a split table to a target node.
+func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID) error {
+	if !c.replicationDB.IsTableExists(tableId) {
+		// the table is not exist in this node
+		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableId)
+	}
+
+	if tableId == 0 {
+		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableId)
+	}
+
+	nodes := c.nodeManager.GetAliveNodes()
+	hasNode := false
+	for _, node := range nodes {
+		if node.ID == targetNode {
+			hasNode = true
+			break
+		}
+	}
+	if !hasNode {
+		return apperror.ErrNodeIsNotFound.GenWithStackByArgs("targetNode", targetNode)
+	}
+
+	replications := c.replicationDB.GetTasksByTableID(tableId)
+	opList := make([]pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(replications))
+	finishList := make([]bool, 0, len(replications))
+	for _, replication := range replications {
+		op := c.operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
+		c.operatorController.AddOperator(op)
+		opList = append(opList, op)
+	}
+
+	// check the op is finished or not
+	count := 0
+	maxTry := 30
+	for count < maxTry {
+		finish := true
+		for idx, op := range opList {
+			if finishList[idx] {
+				continue
+			}
+			if op.IsFinished() {
+				finishList[idx] = true
+				continue
+			} else {
+				finish = false
+			}
+		}
+
+		if finish {
+			return nil
+		}
+
+		time.Sleep(1 * time.Second)
+		count += 1
+		log.Info("wait for move split table operator finished", zap.Int("count", count))
+	}
+
+	return apperror.ErrMoveTableTimeout.GenWithStackByArgs("move table operator is timeout")
 }
 
 func (c *Controller) isDDLDispatcher(dispatcherID common.DispatcherID) bool {

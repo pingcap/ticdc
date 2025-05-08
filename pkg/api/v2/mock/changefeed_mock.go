@@ -146,6 +146,20 @@ func (mr *MockChangefeedInterfaceMockRecorder) MoveTable(ctx, namespace, name, t
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MoveTable", reflect.TypeOf((*MockChangefeedInterface)(nil).MoveTable), ctx, namespace, name, tableID, targetNode)
 }
 
+// MoveSplitTable mocks base method.
+func (m *MockChangefeedInterface) MoveSplitTable(ctx context.Context, namespace, name string, tableID int64, targetNode string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MoveSplitTable", ctx, namespace, name, tableID, targetNode)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// MoveSplitTable indicates an expected call of MoveSplitTable.
+func (mr *MockChangefeedInterfaceMockRecorder) MoveSplitTable(ctx, namespace, name, tableID, targetNode interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MoveSplitTable", reflect.TypeOf((*MockChangefeedInterface)(nil).MoveSplitTable), ctx, namespace, name, tableID, targetNode)
+}
+
 // Pause mocks base method.
 func (m *MockChangefeedInterface) Pause(ctx context.Context, namespace, name string) error {
 	m.ctrl.T.Helper()
