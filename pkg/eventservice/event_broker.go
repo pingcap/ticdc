@@ -245,6 +245,7 @@ func (c *eventBroker) sendWatermark(
 		re,
 		d.getEventSenderState())
 	c.getMessageCh(d.messageWorkerIndex) <- resolvedEvent
+	d.updateSentResolvedTs(watermark)
 	metricEventServiceSendResolvedTsCount.Inc()
 }
 
@@ -317,7 +318,6 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) {
 				if endTs > startTs {
 					// After all the events are sent, we send the watermark to the dispatcher.
 					c.sendWatermark(remoteID, dispatcherStat, endTs)
-					dispatcherStat.updateSentResolvedTs(endTs)
 				}
 				return true
 			})
@@ -401,7 +401,6 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		// We just send the watermark to the dispatcher.
 		remoteID := node.ID(task.info.GetServerID())
 		c.sendWatermark(remoteID, task, dataRange.EndTs)
-		task.updateSentResolvedTs(dataRange.EndTs)
 		return false, common.DataRange{}
 	}
 
