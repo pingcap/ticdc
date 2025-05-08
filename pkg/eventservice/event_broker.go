@@ -518,7 +518,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 
 	// Use the scanner to get events
-	events, lastCommitTs, err := scanner.Scan(ctx, task, dataRange, scanLimit)
+	events, err := scanner.Scan(ctx, task, dataRange, scanLimit)
 	if err != nil {
 		log.Panic("scan events failed", zap.Error(err))
 	}
@@ -539,7 +539,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				log.Error("expect a DDLEvent, but got", zap.Any("event", e))
 				continue
 			}
-			// Send DDL event using the existing method
 			c.sendDDL(ctx, remoteID, ddl, task)
 		case pevent.TypeResolvedEvent:
 			re, ok := e.(*pevent.ResolvedEvent)
@@ -547,18 +546,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				log.Error("expect a ResolvedEvent, but got", zap.Any("event", e))
 				continue
 			}
-			// Send watermark using the existing method
 			c.sendWatermark(remoteID, task, re.ResolvedTs)
 		}
 	}
-
-	// Update the sentResolvedTs of the task
-	if lastCommitTs > 0 {
-		task.updateSentResolvedTs(lastCommitTs)
-	} else {
-		task.updateSentResolvedTs(dataRange.EndTs)
-	}
-
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
 }
