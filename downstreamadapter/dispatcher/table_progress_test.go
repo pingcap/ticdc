@@ -35,6 +35,8 @@ func TestTableProgress(t *testing.T) {
 	require.NotNil(t, job)
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')")
+	dmlEvent.StartTs = 1
+	dmlEvent.CommitTs = 2
 
 	// Add an event
 	tp.Add(dmlEvent)
@@ -42,16 +44,16 @@ func TestTableProgress(t *testing.T) {
 
 	// Verify GetCheckpointTs
 	checkpointTs, isEmpty := tp.GetCheckpointTs()
-	assert.Equal(t, dmlEvent.GetCommitTs()-1, checkpointTs)
+	assert.Equal(t, uint64(1), checkpointTs)
 	assert.False(t, isEmpty)
 
 	// Verify maxCommitTs
-	assert.Equal(t, dmlEvent.GetCommitTs(), tp.maxCommitTs)
+	assert.Equal(t, uint64(2), tp.maxCommitTs)
 
 	// verify after event is flushed
 	dmlEvent.PostFlush()
 	checkpointTs, isEmpty = tp.GetCheckpointTs()
-	assert.Equal(t, dmlEvent.GetCommitTs()-1, checkpointTs)
+	assert.Equal(t, uint64(1), checkpointTs)
 	assert.True(t, isEmpty)
 
 	ddlEvent := &commonEvent.DDLEvent{
