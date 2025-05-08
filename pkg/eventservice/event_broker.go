@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -101,10 +102,9 @@ type eventBroker struct {
 	cancel context.CancelFunc
 	g      *errgroup.Group
 
-	metricDispatcherCount                prometheus.Gauge
-	metricEventServiceReceivedResolvedTs prometheus.Gauge
-	metricEventServiceSentResolvedTsLag  prometheus.Gauge
-	metricEventServiceResolvedTsLag      prometheus.Gauge
+	metricDispatcherCount                   prometheus.Gauge
+	metricEventServiceReceivedResolvedTsLag prometheus.Gauge
+	metricEventServiceSentResolvedTsLag     prometheus.Gauge
 }
 
 func newEventBroker(
@@ -150,10 +150,9 @@ func newEventBroker(
 		cancel:                  cancel,
 		g:                       g,
 
-		metricDispatcherCount:                metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
-		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
-		metricEventServiceResolvedTsLag:      metrics.EventServiceResolvedTsLagGauge.WithLabelValues("received"),
-		metricEventServiceSentResolvedTsLag:  metrics.EventServiceResolvedTsLagGauge.WithLabelValues("sent"),
+		metricDispatcherCount:                   metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
+		metricEventServiceReceivedResolvedTsLag: metrics.EventServiceResolvedTsLagGauge.WithLabelValues("received"),
+		metricEventServiceSentResolvedTsLag:     metrics.EventServiceResolvedTsLagGauge.WithLabelValues("sent"),
 	}
 
 	for i := 0; i < scanWorkerCount; i++ {
@@ -697,32 +696,34 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			log.Info("update metrics goroutine is closing")
 			return
 		case <-ticker.C:
-			receivedMinResolvedTs := uint64(0)
-			sentMinWaterMark := uint64(0)
+			receivedMinResolvedTs := uint64(math.MaxUint64)
+			sentMinResolvedTs := uint64(math.MaxUint64)
 			dispatcherCount := 0
-			c.dispatchers.Range(func(key, value interface{}) bool {
+
+			c.dispatchers.Range(func(key, value any) bool {
 				dispatcherCount++
 				dispatcher := value.(*dispatcherStat)
 				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
-				if receivedMinResolvedTs == 0 || resolvedTs < receivedMinResolvedTs {
+				if resolvedTs < receivedMinResolvedTs {
 					receivedMinResolvedTs = resolvedTs
 				}
 				watermark := dispatcher.sentResolvedTs.Load()
-				if sentMinWaterMark == 0 || watermark < sentMinWaterMark {
-					sentMinWaterMark = watermark
+				if watermark < sentMinResolvedTs {
+					sentMinResolvedTs = watermark
 				}
 				return true
 			})
+
 			// Include the table trigger dispatchers in the metrics.
-			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
+			c.tableTriggerDispatchers.Range(func(key, value any) bool {
 				dispatcher := value.(*dispatcherStat)
 				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
-				if receivedMinResolvedTs == 0 || resolvedTs < receivedMinResolvedTs {
+				if resolvedTs < receivedMinResolvedTs {
 					receivedMinResolvedTs = resolvedTs
 				}
 				watermark := dispatcher.sentResolvedTs.Load()
-				if sentMinWaterMark == 0 || watermark < sentMinWaterMark {
-					sentMinWaterMark = watermark
+				if watermark < sentMinResolvedTs {
+					sentMinResolvedTs = watermark
 				}
 				return true
 			})
@@ -733,17 +734,20 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			// If there are no dispatchers, set the receivedMinResolvedTs and sentMinWaterMark to the pdTime.
 			if dispatcherCount == 0 {
 				receivedMinResolvedTs = uint64(pdPhysicalTs)
-				sentMinWaterMark = uint64(pdPhysicalTs)
+				sentMinResolvedTs = uint64(pdPhysicalTs)
 			}
 
-			phyResolvedTs := oracle.ExtractPhysical(receivedMinResolvedTs)
-			receivedLag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
-			c.metricEventServiceReceivedResolvedTs.Set(float64(phyResolvedTs))
-			c.metricEventServiceResolvedTsLag.Set(receivedLag)
+			receivedLag := float64(oracle.GetPhysical(pdTime)-oracle.ExtractPhysical(receivedMinResolvedTs)) / 1e3
+			c.metricEventServiceReceivedResolvedTsLag.Set(receivedLag)
 
-			sentLag := float64(oracle.GetPhysical(pdTime)-oracle.ExtractPhysical(sentMinWaterMark)) / 1e3
+			sentLag := float64(oracle.GetPhysical(pdTime)-oracle.ExtractPhysical(sentMinResolvedTs)) / 1e3
 			c.metricEventServiceSentResolvedTsLag.Set(sentLag)
-			metricEventBrokerPendingScanTaskCount.Set(float64(len(c.taskChan)))
+
+			pendingTaskCount := 0
+			for i := 0; i < c.scanWorkerCount; i++ {
+				pendingTaskCount += len(c.taskChan[i])
+			}
+			metricEventBrokerPendingScanTaskCount.Set(float64(pendingTaskCount))
 		}
 	}
 }
@@ -765,6 +769,14 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) {
 				if checkpointTs > 0 && checkpointTs < dispatcher.sentResolvedTs.Load() {
 					c.eventStore.UpdateDispatcherCheckpointTs(dispatcher.id, checkpointTs)
 				}
+				if time.Since(time.Unix(dispatcher.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout {
+					inActiveDispatchers = append(inActiveDispatchers, dispatcher)
+				}
+				return true
+			})
+
+			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
+				dispatcher := value.(*dispatcherStat)
 				if time.Since(time.Unix(dispatcher.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout {
 					inActiveDispatchers = append(inActiveDispatchers, dispatcher)
 				}
