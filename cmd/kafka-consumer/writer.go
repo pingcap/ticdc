@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"math"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -138,12 +139,6 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	// The DDL event is delivered after all messages belongs to the tables which are blocked by the DDL event
 	// so we can make assumption that the all DMLs received before the DDL event.
 	// since one table's events may be produced to the different partitions, so we have to flush all partitions.
-	var (
-		done = make(chan struct{}, 1)
-
-		total   int
-		flushed atomic.Int64
-	)
 	// if block the whole database, flush all tables, otherwise flush the blocked tables.
 	tableIDs := make(map[model.TableID]struct{})
 	switch ddl.GetBlockedTables().InfluenceType {
@@ -161,13 +156,21 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 		log.Panic("unsupported influence type", zap.Any("influenceType", ddl.GetBlockedTables().InfluenceType))
 	}
 
+	var (
+		done = make(chan struct{}, 1)
+
+		total   int
+		flushed atomic.Int64
+	)
+
+	watermark := w.globalWatermark()
 	for tableID := range tableIDs {
 		for _, progress := range w.progresses {
 			g, ok := progress.eventGroups[tableID]
 			if !ok {
 				continue
 			}
-			events := g.Resolve(progress.watermark)
+			events := g.Resolve(watermark)
 			resolvedCount := len(events)
 			if resolvedCount == 0 {
 				continue
@@ -184,13 +187,18 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			}
 		}
 	}
+
 	if total != 0 {
+		log.Info("flush DML events before DDL", zap.Uint64("watermark", watermark), zap.Int("total", total))
+		start := time.Now()
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-done:
+			log.Info("flush DML events before DDL done", zap.Uint64("watermark", watermark),
+				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
 		case <-ticker.C:
 			log.Panic("DDL event timeout, since the DML events are not flushed in time",
 				zap.Int("total", total), zap.Int64("flushed", flushed.Load()),
@@ -200,37 +208,49 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	return w.mysqlSink.WriteBlockEvent(ddl)
 }
 
-func (w *writer) flushDMLEventsByWatermark(ctx context.Context, progress *partitionProgress) error {
+func (w *writer) globalWatermark() uint64 {
+	watermark := uint64(math.MaxUint64)
+	for _, progress := range w.progresses {
+		if progress.watermark < watermark {
+			watermark = progress.watermark
+		}
+	}
+	return watermark
+}
+
+func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	var (
 		done = make(chan struct{}, 1)
 
 		total   int
 		flushed atomic.Int64
 	)
-	for _, group := range progress.eventGroups {
-		events := group.Resolve(progress.watermark)
-		resolvedCount := len(events)
-		if resolvedCount == 0 {
-			continue
-		}
-		total += resolvedCount
-		for _, e := range events {
-			e.AddPostFlushFunc(func() {
-				flushed.Inc()
-				if int(flushed.Load()) == total {
-					close(done)
-				}
-			})
-			w.mysqlSink.AddDMLEvent(e)
 
+	watermark := w.globalWatermark()
+	for _, p := range w.progresses {
+		for _, group := range p.eventGroups {
+			events := group.Resolve(watermark)
+			resolvedCount := len(events)
+			if resolvedCount == 0 {
+				continue
+			}
+			total += resolvedCount
+			for _, e := range events {
+				e.AddPostFlushFunc(func() {
+					flushed.Inc()
+					if int(flushed.Load()) == total {
+						close(done)
+					}
+				})
+				w.mysqlSink.AddDMLEvent(e)
+			}
 		}
 	}
 	if total == 0 {
 		return nil
 	}
 
-	log.Info("flush DML events by watermark",
-		zap.Int32("partition", progress.partition), zap.Uint64("watermark", progress.watermark), zap.Int("total", total))
+	log.Info("flush DML events by watermark", zap.Uint64("watermark", watermark), zap.Int("total", total))
 	start := time.Now()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -238,12 +258,10 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context, progress *partit
 	case <-ctx.Done():
 		return context.Cause(ctx)
 	case <-done:
-		log.Info("flush DML events done",
-			zap.Int32("partition", progress.partition), zap.Uint64("watermark", progress.watermark),
+		log.Info("flush DML events done", zap.Uint64("watermark", watermark),
 			zap.Int("total", total), zap.Duration("duration", time.Since(start)))
 	case <-ticker.C:
-		log.Panic("DML events cannot be flushed in 1 minute",
-			zap.Int32("partition", progress.partition), zap.Uint64("watermark", progress.watermark),
+		log.Panic("DML events cannot be flushed in 1 minute", zap.Uint64("watermark", watermark),
 			zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 	}
 	return nil
@@ -280,7 +298,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		progress.updateWatermark(newWatermark, offset)
 
 		// since watermark is broadcast to all partitions, so that each partition can flush events individually.
-		err := w.flushDMLEventsByWatermark(ctx, progress)
+		err := w.flushDMLEventsByWatermark(ctx)
 		if err != nil {
 			log.Panic("flush dml events by the watermark failed", zap.Error(err))
 		}
