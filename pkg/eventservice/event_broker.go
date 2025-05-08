@@ -769,6 +769,7 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 						zap.Duration("lag", lag),
 						zap.Bool("isPaused", slowestDispatchers.isRunning.Load()),
 						zap.Bool("isHandshaked", slowestDispatchers.isHandshaked.Load()),
+						zap.Bool("isTaskScanning", slowestDispatchers.isTaskScanning.Load()),
 					)
 				}
 			}
@@ -832,14 +833,16 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommi
 }
 
 func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
-	d.isTaskScanning.Store(true)
 	if force {
+		d.isTaskScanning.Store(true)
 		c.taskChan[d.scanWorkerIndex] <- d
 	} else {
 		timer := time.NewTimer(time.Millisecond * 10)
 		select {
 		case c.taskChan[d.scanWorkerIndex] <- d:
+			d.isTaskScanning.Store(true)
 		case <-timer.C:
+			d.isTaskScanning.Store(false)
 		}
 	}
 }
