@@ -69,10 +69,7 @@ func (b *BatchDMLEvent) AppendRow(raw *common.RawKVEntry,
 }
 
 func (b *BatchDMLEvent) GetLastCommitTs() uint64 {
-	if len(b.DMLEvents) == 0 {
-		return 0
-	}
-	return b.DMLEvents[len(b.DMLEvents)-1].CommitTs
+	return b.DMLEvents[len(b.DMLEvents)-1].GetCommitTs()
 }
 
 // Len returns the number of row change events all transaction.
