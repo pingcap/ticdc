@@ -368,6 +368,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				// and wake dynamic stream to handle the next events.
 				if d.tableProgress.Empty() {
 					wakeCallback()
+					log.Info("dispatcher dml event wake callback", zap.Any("dispatcher", d.id), zap.Any("commitTs", event.GetCommitTs()))
 				}
 			})
 			d.AddDMLEventToSink(dml)
