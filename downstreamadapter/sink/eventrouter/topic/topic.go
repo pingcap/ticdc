@@ -20,7 +20,7 @@ const (
 	DynamicTopicGeneratorType
 )
 
-type TopicGenerator interface {
+type Generator interface {
 	Substitute(schema, table string) string
 	TopicGeneratorType() TopicGeneratorType
 }
@@ -69,7 +69,7 @@ func (d *DynamicTopicGenerator) TopicGeneratorType() TopicGeneratorType {
 
 func GetTopicGenerator(
 	rule string, defaultTopic string, isPulsar bool, isAvro bool,
-) (TopicGenerator, error) {
+) (Generator, error) {
 	if rule == "" {
 		return newStaticTopic(defaultTopic), nil
 	}

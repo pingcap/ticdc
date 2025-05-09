@@ -22,13 +22,13 @@ import (
 	"go.uber.org/zap"
 )
 
-type PartitionGenerator interface {
+type Generator interface {
 	// GeneratePartitionIndexAndKey returns an index of partitions or a partition key for event.
 	// Concurrency Note: This method is thread-safe.
 	GeneratePartitionIndexAndKey(row *commonEvent.RowChange, partitionNum int32, tableInfo *common.TableInfo, commitTs uint64) (int32, string, error)
 }
 
-func GetPartitionGenerator(rule string, isPulsar bool, indexName string, columns []string) PartitionGenerator {
+func NewGenerator(rule string, isPulsar bool, indexName string, columns []string) Generator {
 	switch strings.ToLower(rule) {
 	case "default", "table":
 		return newTablePartitionGenerator()

@@ -77,7 +77,6 @@ func CheckIsTiDB(ctx context.Context, db *sql.DB) bool {
 	row := db.QueryRowContext(ctx, "select tidb_version()")
 	err := row.Scan(&tidbVer)
 	if err != nil {
-		log.Warn("check tidb version error, the downstream db is not tidb?", zap.Error(err))
 		// In earlier versions, this function returned an `error` along with a boolean value,
 		// which allowed callers to differentiate between network-related issues and
 		// the absence of TiDB. However, since the specific error content wasn't critical to
@@ -94,6 +93,7 @@ func CheckIsTiDB(ctx context.Context, db *sql.DB) bool {
 		// query to retrieve the TiDB version fails.
 		return false
 	}
+	log.Info("mysql sink target is TiDB", zap.String("version", tidbVer))
 	return true
 }
 
@@ -484,18 +484,17 @@ func getDDLCreateTime(ctx context.Context, db *sql.DB) string {
 	ddlCreateTime := "" // default when scan failed
 	row, err := db.QueryContext(ctx, "BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;")
 	if err != nil {
-		log.Warn("selecting tidb current timestamp failed", zap.Error(err))
-	} else {
-		for row.Next() {
-			err = row.Scan(&ddlCreateTime)
-			if err != nil {
-				log.Warn("getting ddlCreateTime failed", zap.Error(err))
-			}
-		}
-		//nolint:sqlclosecheck
-		_ = row.Close()
-		_ = row.Err()
+		return ddlCreateTime
 	}
+	for row.Next() {
+		err = row.Scan(&ddlCreateTime)
+		if err != nil {
+			log.Warn("getting ddlCreateTime failed", zap.Error(err))
+		}
+	}
+	//nolint:sqlclosecheck
+	_ = row.Close()
+	_ = row.Err()
 	return ddlCreateTime
 }
 
