@@ -63,6 +63,7 @@ func NewManager(gcServiceID string, pdClient pd.Client, pdClock pdutil.Clock) Ma
 		gcServiceID:       gcServiceID,
 		pdClient:          pdClient,
 		pdClock:           pdClock,
+		lastUpdatedTime:   atomic.NewTime(time.Now()),
 		lastSucceededTime: atomic.NewTime(time.Now()),
 		gcTTL:             serverConfig.GcTTL,
 	}
