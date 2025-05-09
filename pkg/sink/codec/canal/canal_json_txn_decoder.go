@@ -105,7 +105,7 @@ func (d *txnDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 func (d *txnDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
 	msg := d.msg
 
-	tableInfo := newTableInfo(msg, 0)
+	tableInfo := newTableInfo(msg)
 	result := new(commonEvent.DMLEvent)
 	result.Length++                    // todo: set this field correctly
 	result.StartTs = msg.getCommitTs() // todo: how to set this correctly?
