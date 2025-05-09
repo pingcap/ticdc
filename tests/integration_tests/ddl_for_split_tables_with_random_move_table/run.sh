@@ -112,7 +112,7 @@ main() {
 
 	sleep 10
 
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 
 	cleanup_process $CDC_BINARY
 }

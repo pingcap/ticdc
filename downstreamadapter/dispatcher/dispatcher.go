@@ -321,6 +321,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	// Only return false when all events are resolvedTs Event.
 	block = false
+	log.Info("dispatcher handle events", zap.Any("dispatcher", d.id), zap.Any("events len", len(dispatcherEvents)))
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		log.Debug("dispatcher receive all event",
