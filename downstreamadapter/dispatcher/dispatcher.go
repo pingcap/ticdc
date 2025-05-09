@@ -408,6 +408,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 					d.tableSchemaStore.AddEvent(ddl)
 				}
 				wakeCallback()
+				log.Info("dispatcher ddl event wake callback", zap.Any("dispatcher", d.id), zap.Any("commitTs", event.GetCommitTs()))
 			})
 			d.dealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
