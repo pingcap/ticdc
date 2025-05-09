@@ -67,6 +67,8 @@ func NewEventDecoder(ctx context.Context, codecConfig *common.Config, topic stri
 		decoder = avro.NewDecoder(codecConfig, schemaM, topic, upstreamTiDB)
 	case config.ProtocolSimple:
 		decoder, err = simple.NewDecoder(ctx, codecConfig, upstreamTiDB)
+	case config.ProtocolDebezium:
+		decoder = debezium.NewDecoder(codecConfig, upstreamTiDB)
 	default:
 		log.Panic("Protocol not supported", zap.Any("Protocol", codecConfig.Protocol))
 	}
