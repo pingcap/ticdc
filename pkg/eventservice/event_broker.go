@@ -371,6 +371,7 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		// And the resolvedTs should be the last sent watermark.
 		resolvedTs := task.sentResolvedTs.Load()
 		remoteID := node.ID(task.info.GetServerID())
+		log.Info("fizz checkNeedScan , task is not running, send watermark", zap.Uint64("resolvedTs", resolvedTs))
 		c.sendWatermark(remoteID, task, resolvedTs)
 		return false, common.DataRange{}
 	}
