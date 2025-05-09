@@ -125,26 +125,29 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 		log.Panic("next DDL event failed, since value payload is empty")
 	}
 	defer d.clear()
+
+	schemaName := d.getSchemaName()
+	tableName := d.getTableName()
+
 	event := new(commonEvent.DDLEvent)
 	event.FinishedTs = d.getCommitTs()
-	event.SchemaName = d.getSchemaName()
-	event.TableName = d.getTableName()
-
+	event.SchemaName = schemaName
+	event.TableName = tableName
 	event.Query = d.valuePayload["ddl"].(string)
 	actionType := common.GetDDLActionType(event.Query)
 	event.Type = byte(actionType)
 
 	var tableID int64
-	tableInfo, ok := tableInfoAccessor.Get(event.SchemaName, event.TableName)
+	tableInfo, ok := tableInfoAccessor.Get(schemaName, tableName)
 	if ok {
 		tableID = tableInfo.TableName.TableID
 	}
 	event.BlockedTables = common.GetInfluenceTables(actionType, tableID)
 	log.Debug("set blocked tables for the DDL event",
-		zap.String("schema", event.SchemaName), zap.String("table", event.TableName),
+		zap.String("schema", schemaName), zap.String("table", tableName),
 		zap.String("query", event.Query), zap.Any("blocked", event.BlockedTables))
 
-	tableInfoAccessor.Remove(event.GetSchemaName(), event.GetTableName())
+	tableInfoAccessor.Remove(schemaName, tableName)
 	return event
 }
 
@@ -160,23 +163,26 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 		log.Panic("next DML event failed, since EnableTiDBExtension is false")
 	}
 	defer d.clear()
-	tableInfo := d.getTableInfo()
+	tableInfo := d.queryTableInfo()
 	commitTs := d.getCommitTs()
 	event := &commonEvent.DMLEvent{
-		CommitTs:  commitTs,
-		TableInfo: tableInfo,
+		Rows:            chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1),
+		StartTs:         commitTs,
+		CommitTs:        commitTs,
+		TableInfo:       tableInfo,
+		PhysicalTableID: tableInfo.TableName.TableID,
+		Length:          1,
 	}
-	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	columns := tableInfo.GetColumns()
 	before, ok1 := d.valuePayload["before"].(map[string]interface{})
 	if ok1 {
 		data := assembleColumnData(before, columns)
-		common.AppendRow2Chunk(data, columns, chk)
+		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
 	after, ok2 := d.valuePayload["after"].(map[string]interface{})
 	if ok2 {
 		data := assembleColumnData(after, columns)
-		common.AppendRow2Chunk(data, columns, chk)
+		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
 	if ok1 && ok2 {
 		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeUpdate)
@@ -188,8 +194,6 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	} else {
 		log.Panic("unknown event type for the DML event")
 	}
-	event.Length += 1
-	event.PhysicalTableID = tableIDAllocator.AllocateTableID(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	return event
 }
 
@@ -221,7 +225,7 @@ func (d *decoder) clear() {
 	d.valueSchema = nil
 }
 
-func (d *decoder) getTableInfo() *commonType.TableInfo {
+func (d *decoder) queryTableInfo() *commonType.TableInfo {
 	schemaName := d.getSchemaName()
 	tableName := d.getTableName()
 
@@ -232,7 +236,8 @@ func (d *decoder) getTableInfo() *commonType.TableInfo {
 
 	tidbTableInfo := new(timodel.TableInfo)
 	tidbTableInfo.ID = tableIDAllocator.AllocateTableID(schemaName, tableName)
-	tidbTableInfo.Name = pmodel.NewCIStr(d.getTableName())
+	tidbTableInfo.Name = pmodel.NewCIStr(tableName)
+
 	fields := d.valueSchema["fields"].([]interface{})
 	after := fields[1].(map[string]interface{})
 	columnsField := after["fields"].([]interface{})
@@ -249,7 +254,7 @@ func (d *decoder) getTableInfo() *commonType.TableInfo {
 				fieldType.SetDecimal(6)
 			}
 		}
-		if _, ok := d.keyPayload[colName]; ok {
+		if _, ok = d.keyPayload[colName]; ok {
 			indexColumns = append(indexColumns, &timodel.IndexColumn{
 				Name:   pmodel.NewCIStr(colName),
 				Offset: idx,
@@ -270,7 +275,7 @@ func (d *decoder) getTableInfo() *commonType.TableInfo {
 		Unique:  true,
 		Primary: true,
 	})
-	result := commonType.NewTableInfo4Decoder(d.getSchemaName(), tidbTableInfo)
+	result := commonType.NewTableInfo4Decoder(schemaName, tidbTableInfo)
 	tableInfoAccessor.Add(schemaName, tableName, result)
 	return result
 }
