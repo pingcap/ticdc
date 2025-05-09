@@ -38,7 +38,7 @@ import (
 )
 
 const checkRunningAddIndexSQL = `
-SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE_ID, STATE, QUERY
+SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, STATE
 FROM information_schema.ddl_jobs
 WHERE TABLE_ID = "%d"
     AND JOB_TYPE LIKE "add index%%"

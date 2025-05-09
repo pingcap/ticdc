@@ -17,6 +17,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
@@ -65,6 +66,10 @@ func NewSplitScheduler(
 }
 
 func (s *splitScheduler) Execute() time.Time {
+	failpoint.Inject("StopSplitScheduler", func() time.Time {
+		return time.Now().Add(s.checkInterval)
+	})
+
 	if s.splitter == nil {
 		return time.Time{}
 	}

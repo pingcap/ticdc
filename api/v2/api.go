@@ -61,6 +61,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	// internal APIs
 	changefeedGroup.POST("/:changefeed_id/move_table", authenticateMiddleware, api.MoveTable)
+	changefeedGroup.POST("/:changefeed_id/move_split_table", authenticateMiddleware, api.MoveSplitTable)
 	changefeedGroup.GET("/:changefeed_id/get_dispatcher_count", api.getDispatcherCount)
 	changefeedGroup.GET("/:changefeed_id/tables", api.ListTables)
 

@@ -751,6 +751,80 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 	c.JSON(getStatus(c), &EmptyResponse{})
 }
 
+// MoveSplitTable handles move all dispatchers in the splited table in changefeed to target node,
+// it returns the move result(success or err)
+// This api is for inner test use, not public use. It may be removed in the future.
+// Usage:
+// curl -X POST http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/move_split_table?tableID={tableID}&targetNodeID={targetNodeID}
+// Note:
+// 1. tableID is the table id in the changefeed
+// 2. targetNodeID is the node id to move the table to
+// You can find the node id by using the list_captures api
+func (h *OpenAPIV2) MoveSplitTable(c *gin.Context) {
+	tableIdStr := c.Query("tableID")
+	tableId, err := strconv.ParseInt(tableIdStr, 10, 64)
+	if err != nil {
+		log.Error("failed to parse tableID", zap.Error(err), zap.String("tableID", tableIdStr))
+		_ = c.Error(err)
+		return
+	}
+
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
+			changefeedDisplayName.Name))
+		return
+	}
+
+	// get changefeedID first
+	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Name)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	if cfInfo.MaintainerAddr == "" {
+		_ = c.Error(errors.New("Can't not find maintainer for changefeed: " + changefeedDisplayName.Name))
+		return
+	}
+
+	selfInfo, err := h.server.SelfInfo()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	if cfInfo.MaintainerAddr != selfInfo.AdvertiseAddr {
+		// Forward the request to the maintainer
+		middleware.ForwardToServer(c, selfInfo.ID, cfInfo.MaintainerAddr)
+		c.Abort()
+		return
+	}
+
+	changefeedID := common.ChangeFeedID{
+		Id:          cfInfo.GID,
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+	}
+
+	maintainerManager := h.server.GetMaintainerManager()
+	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
+
+	if !ok {
+		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("Name", changefeedID.DisplayName.String()))
+		_ = c.Error(apperror.ErrMaintainerNotFounded)
+		return
+	}
+
+	targetNodeID := c.Query("targetNodeID")
+	err = maintainer.MoveSplitTable(int64(tableId), node.ID(targetNodeID))
+	if err != nil {
+		log.Error("failed to move split table", zap.Error(err), zap.Int64("tableID", tableId), zap.String("targetNodeID", targetNodeID))
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(getStatus(c), &EmptyResponse{})
+}
+
 // ListTables lists all tables in a changefeed
 // Usage:
 // curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/tables
