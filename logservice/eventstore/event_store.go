@@ -588,7 +588,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	}
 	subscriptionStat := e.dispatcherMeta.subscriptionStats[stat.subID]
 	if dataRange.StartTs < subscriptionStat.checkpointTs.Load() {
-		log.Panic("should not happen",
+		log.Panic("dataRange startTs is larger than subscriptionStat checkpointTs, it should not happen",
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Uint64("checkpointTs", subscriptionStat.checkpointTs.Load()),
 			zap.Uint64("startTs", dataRange.StartTs))
