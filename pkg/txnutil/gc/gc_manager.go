@@ -47,8 +47,8 @@ type gcManager struct {
 	pdClock     pdutil.Clock
 	gcTTL       int64
 
-	lastUpdatedTime   time.Time
-	lastSucceededTime time.Time
+	lastUpdatedTime   *atomic.Time
+	lastSucceededTime *atomic.Time
 	lastSafePointTs   atomic.Uint64
 	isTiCDCBlockGC    atomic.Bool
 }
@@ -63,7 +63,8 @@ func NewManager(gcServiceID string, pdClient pd.Client, pdClock pdutil.Clock) Ma
 		gcServiceID:       gcServiceID,
 		pdClient:          pdClient,
 		pdClock:           pdClock,
-		lastSucceededTime: time.Now(),
+		lastUpdatedTime:   atomic.NewTime(time.Now()),
+		lastSucceededTime: atomic.NewTime(time.Now()),
 		gcTTL:             serverConfig.GcTTL,
 	}
 }
@@ -71,10 +72,10 @@ func NewManager(gcServiceID string, pdClient pd.Client, pdClock pdutil.Clock) Ma
 func (m *gcManager) TryUpdateGCSafePoint(
 	ctx context.Context, checkpointTs common.Ts, forceUpdate bool,
 ) error {
-	if time.Since(m.lastUpdatedTime) < gcSafepointUpdateInterval && !forceUpdate {
+	if time.Since(m.lastUpdatedTime.Load()) < gcSafepointUpdateInterval && !forceUpdate {
 		return nil
 	}
-	m.lastUpdatedTime = time.Now()
+	m.lastUpdatedTime.Store(time.Now())
 
 	actual, err := SetServiceGCSafepoint(
 		ctx, m.pdClient, m.gcServiceID, m.gcTTL, checkpointTs)
@@ -82,7 +83,7 @@ func (m *gcManager) TryUpdateGCSafePoint(
 		log.Warn("updateGCSafePoint failed",
 			zap.Uint64("safePointTs", checkpointTs),
 			zap.Error(err))
-		if time.Since(m.lastSucceededTime) >= time.Second*time.Duration(m.gcTTL) {
+		if time.Since(m.lastSucceededTime.Load()) >= time.Second*time.Duration(m.gcTTL) {
 			return cerror.ErrUpdateServiceSafepointFailed.Wrap(err)
 		}
 		return nil
@@ -108,7 +109,7 @@ func (m *gcManager) TryUpdateGCSafePoint(
 	// gc safe point
 	m.isTiCDCBlockGC.Store(actual == checkpointTs)
 	m.lastSafePointTs.Store(actual)
-	m.lastSucceededTime = time.Now()
+	m.lastSucceededTime.Store(time.Now())
 	minServiceGCSafePointGauge.Set(float64(oracle.ExtractPhysical(actual)))
 	cdcGCSafePointGauge.Set(float64(oracle.ExtractPhysical(checkpointTs)))
 	return nil
