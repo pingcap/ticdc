@@ -232,7 +232,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.D
 	}
 }
 
-func (c *eventBroker) sendWatermark(
+func (c *eventBroker) sendResolvedTs(
 	server node.ID,
 	d *dispatcherStat,
 	watermark uint64,
@@ -316,7 +316,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) {
 				}
 				if endTs > startTs {
 					// After all the events are sent, we send the watermark to the dispatcher.
-					c.sendWatermark(remoteID, dispatcherStat, endTs)
+					c.sendResolvedTs(remoteID, dispatcherStat, endTs)
 				}
 				return true
 			})
@@ -372,7 +372,7 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		resolvedTs := task.sentResolvedTs.Load()
 		remoteID := node.ID(task.info.GetServerID())
 		log.Info("fizz checkNeedScan , task is not running, send watermark", zap.Uint64("resolvedTs", resolvedTs))
-		c.sendWatermark(remoteID, task, resolvedTs)
+		c.sendResolvedTs(remoteID, task, resolvedTs)
 		return false, common.DataRange{}
 	}
 
@@ -400,7 +400,7 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		// The dispatcher has no new events. In such case, we don't need to scan the event store.
 		// We just send the watermark to the dispatcher.
 		remoteID := node.ID(task.info.GetServerID())
-		c.sendWatermark(remoteID, task, dataRange.EndTs)
+		c.sendResolvedTs(remoteID, task, dataRange.EndTs)
 		return false, common.DataRange{}
 	}
 
@@ -542,7 +542,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				log.Error("expect a ResolvedEvent, but got", zap.Any("event", e))
 				continue
 			}
-			c.sendWatermark(remoteID, task, re.ResolvedTs)
+			c.sendResolvedTs(remoteID, task, re.ResolvedTs)
 		}
 	}
 	// Update metrics

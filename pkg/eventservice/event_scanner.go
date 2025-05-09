@@ -132,7 +132,7 @@ func (s *EventScanner) Scan(
 		lastCommitTs = dml.CommitTs
 	}
 
-	appendWaterMark := func(resolvedTs uint64) {
+	appendResolvedTs := func(resolvedTs uint64) {
 		if resolvedTs == 0 {
 			return
 		}
@@ -164,22 +164,23 @@ func (s *EventScanner) Scan(
 		if e == nil {
 			appendDML(dml)
 			appendRemainingDDLEvents()
-			appendWaterMark(dataRange.EndTs)
+			appendResolvedTs(dataRange.EndTs)
 			return events, false, nil
 		}
 
 		eSize := len(e.Key) + len(e.Value) + len(e.OldValue)
 		totalBytes += int64(eSize)
 		elapsed := time.Since(startTime)
-
+		// -2.commitTs , -1.commitTs, current
 		if isNewTxn {
+			appendDML(dml)
+
 			if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs {
 				log.Info("fizz scan break", zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("e.CRTs", e.CRTs))
-				appendWaterMark(lastCommitTs)
+				appendResolvedTs(lastCommitTs)
 				return events, true, nil
 			}
 
-			appendDML(dml)
 			tableID := dataRange.Span.TableID
 			tableInfo, err := s.schemaStore.GetTableInfo(tableID, e.CRTs-1)
 			if err != nil {
