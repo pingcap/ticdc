@@ -99,14 +99,17 @@ const (
 // ToRedoLog converts row changed event to redo log
 func (r *DMLEvent) ToRedoLog() *RedoLog {
 	r.Rewind()
-	row, valid := r.GetNextRow()
-	r.Rewind()
-
+	startTs := r.GetStartTs()
+	commitTs := r.GetCommitTs()
+	row, ok := r.GetNextRow()
+	if !ok {
+		return nil
+	}
 	redoLog := &RedoLog{
 		RedoRow: RedoDMLEvent{
 			Row: &DMLEventInRedoLog{
-				StartTs:      r.StartTs,
-				CommitTs:     r.CommitTs,
+				StartTs:      startTs,
+				CommitTs:     commitTs,
 				Table:        nil,
 				Columns:      nil,
 				PreColumns:   nil,
@@ -117,8 +120,7 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 		},
 		Type: RedoLogTypeRow,
 	}
-
-	if valid && r.TableInfo != nil {
+	if r.TableInfo != nil {
 		redoLog.RedoRow.Row.Table = new(common.TableName)
 		*redoLog.RedoRow.Row.Table = r.TableInfo.TableName
 
@@ -162,7 +164,6 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 		redoLog.RedoRow.Row.Columns = columns
 		redoLog.RedoRow.Row.PreColumns = columns
 	}
-
 	return redoLog
 }
 

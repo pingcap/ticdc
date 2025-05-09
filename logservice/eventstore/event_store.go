@@ -547,7 +547,6 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				subscriptionStat.checkpointTs.Load(),
 				newCheckpointTs,
 			)
-			subscriptionStat.checkpointTs.CompareAndSwap(subscriptionStat.checkpointTs.Load(), newCheckpointTs)
 			if log.GetLevel() <= zap.DebugLevel {
 				log.Debug("update checkpoint ts",
 					zap.Any("dispatcherID", dispatcherID),
@@ -555,6 +554,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 					zap.Uint64("newCheckpointTs", newCheckpointTs),
 					zap.Uint64("oldCheckpointTs", subscriptionStat.checkpointTs.Load()))
 			}
+			subscriptionStat.checkpointTs.CompareAndSwap(subscriptionStat.checkpointTs.Load(), newCheckpointTs)
 		}
 	}
 	return nil

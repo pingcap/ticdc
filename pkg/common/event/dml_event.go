@@ -15,6 +15,7 @@ package event
 
 import (
 	"encoding/binary"
+	"errors"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -30,15 +31,156 @@ const (
 	DMLEventVersion = 0
 )
 
+type BatchDMLEvent struct {
+	DMLEvents []*DMLEvent `json:"dml_events"`
+	// Rows is the rows of the transactions.
+	Rows *chunk.Chunk `json:"rows"`
+	// RawRows is the raw bytes of the rows.
+	// When the DMLEvent is received from a remote eventService, the Rows is nil.
+	// All the data is stored in RawRows.
+	// The receiver needs to call DecodeRawRows function to decode the RawRows into Rows.
+	RawRows   []byte            `json:"raw_rows"`
+	TableInfo *common.TableInfo `json:"table_info"`
+}
+
+func (b *BatchDMLEvent) AppendDMLEvent(dml *DMLEvent) {
+	if b.TableInfo == nil {
+		b.TableInfo = dml.TableInfo
+		// FIXME: check if chk isFull in the future
+		b.Rows = chunk.NewChunkWithCapacity(dml.TableInfo.GetFieldSlice(), defaultRowCount)
+	}
+	if len(b.DMLEvents) > 0 {
+		pre := b.DMLEvents[len(b.DMLEvents)-1]
+		dml.cumOffset = pre.cumOffset + len(pre.RowTypes)
+	}
+	dml.Rows = b.Rows
+	b.DMLEvents = append(b.DMLEvents, dml)
+}
+
+func (b *BatchDMLEvent) AppendRow(raw *common.RawKVEntry,
+	decode func(
+		rawKv *common.RawKVEntry,
+		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error),
+) error {
+	if len(b.DMLEvents) == 0 {
+		return errors.New("DMLEvents length is 0")
+	}
+	return b.DMLEvents[len(b.DMLEvents)-1].AppendRow(raw, decode)
+}
+
+func (b *BatchDMLEvent) GetCommitTs() uint64 {
+	return b.DMLEvents[len(b.DMLEvents)-1].GetCommitTs()
+}
+
+// Len returns the number of row change events all transaction.
+func (b *BatchDMLEvent) Len() int32 {
+	var length int32
+	for _, dml := range b.DMLEvents {
+		length += dml.Len()
+	}
+	return length
+}
+
+func (b *BatchDMLEvent) GetType() int {
+	return TypeBatchDMLEvent
+}
+
+func (b *BatchDMLEvent) Unmarshal(data []byte) error {
+	var err error
+	offset := 0
+	// TableInfo
+	tableInfoDataSize := int(binary.BigEndian.Uint64(data[offset:]))
+	offset += 8
+	b.TableInfo, err = common.UnmarshalJSONToTableInfo(data[offset : offset+tableInfoDataSize])
+	if err != nil {
+		return err
+	}
+	offset += tableInfoDataSize
+	// DMLEvents
+	length := int(binary.LittleEndian.Uint64(data[offset:]))
+	offset += 8
+	b.DMLEvents = make([]*DMLEvent, 0, length)
+	for i := 0; i < length; i++ {
+		event := &DMLEvent{}
+		eventDataSize := int(binary.BigEndian.Uint64(data[offset:]))
+		offset += 8
+		err := event.Unmarshal(data[offset:])
+		if err != nil {
+			return err
+		}
+		b.DMLEvents = append(b.DMLEvents, event)
+		offset += eventDataSize
+	}
+	b.RawRows = data[offset:]
+	return nil
+}
+
+func (b *BatchDMLEvent) Marshal() ([]byte, error) {
+	data := make([]byte, 0)
+	// TableInfo
+	tableInfoData, err := b.TableInfo.Marshal()
+	if err != nil {
+		return nil, err
+	}
+	tableInfoDataSize := make([]byte, 8)
+	binary.BigEndian.PutUint64(tableInfoDataSize, uint64(len(tableInfoData)))
+	data = append(data, tableInfoDataSize...)
+	data = append(data, tableInfoData...)
+	// DMLEvents
+	dmlEventsDataSize := make([]byte, 8)
+	binary.LittleEndian.PutUint64(dmlEventsDataSize, uint64(len(b.DMLEvents)))
+	data = append(data, dmlEventsDataSize...)
+	for _, event := range b.DMLEvents {
+		buff, err := event.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		eventDataSize := make([]byte, 8)
+		binary.BigEndian.PutUint64(eventDataSize, uint64(len(buff)))
+		data = append(data, eventDataSize...)
+		data = append(data, buff...)
+	}
+	encoder := chunk.NewCodec(b.TableInfo.GetFieldSlice())
+	value := encoder.Encode(b.Rows)
+	// Append the encoded value to the buffer
+	data = append(data, value...)
+	return data, nil
+}
+
+// AssembleRows assembles the Rows from the RawRows.
+// It also sets the TableInfo and clears the RawRows.
+func (b *BatchDMLEvent) AssembleRows() {
+	defer b.TableInfo.InitPrivateFields()
+	// rows is already set, no need to assemble again
+	// When the event is passed from the same node, the Rows is already set.
+	if b.Rows != nil {
+		return
+	}
+	if len(b.RawRows) == 0 {
+		log.Panic("DMLEvent: RawRows is empty")
+		return
+	}
+	decoder := chunk.NewCodec(b.TableInfo.GetFieldSlice())
+	b.Rows, _ = decoder.Decode(b.RawRows)
+	b.RawRows = nil
+	for i, dml := range b.DMLEvents {
+		dml.Rows = b.Rows
+		dml.TableInfo = b.TableInfo
+		if i > 0 {
+			pre := b.DMLEvents[i-1]
+			dml.cumOffset = pre.cumOffset + len(pre.RowTypes)
+		}
+	}
+}
+
 // DMLEvent represent a batch of DMLs of a whole or partial of a transaction.
 type DMLEvent struct {
 	// Version is the version of the DMLEvent struct.
-	Version          byte                `json:"version"`
-	DispatcherID     common.DispatcherID `json:"dispatcher_id"`
-	PhysicalTableID  int64               `json:"physical_table_id"`
-	StartTs          uint64              `json:"start_ts"`
-	CommitTs         uint64              `json:"commit_ts"`
-	TableInfoVersion uint64              `json:"table_info_version"`
+	Version         byte                `json:"version"`
+	DispatcherID    common.DispatcherID `json:"dispatcher_id"`
+	PhysicalTableID int64               `json:"physical_table_id"`
+	StartTs         uint64              `json:"start_ts"`
+	CommitTs        uint64              `json:"commit_ts"`
 	// The seq of the event. It is set by event service.
 	Seq uint64 `json:"seq"`
 	// State is the state of sender when sending this event.
@@ -50,13 +192,8 @@ type DMLEvent struct {
 	// ApproximateSize is the approximate size of all rows in the transaction.
 	ApproximateSize int64     `json:"approximate_size"`
 	RowTypes        []RowType `json:"row_types"`
-	// Rows is the rows of the transaction.
-	Rows *chunk.Chunk `json:"rows"`
-	// RawRows is the raw bytes of the rows.
-	// When the DMLEvent is received from a remote eventService, the Rows is nil.
-	// All the data is stored in RawRows.
-	// The receiver needs to call DecodeRawRows function to decode the RawRows into Rows.
-	RawRows []byte `json:"raw_rows"`
+	// Rows shares BatchDMLEvent rows
+	Rows *chunk.Chunk `json:"-"`
 
 	// TableInfo is the table info of the transaction.
 	// If the DMLEvent is send from a remote eventService, the TableInfo is nil.
@@ -72,6 +209,8 @@ type DMLEvent struct {
 	// offset is the offset of the current row in the transaction.
 	// It is internal field, not exported. So it doesn't need to be marshalled.
 	offset int `json:"-"`
+	// cumOffset stores previous dml events
+	cumOffset int `json:"-"`
 
 	// Checksum for the event, only not nil if the upstream TiDB enable the row level checksum
 	// and TiCDC set the integrity check level to the correctness.
@@ -86,18 +225,14 @@ func NewDMLEvent(
 	commitTs uint64,
 	tableInfo *common.TableInfo,
 ) *DMLEvent {
-	// FIXME: check if chk isFull in the future
-	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount)
 	return &DMLEvent{
-		Version:          DMLEventVersion,
-		DispatcherID:     dispatcherID,
-		PhysicalTableID:  tableID,
-		StartTs:          startTs,
-		CommitTs:         commitTs,
-		TableInfoVersion: tableInfo.UpdateTS(),
-		TableInfo:        tableInfo,
-		Rows:             chk,
-		RowTypes:         make([]RowType, 0, 1),
+		Version:         DMLEventVersion,
+		DispatcherID:    dispatcherID,
+		PhysicalTableID: tableID,
+		StartTs:         startTs,
+		CommitTs:        commitTs,
+		TableInfo:       tableInfo,
+		RowTypes:        make([]RowType, 0, 1),
 	}
 }
 
@@ -140,10 +275,12 @@ func (t *DMLEvent) GetDispatcherID() common.DispatcherID {
 	return t.DispatcherID
 }
 
+// GetCommitTs returns current transaction commitTs
 func (t *DMLEvent) GetCommitTs() common.Ts {
 	return t.CommitTs
 }
 
+// GetStartTs returns the first transaction startTs
 func (t *DMLEvent) GetStartTs() common.Ts {
 	return t.StartTs
 }
@@ -192,7 +329,7 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 	switch rowType {
 	case RowTypeInsert:
 		row := RowChange{
-			Row:      t.Rows.GetRow(t.offset),
+			Row:      t.Rows.GetRow(t.cumOffset + t.offset),
 			RowType:  rowType,
 			Checksum: checksum,
 		}
@@ -200,7 +337,7 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		return row, true
 	case RowTypeDelete:
 		row := RowChange{
-			PreRow:   t.Rows.GetRow(t.offset),
+			PreRow:   t.Rows.GetRow(t.cumOffset + t.offset),
 			RowType:  rowType,
 			Checksum: checksum,
 		}
@@ -208,15 +345,15 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		return row, true
 	case RowTypeUpdate:
 		row := RowChange{
-			PreRow:   t.Rows.GetRow(t.offset),
-			Row:      t.Rows.GetRow(t.offset + 1),
+			PreRow:   t.Rows.GetRow(t.cumOffset + t.offset),
+			Row:      t.Rows.GetRow(t.cumOffset + t.offset + 1),
 			RowType:  rowType,
 			Checksum: checksum,
 		}
 		t.offset += 2
 		return row, true
 	default:
-		log.Panic("TEvent.GetNextRow: invalid row type")
+		log.Panic("DMLEvent.GetNextRow: invalid row type")
 	}
 	return RowChange{}, false
 }
@@ -268,7 +405,7 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		return nil, nil
 	}
 	// Calculate the total size needed for the encoded data
-	size := 1 + t.DispatcherID.GetSize() + 6*8 + 4 + t.State.GetSize() + int(t.Length)
+	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4 + t.State.GetSize() + int(t.Length)
 
 	// Allocate a buffer with the calculated size
 	buf := make([]byte, size)
@@ -293,9 +430,6 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	// CommitTs
 	binary.LittleEndian.PutUint64(buf[offset:], t.CommitTs)
 	offset += 8
-	// TableInfoVersion
-	binary.LittleEndian.PutUint64(buf[offset:], t.TableInfoVersion)
-	offset += 8
 	// Seq
 	binary.LittleEndian.PutUint64(buf[offset:], t.Seq)
 	offset += 8
@@ -313,14 +447,7 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		buf[offset] = byte(rowType)
 		offset++
 	}
-
-	encoder := chunk.NewCodec(t.TableInfo.GetFieldSlice())
-	data := encoder.Encode(t.Rows)
-
-	// Append the encoded data to the buffer
-	result := append(buf, data...)
-
-	return result, nil
+	return buf, nil
 }
 
 func (t *DMLEvent) decode(data []byte) error {
@@ -346,8 +473,6 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	offset += 8
 	t.CommitTs = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
-	t.TableInfoVersion = binary.LittleEndian.Uint64(data[offset:])
-	offset += 8
 	t.Seq = binary.LittleEndian.Uint64(data[offset:])
 	offset += 8
 	t.State.decode(data[offset:])
@@ -361,35 +486,7 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 		t.RowTypes[i] = RowType(data[offset])
 		offset++
 	}
-	t.RawRows = data[offset:]
 	return nil
-}
-
-// AssembleRows assembles the Rows from the RawRows.
-// It also sets the TableInfo and clears the RawRows.
-func (t *DMLEvent) AssembleRows(tableInfo *common.TableInfo) {
-	defer t.TableInfo.InitPrivateFields()
-	// t.Rows is already set, no need to assemble again
-	// When the event is passed from the same node, the Rows is already set.
-	if t.Rows != nil {
-		return
-	}
-	if tableInfo == nil {
-		log.Panic("DMLEvent: TableInfo is nil")
-		return
-	}
-	if len(t.RawRows) == 0 {
-		log.Panic("DMLEvent: RawRows is empty")
-		return
-	}
-	if t.TableInfoVersion != tableInfo.UpdateTS() {
-		log.Panic("DMLEvent: TableInfoVersion mismatch", zap.Uint64("dmlEventTableInfoVersion", t.TableInfoVersion), zap.Uint64("tableInfoVersion", tableInfo.UpdateTS()))
-		return
-	}
-	decoder := chunk.NewCodec(tableInfo.GetFieldSlice())
-	t.Rows, _ = decoder.Decode(t.RawRows)
-	t.TableInfo = tableInfo
-	t.RawRows = nil
 }
 
 type RowChange struct {

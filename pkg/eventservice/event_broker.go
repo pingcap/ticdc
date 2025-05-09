@@ -550,8 +550,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	// sendDML is used to send the dml event to the dispatcher.
 	// It returns true if the dml event is sent successfully.
 	// Otherwise, it returns false.
-	sendDML := func(dml *pevent.DMLEvent) bool {
-		if dml == nil {
+	sendDML := func(dmls *pevent.BatchDMLEvent) bool {
+		if dmls == nil {
 			return true
 		}
 
@@ -575,16 +575,19 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 			return false
 		}
 
-		for len(ddlEvents) > 0 && dml.CommitTs > ddlEvents[0].FinishedTs {
+		commitTs := dmls.GetCommitTs()
+		for len(ddlEvents) > 0 && commitTs > ddlEvents[0].FinishedTs {
 			c.sendDDL(ctx, remoteID, ddlEvents[0], task)
 			ddlEvents = ddlEvents[1:]
 		}
 
-		dml.Seq = task.seq.Add(1)
-		c.emitSyncPointEventIfNeeded(dml.CommitTs, task, remoteID)
-		c.getMessageCh(task.messageWorkerIndex) <- newWrapDMLEvent(remoteID, dml, task.getEventSenderState())
-		metricEventServiceSendKvCount.Add(float64(dml.Len()))
-		lastSentDMLCommitTs = dml.CommitTs
+		for _, dml := range dmls.DMLEvents {
+			dml.Seq = task.seq.Add(1)
+		}
+		c.emitSyncPointEventIfNeeded(commitTs, task, remoteID)
+		c.getMessageCh(task.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, dmls, task.getEventSenderState())
+		metricEventServiceSendKvCount.Add(float64(dmls.Len()))
+		lastSentDMLCommitTs = commitTs
 		return true
 	}
 
@@ -596,8 +599,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 
 	// 3. Send the events to the dispatcher.
-	var dml *pevent.DMLEvent
+	var dmls *pevent.BatchDMLEvent
+	var updateTs uint64
 	rowCount := 0
+	tableID := task.info.GetTableSpan().TableID
 	for {
 		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
@@ -606,7 +611,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		}
 		if e == nil {
 			// Send the last dml to the dispatcher.
-			ok := sendDML(dml)
+			ok := sendDML(dmls)
 			if !ok {
 				return
 			}
@@ -630,11 +635,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				// return
 			}
 
-			ok := sendDML(dml)
-			if !ok {
-				return
-			}
-			tableID := task.info.GetTableSpan().TableID
 			tableInfo, err := c.schemaStore.GetTableInfo(tableID, e.CRTs-1)
 			if err != nil {
 				if task.isRemoved.Load() {
@@ -652,9 +652,20 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				log.Panic("get table info failed, unknown reason", zap.Error(err))
 			}
 
-			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
+			hasDDL := dmls != nil && len(ddlEvents) > 0 && e.CRTs > ddlEvents[0].FinishedTs
+			// updateTs may be less than the previous updateTs
+			if tableInfo.UpdateTS() != updateTs || hasDDL {
+				ok := sendDML(dmls)
+				if !ok {
+					return
+				}
+				updateTs = tableInfo.UpdateTS()
+				dmls = new(pevent.BatchDMLEvent)
+			}
+			dml := pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
+			dmls.AppendDMLEvent(dml)
 		}
-		if err = dml.AppendRow(e, c.mounter.DecodeToChunk); err != nil {
+		if err = dmls.AppendRow(e, c.mounter.DecodeToChunk); err != nil {
 			log.Panic("append row failed", zap.Error(err))
 		}
 	}

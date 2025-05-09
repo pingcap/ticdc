@@ -104,7 +104,7 @@ func (ti *TableInfo) InitPrivateFields() {
 		return
 	}
 
-	ti.TableName.quotedName = ti.TableName.QuoteString()
+	ti.TableName.quotedName = QuoteSchema(ti.TableName.Schema, ti.TableName.Table)
 	ti.preSQLs.m[preSQLInsert] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLInsert], ti.TableName.QuoteString())
 	ti.preSQLs.m[preSQLReplace] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLReplace], ti.TableName.QuoteString())
 	ti.preSQLs.m[preSQLUpdate] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLUpdate], ti.TableName.QuoteString())
