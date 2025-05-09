@@ -39,10 +39,8 @@ func newIndexValuePartitionGenerator(indexName string) *IndexValuePartitionGener
 	}
 }
 
-func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonEvent.RowChange,
-	partitionNum int32,
-	tableInfo *common.TableInfo,
-	commitTs uint64,
+func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(
+	row *commonEvent.RowChange, partitionNum int32, tableInfo *common.TableInfo, _ uint64,
 ) (int32, string, error) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
@@ -61,8 +59,7 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(row *commonE
 				continue
 			}
 			if tableInfo.IsHandleKey(col.ID) {
-				value := common.ExtractColVal(&rowData, col, idx)
-				r.hasher.Write([]byte(col.Name.L), []byte(common.ColumnValueString(value)))
+				r.hasher.Write([]byte(col.Name.L), []byte(common.ColumnValueString(common.ExtractColVal(&rowData, col, idx))))
 			}
 		}
 	} else {

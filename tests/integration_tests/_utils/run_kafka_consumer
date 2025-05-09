@@ -19,7 +19,7 @@ cd $workdir
 
 # Because there is no transaction concept in Kafka,
 # we need to set `batch-dml-enable` to false to avoid data inconsistency.
-downstream_uri="mysql://root@127.0.0.1:3306/?safe-mode=true&batch-dml-enable=false"
+downstream_uri="mysql://root@127.0.0.1:3306/?safe-mode=true&batch-dml-enable=false&enable-ddl-ts=false"
 
 # some consumer may require `consumer_replica_config`, set it separately
 if [ "$consumer_replica_config" != "" ] && [ "$schema_registry_uri" != "" ]; then

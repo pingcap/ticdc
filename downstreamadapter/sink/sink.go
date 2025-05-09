@@ -44,7 +44,7 @@ type Sink interface {
 	Run(ctx context.Context) error
 }
 
-func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
+func New(ctx context.Context, config *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
 	sinkURI, err := url.Parse(config.SinkURI)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrSinkURIInvalid, err)
@@ -65,7 +65,7 @@ func NewSink(ctx context.Context, config *config.ChangefeedConfig, changefeedID 
 	return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
 }
 
-func VerifySink(ctx context.Context, config *config.ChangefeedConfig, changefeedID common.ChangeFeedID) error {
+func Verify(ctx context.Context, config *config.ChangefeedConfig, changefeedID common.ChangeFeedID) error {
 	sinkURI, err := url.Parse(config.SinkURI)
 	if err != nil {
 		return errors.WrapError(errors.ErrSinkURIInvalid, err)

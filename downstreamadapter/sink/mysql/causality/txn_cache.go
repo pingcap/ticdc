@@ -18,7 +18,6 @@ import (
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"go.uber.org/zap"
 )
 
 const (
@@ -51,9 +50,6 @@ type txnCache interface {
 }
 
 func newTxnCache(opt TxnCacheOption) txnCache {
-	log.Info("create new worker cache in conflict detector",
-		zap.Int("cacheCount", opt.Count),
-		zap.Int("cacheSize", opt.Size), zap.String("BlockStrategy", string(opt.BlockStrategy)))
 	if opt.Size <= 0 {
 		log.Panic("WorkerOption.CacheSize should be greater than 0, please report a bug")
 	}

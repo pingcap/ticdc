@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -36,26 +35,26 @@ import (
 	"go.uber.org/zap"
 )
 
-// BatchDecoder decodes the byte of a batch into the original messages.
-type BatchDecoder struct {
+var (
+	tableIDAllocator  = common.NewFakeTableIDAllocator()
+	tableInfoAccessor = common.NewTableInfoAccessor()
+)
+
+type decoder struct {
 	keyBytes   []byte
 	valueBytes []byte
 
 	nextKey *messageKey
-	nextRow *messageRow
 
 	storage storage.ExternalStorage
 
 	config *common.Config
 
 	upstreamTiDB *sql.DB
-
-	tableInfoCache   map[tableKey]*commonType.TableInfo
-	tableIDAllocator *common.FakeTableIDAllocator
 }
 
-// NewBatchDecoder creates a new BatchDecoder.
-func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.RowEventDecoder, error) {
+// NewDecoder creates a new decoder.
+func NewDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.Decoder, error) {
 	var (
 		externalStorage storage.ExternalStorage
 		err             error
@@ -74,33 +73,30 @@ func NewBatchDecoder(ctx context.Context, config *common.Config, db *sql.DB) (co
 		}
 	}
 
-	return &BatchDecoder{
-		config:           config,
-		storage:          externalStorage,
-		upstreamTiDB:     db,
-		tableInfoCache:   make(map[tableKey]*commonType.TableInfo),
-		tableIDAllocator: common.NewFakeTableIDAllocator(),
+	tableIDAllocator.Clean()
+	tableInfoAccessor.Clean()
+	return &decoder{
+		config:       config,
+		storage:      externalStorage,
+		upstreamTiDB: db,
 	}, nil
 }
 
-// AddKeyValue implements the RowEventDecoder interface
-func (b *BatchDecoder) AddKeyValue(key, value []byte) error {
+// AddKeyValue implements the Decoder interface
+func (b *decoder) AddKeyValue(key, value []byte) {
 	if len(b.keyBytes) != 0 || len(b.valueBytes) != 0 {
-		return errors.ErrOpenProtocolCodecInvalidData.
-			GenWithStack("decoder key and value not nil")
+		log.Panic("add key / value to the decoder failed, since it's already set")
 	}
 	version := binary.BigEndian.Uint64(key[:8])
 	if version != batchVersion1 {
-		return errors.ErrOpenProtocolCodecInvalidData.
-			GenWithStack("unexpected key format version")
+		log.Panic("the batch version is not supported", zap.Uint64("version", version))
 	}
 
 	b.keyBytes = key[8:]
 	b.valueBytes = value
-	return nil
 }
 
-func (b *BatchDecoder) hasNext() bool {
+func (b *decoder) hasNext() bool {
 	keyLen := len(b.keyBytes)
 	valueLen := len(b.valueBytes)
 
@@ -116,54 +112,32 @@ func (b *BatchDecoder) hasNext() bool {
 	return false
 }
 
-func (b *BatchDecoder) decodeNextKey() {
+// HasNext implements the Decoder interface
+func (b *decoder) HasNext() (common.MessageType, bool) {
+	if !b.hasNext() {
+		return common.MessageTypeUnknown, false
+	}
+
 	keyLen := binary.BigEndian.Uint64(b.keyBytes[:8])
 	key := b.keyBytes[8 : keyLen+8]
 	msgKey := new(messageKey)
 	msgKey.Decode(key)
 	b.nextKey = msgKey
-
 	b.keyBytes = b.keyBytes[keyLen+8:]
+
+	return b.nextKey.Type, true
 }
 
-// HasNext implements the RowEventDecoder interface
-func (b *BatchDecoder) HasNext() (common.MessageType, bool, error) {
-	if !b.hasNext() {
-		return 0, false, nil
-	}
-	b.decodeNextKey()
-
-	switch b.nextKey.Type {
-	case common.MessageTypeResolved, common.MessageTypeDDL:
-		return b.nextKey.Type, true, nil
-	default:
-	}
-	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
-	value := b.valueBytes[8 : valueLen+8]
-	b.valueBytes = b.valueBytes[valueLen+8:]
-
-	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
-	if err != nil {
-		log.Panic("decompress failed",
-			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value), zap.Error(err))
-	}
-	b.nextRow = new(messageRow)
-	b.nextRow.decode(value)
-
-	return common.MessageTypeRow, true, nil
-}
-
-// NextResolvedEvent implements the RowEventDecoder interface
-func (b *BatchDecoder) NextResolvedEvent() (uint64, error) {
+// NextResolvedEvent implements the Decoder interface
+func (b *decoder) NextResolvedEvent() uint64 {
 	if b.nextKey.Type != common.MessageTypeResolved {
-		return 0, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found resolved event message")
+		log.Panic("message type is not watermark", zap.Any("messageType", b.nextKey.Type))
 	}
 	resolvedTs := b.nextKey.Ts
 	b.nextKey = nil
 	// resolved ts event's value part is empty, can be ignored.
 	b.valueBytes = nil
-	return resolvedTs, nil
+	return resolvedTs
 }
 
 type messageDDL struct {
@@ -171,10 +145,10 @@ type messageDDL struct {
 	Type  timodel.ActionType `json:"t"`
 }
 
-// NextDDLEvent implements the RowEventDecoder interface
-func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
+// NextDDLEvent implements the Decoder interface
+func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if b.nextKey.Type != common.MessageTypeDDL {
-		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found ddl event message")
+		log.Panic("message type is not DDL", zap.Any("messageType", b.nextKey.Type))
 	}
 
 	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
@@ -182,7 +156,9 @@ func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 
 	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
-		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("decompress DDL event failed")
+		log.Panic("decompress failed",
+			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value), zap.Error(err))
 	}
 
 	var m messageDDL
@@ -197,16 +173,45 @@ func (b *BatchDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	result.FinishedTs = b.nextKey.Ts
 	result.SchemaName = b.nextKey.Schema
 	result.TableName = b.nextKey.Table
+	actionType := common.GetDDLActionType(result.Query)
+	result.Type = byte(actionType)
+
+	var tableID int64
+	tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
+	if ok {
+		tableID = tableInfo.TableName.TableID
+	}
+	result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
+	log.Debug("set blocked tables for the DDL event",
+		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
+
+	tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
+
 	b.nextKey = nil
 	b.valueBytes = nil
-	return result, nil
+	return result
 }
 
-// NextDMLEvent implements the RowEventDecoder interface
-func (b *BatchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+// NextDMLEvent implements the Decoder interface
+func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if b.nextKey.Type != common.MessageTypeRow {
-		return nil, errors.ErrOpenProtocolCodecInvalidData.GenWithStack("not found row event message")
+		log.Panic("message type is not row", zap.Any("messageType", b.nextKey.Type))
 	}
+
+	valueLen := binary.BigEndian.Uint64(b.valueBytes[:8])
+	value := b.valueBytes[8 : valueLen+8]
+	b.valueBytes = b.valueBytes[valueLen+8:]
+
+	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
+	if err != nil {
+		log.Panic("decompress failed",
+			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value), zap.Error(err))
+	}
+
+	nextRow := new(messageRow)
+	nextRow.decode(value)
 
 	ctx := context.Background()
 	// claim-check message found
@@ -215,51 +220,44 @@ func (b *BatchDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	}
 
 	if b.nextKey.OnlyHandleKey && b.upstreamTiDB != nil {
-		return b.assembleHandleKeyOnlyDMLEvent(ctx), nil
+		return b.assembleHandleKeyOnlyDMLEvent(ctx, nextRow)
 	}
 
-	result := b.assembleDMLEvent()
-
+	result := b.assembleDMLEvent(nextRow)
 	b.nextKey = nil
-	b.nextRow = nil
-	return result, nil
-}
-
-func buildColumns(
-	holder *common.ColumnsHolder, handleKeyColumns map[string]column,
-) map[string]column {
-	columnsCount := holder.Length()
-	result := make(map[string]column, columnsCount)
-	for i := 0; i < columnsCount; i++ {
-		columnType := holder.Types[i]
-		name := columnType.Name()
-		mysqlType := types.StrToType(strings.ToLower(columnType.DatabaseTypeName()))
-
-		var value interface{}
-		value = holder.Values[i].([]uint8)
-
-		switch mysqlType {
-		case mysql.TypeJSON:
-			value = string(value.([]uint8))
-		case mysql.TypeBit:
-			value = common.MustBinaryLiteralToInt(value.([]uint8))
-		}
-
-		col := column{
-			Type:  mysqlType,
-			Value: value,
-		}
-		if _, ok := handleKeyColumns[name]; ok {
-			col.Flag |= binaryFlag
-		}
-		result[name] = col
-	}
 	return result
 }
 
-func (b *BatchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context) *commonEvent.DMLEvent {
+func buildColumns(
+	holder *common.ColumnsHolder, columns map[string]column,
+) map[string]column {
+	columnsCount := holder.Length()
+	for i := 0; i < columnsCount; i++ {
+		columnType := holder.Types[i]
+		name := columnType.Name()
+		if _, ok := columns[name]; ok {
+			continue
+		}
+		var flag uint64
+		// todo: we can extract more detailed type information here.
+		dataType := strings.ToLower(columnType.DatabaseTypeName())
+		if common.IsUnsignedMySQLType(dataType) {
+			flag |= unsignedFlag
+		}
+		if nullable, _ := columnType.Nullable(); nullable {
+			flag |= nullableFlag
+		}
+		columns[name] = column{
+			Type:  common.ExtractBasicMySQLType(dataType),
+			Flag:  flag,
+			Value: holder.Values[i],
+		}
+	}
+	return columns
+}
+
+func (b *decoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, row *messageRow) *commonEvent.DMLEvent {
 	key := b.nextKey
-	row := b.nextRow
 	var (
 		schema   = key.Schema
 		table    = key.Table
@@ -271,45 +269,43 @@ func (b *BatchDecoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context) *commo
 			conditions[name] = col.Value
 		}
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		columns := buildColumns(holder, row.Delete)
-		b.nextRow.Delete = columns
+		row.Delete = buildColumns(holder, row.Delete)
 	} else if len(row.PreColumns) != 0 {
 		for name, col := range row.PreColumns {
 			conditions[name] = col.Value
 		}
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		b.nextRow.PreColumns = buildColumns(holder, row.PreColumns)
+		row.PreColumns = buildColumns(holder, row.PreColumns)
 		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		b.nextRow.Update = buildColumns(holder, row.PreColumns)
+		row.Update = buildColumns(holder, row.Update)
 	} else if len(row.Update) != 0 {
 		for name, col := range row.Update {
 			conditions[name] = col.Value
 		}
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		b.nextRow.Update = buildColumns(holder, row.Update)
+		row.Update = buildColumns(holder, row.Update)
 	} else {
 		log.Panic("unknown event type")
 	}
 	b.nextKey.OnlyHandleKey = false
-	return b.assembleDMLEvent()
+	return b.assembleDMLEvent(row)
 }
 
-func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (*commonEvent.DMLEvent, error) {
+func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(b.nextKey.ClaimCheckLocation)
 	b.nextKey = nil
 	data, err := b.storage.ReadFile(ctx, claimCheckFileName)
 	if err != nil {
-		return nil, errors.Trace(err)
+		log.Panic("read claim check file failed", zap.String("fileName", claimCheckFileName), zap.Error(err))
 	}
 	claimCheckM, err := common.UnmarshalClaimCheckMessage(data)
 	if err != nil {
-		return nil, errors.Trace(err)
+		log.Panic("unmarshal claim check message failed", zap.Any("data", data), zap.Error(err))
 	}
 
 	version := binary.BigEndian.Uint64(claimCheckM.Key[:8])
 	if version != batchVersion1 {
-		return nil, errors.ErrOpenProtocolCodecInvalidData.
-			GenWithStack("unexpected key format version")
+		log.Panic("the batch version is not supported", zap.Uint64("version", version))
 	}
 
 	key := claimCheckM.Key[8:]
@@ -322,39 +318,30 @@ func (b *BatchDecoder) assembleEventFromClaimCheckStorage(ctx context.Context) (
 	value := claimCheckM.Value[8 : valueLen+8]
 	value, err = common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrOpenProtocolCodecInvalidData, err)
+		log.Panic("decompress large message failed",
+			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value), zap.Error(err))
 	}
 
 	rowMsg := new(messageRow)
 	rowMsg.decode(value)
 
 	b.nextKey = msgKey
-	b.nextRow = rowMsg
-
-	return b.assembleDMLEvent(), nil
+	return b.assembleDMLEvent(rowMsg)
 }
 
-type tableKey struct {
-	schema string
-	table  string
-}
-
-func (b *BatchDecoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
-	cacheKey := tableKey{
-		schema: key.Schema,
-		table:  key.Table,
-	}
-	tableInfo, ok := b.tableInfoCache[cacheKey]
+func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+	tableInfo, ok := tableInfoAccessor.Get(key.Schema, key.Table)
 	if !ok {
 		tableInfo = b.newTableInfo(key, value)
-		b.tableInfoCache[cacheKey] = tableInfo
+		tableInfoAccessor.Add(key.Schema, key.Table, tableInfo)
 	}
 	return tableInfo
 }
 
-func (b *BatchDecoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
 	tableInfo := new(timodel.TableInfo)
-	tableInfo.ID = b.tableIDAllocator.AllocateTableID(key.Schema, key.Table)
+	tableInfo.ID = tableIDAllocator.AllocateTableID(key.Schema, key.Table)
 	tableInfo.Name = pmodel.NewCIStr(key.Table)
 
 	var rawColumns map[string]column
@@ -391,6 +378,9 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 			col.SetCharset("binary")
 			col.SetCollate("binary")
 		}
+		if isNullable(raw.Flag) {
+			col.AddFlag(mysql.NotNullFlag)
+		}
 
 		switch col.GetType() {
 		case mysql.TypeVarchar, mysql.TypeString,
@@ -402,7 +392,7 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		case mysql.TypeDuration:
 			// todo: how to find the correct decimal for the duration type ?
 			_, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(col.GetType())
-			col.FieldType.SetDecimal(defaultDecimal)
+			col.SetDecimal(defaultDecimal)
 		case mysql.TypeEnum, mysql.TypeSet:
 			col.SetCharset("utf8mb4")
 			col.SetCollate("utf8mb4_bin")
@@ -425,30 +415,33 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 			})
 		}
 	}
+
+	result := make([]*timodel.IndexInfo, 0, 1)
+	if len(indexColumns) == 0 {
+		return result
+	}
 	indexInfo := &timodel.IndexInfo{
 		ID:      1,
 		Name:    pmodel.NewCIStr("primary"),
 		Columns: indexColumns,
 		Primary: true,
+		Unique:  true,
 	}
-	result := []*timodel.IndexInfo{indexInfo}
+	result = append(result, indexInfo)
 	return result
 }
 
-func (b *BatchDecoder) assembleDMLEvent() *commonEvent.DMLEvent {
+func (b *decoder) assembleDMLEvent(value *messageRow) *commonEvent.DMLEvent {
 	key := b.nextKey
-	value := b.nextRow
-
 	b.nextKey = nil
-	b.nextRow = nil
 
 	tableInfo := b.queryTableInfo(key, value)
 	result := new(commonEvent.DMLEvent)
-	result.Length++
-	result.StartTs = key.Ts
-	result.ApproximateSize = 0
 	result.TableInfo = tableInfo
+	result.PhysicalTableID = tableInfo.TableName.TableID
+	result.StartTs = key.Ts
 	result.CommitTs = key.Ts
+	result.Length++
 	if key.Partition != nil {
 		result.PhysicalTableID = *key.Partition
 		result.TableInfo.TableName.IsPartition = true
@@ -460,7 +453,6 @@ func (b *BatchDecoder) assembleDMLEvent() *commonEvent.DMLEvent {
 		data := collectAllColumnsValue(value.Delete, columns)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
-		result.Length += 1
 	} else if len(value.Update) != 0 && len(value.PreColumns) != 0 {
 		previous := collectAllColumnsValue(value.PreColumns, columns)
 		data := collectAllColumnsValue(value.Update, columns)
@@ -473,16 +465,13 @@ func (b *BatchDecoder) assembleDMLEvent() *commonEvent.DMLEvent {
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
-		result.Length += 1
 	} else if len(value.Update) != 0 {
 		data := collectAllColumnsValue(value.Update, columns)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
-		result.Length += 1
 	} else {
 		log.Panic("unknown event type")
 	}
-
 	result.Rows = chk
 	return result
 }

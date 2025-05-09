@@ -84,6 +84,8 @@ const (
 	prepStmtCacheSize int = 16 * 1024
 
 	defaultHasVectorType = false
+
+	defaultEnableDDLTs = true
 )
 
 type Config struct {
@@ -108,6 +110,11 @@ type Config struct {
 	// IsBDRModeSupported is true if the downstream is TiDB and write source is existed.
 	// write source exists when the downstream is TiDB and version is greater than or equal to v6.5.0.
 	IsWriteSourceExisted bool
+
+	// EnableDDLTs can be set in the sink URI to enable the DDL ts.
+	// it's default to true to make the mysql sink write DDL-ts
+	// for the kafka-consumer, set this to false.
+	EnableDDLTs bool
 
 	SourceID        uint64
 	BatchDMLEnable  bool
@@ -149,6 +156,7 @@ func NewMysqlConfig() *Config {
 		SourceID:               config.DefaultTiDBSourceID,
 		DMLMaxRetry:            8,
 		HasVectorType:          defaultHasVectorType,
+		EnableDDLTs:            defaultEnableDDLTs,
 	}
 }
 
@@ -204,6 +212,9 @@ func (c *Config) Apply(
 		return err
 	}
 	if err = getMultiStmtEnable(query, &c.MultiStmtEnable); err != nil {
+		return err
+	}
+	if err = getEnableDDLTs(query, &c.EnableDDLTs); err != nil {
 		return err
 	}
 
@@ -577,6 +588,18 @@ func getMultiStmtEnable(values url.Values, multiStmtEnable *bool) error {
 			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
 		}
 		*multiStmtEnable = enable
+	}
+	return nil
+}
+
+func getEnableDDLTs(value url.Values, enableDDLTs *bool) error {
+	s := value.Get("enable-ddl-ts")
+	if len(s) > 0 {
+		enable, err := strconv.ParseBool(s)
+		if err != nil {
+			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		}
+		*enableDDLTs = enable
 	}
 	return nil
 }

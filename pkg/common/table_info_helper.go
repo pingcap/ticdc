@@ -444,7 +444,8 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 	for i, col := range colSchema.Columns {
 		colSchema.ColumnsOffset[col.ID] = i
 		pkIsHandle := false
-		if IsColCDCVisible(col) {
+		isVisible := IsColCDCVisible(col)
+		if isVisible {
 			colSchema.NameToColID[col.Name.O] = col.ID
 			colSchema.RowColumnsOffset[col.ID] = rowColumnsCurrentOffset
 			rowColumnsCurrentOffset++
@@ -471,7 +472,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 			ID:            col.ID,
 			IsPKHandle:    pkIsHandle,
 			Ft:            col.FieldType.Clone(),
-			VirtualGenCol: !IsColCDCVisible(col),
+			VirtualGenCol: !isVisible,
 		}
 		colSchema.RowColFieldTps[col.ID] = colSchema.RowColInfos[i].Ft
 		colSchema.RowColFieldTpsSlice = append(colSchema.RowColFieldTpsSlice, colSchema.RowColInfos[i].Ft)

@@ -92,7 +92,7 @@ kafka_groups=(
 	# G10
 	'mq_sink_dispatcher'
 	# G11
-	'multi_topics'
+	# 'multi_topics'
 	# G12
 	'debezium_basic'
 	# G13

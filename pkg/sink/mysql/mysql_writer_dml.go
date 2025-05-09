@@ -370,15 +370,14 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 		prevType := rowChanges[0].RowType
 		for i := 1; i < len(rowChanges); i++ {
 			rowType := rowChanges[i].RowType
-			if rowType != prevType {
-				prevType = rowType
-			} else {
-				log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges), zap.Any("prevType", prevType), zap.Any("currentType", rowType))
+			if rowType == prevType {
+				log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges),
+					zap.Any("prevType", prevType), zap.Any("currentType", rowType))
 			}
+			prevType = rowType
 		}
 		rowsList = append(rowsList, rowChanges[len(rowChanges)-1])
 	}
-
 	// step 3. generate sqls
 	return w.batchSingleTxnDmls(rowsList, tableInfo, false)
 }

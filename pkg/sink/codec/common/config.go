@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
@@ -223,7 +222,7 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 		c.AvroGlueSchemaRegistry = sinkConfig.KafkaConfig.GlueSchemaRegistryConfig
 	}
 	if c.Protocol == config.ProtocolAvro && sinkConfig.ForceReplicate {
-		return cerror.ErrCodecInvalidConfig.GenWithStack(
+		return errors.ErrCodecInvalidConfig.GenWithStack(
 			`force-replicate must be disabled, when using avro protocol`)
 	}
 
@@ -258,7 +257,7 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 
 	c.DeleteOnlyHandleKeyColumns = util.GetOrZero(sinkConfig.DeleteOnlyOutputHandleKeyColumns)
 	if c.DeleteOnlyHandleKeyColumns && sinkConfig.ForceReplicate {
-		return cerror.ErrCodecInvalidConfig.GenWithStack(
+		return errors.ErrCodecInvalidConfig.GenWithStack(
 			`force-replicate must be disabled when configuration "delete-only-output-handle-key-columns" is true.`)
 	}
 
@@ -277,7 +276,7 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 			case EncodingFormatJSON, EncodingFormatAvro:
 				c.EncodingFormat = encodingFormat
 			default:
-				return cerror.ErrCodecInvalidConfig.GenWithStack(
+				return errors.ErrCodecInvalidConfig.GenWithStack(
 					"unsupported encoding format type: %s for the simple protocol", encodingFormat)
 			}
 		}
@@ -347,7 +346,7 @@ func (c *Config) Validate() error {
 
 	if c.Protocol == config.ProtocolAvro {
 		if c.AvroConfluentSchemaRegistry != "" && c.AvroGlueSchemaRegistry != nil {
-			return cerror.ErrCodecInvalidConfig.GenWithStack(
+			return errors.ErrCodecInvalidConfig.GenWithStack(
 				`Avro protocol requires only one of "%s" or "%s" to specify the schema registry`,
 				codecOPTAvroSchemaRegistry,
 				coderOPTAvroGlueSchemaRegistry,
@@ -355,7 +354,7 @@ func (c *Config) Validate() error {
 		}
 
 		if c.AvroConfluentSchemaRegistry == "" && c.AvroGlueSchemaRegistry == nil {
-			return cerror.ErrCodecInvalidConfig.GenWithStack(
+			return errors.ErrCodecInvalidConfig.GenWithStack(
 				`Avro protocol requires parameter "%s" or "%s" to specify the schema registry`,
 				codecOPTAvroSchemaRegistry,
 				coderOPTAvroGlueSchemaRegistry,
@@ -364,7 +363,7 @@ func (c *Config) Validate() error {
 
 		if c.AvroDecimalHandlingMode != DecimalHandlingModePrecise &&
 			c.AvroDecimalHandlingMode != DecimalHandlingModeString {
-			return cerror.ErrCodecInvalidConfig.GenWithStack(
+			return errors.ErrCodecInvalidConfig.GenWithStack(
 				`%s value could only be "%s" or "%s"`,
 				codecOPTAvroDecimalHandlingMode,
 				DecimalHandlingModeString,
@@ -374,7 +373,7 @@ func (c *Config) Validate() error {
 
 		if c.AvroBigintUnsignedHandlingMode != BigintUnsignedHandlingModeLong &&
 			c.AvroBigintUnsignedHandlingMode != BigintUnsignedHandlingModeString {
-			return cerror.ErrCodecInvalidConfig.GenWithStack(
+			return errors.ErrCodecInvalidConfig.GenWithStack(
 				`%s value could only be "%s" or "%s"`,
 				codecOPTAvroBigintUnsignedHandlingMode,
 				BigintUnsignedHandlingModeLong,
@@ -385,7 +384,7 @@ func (c *Config) Validate() error {
 		if c.EnableRowChecksum {
 			if !(c.EnableTiDBExtension && c.AvroDecimalHandlingMode == DecimalHandlingModeString &&
 				c.AvroBigintUnsignedHandlingMode == BigintUnsignedHandlingModeString) {
-				return cerror.ErrCodecInvalidConfig.GenWithStack(
+				return errors.ErrCodecInvalidConfig.GenWithStack(
 					`Avro protocol with row level checksum,
 					should set "%s" to "%s", and set "%s" to "%s" and "%s" to "%s"`,
 					codecOPTEnableTiDBExtension, "true",
@@ -396,13 +395,13 @@ func (c *Config) Validate() error {
 	}
 
 	if c.MaxMessageBytes <= 0 {
-		return cerror.ErrCodecInvalidConfig.Wrap(
+		return errors.ErrCodecInvalidConfig.Wrap(
 			errors.Errorf("invalid max-message-bytes %d", c.MaxMessageBytes),
 		)
 	}
 
 	if c.MaxBatchSize <= 0 {
-		return cerror.ErrCodecInvalidConfig.Wrap(
+		return errors.ErrCodecInvalidConfig.Wrap(
 			errors.Errorf("invalid max-batch-size %d", c.MaxBatchSize),
 		)
 	}

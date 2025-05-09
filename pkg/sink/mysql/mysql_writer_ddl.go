@@ -132,6 +132,7 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 		}
 		log.Info("Execute DDL succeeded",
 			zap.String("changefeed", w.ChangefeedID.String()),
+			zap.Uint64("commitTs", event.GetCommitTs()), zap.String("query", event.GetDDLQuery()),
 			zap.Any("ddl", event))
 		return nil
 	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),

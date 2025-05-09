@@ -40,11 +40,6 @@ import (
 	"golang.org/x/text/encoding/charmap"
 )
 
-type tableKey struct {
-	schema string
-	table  string
-}
-
 type bufferedJSONDecoder struct {
 	buf     *bytes.Buffer
 	decoder *json.Decoder
@@ -79,8 +74,8 @@ func (b *bufferedJSONDecoder) Bytes() []byte {
 	return b.buf.Bytes()
 }
 
-// canalJSONDecoder decodes the byte into the original message.
-type canalJSONDecoder struct {
+// decoder decodes the byte into the original message.
+type decoder struct {
 	msg     canalJSONMessageInterface
 	decoder *bufferedJSONDecoder
 
@@ -88,15 +83,17 @@ type canalJSONDecoder struct {
 
 	storage      storage.ExternalStorage
 	upstreamTiDB *sql.DB
-
-	tableInfoCache   map[tableKey]*commonType.TableInfo
-	tableIDAllocator *common.FakeTableIDAllocator
 }
 
-// NewCanalJSONDecoder return a decoder for canal-json
-func NewCanalJSONDecoder(
+var (
+	tableIDAllocator  = common.NewFakeTableIDAllocator()
+	tableInfoAccessor = common.NewTableInfoAccessor()
+)
+
+// NewDecoder return a decoder for canal-json
+func NewDecoder(
 	ctx context.Context, codecConfig *common.Config, db *sql.DB,
-) (common.RowEventDecoder, error) {
+) (common.Decoder, error) {
 	var (
 		externalStorage storage.ExternalStorage
 		err             error
@@ -115,36 +112,34 @@ func NewCanalJSONDecoder(
 		}
 	}
 
-	return &canalJSONDecoder{
-		config:           codecConfig,
-		decoder:          newBufferedJSONDecoder(),
-		storage:          externalStorage,
-		upstreamTiDB:     db,
-		tableInfoCache:   make(map[tableKey]*commonType.TableInfo),
-		tableIDAllocator: common.NewFakeTableIDAllocator(),
+	tableIDAllocator.Clean()
+	tableInfoAccessor.Clean()
+	return &decoder{
+		config:       codecConfig,
+		decoder:      newBufferedJSONDecoder(),
+		storage:      externalStorage,
+		upstreamTiDB: db,
 	}, nil
 }
 
-// AddKeyValue implements the RowEventDecoder interface
-func (b *canalJSONDecoder) AddKeyValue(_, value []byte) error {
+// AddKeyValue implements the Decoder interface
+func (b *decoder) AddKeyValue(_, value []byte) {
 	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, value)
 	if err != nil {
-		log.Error("decompress data failed",
+		log.Panic("decompress data failed",
 			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("value", value),
 			zap.Error(err))
-
-		return errors.Trace(err)
 	}
 	if _, err = b.decoder.Write(value); err != nil {
-		return errors.Trace(err)
+		log.Panic("add value to the decoder failed", zap.Any("value", value), zap.Error(err))
 	}
-	return nil
 }
 
-// HasNext implements the RowEventDecoder interface
-func (b *canalJSONDecoder) HasNext() (common.MessageType, bool, error) {
+// HasNext implements the Decoder interface
+func (b *decoder) HasNext() (common.MessageType, bool) {
 	if b.decoder.Len() == 0 {
-		return common.MessageTypeUnknown, false, nil
+		return common.MessageTypeUnknown, false
 	}
 
 	var msg canalJSONMessageInterface = &JSONMessage{}
@@ -156,46 +151,48 @@ func (b *canalJSONDecoder) HasNext() (common.MessageType, bool, error) {
 	}
 
 	if err := b.decoder.Decode(msg); err != nil {
-		log.Error("canal-json decoder decode failed",
-			zap.Error(err), zap.ByteString("data", b.decoder.Bytes()))
-		return common.MessageTypeUnknown, false, err
+		log.Panic("canal-json decode failed",
+			zap.ByteString("data", b.decoder.Bytes()),
+			zap.Error(err))
 	}
 	b.msg = msg
-	return b.msg.messageType(), true, nil
+	return b.msg.messageType(), true
 }
 
-func (b *canalJSONDecoder) assembleClaimCheckDMLEvent(
+func (b *decoder) assembleClaimCheckDMLEvent(
 	ctx context.Context, claimCheckLocation string,
-) (*commonEvent.DMLEvent, error) {
+) *commonEvent.DMLEvent {
 	_, claimCheckFileName := filepath.Split(claimCheckLocation)
 	data, err := b.storage.ReadFile(ctx, claimCheckFileName)
 	if err != nil {
-		return nil, err
+		log.Panic("read claim check file failed", zap.String("fileName", claimCheckFileName), zap.Error(err))
 	}
 
 	if !b.config.LargeMessageHandle.ClaimCheckRawValue {
 		claimCheckM, err := common.UnmarshalClaimCheckMessage(data)
 		if err != nil {
-			return nil, err
+			log.Panic("unmarshal claim check message failed", zap.Any("data", data), zap.Error(err))
 		}
 		data = claimCheckM.Value
 	}
 
 	value, err := common.Decompress(b.config.LargeMessageHandle.LargeMessageHandleCompression, data)
 	if err != nil {
-		return nil, err
+		log.Panic("decompress data failed",
+			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
+			zap.Any("data", data), zap.Error(err))
 	}
 	message := &canalJSONMessageWithTiDBExtension{}
 	err = json.Unmarshal(value, message)
 	if err != nil {
-		return nil, err
+		log.Panic("unmarshal claim check message failed", zap.Any("value", value), zap.Error(err))
 	}
 
 	b.msg = message
 	return b.NextDMLEvent()
 }
 
-func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string, error) {
+func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string]string) {
 	columnsCount := holder.Length()
 	data := make(map[string]interface{}, columnsCount)
 	mysqlTypeMap := make(map[string]string, columnsCount)
@@ -210,7 +207,7 @@ func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string
 		if common.IsBinaryMySQLType(mysqlType) {
 			rawValue, err := bytesDecoder.Bytes(rawValue)
 			if err != nil {
-				return nil, nil, errors.Trace(err)
+				log.Panic("decode binary value failed", zap.Any("value", rawValue), zap.Error(err))
 			}
 			value = string(rawValue)
 		} else if strings.Contains(mysqlType, "bit") || strings.Contains(mysqlType, "set") {
@@ -223,12 +220,12 @@ func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string
 		data[name] = value
 	}
 
-	return data, mysqlTypeMap, nil
+	return data, mysqlTypeMap
 }
 
-func (b *canalJSONDecoder) assembleHandleKeyOnlyDMLEvent(
+func (b *decoder) assembleHandleKeyOnlyDMLEvent(
 	ctx context.Context, message *canalJSONMessageWithTiDBExtension,
-) (*commonEvent.DMLEvent, error) {
+) *commonEvent.DMLEvent {
 	var (
 		commitTs  = message.Extensions.CommitTs
 		schema    = message.Schema
@@ -254,33 +251,21 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyDMLEvent(
 	switch eventType {
 	case "INSERT":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		data, mysqlType, err := buildData(holder)
-		if err != nil {
-			return nil, err
-		}
+		data, mysqlType := buildData(holder)
 		result.MySQLType = mysqlType
 		result.Data = []map[string]interface{}{data}
 	case "UPDATE":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		data, mysqlType, err := buildData(holder)
-		if err != nil {
-			return nil, err
-		}
+		data, mysqlType := buildData(holder)
 		result.MySQLType = mysqlType
 		result.Data = []map[string]interface{}{data}
 
 		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		old, _, err := buildData(holder)
-		if err != nil {
-			return nil, err
-		}
+		old, _ := buildData(holder)
 		result.Old = []map[string]interface{}{old}
 	case "DELETE":
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
-		data, mysqlType, err := buildData(holder)
-		if err != nil {
-			return nil, err
-		}
+		data, mysqlType := buildData(holder)
 		result.MySQLType = mysqlType
 		result.Data = []map[string]interface{}{data}
 	}
@@ -289,11 +274,12 @@ func (b *canalJSONDecoder) assembleHandleKeyOnlyDMLEvent(
 	return b.NextDMLEvent()
 }
 
-// NextDMLEvent implements the RowEventDecoder interface
+// NextDMLEvent implements the Decoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeRow {
-		return nil, errors.ErrCodecDecode.GenWithStack("not found row changed event message")
+		log.Panic("message type is not row changed",
+			zap.Any("messageType", b.msg.messageType()), zap.Any("msg", b.msg))
 	}
 
 	message, withExtension := b.msg.(*canalJSONMessageWithTiDBExtension)
@@ -306,21 +292,19 @@ func (b *canalJSONDecoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 			return b.assembleClaimCheckDMLEvent(ctx, message.Extensions.ClaimCheckLocation)
 		}
 	}
-
-	result := b.canalJSONMessage2DMLEvent()
-	return result, nil
+	return b.canalJSONMessage2DMLEvent()
 }
 
-func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
+func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	msg := b.msg
 	tableInfo := b.queryTableInfo(msg)
 
 	result := new(commonEvent.DMLEvent)
-	result.Length++
-	result.StartTs = msg.getCommitTs()
-	result.ApproximateSize = 0
 	result.TableInfo = tableInfo
+	result.StartTs = msg.getCommitTs()
 	result.CommitTs = msg.getCommitTs()
+	result.PhysicalTableID = result.TableInfo.TableName.TableID
+	result.Length++
 
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	columns := tableInfo.GetColumns()
@@ -329,12 +313,10 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 		data := formatAllColumnsValue(msg.getData(), columns)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
-		result.Length += 1
 	case canal.EventType_INSERT:
 		data := formatAllColumnsValue(msg.getData(), columns)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
-		result.Length += 1
 	case canal.EventType_UPDATE:
 		previous := formatAllColumnsValue(msg.getOld(), columns)
 		data := formatAllColumnsValue(msg.getData(), columns)
@@ -347,61 +329,60 @@ func (b *canalJSONDecoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
-		result.Length += 1
 	default:
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}
 	result.Rows = chk
-	// todo: may fix this later.
-	result.PhysicalTableID = result.TableInfo.TableName.TableID
 	return result
 }
 
-// NextDDLEvent implements the RowEventDecoder interface
+// NextDDLEvent implements the Decoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
+func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeDDL {
-		return nil, errors.ErrDecodeFailed.GenWithStack("not found ddl event message")
+		log.Panic("message type is not DDL Event",
+			zap.Any("messageType", b.msg.messageType()), zap.Any("msg", b.msg))
 	}
 
-	result := canalJSONMessage2DDLEvent(b.msg)
-	schemaName := result.GetSchemaName()
-	tableName := result.GetTableName()
-	// if receive a table level DDL, just remove the table info to trigger create a new one.
-	if schemaName != "" && tableName != "" {
-		cacheKey := tableKey{
-			schema: schemaName,
-			table:  tableName,
-		}
-		delete(b.tableInfoCache, cacheKey)
-	}
-	return result, nil
+	result := b.canalJSONMessage2DDLEvent()
+	return result
 }
 
-// NextResolvedEvent implements the RowEventDecoder interface
+// NextResolvedEvent implements the Decoder interface
 // `HasNext` should be called before this.
-func (b *canalJSONDecoder) NextResolvedEvent() (uint64, error) {
+func (b *decoder) NextResolvedEvent() uint64 {
 	if b.msg == nil || b.msg.messageType() != common.MessageTypeResolved {
-		return 0, errors.ErrDecodeFailed.GenWithStack("not found resolved event message")
+		log.Panic("message type is not watermark", zap.Any("messageType", b.msg.messageType()))
 	}
 
 	withExtensionEvent, ok := b.msg.(*canalJSONMessageWithTiDBExtension)
 	if !ok {
-		log.Error("canal-json resolved event message should have tidb extension, but not found",
+		log.Panic("canal-json resolved event message should have tidb extension, but not found",
 			zap.Any("msg", b.msg))
-		return 0, errors.ErrDecodeFailed.GenWithStack("MessageTypeResolved tidb extension not found")
 	}
-	return withExtensionEvent.Extensions.WatermarkTs, nil
+	return withExtensionEvent.Extensions.WatermarkTs
 }
 
-func canalJSONMessage2DDLEvent(msg canalJSONMessageInterface) *commonEvent.DDLEvent {
+func (b *decoder) canalJSONMessage2DDLEvent() *commonEvent.DDLEvent {
 	result := new(commonEvent.DDLEvent)
-	result.Query = msg.getQuery()
-	result.BlockedTables = nil // todo: set this
-	result.Type = byte(getDDLActionType(result.Query))
-	result.FinishedTs = msg.getCommitTs()
-	result.SchemaName = *msg.getSchema()
-	result.TableName = *msg.getTable()
+	result.FinishedTs = b.msg.getCommitTs()
+	result.SchemaName = *b.msg.getSchema()
+	result.TableName = *b.msg.getTable()
+	result.Query = b.msg.getQuery()
+	actionType := common.GetDDLActionType(result.Query)
+	result.Type = byte(actionType)
+
+	var tableID int64
+	tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
+	if ok {
+		tableID = tableInfo.TableName.TableID
+	}
+	result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
+	log.Debug("set blocked tables for the DDL event",
+		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
+
+	tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
 	return result
 }
 
@@ -473,20 +454,13 @@ func formatValue(value any, ft types.FieldType) any {
 		if err != nil {
 			log.Panic("invalid column value for decimal", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		// workaround the decimal `digitInt` field incorrect problem.
-		bin, err := result.ToBin(ft.GetFlen(), ft.GetDecimal())
-		if err != nil {
-			log.Panic("convert decimal to binary failed", zap.Any("rawValue", rawValue), zap.Error(err))
-		}
-		_, err = result.FromBin(bin, ft.GetFlen(), ft.GetDecimal())
-		if err != nil {
-			log.Panic("convert binary to decimal failed", zap.Any("rawValue", rawValue), zap.Error(err))
-		}
 		return result
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
 		result, err := tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, rawValue, ft.GetType(), ft.GetDecimal())
 		if err != nil {
-			log.Panic("invalid column value for time", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value for time", zap.Any("rawValue", rawValue),
+				zap.Int("flen", ft.GetFlen()), zap.Int("decimal", ft.GetDecimal()),
+				zap.Error(err))
 		}
 		// todo: shall we also convert timezone for the mysql.TypeTimestamp ?
 		//if mysqlType == mysql.TypeTimestamp && decoder.loc != nil && !t.IsZero() {
@@ -507,23 +481,19 @@ func formatValue(value any, ft types.FieldType) any {
 		if err != nil {
 			log.Panic("invalid column value for enum", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		result, err := tiTypes.ParseEnumValue(ft.GetElems(), enumValue)
-		if err != nil {
-			log.Panic("parse enum value failed", zap.Any("rawValue", rawValue),
-				zap.Any("enumValue", enumValue), zap.Error(err))
+		return tiTypes.Enum{
+			Name:  "",
+			Value: enumValue,
 		}
-		return result
 	case mysql.TypeSet:
 		setValue, err := strconv.ParseUint(rawValue, 10, 64)
 		if err != nil {
 			log.Panic("invalid column value for set", zap.Any("rawValue", rawValue), zap.Error(err))
 		}
-		result, err := tiTypes.ParseSetValue(ft.GetElems(), setValue)
-		if err != nil {
-			log.Panic("parse set value failed", zap.Any("rawValue", rawValue),
-				zap.Any("setValue", setValue), zap.Error(err))
+		return tiTypes.Set{
+			Name:  "",
+			Value: setValue,
 		}
-		return result
 	case mysql.TypeBit:
 		data, err := strconv.ParseUint(rawValue, 10, 64)
 		if err != nil {
@@ -549,31 +519,32 @@ func formatValue(value any, ft types.FieldType) any {
 	return nil
 }
 
-func (b *canalJSONDecoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
+func (b *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	schema := *msg.getSchema()
 	table := *msg.getTable()
-	cacheKey := tableKey{
-		schema: schema,
-		table:  table,
+
+	tableInfo, ok := tableInfoAccessor.Get(schema, table)
+	if ok {
+		return tableInfo
 	}
-	tableInfo, ok := b.tableInfoCache[cacheKey]
-	if !ok {
-		tableID := b.tableIDAllocator.AllocateTableID(schema, table)
-		tableInfo = newTableInfo(msg, tableID)
-		b.tableInfoCache[cacheKey] = tableInfo
-	}
+
+	tableInfo = newTableInfo(msg)
+	tableInfoAccessor.Add(schema, table, tableInfo)
 	return tableInfo
 }
 
-func newTableInfo(msg canalJSONMessageInterface, tableID int64) *commonType.TableInfo {
+func newTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
+	schemaName := *msg.getSchema()
+	tableName := *msg.getTable()
 	tableInfo := new(timodel.TableInfo)
-	tableInfo.ID = tableID
-	tableInfo.Name = pmodel.NewCIStr(*msg.getTable())
+	tableInfo.ID = tableIDAllocator.AllocateTableID(schemaName, tableName)
+	tableInfo.Name = pmodel.NewCIStr(tableName)
 
 	columns := newTiColumns(msg)
 	tableInfo.Columns = columns
 	tableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
-	return commonType.NewTableInfo4Decoder(*msg.getSchema(), tableInfo)
+	tableInfo.PKIsHandle = len(tableInfo.Indices) != 0
+	return commonType.NewTableInfo4Decoder(schemaName, tableInfo)
 }
 
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
@@ -604,10 +575,10 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 			col.AddFlag(mysql.UniqueKeyFlag)
 			col.AddFlag(mysql.NotNullFlag)
 		}
-		if common.IsUnsignedFlag(mysqlType) {
+		if common.IsUnsignedMySQLType(mysqlType) {
 			col.AddFlag(mysql.UnsignedFlag)
 		}
-		flen, decimal := common.ExtractFlenDecimal(mysqlType)
+		flen, decimal := common.ExtractFlenDecimal(mysqlType, col.GetType())
 		col.FieldType.SetFlen(flen)
 		col.FieldType.SetDecimal(decimal)
 		switch basicType {
@@ -635,31 +606,18 @@ func newTiIndices(columns []*timodel.ColumnInfo, keys map[string]struct{}) []*ti
 			})
 		}
 	}
+
+	result := make([]*timodel.IndexInfo, 0, len(indexColumns))
+	if len(indexColumns) == 0 {
+		return result
+	}
 	indexInfo := &timodel.IndexInfo{
 		ID:      1,
 		Name:    pmodel.NewCIStr("primary"),
 		Columns: indexColumns,
 		Primary: true,
+		Unique:  true,
 	}
-	result := []*timodel.IndexInfo{indexInfo}
+	result = append(result, indexInfo)
 	return result
-}
-
-// return DDL ActionType by the prefix
-// see https://github.com/pingcap/tidb/blob/6dbf2de2f/parser/model/ddl.go#L101-L102
-func getDDLActionType(query string) timodel.ActionType {
-	query = strings.ToLower(query)
-	if strings.HasPrefix(query, "create schema") || strings.HasPrefix(query, "create database") {
-		return timodel.ActionCreateSchema
-	}
-	if strings.HasPrefix(query, "drop schema") || strings.HasPrefix(query, "drop database") {
-		return timodel.ActionDropSchema
-	}
-	if strings.HasPrefix(query, "create table") {
-		return timodel.ActionCreateTable
-	}
-	if strings.Contains(query, "exchange partition") {
-		return timodel.ActionExchangeTablePartition
-	}
-	return timodel.ActionNone
 }

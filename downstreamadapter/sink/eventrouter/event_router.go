@@ -24,7 +24,7 @@ import (
 )
 
 type Rule struct {
-	partitionDispatcher partition.PartitionGenerator
+	partitionDispatcher partition.Generator
 	topicGenerator      topic.TopicGenerator
 	tableFilter.Filter
 }
@@ -58,12 +58,15 @@ func NewEventRouter(
 		if !sinkConfig.CaseSensitive {
 			f = tableFilter.CaseInsensitive(f)
 		}
-		d := partition.GetPartitionGenerator(ruleConfig.PartitionRule, isPulsar, ruleConfig.IndexName, ruleConfig.Columns)
 		topicGenerator, err := topic.GetTopicGenerator(ruleConfig.TopicRule, defaultTopic, isPulsar, isAvro)
 		if err != nil {
 			return nil, err
 		}
-		rules = append(rules, Rule{partitionDispatcher: d, topicGenerator: topicGenerator, Filter: f})
+		rules = append(rules, Rule{
+			partitionDispatcher: partition.NewGenerator(ruleConfig.PartitionRule, isPulsar, ruleConfig.IndexName, ruleConfig.Columns),
+			topicGenerator:      topicGenerator,
+			Filter:              f,
+		})
 	}
 
 	return &EventRouter{
@@ -123,8 +126,14 @@ func (s *EventRouter) GetActiveTopics(activeTables []*commonEvent.SchemaTableNam
 }
 
 // GetPartitionGenerator returns the target partition by the table information.
-func (s *EventRouter) GetPartitionGenerator(schema, table string) partition.PartitionGenerator {
-	return s.matchPartitionGenerator(schema, table)
+func (s *EventRouter) GetPartitionGenerator(schema, table string) partition.Generator {
+	for _, rule := range s.rules {
+		if rule.MatchTable(schema, table) {
+			return rule.partitionDispatcher
+		}
+	}
+	log.Panic("the dispatch rule must cover all tables")
+	return nil
 }
 
 // GetDefaultTopic returns the default topic name.
@@ -134,19 +143,8 @@ func (s *EventRouter) GetDefaultTopic() string {
 
 func (s *EventRouter) matchTopicGenerator(schema, table string) topic.TopicGenerator {
 	for _, rule := range s.rules {
-		if !rule.MatchTable(schema, table) {
-			continue
-		}
-		return rule.topicGenerator
-	}
-	log.Panic("the dispatch rule must cover all tables")
-	return nil
-}
-
-func (s *EventRouter) matchPartitionGenerator(schema, table string) partition.PartitionGenerator {
-	for _, rule := range s.rules {
 		if rule.MatchTable(schema, table) {
-			return rule.partitionDispatcher
+			return rule.topicGenerator
 		}
 	}
 	log.Panic("the dispatch rule must cover all tables")
