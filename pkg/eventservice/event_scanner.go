@@ -173,9 +173,8 @@ func (s *EventScanner) Scan(
 		elapsed := time.Since(startTime)
 
 		if isNewTxn {
-
 			if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs {
-				appendWaterMark(lastCommitTs)
+				//appendWaterMark(lastCommitTs)
 				return events, true, nil
 			}
 
