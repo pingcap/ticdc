@@ -833,6 +833,7 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommi
 		metricEventStoreOutputResolved.Inc()
 		d.onLatestCommitTs(latestCommitTs)
 		needScan, _ := c.checkNeedScan(d, false)
+		log.Info("fizz onNotify, needScan", zap.Bool("needScan", needScan), zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("latestCommitTs", latestCommitTs))
 		if needScan {
 			c.pushTask(d, true)
 		}
