@@ -606,7 +606,7 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID) error {
 	opList := make([]pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(replications))
 	finishList := make([]bool, len(replications))
 	for _, replication := range replications {
-		if replication.GetNodeID() != targetNode {
+		if replication.GetNodeID() == targetNode {
 			continue
 		}
 		op := c.operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
