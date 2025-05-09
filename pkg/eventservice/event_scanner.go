@@ -172,12 +172,13 @@ func (s *EventScanner) Scan(
 		totalBytes += int64(eSize)
 		elapsed := time.Since(startTime)
 
-		if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs {
-			appendWaterMark(lastCommitTs)
-			return events, true, nil
-		}
-
 		if isNewTxn {
+
+			if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs {
+				appendWaterMark(lastCommitTs)
+				return events, true, nil
+			}
+
 			appendDML(dml)
 			tableID := dataRange.Span.TableID
 			tableInfo, err := s.schemaStore.GetTableInfo(tableID, e.CRTs-1)
