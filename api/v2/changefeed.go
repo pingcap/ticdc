@@ -170,7 +170,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	// verify sinkURI
 	tempChangefeedID := common.NewChangeFeedIDWithName("sink-uri-verify-changefeed-id")
 	cfConfig := info.ToChangefeedConfig()
-	err = sink.VerifySink(ctx, cfConfig, tempChangefeedID)
+	err = sink.Verify(ctx, cfConfig, tempChangefeedID)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
 		return
@@ -619,7 +619,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 
 	// verify sink
 	tempChangefeedID := common.NewChangeFeedIDWithName("sink-uri-verify-changefeed-id")
-	err = sink.VerifySink(ctx, oldCfInfo.ToChangefeedConfig(), tempChangefeedID)
+	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), tempChangefeedID)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
 		return
