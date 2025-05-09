@@ -174,6 +174,7 @@ func (s *EventScanner) Scan(
 
 		if isNewTxn {
 			if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs {
+				log.Info("fizz scan break", zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("e.CRTs", e.CRTs))
 				//appendWaterMark(lastCommitTs)
 				return events, true, nil
 			}
