@@ -36,12 +36,16 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	tableIDAllocator  = common.NewFakeTableIDAllocator()
+	tableInfoAccessor = common.NewTableInfoAccessor()
+)
+
 // decoder implement the Decoder interface
 type decoder struct {
 	config *common.Config
 
-	upstreamTiDB     *sql.DB
-	tableIDAllocator *common.FakeTableIDAllocator
+	upstreamTiDB *sql.DB
 
 	keyPayload   map[string]interface{}
 	keySchema    map[string]interface{}
@@ -54,10 +58,11 @@ func NewDecoder(
 	config *common.Config,
 	db *sql.DB,
 ) common.Decoder {
+	tableIDAllocator.Clean()
+	tableInfoAccessor.Clean()
 	return &decoder{
-		config:           config,
-		upstreamTiDB:     db,
-		tableIDAllocator: common.NewFakeTableIDAllocator(),
+		config:       config,
+		upstreamTiDB: db,
 	}
 }
 
@@ -121,16 +126,25 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	}
 	defer d.clear()
 	event := new(commonEvent.DDLEvent)
-	event.TableInfo = new(commonType.TableInfo)
-	tableName := d.getTableName()
-	if tableName != "" {
-		event.TableInfo.TableName = commonType.TableName{
-			Schema: d.getSchemaName(),
-			Table:  tableName,
-		}
-	}
-	event.Query = d.valuePayload["ddl"].(string)
 	event.FinishedTs = d.getCommitTs()
+	event.SchemaName = d.getSchemaName()
+	event.TableName = d.getTableName()
+
+	event.Query = d.valuePayload["ddl"].(string)
+	actionType := common.GetDDLActionType(event.Query)
+	event.Type = byte(actionType)
+
+	var tableID int64
+	tableInfo, ok := tableInfoAccessor.Get(event.SchemaName, event.TableName)
+	if ok {
+		tableID = tableInfo.TableName.TableID
+	}
+	event.BlockedTables = common.GetInfluenceTables(actionType, tableID)
+	log.Debug("set blocked tables for the DDL event",
+		zap.String("schema", event.SchemaName), zap.String("table", event.TableName),
+		zap.String("query", event.Query), zap.Any("blocked", event.BlockedTables))
+
+	tableInfoAccessor.Remove(event.GetSchemaName(), event.GetTableName())
 	return event
 }
 
@@ -175,7 +189,7 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 		log.Panic("unknown event type for the DML event")
 	}
 	event.Length += 1
-	event.PhysicalTableID = d.tableIDAllocator.AllocateTableID(tableInfo.GetSchemaName(), tableInfo.GetTableName())
+	event.PhysicalTableID = tableIDAllocator.AllocateTableID(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	return event
 }
 
@@ -208,7 +222,16 @@ func (d *decoder) clear() {
 }
 
 func (d *decoder) getTableInfo() *commonType.TableInfo {
+	schemaName := d.getSchemaName()
+	tableName := d.getTableName()
+
+	tableInfo, ok := tableInfoAccessor.Get(schemaName, tableName)
+	if ok {
+		return tableInfo
+	}
+
 	tidbTableInfo := new(timodel.TableInfo)
+	tidbTableInfo.ID = tableIDAllocator.AllocateTableID(schemaName, tableName)
 	tidbTableInfo.Name = pmodel.NewCIStr(d.getTableName())
 	fields := d.valueSchema["fields"].([]interface{})
 	after := fields[1].(map[string]interface{})
@@ -247,7 +270,9 @@ func (d *decoder) getTableInfo() *commonType.TableInfo {
 		Unique:  true,
 		Primary: true,
 	})
-	return commonType.NewTableInfo4Decoder(d.getSchemaName(), tidbTableInfo)
+	result := commonType.NewTableInfo4Decoder(d.getSchemaName(), tidbTableInfo)
+	tableInfoAccessor.Add(schemaName, tableName, result)
+	return result
 }
 
 func assembleColumnData(data map[string]interface{}, columns []*timodel.ColumnInfo) map[string]interface{} {

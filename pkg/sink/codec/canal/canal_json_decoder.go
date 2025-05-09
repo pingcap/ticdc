@@ -114,7 +114,6 @@ func NewDecoder(
 
 	tableIDAllocator.Clean()
 	tableInfoAccessor.Clean()
-
 	return &decoder{
 		config:       codecConfig,
 		decoder:      newBufferedJSONDecoder(),
@@ -525,24 +524,27 @@ func (b *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 	table := *msg.getTable()
 
 	tableInfo, ok := tableInfoAccessor.Get(schema, table)
-	if !ok {
-		tableID := tableIDAllocator.AllocateTableID(schema, table)
-		tableInfo = newTableInfo(msg, tableID)
-		tableInfoAccessor.Add(schema, table, tableInfo)
+	if ok {
+		return tableInfo
 	}
+
+	tableInfo = newTableInfo(msg)
+	tableInfoAccessor.Add(schema, table, tableInfo)
 	return tableInfo
 }
 
-func newTableInfo(msg canalJSONMessageInterface, tableID int64) *commonType.TableInfo {
+func newTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
+	schemaName := *msg.getSchema()
+	tableName := *msg.getTable()
 	tableInfo := new(timodel.TableInfo)
-	tableInfo.ID = tableID
-	tableInfo.Name = pmodel.NewCIStr(*msg.getTable())
+	tableInfo.ID = tableIDAllocator.AllocateTableID(schemaName, tableName)
+	tableInfo.Name = pmodel.NewCIStr(tableName)
 
 	columns := newTiColumns(msg)
 	tableInfo.Columns = columns
 	tableInfo.Indices = newTiIndices(columns, msg.pkNameSet())
 	tableInfo.PKIsHandle = len(tableInfo.Indices) != 0
-	return commonType.NewTableInfo4Decoder(*msg.getSchema(), tableInfo)
+	return commonType.NewTableInfo4Decoder(schemaName, tableInfo)
 }
 
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
