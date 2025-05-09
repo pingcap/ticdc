@@ -371,7 +371,7 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 		// And the resolvedTs should be the last sent watermark.
 		resolvedTs := task.sentResolvedTs.Load()
 		remoteID := node.ID(task.info.GetServerID())
-		log.Info("fizz checkNeedScan , task is not running, send watermark", zap.Uint64("resolvedTs", resolvedTs))
+
 		c.sendResolvedTs(remoteID, task, resolvedTs)
 		return false, common.DataRange{}
 	}
@@ -500,7 +500,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 
 	needScan, dataRange := c.checkNeedScan(task, true)
-	log.Info("fizz checkNeedScan in doScan", zap.Bool("needScan", needScan), zap.Any("startTs", dataRange.StartTs), zap.Any("endTs", dataRange.EndTs))
 
 	if !needScan {
 		return
@@ -833,7 +832,6 @@ func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommi
 		metricEventStoreOutputResolved.Inc()
 		d.onLatestCommitTs(latestCommitTs)
 		needScan, _ := c.checkNeedScan(d, false)
-		log.Info("fizz onNotify, needScan", zap.Bool("needScan", needScan), zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("latestCommitTs", latestCommitTs))
 		if needScan {
 			c.pushTask(d, true)
 		}

@@ -171,16 +171,14 @@ func (s *EventScanner) Scan(
 		eSize := len(e.Key) + len(e.Value) + len(e.OldValue)
 		totalBytes += int64(eSize)
 		elapsed := time.Since(startTime)
-		// -2.commitTs , -1.commitTs, current
-		if isNewTxn {
-			appendDML(dml)
 
+		if isNewTxn {
+			// Must append the dml event before interrupt the scan, otherwise the dml event will be lost if its commitTs is equal to lastCommitTs.
+			appendDML(dml)
 			if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs {
-				log.Info("fizz scan break", zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("e.CRTs", e.CRTs))
 				appendResolvedTs(lastCommitTs)
 				return events, true, nil
 			}
-
 			tableID := dataRange.Span.TableID
 			tableInfo, err := s.schemaStore.GetTableInfo(tableID, e.CRTs-1)
 			if err != nil {
