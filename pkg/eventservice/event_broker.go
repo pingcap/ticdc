@@ -714,31 +714,32 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			})
 
 			// Include the table trigger dispatchers in the metrics.
-			c.tableTriggerDispatchers.Range(func(key, value any) bool {
-				dispatcher := value.(*dispatcherStat)
-				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
-				if resolvedTs < receivedMinResolvedTs {
-					receivedMinResolvedTs = resolvedTs
-				}
-				watermark := dispatcher.sentResolvedTs.Load()
-				if watermark < sentMinResolvedTs {
-					sentMinResolvedTs = watermark
-				}
+			// c.tableTriggerDispatchers.Range(func(key, value any) bool {
+			// 	dispatcherCount++
+			// 	dispatcher := value.(*dispatcherStat)
+			// 	resolvedTs := dispatcher.eventStoreResolvedTs.Load()
+			// 	if resolvedTs < receivedMinResolvedTs {
+			// 		receivedMinResolvedTs = resolvedTs
+			// 	}
+			// 	watermark := dispatcher.sentResolvedTs.Load()
+			// 	if watermark < sentMinResolvedTs {
+			// 		sentMinResolvedTs = watermark
+			// 	}
 
-				if slowestDispatchers == nil || slowestDispatchers.sentResolvedTs.Load() < watermark {
-					slowestDispatchers = dispatcher
-				}
+			// 	if slowestDispatchers == nil || slowestDispatchers.sentResolvedTs.Load() < watermark {
+			// 		slowestDispatchers = dispatcher
+			// 	}
 
-				return true
-			})
+			// 	return true
+			// })
 
 			pdTime := c.pdClock.CurrentTime()
-			pdPhysicalTs := oracle.GetPhysical(pdTime)
+			pdTSO := oracle.GoTimeToTS(pdTime)
 
 			// If there are no dispatchers, set the receivedMinResolvedTs and sentMinWaterMark to the pdTime.
 			if dispatcherCount == 0 {
-				receivedMinResolvedTs = uint64(pdPhysicalTs)
-				sentMinResolvedTs = uint64(pdPhysicalTs)
+				receivedMinResolvedTs = uint64(pdTSO)
+				sentMinResolvedTs = uint64(pdTSO)
 				log.Info("fizz no dispatchers, set the receivedMinResolvedTs and sentMinResolvedTs to the pdTime",
 					zap.Uint64("receivedMinResolvedTs", receivedMinResolvedTs),
 					zap.Uint64("sentMinResolvedTs", sentMinResolvedTs),
