@@ -83,7 +83,8 @@ func NewConfluentSchemaManager(
 	}
 	resp, err := httpCli.Get(ctx, registryURL)
 	if err != nil {
-		log.Error("Test connection to Schema Registry failed", zap.Error(err))
+		log.Error("Test connection to Schema Registry failed",
+			zap.String("registryURL", registryURL), zap.Error(err))
 		return nil, errors.WrapError(errors.ErrAvroSchemaAPIError, err)
 	}
 	defer resp.Body.Close()
