@@ -277,7 +277,7 @@ func (b *decoder) assembleHandleKeyOnlyDMLEvent(ctx context.Context, row *messag
 		holder := common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs-1, schema, table, conditions)
 		row.PreColumns = buildColumns(holder, row.PreColumns)
 		holder = common.MustSnapshotQuery(ctx, b.upstreamTiDB, commitTs, schema, table, conditions)
-		row.Update = buildColumns(holder, row.PreColumns)
+		row.Update = buildColumns(holder, row.Update)
 	} else if len(row.Update) != 0 {
 		for name, col := range row.Update {
 			conditions[name] = col.Value
