@@ -699,21 +699,23 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			receivedMinResolvedTs := uint64(math.MaxUint64)
 			sentMinResolvedTs := uint64(math.MaxUint64)
 			dispatcherCount := 0
-			var slowestDispatchers *dispatcherStat
 
+			var slowestDispatchers *dispatcherStat
 			c.dispatchers.Range(func(key, value any) bool {
 				dispatcherCount++
 				dispatcher := value.(*dispatcherStat)
 				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
-				if resolvedTs < receivedMinResolvedTs {
+
+				if receivedMinResolvedTs > resolvedTs {
 					receivedMinResolvedTs = resolvedTs
 				}
-				watermark := dispatcher.sentResolvedTs.Load()
-				if watermark < sentMinResolvedTs {
-					sentMinResolvedTs = watermark
+
+				currentSentResolvedTs := dispatcher.sentResolvedTs.Load()
+				if sentMinResolvedTs > currentSentResolvedTs {
+					sentMinResolvedTs = currentSentResolvedTs
 				}
 
-				if slowestDispatchers == nil || slowestDispatchers.sentResolvedTs.Load() < watermark {
+				if slowestDispatchers == nil || slowestDispatchers.sentResolvedTs.Load() > currentSentResolvedTs {
 					slowestDispatchers = dispatcher
 				}
 
@@ -724,18 +726,18 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			c.tableTriggerDispatchers.Range(func(key, value any) bool {
 				dispatcher := value.(*dispatcherStat)
 				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
-				if resolvedTs < receivedMinResolvedTs {
+				if receivedMinResolvedTs > resolvedTs {
 					receivedMinResolvedTs = resolvedTs
 				}
-				watermark := dispatcher.sentResolvedTs.Load()
-				if watermark < sentMinResolvedTs {
-					sentMinResolvedTs = watermark
+
+				currentSentResolvedTs := dispatcher.sentResolvedTs.Load()
+				if sentMinResolvedTs > currentSentResolvedTs {
+					sentMinResolvedTs = currentSentResolvedTs
 				}
 
-				if slowestDispatchers == nil || slowestDispatchers.sentResolvedTs.Load() < watermark {
+				if slowestDispatchers == nil || slowestDispatchers.sentResolvedTs.Load() > currentSentResolvedTs {
 					slowestDispatchers = dispatcher
 				}
-
 				return true
 			})
 
@@ -803,7 +805,7 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) {
 			inActiveDispatchers := make([]*dispatcherStat, 0)
 			c.dispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*dispatcherStat)
-				checkpointTs := dispatcher.checkpointTs.Load()
+				checkpointTs := dispatcher.downstreamCheckpointTs.Load()
 				if checkpointTs > 0 && checkpointTs < dispatcher.sentResolvedTs.Load() {
 					c.eventStore.UpdateDispatcherCheckpointTs(dispatcher.id, checkpointTs)
 				}
@@ -1085,8 +1087,8 @@ func (c *eventBroker) handleDispatcherHeartbeat(ctx context.Context, heartbeat *
 			continue
 		}
 		// TODO: Should we check if the dispatcher's serverID is the same as the heartbeat's serverID?
-		if dispatcher.checkpointTs.Load() < dp.CheckpointTs {
-			dispatcher.checkpointTs.Store(dp.CheckpointTs)
+		if dispatcher.downstreamCheckpointTs.Load() < dp.CheckpointTs {
+			dispatcher.downstreamCheckpointTs.Store(dp.CheckpointTs)
 		}
 		// Update the last received heartbeat time to the current time.
 		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())

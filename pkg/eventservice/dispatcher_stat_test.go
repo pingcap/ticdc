@@ -45,7 +45,7 @@ func TestNewDispatcherStat(t *testing.T) {
 	require.Equal(t, workerIndex, stat.messageWorkerIndex)
 	require.Equal(t, uint64(0), stat.resetTs.Load())
 	require.Equal(t, startTs, stat.eventStoreResolvedTs.Load())
-	require.Equal(t, startTs, stat.checkpointTs.Load())
+	require.Equal(t, startTs, stat.downstreamCheckpointTs.Load())
 	require.Equal(t, startTs, stat.sentResolvedTs.Load())
 	require.True(t, stat.isRunning.Load())
 	require.False(t, stat.enableSyncPoint)

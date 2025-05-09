@@ -128,6 +128,7 @@ func (s *EventScanner) Scan(
 			events = append(events, &ddlEvents[0])
 			ddlEvents = ddlEvents[1:]
 		}
+
 		events = append(events, dml)
 		lastCommitTs = dml.CommitTs
 	}
@@ -173,8 +174,8 @@ func (s *EventScanner) Scan(
 		elapsed := time.Since(startTime)
 
 		if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs {
-			appendWaterMark(lastCommitTs)
-			return events, true, nil
+			// appendWaterMark(lastCommitTs)
+			// return events, true, nil
 		}
 
 		if isNewTxn {

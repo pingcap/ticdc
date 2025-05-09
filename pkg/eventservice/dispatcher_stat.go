@@ -59,10 +59,9 @@ type dispatcherStat struct {
 	// We use this value to generate data range for the next scan task.
 	// Note: Please don't changed this value directly, use updateSentResolvedTs instead.
 	sentResolvedTs atomic.Uint64
-	// checkpointTs is the ts that reported by the downstream dispatcher.
-	// events <= checkpointTs will not needed anymore, so we can inform eventStore to GC them.
-	// TODO: maintain it
-	checkpointTs atomic.Uint64
+	// downstreamCheckpointTs is the ts that reported by the downstream dispatcher.
+	// events <= downstreamCheckpointTs will not needed anymore, so we can inform eventStore to GC them.
+	downstreamCheckpointTs atomic.Uint64
 
 	// The seq of the events that have been sent to the downstream dispatcher.
 	// It start from 1, and increase by 1 for each event.
@@ -127,7 +126,7 @@ func newDispatcherStat(
 		dispStat.syncPointInterval = info.GetSyncPointInterval()
 	}
 	dispStat.eventStoreResolvedTs.Store(startTs)
-	dispStat.checkpointTs.Store(startTs)
+	dispStat.downstreamCheckpointTs.Store(startTs)
 	dispStat.sentResolvedTs.Store(startTs)
 	dispStat.isRunning.Store(true)
 	dispStat.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
