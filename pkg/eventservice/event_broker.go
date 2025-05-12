@@ -712,26 +712,6 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 				return true
 			})
 
-			// Include the table trigger dispatchers in the metrics.
-			// c.tableTriggerDispatchers.Range(func(key, value any) bool {
-			// 	dispatcherCount++
-			// 	dispatcher := value.(*dispatcherStat)
-			// 	resolvedTs := dispatcher.eventStoreResolvedTs.Load()
-			// 	if resolvedTs < receivedMinResolvedTs {
-			// 		receivedMinResolvedTs = resolvedTs
-			// 	}
-			// 	watermark := dispatcher.sentResolvedTs.Load()
-			// 	if watermark < sentMinResolvedTs {
-			// 		sentMinResolvedTs = watermark
-			// 	}
-
-			// 	if slowestDispatchers == nil || slowestDispatchers.sentResolvedTs.Load() < watermark {
-			// 		slowestDispatchers = dispatcher
-			// 	}
-
-			// 	return true
-			// })
-
 			pdTime := c.pdClock.CurrentTime()
 			pdTSO := oracle.GoTimeToTS(pdTime)
 
@@ -739,10 +719,6 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			if dispatcherCount == 0 {
 				receivedMinResolvedTs = uint64(pdTSO)
 				sentMinResolvedTs = uint64(pdTSO)
-				log.Info("fizz no dispatchers, set the receivedMinResolvedTs and sentMinResolvedTs to the pdTime",
-					zap.Uint64("receivedMinResolvedTs", receivedMinResolvedTs),
-					zap.Uint64("sentMinResolvedTs", sentMinResolvedTs),
-				)
 			}
 
 			receivedLag := float64(oracle.GetPhysical(pdTime)-oracle.ExtractPhysical(receivedMinResolvedTs)) / 1e3
@@ -770,15 +746,6 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 					)
 				}
 			}
-
-			log.Info("fizz update metrics",
-				zap.Uint64("receivedMinResolvedTs", receivedMinResolvedTs),
-				zap.Any("receivedResolvedTsLag", receivedLag),
-				zap.Uint64("sentMinResolvedTs", sentMinResolvedTs),
-				zap.Any("sendResolvedTsLag", sentLag),
-				zap.Int("dispatcherCount", dispatcherCount),
-				zap.Int("pendingTaskCount", pendingTaskCount),
-			)
 		}
 	}
 }
