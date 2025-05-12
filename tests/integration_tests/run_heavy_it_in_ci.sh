@@ -32,7 +32,7 @@ mysql_groups=(
 	# G00
 	'generate_column many_pk_or_uk'
 	# G01
-	'api_v2'
+	'api_v2' 'ddl_for_split_tables_with_random_move_table'
 	# G02
 	'availability'
 	# G03

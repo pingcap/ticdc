@@ -50,6 +50,8 @@ type ChangefeedInterface interface {
 	List(ctx context.Context, namespace string, state string) ([]v2.ChangefeedCommonInfo, error)
 	// Move Table to target node, it just for make test case now. **Not for public use.**
 	MoveTable(ctx context.Context, namespace string, name string, tableID int64, targetNode string) error
+	// Move dispatchers in a split Table to target node, it just for make test case now. **Not for public use.**
+	MoveSplitTable(ctx context.Context, namespace string, name string, tableID int64, targetNode string) error
 }
 
 // changefeeds implements ChangefeedInterface
@@ -166,6 +168,19 @@ func (c *changefeeds) MoveTable(ctx context.Context,
 	namespace string, name string, tableID int64, targetNode string,
 ) error {
 	url := fmt.Sprintf("changefeeds/%s/move_table?namespace=%s", name, namespace)
+	err := c.client.Post().
+		WithURI(url).
+		WithParam("tableID", strconv.FormatInt(tableID, 10)).
+		WithParam("targetNodeID", targetNode).
+		Do(ctx).Error()
+	return err
+}
+
+// move dispatchers in a split table to target node, it just for make test case now. **Not for public use.**
+func (c *changefeeds) MoveSplitTable(ctx context.Context,
+	namespace string, name string, tableID int64, targetNode string,
+) error {
+	url := fmt.Sprintf("changefeeds/%s/move_split_table?namespace=%s", name, namespace)
 	err := c.client.Post().
 		WithURI(url).
 		WithParam("tableID", strconv.FormatInt(tableID, 10)).
