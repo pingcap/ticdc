@@ -48,7 +48,6 @@ func genKeyList(row *chunk.Row, tableInfo *common.TableInfo) []byte {
 	for _, colID := range tableInfo.GetPKIndex() {
 		info, ok := tableInfo.GetColumnInfo(colID)
 		if !ok || info == nil {
-			log.Warn("can't find column info", zap.Int64("colID", colID), zap.String("colName", info.Name.O))
 			return nil
 		}
 		i, ok1 := tableInfo.GetRowColumnsOffset()[colID]
