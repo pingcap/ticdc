@@ -122,6 +122,14 @@ func (s *EventScanner) Scan(
 		return nil, false, err
 	}
 
+	// appendDML adds a DML event to the results list, maintaining order by commitTs.
+	// It ensures:
+	// 1. Any DDL events with FinishedTs <= DML's CommitTs are added first
+	// 2. The DML event is added after relevant DDLs (enforcing DML priority at same commitTs)
+	// 3. lastCommitTs is updated to track the scan boundary for potential interruption
+	//
+	// Example ordering:
+	//    TS10 (DDL1) → TS20 (DML1) → TS30 (DML2) → TS30 (DDL2) → TS40 (DML3)
 	appendDML := func(dml *pevent.DMLEvent) {
 		if dml == nil || dml.Length == 0 {
 			return
