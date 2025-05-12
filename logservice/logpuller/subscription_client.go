@@ -95,7 +95,7 @@ type resolveLockTask struct {
 // rangeTask represents a task to subscribe a range span of a table.
 // It can be a part of a table or a whole table, it also can be a part of a region.
 type rangeTask struct {
-	span           *heartbeatpb.TableSpan
+	span           heartbeatpb.TableSpan
 	subscribedSpan *subscribedSpan
 	filterLoop     bool
 }
@@ -110,7 +110,7 @@ type subscribedSpan struct {
 	startTs uint64
 
 	// The target span
-	span *heartbeatpb.TableSpan
+	span heartbeatpb.TableSpan
 	// The range lock of the span,
 	// it is used to prevent duplicate requests to the same region range,
 	// and it also used to calculate this table's resolvedTs.
@@ -305,7 +305,7 @@ func (s *SubscriptionClient) updateMetrics(ctx context.Context) error {
 // The rangeTask will be handled in `handleRangeTasks` goroutine.
 func (s *SubscriptionClient) Subscribe(
 	subID SubscriptionID,
-	span *heartbeatpb.TableSpan,
+	span heartbeatpb.TableSpan,
 	startTs uint64,
 	consumeKVEvents func(raw []common.RawKVEntry, wakeCallback func()) bool,
 	advanceResolvedTs func(ts uint64),
@@ -596,7 +596,7 @@ func (s *SubscriptionClient) handleRangeTasks(ctx context.Context) error {
 // 3. Schedule a region request to subscribe the region.
 func (s *SubscriptionClient) divideSpanAndScheduleRegionRequests(
 	ctx context.Context,
-	span *heartbeatpb.TableSpan,
+	span heartbeatpb.TableSpan,
 	subscribedSpan *subscribedSpan,
 	filterLoop bool,
 ) error {
@@ -701,7 +701,7 @@ func (s *SubscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 }
 
 func (s *SubscriptionClient) scheduleRangeRequest(
-	ctx context.Context, span *heartbeatpb.TableSpan,
+	ctx context.Context, span heartbeatpb.TableSpan,
 	subscribedSpan *subscribedSpan,
 	filterLoop bool,
 ) {
@@ -945,7 +945,7 @@ func (s *SubscriptionClient) logSlowRegions(ctx context.Context) error {
 
 func (s *SubscriptionClient) newSubscribedSpan(
 	subID SubscriptionID,
-	span *heartbeatpb.TableSpan,
+	span heartbeatpb.TableSpan,
 	startTs uint64,
 	consumeKVEvents func(raw []common.RawKVEntry, wakeCallback func()) bool,
 	advanceResolvedTs func(ts uint64),

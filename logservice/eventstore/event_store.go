@@ -464,7 +464,7 @@ func (e *eventStore) RegisterDispatcher(
 		}
 	}
 	// Note: don't hold any lock when call Subscribe
-	e.subClient.Subscribe(stat.subStat.subID, dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, 600, bdrMode)
+	e.subClient.Subscribe(stat.subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, 600, bdrMode)
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
 		ChangeType:   SubscriptionChangeTypeAdd,
 		SubID:        uint64(stat.subStat.subID),
