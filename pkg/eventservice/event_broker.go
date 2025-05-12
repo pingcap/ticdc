@@ -506,14 +506,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 
 	// Create a scanner to handle the scanning logic
-	scanner := NewEventScanner(c.eventStore, c.schemaStore, c.mounter)
-	scanLimit := ScanLimit{
+	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
+	sl := scanLimit{
 		MaxBytes: 1024 * 1024 * 8,         // 8 MB
 		Timeout:  time.Millisecond * 1000, // 1 Second
 	}
 
 	// Use the scanner to get events
-	events, isBroken, err := scanner.Scan(ctx, task, dataRange, scanLimit)
+	events, isBroken, err := scanner.Scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Panic("scan events failed", zap.Error(err))
 	}

@@ -41,7 +41,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func initEventService(
+func startEventService(
 	ctx context.Context, t *testing.T,
 	mc messaging.MessageCenter, mockStore eventstore.EventStore,
 ) *eventService {
@@ -66,6 +66,8 @@ func TestEventServiceBasic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	log.Info("start event service basic test")
+
 	// Set the max task time range to a very large value to avoid the test case being blocked.
 	maxTaskTimeRange = time.Duration(math.MaxInt64)
 
@@ -75,7 +77,7 @@ func TestEventServiceBasic(t *testing.T) {
 	mc := &mockMessageCenter{
 		messageCh: make(chan *messaging.TargetMessage, 100),
 	}
-	esImpl := initEventService(ctx, t, mc, mockStore)
+	esImpl := startEventService(ctx, t, mc, mockStore)
 	esImpl.Close(ctx)
 
 	dispatcherInfo := newMockDispatcherInfo(t, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
@@ -93,11 +95,11 @@ func TestEventServiceBasic(t *testing.T) {
 		`insert into test.t(id,c) values (2, "c2")`,
 	}...)
 	require.NotNil(t, kvEvents)
-	resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
-	mockStore.AppendEvents(dispatcherInfo.id, resolvedTs, kvEvents...)
-
 	schemastore := esImpl.schemaStore.(*mockSchemaStore)
 	schemastore.AppendDDLEvent(dispatcherInfo.span.TableID, ddlEvent)
+
+	resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
+	mockStore.AppendEvents(dispatcherInfo.id, resolvedTs, kvEvents...)
 	// receive events from msg center
 	msgCnt := 0
 	dmlCount := 0
@@ -127,7 +129,6 @@ func TestEventServiceBasic(t *testing.T) {
 				log.Info("receive handshake event", zap.Any("event", e))
 			case *commonEvent.DMLEvent:
 				require.NotNil(t, msg)
-				log.Info("receive dml event", zap.Any("event", e))
 				require.Equal(t, "event-collector", msg.Topic)
 				require.Equal(t, int32(1), e.Len())
 				require.Equal(t, kvEvents[dmlCount].CRTs, e.CommitTs)
@@ -608,10 +609,10 @@ func genEvents(helper *commonEvent.EventTestHelper, t *testing.T, ddl string, dm
 	job := helper.DDL2Job(ddl)
 	schema := job.SchemaName
 	table := job.TableName
-	kvEvents := helper.DML2RawKv(schema, table, dmls...)
+	kvEvents := helper.DML2RawKv(schema, table, job.BinlogInfo.FinishedTS, dmls...)
 	return commonEvent.DDLEvent{
 		Version:    commonEvent.DDLEventVersion,
-		FinishedTs: job.BinlogInfo.TableInfo.UpdateTS,
+		FinishedTs: job.BinlogInfo.FinishedTS,
 		TableID:    job.BinlogInfo.TableInfo.ID,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,

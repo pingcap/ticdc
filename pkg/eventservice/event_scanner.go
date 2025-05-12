@@ -29,27 +29,27 @@ import (
 )
 
 // ScanLimit defines the limits for a scan operation
-type ScanLimit struct {
+type scanLimit struct {
 	// MaxBytes is the maximum number of bytes to scan
 	MaxBytes int64
 	// Timeout is the maximum time to spend scanning
 	Timeout time.Duration
 }
 
-// EventScanner scans events from eventStore and schemaStore
-type EventScanner struct {
+// eventScanner scans events from eventStore and schemaStore
+type eventScanner struct {
 	eventStore  eventstore.EventStore
 	schemaStore schemastore.SchemaStore
 	mounter     pevent.Mounter
 }
 
-// NewEventScanner creates a new EventScanner
-func NewEventScanner(
+// newEventScanner creates a new EventScanner
+func newEventScanner(
 	eventStore eventstore.EventStore,
 	schemaStore schemastore.SchemaStore,
 	mounter pevent.Mounter,
-) *EventScanner {
-	return &EventScanner{
+) *eventScanner {
+	return &eventScanner{
 		eventStore:  eventStore,
 		schemaStore: schemaStore,
 		mounter:     mounter,
@@ -89,11 +89,11 @@ func NewEventScanner(
 // - events: The scanned events in commitTs order
 // - isBroken: true if the scan was interrupted due to reaching a limit, false otherwise
 // - error: Any error that occurred during the scan operation
-func (s *EventScanner) Scan(
+func (s *eventScanner) Scan(
 	ctx context.Context,
 	dispatcherStat *dispatcherStat,
 	dataRange common.DataRange,
-	limit ScanLimit,
+	limit scanLimit,
 ) ([]event.Event, bool, error) {
 	startTime := time.Now()
 	var events []event.Event
