@@ -43,7 +43,6 @@ func (m *mockMounter) DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.
 
 func TestEventScanner(t *testing.T) {
 	broker, _, _ := newEventBrokerForTest()
-	// Close the broker, so we can catch all message in the test.
 	broker.close()
 
 	mockEventStore := broker.eventStore.(*mockEventStore)
@@ -61,9 +60,9 @@ func TestEventScanner(t *testing.T) {
 
 	scanner := NewEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
 
-	// case 1:  only has resolvedTs
-	// 测试当只有 resolvedTs 事件时，扫描器能正确返回该事件
-	// 预期结果:
+	// case 1: Only has resolvedTs event
+	// Tests that the scanner correctly returns just the resolvedTs event
+	// Expected result:
 	// [Resolved(ts=102)]
 	disp.eventStoreResolvedTs.Store(102)
 	scanLimit := ScanLimit{
@@ -80,11 +79,11 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
 	require.Equal(t, e.GetCommitTs(), uint64(102))
 
-	// case 2: has new dml, ddl, and resolvedTs
-	// 测试扫描器能正确处理混合事件（DDL + DML + resolvedTs）
-	// 生成的事件序列:
+	// case 2: Contains DDL, DML and resolvedTs events
+	// Tests that the scanner can handle mixed event types (DDL + DML + resolvedTs)
+	// Event sequence:
 	//   DDL(ts=x) -> DML(ts=x+1) -> DML(ts=x+2) -> DML(ts=x+3) -> DML(ts=x+4) -> Resolved(ts=x+5)
-	// 预期结果:
+	// Expected result:
 	// [DDL(x), DML(x+1), DML(x+2), DML(x+3), DML(x+4), Resolved(x+5)]
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -112,12 +111,12 @@ func TestEventScanner(t *testing.T) {
 	require.False(t, isBroken)
 	require.Equal(t, 6, len(events))
 
-	// case 3: reach scan limit, only 1 ddl and 1 dml event was scanned
-	// 测试当达到 MaxBytes 限制时，扫描器能部分返回事件并标记 isBroken=true
-	// 预期结果:
-	// [DDL(x), DML(x+1), Resolved(x+1)] (因大小限制只返回部分事件)
+	// case 3: Reaches scan limit, only 1 DDL and 1 DML event scanned
+	// Tests that when MaxBytes limit is reached, the scanner returns partial events with isBroken=true
+	// Expected result:
+	// [DDL(x), DML(x+1), Resolved(x+1)] (partial events due to size limit)
 	//               ▲
-	//               └── 此处中断扫描
+	//               └── Scanning interrupted here
 	scanLimit = ScanLimit{
 		MaxBytes: 1,
 		Timeout:  10 * time.Second,
@@ -137,13 +136,13 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, kvEvents[0].CRTs, e.GetCommitTs())
 
 	// case4: Tests transaction atomicity during scanning
-	// 测试相同 commitTs 的事务会被原子性扫描（即使达到限制也不拆分）
-	// 修改事件使前3个DML具有相同 commitTs=x:
+	// Tests that transactions with same commitTs are scanned atomically (not split even when limit is reached)
+	// Modified events: first 3 DMLs have same commitTs=x:
 	//   DDL(x) -> DML(x+1) -> DML(x+1) -> DML(x+1) -> DML(x+4)
-	// 预期结果（MaxBytes=1）:
+	// Expected result (MaxBytes=1):
 	// [DDL(x), DML(x+1), DML(x+1), DML(x+1), Resolved(x+1)]
 	//                               ▲
-	//                               └── 此处中断，相同 commitTs 的事件必须一起返回
+	//                               └── Scanning interrupted, events with same commitTs must be returned together
 	firstCommitTs := kvEvents[0].CRTs
 	for i := 0; i < 3; i++ {
 		kvEvents[i].CRTs = firstCommitTs
@@ -155,14 +154,13 @@ func TestEventScanner(t *testing.T) {
 	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, scanLimit)
 	require.NoError(t, err)
 	require.True(t, isBroken)
-	// 1 ddl, 3 dmls and 1 resolvedTs
 	require.Equal(t, 5, len(events))
 
-	// ddl
+	// DDL
 	e = events[0]
 	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
 	require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
-	// dmls
+	// DMLs
 	e = events[1]
 	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
 	require.Equal(t, kvEvents[0].CRTs, e.GetCommitTs())
@@ -177,12 +175,12 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
 	require.Equal(t, kvEvents[2].CRTs, e.GetCommitTs())
 
-	// // case 5: Ensure timeout works
-	// 测试超时机制，Timeout=0 时应立即返回已扫描的事件
-	// 预期结果:
+	// case 5: Tests timeout behavior
+	// Tests that with Timeout=0, the scanner immediately returns scanned events
+	// Expected result:
 	// [DDL(x), DML(x+1), DML(x+1), DML(x+1), Resolved(x+1)]
 	//                               ▲
-	//                               └── 因超时中断
+	//                               └── Scanning interrupted due to timeout
 	scanLimit = ScanLimit{
 		MaxBytes: 1000,
 		Timeout:  0 * time.Millisecond,
@@ -192,14 +190,14 @@ func TestEventScanner(t *testing.T) {
 	require.True(t, isBroken)
 	require.Equal(t, 5, len(events))
 
-	// case 6: Ensure DDL and DML with the same commitTs are sorted by DML first
-	// 测试相同 commitTs 时 DML 优先于 DDL 返回
-	// 添加 fakeDDL(ts=x) 后事件序列:
+	// case 6: Tests DMLs are returned before DDLs when they share same commitTs
+	// Tests that DMLs take precedence over DDLs with same commitTs
+	// Event sequence after adding fakeDDL(ts=x):
 	//   DDL(x) -> DML(x+1) -> DML(x+1) -> DML(x+1) -> fakeDDL(x+1) -> DML(x+4)
-	// 预期结果:
+	// Expected result:
 	// [DDL(x), DML(x+1), DML(x+1), DML(x+1), fakeDDL(x+1), DML(x+4), Resolved(x+5)]
 	//                                ▲
-	//                                └── DML 优先于同 ts 的 DDL
+	//                                └── DMLs take precedence over DDL with same ts
 	fakeDDL := event.DDLEvent{
 		FinishedTs: kvEvents[0].CRTs,
 		TableInfo:  ddlEvent.TableInfo,
@@ -213,11 +211,11 @@ func TestEventScanner(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, isBroken)
 	require.Equal(t, 7, len(events))
-	// The first DML event should be returned before the fake DDL event
+	// First DML should appear before fake DDL
 	firstDML := events[1]
 	require.Equal(t, firstDML.GetType(), pevent.TypeDMLEvent)
 	require.Equal(t, kvEvents[0].CRTs, firstDML.GetCommitTs())
-	// The fake DDL event should be returned after the DML event
+	// Fake DDL should appear after DMLs
 	ddl := events[2]
 	require.Equal(t, ddl.GetType(), pevent.TypeDDLEvent)
 	require.Equal(t, fakeDDL.FinishedTs, ddl.GetCommitTs())
@@ -227,12 +225,11 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, resolvedTs, e.GetCommitTs())
 }
 
-// TestEventScanner_InterruptAtDDL tests the case that the scan is interrupted at a DDL event.
-// The Scanner will return the DDL event and the DML events that have the same commitTs as the DDL event.
-// The Scanner will also return the resolvedTs event with the commitTs of the last DML event.
+// TestEventScannerWithDDL tests cases where scanning is interrupted at DDL events
+// The scanner should return the DDL event plus any DML events sharing the same commitTs
+// It should also return a resolvedTs event with the commitTs of the last DML event
 func TestEventScannerWithDDL(t *testing.T) {
 	broker, _, _ := newEventBrokerForTest()
-	// Close the broker, so we can catch all message in the test.
 	broker.close()
 
 	mockEventStore := broker.eventStore.(*mockEventStore)
@@ -250,7 +247,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 
 	scanner := NewEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
 
-	// Construct events: dml 2, dml 3 have the same commitTs, fakeDDL  has the same commitTs with dml 2, dml 3
+	// Construct events: dml2 and dml3 share commitTs, fakeDDL shares commitTs with them
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
@@ -264,7 +261,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	require.NoError(t, err)
 	mockSchemaStore.AppendDDLEvent(tableID, ddlEvent)
 
-	// Create a fake ddl event with the same commitTs as dml 2 and dml 3
+	// Create fake DDL event sharing commitTs with dml2 and dml3
 	dml1 := kvEvents[0]
 	dml2 := kvEvents[1]
 	dml3 := kvEvents[2]
@@ -280,14 +277,14 @@ func TestEventScannerWithDDL(t *testing.T) {
 
 	eSize := len(kvEvents[0].Key) + len(kvEvents[0].Value) + len(kvEvents[0].OldValue)
 
-	// case 1: The scan will be interrupted at dml 1
-	// 测试在第一个 DML 处因大小限制中断
-	// 事件序列:
+	// case 1: Scanning interrupted at dml1
+	// Tests interruption at first DML due to size limit
+	// Event sequence:
 	//   DDL(x) -> DML1(x+1) -> DML2(x+2) ->fakeDDL(x+2) -> DML3(x+3)
-	// 预期结果（MaxBytes=1*eSize）:
+	// Expected result (MaxBytes=1*eSize):
 	// [DDL(x), DML1(x+1), Resolved(x+1)]
 	//             ▲
-	//             └── 在 DML1 处中断
+	//             └── Scanning interrupted at DML1
 	scanLimit := ScanLimit{
 		MaxBytes: int64(1 * eSize),
 		Timeout:  10 * time.Second,
@@ -296,11 +293,11 @@ func TestEventScannerWithDDL(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, isBroken)
 	require.Equal(t, 3, len(events))
-	// ddl
+	// DDL
 	e := events[0]
 	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
 	require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
-	// dml 1
+	// DML1
 	e = events[1]
 	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
 	require.Equal(t, dml1.CRTs, e.GetCommitTs())
@@ -310,12 +307,12 @@ func TestEventScannerWithDDL(t *testing.T) {
 	require.Equal(t, dml1.CRTs, e.GetCommitTs())
 	require.Equal(t, dml1.CRTs, e.GetCommitTs())
 
-	// case 2: The scan will be interrupted at dml 2
-	// 测试能原子性返回相同 commitTs 的 DML2/DML3/fakeDDL
-	// 预期结果（MaxBytes=2*eSize）:
+	// case 2: Scanning interrupted at dml2
+	// Tests atomic return of DML2/DML3/fakeDDL sharing same commitTs
+	// Expected result (MaxBytes=2*eSize):
 	// [DDL(x), DML1(x+1), DML2(x+2), DML3(x+2), fakeDDL(x+2), Resolved(x+3)]
 	//                                               ▲
-	//                                               └── 相同 commitTs 的事件必须一起返回
+	//                                               └── Events with same commitTs must be returned together
 	scanLimit = ScanLimit{
 		MaxBytes: int64(2 * eSize),
 		Timeout:  10 * time.Second,
@@ -325,23 +322,23 @@ func TestEventScannerWithDDL(t *testing.T) {
 	require.True(t, isBroken)
 	require.Equal(t, 6, len(events))
 
-	// ddl 1
+	// DDL1
 	e = events[0]
 	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
 	require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
-	// dml 1
+	// DML1
 	e = events[1]
 	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
 	require.Equal(t, dml1.CRTs, e.GetCommitTs())
-	// dml 2
+	// DML2
 	e = events[2]
 	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
 	require.Equal(t, dml2.CRTs, e.GetCommitTs())
-	// dml 3
+	// DML3
 	e = events[3]
 	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
 	require.Equal(t, dml3.CRTs, e.GetCommitTs())
-	// fake ddl
+	// fake DDL
 	e = events[4]
 	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
 	require.Equal(t, fakeDDL.FinishedTs, e.GetCommitTs())
@@ -351,18 +348,18 @@ func TestEventScannerWithDDL(t *testing.T) {
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
 	require.Equal(t, dml3.CRTs, e.GetCommitTs())
 
-	// case 3: Ensure the Scanner will return all remained DDLs
-	// 测试能正确处理多个 DDL 事件
-	// 添加事件后序列:
+	// case 3: Tests handling of multiple DDL events
+	// Tests that scanner correctly processes multiple DDL events
+	// Event sequence after additions:
 	//   ... -> fakeDDL2(x+5) -> fakeDDL3(x+6)
-	// 预期结果:
+	// Expected result:
 	// [..., fakeDDL2(x+5), fakeDDL3(x+6), Resolved(x+7)]
 	scanLimit = ScanLimit{
 		MaxBytes: int64(100 * eSize),
 		Timeout:  10 * time.Second,
 	}
 
-	// add more fake ddl events
+	// Add more fake DDL events
 	fakeDDL2 := event.DDLEvent{
 		FinishedTs: resolvedTs + 1,
 		TableInfo:  ddlEvent.TableInfo,
