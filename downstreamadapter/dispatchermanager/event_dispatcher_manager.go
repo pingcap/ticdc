@@ -185,7 +185,7 @@ func NewEventDispatcherManager(
 	}
 
 	var err error
-	manager.sink, err = sink.NewSink(ctx, manager.config, manager.changefeedID)
+	manager.sink, err = sink.New(ctx, manager.config, manager.changefeedID)
 	if err != nil {
 		return nil, 0, errors.Trace(err)
 	}
@@ -361,9 +361,19 @@ func (e *EventDispatcherManager) closeAllDispatchers() {
 			zap.Any("tableSpan", common.FormatTableSpan(dispatcher.GetTableSpan())),
 		)
 		ok := false
+		count := 0
 		for !ok {
 			_, ok = dispatcher.TryClose()
 			time.Sleep(10 * time.Millisecond)
+			count += 1
+			if count%100 == 0 {
+				log.Info("waiting for dispatcher to close",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Stringer("dispatcherID", dispatcher.GetId()),
+					zap.Any("tableSpan", common.FormatTableSpan(dispatcher.GetTableSpan())),
+					zap.Int("count", count),
+				)
+			}
 		}
 		// Remove should be called after dispatcher is closed
 		dispatcher.Remove()

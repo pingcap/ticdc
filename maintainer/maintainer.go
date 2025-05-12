@@ -944,6 +944,11 @@ func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID) error {
 	return m.controller.moveTable(tableId, targetNode)
 }
 
+// MoveSplitTable moves all the dispatchers in a split table to a specific node.
+func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID) error {
+	return m.controller.moveSplitTable(tableId, targetNode)
+}
+
 // GetTables returns all tables.
 func (m *Maintainer) GetTables() []*replica.SpanReplication {
 	return m.controller.replicationDB.GetAllTasks()

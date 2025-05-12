@@ -55,7 +55,7 @@ func NewDecoder(
 	schemaM SchemaManager,
 	topic string,
 	db *sql.DB,
-) common.RowEventDecoder {
+) common.Decoder {
 	return &decoder{
 		config:           config,
 		topic:            topic,
@@ -65,51 +65,51 @@ func NewDecoder(
 	}
 }
 
-func (d *decoder) AddKeyValue(key, value []byte) error {
+func (d *decoder) AddKeyValue(key, value []byte) {
 	if d.key != nil || d.value != nil {
-		return errors.ErrCodecDecode.GenWithStack(
-			"key or value is not nil")
+		log.Panic("add key/value to the decoder failed, since it's already set")
 	}
 	d.key = key
 	d.value = value
-	return nil
 }
 
-func (d *decoder) HasNext() (common.MessageType, bool, error) {
+func (d *decoder) HasNext() (common.MessageType, bool) {
 	if d.key == nil && d.value == nil {
-		return common.MessageTypeUnknown, false, nil
+		return common.MessageTypeUnknown, false
 	}
 
 	// it must a row event.
 	if d.key != nil {
-		return common.MessageTypeRow, true, nil
+		return common.MessageTypeRow, true
 	}
 	if len(d.value) < 1 {
-		return common.MessageTypeUnknown, false, errors.ErrAvroInvalidMessage.FastGenByArgs(d.value)
+		log.Panic("avro invalid data, the length of value is less than 1", zap.Any("data", d.value))
 	}
 	switch d.value[0] {
 	case magicByte:
-		return common.MessageTypeRow, true, nil
+		return common.MessageTypeRow, true
 	case ddlByte:
-		return common.MessageTypeDDL, true, nil
+		return common.MessageTypeDDL, true
 	case checkpointByte:
-		return common.MessageTypeResolved, true, nil
+		return common.MessageTypeResolved, true
+	default:
 	}
-	return common.MessageTypeUnknown, false, errors.ErrAvroInvalidMessage.FastGenByArgs(d.value)
+	log.Panic("avro invalid data, the first byte is not magic byte or ddl byte")
+	return common.MessageTypeUnknown, false
 }
 
 // NextResolvedEvent returns the next resolved event if exists
-func (d *decoder) NextResolvedEvent() (uint64, error) {
+func (d *decoder) NextResolvedEvent() uint64 {
 	if len(d.value) == 0 {
-		return 0, errors.ErrCodecDecode.GenWithStack("value should not be empty")
+		log.Panic("value is empty, cannot found the resolved-ts")
 	}
 	ts := binary.BigEndian.Uint64(d.value[1:])
 	d.value = nil
-	return ts, nil
+	return ts
 }
 
 // NextDMLEvent returns the next row changed event if exists
-func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
+func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	var (
 		valueMap    map[string]interface{}
 		valueSchema map[string]interface{}
@@ -119,7 +119,7 @@ func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	ctx := context.Background()
 	keyMap, keySchema, err := d.decodeKey(ctx)
 	if err != nil {
-		return nil, errors.Trace(err)
+		log.Panic("decode key failed", zap.Error(err))
 	}
 
 	// for the delete event, only have key part, it holds primary key or the unique key columns.
@@ -132,26 +132,23 @@ func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	} else {
 		valueMap, valueSchema, err = d.decodeValue(ctx)
 		if err != nil {
-			return nil, errors.Trace(err)
+			log.Panic("decode value failed", zap.Error(err))
 		}
 	}
 
 	event, err := assembleEvent(keyMap, valueMap, valueSchema, isDelete)
 	if err != nil {
-		return nil, errors.Trace(err)
+		log.Panic("assemble event failed", zap.Error(err))
 	}
 	event.PhysicalTableID = d.tableIDAllocator.AllocateTableID(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName())
 
 	// Delete event only has Primary Key Columns, but the checksum is calculated based on the whole row columns,
 	// checksum verification cannot be done here, so skip it.
 	if isDelete {
-		return event, nil
+		return event
 	}
 
-	expectedChecksum, found, err := extractExpectedChecksum(valueMap)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
+	expectedChecksum, found := extractExpectedChecksum(valueMap)
 	corrupted := isCorrupted(valueMap)
 	if found {
 		event.Checksum = []*integrity.Checksum{{
@@ -175,11 +172,11 @@ func (d *decoder) NextDMLEvent() (*commonEvent.DMLEvent, error) {
 	}
 	if found {
 		if err = common.VerifyChecksum(event, d.upstreamTiDB); err != nil {
-			return nil, errors.Trace(err)
+			return nil
 		}
 	}
 
-	return event, nil
+	return event
 }
 
 // assembleEvent return a row changed event
@@ -272,7 +269,7 @@ func assembleEvent(
 	} else {
 		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeInsert)
 	}
-	event.Length += 1
+	event.Length++
 	return event, nil
 }
 
@@ -309,20 +306,20 @@ func isCorrupted(valueMap map[string]interface{}) bool {
 
 // extract the checksum from the received value map
 // return true if the checksum found, and return error if the checksum is not valid
-func extractExpectedChecksum(valueMap map[string]interface{}) (uint64, bool, error) {
+func extractExpectedChecksum(valueMap map[string]interface{}) (uint64, bool) {
 	o, ok := valueMap[tidbRowLevelChecksum]
 	if !ok {
-		return 0, false, nil
+		return 0, false
 	}
 	checksum := o.(string)
 	if checksum == "" {
-		return 0, false, nil
+		return 0, false
 	}
 	result, err := strconv.ParseUint(checksum, 10, 64)
 	if err != nil {
-		return 0, true, errors.Trace(err)
+		log.Panic("parse checksum into uint64 failed", zap.String("checksum", checksum), zap.Error(err))
 	}
-	return result, true, nil
+	return result, true
 }
 
 // value is an interface, need to convert it to the real value with the help of type info.
@@ -426,19 +423,19 @@ func getColumnValue(
 }
 
 // NextDDLEvent returns the next DDL event if exists
-func (d *decoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
+func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if len(d.value) == 0 {
-		return nil, errors.ErrCodecDecode.GenWithStack("value should not be empty")
+		log.Panic("value is empty, cannot found the ddl event")
 	}
 	if d.value[0] != ddlByte {
-		return nil, errors.ErrCodecDecode.GenWithStack("first byte is not the ddl byte, but got: %+v", d.value[0])
+		log.Panic("avro invalid data, the first byte is not ddl byte", zap.Any("value", d.value))
 	}
 
 	data := d.value[1:]
 	var baseDDLEvent ddlEvent
 	err := json.Unmarshal(data, &baseDDLEvent)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrDecodeFailed, err)
+		log.Panic("unmarshal ddl event failed", zap.Any("value", d.value), zap.Error(err))
 	}
 	d.value = nil
 
@@ -452,7 +449,7 @@ func (d *decoder) NextDDLEvent() (*commonEvent.DDLEvent, error) {
 	result.Type = byte(baseDDLEvent.Type)
 	result.Query = baseDDLEvent.Query
 
-	return result, nil
+	return result
 }
 
 // return the schema ID and the encoded binary data

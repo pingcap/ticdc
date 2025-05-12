@@ -257,7 +257,6 @@ func (ti *TableInfo) ForceGetColumnIDByName(name string) int64 {
 	return colID
 }
 
-// MustGetColumnOffsetByID return the column offset by the column ID
 func (ti *TableInfo) MustGetColumnOffsetByID(id int64) int {
 	offset, ok := ti.columnSchema.ColumnsOffset[id]
 	if !ok {
@@ -319,11 +318,7 @@ func (ti *TableInfo) GetColInfosForRowChangedEvent() []rowcodec.ColInfo {
 
 // IsColCDCVisible returns whether the col is visible for CDC
 func IsColCDCVisible(col *model.ColumnInfo) bool {
-	// this column is a virtual generated column
-	if col.IsGenerated() && !col.GeneratedStored {
-		return false
-	}
-	return true
+	return !col.IsGenerated() || col.GeneratedStored
 }
 
 // HasVirtualColumns returns whether the table has virtual columns
@@ -417,7 +412,7 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 }
 
 func newTableInfo(schema string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
-	ti := &TableInfo{
+	return &TableInfo{
 		TableName: TableName{
 			Schema:      schema,
 			Table:       table,
@@ -432,7 +427,6 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 		Collate:      tableInfo.Collate,
 		Comment:      tableInfo.Comment,
 	}
-	return ti
 }
 
 func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
@@ -459,7 +453,9 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
 	cs := newColumnSchema4Decoder(tableInfo)
-	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
+	result := newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
+	result.InitPrivateFields()
+	return result
 }
 
 // BuildTiDBTableInfoWithoutVirtualColumns build a TableInfo without virual columns from the source table info
