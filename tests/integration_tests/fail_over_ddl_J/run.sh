@@ -97,9 +97,6 @@ function failOverCaseJ-1() {
 
 	cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
 	kill_cdc_pid $cdc_pid_2
-
-	sleep 5
-	
 	# restart cdc server
 	export GO_FAILPOINTS=''
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-2" --addr "127.0.0.1:8301"
