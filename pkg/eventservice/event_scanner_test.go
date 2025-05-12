@@ -194,7 +194,10 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, fakeDDL.FinishedTs, firstDML.GetCommitTs())
 }
 
-func TestEventScanner_InterruptAtDDL(t *testing.T) {
+// TestEventScanner_InterruptAtDDL tests the case that the scan is interrupted at a DDL event.
+// The Scanner will return the DDL event and the DML events that have the same commitTs as the DDL event.
+// The Scanner will also return the resolvedTs event with the commitTs of the last DML event.
+func TestEventScannerWithDDL(t *testing.T) {
 	broker, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
 	broker.close()
@@ -302,4 +305,40 @@ func TestEventScanner_InterruptAtDDL(t *testing.T) {
 	e = events[5]
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
 	require.Equal(t, dml3.CRTs, e.GetCommitTs())
+
+	// case 3: Ensure the Scanner will return all remained DDLs, set the limit to 100 * eSize
+	scanLimit = ScanLimit{
+		MaxBytes: int64(100 * eSize),
+		Timeout:  10 * time.Second,
+	}
+
+	// add more fake ddl events
+	fakeDDL2 := event.DDLEvent{
+		FinishedTs: resolvedTs + 1,
+		TableInfo:  ddlEvent.TableInfo,
+	}
+	fakeDDL3 := event.DDLEvent{
+		FinishedTs: resolvedTs + 2,
+		TableInfo:  ddlEvent.TableInfo,
+	}
+	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL2)
+	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL3)
+	resolvedTs = resolvedTs + 3
+	disp.eventStoreResolvedTs.Store(resolvedTs)
+	needScan, dataRange = broker.checkNeedScan(disp, true)
+	require.True(t, needScan)
+
+	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, scanLimit)
+	require.NoError(t, err)
+	require.False(t, isBroken)
+	require.Equal(t, 9, len(events))
+	e = events[6]
+	require.Equal(t, fakeDDL2.GetType(), pevent.TypeDDLEvent)
+	require.Equal(t, fakeDDL2.GetCommitTs(), fakeDDL2.FinishedTs)
+	e = events[7]
+	require.Equal(t, fakeDDL3.GetType(), pevent.TypeDDLEvent)
+	require.Equal(t, fakeDDL3.GetCommitTs(), fakeDDL3.FinishedTs)
+	e = events[8]
+	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
+	require.Equal(t, resolvedTs, e.GetCommitTs())
 }

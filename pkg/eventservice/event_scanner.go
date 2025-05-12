@@ -184,7 +184,6 @@ func (s *EventScanner) Scan(
 		}
 
 		eSize := len(e.Key) + len(e.Value) + len(e.OldValue)
-		log.Info("fizz event size", zap.Int("size", eSize))
 		totalBytes += int64(eSize)
 		elapsed := time.Since(startTime)
 
