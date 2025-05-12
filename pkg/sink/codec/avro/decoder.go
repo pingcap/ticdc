@@ -145,7 +145,6 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if err != nil {
 		log.Panic("assemble event failed", zap.Error(err))
 	}
-	event.PhysicalTableID = tableIDAllocator.AllocateTableID(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName())
 
 	// Delete event only has Primary Key Columns, but the checksum is calculated based on the whole row columns,
 	// checksum verification cannot be done here, so skip it.
@@ -268,14 +267,15 @@ func assembleEvent(
 	event.StartTs = uint64(commitTs)
 	event.CommitTs = uint64(commitTs)
 	event.PhysicalTableID = event.TableInfo.TableName.TableID
-	event.Length++
 	event.Rows = chunk.NewChunkWithCapacity(event.TableInfo.GetFieldSlice(), 1)
+	event.Length++
 	common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
+
+	rowType := commonEvent.RowTypeInsert
 	if isDelete {
-		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeDelete)
-	} else {
-		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeInsert)
+		rowType = commonEvent.RowTypeDelete
 	}
+	event.RowTypes = append(event.RowTypes, rowType)
 	return event, nil
 }
 
@@ -291,7 +291,8 @@ func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo,
 }
 
 func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]interface{}) *commonType.TableInfo {
-	tidbTableInfo := &timodel.TableInfo{}
+	tidbTableInfo := new(timodel.TableInfo)
+	tidbTableInfo.ID = tableIDAllocator.AllocateTableID(schemaName, tableName)
 	tidbTableInfo.Name = pmodel.NewCIStr(tableName)
 	tidbTableInfo.Columns = columns
 	indexColumns := make([]*timodel.IndexColumn, 0)

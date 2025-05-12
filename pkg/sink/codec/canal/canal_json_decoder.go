@@ -297,25 +297,25 @@ func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 
 func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	msg := b.msg
-	tableInfo := b.queryTableInfo(msg)
+	tableInfo := queryTableInfo(msg)
 
 	result := new(commonEvent.DMLEvent)
 	result.TableInfo = tableInfo
 	result.StartTs = msg.getCommitTs()
 	result.CommitTs = msg.getCommitTs()
 	result.PhysicalTableID = result.TableInfo.TableName.TableID
+	result.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	result.Length++
 
-	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	columns := tableInfo.GetColumns()
 	switch msg.eventType() {
 	case canal.EventType_DELETE:
 		data := formatAllColumnsValue(msg.getData(), columns)
-		common.AppendRow2Chunk(data, columns, chk)
+		common.AppendRow2Chunk(data, columns, result.Rows)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
 	case canal.EventType_INSERT:
 		data := formatAllColumnsValue(msg.getData(), columns)
-		common.AppendRow2Chunk(data, columns, chk)
+		common.AppendRow2Chunk(data, columns, result.Rows)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
 	case canal.EventType_UPDATE:
 		previous := formatAllColumnsValue(msg.getOld(), columns)
@@ -325,14 +325,13 @@ func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 				previous[k] = v
 			}
 		}
-		common.AppendRow2Chunk(previous, columns, chk)
-		common.AppendRow2Chunk(data, columns, chk)
+		common.AppendRow2Chunk(previous, columns, result.Rows)
+		common.AppendRow2Chunk(data, columns, result.Rows)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 	default:
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}
-	result.Rows = chk
 	return result
 }
 
@@ -519,7 +518,7 @@ func formatValue(value any, ft types.FieldType) any {
 	return nil
 }
 
-func (b *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
+func queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	schema := *msg.getSchema()
 	table := *msg.getTable()
 

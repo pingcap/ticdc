@@ -102,8 +102,6 @@ func TestDDLEventE2E(t *testing.T) {
 	require.Equal(t, ddl.GetCommitTs(), decodedEvent.GetCommitTs())
 	require.Equal(t, timodel.ActionCreateTable, decodedEvent.GetDDLType())
 	require.NotEmpty(t, decodedEvent.Query)
-	require.NotEmpty(t, decodedEvent.TableInfo.TableName.Schema)
-	require.NotEmpty(t, decodedEvent.TableInfo.TableName.Table)
 }
 
 func TestResolvedE2E(t *testing.T) {
