@@ -471,7 +471,7 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 		tableID = tableInfo.TableName.TableID
 	}
 	result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
-	tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
+	tableInfoAccessor.Remove(result.SchemaName, result.TableName)
 	return result
 }
 

@@ -163,14 +163,14 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 		flushed atomic.Int64
 	)
 
-	watermark := w.globalWatermark()
+	commitTs := ddl.GetCommitTs()
 	for tableID := range tableIDs {
 		for _, progress := range w.progresses {
 			g, ok := progress.eventGroups[tableID]
 			if !ok {
 				continue
 			}
-			events := g.Resolve(watermark)
+			events := g.Resolve(commitTs)
 			resolvedCount := len(events)
 			if resolvedCount == 0 {
 				continue
@@ -188,22 +188,27 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 		}
 	}
 
-	if total != 0 {
-		log.Info("flush DML events before DDL", zap.Uint64("watermark", watermark), zap.Int("total", total))
-		start := time.Now()
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-done:
-			log.Info("flush DML events before DDL done", zap.Uint64("watermark", watermark),
-				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
-		case <-ticker.C:
-			log.Panic("DDL event timeout, since the DML events are not flushed in time",
-				zap.Int("total", total), zap.Int64("flushed", flushed.Load()),
-				zap.String("query", ddl.Query))
-		}
+	if total == 0 {
+		log.Info("no DML events found before DDL",
+			zap.Uint64("DDLCommitTs", commitTs), zap.Any("tables", tableIDs))
+		return w.mysqlSink.WriteBlockEvent(ddl)
+	}
+
+	log.Info("flush DML events before DDL", zap.Uint64("DDLCommitTs", commitTs), zap.Int("total", total))
+	start := time.Now()
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-done:
+		log.Info("flush DML events before DDL done", zap.Uint64("DDLCommitTs", commitTs),
+			zap.Int("total", total), zap.Duration("duration", time.Since(start)),
+			zap.Any("tables", tableIDs))
+	case <-ticker.C:
+		log.Panic("DDL event timeout, since the DML events are not flushed in time",
+			zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query),
+			zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 	}
 	return w.mysqlSink.WriteBlockEvent(ddl)
 }

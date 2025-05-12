@@ -609,15 +609,20 @@ func logDMLTxnErr(
 	}
 	if isRetryableDMLError(err) {
 		log.Warn("execute DMLs with error, retry later",
-			zap.Error(err), zap.Duration("duration", time.Since(start)),
-			zap.String("query", query), zap.Int("count", count),
+			zap.String("changefeed", changefeed),
+			zap.Duration("duration", time.Since(start)),
 			zap.Uint64s("startTs", startTs),
-			zap.String("changefeed", changefeed))
+			zap.Int("count", count),
+			zap.String("query", query),
+			zap.Error(err))
 	} else {
 		log.Error("execute DMLs with error, can not retry",
-			zap.Error(err), zap.Duration("duration", time.Since(start)),
-			zap.String("query", query), zap.Int("count", count),
-			zap.String("changefeed", changefeed))
+			zap.String("changefeed", changefeed),
+			zap.Duration("duration", time.Since(start)),
+			zap.Uint64s("startTs", startTs),
+			zap.Int("count", count),
+			zap.String("query", query),
+			zap.Error(err))
 	}
 	return errors.WithMessage(err, fmt.Sprintf("Failed query info: %s; ", query))
 }
