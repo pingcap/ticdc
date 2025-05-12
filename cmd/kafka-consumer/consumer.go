@@ -73,17 +73,6 @@ type consumer struct {
 
 // newConsumer will create a consumer client.
 func newConsumer(ctx context.Context, o *option) *consumer {
-	partitionNum, err := getPartitionNum(o)
-	if err != nil {
-		log.Panic("cannot get the partition number", zap.String("topic", o.topic), zap.Error(err))
-	}
-	if o.partitionNum == 0 {
-		o.partitionNum = partitionNum
-	}
-	topics := strings.Split(o.topic, ",")
-	if len(topics) == 0 {
-		log.Panic("no topic provided for the consumer")
-	}
 	configMap := &kafka.ConfigMap{
 		"bootstrap.servers": strings.Join(o.address, ","),
 		"group.id":          o.groupID,
@@ -110,9 +99,11 @@ func newConsumer(ctx context.Context, o *option) *consumer {
 	if err != nil {
 		log.Panic("create kafka consumer failed", zap.Error(err))
 	}
+
+	topics := strings.Split(o.topic, ",")
 	err = client.SubscribeTopics(topics, nil)
 	if err != nil {
-		log.Panic("subscribe topics failed", zap.Error(err))
+		log.Panic("subscribe topics failed", zap.Strings("topics", topics), zap.Error(err))
 	}
 	return &consumer{
 		writer: newWriter(ctx, o),

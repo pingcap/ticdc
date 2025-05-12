@@ -78,18 +78,13 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	o.topic = strings.TrimFunc(upstreamURI.Path, func(r rune) bool {
 		return r == '/'
 	})
-	o.address = strings.Split(upstreamURI.Host, ",")
-
-	s := upstreamURI.Query().Get("partition-num")
-	if s != "" {
-		c, err := strconv.ParseInt(s, 10, 32)
-		if err != nil {
-			log.Panic("invalid partition-num of upstream-uri")
-		}
-		o.partitionNum = int32(c)
+	if len(o.topic) == 0 {
+		log.Panic("no topic provided for the consumer")
 	}
 
-	s = upstreamURI.Query().Get("max-message-bytes")
+	o.address = strings.Split(upstreamURI.Host, ",")
+
+	s := upstreamURI.Query().Get("max-message-bytes")
 	if s != "" {
 		c, err := strconv.Atoi(s)
 		if err != nil {
@@ -117,6 +112,22 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	}
 	o.protocol = protocol
 
+	s = upstreamURI.Query().Get("partition-num")
+	if s != "" {
+		c, err := strconv.ParseInt(s, 10, 32)
+		if err != nil {
+			log.Panic("invalid partition-num of upstream-uri")
+		}
+		o.partitionNum = int32(c)
+	}
+	partitionNum, err := getPartitionNum(o)
+	if err != nil {
+		log.Panic("cannot get the partition number", zap.String("topic", o.topic), zap.Error(err))
+	}
+	if o.partitionNum == 0 {
+		o.partitionNum = partitionNum
+	}
+
 	replicaConfig := config.GetDefaultReplicaConfig()
 	if configFile != "" {
 		err = util.StrictDecodeFile(configFile, "kafka consumer", replicaConfig)
@@ -136,6 +147,8 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	if err = o.codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
 		log.Panic("codec config apply failed", zap.Error(err))
 	}
+	o.codecConfig.AvroConfluentSchemaRegistry = o.schemaRegistryURI
+
 	tz, err := putil.GetTimezone(o.timezone)
 	if err != nil {
 		log.Panic("parse timezone failed", zap.Error(err))
@@ -150,6 +163,8 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 		zap.String("address", strings.Join(o.address, ",")),
 		zap.String("topic", o.topic),
 		zap.Int32("partitionNum", o.partitionNum),
+		zap.String("protocol", protocol.String()),
+		zap.String("schema-registry-uri", o.schemaRegistryURI),
 		zap.String("groupID", o.groupID),
 		zap.Int("maxMessageBytes", o.maxMessageBytes),
 		zap.Int("maxBatchSize", o.maxBatchSize),
