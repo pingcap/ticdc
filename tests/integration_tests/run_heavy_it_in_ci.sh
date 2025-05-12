@@ -34,7 +34,7 @@ mysql_groups=(
 	# G01
 	'api_v2' 'ddl_for_split_tables_with_random_move_table'
 	# G02
-	'availability'
+	'availability' 'ddl_for_split_tables_with_failover'
 	# G03
 	'multi_source'
 	# G04
