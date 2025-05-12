@@ -101,7 +101,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		}
 	}
 	for i := 0; i < int(o.partitionNum); i++ {
-		decoder, err := codec.NewEventDecoder(ctx, o.codecConfig, o.topic, db)
+		decoder, err := codec.NewEventDecoder(ctx, i, o.codecConfig, o.topic, db)
 		if err != nil {
 			log.Panic("cannot create the decoder", zap.Error(err))
 		}

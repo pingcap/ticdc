@@ -62,7 +62,7 @@ func TestDMLEventE2E(t *testing.T) {
 			schemaM, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
 			require.NoError(t, err)
 
-			decoder := NewDecoder(codecConfig, schemaM, topic, nil)
+			decoder := NewDecoder(codecConfig, 0, schemaM, topic, nil)
 			decoder.AddKeyValue(message.Key, message.Value)
 
 			messageType, exist := decoder.HasNext()
@@ -90,7 +90,7 @@ func TestDDLEventE2E(t *testing.T) {
 	require.NotNil(t, message)
 
 	topic := "test-topic"
-	decoder := NewDecoder(codecConfig, nil, topic, nil)
+	decoder := NewDecoder(codecConfig, 0, nil, topic, nil)
 	decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, exist := decoder.HasNext()
@@ -119,7 +119,7 @@ func TestResolvedE2E(t *testing.T) {
 	require.NotNil(t, message)
 
 	topic := "test-topic"
-	decoder := NewDecoder(codecConfig, nil, topic, nil)
+	decoder := NewDecoder(codecConfig, 0, nil, topic, nil)
 	decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, exist := decoder.HasNext()

@@ -42,6 +42,7 @@ var (
 )
 
 type decoder struct {
+	idx    int
 	config *common.Config
 	topic  string
 
@@ -56,6 +57,7 @@ type decoder struct {
 // NewDecoder return an avro decoder
 func NewDecoder(
 	config *common.Config,
+	idx int,
 	schemaM SchemaManager,
 	topic string,
 	db *sql.DB,
@@ -63,6 +65,7 @@ func NewDecoder(
 	tableIDAllocator.Clean()
 	tableInfoAccessor.Clean()
 	return &decoder{
+		idx:          idx,
 		config:       config,
 		topic:        topic,
 		schemaM:      schemaM,
@@ -284,7 +287,6 @@ func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo,
 	if ok {
 		return tableInfo
 	}
-
 	tableInfo = newTableInfo(schemaName, tableName, columns, keyMap)
 	tableInfoAccessor.Add(schemaName, tableName, tableInfo)
 	return tableInfo
@@ -465,18 +467,20 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 
-	var tableID int64
-	tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
-	if ok {
-		tableID = tableInfo.TableName.TableID
-		log.Info("found tableID for the blocked table in the table accessor",
-			zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
-			zap.Any("actionType", actionType.String()), zap.Int64("tableID", tableID))
+	if d.idx == 0 {
+		var tableID int64
+		tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
+		if ok {
+			tableID = tableInfo.TableName.TableID
+			log.Info("found tableID for the blocked table in the table accessor",
+				zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+				zap.Any("actionType", actionType.String()), zap.Int64("tableID", tableID))
+		}
+		result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
+		log.Info("set blocked table", zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+			zap.Any("actionType", actionType.String()), zap.Any("tableID", tableID))
+		tableInfoAccessor.Remove(result.SchemaName, result.TableName)
 	}
-	result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
-	log.Info("set blocked table", zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
-		zap.Any("actionType", actionType.String()), zap.Any("tableID", tableID))
-	tableInfoAccessor.Remove(result.SchemaName, result.TableName)
 	return result
 }
 

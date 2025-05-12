@@ -43,6 +43,7 @@ var (
 
 // decoder implement the Decoder interface
 type decoder struct {
+	idx    int
 	config *common.Config
 
 	upstreamTiDB *sql.DB
@@ -56,11 +57,13 @@ type decoder struct {
 // NewDecoder return an debezium decoder
 func NewDecoder(
 	config *common.Config,
+	idx int,
 	db *sql.DB,
 ) common.Decoder {
 	tableIDAllocator.Clean()
 	tableInfoAccessor.Clean()
 	return &decoder{
+		idx:          idx,
 		config:       config,
 		upstreamTiDB: db,
 	}
@@ -137,17 +140,18 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(event.Query)
 	event.Type = byte(actionType)
 
-	var tableID int64
-	tableInfo, ok := tableInfoAccessor.Get(schemaName, tableName)
-	if ok {
-		tableID = tableInfo.TableName.TableID
+	if d.idx == 0 {
+		var tableID int64
+		tableInfo, ok := tableInfoAccessor.Get(schemaName, tableName)
+		if ok {
+			tableID = tableInfo.TableName.TableID
+		}
+		event.BlockedTables = common.GetInfluenceTables(actionType, tableID)
+		log.Debug("set blocked tables for the DDL event",
+			zap.String("schema", schemaName), zap.String("table", tableName),
+			zap.String("query", event.Query), zap.Any("blocked", event.BlockedTables))
+		tableInfoAccessor.Remove(schemaName, tableName)
 	}
-	event.BlockedTables = common.GetInfluenceTables(actionType, tableID)
-	log.Debug("set blocked tables for the DDL event",
-		zap.String("schema", schemaName), zap.String("table", tableName),
-		zap.String("query", event.Query), zap.Any("blocked", event.BlockedTables))
-
-	tableInfoAccessor.Remove(schemaName, tableName)
 	return event
 }
 
