@@ -120,6 +120,7 @@ func TestOnNotify(t *testing.T) {
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 
 	disp := newDispatcherStat(startTs, disInfo, nil, workerIndex, workerIndex, changefeedStatus)
+	broker.addDispatcher(disInfo)
 	// Make the dispatcher is reset.
 	disp.resetState(100)
 	disp.isHandshaked.Store(true)
@@ -134,8 +135,8 @@ func TestOnNotify(t *testing.T) {
 	broker.onNotify(disp, notifyMsgs2.resolvedTs, notifyMsgs2.latestCommitTs)
 	require.Equal(t, uint64(101), disp.eventStoreResolvedTs.Load())
 	log.Info("Pass case 2")
+
 	// Case 3: The latestCommitTs is greater than the startTs, it triggers a scan task.
-	// Set a temp taskChan to catch the scan task.
 	notifyMsgs3 := notifyMsg{102, 101}
 	broker.onNotify(disp, notifyMsgs3.resolvedTs, notifyMsgs3.latestCommitTs)
 	require.Equal(t, uint64(102), disp.eventStoreResolvedTs.Load())
@@ -143,7 +144,8 @@ func TestOnNotify(t *testing.T) {
 	task := <-broker.taskChan[disp.scanWorkerIndex]
 	require.Equal(t, task.id, disp.id)
 	log.Info("Pass case 3")
-	// Case 4: When the scan task is running, even there is a large latestCommitTs,
+
+	// Case 4: When the scan task is running, even there is a larger resolvedTs,
 	// should not trigger a new scan task.
 	notifyMsgs4 := notifyMsg{103, 101}
 	broker.onNotify(disp, notifyMsgs4.resolvedTs, notifyMsgs4.latestCommitTs)
@@ -151,13 +153,13 @@ func TestOnNotify(t *testing.T) {
 	after := time.After(50 * time.Millisecond)
 	select {
 	case <-after:
+		log.Info("Pass case 4")
 	case task := <-broker.taskChan[disp.scanWorkerIndex]:
 		log.Info("trigger a new scan task", zap.Any("task", task.id.String()), zap.Any("resolvedTs", task.eventStoreResolvedTs.Load()), zap.Any("latestCommitTs", task.latestCommitTs.Load()), zap.Any("isTaskScanning", task.isTaskScanning.Load()))
 		require.Fail(t, "should not trigger a new scan task")
 	}
-	log.Info("Pass case 4")
 
-	// Case 5: do scan and then onNotify again.
+	// Case 5: Do scan, it will update the sentResolvedTs.
 	broker.doScan(context.TODO(), task, 0)
 	require.False(t, disp.isTaskScanning.Load())
 	require.Equal(t, notifyMsgs4.resolvedTs, disp.sentResolvedTs.Load())

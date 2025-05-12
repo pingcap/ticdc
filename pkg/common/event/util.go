@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -227,7 +228,7 @@ func (s *EventTestHelper) DML2RawKv(schema, table string, dml ...string) []*comm
 	require.True(s.t, ok)
 	ts := tableInfo.UpdateTS()
 	var rawKVs []*common.RawKVEntry
-	for _, dml := range dml {
+	for i, dml := range dml {
 		s.tk.MustExec(dml)
 		key, value := s.getLastKeyValue(tableInfo.TableName.TableID)
 		rawKV := &common.RawKVEntry{
@@ -235,8 +236,8 @@ func (s *EventTestHelper) DML2RawKv(schema, table string, dml ...string) []*comm
 			Key:      key,
 			Value:    value,
 			OldValue: nil,
-			StartTs:  ts - 1,
-			CRTs:     ts + 1,
+			StartTs:  ts + uint64(i),
+			CRTs:     ts + uint64(i+1),
 		}
 		rawKVs = append(rawKVs, rawKV)
 	}

@@ -56,10 +56,21 @@ func NewEventScanner(
 	}
 }
 
-// Scan scans events from eventStore and schemaStore according to the given scanTask and limits
-// It returns events in order (DDL and DML events are sorted by their commit timestamp)
-// If scan hits any limit (bytes, rows, timeout), it will break if current event.CommitTs is larger than lastCommitTs
-// Return true if the scan is broken, otherwise return false
+// Scan retrieves and processes events from both eventStore and schemaStore based on the provided scanTask and limits.
+// The function ensures that events are returned in chronological order, with DDL and DML events sorted by their commit timestamps.
+//
+// The scan operation may be interrupted when any of the following limits are reached:
+// - Maximum bytes processed
+// - Timeout duration
+//
+// A scan interruption is only allowed when:
+// 1. The current event's commit timestamp is greater than the lastCommitTs
+// 2. At least one DML event has been successfully scanned
+//
+// Returns:
+// - events: The scanned events in chronological order
+// - isBroken: true if the scan was interrupted due to reaching a limit, false otherwise
+// - error: Any error that occurred during the scan operation
 func (s *EventScanner) Scan(
 	ctx context.Context,
 	dispatcherStat *dispatcherStat,
@@ -95,35 +106,10 @@ func (s *EventScanner) Scan(
 		return nil, false, err
 	}
 
-	// After all the events are sent, we need to drain the remaining ddlEvents.
-	appendRemainingDDLEvents := func() {
-		for _, e := range ddlEvents {
-			ep := &e
-			events = append(events, ep)
-		}
-		lastCommitTs = dataRange.EndTs
-	}
-
-	if iter == nil {
-		appendRemainingDDLEvents()
-		return events, false, nil
-	}
-
-	defer func() {
-		eventCount, _ := iter.Close()
-		if eventCount != 0 {
-			metricEventStoreOutputKv.Add(float64(eventCount))
-		}
-	}()
-
-	// sendDML is used to send the dml event to the dispatcher.
-	// It returns true if the dml event is sent successfully.
-	// Otherwise, it returns false.
 	appendDML := func(dml *pevent.DMLEvent) {
 		if dml == nil || dml.Length == 0 {
 			return
 		}
-
 		for len(ddlEvents) > 0 && dml.CommitTs > ddlEvents[0].FinishedTs {
 			events = append(events, &ddlEvents[0])
 			ddlEvents = ddlEvents[1:]
@@ -143,9 +129,31 @@ func (s *EventScanner) Scan(
 			Version:      event.ResolvedEventVersion,
 		})
 	}
+	// After all the events are sent, we need to drain the remaining ddlEvents.
+	appendRemainingDDLEvents := func() {
+		for _, e := range ddlEvents {
+			ep := &e
+			events = append(events, ep)
+		}
+		lastCommitTs = dataRange.EndTs
+	}
+
+	if iter == nil {
+		appendRemainingDDLEvents()
+		appendResolvedTs(dataRange.EndTs)
+		return events, false, nil
+	}
+
+	defer func() {
+		eventCount, _ := iter.Close()
+		if eventCount != 0 {
+			metricEventStoreOutputKv.Add(float64(eventCount))
+		}
+	}()
 
 	// 3. Send the events to the dispatcher.
 	var dml *pevent.DMLEvent
+	dmlCount := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -175,7 +183,7 @@ func (s *EventScanner) Scan(
 		if isNewTxn {
 			// Must append the dml event before interrupt the scan, otherwise the dml event will be lost if its commitTs is equal to lastCommitTs.
 			appendDML(dml)
-			if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs {
+			if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs && dmlCount > 0 {
 				appendResolvedTs(lastCommitTs)
 				return events, true, nil
 			}
@@ -198,6 +206,7 @@ func (s *EventScanner) Scan(
 				log.Panic("get table info failed, unknown reason", zap.Error(err))
 			}
 			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
+			dmlCount++
 		}
 
 		if err = dml.AppendRow(e, s.mounter.DecodeToChunk); err != nil {
