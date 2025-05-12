@@ -164,7 +164,7 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 		zap.String("topic", o.topic),
 		zap.Int32("partitionNum", o.partitionNum),
 		zap.String("protocol", protocol.String()),
-		zap.String("schema-registry-uri", o.schemaRegistryURI),
+		zap.String("schemaRegistryURL", o.schemaRegistryURI),
 		zap.String("groupID", o.groupID),
 		zap.Int("maxMessageBytes", o.maxMessageBytes),
 		zap.Int("maxBatchSize", o.maxBatchSize),
