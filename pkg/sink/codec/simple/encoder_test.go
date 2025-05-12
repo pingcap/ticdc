@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -60,20 +60,17 @@ func TestEncodeCheckpoint(t *testing.T) {
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
-			dec, ok := rowEventDecoder.(*decoder)
+			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			messageType, hasNext, err := dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext := dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeResolved, messageType)
 			require.NotEqual(t, 0, dec.msg.BuildTs)
 
-			ts, err := dec.NextResolvedEvent()
-			require.NoError(t, err)
+			ts := dec.NextResolvedEvent()
 			require.Equal(t, uint64(checkpoint), ts)
 		}
 	}
@@ -104,23 +101,19 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
-			dec, ok := rowEventDecoder.(*decoder)
+			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
 			m, err := enc.EncodeDDLEvent(createTableDDL)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			messageType, hasNext, err := dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext := dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeDDL, messageType)
 
-			decodedDDL, err := dec.NextDDLEvent()
-			require.NoError(t, err)
-
+			decodedDDL := dec.NextDDLEvent()
 			originCols := createTableDDL.TableInfo.GetColumns()
 
 			for _, expected := range originCols {
@@ -135,15 +128,13 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 			messages := enc.Build()
 			require.Len(t, messages, 1)
 
-			err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
-			messageType, hasNext, err = dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext = dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			// decodedRow, err := dec.NextDMLEvent()
+			// decodedRow:= decoder.NextDMLEvent()
 			// require.NoError(t, err)
 			// require.Equal(t, updateEvent.Checksum.Current, decodedRow.Checksum.Current)
 			// require.Equal(t, updateEvent.Checksum.Previous, decodedRow.Checksum.Previous)
@@ -160,22 +151,19 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 
 	rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
-	dec, ok := rowEventDecoder.(*decoder)
+	dec, ok := rowEventDecoder.(*Decoder)
 	require.True(t, ok)
 
 	m, err := enc.EncodeDDLEvent(createTableDDL)
 	require.NoError(t, err)
 
-	err = dec.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	dec.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err := dec.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := dec.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
-	_, err = dec.NextDDLEvent()
-	require.NoError(t, err)
+	_ = dec.NextDDLEvent()
 
 	err = enc.AppendRowChangedEvent(ctx, "", updateEvent)
 	require.NoError(t, err)
@@ -183,15 +171,13 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 	messages := enc.Build()
 	require.Len(t, messages, 1)
 
-	err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-	require.NoError(t, err)
+	dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
-	messageType, hasNext, err = dec.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext = dec.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	// decodedRow, err := dec.NextDMLEvent()
+	// decodedRow:= decoder.NextDMLEvent()
 	// require.Error(t, err)
 	// require.Nil(t, decodedRow)
 }
@@ -237,20 +223,20 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 // 		codecConfig.EncodingFormat = format
 // 		enc, err := NewEncoder(ctx, codecConfig)
 // 		require.NoError(t, err)
-// 		decoder, err := NewDecoder(ctx, codecConfig, nil)
+// 		Decoder, err := NewDecoder(ctx, codecConfig, nil)
 // 		require.NoError(t, err)
 
 // 		message, err := enc.EncodeDDLEvent(createPartitionTableDDL)
 // 		require.NoError(t, err)
 
-// 		err = decoder.AddKeyValue(message.Key, message.Value)
+// 		err = Decoder.AddKeyValue(message.Key, message.Value)
 // 		require.NoError(t, err)
-// 		tp, hasNext, err := decoder.HasNext()
+// 		tp, hasNext, err := Decoder.HasNext()
 // 		require.NoError(t, err)
 // 		require.True(t, hasNext)
 // 		require.Equal(t, common.MessageTypeDDL, tp)
 
-// 		decodedDDL, err := decoder.NextDDLEvent()
+// 		decodedDDL, err := Decoder.NextDDLEvent()
 // 		require.NoError(t, err)
 // 		require.NotNil(t, decodedDDL)
 
@@ -267,14 +253,14 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 // 			require.NoError(t, err)
 // 			message := enc.Build()[0]
 
-// 			err = decoder.AddKeyValue(message.Key, message.Value)
+// 			err = Decoder.AddKeyValue(message.Key, message.Value)
 // 			require.NoError(t, err)
-// 			tp, hasNext, err := decoder.HasNext()
+// 			tp, hasNext, err := Decoder.HasNext()
 // 			require.NoError(t, err)
 // 			require.True(t, hasNext)
 // 			require.Equal(t, common.MessageTypeRow, tp)
 
-// 			decodedEvent, err := decoder.NextDMLEvent()
+// 			decodedEvent, err := Decoder.NextDMLEvent()
 // 			require.NoError(t, err)
 // 			// table id should be set to the partition table id, the PhysicalTableID
 // 			require.Equal(t, decodedEvent.GetTableID(), event.GetTableID())
@@ -364,128 +350,104 @@ func TestEncodeDDLSequence(t *testing.T) {
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
-			dec, ok := rowEventDecoder.(*decoder)
+			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
 			m, err := enc.EncodeDDLEvent(dropDBEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			messageType, hasNext, err := dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext := dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeDDL, messageType)
 			require.Equal(t, DDLTypeQuery, dec.msg.Type)
 
-			_, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			_ = dec.NextDDLEvent()
 
 			m, err = enc.EncodeDDLEvent(createDBDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			messageType, hasNext, err = dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext = dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeDDL, messageType)
 			require.Equal(t, DDLTypeQuery, dec.msg.Type)
 
-			_, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			_ = dec.NextDDLEvent()
 
 			m, err = enc.EncodeDDLEvent(createTableDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			messageType, hasNext, err = dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext = dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeDDL, messageType)
 			require.Equal(t, DDLTypeCreate, dec.msg.Type)
 
-			event, err := dec.NextDDLEvent()
-			require.NoError(t, err)
+			event := dec.NextDDLEvent()
 			require.Len(t, event.TableInfo.GetIndices(), 1)
 			require.Len(t, event.TableInfo.GetColumns(), 4)
 
 			m, err = enc.EncodeDDLEvent(addColumnDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Len(t, event.TableInfo.GetIndices(), 1)
 			require.Len(t, event.TableInfo.GetColumns(), 5)
 
 			m, err = enc.EncodeDDLEvent(dropColumnDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Len(t, event.TableInfo.GetIndices(), 1)
 			require.Len(t, event.TableInfo.GetColumns(), 4)
 
 			m, err = enc.EncodeDDLEvent(changeColumnDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Len(t, event.TableInfo.GetIndices(), 1)
 			require.Len(t, event.TableInfo.GetColumns(), 4)
 
 			m, err = enc.EncodeDDLEvent(modifyColumnDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()), string(format), compressionType)
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(setDefaultDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 			for _, col := range event.TableInfo.GetColumns() {
@@ -497,15 +459,12 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(dropDefaultDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 			for _, col := range event.TableInfo.GetColumns() {
@@ -517,14 +476,12 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(autoIncrementDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
+			event = dec.NextDDLEvent()
 			require.NoError(t, err)
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
@@ -532,15 +489,12 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(modifyColumnNullDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 			for _, col := range event.TableInfo.GetColumns() {
@@ -552,15 +506,12 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(modifyColumnNotNullDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 			for _, col := range event.TableInfo.GetColumns() {
@@ -572,30 +523,24 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(addIndexDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeCIndex, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 2, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(renameIndexDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 2, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 			hasNewIndex := false
@@ -614,225 +559,180 @@ func TestEncodeDDLSequence(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(indexVisibilityDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 2, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(dropIndexDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeDIndex, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(truncateTableDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeTruncate, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(multiSchemaChangeDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 2, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 5, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(multiSchemaChangeDropDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(renameTableDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeRename, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(renameColumnDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(partitionTableDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(addPartitionDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(dropPartitionDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(truncatePartitionDDLevent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(reorganizePartitionDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(removePartitionDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(alterCharsetCollateDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeAlter, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 
 			m, err = enc.EncodeDDLEvent(dropTableDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			_, _, err = dec.HasNext()
-			require.NoError(t, err)
+			_, _ = dec.HasNext()
 			require.Equal(t, DDLTypeErase, dec.msg.Type)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
 		}
@@ -876,17 +776,15 @@ func TestEncodeDDLEvent(t *testing.T) {
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
-			dec, ok := rowEventDecoder.(*decoder)
+			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
 			m, err := enc.EncodeDDLEvent(createTableDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			messageType, hasNext, err := dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext := dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeDDL, messageType)
 			require.NotEqual(t, 0, dec.msg.BuildTs)
@@ -903,7 +801,7 @@ func TestEncodeDDLEvent(t *testing.T) {
 				require.Equal(t, column.Name.O, columnSchemas[idx].Name)
 			}
 
-			event, err := dec.NextDDLEvent()
+			event := dec.NextDDLEvent()
 
 			require.NoError(t, err)
 			require.Equal(t, createTableDDLEvent.TableInfo.TableName.TableID, event.TableInfo.TableName.TableID)
@@ -931,17 +829,14 @@ func TestEncodeDDLEvent(t *testing.T) {
 			messages := enc.Build()
 			require.Len(t, messages, 1)
 
-			err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
-			messageType, hasNext, err = dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext = dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, messageType)
 			require.NotEqual(t, 0, dec.msg.BuildTs)
 
-			decodedRow, err := dec.NextDMLEvent()
-			require.NoError(t, err)
+			decodedRow := dec.NextDMLEvent()
 			require.Equal(t, decodedRow.CommitTs, insertEvent.GetCommitTs())
 			require.Equal(t, decodedRow.TableInfo.GetSchemaName(), insertEvent.TableInfo.GetSchemaName())
 			require.Equal(t, decodedRow.TableInfo.GetTableName(), insertEvent.TableInfo.GetTableName())
@@ -949,17 +844,14 @@ func TestEncodeDDLEvent(t *testing.T) {
 			m, err = enc.EncodeDDLEvent(renameTableDDLEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			messageType, hasNext, err = dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext = dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeDDL, messageType)
 			require.NotEqual(t, 0, dec.msg.BuildTs)
 
-			event, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			event = dec.NextDDLEvent()
 			require.Equal(t, renameTableDDLEvent.TableInfo.TableName.TableID, event.TableInfo.TableName.TableID)
 			require.Equal(t, renameTableDDLEvent.GetCommitTs(), event.GetCommitTs())
 			require.Equal(t, renameTableDDLEvent.Query, event.Query)
@@ -986,17 +878,14 @@ func TestEncodeDDLEvent(t *testing.T) {
 			messages = enc.Build()
 			require.Len(t, messages, 1)
 
-			err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
-			messageType, hasNext, err = dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext = dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, messageType)
 			require.NotEqual(t, 0, dec.msg.BuildTs)
 
-			decodedRow, err = dec.NextDMLEvent()
-			require.NoError(t, err)
+			decodedRow = dec.NextDMLEvent()
 			require.Equal(t, insertEvent2.GetCommitTs(), decodedRow.GetCommitTs())
 			require.Equal(t, insertEvent2.TableInfo.GetSchemaName(), decodedRow.TableInfo.GetSchemaName())
 			require.Equal(t, insertEvent2.TableInfo.GetTableName(), decodedRow.TableInfo.GetTableName())
@@ -1035,18 +924,16 @@ func TestColumnFlags(t *testing.T) {
 
 		rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
-		dec, ok := rowEventDecoder.(*decoder)
+		dec, ok := rowEventDecoder.(*Decoder)
 		require.True(t, ok)
 
-		err = dec.AddKeyValue(m.Key, m.Value)
-		require.NoError(t, err)
+		dec.AddKeyValue(m.Key, m.Value)
 
-		messageType, hasNext, err := dec.HasNext()
-		require.NoError(t, err)
+		messageType, hasNext := dec.HasNext()
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeDDL, messageType)
 
-		decodedDDLEvent, err := dec.NextDDLEvent()
+		decodedDDLEvent := dec.NextDDLEvent()
 		require.NoError(t, err)
 
 		originCols := createTableDDLEvent.TableInfo.GetColumns()
@@ -1119,19 +1006,16 @@ func TestEncodeIntegerTypes(t *testing.T) {
 
 		rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
-		dec, ok := rowEventDecoder.(*decoder)
+		dec, ok := rowEventDecoder.(*Decoder)
 		require.True(t, ok)
 
-		err = dec.AddKeyValue(m.Key, m.Value)
-		require.NoError(t, err)
+		dec.AddKeyValue(m.Key, m.Value)
 
-		messageType, hasNext, err := dec.HasNext()
-		require.NoError(t, err)
+		messageType, hasNext := dec.HasNext()
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeDDL, messageType)
 
-		_, err = dec.NextDDLEvent()
-		require.NoError(t, err)
+		_ = dec.NextDDLEvent()
 
 		for _, event := range []*commonEvent.DMLEvent{
 			minValues,
@@ -1150,22 +1034,19 @@ func TestEncodeIntegerTypes(t *testing.T) {
 			require.NoError(t, err)
 
 			messages := enc.Build()
-			err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
-			messageType, hasNext, err = dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext = dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, messageType)
 
-			decodedRow, err := dec.NextDMLEvent()
-			require.NoError(t, err)
+			decodedRow := dec.NextDMLEvent()
 			require.Equal(t, decodedRow.CommitTs, event.GetCommitTs())
 
-			deocde, ok := decodedRow.GetNextRow()
+			decoded, ok := decodedRow.GetNextRow()
 			require.True(t, ok)
 
-			common.CompareRow(t, rowChange, event.TableInfo, deocde, decodedRow.TableInfo)
+			common.CompareRow(t, rowChange, event.TableInfo, decoded, decodedRow.TableInfo)
 		}
 	}
 }
@@ -1204,19 +1085,16 @@ func TestEncoderOtherTypes(t *testing.T) {
 
 		rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 		require.NoError(t, err)
-		dec, ok := rowEventDecoder.(*decoder)
+		dec, ok := rowEventDecoder.(*Decoder)
 		require.True(t, ok)
 
-		err = dec.AddKeyValue(m.Key, m.Value)
-		require.NoError(t, err)
+		dec.AddKeyValue(m.Key, m.Value)
 
-		messageType, hasNext, err := dec.HasNext()
-		require.NoError(t, err)
+		messageType, hasNext := dec.HasNext()
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeDDL, messageType)
 
-		_, err = dec.NextDDLEvent()
-		require.NoError(t, err)
+		_ = dec.NextDDLEvent()
 
 		row, ok := event.GetNextRow()
 		require.True(t, ok)
@@ -1231,20 +1109,17 @@ func TestEncoderOtherTypes(t *testing.T) {
 		messages := enc.Build()
 		require.Len(t, messages, 1)
 
-		err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-		require.NoError(t, err)
+		dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
-		messageType, hasNext, err = dec.HasNext()
-		require.NoError(t, err)
+		messageType, hasNext = dec.HasNext()
 		require.True(t, hasNext)
 		require.Equal(t, common.MessageTypeRow, messageType)
 
-		decodedRow, err := dec.NextDMLEvent()
-		require.NoError(t, err)
-		deocde, ok := decodedRow.GetNextRow()
+		decodedRow := dec.NextDMLEvent()
+		decoded, ok := decodedRow.GetNextRow()
 		require.True(t, ok)
 
-		common.CompareRow(t, row, event.TableInfo, deocde, decodedRow.TableInfo)
+		common.CompareRow(t, row, event.TableInfo, decoded, decodedRow.TableInfo)
 	}
 }
 
@@ -1283,7 +1158,7 @@ func TestEncoderOtherTypes(t *testing.T) {
 // 		enc, err := NewEncoder(ctx, codecConfig)
 // 		require.NoError(t, err)
 
-// 		decoder, err := NewDecoder(ctx, codecConfig, nil)
+// 		Decoder, err := NewDecoder(ctx, codecConfig, nil)
 // 		require.NoError(t, err)
 
 // 		codecConfig.EncodingFormat = format
@@ -1302,14 +1177,14 @@ func TestEncoderOtherTypes(t *testing.T) {
 // 			require.NoError(t, err)
 // 			message := enc.Build()[0]
 
-// 			err = decoder.AddKeyValue(message.Key, message.Value)
+// 			err = Decoder.AddKeyValue(message.Key, message.Value)
 // 			require.NoError(t, err)
-// 			tp, hasNext, err := decoder.HasNext()
+// 			tp, hasNext, err := Decoder.HasNext()
 // 			require.NoError(t, err)
 // 			require.True(t, hasNext)
 // 			require.Equal(t, common.MessageTypeRow, tp)
 
-// 			decodedEvent, err := decoder.NextDMLEvent()
+// 			decodedEvent, err := Decoder.NextDMLEvent()
 // 			require.NoError(t, err)
 // 			require.Nil(t, decodedEvent)
 // 		}
@@ -1317,18 +1192,18 @@ func TestEncoderOtherTypes(t *testing.T) {
 // 		message, err := enc.EncodeDDLEvent(createPartitionTableDDL)
 // 		require.NoError(t, err)
 
-// 		err = decoder.AddKeyValue(message.Key, message.Value)
+// 		err = Decoder.AddKeyValue(message.Key, message.Value)
 // 		require.NoError(t, err)
-// 		tp, hasNext, err := decoder.HasNext()
+// 		tp, hasNext, err := Decoder.HasNext()
 // 		require.NoError(t, err)
 // 		require.True(t, hasNext)
 // 		require.Equal(t, common.MessageTypeDDL, tp)
 
-// 		decodedDDL, err := decoder.NextDDLEvent()
+// 		decodedDDL, err := Decoder.NextDDLEvent()
 // 		require.NoError(t, err)
 // 		require.NotNil(t, decodedDDL)
 
-// 		cachedEvents := decoder.GetCachedEvents()
+// 		cachedEvents := Decoder.GetCachedEvents()
 // 		for idx, decodedRow := range cachedEvents {
 // 			require.NotNil(t, decodedRow)
 // 			require.NotNil(t, decodedRow.TableInfo)
@@ -1368,34 +1243,28 @@ func TestEncodeDMLBeforeDDL(t *testing.T) {
 
 	rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
-	dec, ok := rowEventDecoder.(*decoder)
+	dec, ok := rowEventDecoder.(*Decoder)
 	require.True(t, ok)
 
-	err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-	require.NoError(t, err)
+	dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
-	messageType, hasNext, err := dec.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext := dec.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decodedRow, err := dec.NextDMLEvent()
-	require.NoError(t, err)
+	decodedRow := dec.NextDMLEvent()
 	require.Nil(t, decodedRow)
 
 	m, err := enc.EncodeDDLEvent(ddlEvent)
 	require.NoError(t, err)
 
-	err = dec.AddKeyValue(m.Key, m.Value)
-	require.NoError(t, err)
+	dec.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext, err = dec.HasNext()
-	require.NoError(t, err)
+	messageType, hasNext = dec.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
-	ddlEvent, err = dec.NextDDLEvent()
-	require.NoError(t, err)
+	ddlEvent = dec.NextDDLEvent()
 	require.NotNil(t, ddlEvent)
 
 	cachedEvents := dec.GetCachedEvents()
@@ -1447,20 +1316,17 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
-			dec, ok := rowEventDecoder.(*decoder)
+			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			messageType, hasNext, err := dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext := dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeDDL, messageType)
 			require.NotEqual(t, 0, dec.msg.BuildTs)
 
-			event, err := dec.NextDDLEvent()
-			require.NoError(t, err)
+			event := dec.NextDDLEvent()
 			require.Equal(t, ddlEvent.TableInfo.TableName.TableID, event.TableInfo.TableName.TableID)
 			// Bootstrap event doesn't have query
 			require.Equal(t, "", event.Query)
@@ -1484,17 +1350,14 @@ func TestEncodeBootstrapEvent(t *testing.T) {
 			messages := enc.Build()
 			require.Len(t, messages, 1)
 
-			err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
-			messageType, hasNext, err = dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext = dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeRow, messageType)
 			require.NotEqual(t, 0, dec.msg.BuildTs)
 
-			decodedRow, err := dec.NextDMLEvent()
-			require.NoError(t, err)
+			decodedRow := dec.NextDMLEvent()
 			decode, ok := decodedRow.GetNextRow()
 			require.True(t, ok)
 			require.Equal(t, decodedRow.CommitTs, dmlEvent.CommitTs)
@@ -1527,22 +1390,19 @@ func TestEncodeLargeEventsNormal(t *testing.T) {
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 			require.NoError(t, err)
-			dec, ok := rowEventDecoder.(*decoder)
+			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
 			m, err := enc.EncodeDDLEvent(ddlEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			messageType, hasNext, err := dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext := dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeDDL, messageType)
 
-			obtainedDDL, err := dec.NextDDLEvent()
-			require.NoError(t, err)
+			obtainedDDL := dec.NextDDLEvent()
 			require.NotNil(t, obtainedDDL)
 
 			obtainedDefaultValues := make(map[string]interface{}, len(obtainedDDL.TableInfo.GetColumns()))
@@ -1567,11 +1427,9 @@ func TestEncodeLargeEventsNormal(t *testing.T) {
 				messages := enc.Build()
 				require.Len(t, messages, 1)
 
-				err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-				require.NoError(t, err)
+				dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
-				messageType, hasNext, err = dec.HasNext()
-				require.NoError(t, err)
+				messageType, hasNext = dec.HasNext()
 				require.True(t, hasNext)
 				require.Equal(t, common.MessageTypeRow, messageType)
 
@@ -1583,18 +1441,17 @@ func TestEncodeLargeEventsNormal(t *testing.T) {
 					require.Equal(t, dec.msg.Type, DMLTypeInsert)
 				}
 
-				decodedRow, err := dec.NextDMLEvent()
-				require.NoError(t, err)
+				decodedRow := dec.NextDMLEvent()
 
 				require.Equal(t, decodedRow.CommitTs, event.CommitTs)
 				require.Equal(t, decodedRow.TableInfo.GetSchemaName(), event.TableInfo.GetSchemaName())
 				require.Equal(t, decodedRow.TableInfo.GetTableName(), event.TableInfo.GetTableName())
 				require.Equal(t, decodedRow.GetTableID(), event.GetTableID())
 
-				deocde, ok := decodedRow.GetNextRow()
+				decoded, ok := decodedRow.GetNextRow()
 				require.True(t, ok)
 
-				common.CompareRow(t, event.Event, event.TableInfo, deocde, decodedRow.TableInfo)
+				common.CompareRow(t, event.Event, event.TableInfo, decoded, decodedRow.TableInfo)
 			}
 		}
 	}
@@ -1685,20 +1542,16 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 
 				rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 				require.NoError(t, err)
-				dec, ok := rowEventDecoder.(*decoder)
+				dec, ok := rowEventDecoder.(*Decoder)
 				require.True(t, ok)
 
-				err = dec.AddKeyValue(m.Key, m.Value)
-				require.NoError(t, err)
+				dec.AddKeyValue(m.Key, m.Value)
 
-				messageType, hasNext, err := dec.HasNext()
-				require.NoError(t, err)
+				messageType, hasNext := dec.HasNext()
 				require.True(t, hasNext)
 				require.Equal(t, common.MessageTypeDDL, messageType)
 
-				_, err = dec.NextDDLEvent()
-				require.NoError(t, err)
-
+				_ = dec.NextDDLEvent()
 				enc.(*Encoder).config.MaxMessageBytes = 500
 				err = enc.AppendRowChangedEvent(ctx, "", updateEvent)
 				require.NoError(t, err)
@@ -1706,26 +1559,23 @@ func TestLargerMessageHandleClaimCheck(t *testing.T) {
 				claimCheckLocationM := enc.Build()[0]
 
 				dec.config.MaxMessageBytes = 500
-				err = dec.AddKeyValue(claimCheckLocationM.Key, claimCheckLocationM.Value)
-				require.NoError(t, err)
+				dec.AddKeyValue(claimCheckLocationM.Key, claimCheckLocationM.Value)
 
-				messageType, hasNext, err = dec.HasNext()
-				require.NoError(t, err)
+				messageType, hasNext = dec.HasNext()
 				require.True(t, hasNext)
 				require.Equal(t, common.MessageTypeRow, messageType)
 				require.NotEqual(t, "", dec.msg.ClaimCheckLocation)
 
-				decodedRow, err := dec.NextDMLEvent()
-				require.NoError(t, err)
+				decodedRow := dec.NextDMLEvent()
 
 				require.Equal(t, decodedRow.CommitTs, updateEvent.CommitTs)
 				require.Equal(t, decodedRow.TableInfo.GetSchemaName(), updateEvent.TableInfo.GetSchemaName())
 				require.Equal(t, decodedRow.TableInfo.GetTableName(), updateEvent.TableInfo.GetTableName())
 
-				deocde, ok := decodedRow.GetNextRow()
+				decoded, ok := decodedRow.GetNextRow()
 				require.True(t, ok)
 
-				common.CompareRow(t, updateEvent.Event, updateEvent.TableInfo, deocde, decodedRow.TableInfo)
+				common.CompareRow(t, updateEvent.Event, updateEvent.TableInfo, decoded, decodedRow.TableInfo)
 			}
 		}
 	}
@@ -1769,7 +1619,7 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 
 			rowEventDecoder, err := NewDecoder(ctx, codecConfig, db)
 			require.NoError(t, err)
-			dec, ok := rowEventDecoder.(*decoder)
+			dec, ok := rowEventDecoder.(*Decoder)
 			require.True(t, ok)
 
 			enc.(*Encoder).config.MaxMessageBytes = 500
@@ -1781,17 +1631,14 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 				messages := enc.Build()
 				require.Len(t, messages, 1)
 
-				err = dec.AddKeyValue(messages[0].Key, messages[0].Value)
-				require.NoError(t, err)
+				dec.AddKeyValue(messages[0].Key, messages[0].Value)
 
-				messageType, hasNext, err := dec.HasNext()
-				require.NoError(t, err)
+				messageType, hasNext := dec.HasNext()
 				require.True(t, hasNext)
 				require.Equal(t, common.MessageTypeRow, messageType)
 				require.True(t, dec.msg.HandleKeyOnly)
 
-				decodedRow, err := dec.NextDMLEvent()
-				require.NoError(t, err)
+				decodedRow := dec.NextDMLEvent()
 				require.Nil(t, decodedRow)
 			}
 
@@ -1800,11 +1647,9 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 			m, err := enc.EncodeDDLEvent(ddlEvent)
 			require.NoError(t, err)
 
-			err = dec.AddKeyValue(m.Key, m.Value)
-			require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
 
-			messageType, hasNext, err := dec.HasNext()
-			require.NoError(t, err)
+			messageType, hasNext := dec.HasNext()
 			require.True(t, hasNext)
 			require.Equal(t, common.MessageTypeDDL, messageType)
 
@@ -1826,8 +1671,7 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 					WillReturnRows(mock.NewRows(names).AddRow(values...))
 
 			}
-			_, err = dec.NextDDLEvent()
-			require.NoError(t, err)
+			_ = dec.NextDDLEvent()
 
 			decodedRows := dec.GetCachedEvents()
 			for idx, decodedRow := range decodedRows {
@@ -1837,45 +1681,13 @@ func TestLargeMessageHandleKeyOnly(t *testing.T) {
 				require.Equal(t, decodedRow.TableInfo.GetSchemaName(), event.TableInfo.GetSchemaName())
 				require.Equal(t, decodedRow.TableInfo.GetTableName(), event.TableInfo.GetTableName())
 
-				deocde, ok := decodedRow.GetNextRow()
+				decoded, ok := decodedRow.GetNextRow()
 				require.True(t, ok)
 
-				common.CompareRow(t, event.Event, event.TableInfo, deocde, decodedRow.TableInfo)
+				common.CompareRow(t, event.Event, event.TableInfo, decoded, decodedRow.TableInfo)
 			}
 		}
 	}
-}
-
-func TestDecoder(t *testing.T) {
-	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolSimple)
-	rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
-	require.NoError(t, err)
-	require.NotNil(t, rowEventDecoder)
-	decoder, ok := rowEventDecoder.(*decoder)
-	require.True(t, ok)
-
-	messageType, hasNext, err := decoder.HasNext()
-	require.NoError(t, err)
-	require.False(t, hasNext)
-	require.Equal(t, common.MessageTypeUnknown, messageType)
-
-	ddl, err := decoder.NextDDLEvent()
-	require.ErrorIs(t, err, errors.ErrCodecDecode)
-	require.Nil(t, ddl)
-
-	decoder.msg = new(message)
-	checkpoint, err := decoder.NextResolvedEvent()
-	require.ErrorIs(t, err, errors.ErrCodecDecode)
-	require.Equal(t, uint64(0), checkpoint)
-
-	event, err := decoder.NextDMLEvent()
-	require.ErrorIs(t, err, errors.ErrCodecDecode)
-	require.Nil(t, event)
-
-	decoder.value = []byte("invalid")
-	err = decoder.AddKeyValue(nil, nil)
-	require.ErrorIs(t, err, errors.ErrCodecDecode)
 }
 
 func TestMarshallerError(t *testing.T) {
@@ -1902,16 +1714,14 @@ func TestMarshallerError(t *testing.T) {
 
 	rowEventDecoder, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
-	dec, ok := rowEventDecoder.(*decoder)
+	dec, ok := rowEventDecoder.(*Decoder)
 	require.True(t, ok)
 	dec.marshaller = mockMarshaller
 
 	mockMarshaller.EXPECT().Unmarshal(gomock.Any(), gomock.Any()).Return(errors.ErrDecodeFailed)
-	err = dec.AddKeyValue([]byte("key"), []byte("value"))
-	require.NoError(t, err)
+	dec.AddKeyValue([]byte("key"), []byte("value"))
 
-	messageType, hasNext, err := dec.HasNext()
-	require.ErrorIs(t, err, errors.ErrDecodeFailed)
-	require.False(t, hasNext)
-	require.Equal(t, common.MessageTypeUnknown, messageType)
+	require.Panics(t, func() {
+		_, _ = dec.HasNext()
+	})
 }
