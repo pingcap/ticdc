@@ -100,7 +100,7 @@ main() {
 
 	for i in {1..5}; do
 		execute_dml $i &
-		pids+=("$!") 
+		pids+=("$!")
 	done
 
 	move_split_table &
