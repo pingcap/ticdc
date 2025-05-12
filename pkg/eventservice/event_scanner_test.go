@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/integrity"
@@ -167,4 +168,138 @@ func TestEventScanner(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, isBroken)
 	require.Equal(t, 5, len(events))
+
+	// case 6: Ensure DDL and DML with the same commitTs are sorted by DML first
+	fakeDDL := event.DDLEvent{
+		FinishedTs: kvEvents[0].CRTs,
+		TableInfo:  ddlEvent.TableInfo,
+	}
+	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL)
+	scanLimit = ScanLimit{
+		MaxBytes: 1000,
+		Timeout:  10 * time.Second,
+	}
+	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, scanLimit)
+	require.NoError(t, err)
+	require.False(t, isBroken)
+	require.Equal(t, 7, len(events))
+	// The first DML event should be returned before the fake DDL event
+	firstDML := events[1]
+	require.Equal(t, firstDML.GetType(), pevent.TypeDMLEvent)
+	require.Equal(t, kvEvents[0].CRTs, firstDML.GetCommitTs())
+	// The fake DDL event should be returned after the DML event
+	ddl := events[2]
+	require.Equal(t, ddl.GetType(), pevent.TypeDDLEvent)
+	require.Equal(t, fakeDDL.FinishedTs, ddl.GetCommitTs())
+	require.Equal(t, fakeDDL.FinishedTs, firstDML.GetCommitTs())
+}
+
+func TestEventScanner_InterruptAtDDL(t *testing.T) {
+	broker, _, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	mockEventStore := broker.eventStore.(*mockEventStore)
+	mockSchemaStore := broker.schemaStore.(*mockSchemaStore)
+
+	disInfo := newMockDispatcherInfoForTest(t)
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
+	tableID := disInfo.GetTableSpan().TableID
+	dispatcherID := disInfo.GetID()
+
+	startTs := uint64(100)
+	disp := newDispatcherStat(startTs, disInfo, nil, 0, 0, changefeedStatus)
+	makeDispatcherReady(disp)
+	broker.addDispatcher(disp.info)
+
+	scanner := NewEventScanner(broker.eventStore, broker.schemaStore, &mockMounter{})
+
+	// Construct events: dml 2, dml 3 have the same commitTs, fakeDDL  has the same commitTs with dml 2, dml 3
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
+		`insert into test.t(id,c) values (0, "c0")`,
+		`insert into test.t(id,c) values (1, "c1")`,
+		`insert into test.t(id,c) values (2, "c2")`,
+		`insert into test.t(id,c) values (3, "c3")`,
+	}...)
+	resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
+	err := mockEventStore.AppendEvents(dispatcherID, resolvedTs, kvEvents...)
+	require.NoError(t, err)
+	mockSchemaStore.AppendDDLEvent(tableID, ddlEvent)
+
+	// Create a fake ddl event with the same commitTs as dml 2 and dml 3
+	dml1 := kvEvents[0]
+	dml2 := kvEvents[1]
+	dml3 := kvEvents[2]
+	dml3.CRTs = dml2.CRTs
+	fakeDDL := event.DDLEvent{
+		FinishedTs: dml2.CRTs,
+		TableInfo:  ddlEvent.TableInfo,
+	}
+	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL)
+	disp.eventStoreResolvedTs.Store(resolvedTs)
+	needScan, dataRange := broker.checkNeedScan(disp, true)
+	require.True(t, needScan)
+
+	eSize := len(kvEvents[0].Key) + len(kvEvents[0].Value) + len(kvEvents[0].OldValue)
+
+	// case 1: The scan will be interrupted at dml 1, so the Scanner will return 3 events: ddl, dml 1, resolvedTsEvent = dml1.CommitTs
+	scanLimit := ScanLimit{
+		MaxBytes: int64(1 * eSize),
+		Timeout:  10 * time.Second,
+	}
+	events, isBroken, err := scanner.Scan(context.Background(), disp, dataRange, scanLimit)
+	require.NoError(t, err)
+	require.True(t, isBroken)
+	require.Equal(t, 3, len(events))
+	// ddl
+	e := events[0]
+	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
+	require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
+	// dml 1
+	e = events[1]
+	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
+	require.Equal(t, dml1.CRTs, e.GetCommitTs())
+	// resolvedTs
+	e = events[2]
+	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
+	require.Equal(t, dml1.CRTs, e.GetCommitTs())
+	require.Equal(t, dml1.CRTs, e.GetCommitTs())
+
+	// case 2: The scan will be interrupted at dml 2, so the Scanner will return 6 events: ddl, dml1, dml 2, dml3, fake ddl, resolvedTsEvent = dml2.CommitTs
+	scanLimit = ScanLimit{
+		MaxBytes: int64(2 * eSize),
+		Timeout:  10 * time.Second,
+	}
+	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, scanLimit)
+	require.NoError(t, err)
+	require.True(t, isBroken)
+	require.Equal(t, 6, len(events))
+
+	// ddl 1
+	e = events[0]
+	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
+	require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
+	// dml 1
+	e = events[1]
+	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
+	require.Equal(t, dml1.CRTs, e.GetCommitTs())
+	// dml 2
+	e = events[2]
+	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
+	require.Equal(t, dml2.CRTs, e.GetCommitTs())
+	// dml 3
+	e = events[3]
+	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
+	require.Equal(t, dml3.CRTs, e.GetCommitTs())
+	// fake ddl
+	e = events[4]
+	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
+	require.Equal(t, fakeDDL.FinishedTs, e.GetCommitTs())
+	require.Equal(t, dml3.CRTs, e.GetCommitTs())
+	// resolvedTs
+	e = events[5]
+	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
+	require.Equal(t, dml3.CRTs, e.GetCommitTs())
 }
