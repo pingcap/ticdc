@@ -25,7 +25,7 @@ import (
 
 type Rule struct {
 	partitionDispatcher partition.Generator
-	topicGenerator      topic.TopicGenerator
+	topicGenerator      topic.Generator
 	tableFilter.Filter
 }
 
@@ -58,12 +58,13 @@ func NewEventRouter(
 		if !sinkConfig.CaseSensitive {
 			f = tableFilter.CaseInsensitive(f)
 		}
+		d := partition.NewGenerator(ruleConfig.PartitionRule, isPulsar, ruleConfig.IndexName, ruleConfig.Columns)
 		topicGenerator, err := topic.GetTopicGenerator(ruleConfig.TopicRule, defaultTopic, isPulsar, isAvro)
 		if err != nil {
 			return nil, err
 		}
 		rules = append(rules, Rule{
-			partitionDispatcher: partition.NewGenerator(ruleConfig.PartitionRule, isPulsar, ruleConfig.IndexName, ruleConfig.Columns),
+			partitionDispatcher: d,
 			topicGenerator:      topicGenerator,
 			Filter:              f,
 		})
@@ -141,7 +142,7 @@ func (s *EventRouter) GetDefaultTopic() string {
 	return s.defaultTopic
 }
 
-func (s *EventRouter) matchTopicGenerator(schema, table string) topic.TopicGenerator {
+func (s *EventRouter) matchTopicGenerator(schema, table string) topic.Generator {
 	for _, rule := range s.rules {
 		if rule.MatchTable(schema, table) {
 			return rule.topicGenerator

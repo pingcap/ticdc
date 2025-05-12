@@ -186,6 +186,7 @@ func (c *EventCollector) Run(ctx context.Context) {
 func (c *EventCollector) Close() {
 	log.Info("event collector is closing")
 	c.cancel()
+	c.wg.Wait()
 	c.ds.Close()
 	c.changefeedIDMap.Range(func(key, value any) bool {
 		cfID := value.(common.ChangeFeedID)
@@ -203,7 +204,6 @@ func (c *EventCollector) Close() {
 		return true
 	})
 
-	c.wg.Wait()
 	log.Info("event collector is closed")
 }
 

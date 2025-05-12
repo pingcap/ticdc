@@ -54,7 +54,7 @@ mysql_groups=(
 	# G11
 	'ddl_reentrant force_replicate_table'
 	# G12
-	'tidb_mysql_test'
+	'tidb_mysql_test' 'ddl_with_random_move_table'
 	# G13
 	'fail_over region_merge'
 	# G14

@@ -107,7 +107,7 @@ type eventBroker struct {
 
 	metricDispatcherCount                prometheus.Gauge
 	metricEventServiceReceivedResolvedTs prometheus.Gauge
-	metricEventServiceSentResolvedTs     prometheus.Gauge
+	metricEventServiceSentResolvedTsLag  prometheus.Gauge
 	metricEventServiceResolvedTsLag      prometheus.Gauge
 }
 
@@ -157,7 +157,7 @@ func newEventBroker(
 		metricDispatcherCount:                metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
 		metricEventServiceReceivedResolvedTs: metrics.EventServiceResolvedTsGauge,
 		metricEventServiceResolvedTsLag:      metrics.EventServiceResolvedTsLagGauge.WithLabelValues("received"),
-		metricEventServiceSentResolvedTs:     metrics.EventServiceResolvedTsLagGauge.WithLabelValues("sent"),
+		metricEventServiceSentResolvedTsLag:  metrics.EventServiceResolvedTsLagGauge.WithLabelValues("sent"),
 	}
 
 	for i := 0; i < scanWorkerCount; i++ {
@@ -399,14 +399,13 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 	}
 
 	// Adjust the data range to avoid the time range of a task exceeds maxTaskTimeRange.
-	upperPhs := oracle.GetTimeFromTS(task.eventStoreResolvedTs.Load())
-	lowerPhs := oracle.GetTimeFromTS(task.sentResolvedTs.Load())
+	upperPhs := oracle.GetTimeFromTS(dataRange.EndTs)
+	lowerPhs := oracle.GetTimeFromTS(dataRange.StartTs)
 
 	// The time range of a task should not exceed maxTaskTimeRange.
 	// This would help for reduce changefeed latency.
 	if upperPhs.Sub(lowerPhs) > maxTaskTimeRange {
-		newUpperCommitTs := oracle.GoTimeToTS(lowerPhs.Add(maxTaskTimeRange))
-		dataRange.EndTs = newUpperCommitTs
+		dataRange.EndTs = oracle.GoTimeToTS(lowerPhs.Add(maxTaskTimeRange))
 	}
 
 	return true, dataRange
@@ -803,7 +802,9 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 		case <-ticker.C:
 			receivedMinResolvedTs := uint64(0)
 			sentMinWaterMark := uint64(0)
+			dispatcherCount := 0
 			c.dispatchers.Range(func(key, value interface{}) bool {
+				dispatcherCount++
 				dispatcher := value.(*dispatcherStat)
 				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
 				if receivedMinResolvedTs == 0 || resolvedTs < receivedMinResolvedTs {
@@ -828,16 +829,23 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 				}
 				return true
 			})
-			if receivedMinResolvedTs == 0 {
-				continue
-			}
+
 			pdTime := c.pdClock.CurrentTime()
+			pdPhysicalTs := oracle.GetPhysical(pdTime)
+
+			// If there are no dispatchers, set the receivedMinResolvedTs and sentMinWaterMark to the pdTime.
+			if dispatcherCount == 0 {
+				receivedMinResolvedTs = uint64(pdPhysicalTs)
+				sentMinWaterMark = uint64(pdPhysicalTs)
+			}
+
 			phyResolvedTs := oracle.ExtractPhysical(receivedMinResolvedTs)
-			lag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
+			receivedLag := float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3
 			c.metricEventServiceReceivedResolvedTs.Set(float64(phyResolvedTs))
-			c.metricEventServiceResolvedTsLag.Set(lag)
-			lag = float64(oracle.GetPhysical(pdTime)-oracle.ExtractPhysical(sentMinWaterMark)) / 1e3
-			c.metricEventServiceSentResolvedTs.Set(lag)
+			c.metricEventServiceResolvedTsLag.Set(receivedLag)
+
+			sentLag := float64(oracle.GetPhysical(pdTime)-oracle.ExtractPhysical(sentMinWaterMark)) / 1e3
+			c.metricEventServiceSentResolvedTsLag.Set(sentLag)
 			metricEventBrokerPendingScanTaskCount.Set(float64(len(c.taskChan)))
 		}
 	}

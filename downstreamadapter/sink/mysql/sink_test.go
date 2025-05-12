@@ -32,7 +32,7 @@ func MysqlSinkForTest() (*sink, sqlmock.Sqlmock) {
 	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	cfg := mysql.NewMysqlConfig()
+	cfg := mysql.New()
 	cfg.WorkerCount = 1
 	cfg.DMLMaxRetry = 1
 	cfg.MaxAllowedPacket = int64(variable.DefMaxAllowedPacket)

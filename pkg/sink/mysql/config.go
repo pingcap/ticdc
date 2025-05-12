@@ -138,8 +138,8 @@ type Config struct {
 	DryRunBlockInterval time.Duration
 }
 
-// NewConfig returns the default mysql backend config.
-func NewMysqlConfig() *Config {
+// New returns the default mysql backend config.
+func New() *Config {
 	return &Config{
 		WorkerCount:            DefaultWorkerCount,
 		MaxTxnRow:              DefaultMaxTxnRow,
@@ -237,19 +237,13 @@ func (c *Config) Apply(
 	return nil
 }
 
-func NewMySQLConfig(changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*Config, error) {
-	cfg := NewMysqlConfig()
-	err := cfg.Apply(sinkURI, changefeedID, config)
-	if err != nil {
-		return nil, err
-	}
-	return cfg, nil
-}
-
-func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*Config, *sql.DB, error) {
+func NewMysqlConfigAndDB(
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig,
+) (*Config, *sql.DB, error) {
 	log.Info("create db connection", zap.String("sinkURI", sinkURI.String()))
 	// create db connection
-	cfg, err := NewMySQLConfig(changefeedID, sinkURI, config)
+	cfg := New()
+	err := cfg.Apply(sinkURI, changefeedID, config)
 	if err != nil {
 		return nil, nil, err
 	}
