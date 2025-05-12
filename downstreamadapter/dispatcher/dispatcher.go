@@ -322,7 +322,6 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	// Only return false when all events are resolvedTs Event.
 	block = false
-	log.Info("dispatcher handle events", zap.Any("dispatcher", d.id), zap.Any("events len", len(dispatcherEvents)))
 	dmlWakeOnce := &sync.Once{}
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
@@ -370,7 +369,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				// and wake dynamic stream to handle the next events.
 				if d.tableProgress.Empty() {
 					dmlWakeOnce.Do(wakeCallback)
-					log.Info("dispatcher dml event wake callback", zap.Any("dispatcher", d.id), zap.Any("commitTs", event.GetCommitTs()))
 				}
 			})
 			d.AddDMLEventToSink(dml)
@@ -411,7 +409,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 					d.tableSchemaStore.AddEvent(ddl)
 				}
 				wakeCallback()
-				log.Info("dispatcher ddl event wake callback", zap.Any("dispatcher", d.id), zap.Any("commitTs", event.GetCommitTs()))
 			})
 			d.dealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
