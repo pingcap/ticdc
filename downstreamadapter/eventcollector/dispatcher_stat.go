@@ -139,10 +139,10 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 		return
 	}
 	d.waitHandshake.Store(false)
-	d.setInitialTableInfo(event.Event.(*commonEvent.HandshakeEvent).TableInfo)
+	d.setTableInfo(event.Event.(*commonEvent.HandshakeEvent).TableInfo)
 }
 
-func (d *dispatcherStat) setInitialTableInfo(tableInfo *common.TableInfo) {
+func (d *dispatcherStat) setTableInfo(tableInfo *common.TableInfo) {
 	if tableInfo == nil {
 		return
 	}

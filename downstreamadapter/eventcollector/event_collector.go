@@ -558,8 +558,7 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						if !ok {
 							continue
 						}
-						stat.(*dispatcherStat).tableInfo.Store(e.(*event.DDLEvent).TableInfo)
-
+						stat.(*dispatcherStat).setTableInfo(e.(*event.DDLEvent).TableInfo)
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					default:
