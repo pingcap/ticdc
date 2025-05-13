@@ -120,6 +120,9 @@ func NewController(changefeedID common.ChangeFeedID,
 
 // HandleStatus handle the status report from the node
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
+	if len(statusList) != 0 {
+		log.Info("hyy handle status", zap.Any("statusList", statusList), zap.Any("from", from))
+	}
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 		c.operatorController.UpdateOperatorStatus(dispatcherID, from, status)

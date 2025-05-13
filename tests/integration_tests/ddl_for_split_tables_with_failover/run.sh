@@ -111,7 +111,6 @@ main() {
 	execute_ddls &
 	NORMAL_TABLE_DDL_PID=$!
 
-	# do execute dml for 100 tables, and store the pid for each thread
 	declare -a pids=()
 
 	for i in {1..5}; do

@@ -267,6 +267,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 		if d.blockEventStatus.actionMatchs(action) {
 			log.Info("pending event get the action",
 				zap.Any("action", action),
+				zap.Any("innerAction", int(action.Action)),
 				zap.Stringer("dispatcher", d.id),
 				zap.Uint64("pendingEventCommitTs", pendingEvent.GetCommitTs()))
 			d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
