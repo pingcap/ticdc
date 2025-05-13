@@ -15,6 +15,7 @@ package maintainer
 
 import (
 	"context"
+	"math/rand"
 	"time"
 
 	"github.com/pingcap/log"
@@ -641,6 +642,100 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID) error {
 	}
 
 	return apperror.ErrMoveTableTimeout.GenWithStackByArgs("move table operator is timeout")
+}
+
+func (c *Controller) SplitTableByRegionCount(tableID int64) error {
+	if !c.replicationDB.IsTableExists(tableID) {
+		// the table is not exist in this node
+		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
+	}
+
+	if tableID == 0 {
+		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID)
+	}
+
+	replications := c.replicationDB.GetTasksByTableID(tableID)
+
+	if len(replications) > 1 {
+		log.Info("There is more than one replication for this table, so no need to do split", zap.Any("tableID", tableID), zap.Any("replicationsLen", len(replications)))
+		return nil
+	}
+
+	span := spanz.TableIDToComparableSpan(tableID)
+	wholeSpan := &heartbeatpb.TableSpan{
+		TableID:  span.TableID,
+		StartKey: span.StartKey,
+		EndKey:   span.EndKey,
+	}
+	splitTableSpans := c.splitter.SplitSpansByRegion(context.Background(), wholeSpan)
+	op := operator.NewMergeSplitDispatcherOperator(c.replicationDB, replications[0].ID, replications[0], replications, splitTableSpans, nil)
+	c.operatorController.AddOperator(op)
+
+	count := 0
+	maxTry := 30
+	for count < maxTry {
+		if op.IsFinished() {
+			return nil
+		}
+
+		time.Sleep(1 * time.Second)
+		count += 1
+		log.Info("wait for split table operator finished", zap.Int("count", count))
+	}
+
+	return apperror.ErrMoveTableTimeout.GenWithStackByArgs("split table operator is timeout")
+}
+
+func (c *Controller) MergeTable(tableID int64) error {
+	if !c.replicationDB.IsTableExists(tableID) {
+		// the table is not exist in this node
+		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
+	}
+
+	if tableID == 0 {
+		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID)
+	}
+
+	replications := c.replicationDB.GetTasksByTableID(tableID)
+
+	if len(replications) == 1 {
+		log.Info("Merge Table is finished; There is only one replication for this table, so no need to do merge", zap.Any("tableID", tableID))
+		return nil
+	}
+
+	span := spanz.TableIDToComparableSpan(tableID)
+	totalSpan := &heartbeatpb.TableSpan{
+		TableID:  span.TableID,
+		StartKey: span.StartKey,
+		EndKey:   span.EndKey,
+	}
+
+	randomIdx := rand.Intn(len(replications))
+	primaryID := replications[randomIdx].ID
+	primaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[randomIdx], replications, []*heartbeatpb.TableSpan{totalSpan}, nil)
+	for _, replicaSet := range replications {
+		var op *operator.MergeSplitDispatcherOperator
+		if replicaSet.ID == primaryID {
+			op = primaryOp
+		} else {
+			op = operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
+		}
+		c.operatorController.AddOperator(op)
+	}
+
+	count := 0
+	maxTry := 30
+	for count < maxTry {
+		if primaryOp.IsFinished() {
+			return nil
+		}
+
+		time.Sleep(1 * time.Second)
+		count += 1
+		log.Info("wait for merge table table operator finished", zap.Int("count", count))
+	}
+
+	return apperror.ErrMoveTableTimeout.GenWithStackByArgs("merge table operator is timeout")
 }
 
 func (c *Controller) isDDLDispatcher(dispatcherID common.DispatcherID) bool {

@@ -188,3 +188,7 @@ func (m *MergeSplitDispatcherOperator) String() string {
 func (m *MergeSplitDispatcherOperator) Type() string {
 	return "merge-split"
 }
+
+func (m *MergeSplitDispatcherOperator) GetOnFinished() func() {
+	return m.onFinished
+}

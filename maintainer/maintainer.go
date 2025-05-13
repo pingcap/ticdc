@@ -953,3 +953,13 @@ func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID) error {
 func (m *Maintainer) GetTables() []*replica.SpanReplication {
 	return m.controller.replicationDB.GetAllTasks()
 }
+
+// SplitTableByRegionCount split table based on region count
+func (m *Maintainer) SplitTableByRegionCount(tableId int64) error {
+	return m.controller.SplitTableByRegionCount(tableId)
+}
+
+// MergeTable merge table
+func (m *Maintainer) MergeTable(tableId int64) error {
+	return m.controller.MergeTable(tableId)
+}
