@@ -200,13 +200,33 @@ func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 	}
 }
 
+func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *BatchDMLEvent {
+	key := toTableInfosKey(schema, table)
+	log.Info("dml2batchEvent", zap.String("key", key))
+	tableInfo, ok := s.tableInfos[key]
+	require.True(s.t, ok)
+	dmlEvent := new(BatchDMLEvent)
+	did := common.NewDispatcherID()
+	ts := tableInfo.UpdateTS()
+	for _, dml := range dmls {
+		event := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+		dmlEvent.AppendDMLEvent(event)
+		rawKvs := s.DML2RawKv(schema, table, ts, dml)
+		for _, rawKV := range rawKvs {
+			err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
+			require.NoError(s.t, err)
+		}
+	}
+	return dmlEvent
+}
+
 // DML2Event execute the dml(s) and return the corresponding DMLEvent.
 // Note:
 // 1. It dose not support `delete` since the key value cannot be found
 // after the query executed.
 // 2. You must execute create table statement before calling this function.
 // 3. You must set the preRow of the DMLEvent by yourself, since we can not get it from TiDB.
-func (s *EventTestHelper) DML2Event(schema, table string, dml ...string) *DMLEvent {
+func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEvent {
 	key := toTableInfosKey(schema, table)
 	log.Info("dml2event", zap.String("key", key))
 	tableInfo, ok := s.tableInfos[key]
@@ -216,7 +236,7 @@ func (s *EventTestHelper) DML2Event(schema, table string, dml ...string) *DMLEve
 	ts := tableInfo.UpdateTS()
 	event := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
 	dmlEvent.AppendDMLEvent(event)
-	rawKvs := s.DML2RawKv(schema, table, ts, dml...)
+	rawKvs := s.DML2RawKv(schema, table, ts, dmls...)
 	for _, rawKV := range rawKvs {
 		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
 		require.NoError(s.t, err)

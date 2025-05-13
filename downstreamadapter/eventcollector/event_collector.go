@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -522,21 +521,21 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 		case targetMessage := <-inCh:
 			for _, msg := range targetMessage.Message {
 				switch msg.(type) {
-				case commonEvent.Event:
-					event := msg.(commonEvent.Event)
-					switch event.GetType() {
-					case commonEvent.TypeBatchResolvedEvent:
-						events := event.(*commonEvent.BatchResolvedEvent).Events
+				case event.Event:
+					e := msg.(event.Event)
+					switch e.GetType() {
+					case event.TypeBatchResolvedEvent:
+						events := e.(*event.BatchResolvedEvent).Events
 						from := &targetMessage.From
 						event := dispatcher.DispatcherEvent{}
-						for _, e := range events {
+						for _, resolvedEvent := range events {
 							event.From = from
-							event.Event = e
-							c.ds.Push(e.DispatcherID, event)
+							event.Event = resolvedEvent
+							c.ds.Push(resolvedEvent.DispatcherID, event)
 						}
-						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(event.Len()))
-					case commonEvent.TypeBatchDMLEvent:
-						stat, ok := c.dispatcherMap.Load(event.GetDispatcherID())
+						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(e.Len()))
+					case event.TypeBatchDMLEvent:
+						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
 						if !ok {
 							continue
 						}
@@ -544,28 +543,28 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						if !ok {
 							continue
 						}
-						events := event.(*commonEvent.BatchDMLEvent)
+						events := e.(*event.BatchDMLEvent)
 						events.AssembleRows(tableInfo)
 						from := &targetMessage.From
 						event := dispatcher.DispatcherEvent{}
-						for _, e := range events.DMLEvents {
+						for _, dml := range events.DMLEvents {
 							event.From = from
-							event.Event = e
-							c.ds.Push(e.DispatcherID, event)
+							event.Event = dml
+							c.ds.Push(dml.DispatcherID, event)
 						}
-						c.metricDispatcherReceivedKVEventCount.Add(float64(event.Len()))
-					case commonEvent.TypeDDLEvent:
-						event := event.(*commonEvent.DDLEvent)
-						stat, ok := c.dispatcherMap.Load(event.GetDispatcherID())
+						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
+					case event.TypeDDLEvent:
+						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
 						if !ok {
 							continue
 						}
-						stat.(*dispatcherStat).tableInfo.Store(event.TableInfo)
-						c.metricDispatcherReceivedKVEventCount.Add(float64(event.Len()))
-						c.ds.Push(event.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, event))
+						stat.(*dispatcherStat).tableInfo.Store(e.(*event.DDLEvent).TableInfo)
+
+						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
+						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					default:
-						c.metricDispatcherReceivedKVEventCount.Add(float64(event.Len()))
-						c.ds.Push(event.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, event))
+						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
+						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					}
 				default:
 					log.Panic("invalid message type", zap.Any("msg", msg))
