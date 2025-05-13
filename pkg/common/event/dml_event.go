@@ -32,6 +32,8 @@ const (
 )
 
 type BatchDMLEvent struct {
+	// Version is the version of the BatchDMLEvent struct.
+	Version   byte        `json:"version"`
 	DMLEvents []*DMLEvent `json:"dml_events"`
 	// Rows is the rows of the transactions.
 	Rows *chunk.Chunk `json:"rows"`
@@ -51,7 +53,7 @@ func (b *BatchDMLEvent) AppendDMLEvent(dml *DMLEvent) {
 	}
 	if len(b.DMLEvents) > 0 {
 		pre := b.DMLEvents[len(b.DMLEvents)-1]
-		dml.cumOffset = pre.cumOffset + len(pre.RowTypes)
+		dml.previousTotalOffset = pre.previousTotalOffset + len(pre.RowTypes)
 	}
 	dml.Rows = b.Rows
 	b.DMLEvents = append(b.DMLEvents, dml)
@@ -86,8 +88,17 @@ func (b *BatchDMLEvent) GetType() int {
 }
 
 func (b *BatchDMLEvent) Unmarshal(data []byte) error {
+	b.Version = data[0]
+	if b.Version != 0 {
+		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
+		return nil
+	}
+	return b.decodeV0(data)
+}
+
+func (b *BatchDMLEvent) decodeV0(data []byte) error {
 	var err error
-	offset := 0
+	offset := 1
 	// TableInfo
 	tableInfoDataSize := int(binary.BigEndian.Uint64(data[offset:]))
 	offset += 8
@@ -116,7 +127,18 @@ func (b *BatchDMLEvent) Unmarshal(data []byte) error {
 }
 
 func (b *BatchDMLEvent) Marshal() ([]byte, error) {
+	if b.Version != 0 {
+		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
+		return nil, nil
+	}
+	return b.encodeV0()
+}
+
+func (b *BatchDMLEvent) encodeV0() ([]byte, error) {
 	data := make([]byte, 0)
+	// Encode all fields
+	// Version
+	data = append(data, b.Version)
 	// TableInfo
 	tableInfoData, err := b.TableInfo.Marshal()
 	if err != nil {
@@ -168,7 +190,7 @@ func (b *BatchDMLEvent) AssembleRows() {
 		dml.TableInfo = b.TableInfo
 		if i > 0 {
 			pre := b.DMLEvents[i-1]
-			dml.cumOffset = pre.cumOffset + len(pre.RowTypes)
+			dml.previousTotalOffset = pre.previousTotalOffset + len(pre.RowTypes)
 		}
 	}
 }
@@ -209,8 +231,8 @@ type DMLEvent struct {
 	// offset is the offset of the current row in the transaction.
 	// It is internal field, not exported. So it doesn't need to be marshalled.
 	offset int `json:"-"`
-	// cumOffset stores previous dml events
-	cumOffset int `json:"-"`
+	// Accumulates the offsets of all previous DML events to facilitate sharing the same chunk when using batch DML events
+	previousTotalOffset int `json:"-"`
 
 	// Checksum for the event, only not nil if the upstream TiDB enable the row level checksum
 	// and TiCDC set the integrity check level to the correctness.
@@ -329,7 +351,7 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 	switch rowType {
 	case RowTypeInsert:
 		row := RowChange{
-			Row:      t.Rows.GetRow(t.cumOffset + t.offset),
+			Row:      t.Rows.GetRow(t.previousTotalOffset + t.offset),
 			RowType:  rowType,
 			Checksum: checksum,
 		}
@@ -337,7 +359,7 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		return row, true
 	case RowTypeDelete:
 		row := RowChange{
-			PreRow:   t.Rows.GetRow(t.cumOffset + t.offset),
+			PreRow:   t.Rows.GetRow(t.previousTotalOffset + t.offset),
 			RowType:  rowType,
 			Checksum: checksum,
 		}
@@ -345,8 +367,8 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		return row, true
 	case RowTypeUpdate:
 		row := RowChange{
-			PreRow:   t.Rows.GetRow(t.cumOffset + t.offset),
-			Row:      t.Rows.GetRow(t.cumOffset + t.offset + 1),
+			PreRow:   t.Rows.GetRow(t.previousTotalOffset + t.offset),
+			Row:      t.Rows.GetRow(t.previousTotalOffset + t.offset + 1),
 			RowType:  rowType,
 			Checksum: checksum,
 		}

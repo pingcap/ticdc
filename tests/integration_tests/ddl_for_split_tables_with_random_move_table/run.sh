@@ -1,9 +1,10 @@
 #!/bin/bash
-# This test is aimed to test the ddl execution when the table is scheduled to be moved.
-# 1. we start three TiCDC servers, and create 100 tables.
-# 2. one thread we execute ddl randomly(including create table, drop table, rename table, truncate table, recover table, add column, drop column)
-# 3. one thread we execute dmls, and insert data to these 100 tables.
-# 4. one thread we randomly move the tables to other nodes.
+# This test is aimed to test the ddl execution for split tables when the table is scheduled to be moved.
+# 1. we start three TiCDC servers, and create a table with some data and multiple regions.
+# 2. we enable the split table param, and start a changefeed.
+# 2. one thread we execute ddl randomly(including add column, drop column, rename table, add index, drop index)
+# 3. one thread we execute dmls, and insert data to these table.
+# 4. one thread we randomly move the table(all related dispatchers) to other nodes.
 # finally, we check the data consistency between the upstream and downstream.
 
 set -eu
@@ -25,53 +26,37 @@ function prepare() {
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/maintainer/scheduler/StopSplitScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "2" --addr "127.0.0.1:8302"
 
-	TOPIC_NAME="ticdc-failover-ddl-test-mix-$RANDOM"
-	SINK_URI="mysql://root@127.0.0.1:3306/"
-	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test"
-}
+	run_sql_file $CUR/data/pre.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-function create_tables() {
-	## normal tables
-	for i in {1..10}; do
-		echo "Creating table table_$i..."
-		run_sql "CREATE TABLE IF NOT EXISTS test.table_$i (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	done
+	SINK_URI="mysql://root@127.0.0.1:3306/"
+	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
 }
 
 function execute_ddls() {
 	while true; do
-		table_num=$((RANDOM % 10 + 1))
+		table_num=$((RANDOM % 5 + 1))
 		table_name="table_$table_num"
 
-		case $((RANDOM % 5)) in
+		case $((RANDOM % 3)) in
 		0)
-			echo "DDL: Dropping and recreating $table_name..."
-			run_sql "DROP TABLE IF EXISTS test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			echo "DDL: Adding index and dropping index in $table_name..."
+			run_sql "CREATE INDEX idx_data ON test.$table_name (data);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 			sleep 0.5
-			run_sql "CREATE TABLE IF NOT EXISTS test.$table_name (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			run_sql "DROP INDEX idx_data ON test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 			;;
 		1)
-			echo "DDL: Dropping and recovering $table_name..."
-			run_sql "DROP TABLE IF EXISTS test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-			sleep 0.5
-			run_sql "RECOVER TABLE test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-			;;
-		2)
-			echo "DDL: Truncating $table_name..."
-			run_sql "TRUNCATE TABLE test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-			;;
-		3)
 			echo "DDL: Renaming $table_name..."
 			new_table_name="table_$(($table_num + 100))"
 			run_sql "RENAME TABLE test.$table_name TO test.$new_table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 			sleep 0.5
 			run_sql "RENAME TABLE test.$new_table_name TO test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 			;;
-		4)
+		2)
 			echo "DDL: Adding column to $table_name..."
 			run_sql "ALTER TABLE test.$table_name ADD COLUMN new_col INT;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 			sleep 0.5
@@ -91,15 +76,15 @@ function execute_dml() {
 	done
 }
 
-function move_table() {
+function move_split_table() {
 	while true; do
-		table_num=$((RANDOM % 10 + 1))
+		table_num=$((RANDOM % 5 + 1))
 		table_name="table_$table_num"
 		port=$((RANDOM % 3 + 8300))
 
 		# move table to a random node
 		table_id=$(get_table_id "test" "$table_name")
-		move_table_with_retry "127.0.0.1:$port" $table_id "test" 10 || true
+		move_split_table_with_retry "127.0.0.1:$port" $table_id "test" 10 || true
 		sleep 1
 	done
 }
@@ -107,29 +92,27 @@ function move_table() {
 main() {
 	prepare
 
-	create_tables
 	execute_ddls &
 	NORMAL_TABLE_DDL_PID=$!
 
 	# do execute dml for 100 tables, and store the pid for each thread
 	declare -a pids=()
 
-	for i in {1..10}; do
+	for i in {1..5}; do
 		execute_dml $i &
 		pids+=("$!")
 	done
 
-	move_table &
+	move_split_table &
 	MOVE_TABLE_PID=$!
 
 	sleep 500
 
 	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MOVE_TABLE_PID
-	# wait for all dml threads to finish
 
 	sleep 10
 
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 
 	cleanup_process $CDC_BINARY
 }

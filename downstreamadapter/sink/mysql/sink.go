@@ -83,10 +83,10 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	return newMysqlSinkWithDBAndConfig(ctx, changefeedID, cfg, db), nil
+	return newMySQLSink(ctx, changefeedID, cfg, db), nil
 }
 
-func newMysqlSinkWithDBAndConfig(
+func newMySQLSink(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	cfg *mysql.Config,

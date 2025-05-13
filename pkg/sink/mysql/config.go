@@ -84,6 +84,8 @@ const (
 	prepStmtCacheSize int = 16 * 1024
 
 	defaultHasVectorType = false
+
+	defaultEnableDDLTs = true
 )
 
 type Config struct {
@@ -109,6 +111,11 @@ type Config struct {
 	// write source exists when the downstream is TiDB and version is greater than or equal to v6.5.0.
 	IsWriteSourceExisted bool
 
+	// EnableDDLTs can be set in the sink URI to enable the DDL ts.
+	// it's default to true to make the mysql sink write DDL-ts
+	// for the kafka-consumer, set this to false.
+	EnableDDLTs bool
+
 	SourceID        uint64
 	BatchDMLEnable  bool
 	MultiStmtEnable bool
@@ -131,8 +138,8 @@ type Config struct {
 	DryRunBlockInterval time.Duration
 }
 
-// NewConfig returns the default mysql backend config.
-func NewMysqlConfig() *Config {
+// New returns the default mysql backend config.
+func New() *Config {
 	return &Config{
 		WorkerCount:            DefaultWorkerCount,
 		MaxTxnRow:              DefaultMaxTxnRow,
@@ -149,6 +156,7 @@ func NewMysqlConfig() *Config {
 		SourceID:               config.DefaultTiDBSourceID,
 		DMLMaxRetry:            8,
 		HasVectorType:          defaultHasVectorType,
+		EnableDDLTs:            defaultEnableDDLTs,
 	}
 }
 
@@ -206,6 +214,9 @@ func (c *Config) Apply(
 	if err = getMultiStmtEnable(query, &c.MultiStmtEnable); err != nil {
 		return err
 	}
+	if err = getEnableDDLTs(query, &c.EnableDDLTs); err != nil {
+		return err
+	}
 
 	// c.EnableOldValue = config.EnableOldValue
 	c.ForceReplicate = cfg.ForceReplicate
@@ -226,19 +237,13 @@ func (c *Config) Apply(
 	return nil
 }
 
-func NewMySQLConfig(changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*Config, error) {
-	cfg := NewMysqlConfig()
-	err := cfg.Apply(sinkURI, changefeedID, config)
-	if err != nil {
-		return nil, err
-	}
-	return cfg, nil
-}
-
-func NewMysqlConfigAndDB(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig) (*Config, *sql.DB, error) {
+func NewMysqlConfigAndDB(
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, config *config.ChangefeedConfig,
+) (*Config, *sql.DB, error) {
 	log.Info("create db connection", zap.String("sinkURI", sinkURI.String()))
 	// create db connection
-	cfg, err := NewMySQLConfig(changefeedID, sinkURI, config)
+	cfg := New()
+	err := cfg.Apply(sinkURI, changefeedID, config)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -577,6 +582,18 @@ func getMultiStmtEnable(values url.Values, multiStmtEnable *bool) error {
 			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
 		}
 		*multiStmtEnable = enable
+	}
+	return nil
+}
+
+func getEnableDDLTs(value url.Values, enableDDLTs *bool) error {
+	s := value.Get("enable-ddl-ts")
+	if len(s) > 0 {
+		enable, err := strconv.ParseBool(s)
+		if err != nil {
+			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		}
+		*enableDDLTs = enable
 	}
 	return nil
 }

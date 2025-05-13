@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -216,7 +217,7 @@ func (s *EventTestHelper) DML2Event(schema, table string, dml ...string) *DMLEve
 	ts := tableInfo.UpdateTS()
 	event := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
 	dmlEvent.AppendDMLEvent(event)
-	rawKvs := s.DML2RawKv(schema, table, dml...)
+	rawKvs := s.DML2RawKv(schema, table, ts, dml...)
 	for _, rawKV := range rawKvs {
 		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
 		require.NoError(s.t, err)
@@ -224,12 +225,11 @@ func (s *EventTestHelper) DML2Event(schema, table string, dml ...string) *DMLEve
 	return dmlEvent.DMLEvents[0]
 }
 
-func (s *EventTestHelper) DML2RawKv(schema, table string, dml ...string) []*common.RawKVEntry {
+func (s *EventTestHelper) DML2RawKv(schema, table string, ddlFinishedTs uint64, dml ...string) []*common.RawKVEntry {
 	tableInfo, ok := s.tableInfos[toTableInfosKey(schema, table)]
 	require.True(s.t, ok)
-	ts := tableInfo.UpdateTS()
 	var rawKVs []*common.RawKVEntry
-	for _, dml := range dml {
+	for i, dml := range dml {
 		s.tk.MustExec(dml)
 		key, value := s.getLastKeyValue(tableInfo.TableName.TableID)
 		rawKV := &common.RawKVEntry{
@@ -237,8 +237,8 @@ func (s *EventTestHelper) DML2RawKv(schema, table string, dml ...string) []*comm
 			Key:      key,
 			Value:    value,
 			OldValue: nil,
-			StartTs:  ts - 1,
-			CRTs:     ts + 1,
+			StartTs:  ddlFinishedTs + uint64(i),
+			CRTs:     ddlFinishedTs + uint64(i+1),
 		}
 		rawKVs = append(rawKVs, rawKV)
 	}

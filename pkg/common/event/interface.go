@@ -34,6 +34,7 @@ type Event interface {
 }
 
 type BatchEvent interface {
+	GetCommitTs() common.Ts
 	GetType() int
 	Len() int32
 }

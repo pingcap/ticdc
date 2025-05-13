@@ -37,7 +37,7 @@ func TestGenerateDSNByConfig(t *testing.T) {
 
 		dsn, err := dmysql.ParseDSN("root:123456@tcp(127.0.0.1:4000)/")
 		require.Nil(t, err)
-		cfg := NewMysqlConfig()
+		cfg := New()
 		dsnStr, err := generateDSNByConfig(dsn, cfg, db)
 		require.Nil(t, err)
 		expectedCfg := []string{
@@ -62,7 +62,7 @@ func TestGenerateDSNByConfig(t *testing.T) {
 
 		dsn, err := dmysql.ParseDSN("root:123456@tcp(127.0.0.1:4000)/")
 		require.Nil(t, err)
-		cfg := NewMysqlConfig()
+		cfg := New()
 		cfg.Timezone = `"UTC"`
 		dsnStr, err := generateDSNByConfig(dsn, cfg, db)
 		require.Nil(t, err)
@@ -78,7 +78,7 @@ func TestGenerateDSNByConfig(t *testing.T) {
 		require.Nil(t, err)
 		uri, err := url.Parse("mysql://127.0.0.1:3306/?read-timeout=4m&write-timeout=5m&timeout=3m")
 		require.Nil(t, err)
-		cfg := NewMysqlConfig()
+		cfg := New()
 
 		changefeedConfig := &config.ChangefeedConfig{
 			TimeZone: "UTC",
@@ -114,7 +114,7 @@ func TestGenerateDSNByConfig(t *testing.T) {
 		// simulate error
 		dsn, err := dmysql.ParseDSN("root:123456@tcp(127.0.0.1:4000)/")
 		require.Nil(t, err)
-		cfg := NewMysqlConfig()
+		cfg := New()
 		var dsnStr string
 		_, err = generateDSNByConfig(dsn, cfg, db)
 		require.Error(t, err)
@@ -185,7 +185,7 @@ func TestGenerateDSNByConfig(t *testing.T) {
 func TestApplySinkURIParamsToConfig(t *testing.T) {
 	t.Parallel()
 
-	expected := NewMysqlConfig()
+	expected := New()
 	expected.WorkerCount = 64
 	expected.MaxTxnRow = 20
 	expected.MaxMultiUpdateRowCount = 80
@@ -202,7 +202,7 @@ func TestApplySinkURIParamsToConfig(t *testing.T) {
 		"&tidb-txn-mode=pessimistic"
 	uri, err := url.Parse(uriStr)
 	require.Nil(t, err)
-	cfg := NewMysqlConfig()
+	cfg := New()
 	changefeedConfig := &config.ChangefeedConfig{
 		TimeZone: "UTC",
 		SinkConfig: &config.SinkConfig{
@@ -257,7 +257,7 @@ func TestParseSinkURIOverride(t *testing.T) {
 		} else {
 			uri = nil
 		}
-		cfg := NewMysqlConfig()
+		cfg := New()
 		changefeedConfig := &config.ChangefeedConfig{
 			TimeZone: "UTC",
 			SinkConfig: &config.SinkConfig{
@@ -300,7 +300,7 @@ func TestParseSinkURIBadQueryString(t *testing.T) {
 		} else {
 			uri = nil
 		}
-		cfg := NewMysqlConfig()
+		cfg := New()
 		canalJsonProtocol := "canal-json"
 		changefeedConfig := &config.ChangefeedConfig{
 			// SinkURI: "tidb://root:@127.0.0.1:4000?dry-run=true",
@@ -409,7 +409,7 @@ func TestApplyTimezone(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			cfg := NewMysqlConfig()
+			cfg := New()
 			sinkURI := "mysql://127.0.0.1:3306"
 			if !tc.noChangefeedTimezone {
 				sinkURI = sinkURI + "?time-zone=" + tc.changefeedTimezone
