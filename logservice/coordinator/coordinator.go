@@ -14,6 +14,7 @@
 package logcoordinator
 
 import (
+	"bytes"
 	"context"
 	"sort"
 	"sync"
@@ -29,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -182,15 +184,22 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 		var maxResolvedTs uint64
 		found := false
 		for _, subsState := range subStates.GetSubscriptions() {
-			// FIXME: check table span
-			if subsState.CheckpointTs <= startTs {
+			if bytes.Compare(subsState.Span.StartKey, span.StartKey) <= 0 &&
+				bytes.Compare(span.EndKey, subsState.Span.EndKey) <= 0 &&
+				subsState.CheckpointTs <= startTs {
 				if !found || subsState.ResolvedTs > maxResolvedTs {
 					maxResolvedTs = subsState.ResolvedTs
 					found = true
 				}
 			}
 		}
-		// TODO: check maxResolveTs is not significantly smaller than request startTs
+		// Check maxResolveTs is not significantly smaller than request startTs to filter out invalid nodes
+		const maxTimeDiff = 3600000 // 1 hour in milliseconds
+		if found &&
+			startTs > maxResolvedTs &&
+			(oracle.ExtractPhysical(startTs)-oracle.ExtractPhysical(maxResolvedTs)) > maxTimeDiff {
+			found = false // Disqualify this candidate if the diff is too large
+		}
 
 		// If a valid subscription with checkpointTs <= startTs was found, add to candidates
 		if found {
