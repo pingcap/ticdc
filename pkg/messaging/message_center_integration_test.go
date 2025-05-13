@@ -147,7 +147,7 @@ func validateReceivedMessage(t *testing.T, targetMsg *TargetMessage, receivedMsg
 	require.Equal(t, senderID, receivedMsg.From)
 	require.Equal(t, targetMsg.Type, receivedMsg.Type)
 	receivedEvent := receivedMsg.Message[0].(*commonEvent.BatchDMLEvent)
-	receivedEvent.AssembleRows()
+	receivedEvent.AssembleRows(event.TableInfo)
 	require.Equal(t, event.Rows.ToString(event.TableInfo.GetFieldSlice()), receivedEvent.Rows.ToString(event.TableInfo.GetFieldSlice()))
 }
 

@@ -536,8 +536,16 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						}
 						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(event.Len()))
 					case commonEvent.TypeBatchDMLEvent:
+						stat, ok := c.dispatcherMap.Load(event.GetDispatcherID())
+						if !ok {
+							continue
+						}
+						tableInfo, ok := stat.(*dispatcherStat).tableInfo.Load().(*common.TableInfo)
+						if !ok {
+							continue
+						}
 						events := event.(*commonEvent.BatchDMLEvent)
-						events.AssembleRows()
+						events.AssembleRows(tableInfo)
 						from := &targetMessage.From
 						event := dispatcher.DispatcherEvent{}
 						for _, e := range events.DMLEvents {
@@ -546,6 +554,15 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 							c.ds.Push(e.DispatcherID, event)
 						}
 						c.metricDispatcherReceivedKVEventCount.Add(float64(event.Len()))
+					case commonEvent.TypeDDLEvent:
+						event := event.(*commonEvent.DDLEvent)
+						stat, ok := c.dispatcherMap.Load(event.GetDispatcherID())
+						if !ok {
+							continue
+						}
+						stat.(*dispatcherStat).tableInfo.Store(event.TableInfo)
+						c.metricDispatcherReceivedKVEventCount.Add(float64(event.Len()))
+						c.ds.Push(event.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, event))
 					default:
 						c.metricDispatcherReceivedKVEventCount.Add(float64(event.Len()))
 						c.ds.Push(event.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, event))

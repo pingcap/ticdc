@@ -52,6 +52,9 @@ type dispatcherStat struct {
 
 	// The largest commit ts that has been sent to the dispatcher.
 	sentCommitTs atomic.Uint64
+
+	// tableInfo is the latest table info of the dispatcher's corresponding table.
+	tableInfo atomic.Value
 }
 
 func (d *dispatcherStat) reset() {
@@ -136,6 +139,14 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 		return
 	}
 	d.waitHandshake.Store(false)
+	d.setInitialTableInfo(event.Event.(*commonEvent.HandshakeEvent).TableInfo)
+}
+
+func (d *dispatcherStat) setInitialTableInfo(tableInfo *common.TableInfo) {
+	if tableInfo == nil {
+		return
+	}
+	d.tableInfo.Store(tableInfo)
 }
 
 func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {

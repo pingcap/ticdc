@@ -83,17 +83,7 @@ func (b *BatchDMLEvent) decodeV0(data []byte) error {
 		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
 		return nil
 	}
-	var err error
 	offset := 1
-	// TableInfo
-	tableInfoDataSize := int(binary.BigEndian.Uint64(data[offset:]))
-	offset += 8
-	b.TableInfo, err = common.UnmarshalJSONToTableInfo(data[offset : offset+tableInfoDataSize])
-	if err != nil {
-		return err
-	}
-	offset += tableInfoDataSize
-	// DMLEvents
 	length := int(binary.LittleEndian.Uint64(data[offset:]))
 	offset += 8
 	b.DMLEvents = make([]*DMLEvent, 0, length)
@@ -121,19 +111,11 @@ func (b *BatchDMLEvent) encodeV0() ([]byte, error) {
 		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
 		return nil, nil
 	}
-	data := make([]byte, 0)
+	size := 1 + 8 + (1+16+6*8+4+1)*len(b.DMLEvents) + int(b.Len())
+	data := make([]byte, 0, size)
 	// Encode all fields
 	// Version
 	data = append(data, b.Version)
-	// TableInfo
-	tableInfoData, err := b.TableInfo.Marshal()
-	if err != nil {
-		return nil, err
-	}
-	tableInfoDataSize := make([]byte, 8)
-	binary.BigEndian.PutUint64(tableInfoDataSize, uint64(len(tableInfoData)))
-	data = append(data, tableInfoDataSize...)
-	data = append(data, tableInfoData...)
 	// DMLEvents
 	dmlEventsDataSize := make([]byte, 8)
 	binary.LittleEndian.PutUint64(dmlEventsDataSize, uint64(len(b.DMLEvents)))
@@ -157,19 +139,28 @@ func (b *BatchDMLEvent) encodeV0() ([]byte, error) {
 
 // AssembleRows assembles the Rows from the RawRows.
 // It also sets the TableInfo and clears the RawRows.
-func (b *BatchDMLEvent) AssembleRows() {
+func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	defer b.TableInfo.InitPrivateFields()
 	// rows is already set, no need to assemble again
 	// When the event is passed from the same node, the Rows is already set.
 	if b.Rows != nil {
 		return
 	}
+	if tableInfo == nil {
+		log.Panic("DMLEvent: TableInfo is nil")
+		return
+	}
 	if len(b.RawRows) == 0 {
 		log.Panic("DMLEvent: RawRows is empty")
 		return
 	}
-	decoder := chunk.NewCodec(b.TableInfo.GetFieldSlice())
+	if b.TableInfo != nil && b.TableInfo.UpdateTS() != tableInfo.UpdateTS() {
+		log.Panic("DMLEvent: TableInfoVersion mismatch", zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.UpdateTS()), zap.Uint64("tableInfoVersion", tableInfo.UpdateTS()))
+		return
+	}
+	decoder := chunk.NewCodec(tableInfo.GetFieldSlice())
 	b.Rows, _ = decoder.Decode(b.RawRows)
+	b.TableInfo = tableInfo
 	b.RawRows = nil
 	for i, dml := range b.DMLEvents {
 		dml.Rows = b.Rows
