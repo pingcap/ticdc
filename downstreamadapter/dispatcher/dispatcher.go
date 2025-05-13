@@ -358,7 +358,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			}
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
-			// dml.TableInfo = d.tableInfo
 			dml.AddPostFlushFunc(func() {
 				// Considering dml event in sink may be written to downstream not in order,
 				// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
@@ -392,8 +391,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				}
 				return
 			}
-			// Update the table info of the dispatcher, when it receives ddl event.
-			// d.tableInfo = ddl.TableInfo
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
 				zap.String("query", ddl.Query),
