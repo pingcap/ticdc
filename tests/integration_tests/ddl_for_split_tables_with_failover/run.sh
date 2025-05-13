@@ -76,33 +76,33 @@ function execute_dml() {
 }
 
 function kill_server() {
-    count=1
-    while true; do
-        case $((RANDOM % 3)) in
-        0)
-            cdc_pid_1=$(ps aux | grep cdc | grep 8300 | awk '{print $2}')
-            if [ -z "$cdc_pid_1" ]; then
-                continue
-            fi
-            kill_cdc_pid $cdc_pid_1
+	count=1
+	while true; do
+		case $((RANDOM % 3)) in
+		0)
+			cdc_pid_1=$(ps aux | grep cdc | grep 8300 | awk '{print $2}')
+			if [ -z "$cdc_pid_1" ]; then
+				continue
+			fi
+			kill_cdc_pid $cdc_pid_1
 
-            sleep 15
-            run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-$count" --addr "127.0.0.1:8300"
-            ;;
-        1)
-            cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
-            if [ -z "$cdc_pid_2" ]; then
-                continue
-            fi
-            kill_cdc_pid $cdc_pid_2
+			sleep 15
+			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-$count" --addr "127.0.0.1:8300"
+			;;
+		1)
+			cdc_pid_2=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+			if [ -z "$cdc_pid_2" ]; then
+				continue
+			fi
+			kill_cdc_pid $cdc_pid_2
 
-            sleep 15
-            run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-$count" --addr "127.0.0.1:8301"
-            ;;
-        esac
-        count=$((count + 1))
-        sleep 15
-    done
+			sleep 15
+			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-$count" --addr "127.0.0.1:8301"
+			;;
+		esac
+		count=$((count + 1))
+		sleep 15
+	done
 }
 
 main() {
