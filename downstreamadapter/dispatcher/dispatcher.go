@@ -49,7 +49,6 @@ type EventDispatcher interface {
 	GetSyncPointInterval() time.Duration
 	GetStartTsIsSyncpoint() bool
 	GetResolvedTs() uint64
-	SetInitialTableInfo(tableInfo *common.TableInfo)
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 }
 
@@ -105,9 +104,6 @@ type Dispatcher struct {
 	componentStatus *ComponentStateWithMutex
 	// the config of filter
 	filterConfig *eventpb.FilterConfig
-
-	// tableInfo is the latest table info of the dispatcher's corresponding table.
-	tableInfo *common.TableInfo
 
 	// shared by the event dispatcher manager
 	sink sink.Sink
@@ -397,7 +393,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 				return
 			}
 			// Update the table info of the dispatcher, when it receives ddl event.
-			d.tableInfo = ddl.TableInfo
+			// d.tableInfo = ddl.TableInfo
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
 				zap.String("query", ddl.Query),
@@ -454,13 +450,6 @@ func (d *Dispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
 func (d *Dispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 	d.tableProgress.Pass(event)
 	event.PostFlush()
-}
-
-func (d *Dispatcher) SetInitialTableInfo(tableInfo *common.TableInfo) {
-	if tableInfo == nil {
-		return
-	}
-	d.tableInfo = tableInfo
 }
 
 func isCompleteSpan(tableSpan *heartbeatpb.TableSpan) bool {

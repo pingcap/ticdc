@@ -136,7 +136,6 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 		return
 	}
 	d.waitHandshake.Store(false)
-	d.target.SetInitialTableInfo(event.Event.(*commonEvent.HandshakeEvent).TableInfo)
 }
 
 func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {

@@ -152,7 +152,6 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	sink := newMockSink(common.MysqlSinkType)
 	tableSpan := getCompleteTableSpan()
 	dispatcher := newDispatcherForTest(sink, tableSpan)
-	dispatcher.SetInitialTableInfo(tableInfo)
 	require.Equal(t, uint64(0), dispatcher.GetCheckpointTs())
 	require.Equal(t, uint64(0), dispatcher.GetResolvedTs())
 	tableProgress := dispatcher.tableProgress
@@ -664,13 +663,9 @@ func TestDispatcherClose(t *testing.T) {
 	dmlEvent.CommitTs = 2
 	dmlEvent.Length = 1
 
-	tableInfo := dmlEvent.TableInfo
-
 	{
 		sink := newMockSink(common.MysqlSinkType)
 		dispatcher := newDispatcherForTest(sink, getCompleteTableSpan())
-
-		dispatcher.SetInitialTableInfo(tableInfo)
 
 		// ===== dml event =====
 		nodeID := node.NewID()
@@ -692,8 +687,6 @@ func TestDispatcherClose(t *testing.T) {
 	{
 		sink := newMockSink(common.MysqlSinkType)
 		dispatcher := newDispatcherForTest(sink, getCompleteTableSpan())
-
-		dispatcher.SetInitialTableInfo(tableInfo)
 
 		// ===== dml event =====
 		nodeID := node.NewID()
