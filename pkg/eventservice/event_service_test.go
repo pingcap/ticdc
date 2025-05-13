@@ -130,10 +130,15 @@ func TestEventServiceBasic(t *testing.T) {
 			case *commonEvent.BatchDMLEvent:
 				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
-				require.Equal(t, int32(1), e.Len())
-				require.Equal(t, kvEvents[dmlCount].CRTs, e.DMLEvents[dmlCount].CommitTs)
-				require.Equal(t, uint64(dmlCount+3), e.DMLEvents[dmlCount].Seq)
-				dmlCount++
+				// first dml has one event, sencond dml has two events
+				if dmlCount == 0 {
+					require.Equal(t, int32(1), e.Len())
+				} else if dmlCount == 1 {
+					require.Equal(t, int32(2), e.Len())
+				}
+				dmlCount += len(e.DMLEvents)
+				require.Equal(t, kvEvents[dmlCount-1].CRTs, e.GetCommitTs())
+				require.Equal(t, uint64(dmlCount+2), e.GetSeq())
 			case *commonEvent.DDLEvent:
 				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
