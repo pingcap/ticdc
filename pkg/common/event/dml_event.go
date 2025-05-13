@@ -15,10 +15,10 @@ package event
 
 import (
 	"encoding/binary"
-	"errors"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
@@ -71,15 +71,18 @@ func (b *BatchDMLEvent) AppendRow(raw *common.RawKVEntry,
 }
 
 func (b *BatchDMLEvent) Unmarshal(data []byte) error {
+	return b.decodeV0(data)
+}
+
+func (b *BatchDMLEvent) decodeV0(data []byte) error {
+	if len(data) < 1+8*3 {
+		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
+	}
 	b.Version = data[0]
 	if b.Version != 0 {
 		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
 		return nil
 	}
-	return b.decodeV0(data)
-}
-
-func (b *BatchDMLEvent) decodeV0(data []byte) error {
 	var err error
 	offset := 1
 	// TableInfo
@@ -110,14 +113,14 @@ func (b *BatchDMLEvent) decodeV0(data []byte) error {
 }
 
 func (b *BatchDMLEvent) Marshal() ([]byte, error) {
-	if b.Version != 0 {
-		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
-		return nil, nil
-	}
 	return b.encodeV0()
 }
 
 func (b *BatchDMLEvent) encodeV0() ([]byte, error) {
+	if b.Version != 0 {
+		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
+		return nil, nil
+	}
 	data := make([]byte, 0)
 	// Encode all fields
 	// Version
@@ -506,6 +509,9 @@ func (t *DMLEvent) decode(data []byte) error {
 }
 
 func (t *DMLEvent) decodeV0(data []byte) error {
+	if len(data) < 1+16+8*5+4 {
+		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
+	}
 	if t.Version != 0 {
 		log.Panic("DMLEvent: invalid version, expect 0, got ", zap.Uint8("version", t.Version))
 		return nil
