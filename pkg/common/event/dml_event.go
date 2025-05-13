@@ -185,9 +185,11 @@ func (b *BatchDMLEvent) GetType() int {
 func (b *BatchDMLEvent) GetSeq() uint64 {
 	return b.DMLEvents[len(b.DMLEvents)-1].Seq
 }
+
 func (b *BatchDMLEvent) GetDispatcherID() common.DispatcherID {
 	return b.DMLEvents[len(b.DMLEvents)-1].DispatcherID
 }
+
 func (b *BatchDMLEvent) GetCommitTs() common.Ts {
 	return b.DMLEvents[len(b.DMLEvents)-1].GetCommitTs()
 }
