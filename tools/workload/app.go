@@ -22,9 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
-	plog "github.com/pingcap/log"
-	"go.uber.org/zap"
 	"workload/schema"
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
@@ -34,6 +31,10 @@ import (
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
 	puuu "workload/schema/uuu"
+
+	"github.com/pingcap/errors"
+	plog "github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // WorkloadExecutor executes the workload and collects statistics
@@ -282,7 +283,7 @@ func (app *WorkloadApp) execute(conn *sql.Conn, sql string, tableIndex int) (sql
 	res, err := conn.ExecContext(context.Background(), sql)
 	if err != nil {
 		if !strings.Contains(err.Error(), "Error 1146") {
-			plog.Info("insert error", zap.Error(err))
+			plog.Info("execute error", zap.Error(err), zap.Any("sql", sql))
 			return res, err
 		}
 		// if table not exists, we create it
@@ -340,8 +341,8 @@ func (app *WorkloadApp) StartMetricsReporting() {
 }
 
 func getSQLPreview(sql string) string {
-	if len(sql) > 140 {
-		return sql[:140] + "..."
+	if len(sql) > 512 {
+		return sql[:512] + "..."
 	}
 	return sql
 }
