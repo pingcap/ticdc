@@ -757,6 +757,12 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 
 	// If needCompleteStatus is true, we need to send the dispatcher heartbeat to the event service.
 	if needCompleteStatus {
+		if e.tableTriggerEventDispatcher != nil {
+			// add tableTriggerEventDispatcher heartbeat
+			heartBeatInfo := &dispatcher.HeartBeatInfo{}
+			e.tableTriggerEventDispatcher.GetHeartBeatInfo(heartBeatInfo)
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(e.tableTriggerEventDispatcher.GetId(), heartBeatInfo.Watermark.CheckpointTs))
+		}
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
 
