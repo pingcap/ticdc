@@ -112,13 +112,13 @@ func (s *eventScanner) Scan(
 		dataRange.EndTs,
 	)
 	if err != nil {
-		log.Error("get ddl events failed", zap.Error(err))
+		log.Error("get ddl events failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 		return nil, false, err
 	}
 
 	iter, err := s.eventStore.GetIterator(dispatcherID, dataRange)
 	if err != nil {
-		log.Error("read events failed", zap.Error(err))
+		log.Error("read events failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 		return nil, false, err
 	}
 
@@ -173,18 +173,16 @@ func (s *eventScanner) Scan(
 	for {
 		select {
 		case <-ctx.Done():
-			log.Warn("scan exits since context done", zap.Error(ctx.Err()))
+			log.Warn("scan exits since context done", zap.Error(ctx.Err()), zap.Stringer("dispatcherID", dispatcherID))
 			return events, false, ctx.Err()
 		default:
 		}
 
-		// Node: The first event of the txn must return isNewTxn as true.
 		e, isNewTxn, err := iter.Next()
 		if err != nil {
-			log.Panic("read events failed", zap.Error(err))
+			log.Panic("read events failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 		}
 
-		// Append last dml
 		if e == nil {
 			appendDML(dml)
 			appendDDLs(dataRange.EndTs)
@@ -196,8 +194,8 @@ func (s *eventScanner) Scan(
 		elapsed := time.Since(startTime)
 
 		if isNewTxn {
-			// Must append the dml event before interrupt the scan, otherwise the dml event will be lost if its commitTs is equal to lastCommitTs.
 			appendDML(dml)
+
 			if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs && dmlCount > 0 {
 				appendDDLs(lastCommitTs)
 				return events, true, nil
@@ -206,7 +204,7 @@ func (s *eventScanner) Scan(
 			tableInfo, err := s.schemaStore.GetTableInfo(tableID, e.CRTs-1)
 			if err != nil {
 				if dispatcherStat.isRemoved.Load() {
-					log.Warn("get table info failed, since the dispatcher is removed", zap.Error(err))
+					log.Warn("get table info failed, since the dispatcher is removed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 					return events, false, nil
 				}
 
@@ -215,17 +213,17 @@ func (s *eventScanner) Scan(
 					// TODO: tables may be deleted in many ways, we need to check if it is safe to ignore later dmls in all cases.
 					// We must send the remaining ddl events to the dispatcher in this case.
 					appendDDLs(dataRange.EndTs)
-					log.Warn("get table info failed, since the table is deleted", zap.Error(err))
+					log.Warn("get table info failed, since the table is deleted", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 					return events, false, nil
 				}
-				log.Panic("get table info failed, unknown reason", zap.Error(err))
+				log.Panic("get table info failed, unknown reason", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 			}
 			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
 			dmlCount++
 		}
 
 		if err = dml.AppendRow(e, s.mounter.DecodeToChunk); err != nil {
-			log.Panic("append row failed", zap.Error(err))
+			log.Panic("append row failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 		}
 	}
 }

@@ -474,7 +474,6 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 	}
 }
 
-// TODO: handle error properly.
 func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	remoteID := node.ID(task.info.GetServerID())
 
@@ -505,21 +504,28 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		return
 	}
 
-	// Create a scanner to handle the scanning logic
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
 	sl := scanLimit{
 		MaxBytes: 1024 * 1024 * 8,         // 8 MB
 		Timeout:  time.Millisecond * 1000, // 1 Second
 	}
 
-	// Use the scanner to get events
 	events, isBroken, err := scanner.Scan(ctx, task, dataRange, sl)
 	if err != nil {
 		log.Panic("scan events failed", zap.Error(err))
 	}
 
-	// Process and send events
 	for _, e := range events {
+		if task.isRemoved.Load() {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		switch e.GetType() {
 		case pevent.TypeDMLEvent:
 			dml, ok := e.(*pevent.DMLEvent)
