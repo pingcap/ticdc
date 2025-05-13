@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -42,6 +43,10 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
+
+// CAUTION:
+// ALL METHODS IN THIS FILE ARE FOR TESTING ONLY!!!
+// DO NOT USE THEM IN OTHER PLACES.
 
 // EventTestHelper is a test helper for generating test events
 type EventTestHelper struct {
@@ -214,7 +219,7 @@ func (s *EventTestHelper) DML2Event(schema, table string, dml ...string) *DMLEve
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
 	dmlEvent := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
-	rawKvs := s.DML2RawKv(schema, table, dml...)
+	rawKvs := s.DML2RawKv(schema, table, ts, dml...)
 	for _, rawKV := range rawKvs {
 		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
 		require.NoError(s.t, err)
@@ -222,12 +227,43 @@ func (s *EventTestHelper) DML2Event(schema, table string, dml ...string) *DMLEve
 	return dmlEvent
 }
 
-func (s *EventTestHelper) DML2RawKv(schema, table string, dml ...string) []*common.RawKVEntry {
+func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) *DMLEvent {
+	if len(dml) != 2 {
+		log.Fatal("DML2UpdateEvent must have 2 dml statements, the first one is insert, the second one is update", zap.Any("dml", dml))
+	}
+
+	lowerInsert := strings.ToLower(dml[0])
+	lowerUpdate := strings.ToLower(dml[1])
+
+	if !strings.Contains(lowerInsert, "insert") || !strings.Contains(lowerUpdate, "update") {
+		log.Fatal("DML2UpdateEvent must have 2 dml statements, the first one is insert, the second one is update", zap.Any("dml", dml))
+	}
+
+	key := toTableInfosKey(schema, table)
+	tableInfo, ok := s.tableInfos[key]
+	require.True(s.t, ok)
+	did := common.NewDispatcherID()
+	ts := tableInfo.UpdateTS()
+	dmlEvent := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+	rawKvs := s.DML2RawKv(schema, table, ts, dml...)
+
+	raw := &common.RawKVEntry{
+		OpType:   common.OpTypePut,
+		Key:      rawKvs[0].Key,
+		Value:    rawKvs[0].Value,
+		OldValue: rawKvs[1].Value,
+		StartTs:  rawKvs[0].StartTs,
+		CRTs:     rawKvs[1].CRTs,
+	}
+	dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk)
+	return dmlEvent
+}
+
+func (s *EventTestHelper) DML2RawKv(schema, table string, ddlFinishedTs uint64, dml ...string) []*common.RawKVEntry {
 	tableInfo, ok := s.tableInfos[toTableInfosKey(schema, table)]
 	require.True(s.t, ok)
-	ts := tableInfo.UpdateTS()
 	var rawKVs []*common.RawKVEntry
-	for _, dml := range dml {
+	for i, dml := range dml {
 		s.tk.MustExec(dml)
 		key, value := s.getLastKeyValue(tableInfo.TableName.TableID)
 		rawKV := &common.RawKVEntry{
@@ -235,8 +271,8 @@ func (s *EventTestHelper) DML2RawKv(schema, table string, dml ...string) []*comm
 			Key:      key,
 			Value:    value,
 			OldValue: nil,
-			StartTs:  ts - 1,
-			CRTs:     ts + 1,
+			StartTs:  ddlFinishedTs + uint64(i),
+			CRTs:     ddlFinishedTs + uint64(i+1),
 		}
 		rawKVs = append(rawKVs, rawKV)
 	}
