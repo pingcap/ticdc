@@ -145,11 +145,12 @@ func (s *eventScanner) Scan(
 
 	// appendDDLs appends all ddl events with finishedTs <= endTs
 	appendDDLs := func(endTs uint64) {
-		for _, e := range ddlEvents {
-			ep := &e
-			if ep.FinishedTs <= endTs {
-				events = append(events, ep)
+		for i := 0; i < len(ddlEvents); i++ {
+			ep := &ddlEvents[i]
+			if ep.FinishedTs > endTs {
+				break
 			}
+			events = append(events, ep)
 		}
 		events = append(events, pevent.ResolvedEvent{
 			DispatcherID: dispatcherID,
