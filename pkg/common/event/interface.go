@@ -33,12 +33,6 @@ type Event interface {
 	Len() int32
 }
 
-type BatchEvent interface {
-	GetCommitTs() common.Ts
-	GetType() int
-	Len() int32
-}
-
 // FlushableEvent is an event that can be flushed to downstream by a dispatcher.
 type FlushableEvent interface {
 	Event

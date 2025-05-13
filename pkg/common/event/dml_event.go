@@ -70,23 +70,6 @@ func (b *BatchDMLEvent) AppendRow(raw *common.RawKVEntry,
 	return b.DMLEvents[len(b.DMLEvents)-1].AppendRow(raw, decode)
 }
 
-func (b *BatchDMLEvent) GetCommitTs() uint64 {
-	return b.DMLEvents[len(b.DMLEvents)-1].GetCommitTs()
-}
-
-// Len returns the number of row change events all transaction.
-func (b *BatchDMLEvent) Len() int32 {
-	var length int32
-	for _, dml := range b.DMLEvents {
-		length += dml.Len()
-	}
-	return length
-}
-
-func (b *BatchDMLEvent) GetType() int {
-	return TypeBatchDMLEvent
-}
-
 func (b *BatchDMLEvent) Unmarshal(data []byte) error {
 	b.Version = data[0]
 	if b.Version != 0 {
@@ -193,6 +176,45 @@ func (b *BatchDMLEvent) AssembleRows() {
 			dml.previousTotalOffset = pre.previousTotalOffset + len(pre.RowTypes)
 		}
 	}
+}
+
+func (b *BatchDMLEvent) GetType() int {
+	return TypeBatchDMLEvent
+}
+
+func (b *BatchDMLEvent) GetSeq() uint64 {
+	return b.DMLEvents[len(b.DMLEvents)-1].Seq
+}
+func (b *BatchDMLEvent) GetDispatcherID() common.DispatcherID {
+	return b.DMLEvents[len(b.DMLEvents)-1].DispatcherID
+}
+func (b *BatchDMLEvent) GetCommitTs() common.Ts {
+	return b.DMLEvents[len(b.DMLEvents)-1].GetCommitTs()
+}
+
+func (b *BatchDMLEvent) GetStartTs() common.Ts {
+	return b.DMLEvents[0].GetStartTs()
+}
+
+func (b *BatchDMLEvent) GetSize() int64 {
+	var size int64
+	for _, dml := range b.DMLEvents {
+		size += dml.GetSize()
+	}
+	return size
+}
+
+func (b *BatchDMLEvent) IsPaused() bool {
+	return b.DMLEvents[len(b.DMLEvents)-1].IsPaused()
+}
+
+// Len returns the number of row change events all transaction.
+func (b *BatchDMLEvent) Len() int32 {
+	var length int32
+	for _, dml := range b.DMLEvents {
+		length += dml.Len()
+	}
+	return length
 }
 
 // DMLEvent represent a batch of DMLs of a whole or partial of a transaction.

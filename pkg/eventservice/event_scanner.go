@@ -94,9 +94,9 @@ func (s *eventScanner) Scan(
 	dispatcherStat *dispatcherStat,
 	dataRange common.DataRange,
 	limit scanLimit,
-) ([]event.BatchEvent, bool, error) {
+) ([]event.Event, bool, error) {
 	startTime := time.Now()
-	var events []event.BatchEvent
+	var events []event.Event
 	var totalBytes int64
 	var lastCommitTs uint64
 
