@@ -258,7 +258,8 @@ type DMLEvent struct {
 	// offset is the offset of the current row in the transaction.
 	// It is internal field, not exported. So it doesn't need to be marshalled.
 	offset int `json:"-"`
-	// Accumulates the offsets of all previous DML events to facilitate sharing the same chunk when using batch DML events
+	// previousTotalOffset accumulates the offsets of all previous DML events to facilitate sharing the same chunk when using batch DML events.
+	// It is used to determine the correct offset for the chunk in batch DML operations.
 	previousTotalOffset int `json:"-"`
 
 	// Checksum for the event, only not nil if the upstream TiDB enable the row level checksum
