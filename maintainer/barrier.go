@@ -172,6 +172,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 
 // HandleBootstrapResponse rebuild the block event from the bootstrap response
 func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
+	log.Info("hyy handle bootstrap response", zap.Any("bootstrapRespMap", bootstrapRespMap))
 	for _, resp := range bootstrapRespMap {
 		for _, span := range resp.Spans {
 			// we only care about the WAITING, WRITING and DONE stage
@@ -220,31 +221,35 @@ func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			// so we don't do speical check for this event
 			// just use usual logic to handle it
 			// Besides, is the dispatchers are all reported waiting status, it means at least one dispatcher
-			// is not get acked, so it must be resend by dispatcher later.
+			// is not get acked, so it must be resent by dispatcher later.
 			return true
 		}
 		switch barrierEvent.blockedDispatchers.InfluenceType {
 		case heartbeatpb.InfluenceType_Normal:
 			for _, tableId := range barrierEvent.blockedDispatchers.TableIDs {
+				log.Info("hyy check block event with tableID in bootstrap", zap.Any("tableId", tableId))
 				replications := b.controller.replicationDB.GetTasksByTableID(tableId)
 				for _, replication := range replications {
+					log.Info("hyy check block event with tableID in bootstrap", zap.Any("replication", replication), zap.Any("checkpointTs", replication.GetStatus().CheckpointTs), zap.Any("barrierEvent.commitTs", barrierEvent.commitTs))
 					if replication.GetStatus().CheckpointTs >= barrierEvent.commitTs {
 						// one related table has forward checkpointTs, means the block event can be advanced
 						barrierEvent.selected.Store(true)
 						barrierEvent.writerDispatcherAdvanced = true
-						return false
+						return true
 					}
 				}
 			}
 		case heartbeatpb.InfluenceType_DB:
 			schemaID := barrierEvent.blockedDispatchers.SchemaID
 			replications := b.controller.replicationDB.GetTasksBySchemaID(schemaID)
+			log.Info("hyy check block event with tableID in bootstrap", zap.Any("schemaID", schemaID))
 			for _, replication := range replications {
+				log.Info("hyy check block event with tableID in bootstrap", zap.Any("replication", replication), zap.Any("checkpointTs", replication.GetStatus().CheckpointTs), zap.Any("barrierEvent.commitTs", barrierEvent.commitTs))
 				if replication.GetStatus().CheckpointTs >= barrierEvent.commitTs {
 					// one related table has forward checkpointTs, means the block event can be advanced
 					barrierEvent.selected.Store(true)
 					barrierEvent.writerDispatcherAdvanced = true
-					return false
+					return true
 				}
 			}
 		case heartbeatpb.InfluenceType_All:
@@ -254,7 +259,7 @@ func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 					// one related table has forward checkpointTs, means the block event can be advanced
 					barrierEvent.selected.Store(true)
 					barrierEvent.writerDispatcherAdvanced = true
-					return false
+					return true
 				}
 			}
 		}
