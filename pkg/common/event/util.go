@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -263,7 +264,7 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) *
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
-	dmlEvent := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+	dmlEvent := newDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
 	rawKvs := s.DML2RawKv(schema, table, ts, dml...)
 
 	raw := &common.RawKVEntry{
