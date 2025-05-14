@@ -364,10 +364,12 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
 			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
 	case mysql.TypeFloat:
-		value, err = value.(json.Number).Float64()
+		var f64 float64
+		f64, err = value.(json.Number).Float64()
 		if err != nil {
 			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
+		value = float32(f64)
 	case mysql.TypeYear:
 		value, err = value.(json.Number).Int64()
 		if err != nil {
