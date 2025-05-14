@@ -539,6 +539,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 			e.subscriptionChangeCh.In() <- SubscriptionChange{
 				ChangeType:   SubscriptionChangeTypeUpdate,
 				SubID:        uint64(stat.subStat.subID),
+				Span:         stat.tableSpan,
 				CheckpointTs: newCheckpointTs,
 				ResolvedTs:   subStat.resolvedTs.Load(),
 			}
@@ -648,6 +649,7 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 						e.subscriptionChangeCh.In() <- SubscriptionChange{
 							ChangeType: SubscriptionChangeTypeRemove,
 							SubID:      uint64(subStat.subID),
+							Span:       subStat.tableSpan,
 						}
 						metrics.EventStoreSubscriptionGauge.Dec()
 						// If subStats becomes empty, remove it from tableStats
@@ -846,9 +848,9 @@ const (
 type SubscriptionChange struct {
 	ChangeType   SubscriptionChangeType
 	SubID        uint64
-	Span         *heartbeatpb.TableSpan // only valid for SubscriptionChangeTypeAdd
-	CheckpointTs uint64                 // only valid for SubscriptionChangeTypeAdd/SubscriptionChangeTypeUpdate
-	ResolvedTs   uint64                 // only valid for SubscriptionChangeTypeAdd/SubscriptionChangeTypeUpdate
+	Span         *heartbeatpb.TableSpan
+	CheckpointTs uint64 // only valid for SubscriptionChangeTypeAdd/SubscriptionChangeTypeUpdate
+	ResolvedTs   uint64 // only valid for SubscriptionChangeTypeAdd/SubscriptionChangeTypeUpdate
 }
 
 func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
