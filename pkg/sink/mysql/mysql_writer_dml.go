@@ -80,9 +80,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 		} else if len(eventsInGroup) > 0 {
 			// if the events are in different safe mode, we can't use the batch dml generate
-			firstEventSafeMode := !w.cfg.SafeMode && eventsInGroup[0].CommitTs > eventsInGroup[0].ReplicatingTs
-			finalEventSafeMode := !w.cfg.SafeMode && eventsInGroup[len(eventsInGroup)-1].CommitTs > eventsInGroup[len(eventsInGroup)-1].ReplicatingTs
-			if firstEventSafeMode != finalEventSafeMode {
+			if shouldSafeMode(w.cfg.SafeMode, eventsInGroup) {
 				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 			} else {
 				// use the batch dml generate
@@ -99,6 +97,18 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	}
 
 	return dmls
+}
+
+func shouldSafeMode(safemode bool, events []*commonEvent.DMLEvent) bool {
+	if safemode {
+		return true
+	}
+	for _, event := range events {
+		if event.CommitTs < event.ReplicatingTs {
+			return true
+		}
+	}
+	return false
 }
 
 // for generate batch sql for multi events, we first need to compare the rows with the same pk, to generate the final rows.
