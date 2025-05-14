@@ -520,9 +520,8 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 			return
 		case targetMessage := <-inCh:
 			for _, msg := range targetMessage.Message {
-				switch msg.(type) {
+				switch e := msg.(type) {
 				case event.Event:
-					e := msg.(event.Event)
 					switch e.GetType() {
 					case event.TypeBatchResolvedEvent:
 						events := e.(*event.BatchResolvedEvent).Events

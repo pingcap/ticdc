@@ -75,6 +75,7 @@ func (d *dispatcherStat) checkEventSeq(event dispatcher.DispatcherEvent, eventCo
 			log.Warn("Received an out-of-order event, reset the dispatcher",
 				zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 				zap.Stringer("dispatcher", d.target.GetId()),
+				zap.Int("eventType", event.GetType()),
 				zap.Uint64("receivedSeq", event.GetSeq()),
 				zap.Uint64("expectedSeq", expectedSeq),
 				zap.Uint64("commitTs", event.GetCommitTs()))
