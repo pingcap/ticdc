@@ -373,6 +373,7 @@ func (e *eventStore) RegisterDispatcher(
 	if subStats, ok := e.dispatcherMeta.tableStats[dispatcherSpan.TableID]; ok {
 		for _, subStat := range subStats {
 			// TODO: find a subscription which is most close to dispactcher span.
+			// TODO: when the subscription contains too much unnecessary data, create a new subscription
 			// check whether startTs is in the range [checkpointTs, resolvedTs]
 			// why `[checkpointTs`:
 			//   1) ts <= checkpointTs may be deleted
@@ -865,6 +866,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 		case change := <-e.subscriptionChangeCh.Out():
 			switch change.ChangeType {
 			case SubscriptionChangeTypeAdd:
+				log.Info("add subscription for upload state", zap.Uint64("subID", change.SubID))
 				if tableState, ok := state.TableStates[change.Span.TableID]; ok {
 					tableState.Subscriptions = append(tableState.Subscriptions, &logservicepb.SubscriptionState{
 						SubID:        change.SubID,
@@ -885,6 +887,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					}
 				}
 			case SubscriptionChangeTypeRemove:
+				log.Info("remove subscription from upload state", zap.Uint64("subID", change.SubID))
 				tableState, ok := state.TableStates[change.Span.TableID]
 				if !ok {
 					log.Panic("cannot find table state", zap.Int64("tableID", change.Span.TableID))
