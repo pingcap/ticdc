@@ -224,45 +224,8 @@ func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			// is not get acked, so it must be resent by dispatcher later.
 			return true
 		}
-		switch barrierEvent.blockedDispatchers.InfluenceType {
-		case heartbeatpb.InfluenceType_Normal:
-			for _, tableId := range barrierEvent.blockedDispatchers.TableIDs {
-				log.Info("hyy check block event with tableID in bootstrap", zap.Any("tableId", tableId))
-				replications := b.controller.replicationDB.GetTasksByTableID(tableId)
-				for _, replication := range replications {
-					log.Info("hyy check block event with tableID in bootstrap", zap.Any("replication", replication), zap.Any("checkpointTs", replication.GetStatus().CheckpointTs), zap.Any("barrierEvent.commitTs", barrierEvent.commitTs))
-					if replication.GetStatus().CheckpointTs >= barrierEvent.commitTs {
-						// one related table has forward checkpointTs, means the block event can be advanced
-						barrierEvent.selected.Store(true)
-						barrierEvent.writerDispatcherAdvanced = true
-						return true
-					}
-				}
-			}
-		case heartbeatpb.InfluenceType_DB:
-			schemaID := barrierEvent.blockedDispatchers.SchemaID
-			replications := b.controller.replicationDB.GetTasksBySchemaID(schemaID)
-			log.Info("hyy check block event with tableID in bootstrap", zap.Any("schemaID", schemaID))
-			for _, replication := range replications {
-				log.Info("hyy check block event with tableID in bootstrap", zap.Any("replication", replication), zap.Any("checkpointTs", replication.GetStatus().CheckpointTs), zap.Any("barrierEvent.commitTs", barrierEvent.commitTs))
-				if replication.GetStatus().CheckpointTs >= barrierEvent.commitTs {
-					// one related table has forward checkpointTs, means the block event can be advanced
-					barrierEvent.selected.Store(true)
-					barrierEvent.writerDispatcherAdvanced = true
-					return true
-				}
-			}
-		case heartbeatpb.InfluenceType_All:
-			replications := b.controller.replicationDB.GetAllTasks()
-			for _, replication := range replications {
-				if replication.GetStatus().CheckpointTs >= barrierEvent.commitTs {
-					// one related table has forward checkpointTs, means the block event can be advanced
-					barrierEvent.selected.Store(true)
-					barrierEvent.writerDispatcherAdvanced = true
-					return true
-				}
-			}
-		}
+		barrierEvent.checkBlockedDispatchers()
+
 		// meet the target state(which means the ddl is writen), we need to send pass actions in resend
 		if barrierEvent.allDispatcherReported() {
 			barrierEvent.selected.Store(true)
