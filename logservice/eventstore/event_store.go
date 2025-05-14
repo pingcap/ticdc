@@ -209,6 +209,8 @@ func New(
 		writeTaskPools: make([]*writeTaskPool, 0, dbCount),
 
 		gcManager: newGCManager(),
+
+		subscriptionChangeCh: chann.NewAutoDrainChann[SubscriptionChange](),
 	}
 
 	// create a write task pool per db instance
