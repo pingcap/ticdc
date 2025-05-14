@@ -36,7 +36,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
-
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
