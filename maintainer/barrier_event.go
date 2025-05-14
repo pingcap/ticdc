@@ -394,7 +394,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		for _, tableId := range be.blockedDispatchers.TableIDs {
 			replications := be.controller.replicationDB.GetTasksByTableID(tableId)
 			for _, replication := range replications {
-				log.Info("hyy check block event with tableID in bootstrap", zap.Any("replication", replication), zap.Any("checkpointTs", replication.GetStatus().CheckpointTs), zap.Any("barrierEvent.commitTs", barrierEvent.commitTs))
+				log.Info("hyy check block event with tableID in bootstrap", zap.Any("replication", replication), zap.Any("checkpointTs", replication.GetStatus().CheckpointTs), zap.Any("barrierEvent.commitTs", be.commitTs))
 				if replication.GetStatus().CheckpointTs >= be.commitTs {
 					// one related table has forward checkpointTs, means the block event can be advanced
 					be.selected.Store(true)
@@ -408,7 +408,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		replications := be.controller.replicationDB.GetTasksBySchemaID(schemaID)
 		log.Info("hyy check block event with tableID in bootstrap", zap.Any("schemaID", schemaID))
 		for _, replication := range replications {
-			log.Info("hyy check block event with tableID in bootstrap", zap.Any("replication", replication), zap.Any("checkpointTs", replication.GetStatus().CheckpointTs), zap.Any("barrierEvent.commitTs", barrierEvent.commitTs))
+			log.Info("hyy check block event with tableID in bootstrap", zap.Any("replication", replication), zap.Any("checkpointTs", replication.GetStatus().CheckpointTs), zap.Any("barrierEvent.commitTs", be.commitTs))
 			if replication.GetStatus().CheckpointTs >= be.commitTs {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
