@@ -30,37 +30,37 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'ddl_with_random_move_table'
+	'generate_column many_pk_or_uk'
 	# G01
-	'ddl_with_random_move_table'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G02
-	'ddl_with_random_move_table'
+	'availability'
 	# G03
-	'ddl_with_random_move_table'
+	'multi_source'
 	# G04
-	'ddl_with_random_move_table'
+	'syncpoint syncpoint_check_ts'
 	# G05
-	'ddl_with_random_move_table'
+	'move_table'
 	# G06
-	'ddl_with_random_move_table'
+	'cdc'
 	# G07
-	'ddl_with_random_move_table'
+	'resolve_lock'
 	# G08
-	'ddl_with_random_move_table'
+	'bank'
 	# G09
-	'ddl_with_random_move_table'
+	'drop_many_tables'
 	# G10
-	'ddl_with_random_move_table'
+	'default_value http_proxies'
 	# G11
-	'ddl_with_random_move_table'
+	'ddl_reentrant force_replicate_table'
 	# G12
-	'ddl_with_random_move_table'
+	'tidb_mysql_test ddl_with_random_move_table'
 	# G13
-	'ddl_with_random_move_table'
+	'fail_over region_merge'
 	# G14
-	'ddl_with_random_move_table'
+	'fail_over_ddl_mix'
 	# G15
-	'ddl_with_random_move_table'
+	'fail_over_ddl_mix_with_syncpoint'
 )
 
 kafka_groups=(
