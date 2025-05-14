@@ -637,6 +637,9 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 			for tableID, subStats := range e.dispatcherMeta.tableStats {
 				for subID, subStat := range subStats {
 					idleTime := subStat.idleTime.Load()
+					if idleTime == 0 {
+						continue
+					}
 					if now-idleTime > ttlInMs {
 						log.Info("clean obsolete subscription",
 							zap.Uint64("subID", uint64(subID)),
