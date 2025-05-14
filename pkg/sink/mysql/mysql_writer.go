@@ -16,6 +16,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"sync"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru"
@@ -47,8 +48,9 @@ type Writer struct {
 	syncPointTableInit     bool
 	lastCleanSyncPointTime time.Time
 
-	ddlTsTableInit   bool
-	tableSchemaStore *util.TableSchemaStore
+	ddlTsTableInit      bool
+	ddlTsTableInitMutex sync.Mutex
+	tableSchemaStore    *util.TableSchemaStore
 
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
