@@ -77,6 +77,13 @@ var (
 			Name:      "pending_scan_task_count",
 			Help:      "The number of pending scan tasks",
 		})
+	EventServiceTaskStatus = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "task_status",
+			Help:      "The status of pending scan tasks",
+		}, []string{"status"})
 )
 
 // InitEventServiceMetrics registers all metrics in this file.
@@ -88,5 +95,6 @@ func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceScanDuration)
 	registry.MustRegister(EventServiceDispatcherGauge)
 	registry.MustRegister(EventServiceScanTaskCount)
+	registry.MustRegister(EventServiceTaskStatus)
 	registry.MustRegister(EventServicePendingScanTaskCount)
 }
