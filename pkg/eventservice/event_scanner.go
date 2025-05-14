@@ -28,6 +28,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	batchDMLSizeLimit = 128
+)
+
 // ScanLimit defines the limits for a scan operation
 type scanLimit struct {
 	// MaxBytes is the maximum number of bytes to scan
@@ -170,7 +174,7 @@ func (s *eventScanner) Scan(
 		}
 	}()
 
-	var dmls *pevent.BatchDMLEvent
+	var batchDML *pevent.BatchDMLEvent
 	var updateTs uint64
 	dmlCount := 0
 	tableID := dataRange.Span.TableID
@@ -188,7 +192,7 @@ func (s *eventScanner) Scan(
 		}
 
 		if e == nil {
-			appendDML(dmls)
+			appendDML(batchDML)
 			appendDDLs(dataRange.EndTs)
 			return events, false, nil
 		}
@@ -199,7 +203,7 @@ func (s *eventScanner) Scan(
 
 		if isNewTxn {
 			if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs && dmlCount > 0 {
-				appendDML(dmls)
+				appendDML(batchDML)
 				appendDDLs(lastCommitTs)
 				return events, true, nil
 			}
@@ -220,20 +224,20 @@ func (s *eventScanner) Scan(
 				}
 				log.Panic("get table info failed, unknown reason", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 			}
-			hasDDL := dmls != nil && len(ddlEvents) > 0 && e.CRTs > ddlEvents[0].FinishedTs
+			hasDDL := batchDML != nil && len(ddlEvents) > 0 && e.CRTs > ddlEvents[0].FinishedTs
 			// updateTs may be less than the previous updateTs
-			if tableInfo.UpdateTS() != updateTs || hasDDL {
-				appendDML(dmls)
+			if tableInfo.UpdateTS() != updateTs || hasDDL || batchDML.Len() > batchDMLSizeLimit {
+				appendDML(batchDML)
 				updateTs = tableInfo.UpdateTS()
-				dmls = new(pevent.BatchDMLEvent)
+				batchDML = new(pevent.BatchDMLEvent)
 			}
-			dmls.AppendDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
+			batchDML.AppendDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
 
-			lastCommitTs = dmls.GetCommitTs()
+			lastCommitTs = batchDML.GetCommitTs()
 			dmlCount++
 		}
 
-		if err = dmls.AppendRow(e, s.mounter.DecodeToChunk); err != nil {
+		if err = batchDML.AppendRow(e, s.mounter.DecodeToChunk); err != nil {
 			log.Panic("append row failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 		}
 	}
