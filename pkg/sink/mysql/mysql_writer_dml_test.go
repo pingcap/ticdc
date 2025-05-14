@@ -59,7 +59,7 @@ func TestShouldGenBatchSQL(t *testing.T) {
 			want:     false,
 		},
 		{
-			name:           "safe mode should not use batch SQL",
+			name:           "all rows in same safe mode should use batch SQL",
 			hasPK:          true,
 			hasVirtualCols: false,
 			events: []*commonEvent.DMLEvent{
@@ -67,7 +67,7 @@ func TestShouldGenBatchSQL(t *testing.T) {
 				newDMLEvent(t, 2, 3, 2),
 			},
 			safemode: false,
-			want:     false,
+			want:     true,
 		},
 		{
 			name:           "multiple rows with primary key in unsafe mode should use batch SQL",
@@ -81,13 +81,24 @@ func TestShouldGenBatchSQL(t *testing.T) {
 			want:     true,
 		},
 		{
-			name:           "global safe mode should not use batch SQL",
+			name:           "global safe mode should use batch SQL",
 			hasPK:          true,
 			hasVirtualCols: false,
 			events: []*commonEvent.DMLEvent{
 				newDMLEvent(t, 2, 1, 2),
 			},
 			safemode: true,
+			want:     true,
+		},
+		{
+			name:           "multiple rows with primary key in different safe mode should not use batch SQL",
+			hasPK:          true,
+			hasVirtualCols: false,
+			events: []*commonEvent.DMLEvent{
+				newDMLEvent(t, 2, 1, 2),
+				newDMLEvent(t, 1, 2, 2),
+			},
+			safemode: false,
 			want:     false,
 		},
 	}
@@ -102,8 +113,9 @@ func TestShouldGenBatchSQL(t *testing.T) {
 	}
 }
 
-// TestShouldSafeMode tests the shouldSafeMode function
-func TestShouldSafeMode(t *testing.T) {
+// TestAllRowInSameSafeMode tests the allRowInSameSafeMode function which determines
+// if all rows in a batch of DML events have the same safe mode status
+func TestAllRowInSameSafeMode(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -119,29 +131,52 @@ func TestShouldSafeMode(t *testing.T) {
 			want:     true,
 		},
 		{
-			name:     "all events have CommitTs > ReplicatingTs",
+			name:     "all events have same safe mode status (all CommitTs > ReplicatingTs)",
 			safemode: false,
 			events: []*commonEvent.DMLEvent{
 				newDMLEvent(t, 2, 1, 1),
-				newDMLEvent(t, 3, 2, 1),
-			},
-			want: false,
-		},
-		{
-			name:     "at least one event has CommitTs < ReplicatingTs",
-			safemode: false,
-			events: []*commonEvent.DMLEvent{
-				newDMLEvent(t, 2, 1, 1),
-				newDMLEvent(t, 1, 2, 1), // This event triggers safe mode
 				newDMLEvent(t, 3, 2, 1),
 			},
 			want: true,
 		},
 		{
-			name:     "empty events should not trigger safe mode",
+			name:     "all events have same safe mode status (all CommitTs <= ReplicatingTs)",
+			safemode: false,
+			events: []*commonEvent.DMLEvent{
+				newDMLEvent(t, 1, 1, 1),
+				newDMLEvent(t, 1, 2, 1),
+			},
+			want: true,
+		},
+		{
+			name:     "events have mixed safe mode status",
+			safemode: false,
+			events: []*commonEvent.DMLEvent{
+				newDMLEvent(t, 2, 1, 1), // CommitTs > ReplicatingTs
+				newDMLEvent(t, 1, 2, 1), // CommitTs < ReplicatingTs
+			},
+			want: false,
+		},
+		{
+			name:     "events have mixed safe mode status (equal case)",
+			safemode: false,
+			events: []*commonEvent.DMLEvent{
+				newDMLEvent(t, 2, 1, 1), // CommitTs > ReplicatingTs
+				newDMLEvent(t, 2, 2, 1), // CommitTs = ReplicatingTs
+			},
+			want: false,
+		},
+		{
+			name:     "empty events array",
 			safemode: false,
 			events:   []*commonEvent.DMLEvent{},
 			want:     false,
+		},
+		{
+			name:     "single event",
+			safemode: false,
+			events:   []*commonEvent.DMLEvent{newDMLEvent(t, 1, 1, 1)},
+			want:     true,
 		},
 	}
 
@@ -149,7 +184,7 @@ func TestShouldSafeMode(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := shouldSafeMode(tt.safemode, tt.events)
+			got := allRowInSameSafeMode(tt.safemode, tt.events)
 			require.Equal(t, tt.want, got)
 		})
 	}

@@ -104,27 +104,41 @@ func shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DM
 		return false
 	}
 
-	if shouldSafeMode(safemode, events) {
-		return false
-	}
-
-	return true
+	return allRowInSameSafeMode(safemode, events)
 }
 
-// shouldSafeMode determines if the events should be processed in safe mode.
-// Safe mode is enabled when:
-// 1. The global safe mode is enabled, or
-// 2. Any event's commit timestamp is less than its replicating timestamp
-func shouldSafeMode(safemode bool, events []*commonEvent.DMLEvent) bool {
+// allRowInSameSafeMode determines whether all DMLEvents in a batch have the same safe mode status.
+// Safe mode is either globally enabled via the safemode parameter, or determined per event
+// by comparing CommitTs and ReplicatingTs.
+//
+// Parameters:
+//   - safemode: If true, global safe mode is enabled and the function returns true immediately
+//   - events: A slice of DMLEvents to check for consistent safe mode status
+//
+// Returns:
+//
+//	true if either:
+//	- global safe mode is enabled (safemode=true), or
+//	- all events have the same safe mode status (all events' CommitTs > ReplicatingTs, or all ≤)
+//	false if events have inconsistent safe mode status
+func allRowInSameSafeMode(safemode bool, events []*commonEvent.DMLEvent) bool {
 	if safemode {
 		return true
 	}
+
+	if len(events) == 0 {
+		return false
+	}
+
+	firstSafeMode := events[0].CommitTs > events[0].ReplicatingTs
 	for _, event := range events {
-		if event.CommitTs < event.ReplicatingTs {
-			return true
+		currentSafeMode := event.CommitTs > event.ReplicatingTs
+		if currentSafeMode != firstSafeMode {
+			return false
 		}
 	}
-	return false
+
+	return true
 }
 
 // for generate batch sql for multi events, we first need to compare the rows with the same pk, to generate the final rows.
