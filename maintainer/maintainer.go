@@ -543,7 +543,6 @@ func (m *Maintainer) calCheckpointTs() {
 				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
 			return
 		}
-		log.Info("hyy cal checkpointTs", zap.Any("node", id), zap.Any("watermark", m.checkpointTsByCapture[id]))
 		newWatermark.UpdateMin(m.checkpointTsByCapture[id])
 	}
 
@@ -590,7 +589,6 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 		old, ok := m.checkpointTsByCapture[msg.From]
 		if !ok || req.Watermark.Seq >= old.Seq {
 			m.checkpointTsByCapture[msg.From] = *req.Watermark
-			log.Info("hyy get heartbeat request", zap.Any("watermark", req.Watermark), zap.Any("node", msg.From))
 		}
 	}
 	m.controller.HandleStatus(msg.From, req.Statuses)

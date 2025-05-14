@@ -172,7 +172,6 @@ func (b *Barrier) HandleStatus(from node.ID,
 
 // HandleBootstrapResponse rebuild the block event from the bootstrap response
 func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
-	log.Info("hyy handle bootstrap response", zap.Any("bootstrapRespMap", bootstrapRespMap))
 	for _, resp := range bootstrapRespMap {
 		for _, span := range resp.Spans {
 			// we only care about the WAITING, WRITING and DONE stage
@@ -214,7 +213,6 @@ func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 	// so it will not block by the ddl, and can continue to handle the following events.
 	// While for the table1 in NodeB, it's still wait the pass action.
 	// So we need to check the block event when the maintainer is restarted to help block event decide its state.
-	// TODO:double check the logic here
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		if barrierEvent.allDispatcherReported() {
 			// it means the dispatchers involved in the block event are all in the cached resp, not restarted.
@@ -225,12 +223,6 @@ func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			return true
 		}
 		barrierEvent.checkBlockedDispatchers()
-
-		// meet the target state(which means the ddl is writen), we need to send pass actions in resend
-		if barrierEvent.allDispatcherReported() {
-			barrierEvent.selected.Store(true)
-			barrierEvent.writerDispatcherAdvanced = true
-		}
 		return true
 	})
 }

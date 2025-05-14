@@ -302,10 +302,6 @@ func (m *Manager) sendHeartbeat() {
 			if cfMaintainer.statusChanged.Load() ||
 				time.Since(cfMaintainer.lastReportTime) > reportMaintainerStatusInterval {
 				mStatus := cfMaintainer.GetMaintainerStatus()
-				log.Info("send maintainer status",
-					zap.Stringer("changefeed", cfMaintainer.id),
-					zap.Uint64("checkpointTs", cfMaintainer.getWatermark().CheckpointTs),
-					zap.String("status", mStatus.String()))
 				response.Statuses = append(response.Statuses, mStatus)
 				cfMaintainer.statusChanged.Store(false)
 				cfMaintainer.lastReportTime = time.Now()

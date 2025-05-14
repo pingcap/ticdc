@@ -30,37 +30,37 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'ddl_for_split_tables_with_failover'
+	'generate_column many_pk_or_uk'
 	# G01
-	'ddl_for_split_tables_with_failover'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G02
-	'ddl_for_split_tables_with_failover'
+	'availability ddl_for_split_tables_with_failover'
 	# G03
-	'ddl_for_split_tables_with_failover'
+	'multi_source'
 	# G04
-	'ddl_for_split_tables_with_failover'
+	'syncpoint syncpoint_check_ts'
 	# G05
-	'ddl_for_split_tables_with_failover'
+	'move_table'
 	# G06
-	'ddl_for_split_tables_with_failover'
+	'cdc'
 	# G07
-	'ddl_for_split_tables_with_failover'
+	'resolve_lock'
 	# G08
-	'ddl_for_split_tables_with_failover'
+	'bank'
 	# G09
-	'ddl_for_split_tables_with_failover'
+	'drop_many_tables'
 	# G10
-	'ddl_for_split_tables_with_failover'
+	'default_value http_proxies'
 	# G11
-	'ddl_for_split_tables_with_failover'
+	'ddl_reentrant force_replicate_table'
 	# G12
-	'ddl_for_split_tables_with_failover'
+	'tidb_mysql_test ddl_with_random_move_table'
 	# G13
-	'ddl_for_split_tables_with_failover'
+	'fail_over region_merge'
 	# G14
-	'ddl_for_split_tables_with_failover'
+	'fail_over_ddl_mix'
 	# G15
-	'ddl_for_split_tables_with_failover'
+	'fail_over_ddl_mix_with_syncpoint'
 )
 
 kafka_groups=(
