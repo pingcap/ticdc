@@ -92,7 +92,7 @@ func (d *decoder) AddKeyValue(key, value []byte) {
 // HasNext returns whether there is any event need to be consumed
 func (d *decoder) HasNext() (common.MessageType, bool) {
 	if d.valuePayload == nil && d.valueSchema == nil {
-		log.Panic("has next failed, since key / value is not set")
+		return common.MessageTypeUnknown, false
 	}
 
 	if len(d.valuePayload) < 1 {
