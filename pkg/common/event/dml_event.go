@@ -228,11 +228,10 @@ type DMLEvent struct {
 	State EventSenderState `json:"state"`
 	// Length is the number of rows in the transaction.
 	Length int32 `json:"length"`
-	// RowTypes is the types of every row in the transaction.
-	// len(RowTypes) == Length
 	// ApproximateSize is the approximate size of all rows in the transaction.
-	ApproximateSize int64     `json:"approximate_size"`
-	RowTypes        []RowType `json:"row_types"`
+	ApproximateSize int64 `json:"approximate_size"`
+	// RowTypes is the types of every row in the transaction.
+	RowTypes []RowType `json:"row_types"`
 	// Rows shares BatchDMLEvent rows
 	Rows *chunk.Chunk `json:"-"`
 
