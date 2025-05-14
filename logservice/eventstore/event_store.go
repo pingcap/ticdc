@@ -904,7 +904,8 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 			case SubscriptionChangeTypeUpdate:
 				tableState, ok := state.TableStates[change.Span.TableID]
 				if !ok {
-					log.Panic("cannot find table state", zap.Int64("tableID", change.Span.TableID))
+					log.Warn("cannot find table state", zap.Int64("tableID", change.Span.TableID))
+					continue
 				}
 				targetIndex := -1
 				for i := 0; i < len(tableState.Subscriptions); i++ {
@@ -914,7 +915,8 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					}
 				}
 				if targetIndex == -1 {
-					log.Panic("cannot find subscription state", zap.Uint64("subID", change.SubID))
+					log.Warn("cannot find subscription state", zap.Uint64("subID", change.SubID))
+					continue
 				}
 				if change.CheckpointTs < tableState.Subscriptions[targetIndex].CheckpointTs ||
 					change.ResolvedTs < tableState.Subscriptions[targetIndex].ResolvedTs {
