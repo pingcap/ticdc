@@ -305,6 +305,11 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
 	case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeTinyBlob,
 		mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
 		if mysql.HasBinaryFlag(colInfo.GetFlag()) {
+			switch v := value.(type) {
+			case string:
+				return []byte(v)
+			default:
+			}
 			return value
 		}
 		return common.UnsafeStringToBytes(value.(string))
