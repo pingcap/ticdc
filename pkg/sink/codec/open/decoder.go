@@ -181,6 +181,9 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 
+	// only the DDL comes from the first partition will be processed.
+	// since tableInfoAccessor is global, we need to make sure the table info
+	// is not removed by other partitions' decoder.
 	if b.idx == 0 {
 		var tableID int64
 		tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
