@@ -96,6 +96,16 @@ type EventIterator interface {
 	Close() (eventCnt int64, err error)
 }
 
+type dispatcherStat struct {
+	dispatcherID common.DispatcherID
+	// data span of this dispatcher
+	tableSpan *heartbeatpb.TableSpan
+	// the max ts of events which is not needed by this dispatcher
+	checkpointTs uint64
+	// the subscription which this dipatcher depends on
+	subStat *subscriptionStat
+}
+
 type subscriptionStat struct {
 	subID logpuller.SubscriptionID
 	// data span of the subscription, it can support dispatchers with smaller span
@@ -121,15 +131,7 @@ type subscriptionStat struct {
 	idleTime atomic.Int64
 }
 
-type dispatcherStat struct {
-	dispatcherID common.DispatcherID
-	// data span of this dispatcher
-	tableSpan *heartbeatpb.TableSpan
-	// the max ts of events which is not needed by this dispatcher
-	checkpointTs uint64
-	// the subscription which this dipatcher depends on
-	subStat *subscriptionStat
-}
+type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
 
 type eventWithCallback struct {
 	subID    logpuller.SubscriptionID
@@ -145,8 +147,6 @@ func eventWithCallbackSizer(e eventWithCallback) int {
 	}
 	return size
 }
-
-type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
 
 type eventStore struct {
 	pdClock   pdutil.Clock
