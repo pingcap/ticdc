@@ -802,6 +802,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	iter.prevStartTs = rawKV.StartTs
 	iter.rowCount++
 	startTime := time.Now()
+	iter.innerIter.Next()
 	metricEventStoreNextReadDurationHistogram.Observe(float64(time.Since(startTime).Seconds()))
 	return rawKV, isNewTxn, nil
 }
