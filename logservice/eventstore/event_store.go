@@ -16,7 +16,6 @@ package eventstore
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
@@ -607,8 +606,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	metrics.EventStoreScanRequestsCount.Inc()
 
 	needCheckSpan := true
-	if bytes.Equal(stat.tableSpan.StartKey, subscriptionStat.tableSpan.StartKey) &&
-		bytes.Equal(stat.tableSpan.EndKey, subscriptionStat.tableSpan.EndKey) {
+	if stat.tableSpan.Equal(subscriptionStat.tableSpan) {
 		needCheckSpan = false
 	}
 
@@ -792,9 +790,6 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 				bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
 				break
 			}
-			log.Info("filter invalid data",
-				zap.String("key", hex.EncodeToString(comparableKey)),
-				zap.String("subscriptionSpan", common.FormatTableSpan(iter.tableSpan)))
 		} else {
 			break
 		}
