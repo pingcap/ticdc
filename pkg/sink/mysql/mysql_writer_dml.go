@@ -72,20 +72,10 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	)
 	for _, eventsInGroup := range eventsGroup {
 		tableInfo := eventsInGroup[0].TableInfo
-		if !tableInfo.HasPrimaryKey() || tableInfo.HasVirtualColumns() {
-			// check if the table has a handle key or has a virtual column
+		if !shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup, w.cfg.SafeMode) {
 			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
-		} else if len(eventsInGroup) == 1 && eventsInGroup[0].Len() == 1 {
-			// if there only one row in the group, we can use the normal sql generate
-			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
-		} else if len(eventsInGroup) > 0 {
-			// if the events are in different safe mode, we can't use the batch dml generate
-			if shouldSafeMode(w.cfg.SafeMode, eventsInGroup) {
-				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
-			} else {
-				// use the batch dml generate
-				queryList, argsList = w.generateBatchSQL(eventsInGroup)
-			}
+		} else {
+			queryList, argsList = w.generateBatchSQL(eventsInGroup)
 		}
 		dmls.sqls = append(dmls.sqls, queryList...)
 		dmls.values = append(dmls.values, argsList...)
@@ -99,6 +89,32 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	return dmls
 }
 
+// shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.
+// Batch SQL generation is used when:
+// 1. The table has a primary key
+// 2. The table doesn't have virtual columns
+// 3. There's more than one row in the group
+// 4. All events have the same safe mode status
+func shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent, safemode bool) bool {
+	if !hasPK || hasVirtualCols {
+		return false
+	}
+
+	if len(events) == 1 && events[0].Len() == 1 {
+		return false
+	}
+
+	if shouldSafeMode(safemode, events) {
+		return false
+	}
+
+	return true
+}
+
+// shouldSafeMode determines if the events should be processed in safe mode.
+// Safe mode is enabled when:
+// 1. The global safe mode is enabled, or
+// 2. Any event's commit timestamp is less than its replicating timestamp
 func shouldSafeMode(safemode bool, events []*commonEvent.DMLEvent) bool {
 	if safemode {
 		return true
