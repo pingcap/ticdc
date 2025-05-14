@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/tikv/client-go/v2/oracle"
@@ -603,14 +604,21 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	metricEventStoreFirstReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	metrics.EventStoreScanRequestsCount.Inc()
 
+	needCheckSpan := true
+	if bytes.Equal(stat.tableSpan.StartKey, subscriptionStat.tableSpan.StartKey) &&
+		bytes.Equal(stat.tableSpan.EndKey, subscriptionStat.tableSpan.EndKey) {
+		needCheckSpan = false
+	}
+
 	return &eventStoreIter{
-		tableSpan:    stat.tableSpan,
-		innerIter:    iter,
-		prevStartTs:  0,
-		prevCommitTs: 0,
-		startTs:      dataRange.StartTs,
-		endTs:        dataRange.EndTs,
-		rowCount:     0,
+		tableSpan:     stat.tableSpan,
+		needCheckSpan: needCheckSpan,
+		innerIter:     iter,
+		prevStartTs:   0,
+		prevCommitTs:  0,
+		startTs:       dataRange.StartTs,
+		endTs:         dataRange.EndTs,
+		rowCount:      0,
 	}, nil
 }
 
@@ -742,10 +750,13 @@ func (e *eventStore) deleteEvents(dbIndex int, uniqueKeyID uint64, tableID int64
 }
 
 type eventStoreIter struct {
-	tableSpan    *heartbeatpb.TableSpan
-	innerIter    *pebble.Iterator
-	prevStartTs  uint64
-	prevCommitTs uint64
+	tableSpan *heartbeatpb.TableSpan
+	// true when need check whether data from `innerIter` is in `tableSpan`
+	// (e.g. subscription span is not the same as dispatcher span)
+	needCheckSpan bool
+	innerIter     *pebble.Iterator
+	prevStartTs   uint64
+	prevCommitTs  uint64
 
 	// for debug
 	startTs  uint64
@@ -769,14 +780,18 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 			log.Panic("fail to decode raw kv entry", zap.Error(err))
 		}
 		metrics.EventStoreScanBytes.Add(float64(len(value)))
-		// TODO: check whether the compare condition is correct
-		if bytes.Compare(rawKV.Key, iter.tableSpan.StartKey) >= 0 &&
-			bytes.Compare(rawKV.Key, iter.tableSpan.EndKey) <= 0 {
+		if iter.needCheckSpan {
+			comparableKey := spanz.ToComparableKey(rawKV.Key)
+			if bytes.Compare(comparableKey, iter.tableSpan.StartKey) >= 0 &&
+				bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
+				break
+			}
+			log.Warn("filter invalid data",
+				zap.String("key", hex.EncodeToString(comparableKey)),
+				zap.String("subscriptionSpan", common.FormatTableSpan(iter.tableSpan)))
+		} else {
 			break
 		}
-		log.Warn("filter invalid data",
-			zap.String("key", hex.EncodeToString(rawKV.Key)),
-			zap.String("subscriptionSpan", common.FormatTableSpan(iter.tableSpan)))
 		iter.innerIter.Next()
 	}
 	isNewTxn := false
