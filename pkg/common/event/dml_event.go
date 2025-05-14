@@ -45,7 +45,8 @@ type BatchDMLEvent struct {
 	TableInfo *common.TableInfo `json:"table_info"`
 }
 
-func (b *BatchDMLEvent) AppendDMLEvent(dml *DMLEvent) {
+func (b *BatchDMLEvent) AppendDMLEvent(dispatcherID common.DispatcherID, tableID int64, startTs, commitTs uint64, tableInfo *common.TableInfo) {
+	dml := newDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo)
 	if b.TableInfo == nil {
 		b.TableInfo = dml.TableInfo
 		// FIXME: check if chk isFull in the future
@@ -111,7 +112,7 @@ func (b *BatchDMLEvent) encodeV0() ([]byte, error) {
 		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
 		return nil, nil
 	}
-	size := 1 + 8 + (1+16+6*8+4+1)*len(b.DMLEvents) + int(b.Len())
+	size := 1 + 8 + (1+16+6*8+4*2+1)*len(b.DMLEvents) + int(b.Len())
 	data := make([]byte, 0, size)
 	// Encode all fields
 	// Version
@@ -259,7 +260,7 @@ type DMLEvent struct {
 	checksumOffset int                   `json:"-"`
 }
 
-func NewDMLEvent(
+func newDMLEvent(
 	dispatcherID common.DispatcherID,
 	tableID int64,
 	startTs,
@@ -273,7 +274,7 @@ func NewDMLEvent(
 		StartTs:         startTs,
 		CommitTs:        commitTs,
 		TableInfo:       tableInfo,
-		RowTypes:        make([]RowType, 0, 1),
+		RowTypes:        make([]RowType, 0),
 	}
 }
 

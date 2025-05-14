@@ -209,8 +209,7 @@ func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
 	for _, dml := range dmls {
-		event := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
-		dmlEvent.AppendDMLEvent(event)
+		dmlEvent.AppendDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
 		rawKvs := s.DML2RawKv(schema, table, ts, dml)
 		for _, rawKV := range rawKvs {
 			err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
@@ -234,8 +233,7 @@ func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEv
 	dmlEvent := new(BatchDMLEvent)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
-	event := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
-	dmlEvent.AppendDMLEvent(event)
+	dmlEvent.AppendDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
 	rawKvs := s.DML2RawKv(schema, table, ts, dmls...)
 	for _, rawKV := range rawKvs {
 		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)

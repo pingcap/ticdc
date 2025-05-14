@@ -227,8 +227,7 @@ func (s *eventScanner) Scan(
 				updateTs = tableInfo.UpdateTS()
 				dmls = new(pevent.BatchDMLEvent)
 			}
-			dml := pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
-			dmls.AppendDMLEvent(dml)
+			dmls.AppendDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
 			dmlCount++
 		}
 
