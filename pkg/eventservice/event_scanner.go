@@ -228,6 +228,8 @@ func (s *eventScanner) Scan(
 				dmls = new(pevent.BatchDMLEvent)
 			}
 			dmls.AppendDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
+
+			lastCommitTs = dmls.GetCommitTs()
 			dmlCount++
 		}
 
