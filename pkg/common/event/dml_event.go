@@ -503,7 +503,7 @@ func (t *DMLEvent) decode(data []byte) error {
 }
 
 func (t *DMLEvent) decodeV0(data []byte) error {
-	if len(data) < 1+16+8*5+4 {
+	if len(data) < 1+16+8*5+4*2 {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
 	if t.Version != 0 {
