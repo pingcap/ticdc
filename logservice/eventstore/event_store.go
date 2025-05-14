@@ -16,6 +16,7 @@ package eventstore
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
@@ -773,6 +774,10 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 			bytes.Compare(rawKV.Key, iter.tableSpan.EndKey) <= 0 {
 			break
 		}
+		log.Warn("filter invalid data",
+			zap.String("key", hex.EncodeToString(rawKV.Key)),
+			zap.String("subscriptionSpan", common.FormatTableSpan(iter.tableSpan)))
+		iter.innerIter.Next()
 	}
 	isNewTxn := false
 	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
