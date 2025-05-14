@@ -16,7 +16,6 @@ package debezium
 import (
 	"bytes"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -306,13 +305,9 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
 	case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeTinyBlob,
 		mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
 		if mysql.HasBinaryFlag(colInfo.GetFlag()) {
-			s := value.(string)
-			value, err = base64.StdEncoding.DecodeString(s)
-			if err != nil {
-				log.Error("decode value failed", zap.Error(err), zap.Any("value", value))
-				return nil
-			}
+			return value
 		}
+		return common.UnsafeStringToBytes(value.(string))
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeNewDate:
 		val := value.(json.Number).String()
 		value, err = types.ParseTime(types.DefaultStmtNoWarningContext, val, colInfo.GetType(), colInfo.GetDecimal())
