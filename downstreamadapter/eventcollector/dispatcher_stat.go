@@ -140,7 +140,6 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 		return
 	}
 	d.waitHandshake.Store(false)
-	d.setTableInfo(event.Event.(*commonEvent.HandshakeEvent).TableInfo)
 }
 
 func (d *dispatcherStat) setTableInfo(tableInfo *common.TableInfo) {

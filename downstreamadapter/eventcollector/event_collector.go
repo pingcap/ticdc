@@ -560,6 +560,14 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						stat.(*dispatcherStat).setTableInfo(e.(*event.DDLEvent).TableInfo)
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+					case event.TypeHandshakeEvent:
+						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
+						if !ok {
+							continue
+						}
+						stat.(*dispatcherStat).setTableInfo(e.(*event.HandshakeEvent).TableInfo)
+						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
+						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					default:
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
