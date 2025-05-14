@@ -768,12 +768,12 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	if iter.innerIter == nil {
 		log.Panic("iter is nil")
 	}
-	if !iter.innerIter.Valid() {
-		return nil, false, nil
-	}
 
 	rawKV := &common.RawKVEntry{}
 	for {
+		if !iter.innerIter.Valid() {
+			return nil, false, nil
+		}
 		value := iter.innerIter.Value()
 		err := rawKV.Decode(value)
 		if err != nil {
@@ -786,7 +786,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 				bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
 				break
 			}
-			log.Warn("filter invalid data",
+			log.Info("filter invalid data",
 				zap.String("key", hex.EncodeToString(comparableKey)),
 				zap.String("subscriptionSpan", common.FormatTableSpan(iter.tableSpan)))
 		} else {
@@ -802,7 +802,6 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 	iter.prevStartTs = rawKV.StartTs
 	iter.rowCount++
 	startTime := time.Now()
-	iter.innerIter.Next()
 	metricEventStoreNextReadDurationHistogram.Observe(float64(time.Since(startTime).Seconds()))
 	return rawKV, isNewTxn, nil
 }
