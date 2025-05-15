@@ -474,7 +474,7 @@ func calculateThresholds(pathCount int64, areaMemoryUsageRatio float64) (pauseLi
 		{1.0, 0.05, 0.01}, // area usage <= 100%
 		// Default maxPendingSize is 1024MB, so the default lowest pause limit is 10 MB.
 		{1.2, 0.01, 0.005},  // area usage > 100%
-		{1.5, 0.005, 0.000}, // area usage > 150%, pause all paths
+		{1.5, 0.005, 0.001}, // area usage > 150%, set the lowest pause limit to 1 MB.
 	}
 
 	// find applicable threshold

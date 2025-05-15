@@ -509,7 +509,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
 	sl := scanLimit{
-		MaxBytes: 1024 * 1024 * 8,         // 8 MB
+		MaxBytes: task.getCurrentScanLimitInBytes(),
 		Timeout:  time.Millisecond * 1000, // 1 Second
 	}
 
@@ -991,6 +991,7 @@ func (c *eventBroker) pauseDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Uint64("sentResolvedTs", stat.sentResolvedTs.Load()),
 		zap.Uint64("seq", stat.seq.Load()))
 	stat.isRunning.Store(false)
+	stat.resetScanLimit()
 }
 
 func (c *eventBroker) resumeDispatcher(dispatcherInfo DispatcherInfo) {
