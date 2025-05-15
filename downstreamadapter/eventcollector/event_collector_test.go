@@ -15,8 +15,13 @@ package eventcollector
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/eventpb"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -26,8 +31,49 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newMessage(to node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
-	return messaging.NewSingleTargetMessage(to, messaging.EventCollectorTopic, msg)
+func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
+	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
+	targetMessage.From = id
+	return targetMessage
+}
+
+type mockEventDispatcher struct {
+	id     common.DispatcherID
+	handle func(commonEvent.Event)
+}
+
+func (m *mockEventDispatcher) GetId() common.DispatcherID {
+	return m.id
+}
+func (m *mockEventDispatcher) GetStartTs() uint64 {
+	return 0
+}
+func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
+	return common.NewChangefeedID()
+}
+func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
+	return &heartbeatpb.TableSpan{}
+}
+func (m *mockEventDispatcher) GetFilterConfig() *eventpb.FilterConfig {
+	return &eventpb.FilterConfig{}
+}
+func (m *mockEventDispatcher) EnableSyncPoint() bool {
+	return false
+}
+func (m *mockEventDispatcher) GetSyncPointInterval() time.Duration {
+	return time.Second
+}
+func (m *mockEventDispatcher) GetStartTsIsSyncpoint() bool {
+	return false
+}
+func (m *mockEventDispatcher) GetResolvedTs() uint64 {
+	return 0
+}
+func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+	for _, dispatcherEvent := range dispatcherEvents {
+		m.handle(dispatcherEvent.Event)
+	}
+	return false
 }
 
 func TestProcessMessage(t *testing.T) {
@@ -40,19 +86,17 @@ func TestProcessMessage(t *testing.T) {
 	c := New(node.ID)
 	did := common.NewDispatcherID()
 	ch := make(chan *messaging.TargetMessage, receiveChanSize)
-	for i := 0; i < 3; i++ {
-		go func() {
-			c.runProcessMessage(ctx, ch)
-		}()
-	}
+	go func() {
+		c.runProcessMessage(ctx, ch)
+	}()
 
+	var seq atomic.Uint64
+	seq.Store(0)
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 	helper.Tk().MustExec("use test")
 	ddl := helper.DDL2Event("create table t(id int primary key, v int)")
 	require.NotNil(t, ddl)
-	ddl.DispatcherID = did
-
 	dmls := helper.DML2BatchEvent("test", "t",
 		"insert into t values(1, 1)",
 		"insert into t values(2, 2)",
@@ -60,13 +104,42 @@ func TestProcessMessage(t *testing.T) {
 		"insert into t values(4, 4)",
 	)
 	require.NotNil(t, dmls)
+
+	readyEvent := commonEvent.NewReadyEvent(did)
+	handshakeEvent := commonEvent.NewHandshakeEvent(did, 0, ddl.GetStartTs()-1, ddl.TableInfo)
+	events := make(map[uint64]commonEvent.Event)
+	ddl.DispatcherID = did
+	handshakeEvent.Seq = seq.Add(1)
+	ddl.Seq = seq.Add(1)
+	events[ddl.Seq] = ddl
 	for _, dml := range dmls.DMLEvents {
 		dml.DispatcherID = did
+		dml.Seq = seq.Add(1)
+		events[dml.Seq] = dml
 	}
 
-	handshakeEvent := commonEvent.NewHandshakeEvent(did, 0, ddl.FinishedTs-1, ddl.TableInfo)
+	seq.Store(1)
+	done := make(chan struct{})
+	d := &mockEventDispatcher{id: did}
+	d.handle = func(e commonEvent.Event) {
+		require.Equal(t, e.GetSeq(), seq.Add(1))
+		require.Equal(t, events[e.GetSeq()], e)
+		if e.GetSeq() == uint64(ddl.Len())+uint64(len(dmls.DMLEvents)) {
+			done <- struct{}{}
+		}
+	}
+	c.AddDispatcher(d, config.GetDefaultReplicaConfig().MemoryQuota, *config.GetDefaultReplicaConfig().BDRMode)
 
+	ch <- newMessage(node.ID, &readyEvent)
 	ch <- newMessage(node.ID, handshakeEvent)
 	ch <- newMessage(node.ID, ddl)
 	ch <- newMessage(node.ID, dmls)
+
+	ctx1, cancel := context.WithTimeout(ctx, time.Second*10)
+	defer cancel()
+	select {
+	case <-done:
+	case <-ctx1.Done():
+		require.Fail(t, "timeout")
+	}
 }
