@@ -518,6 +518,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		log.Panic("scan events failed", zap.Error(err))
 	}
 
+	// If the task is not running, we don't send the events to the dispatcher.
+	if !task.isRunning.Load() {
+		return
+	}
+
 	for _, e := range events {
 		if task.isRemoved.Load() {
 			return

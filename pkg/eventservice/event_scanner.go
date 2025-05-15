@@ -186,6 +186,11 @@ func (s *eventScanner) Scan(
 		default:
 		}
 
+		// If the dispatcher is not running, we don't scan any events.
+		if !dispatcherStat.isRunning.Load() {
+			return nil, false, nil
+		}
+
 		e, isNewTxn, err := iter.Next()
 		if err != nil {
 			log.Panic("read events failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
