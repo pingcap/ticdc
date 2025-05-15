@@ -327,10 +327,15 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
 		t := time.Unix(val*60*60*24, 0)
 		value = types.NewTime(types.FromGoTime(t.UTC()), colInfo.GetType(), colInfo.GetDecimal())
 	case mysql.TypeTimestamp:
-		value, err = types.ParseTimestamp(types.DefaultStmtNoWarningContext, value.(string))
+		t, err := types.ParseTimestamp(types.DefaultStmtNoWarningContext, value.(string))
 		if err != nil {
 			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
+		err = t.ConvertTimeZone(time.Local, time.UTC)
+		if err != nil {
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
+		}
+		value = t
 	case mysql.TypeDatetime:
 		val, err := value.(json.Number).Int64()
 		if err != nil {
