@@ -282,7 +282,7 @@ func (app *WorkloadApp) execute(conn *sql.Conn, sql string, tableIndex int) (sql
 	res, err := conn.ExecContext(context.Background(), sql)
 	if err != nil {
 		if !strings.Contains(err.Error(), "Error 1146") {
-plog.Info("execute error", zap.Error(err), zap.String("sql", sql))
+			plog.Info("execute error", zap.Error(err), zap.String("sql", sql))
 			return res, err
 		}
 		// if table not exists, we create it
