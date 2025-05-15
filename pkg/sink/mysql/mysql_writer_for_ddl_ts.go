@@ -572,6 +572,8 @@ func (w *Writer) createDDLTsTable() error {
 }
 
 func (w *Writer) createDDLTsTableIfNotExist() error {
+	w.ddlTsTableInitMutex.Lock()
+	defer w.ddlTsTableInitMutex.Unlock()
 	if w.ddlTsTableInit {
 		return nil
 	}

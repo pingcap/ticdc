@@ -59,8 +59,7 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(
 				continue
 			}
 			if tableInfo.IsHandleKey(col.ID) {
-				value := common.ExtractColVal(&rowData, col, idx)
-				r.hasher.Write([]byte(col.Name.L), []byte(common.ColumnValueString(value)))
+				r.hasher.Write([]byte(col.Name.L), []byte(common.ColumnValueString(common.ExtractColVal(&rowData, col, idx))))
 			}
 		}
 	} else {

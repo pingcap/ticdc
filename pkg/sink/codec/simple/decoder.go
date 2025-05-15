@@ -60,7 +60,9 @@ type Decoder struct {
 }
 
 // NewDecoder returns a new Decoder
-func NewDecoder(ctx context.Context, config *common.Config, db *sql.DB) (common.Decoder, error) {
+func NewDecoder(
+	ctx context.Context, config *common.Config, db *sql.DB,
+) (common.Decoder, error) {
 	var (
 		externalStorage storage.ExternalStorage
 		err             error
