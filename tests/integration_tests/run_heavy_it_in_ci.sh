@@ -42,7 +42,7 @@ mysql_groups=(
 	# G05
 	'move_table ddl_for_split_tables_with_merge_and_split'
 	# G06
-	'cdc ddl_for_split_tables_with_rando_merge_and_split'
+	'cdc ddl_for_split_tables_with_random_merge_and_split'
 	# G07
 	'resolve_lock'
 	# G08
