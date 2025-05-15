@@ -31,8 +31,8 @@ function prepare() {
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 20
 
 	# make node0 to be maintainer
-	sleep 10 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite=pause' 
+	sleep 10
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
 	SINK_URI="mysql://root@127.0.0.1:3306/"
