@@ -94,7 +94,7 @@ kafka_groups=(
 	# G11
 	'multi_topics'
 	# G12
-	#	'debezium_basic'
+	'debezium_basic'
 	# G13
 	'avro_basic'
 )
