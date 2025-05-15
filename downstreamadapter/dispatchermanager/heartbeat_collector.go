@@ -219,5 +219,11 @@ func (c *HeartBeatCollector) Close() {
 	c.mc.DeRegisterHandler(messaging.HeartbeatCollectorTopic)
 	c.cancel()
 	c.wg.Wait()
+
+	c.checkpointTsMessageDynamicStream.Close()
+	c.heartBeatResponseDynamicStream.Close()
+	c.schedulerDispatcherRequestDynamicStream.Close()
+	c.dispatcherStatusDynamicStream.Close()
+
 	log.Info("heartbeat collector is closed")
 }

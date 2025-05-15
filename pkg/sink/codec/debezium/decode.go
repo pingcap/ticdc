@@ -16,7 +16,6 @@ package debezium
 import (
 	"bytes"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -43,6 +42,7 @@ var (
 
 // decoder implement the Decoder interface
 type decoder struct {
+	idx    int
 	config *common.Config
 
 	upstreamTiDB *sql.DB
@@ -56,11 +56,13 @@ type decoder struct {
 // NewDecoder return an debezium decoder
 func NewDecoder(
 	config *common.Config,
+	idx int,
 	db *sql.DB,
 ) common.Decoder {
 	tableIDAllocator.Clean()
 	tableInfoAccessor.Clean()
 	return &decoder{
+		idx:          idx,
 		config:       config,
 		upstreamTiDB: db,
 	}
@@ -89,7 +91,7 @@ func (d *decoder) AddKeyValue(key, value []byte) {
 // HasNext returns whether there is any event need to be consumed
 func (d *decoder) HasNext() (common.MessageType, bool) {
 	if d.valuePayload == nil && d.valueSchema == nil {
-		log.Panic("has next failed, since key / value is not set")
+		return common.MessageTypeUnknown, false
 	}
 
 	if len(d.valuePayload) < 1 {
@@ -137,17 +139,18 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	actionType := common.GetDDLActionType(event.Query)
 	event.Type = byte(actionType)
 
-	var tableID int64
-	tableInfo, ok := tableInfoAccessor.Get(schemaName, tableName)
-	if ok {
-		tableID = tableInfo.TableName.TableID
+	if d.idx == 0 {
+		var tableID int64
+		tableInfo, ok := tableInfoAccessor.Get(schemaName, tableName)
+		if ok {
+			tableID = tableInfo.TableName.TableID
+		}
+		event.BlockedTables = common.GetInfluenceTables(actionType, tableID)
+		log.Debug("set blocked tables for the DDL event",
+			zap.String("schema", schemaName), zap.String("table", tableName),
+			zap.String("query", event.Query), zap.Any("blocked", event.BlockedTables))
+		tableInfoAccessor.Remove(schemaName, tableName)
 	}
-	event.BlockedTables = common.GetInfluenceTables(actionType, tableID)
-	log.Debug("set blocked tables for the DDL event",
-		zap.String("schema", schemaName), zap.String("table", tableName),
-		zap.String("query", event.Query), zap.Any("blocked", event.BlockedTables))
-
-	tableInfoAccessor.Remove(schemaName, tableName)
 	return event
 }
 
@@ -302,101 +305,104 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
 	case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeTinyBlob,
 		mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
 		if mysql.HasBinaryFlag(colInfo.GetFlag()) {
-			s := value.(string)
-			value, err = base64.StdEncoding.DecodeString(s)
-			if err != nil {
-				log.Error("decode value failed", zap.Error(err), zap.Any("value", value))
-				return nil
+			switch v := value.(type) {
+			case string:
+				return []byte(v)
+			default:
 			}
+			return value
 		}
+		return common.UnsafeStringToBytes(value.(string))
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeNewDate:
 		val := value.(json.Number).String()
 		value, err = types.ParseTime(types.DefaultStmtNoWarningContext, val, colInfo.GetType(), colInfo.GetDecimal())
 		if err != nil {
-			log.Error("decode value failed", zap.Error(err), zap.Any("value", value))
-			return nil
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
 	case mysql.TypeDuration:
 		val := value.(json.Number).String()
-		value, _, err := types.ParseDuration(types.DefaultStmtNoWarningContext, val, colInfo.GetDecimal())
+		value, _, err = types.ParseDuration(types.DefaultStmtNoWarningContext, val, colInfo.GetDecimal())
 		if err != nil {
-			log.Error("decode value failed", zap.Error(err), zap.Any("value", value))
-			return nil
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
 	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
-		v, err := value.(json.Number).Int64()
+		var intVal int64
+		intVal, err = value.(json.Number).Int64()
 		if err != nil {
-			log.Error("decode value failed", zap.Error(err), zap.Any("value", value))
-			return nil
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
 		if mysql.HasUnsignedFlag(colInfo.GetFlag()) {
-			value = uint64(v)
-		} else {
-			if v > math.MaxInt64 {
-				value = math.MaxInt64
-			} else if v < math.MinInt64 {
-				value = math.MinInt64
-			} else {
-				value = v
-			}
+			return uint64(intVal)
 		}
+
+		if intVal > math.MaxInt64 {
+			return math.MaxInt64
+		}
+		if intVal < math.MinInt64 {
+			return math.MinInt64
+		}
+		return intVal
 	case mysql.TypeBit:
 		switch val := value.(type) {
 		case string:
 			value, err = types.NewBitLiteral(val)
 			if err != nil {
-				log.Error("decode value failed", zap.Error(err), zap.Any("value", value))
-				return nil
+				log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 			}
+			return value
 		case bool:
 			if val {
-				value = types.NewBinaryLiteralFromUint(uint64(1), -1)
-			} else {
-				value = types.NewBinaryLiteralFromUint(uint64(0), -1)
+				return types.NewBinaryLiteralFromUint(uint64(1), -1)
 			}
+			return types.NewBinaryLiteralFromUint(uint64(0), -1)
 		}
 	case mysql.TypeNewDecimal:
-		v, err := value.(json.Number).Float64()
+		var f64 float64
+		f64, err = value.(json.Number).Float64()
 		if err != nil {
-			log.Error("decode value failed", zap.Error(err), zap.Any("value", value))
-			return nil
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
-		value = types.NewDecFromFloatForTest(v)
+		value = types.NewDecFromFloatForTest(f64)
 	case mysql.TypeDouble:
-		value, err := value.(json.Number).Float64()
+		value, err = value.(json.Number).Float64()
 		if err != nil {
-			log.Error("decode value failed", zap.Error(err), zap.Any("value", value))
-			return nil
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
 	case mysql.TypeFloat:
-		v, err := value.(json.Number).Float64()
+		var f64 float64
+		f64, err = value.(json.Number).Float64()
 		if err != nil {
-			log.Error("decode value failed", zap.Error(err), zap.Any("value", value))
-			return nil
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
-		value = float32(v)
+		value = float32(f64)
 	case mysql.TypeYear:
 		value, err = value.(json.Number).Int64()
 		if err != nil {
-			log.Error("decode value failed", zap.Error(err), zap.Any("value", value))
-			return nil
-
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
 	case mysql.TypeEnum:
 		value, err = types.ParseEnumName(colInfo.GetElems(), value.(string), colInfo.GetCollate())
+		if err != nil {
+			log.Panic("decode enum value failed",
+				zap.Any("value", value), zap.Any("elements", colInfo.GetElems()),
+				zap.String("string", colInfo.GetCollate()), zap.Error(err))
+		}
 	case mysql.TypeSet:
 		value, err = types.ParseSetName(colInfo.GetElems(), value.(string), colInfo.GetCollate())
+		if err != nil {
+			log.Panic("decode set value failed",
+				zap.Any("value", value), zap.Any("elements", colInfo.GetElems()),
+				zap.String("string", colInfo.GetCollate()), zap.Error(err))
+		}
 	case mysql.TypeJSON:
 		value, err = types.ParseBinaryJSONFromString(value.(string))
 		if err != nil {
-			log.Error("decode value failed", zap.Error(err), zap.Any("value", value))
-			return nil
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
 	case mysql.TypeTiDBVectorFloat32:
 		value, err = types.ParseVectorFloat32(value.(string))
 		if err != nil {
-			log.Error("decode value failed", zap.Error(err), zap.Any("value", value))
-			return nil
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
 	default:
 	}

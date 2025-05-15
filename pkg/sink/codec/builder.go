@@ -49,33 +49,28 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncod
 }
 
 // NewEventDecoder will create a new event decoder
-func NewEventDecoder(ctx context.Context, codecConfig *common.Config, topic string, upstreamTiDB *sql.DB) (common.Decoder, error) {
-	var (
-		decoder common.Decoder
-		err     error
-	)
+func NewEventDecoder(
+	ctx context.Context, idx int, codecConfig *common.Config, topic string, upstreamTiDB *sql.DB,
+) (common.Decoder, error) {
 	switch codecConfig.Protocol {
 	case config.ProtocolOpen, config.ProtocolDefault:
-		decoder, err = open.NewDecoder(ctx, codecConfig, upstreamTiDB)
+		return open.NewDecoder(ctx, idx, codecConfig, upstreamTiDB)
 	case config.ProtocolCanalJSON:
-		decoder, err = canal.NewDecoder(ctx, codecConfig, upstreamTiDB)
+		return canal.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	case config.ProtocolAvro:
 		schemaM, err := avro.NewConfluentSchemaManager(ctx, codecConfig.AvroConfluentSchemaRegistry, nil)
 		if err != nil {
-			return decoder, cerror.Trace(err)
+			return nil, cerror.Trace(err)
 		}
-		decoder = avro.NewDecoder(codecConfig, schemaM, topic, upstreamTiDB)
+		return avro.NewDecoder(codecConfig, idx, schemaM, topic, upstreamTiDB), nil
 	case config.ProtocolSimple:
-		decoder, err = simple.NewDecoder(ctx, codecConfig, upstreamTiDB)
+		return simple.NewDecoder(ctx, codecConfig, upstreamTiDB)
 	case config.ProtocolDebezium:
-		decoder = debezium.NewDecoder(codecConfig, upstreamTiDB)
+		return debezium.NewDecoder(codecConfig, idx, upstreamTiDB), nil
 	default:
-		log.Panic("Protocol not supported", zap.Any("Protocol", codecConfig.Protocol))
 	}
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	return decoder, err
+	log.Panic("Protocol not supported", zap.Any("Protocol", codecConfig.Protocol))
+	return nil, nil
 }
 
 // NewTxnEventEncoder returns an TxnEventEncoderBuilder.
