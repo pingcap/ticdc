@@ -716,8 +716,10 @@ func (c *Controller) MergeTable(tableID int64) error {
 		EndKey:   replications[1].Span.EndKey,
 	}
 
+	mergeReplication := replications[:2]
+
 	primaryID := replications[0].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[0], replications, []*heartbeatpb.TableSpan{newSpan}, nil)
+	primaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[0], mergeReplication, []*heartbeatpb.TableSpan{newSpan}, nil)
 	secondaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[1], nil, nil, primaryOp.GetOnFinished())
 	c.operatorController.AddOperator(primaryOp)
 	c.operatorController.AddOperator(secondaryOp)
