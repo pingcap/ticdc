@@ -325,7 +325,7 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
 			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
 		t := time.Unix(val*60*60*24, 0)
-		value = types.NewTime(types.FromGoTime(t), colInfo.GetType(), colInfo.GetDecimal())
+		value = types.NewTime(types.FromGoTime(t.UTC()), colInfo.GetType(), colInfo.GetDecimal())
 	case mysql.TypeTimestamp:
 		value, err = types.ParseTimestamp(types.DefaultStmtNoWarningContext, value.(string))
 		if err != nil {
@@ -342,7 +342,7 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
 		} else {
 			t = time.UnixMicro(val)
 		}
-		value = types.NewTime(types.FromGoTime(t), colInfo.GetType(), colInfo.GetDecimal())
+		value = types.NewTime(types.FromGoTime(t.UTC()), colInfo.GetType(), colInfo.GetDecimal())
 	case mysql.TypeDuration:
 		val, err := value.(json.Number).Int64()
 		if err != nil {
