@@ -485,10 +485,35 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 			log.Warn("writer dispatcher not found",
 				zap.String("changefeed", be.cfID.Name()),
 				zap.String("dispatcher", be.writerDispatcher.String()),
-				zap.Stringer("node", stm.GetNodeID()),
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Bool("isSyncPoint", be.isSyncPoint))
-			// TODO: select a new writer
+
+			// choose a new one as the writer
+			// it only can happen then the split and merge happens to a table, and the writeDispatcher is not the table trigger event dispatcher
+			// So the block event influence type is must normal, we just need to select one dispatcher in the block dispatchers
+			if be.blockedDispatchers.InfluenceType != heartbeatpb.InfluenceType_Normal || len(be.blockedDispatchers.TableIDs) == 0 {
+				log.Panic("influence type should be normal when writer dispatcher not found",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.Any("event", be),
+					zap.String("dispatcher", be.writerDispatcher.String()),
+					zap.Uint64("commitTs", be.commitTs),
+					zap.Bool("isSyncPoint", be.isSyncPoint))
+			}
+
+			tableID := be.blockedDispatchers.TableIDs[0]
+			replications := be.controller.replicationDB.GetTasksByTableID(tableID)
+
+			if len(replications) == 0 {
+				log.Panic("replications for this block event should not be empty",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.Int64("tableID", tableID),
+					zap.Any("event", be),
+					zap.String("dispatcher", be.writerDispatcher.String()),
+					zap.Uint64("commitTs", be.commitTs),
+					zap.Bool("isSyncPoint", be.isSyncPoint))
+			}
+
+			be.writerDispatcher = replications[0].ID
 			return nil
 		}
 

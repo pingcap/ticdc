@@ -728,8 +728,6 @@ func (c *Controller) MergeTable(tableID int64) error {
 		EndKey:   replications[1].Span.EndKey,
 	}
 
-	log.Info("sorted replication", zap.Any("len", len(replications)), zap.Any("replications", replications), zap.Any("newSpan", newSpan))
-
 	mergeReplication := replications[:2]
 
 	primaryID := replications[0].ID

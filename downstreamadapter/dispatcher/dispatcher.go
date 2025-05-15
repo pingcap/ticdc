@@ -282,10 +282,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 			})
 
 			if action.Action == heartbeatpb.Action_Write {
-				log.Info("hyy block the event and write to sink")
-				// failpoint.Inject("BlockOrWaitBeforeWrite", nil)
 				failpoint.Inject("BlockOrWaitBeforeWrite", nil)
-				log.Info("hyy not block the event and write to sink")
 				err := d.AddBlockEventToSink(pendingEvent)
 				if err != nil {
 					select {

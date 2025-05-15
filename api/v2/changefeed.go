@@ -825,7 +825,8 @@ func (h *OpenAPIV2) MoveSplitTable(c *gin.Context) {
 	c.JSON(getStatus(c), &EmptyResponse{})
 }
 
-// SplitTableByRegionCount do split table by region count in changefeed
+// SplitTableByRegionCount do split table by region count in changefeed,
+// it can also split the table when there are multiple dispatchers in the table.
 // it returns the split result(success or err)
 // This api is for inner test use, not public use. It may be removed in the future.
 // Usage:
@@ -896,7 +897,7 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 	c.JSON(getStatus(c), &EmptyResponse{})
 }
 
-// MergeTable merges table in changefeed
+// MergeTable merges the split table in changefeed, it just merge two nearby dispatchers into one dispatcher in this table.
 // it returns the split result(success or err)
 // This api is for inner test use, not public use. It may be removed in the future.
 // Usage:

@@ -338,9 +338,7 @@ func (m *Maintainer) initialize() error {
 	log.Info("start to initialize changefeed maintainer",
 		zap.String("changefeed", m.id.String()))
 
-	log.Info("hyy before NewChangefeedRetryError")
 	failpoint.Inject("NewChangefeedRetryError", func() {
-		log.Info("hyy into NewChangefeedRetryError failpoint")
 		failpoint.Return(errors.New("failpoint injected retriable error"))
 	})
 
@@ -957,11 +955,13 @@ func (m *Maintainer) GetTables() []*replica.SpanReplication {
 }
 
 // SplitTableByRegionCount split table based on region count
+// it can split the table whether the table have one dispatcher or multiple dispatchers
 func (m *Maintainer) SplitTableByRegionCount(tableId int64) error {
 	return m.controller.SplitTableByRegionCount(tableId)
 }
 
-// MergeTable merge table
+// MergeTable merge two dispatchers in this table into one dispatcher,
+// so after merge table, the table may also have multiple dispatchers
 func (m *Maintainer) MergeTable(tableId int64) error {
 	return m.controller.MergeTable(tableId)
 }

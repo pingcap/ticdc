@@ -17,8 +17,6 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/pingcap/failpoint"
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -69,12 +67,6 @@ func (s *balanceScheduler) Execute() time.Time {
 		return s.lastRebalanceTime.Add(s.checkBalanceInterval)
 	}
 	now := time.Now()
-
-	log.Info("hyy before balance scheduler")
-	failpoint.Inject("StopBalanceScheduler", func() time.Time {
-		log.Info("hyy into StopBalanceScheduler failpoint")
-		return now.Add(s.checkBalanceInterval)
-	})
 
 	if s.operatorController.OperatorSize() > 0 || s.changefeedDB.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance

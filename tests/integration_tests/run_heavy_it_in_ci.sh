@@ -30,37 +30,37 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'ddl_for_split_tables_with_merge_and_split'
+	'generate_column many_pk_or_uk'
 	# G01
-	'ddl_for_split_tables_with_merge_and_split'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G02
-	'ddl_for_split_tables_with_merge_and_split'
+	'availability ddl_for_split_tables_with_failover'
 	# G03
-	'ddl_for_split_tables_with_merge_and_split'
+	'multi_source'
 	# G04
-	'ddl_for_split_tables_with_merge_and_split'
+	'syncpoint syncpoint_check_ts'
 	# G05
-	'ddl_for_split_tables_with_merge_and_split'
+	'move_table ddl_for_split_tables_with_merge_and_split'
 	# G06
-	'ddl_for_split_tables_with_merge_and_split'
+	'cdc ddl_for_split_tables_with_rando_merge_and_split'
 	# G07
-	'ddl_for_split_tables_with_merge_and_split'
+	'resolve_lock'
 	# G08
-	'ddl_for_split_tables_with_merge_and_split'
+	'bank'
 	# G09
-	'ddl_for_split_tables_with_merge_and_split'
+	'drop_many_tables'
 	# G10
-	'ddl_for_split_tables_with_merge_and_split'
+	'default_value http_proxies'
 	# G11
-	'ddl_for_split_tables_with_merge_and_split'
+	'ddl_reentrant force_replicate_table'
 	# G12
-	'ddl_for_split_tables_with_merge_and_split'
+	'tidb_mysql_test ddl_with_random_move_table'
 	# G13
-	'ddl_for_split_tables_with_merge_and_split'
+	'fail_over region_merge'
 	# G14
-	'ddl_for_split_tables_with_merge_and_split'
+	'fail_over_ddl_mix'
 	# G15
-	'ddl_for_split_tables_with_merge_and_split'
+	'fail_over_ddl_mix_with_syncpoint'
 )
 
 kafka_groups=(
