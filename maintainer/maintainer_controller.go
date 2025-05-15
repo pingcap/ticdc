@@ -16,6 +16,7 @@ package maintainer
 import (
 	"bytes"
 	"context"
+	"math/rand"
 	"sort"
 	"time"
 
@@ -591,7 +592,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 	}
 
 	if !op.IsFinished() {
-		return apperror.ErrMoveTableTimeout.GenWithStackByArgs("move table operator is timeout")
+		return apperror.ErrTimeout.GenWithStackByArgs("move table operator is timeout")
 	}
 
 	return nil
@@ -642,7 +643,7 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID) error {
 		log.Info("wait for move split table operator finished", zap.Int("count", count))
 	}
 
-	return apperror.ErrMoveTableTimeout.GenWithStackByArgs("move table operator is timeout")
+	return apperror.ErrTimeout.GenWithStackByArgs("move split table operator is timeout")
 }
 
 func (c *Controller) SplitTableByRegionCount(tableID int64) error {
@@ -657,11 +658,6 @@ func (c *Controller) SplitTableByRegionCount(tableID int64) error {
 
 	replications := c.replicationDB.GetTasksByTableID(tableID)
 
-	if len(replications) > 1 {
-		log.Info("There is more than one replication for this table, so no need to do split", zap.Any("tableID", tableID), zap.Any("replicationsLen", len(replications)))
-		return nil
-	}
-
 	span := spanz.TableIDToComparableSpan(tableID)
 	wholeSpan := &heartbeatpb.TableSpan{
 		TableID:  span.TableID,
@@ -669,13 +665,29 @@ func (c *Controller) SplitTableByRegionCount(tableID int64) error {
 		EndKey:   span.EndKey,
 	}
 	splitTableSpans := c.splitter.SplitSpansByRegion(context.Background(), wholeSpan)
-	op := operator.NewMergeSplitDispatcherOperator(c.replicationDB, replications[0].ID, replications[0], replications, splitTableSpans, nil)
-	c.operatorController.AddOperator(op)
+
+	if len(splitTableSpans) == len(replications) {
+		log.Info("Split Table is finished; There is no need to do split", zap.Any("tableID", tableID))
+		return nil
+	}
+
+	randomIdx := rand.Intn(len(replications))
+	primaryID := replications[randomIdx].ID
+	primaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[randomIdx], replications, splitTableSpans, nil)
+	for _, replicaSet := range replications {
+		var op *operator.MergeSplitDispatcherOperator
+		if replicaSet.ID == primaryID {
+			op = primaryOp
+		} else {
+			op = operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
+		}
+		c.operatorController.AddOperator(op)
+	}
 
 	count := 0
 	maxTry := 30
 	for count < maxTry {
-		if op.IsFinished() {
+		if primaryOp.IsFinished() {
 			return nil
 		}
 
@@ -684,7 +696,7 @@ func (c *Controller) SplitTableByRegionCount(tableID int64) error {
 		log.Info("wait for split table operator finished", zap.Int("count", count))
 	}
 
-	return apperror.ErrMoveTableTimeout.GenWithStackByArgs("split table operator is timeout")
+	return apperror.ErrTimeout.GenWithStackByArgs("split table operator is timeout")
 }
 
 func (c *Controller) MergeTable(tableID int64) error {
@@ -716,6 +728,8 @@ func (c *Controller) MergeTable(tableID int64) error {
 		EndKey:   replications[1].Span.EndKey,
 	}
 
+	log.Info("sorted replication", zap.Any("len", len(replications)), zap.Any("replications", replications), zap.Any("newSpan", newSpan))
+
 	mergeReplication := replications[:2]
 
 	primaryID := replications[0].ID
@@ -736,7 +750,7 @@ func (c *Controller) MergeTable(tableID int64) error {
 		log.Info("wait for merge table table operator finished", zap.Int("count", count))
 	}
 
-	return apperror.ErrMoveTableTimeout.GenWithStackByArgs("merge table operator is timeout")
+	return apperror.ErrTimeout.GenWithStackByArgs("merge table operator is timeout")
 }
 
 func (c *Controller) isDDLDispatcher(dispatcherID common.DispatcherID) bool {

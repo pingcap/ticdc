@@ -338,7 +338,9 @@ func (m *Maintainer) initialize() error {
 	log.Info("start to initialize changefeed maintainer",
 		zap.String("changefeed", m.id.String()))
 
+	log.Info("hyy before NewChangefeedRetryError")
 	failpoint.Inject("NewChangefeedRetryError", func() {
+		log.Info("hyy into NewChangefeedRetryError failpoint")
 		failpoint.Return(errors.New("failpoint injected retriable error"))
 	})
 

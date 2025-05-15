@@ -51,9 +51,9 @@ var (
 		errors.RFCCodeText("CDC:ErrMaintainerNotFounded"),
 	)
 
-	ErrMoveTableTimeout = errors.Normalize(
-		"move table timeout",
-		errors.RFCCodeText("CDC:ErrMoveTableTimeout"),
+	ErrTimeout = errors.Normalize(
+		"timeout",
+		errors.RFCCodeText("CDC:ErrTimeout"),
 	)
 
 	ErrNodeIsNotFound = errors.Normalize(

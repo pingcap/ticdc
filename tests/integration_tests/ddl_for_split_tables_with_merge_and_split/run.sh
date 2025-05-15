@@ -23,17 +23,20 @@ function prepare() {
 
 	cd $WORK_DIR
 
-	# record tso before we create tables to skip the system table DDLs
-	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
-
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/maintainer/scheduler/StopSplitScheduler=return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/maintainer/scheduler/StopSplitScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
 	run_sql_file $CUR/data/pre.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql_file $CUR/data/pre.sql ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 20
+
+	# make node0 to be maintainer
+	sleep 10 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockorWaitBeforeWrite=pause'
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
 	SINK_URI="mysql://root@127.0.0.1:3306/"
-	do_retry 5 3 run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
+	do_retry 5 3 run_cdc_cli changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/changefeed.toml"
 }
 
 function execute_ddls() {
@@ -88,29 +91,63 @@ function merge_and_split_table() {
 	done
 }
 
+# main() {
+# 	prepare
+
+# 	execute_ddls &
+# 	NORMAL_TABLE_DDL_PID=$!
+
+# 	declare -a pids=()
+
+# 	for i in {1..5}; do
+# 		execute_dml $i &
+# 		pids+=("$!")
+# 	done
+
+# 	merge_and_split_table &
+# 	MERGE_AND_SPLIT_TABLE_PID=$!
+
+# 	sleep 500
+
+# 	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MERGE_AND_SPLIT_TABLE_PID
+
+# 	sleep 10
+
+# 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+
+# 	cleanup_process $CDC_BINARY
+# }
+
 main() {
+	echo "hello"
 	prepare
 
-	execute_ddls &
-	NORMAL_TABLE_DDL_PID=$!
+	# move the table to node 2
+	table_id=$(get_table_id "test" "table_1")
+	move_split_table_with_retry "127.0.0.1:8301" $table_id "test" 10 || true
 
-	declare -a pids=()
+	run_sql "ALTER TABLE test.table_1 ADD COLUMN new_col INT;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql_ignore_error "INSERT INTO test.table_1 (data) VALUES ('$(date +%s)');" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
 
-	for i in {1..5}; do
-		execute_dml $i &
-		pids+=("$!")
-	done
-
-	merge_and_split_table &
-	MERGE_AND_SPLIT_TABLE_PID=$!
-
-	sleep 500
-
-	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MERGE_AND_SPLIT_TABLE_PID
-
+	# 等到都上报了，通知下游来写 ddl 并卡住
 	sleep 10
 
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+	## merge and split make the dispatcher id changed
+	merge_table_with_retry $table_id "test" 10 || true
+	sleep 10
+	split_table_with_retry $table_id "test" 10 || true
+
+
+	# restart node2 to disable failpoint
+	cdc_pid_1=$(ps aux | grep cdc | grep 8301 | awk '{print $2}')
+	kill_cdc_pid $cdc_pid_1
+	sleep 5
+	export GO_FAILPOINTS=''
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
+
+	sleep 20
+
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 20
 
 	cleanup_process $CDC_BINARY
 }
