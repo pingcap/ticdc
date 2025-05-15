@@ -181,12 +181,12 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	columns := tableInfo.GetColumns()
 	before, ok1 := d.valuePayload["before"].(map[string]interface{})
 	if ok1 {
-		data := assembleColumnData(before, columns)
+		data := assembleColumnData(before, columns, d.config.TimeZone)
 		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
 	after, ok2 := d.valuePayload["after"].(map[string]interface{})
 	if ok2 {
-		data := assembleColumnData(after, columns)
+		data := assembleColumnData(after, columns, d.config.TimeZone)
 		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
 	if ok1 && ok2 {
@@ -290,19 +290,19 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 	return result
 }
 
-func assembleColumnData(data map[string]interface{}, columns []*timodel.ColumnInfo) map[string]interface{} {
+func assembleColumnData(data map[string]interface{}, columns []*timodel.ColumnInfo, timeZone *time.Location) map[string]interface{} {
 	result := make(map[string]interface{}, 0)
 	for _, col := range columns {
 		val, ok := data[col.Name.O]
 		if !ok {
 			continue
 		}
-		result[col.Name.O] = decodeColumn(val, col)
+		result[col.Name.O] = decodeColumn(val, col, timeZone)
 	}
 	return result
 }
 
-func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
+func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo, timeZone *time.Location) interface{} {
 	if value == nil {
 		return value
 	}
@@ -331,7 +331,7 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
 		if err != nil {
 			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
-		err = t.ConvertTimeZone(time.Local, time.UTC)
+		err = t.ConvertTimeZone(time.UTC, timeZone)
 		if err != nil {
 			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
