@@ -72,6 +72,15 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
+	if m.dest == m.origin && !m.originNodeStopped {
+		log.Info("origin and dest are the same, no need to move",
+			zap.String("origin", m.origin.String()),
+			zap.String("dest", m.dest.String()),
+			zap.String("replicaSet", m.replicaSet.ID.String()))
+		m.finished = true
+		return nil
+	}
+
 	if m.originNodeStopped {
 		if !m.bind {
 			// only bind the span to the dest node after the origin node is stopped.
@@ -91,6 +100,14 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
 	m.lck.Lock()
 	defer m.lck.Unlock()
+
+	if m.finished {
+		log.Info("move dispatcher operator is finished, no need to handle node remove",
+			zap.String("replicaSet", m.replicaSet.ID.String()),
+			zap.String("origin", m.origin.String()),
+			zap.String("dest", m.dest.String()))
+		return
+	}
 
 	if n == m.dest {
 		// the origin node is finished, we must mark the span as absent to reschedule it again

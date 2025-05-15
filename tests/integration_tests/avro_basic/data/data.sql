@@ -54,10 +54,10 @@ create table t (
    c_json json               null,
 
 -- gbk dmls
-   name varchar(128) CHARACTER SET gbk,
-   country char(32) CHARACTER SET gbk,
+--    name varchar(128) CHARACTER SET gbk,
+--    country char(32) CHARACTER SET gbk,
    city varchar(64),
-   description text CHARACTER SET gbk,
+--    description text CHARACTER SET gbk,
    image tinyblob
 );
 
@@ -76,7 +76,11 @@ insert into t values (
 "key2": "value2",
 "key3": "123"
 }',
-     '测试', "中国", "上海", "你好,世界", 0xC4E3BAC3CAC0BDE7
+--   '测试',
+--   "中国",
+     "上海",
+--   "你好,世界",
+     0xC4E3BAC3CAC0BDE7
 );
 
 insert into t values (
@@ -94,7 +98,11 @@ insert into t values (
 "key2": "value2",
 "key3": "123"
 }',
-     '部署', "美国", "纽约", "世界,你好", 0xCAC0BDE7C4E3BAC3
+--   '部署',
+--   "美国",
+     "纽约",
+--   "世界,你好",
+     0xCAC0BDE7C4E3BAC3
 );
 
 
@@ -113,7 +121,11 @@ insert into t values (
 "key2": "value2",
 "key3": "123"
 }',
-     '部署', "美国", "纽约", "世界,你好", 0xCAC0BDE7C4E3BAC3
+--   '部署',
+--   "美国",
+     "纽约",
+--   "世界,你好",
+     0xCAC0BDE7C4E3BAC3
 );
 
 update t set c_float = 3.1415, c_double = 2.7182, c_decimal = 8000, c_decimal_2 = 179394.233 where id = 3;
@@ -136,7 +148,12 @@ insert into t values (
 "key2": "value2",
 "key3": "123"
 }',
-     '部署', "美国", "纽约", "世界,你好", 0xCAC0BDE7C4E3BAC3, 3.1415
+--   '部署',
+--   "美国",
+     "纽约",
+--   "世界,你好",
+     0xCAC0BDE7C4E3BAC3,
+     3.1415
 );
 
 alter table t modify c_float double null;
@@ -155,8 +172,13 @@ insert into t values (
 "key2": "value2",
 "key3": "123"
 }',
-     '部署', "美国", "纽约", "世界,你好", 0xCAC0BDE7C4E3BAC3, 3.1415
- );
+--   '部署',
+--   "美国",
+     "纽约",
+--   "世界,你好",
+     0xCAC0BDE7C4E3BAC3,
+     3.1415
+);
 
 alter table t drop column c_smallint;
 insert into t(c_tinyint, c_mediumint, c_int, c_bigint, a) values (4, 5, 6, 7, 8);

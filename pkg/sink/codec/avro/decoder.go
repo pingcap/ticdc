@@ -36,12 +36,17 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	tableIDAllocator  = common.NewFakeTableIDAllocator()
+	tableInfoAccessor = common.NewTableInfoAccessor()
+)
+
 type decoder struct {
+	idx    int
 	config *common.Config
 	topic  string
 
-	upstreamTiDB     *sql.DB
-	tableIDAllocator *common.FakeTableIDAllocator
+	upstreamTiDB *sql.DB
 
 	schemaM SchemaManager
 
@@ -52,16 +57,19 @@ type decoder struct {
 // NewDecoder return an avro decoder
 func NewDecoder(
 	config *common.Config,
+	idx int,
 	schemaM SchemaManager,
 	topic string,
 	db *sql.DB,
 ) common.Decoder {
+	tableIDAllocator.Clean()
+	tableInfoAccessor.Clean()
 	return &decoder{
-		config:           config,
-		topic:            topic,
-		schemaM:          schemaM,
-		upstreamTiDB:     db,
-		tableIDAllocator: common.NewFakeTableIDAllocator(),
+		idx:          idx,
+		config:       config,
+		topic:        topic,
+		schemaM:      schemaM,
+		upstreamTiDB: db,
 	}
 }
 
@@ -140,7 +148,6 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if err != nil {
 		log.Panic("assemble event failed", zap.Error(err))
 	}
-	event.PhysicalTableID = d.tableIDAllocator.AllocateTableID(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName())
 
 	// Delete event only has Primary Key Columns, but the checksum is calculated based on the whole row columns,
 	// checksum verification cannot be done here, so skip it.
@@ -259,22 +266,35 @@ func assembleEvent(
 	}
 
 	event := new(commonEvent.DMLEvent)
+	event.TableInfo = queryTableInfo(schemaName, tableName, columns, keyMap)
+	event.StartTs = uint64(commitTs)
 	event.CommitTs = uint64(commitTs)
-	event.TableInfo = newTableInfo(schemaName, tableName, columns, keyMap)
-
-	chk := chunk.NewChunkWithCapacity(event.TableInfo.GetFieldSlice(), 1)
-	common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), chk)
-	if isDelete {
-		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeDelete)
-	} else {
-		event.RowTypes = append(event.RowTypes, commonEvent.RowTypeInsert)
-	}
+	event.PhysicalTableID = event.TableInfo.TableName.TableID
+	event.Rows = chunk.NewChunkWithCapacity(event.TableInfo.GetFieldSlice(), 1)
 	event.Length++
+	common.AppendRow2Chunk(data, event.TableInfo.GetColumns(), event.Rows)
+
+	rowType := commonEvent.RowTypeInsert
+	if isDelete {
+		rowType = commonEvent.RowTypeDelete
+	}
+	event.RowTypes = append(event.RowTypes, rowType)
 	return event, nil
 }
 
+func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]interface{}) *commonType.TableInfo {
+	tableInfo, ok := tableInfoAccessor.Get(schemaName, tableName)
+	if ok {
+		return tableInfo
+	}
+	tableInfo = newTableInfo(schemaName, tableName, columns, keyMap)
+	tableInfoAccessor.Add(schemaName, tableName, tableInfo)
+	return tableInfo
+}
+
 func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, keyMap map[string]interface{}) *commonType.TableInfo {
-	tidbTableInfo := &timodel.TableInfo{}
+	tidbTableInfo := new(timodel.TableInfo)
+	tidbTableInfo.ID = tableIDAllocator.AllocateTableID(schemaName, tableName)
 	tidbTableInfo.Name = pmodel.NewCIStr(tableName)
 	tidbTableInfo.Columns = columns
 	indexColumns := make([]*timodel.IndexColumn, 0)
@@ -287,7 +307,7 @@ func newTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo, k
 	}
 	tidbTableInfo.Indices = []*timodel.IndexInfo{{
 		Primary: true,
-		Name:    pmodel.NewCIStr("pk"),
+		Name:    pmodel.NewCIStr("primary"),
 		Columns: indexColumns,
 		State:   timodel.StatePublic,
 	}}
@@ -440,15 +460,27 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	d.value = nil
 
 	result := new(commonEvent.DDLEvent)
-	result.TableInfo = new(commonType.TableInfo)
 	result.FinishedTs = baseDDLEvent.CommitTs
-	result.TableInfo.TableName = commonType.TableName{
-		Schema: baseDDLEvent.Schema,
-		Table:  baseDDLEvent.Table,
-	}
-	result.Type = byte(baseDDLEvent.Type)
+	result.SchemaName = baseDDLEvent.Schema
+	result.TableName = baseDDLEvent.Table
 	result.Query = baseDDLEvent.Query
+	actionType := common.GetDDLActionType(result.Query)
+	result.Type = byte(actionType)
 
+	if d.idx == 0 {
+		var tableID int64
+		tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
+		if ok {
+			tableID = tableInfo.TableName.TableID
+			log.Info("found tableID for the blocked table in the table accessor",
+				zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+				zap.Any("actionType", actionType.String()), zap.Int64("tableID", tableID))
+		}
+		result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
+		log.Info("set blocked table", zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+			zap.Any("actionType", actionType.String()), zap.Any("tableID", tableID))
+		tableInfoAccessor.Remove(result.SchemaName, result.TableName)
+	}
 	return result
 }
 
