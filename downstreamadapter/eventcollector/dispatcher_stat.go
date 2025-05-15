@@ -269,8 +269,11 @@ func (d *dispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
 
 	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
 		log.Info("ignore pause dispatcher request because the eventService is not ready",
+			zap.Stringer("dispatcherID", d.dispatcherID),
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-			zap.Any("eventServiceID", d.eventServiceInfo.serverID))
+			zap.Any("eventServiceID", d.eventServiceInfo.serverID),
+			zap.Bool("readyEventReceived", d.eventServiceInfo.readyEventReceived),
+		)
 		// Just ignore the request if the dispatcher is not ready.
 		return
 	}

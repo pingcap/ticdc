@@ -575,7 +575,7 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 }
 
 func (c *EventCollector) updateMetrics(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {

@@ -64,6 +64,9 @@ var (
 	metricEventServiceSendResolvedTsCount = metrics.EventServiceSendEventCount.WithLabelValues("resolved_ts")
 	metricEventServiceSendDDLCount        = metrics.EventServiceSendEventCount.WithLabelValues("ddl")
 	metricEventServiceSendCommandCount    = metrics.EventServiceSendEventCount.WithLabelValues("command")
+
+	metricEventServiceRunningDispatcherCount = metrics.EventServiceDispatcherStatusCount.WithLabelValues("running")
+	metricEventServicePausedDispatcherCount  = metrics.EventServiceDispatcherStatusCount.WithLabelValues("paused")
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -206,9 +209,10 @@ func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, e *pevent.B
 	// Set sequence number for the event
 	for _, dml := range e.DMLEvents {
 		dml.Seq = d.seq.Add(1)
+		// Emit sync point event if needed
+		c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)
 	}
-	// Emit sync point event if needed
-	c.emitSyncPointEventIfNeeded(e.GetCommitTs(), d, remoteID)
+
 	// Send the DML event
 	c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
 	metricEventServiceSendKvCount.Add(float64(e.Len()))
@@ -699,6 +703,8 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			receivedMinResolvedTs := uint64(math.MaxUint64)
 			sentMinResolvedTs := uint64(math.MaxUint64)
 			dispatcherCount := 0
+			runningDispatcherCount := 0
+			pausedDispatcherCount := 0
 			var slowestDispatchers *dispatcherStat
 
 			c.dispatchers.Range(func(key, value any) bool {
@@ -715,6 +721,12 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 
 				if slowestDispatchers == nil || slowestDispatchers.sentResolvedTs.Load() < watermark {
 					slowestDispatchers = dispatcher
+				}
+
+				if dispatcher.isRunning.Load() {
+					runningDispatcherCount++
+				} else {
+					pausedDispatcherCount++
 				}
 
 				return true

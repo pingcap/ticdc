@@ -77,6 +77,13 @@ var (
 			Name:      "pending_scan_task_count",
 			Help:      "The number of pending scan tasks",
 		})
+	EventServiceDispatcherStatusCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "dispatcher_status_count",
+			Help:      "The number of different dispatcher status",
+		}, []string{"status"})
 )
 
 // InitEventServiceMetrics registers all metrics in this file.

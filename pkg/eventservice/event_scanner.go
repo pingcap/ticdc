@@ -175,7 +175,7 @@ func (s *eventScanner) Scan(
 	}()
 
 	var batchDML *pevent.BatchDMLEvent
-	var updateTs uint64
+	var lastTableInfoUpdateTs uint64
 	dmlCount := 0
 	tableID := dataRange.Span.TableID
 	for {
@@ -226,9 +226,9 @@ func (s *eventScanner) Scan(
 			}
 			hasDDL := batchDML != nil && len(ddlEvents) > 0 && e.CRTs > ddlEvents[0].FinishedTs
 			// updateTs may be less than the previous updateTs
-			if tableInfo.UpdateTS() != updateTs || hasDDL || batchDML.Len() > batchDMLSizeLimit {
+			if tableInfo.UpdateTS() != lastTableInfoUpdateTs || hasDDL || batchDML.Len() > batchDMLSizeLimit {
 				appendDML(batchDML)
-				updateTs = tableInfo.UpdateTS()
+				lastTableInfoUpdateTs = tableInfo.UpdateTS()
 				batchDML = new(pevent.BatchDMLEvent)
 			}
 			batchDML.AppendDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
