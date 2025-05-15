@@ -28,10 +28,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	batchDMLSizeLimit = 128
-)
-
 // ScanLimit defines the limits for a scan operation
 type scanLimit struct {
 	// MaxBytes is the maximum number of bytes to scan
@@ -231,7 +227,7 @@ func (s *eventScanner) Scan(
 			}
 			hasDDL := batchDML != nil && len(ddlEvents) > 0 && e.CRTs > ddlEvents[0].FinishedTs
 			// updateTs may be less than the previous updateTs
-			if tableInfo.UpdateTS() != lastTableInfoUpdateTs || hasDDL || batchDML.Len() > batchDMLSizeLimit {
+			if tableInfo.UpdateTS() != lastTableInfoUpdateTs || hasDDL {
 				appendDML(batchDML)
 				lastTableInfoUpdateTs = tableInfo.UpdateTS()
 				batchDML = new(pevent.BatchDMLEvent)
