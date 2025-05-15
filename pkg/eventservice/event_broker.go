@@ -64,9 +64,6 @@ var (
 	metricEventServiceSendResolvedTsCount = metrics.EventServiceSendEventCount.WithLabelValues("resolved_ts")
 	metricEventServiceSendDDLCount        = metrics.EventServiceSendEventCount.WithLabelValues("ddl")
 	metricEventServiceSendCommandCount    = metrics.EventServiceSendEventCount.WithLabelValues("command")
-
-	metricEventServiceRunningDispatcherCount = metrics.EventServiceDispatcherStatusCount.WithLabelValues("running")
-	metricEventServicePausedDispatcherCount  = metrics.EventServiceDispatcherStatusCount.WithLabelValues("paused")
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -752,6 +749,10 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 				pendingTaskCount += len(c.taskChan[i])
 			}
 			metricEventBrokerPendingScanTaskCount.Set(float64(pendingTaskCount))
+
+			metrics.EventServiceDispatcherStatusCount.WithLabelValues("running").Set(float64(runningDispatcherCount))
+			metrics.EventServiceDispatcherStatusCount.WithLabelValues("paused").Set(float64(pausedDispatcherCount))
+			metrics.EventServiceDispatcherStatusCount.WithLabelValues("total").Set(float64(dispatcherCount))
 
 			if slowestDispatchers != nil {
 				lag := time.Since(oracle.GetTimeFromTS(slowestDispatchers.sentResolvedTs.Load()))
