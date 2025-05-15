@@ -241,7 +241,6 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 		zap.Stringer("dispatcher", d.id),
 		zap.Any("action", dispatcherStatus.GetAction()),
 		zap.Any("ack", dispatcherStatus.GetAck()))
-
 	// deal with the ack info
 	ack := dispatcherStatus.GetAck()
 	if ack != nil {
@@ -280,7 +279,6 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 				// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
 				d.blockEventStatus.clear()
 			})
-
 			if action.Action == heartbeatpb.Action_Write {
 				failpoint.Inject("BlockOrWaitBeforeWrite", nil)
 				err := d.AddBlockEventToSink(pendingEvent)

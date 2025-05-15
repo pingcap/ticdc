@@ -646,6 +646,9 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID) error {
 	return apperror.ErrTimeout.GenWithStackByArgs("move split table operator is timeout")
 }
 
+// only for test
+// SplitTableByRegionCount split table based on region count
+// it can split the table whether the table have one dispatcher or multiple dispatchers
 func (c *Controller) SplitTableByRegionCount(tableID int64) error {
 	if !c.replicationDB.IsTableExists(tableID) {
 		// the table is not exist in this node
@@ -699,6 +702,9 @@ func (c *Controller) SplitTableByRegionCount(tableID int64) error {
 	return apperror.ErrTimeout.GenWithStackByArgs("split table operator is timeout")
 }
 
+// only for test
+// MergeTable merge two nearby dispatchers in this table into one dispatcher,
+// so after merge table, the table may also have multiple dispatchers
 func (c *Controller) MergeTable(tableID int64) error {
 	if !c.replicationDB.IsTableExists(tableID) {
 		// the table is not exist in this node
