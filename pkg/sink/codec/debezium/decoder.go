@@ -16,10 +16,12 @@ package debezium
 import (
 	"bytes"
 	"database/sql"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strings"
+	"time"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -251,7 +253,12 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 		tidbType := col["tidb_type"].(string)
 		optional := col["optional"].(bool)
 		fieldType := parseTiDBType(tidbType, optional)
-		if fieldType.GetType() == mysql.TypeDatetime {
+		switch fieldType.GetType() {
+		case mysql.TypeEnum, mysql.TypeSet:
+			parameters := col["parameters"].(map[string]interface{})
+			allowed := parameters["allowed"].(string)
+			fieldType.SetElems(strings.Split(allowed, ","))
+		case mysql.TypeDatetime:
 			name := col["name"].(string)
 			if name == "io.debezium.time.MicroTimestamp" {
 				fieldType.SetDecimal(6)
@@ -305,26 +312,43 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
 	case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeTinyBlob,
 		mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
 		if mysql.HasBinaryFlag(colInfo.GetFlag()) {
-			switch v := value.(type) {
-			case string:
-				return []byte(v)
-			default:
+			value, err = base64.StdEncoding.DecodeString(value.(string))
+			if err != nil {
+				log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 			}
 			return value
 		}
 		return common.UnsafeStringToBytes(value.(string))
-	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeNewDate:
-		val := value.(json.Number).String()
-		value, err = types.ParseTime(types.DefaultStmtNoWarningContext, val, colInfo.GetType(), colInfo.GetDecimal())
+	case mysql.TypeDate, mysql.TypeNewDate:
+		val, err := value.(json.Number).Int64()
 		if err != nil {
 			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
+		t := time.Unix(val*60*60*24, 0)
+		value = types.NewTime(types.FromGoTime(t), colInfo.GetType(), colInfo.GetDecimal())
+	case mysql.TypeTimestamp:
+		value, err = types.ParseTimestamp(types.DefaultStmtNoWarningContext, value.(string))
+		if err != nil {
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
+		}
+	case mysql.TypeDatetime:
+		val, err := value.(json.Number).Int64()
+		if err != nil {
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
+		}
+		var t time.Time
+		if colInfo.GetDecimal() <= 3 {
+			t = time.UnixMilli(val)
+		} else {
+			t = time.UnixMicro(val)
+		}
+		value = types.NewTime(types.FromGoTime(t), colInfo.GetType(), colInfo.GetDecimal())
 	case mysql.TypeDuration:
-		val := value.(json.Number).String()
-		value, _, err = types.ParseDuration(types.DefaultStmtNoWarningContext, val, colInfo.GetDecimal())
+		val, err := value.(json.Number).Int64()
 		if err != nil {
 			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
+		value = types.NewDuration(0, 0, 0, int(val), types.MaxFsp)
 	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
 		var intVal int64
 		intVal, err = value.(json.Number).Int64()
@@ -334,22 +358,16 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
 		if mysql.HasUnsignedFlag(colInfo.GetFlag()) {
 			return uint64(intVal)
 		}
-
-		if intVal > math.MaxInt64 {
-			return math.MaxInt64
-		}
-		if intVal < math.MinInt64 {
-			return math.MinInt64
-		}
 		return intVal
 	case mysql.TypeBit:
 		switch val := value.(type) {
 		case string:
-			value, err = types.NewBitLiteral(val)
+			b, err := base64.StdEncoding.DecodeString(val)
 			if err != nil {
 				log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 			}
-			return value
+			v := binary.LittleEndian.Uint64(b)
+			value = types.NewBinaryLiteralFromUint(v, len(b))
 		case bool:
 			if val {
 				return types.NewBinaryLiteralFromUint(uint64(1), -1)
@@ -383,16 +401,12 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
 	case mysql.TypeEnum:
 		value, err = types.ParseEnumName(colInfo.GetElems(), value.(string), colInfo.GetCollate())
 		if err != nil {
-			log.Panic("decode enum value failed",
-				zap.Any("value", value), zap.Any("elements", colInfo.GetElems()),
-				zap.String("string", colInfo.GetCollate()), zap.Error(err))
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
 	case mysql.TypeSet:
 		value, err = types.ParseSetName(colInfo.GetElems(), value.(string), colInfo.GetCollate())
 		if err != nil {
-			log.Panic("decode set value failed",
-				zap.Any("value", value), zap.Any("elements", colInfo.GetElems()),
-				zap.String("string", colInfo.GetCollate()), zap.Error(err))
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
 	case mysql.TypeJSON:
 		value, err = types.ParseBinaryJSONFromString(value.(string))
@@ -420,6 +434,16 @@ func parseTiDBType(tidbType string, optional bool) *ptypes.FieldType {
 	}
 	if strings.Contains(tidbType, "blob") || strings.Contains(tidbType, "binary") {
 		ft.AddFlag(mysql.BinaryFlag)
+		ft.SetCharset("binary")
+		ft.SetCollate("binary")
+	}
+	if strings.HasPrefix(tidbType, "char") ||
+		strings.HasPrefix(tidbType, "varchar") ||
+		strings.Contains(tidbType, "text") ||
+		strings.Contains(tidbType, "enum") ||
+		strings.Contains(tidbType, "set") {
+		ft.SetCharset("utf8mb4")
+		ft.SetCollate("utf8mb4_bin")
 	}
 	tp := ptypes.StrToType(tidbType)
 	ft.SetType(tp)
