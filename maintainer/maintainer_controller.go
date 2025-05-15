@@ -14,8 +14,9 @@
 package maintainer
 
 import (
+	"bytes"
 	"context"
-	"math/rand"
+	"sort"
 	"time"
 
 	"github.com/pingcap/log"
@@ -703,25 +704,23 @@ func (c *Controller) MergeTable(tableID int64) error {
 		return nil
 	}
 
-	span := spanz.TableIDToComparableSpan(tableID)
-	totalSpan := &heartbeatpb.TableSpan{
-		TableID:  span.TableID,
-		StartKey: span.StartKey,
-		EndKey:   span.EndKey,
+	// sort by startKey
+	sort.Slice(replications, func(i, j int) bool {
+		return bytes.Compare(replications[i].Span.StartKey, replications[j].Span.StartKey) < 0
+	})
+
+	// choose the first two replication to merge a new replication
+	newSpan := &heartbeatpb.TableSpan{
+		TableID:  replications[0].Span.TableID,
+		StartKey: replications[0].Span.StartKey,
+		EndKey:   replications[1].Span.EndKey,
 	}
 
-	randomIdx := rand.Intn(len(replications))
-	primaryID := replications[randomIdx].ID
-	primaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[randomIdx], replications, []*heartbeatpb.TableSpan{totalSpan}, nil)
-	for _, replicaSet := range replications {
-		var op *operator.MergeSplitDispatcherOperator
-		if replicaSet.ID == primaryID {
-			op = primaryOp
-		} else {
-			op = operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
-		}
-		c.operatorController.AddOperator(op)
-	}
+	primaryID := replications[0].ID
+	primaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[0], replications, []*heartbeatpb.TableSpan{newSpan}, nil)
+	secondaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[1], nil, nil, primaryOp.GetOnFinished())
+	c.operatorController.AddOperator(primaryOp)
+	c.operatorController.AddOperator(secondaryOp)
 
 	count := 0
 	maxTry := 30
