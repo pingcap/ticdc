@@ -45,30 +45,39 @@ type mockEventDispatcher struct {
 func (m *mockEventDispatcher) GetId() common.DispatcherID {
 	return m.id
 }
+
 func (m *mockEventDispatcher) GetStartTs() uint64 {
 	return 0
 }
+
 func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return common.NewChangefeedID()
 }
+
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return &heartbeatpb.TableSpan{}
 }
+
 func (m *mockEventDispatcher) GetFilterConfig() *eventpb.FilterConfig {
 	return &eventpb.FilterConfig{}
 }
+
 func (m *mockEventDispatcher) EnableSyncPoint() bool {
 	return false
 }
+
 func (m *mockEventDispatcher) GetSyncPointInterval() time.Duration {
 	return time.Second
 }
+
 func (m *mockEventDispatcher) GetStartTsIsSyncpoint() bool {
 	return false
 }
+
 func (m *mockEventDispatcher) GetResolvedTs() uint64 {
 	return 0
 }
+
 func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
 	for _, dispatcherEvent := range dispatcherEvents {
 		m.handle(dispatcherEvent.Event)
