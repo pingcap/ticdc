@@ -21418,7 +21418,7 @@
         "allValue": ".*",
         "current": {},
         "datasource": "${DS_TEST-CLUSTER}",
-        "definition": "label_values(ticdc_processor_processor_tick_duration_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, namespace)",
+        "definition": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, namespace)",
         "description": null,
         "error": null,
         "hide": 0,
@@ -21428,7 +21428,7 @@
         "name": "namespace",
         "options": [],
         "query": {
-          "query": "label_values(ticdc_processor_processor_tick_duration_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, namespace)",
+          "query": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, namespace)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 2,
@@ -21445,7 +21445,7 @@
         "allValue": ".*",
         "current": {},
         "datasource": "${DS_TEST-CLUSTER}",
-        "definition": "label_values(ticdc_processor_processor_tick_duration_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, changefeed)",
+        "definition": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, changefeed)",
         "description": null,
         "error": null,
         "hide": 0,
@@ -21455,7 +21455,7 @@
         "name": "changefeed",
         "options": [],
         "query": {
-          "query": "label_values(ticdc_processor_processor_tick_duration_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, changefeed)",
+          "query": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, changefeed)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 2,
@@ -21594,33 +21594,6 @@
         "query": {
           "query": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}, instance)",
           "refId": "local-runtime_instance-Variable-Query"
-        },
-        "refresh": 2,
-        "regex": "",
-        "skipUrlSync": false,
-        "sort": 0,
-        "tagValuesQuery": "",
-        "tags": [],
-        "tagsQuery": "",
-        "type": "query",
-        "useTags": false
-      },
-      {
-        "allValue": null,
-        "current": {},
-        "datasource": "${DS_TEST-CLUSTER}",
-        "definition": "label_values(ticdc_actor_number_of_workers{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}, name)",
-        "description": null,
-        "error": null,
-        "hide": 0,
-        "includeAll": true,
-        "label": "Actor",
-        "multi": true,
-        "name": "actor_name",
-        "options": [],
-        "query": {
-          "query": "label_values(ticdc_actor_number_of_workers{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}, name)",
-          "refId": "local-actor_name-Variable-Query"
         },
         "refresh": 2,
         "regex": "",
