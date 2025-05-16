@@ -282,7 +282,7 @@ func (app *WorkloadApp) execute(conn *sql.Conn, sql string, tableIndex int) (sql
 	res, err := conn.ExecContext(context.Background(), sql)
 	if err != nil {
 		if !strings.Contains(err.Error(), "Error 1146") {
-			plog.Info("insert error", zap.Error(err))
+			plog.Info("execute error", zap.Error(err), zap.String("sql", sql))
 			return res, err
 		}
 		// if table not exists, we create it
@@ -340,8 +340,8 @@ func (app *WorkloadApp) StartMetricsReporting() {
 }
 
 func getSQLPreview(sql string) string {
-	if len(sql) > 140 {
-		return sql[:140] + "..."
+	if len(sql) > 512 {
+		return sql[:512] + "..."
 	}
 	return sql
 }

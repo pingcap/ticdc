@@ -32,6 +32,10 @@ const (
 	// If the dispatcher doesn't send heartbeat to the event service for a long time,
 	// we consider it is in-active and remove it.
 	heartbeatTimeout = time.Second * 180
+
+	minScanLimitInBytes     = 1024 * 1024 * 2  // 2MB
+	maxScanLimitInBytes     = 1024 * 1024 * 10 // 10MB
+	updateScanLimitInterval = time.Second * 10
 )
 
 // Store the progress of the dispatcher, and the incremental events stats.
@@ -100,6 +104,10 @@ type dispatcherStat struct {
 	// scanRateLimiter *rate.Limiter
 
 	isReceivedFirstResolvedTs atomic.Bool
+
+	currentScanLimitInBytes atomic.Int64
+	maxScanLimitInBytes     atomic.Int64
+	lastUpdateScanLimitTime atomic.Time
 }
 
 func newDispatcherStat(
@@ -117,7 +125,6 @@ func newDispatcherStat(
 		messageWorkerIndex: messageWorkerIndex,
 		info:               info,
 		filter:             filter,
-		// scanRateLimiter:    rate.NewLimiter(rate.Limit(25), 25),
 	}
 	changefeedStatus.addDispatcher()
 
@@ -131,6 +138,9 @@ func newDispatcherStat(
 	dispStat.sentResolvedTs.Store(startTs)
 	dispStat.isRunning.Store(true)
 	dispStat.lastReceivedHeartbeatTime.Store(time.Now().UnixNano())
+
+	dispStat.resetScanLimit()
+	dispStat.maxScanLimitInBytes.Store(maxScanLimitInBytes)
 	return dispStat
 }
 
@@ -208,6 +218,30 @@ func (a *dispatcherStat) IsRunning() bool {
 	return a.isRunning.Load() && a.changefeedStat.isRunning.Load()
 }
 
+// getCurrentScanLimitInBytes returns the current scan limit in bytes.
+// It will double the current scan limit in bytes every 10 seconds,
+// and cap the scan limit in bytes to the max scan limit in bytes.
+func (a *dispatcherStat) getCurrentScanLimitInBytes() int64 {
+	res := a.currentScanLimitInBytes.Load()
+	if time.Since(a.lastUpdateScanLimitTime.Load()) > updateScanLimitInterval {
+		if res >= a.maxScanLimitInBytes.Load() {
+			return res
+		}
+		newLimit := res * 2
+		if newLimit > a.maxScanLimitInBytes.Load() {
+			newLimit = a.maxScanLimitInBytes.Load()
+		}
+		a.currentScanLimitInBytes.Store(newLimit)
+		a.lastUpdateScanLimitTime.Store(time.Now())
+	}
+	return res
+}
+
+func (a *dispatcherStat) resetScanLimit() {
+	a.currentScanLimitInBytes.Store(minScanLimitInBytes)
+	a.lastUpdateScanLimitTime.Store(time.Now())
+}
+
 type scanTask = *dispatcherStat
 
 func (t scanTask) GetKey() common.DispatcherID {
@@ -236,12 +270,14 @@ type wrapEvent struct {
 	postSendFunc func()
 }
 
-func newWrapDMLEvent(serverID node.ID, e *pevent.DMLEvent, state pevent.EventSenderState) *wrapEvent {
-	e.State = state
+func newWrapBatchDMLEvent(serverID node.ID, e *pevent.BatchDMLEvent, state pevent.EventSenderState) *wrapEvent {
+	for _, dml := range e.DMLEvents {
+		dml.State = state
+	}
 	w := getWrapEvent()
 	w.serverID = serverID
 	w.e = e
-	w.msgType = pevent.TypeDMLEvent
+	w.msgType = e.GetType()
 	return w
 }
 

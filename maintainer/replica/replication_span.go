@@ -68,6 +68,7 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 		zap.Int64("schemaID", SchemaID),
 		zap.Int64("tableID", span.TableID),
 		zap.String("groupID", replica.GetGroupName(r.groupID)),
+		zap.Uint64("checkpointTs", checkpointTs),
 		zap.String("start", hex.EncodeToString(span.StartKey)),
 		zap.String("end", hex.EncodeToString(span.EndKey)))
 	return r

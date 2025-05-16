@@ -80,10 +80,6 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		return 0, nil, nil
 	}
 
-	// key, physicalTableID, err := decodeTableID(raw.Key)
-	// if err != nil {
-	// 	return nil
-	// }
 	var (
 		decoder         *rowcodec.ChunkDecoder
 		preChecksum     uint32
@@ -116,6 +112,7 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		}
 		count++
 	}
+
 	if len(raw.Value) != 0 {
 		if !rowcodec.IsNewFormat(raw.Value) {
 			err = m.rawKVToChunkV1(raw.Value, tableInfo, chk, recordID)

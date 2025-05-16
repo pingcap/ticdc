@@ -73,8 +73,8 @@ func (s *balanceScheduler) Execute() time.Time {
 	}
 	now := time.Now()
 
-	failpoint.Inject("StopBalanceScheduler", func() time.Time {
-		return now.Add(s.checkBalanceInterval)
+	failpoint.Inject("StopBalanceScheduler", func() {
+		failpoint.Return(now.Add(s.checkBalanceInterval))
 	})
 
 	// TODO: consider to ignore split tables' dispatcher basic schedule operator to decide whether we can make balance schedule

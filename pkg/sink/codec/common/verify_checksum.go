@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
@@ -36,46 +36,48 @@ func VerifyChecksum(event *commonEvent.DMLEvent, db *sql.DB) error {
 	// the data maybe restored by br, and the checksum is not enabled, so no expected here.
 	columns := event.TableInfo.GetColumns()
 	event.Rewind()
-	row, ok := event.GetNextRow()
-	if !ok {
-		log.Error("get RowChange failed")
-	}
-	if row.Checksum.Current != 0 {
-		checksum, err := calculateChecksum(row.Row, columns)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		if checksum != row.Checksum.Current {
-			log.Error("current checksum mismatch",
-				zap.Uint32("expected", row.Checksum.Current), zap.Uint32("actual", checksum), zap.Any("event", event))
-			for _, col := range columns {
-				log.Info("data corrupted, print each column for debugging",
-					zap.String("name", col.Name.O), zap.Any("type", col.GetType()),
-					zap.Any("charset", col.GetCharset()), zap.Any("flag", col.GetFlag()),
-					zap.Any("default", col.GetDefaultValue()))
-			}
-			return fmt.Errorf("current checksum mismatch, current: %d, expected: %d", checksum, row.Checksum.Current)
-		}
-	}
-	if row.Checksum.Previous != 0 {
-		checksum, err := calculateChecksum(row.PreRow, columns)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		if checksum != row.Checksum.Previous {
-			log.Error("previous checksum mismatch",
-				zap.Uint32("expected", row.Checksum.Previous),
-				zap.Uint32("actual", checksum), zap.Any("event", event))
-			for _, col := range columns {
-				log.Info("data corrupted, print each column for debugging",
-					zap.String("name", col.Name.O), zap.Any("type", col.GetType()),
-					zap.Any("charset", col.GetCharset()), zap.Any("flag", col.GetFlag()),
-					zap.Any("default", col.GetDefaultValue()))
-			}
-			return fmt.Errorf("previous checksum mismatch, current: %d, expected: %d", checksum, row.Checksum.Previous)
-		}
-	}
 
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			break
+		}
+		if row.Checksum.Current != 0 {
+			checksum, err := calculateChecksum(row.Row, columns)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			if checksum != row.Checksum.Current {
+				log.Error("current checksum mismatch",
+					zap.Uint32("expected", row.Checksum.Current), zap.Uint32("actual", checksum), zap.Any("event", event))
+				for _, col := range columns {
+					log.Info("data corrupted, print each column for debugging",
+						zap.String("name", col.Name.O), zap.Any("type", col.GetType()),
+						zap.Any("charset", col.GetCharset()), zap.Any("flag", col.GetFlag()),
+						zap.Any("default", col.GetDefaultValue()))
+				}
+				return fmt.Errorf("current checksum mismatch, current: %d, expected: %d", checksum, row.Checksum.Current)
+			}
+		}
+		if row.Checksum.Previous != 0 {
+			checksum, err := calculateChecksum(row.PreRow, columns)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			if checksum != row.Checksum.Previous {
+				log.Error("previous checksum mismatch",
+					zap.Uint32("expected", row.Checksum.Previous),
+					zap.Uint32("actual", checksum), zap.Any("event", event))
+				for _, col := range columns {
+					log.Info("data corrupted, print each column for debugging",
+						zap.String("name", col.Name.O), zap.Any("type", col.GetType()),
+						zap.Any("charset", col.GetCharset()), zap.Any("flag", col.GetFlag()),
+						zap.Any("default", col.GetDefaultValue()))
+				}
+				return fmt.Errorf("previous checksum mismatch, current: %d, expected: %d", checksum, row.Checksum.Previous)
+			}
+		}
+	}
 	if db == nil {
 		return nil
 	}
@@ -85,7 +87,7 @@ func VerifyChecksum(event *commonEvent.DMLEvent, db *sql.DB) error {
 
 // calculate the checksum, caller should make sure all columns is ordered by the column's id.
 // by follow: https://github.com/pingcap/tidb/blob/e3417913f58cdd5a136259b902bf177eaf3aa637/util/rowcodec/common.go#L294
-func calculateChecksum(row chunk.Row, columnInfo []*timodel.ColumnInfo) (uint32, error) {
+func calculateChecksum(row chunk.Row, columnInfo []*model.ColumnInfo) (uint32, error) {
 	var (
 		checksum uint32
 		err      error
@@ -107,7 +109,7 @@ func calculateChecksum(row chunk.Row, columnInfo []*timodel.ColumnInfo) (uint32,
 
 // buildChecksumBytes append value to the buf, mysqlType is used to convert value interface to concrete type.
 // by follow: https://github.com/pingcap/tidb/blob/e3417913f58cdd5a136259b902bf177eaf3aa637/util/rowcodec/common.go#L308
-func buildChecksumBytes(buf []byte, row chunk.Row, idx int, col *timodel.ColumnInfo) ([]byte, error) {
+func buildChecksumBytes(buf []byte, row chunk.Row, idx int, col *model.ColumnInfo) ([]byte, error) {
 	if row.IsNull(idx) {
 		return buf, nil
 	}

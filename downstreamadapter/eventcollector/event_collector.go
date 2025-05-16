@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -521,23 +520,51 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 			return
 		case targetMessage := <-inCh:
 			for _, msg := range targetMessage.Message {
-				switch msg.(type) {
-				case commonEvent.Event:
-					event := msg.(commonEvent.Event)
-					switch event.GetType() {
-					case commonEvent.TypeBatchResolvedEvent:
-						events := event.(*commonEvent.BatchResolvedEvent).Events
+				switch e := msg.(type) {
+				case event.Event:
+					switch e.GetType() {
+					case event.TypeBatchResolvedEvent:
+						events := e.(*event.BatchResolvedEvent).Events
 						from := &targetMessage.From
-						event := dispatcher.DispatcherEvent{}
-						for _, e := range events {
-							event.From = from
-							event.Event = e
-							c.ds.Push(e.DispatcherID, event)
+						for _, resolvedEvent := range events {
+							c.ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
 						}
-						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(event.Len()))
+						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(e.Len()))
+					case event.TypeBatchDMLEvent:
+						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
+						if !ok {
+							continue
+						}
+						tableInfo, ok := stat.(*dispatcherStat).tableInfo.Load().(*common.TableInfo)
+						if !ok {
+							continue
+						}
+						events := e.(*event.BatchDMLEvent)
+						events.AssembleRows(tableInfo)
+						from := &targetMessage.From
+						for _, dml := range events.DMLEvents {
+							c.ds.Push(dml.DispatcherID, dispatcher.NewDispatcherEvent(from, dml))
+						}
+						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
+					case event.TypeDDLEvent:
+						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
+						if !ok {
+							continue
+						}
+						stat.(*dispatcherStat).setTableInfo(e.(*event.DDLEvent).TableInfo)
+						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
+						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+					case event.TypeHandshakeEvent:
+						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
+						if !ok {
+							continue
+						}
+						stat.(*dispatcherStat).setTableInfo(e.(*event.HandshakeEvent).TableInfo)
+						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
+						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					default:
-						c.metricDispatcherReceivedKVEventCount.Add(float64(event.Len()))
-						c.ds.Push(event.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, event))
+						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
+						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					}
 				default:
 					log.Panic("invalid message type", zap.Any("msg", msg))
@@ -548,7 +575,7 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 }
 
 func (c *EventCollector) updateMetrics(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {

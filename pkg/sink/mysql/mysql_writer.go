@@ -16,6 +16,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"sync"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru"
@@ -47,8 +48,9 @@ type Writer struct {
 	syncPointTableInit     bool
 	lastCleanSyncPointTime time.Time
 
-	ddlTsTableInit   bool
-	tableSchemaStore *util.TableSchemaStore
+	ddlTsTableInit      bool
+	ddlTsTableInitMutex sync.Mutex
+	tableSchemaStore    *util.TableSchemaStore
 
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
@@ -106,8 +108,8 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 		// first we check whether there is some async ddl executed now.
 		w.waitAsyncDDLDone(event)
 	}
-	if !(event.TiDBOnly && !w.cfg.IsTiDB) {
-		if w.cfg.IsTiDB {
+	if w.cfg.IsTiDB || !event.TiDBOnly {
+		if w.cfg.IsTiDB && w.cfg.EnableDDLTs {
 			// if downstream is tidb, we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
 			// to ensure the atomic with ddl writing when server is restarted.
 			w.FlushDDLTsPre(event)
@@ -124,9 +126,11 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 		// We make Flush ddl ts before callback(), in order to make sure the ddl ts is flushed
 		// before new checkpointTs will report to maintainer. Therefore, when the table checkpointTs is forward,
 		// we can ensure the ddl and ddl ts are both flushed downstream successfully.
-		err = w.FlushDDLTs(event)
-		if err != nil {
-			return err
+		if w.cfg.EnableDDLTs {
+			err = w.FlushDDLTs(event)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -145,7 +149,7 @@ func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 		}
 		w.syncPointTableInit = true
 	}
-	if w.cfg.IsTiDB {
+	if w.cfg.IsTiDB && w.cfg.EnableDDLTs {
 		// if downstream is tidb, we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
 		// to ensure the atomic with ddl writing when server is restarted.
 		w.FlushDDLTsPre(event)
@@ -163,11 +167,10 @@ func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	// We make Flush ddl ts before callback(), in order to make sure the ddl ts is flushed
 	// before new checkpointTs will report to maintainer. Therefore, when the table checkpointTs is forward,
 	// we can ensure the ddl and ddl ts are both flushed downstream successfully.
-	err = w.FlushDDLTs(event)
-	if err != nil {
-		return err
+	if w.cfg.EnableDDLTs {
+		err = w.FlushDDLTs(event)
 	}
-	return nil
+	return err
 }
 
 func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {

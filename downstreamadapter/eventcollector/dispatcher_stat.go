@@ -52,6 +52,9 @@ type dispatcherStat struct {
 
 	// The largest commit ts that has been sent to the dispatcher.
 	sentCommitTs atomic.Uint64
+
+	// tableInfo is the latest table info of the dispatcher's corresponding table.
+	tableInfo atomic.Value
 }
 
 func (d *dispatcherStat) reset() {
@@ -72,6 +75,7 @@ func (d *dispatcherStat) checkEventSeq(event dispatcher.DispatcherEvent, eventCo
 			log.Warn("Received an out-of-order event, reset the dispatcher",
 				zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 				zap.Stringer("dispatcher", d.target.GetId()),
+				zap.Int("eventType", event.GetType()),
 				zap.Uint64("receivedSeq", event.GetSeq()),
 				zap.Uint64("expectedSeq", expectedSeq),
 				zap.Uint64("commitTs", event.GetCommitTs()))
@@ -136,7 +140,13 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 		return
 	}
 	d.waitHandshake.Store(false)
-	d.target.SetInitialTableInfo(event.Event.(*commonEvent.HandshakeEvent).TableInfo)
+}
+
+func (d *dispatcherStat) setTableInfo(tableInfo *common.TableInfo) {
+	if tableInfo == nil {
+		return
+	}
+	d.tableInfo.Store(tableInfo)
 }
 
 func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {
@@ -259,8 +269,11 @@ func (d *dispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
 
 	if d.eventServiceInfo.serverID == "" || !d.eventServiceInfo.readyEventReceived {
 		log.Info("ignore pause dispatcher request because the eventService is not ready",
+			zap.Stringer("dispatcherID", d.dispatcherID),
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-			zap.Any("eventServiceID", d.eventServiceInfo.serverID))
+			zap.Any("eventServiceID", d.eventServiceInfo.serverID),
+			zap.Bool("readyEventReceived", d.eventServiceInfo.readyEventReceived),
+		)
 		// Just ignore the request if the dispatcher is not ready.
 		return
 	}

@@ -556,6 +556,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 					zap.Uint64("newCheckpointTs", newCheckpointTs),
 					zap.Uint64("oldCheckpointTs", subStat.checkpointTs.Load()))
 			}
+			subscriptionStat.checkpointTs.CompareAndSwap(subscriptionStat.checkpointTs.Load(), newCheckpointTs)
 		}
 	}
 	return nil
@@ -586,7 +587,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	}
 	subscriptionStat := stat.subStat
 	if dataRange.StartTs < subscriptionStat.checkpointTs.Load() {
-		log.Panic("should not happen",
+		log.Panic("dataRange startTs is larger than subscriptionStat checkpointTs, it should not happen",
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Uint64("checkpointTs", subscriptionStat.checkpointTs.Load()),
 			zap.Uint64("startTs", dataRange.StartTs))

@@ -32,15 +32,21 @@ func TestDMLEvent(t *testing.T) {
 	dmlEvent.State = EventSenderStatePaused
 	require.NotNil(t, dmlEvent)
 
-	data, err := dmlEvent.Marshal()
+	batchDMLEvent := &BatchDMLEvent{
+		DMLEvents: []*DMLEvent{dmlEvent},
+		Rows:      dmlEvent.Rows,
+		TableInfo: dmlEvent.TableInfo,
+	}
+	data, err := batchDMLEvent.Marshal()
 	require.NoError(t, err)
 
-	reverseEvent := &DMLEvent{}
+	reverseEvents := &BatchDMLEvent{}
 	// Set the TableInfo before unmarshal, it is used in Unmarshal.
-	err = reverseEvent.Unmarshal(data)
+	err = reverseEvents.Unmarshal(data)
 	require.NoError(t, err)
-	require.Equal(t, len(data), int(reverseEvent.eventSize))
-	reverseEvent.AssembleRows(dmlEvent.TableInfo)
+	reverseEvents.AssembleRows(batchDMLEvent.TableInfo)
+	require.Equal(t, len(reverseEvents.DMLEvents), 1)
+	reverseEvent := reverseEvents.DMLEvents[0]
 	// Compare the content of the two event's rows.
 	require.Equal(t, dmlEvent.Rows.ToString(dmlEvent.TableInfo.GetFieldSlice()), reverseEvent.Rows.ToString(dmlEvent.TableInfo.GetFieldSlice()))
 	for i := 0; i < dmlEvent.Rows.NumRows(); i++ {
@@ -52,9 +58,12 @@ func TestDMLEvent(t *testing.T) {
 	require.True(t, reverseEvent.IsPaused())
 
 	// Compare the remaining content of the two events.
+	require.Equal(t, dmlEvent.TableInfo.GetFieldSlice(), reverseEvent.TableInfo.GetFieldSlice())
 	dmlEvent.Rows = nil
 	reverseEvent.Rows = nil
 	reverseEvent.eventSize = 0
+	dmlEvent.TableInfo = nil
+	reverseEvent.TableInfo = nil
 	require.Equal(t, dmlEvent, reverseEvent)
 }
 
@@ -76,19 +85,15 @@ func TestEncodeAndDecodeV0(t *testing.T) {
 	// Set the TableInfo before decode, it is used in decode.
 	err = reverseEvent.decodeV0(data)
 	require.NoError(t, err)
-	reverseEvent.AssembleRows(dmlEvent.TableInfo)
-	require.Equal(t, dmlEvent.Rows.ToString(dmlEvent.TableInfo.GetFieldSlice()), reverseEvent.Rows.ToString(dmlEvent.TableInfo.GetFieldSlice()))
-	for i := 0; i < dmlEvent.Rows.NumRows(); i++ {
-		for j := 0; j < dmlEvent.Rows.NumCols(); j++ {
-			require.Equal(t, dmlEvent.Rows.GetRow(i).GetRaw(j), reverseEvent.Rows.GetRow(i).GetRaw(j))
-		}
-	}
 
 	require.False(t, reverseEvent.IsPaused())
 
 	// Compare the remaining content of the two events.
+	require.Equal(t, dmlEvent.TableInfo.GetFieldSlice(), reverseEvent.TableInfo.GetFieldSlice())
 	dmlEvent.Rows = nil
 	reverseEvent.Rows = nil
 	reverseEvent.eventSize = 0
+	dmlEvent.TableInfo = nil
+	reverseEvent.TableInfo = nil
 	require.Equal(t, dmlEvent, reverseEvent)
 }

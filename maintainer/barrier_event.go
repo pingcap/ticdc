@@ -378,6 +378,57 @@ func (be *BarrierEvent) sendPassAction() []*messaging.TargetMessage {
 	return msgs
 }
 
+// check all related blocked dispatchers progress, to forward the progress of some block event,
+// to avoid the corner case that some dispatcher has forward checkpointTs.
+// If the dispatcher's checkpointTs >= commitTs of this event, means the block event is writen to the sink.
+//
+// For example, there are two nodes A and B, and there are two dispatchers A1 and B1, maintainer is also running on A.
+// One ddl event E need the evolve of A1 and B1, and A1 finish flushing the event E downstream.
+// While before A1 report the checkpointTs, node A crash.
+// Then maintainer transfer to node B, and B1 report the block event.
+// And new A1 will be created as startTs = E.commitTs, because the ddl_ts in sink is E.commitTs.
+// while in HandleBootstrapResponse, the replication checkpointTs of A1 is still smaller than E.commitTs.(not finish reporting new checkpointTs of A1)
+// so we will still have a block event, waiting for the report of A1.
+//
+// So we add this check in resend, to provide a safety check for ddl event, avoid a block event is always blocked.
+func (be *BarrierEvent) checkBlockedDispatchers() {
+	switch be.blockedDispatchers.InfluenceType {
+	case heartbeatpb.InfluenceType_Normal:
+		for _, tableId := range be.blockedDispatchers.TableIDs {
+			replications := be.controller.replicationDB.GetTasksByTableID(tableId)
+			for _, replication := range replications {
+				if replication.GetStatus().CheckpointTs >= be.commitTs {
+					// one related table has forward checkpointTs, means the block event can be advanced
+					be.selected.Store(true)
+					be.writerDispatcherAdvanced = true
+					return
+				}
+			}
+		}
+	case heartbeatpb.InfluenceType_DB:
+		schemaID := be.blockedDispatchers.SchemaID
+		replications := be.controller.replicationDB.GetTasksBySchemaID(schemaID)
+		for _, replication := range replications {
+			if replication.GetStatus().CheckpointTs >= be.commitTs {
+				// one related table has forward checkpointTs, means the block event can be advanced
+				be.selected.Store(true)
+				be.writerDispatcherAdvanced = true
+				return
+			}
+		}
+	case heartbeatpb.InfluenceType_All:
+		replications := be.controller.replicationDB.GetAllTasks()
+		for _, replication := range replications {
+			if replication.GetStatus().CheckpointTs >= be.commitTs {
+				// one related table has forward checkpointTs, means the block event can be advanced
+				be.selected.Store(true)
+				be.writerDispatcherAdvanced = true
+				return
+			}
+		}
+	}
+}
+
 func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 	if time.Since(be.lastResendTime) < time.Second {
 		return nil
@@ -413,6 +464,16 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 
 	// still waiting for all dispatcher to reach the block commit ts
 	if !be.selected.Load() {
+		if time.Since(be.lastResendTime) > 30*time.Second {
+			log.Info("barrier event is not being selected",
+				zap.String("changefeed", be.cfID.Name()),
+				zap.Uint64("commitTs", be.commitTs),
+				zap.Bool("isSyncPoint", be.isSyncPoint),
+				zap.Bool("selected", be.selected.Load()),
+				zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
+				zap.Any("blocker", be.blockedDispatchers))
+		}
+		be.checkBlockedDispatchers()
 		return nil
 	}
 	be.lastResendTime = time.Now()
@@ -424,10 +485,35 @@ func (be *BarrierEvent) resend() []*messaging.TargetMessage {
 			log.Warn("writer dispatcher not found",
 				zap.String("changefeed", be.cfID.Name()),
 				zap.String("dispatcher", be.writerDispatcher.String()),
-				zap.Stringer("node", stm.GetNodeID()),
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Bool("isSyncPoint", be.isSyncPoint))
-			// TODO: select a new writer
+
+			// choose a new one as the writer
+			// it only can happen then the split and merge happens to a table, and the writeDispatcher is not the table trigger event dispatcher
+			// So the block event influence type is must normal, we just need to select one dispatcher in the block dispatchers
+			if be.blockedDispatchers.InfluenceType != heartbeatpb.InfluenceType_Normal || len(be.blockedDispatchers.TableIDs) == 0 {
+				log.Panic("influence type should be normal when writer dispatcher not found",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.Any("event", be),
+					zap.String("dispatcher", be.writerDispatcher.String()),
+					zap.Uint64("commitTs", be.commitTs),
+					zap.Bool("isSyncPoint", be.isSyncPoint))
+			}
+
+			tableID := be.blockedDispatchers.TableIDs[0]
+			replications := be.controller.replicationDB.GetTasksByTableID(tableID)
+
+			if len(replications) == 0 {
+				log.Panic("replications for this block event should not be empty",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.Int64("tableID", tableID),
+					zap.Any("event", be),
+					zap.String("dispatcher", be.writerDispatcher.String()),
+					zap.Uint64("commitTs", be.commitTs),
+					zap.Bool("isSyncPoint", be.isSyncPoint))
+			}
+
+			be.writerDispatcher = replications[0].ID
 			return nil
 		}
 

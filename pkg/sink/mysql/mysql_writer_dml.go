@@ -72,22 +72,10 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	)
 	for _, eventsInGroup := range eventsGroup {
 		tableInfo := eventsInGroup[0].TableInfo
-		if !tableInfo.HasPrimaryKey() || tableInfo.HasVirtualColumns() {
-			// check if the table has a handle key or has a virtual column
+		if !shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup, w.cfg.SafeMode) {
 			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
-		} else if len(eventsInGroup) == 1 && eventsInGroup[0].Len() == 1 {
-			// if there only one row in the group, we can use the normal sql generate
-			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
-		} else if len(eventsInGroup) > 0 {
-			// if the events are in different safe mode, we can't use the batch dml generate
-			firstEventSafeMode := !w.cfg.SafeMode && eventsInGroup[0].CommitTs > eventsInGroup[0].ReplicatingTs
-			finalEventSafeMode := !w.cfg.SafeMode && eventsInGroup[len(eventsInGroup)-1].CommitTs > eventsInGroup[len(eventsInGroup)-1].ReplicatingTs
-			if firstEventSafeMode != finalEventSafeMode {
-				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
-			} else {
-				// use the batch dml generate
-				queryList, argsList = w.generateBatchSQL(eventsInGroup)
-			}
+		} else {
+			queryList, argsList = w.generateBatchSQL(eventsInGroup)
 		}
 		dmls.sqls = append(dmls.sqls, queryList...)
 		dmls.values = append(dmls.values, argsList...)
@@ -99,6 +87,58 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	}
 
 	return dmls
+}
+
+// shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.
+// Batch SQL generation is used when:
+// 1. The table has a primary key
+// 2. The table doesn't have virtual columns
+// 3. There's more than one row in the group
+// 4. All events have the same safe mode status
+func shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent, safemode bool) bool {
+	if !hasPK || hasVirtualCols {
+		return false
+	}
+
+	if len(events) == 1 && events[0].Len() == 1 {
+		return false
+	}
+
+	return allRowInSameSafeMode(safemode, events)
+}
+
+// allRowInSameSafeMode determines whether all DMLEvents in a batch have the same safe mode status.
+// Safe mode is either globally enabled via the safemode parameter, or determined per event
+// by comparing CommitTs and ReplicatingTs.
+//
+// Parameters:
+//   - safemode: If true, global safe mode is enabled and the function returns true immediately
+//   - events: A slice of DMLEvents to check for consistent safe mode status
+//
+// Returns:
+//
+//	true if either:
+//	- global safe mode is enabled (safemode=true), or
+//	- all events have the same safe mode status (all events' CommitTs > ReplicatingTs, or all ≤)
+//	false if events have inconsistent safe mode status
+func allRowInSameSafeMode(safemode bool, events []*commonEvent.DMLEvent) bool {
+	if safemode {
+		return true
+	}
+
+	if len(events) == 0 {
+		return false
+	}
+
+	firstSafeMode := events[0].CommitTs > events[0].ReplicatingTs
+	for _, event := range events {
+		currentSafeMode := event.CommitTs > event.ReplicatingTs
+		if currentSafeMode != firstSafeMode {
+			return false
+		}
+	}
+
+	return true
 }
 
 // for generate batch sql for multi events, we first need to compare the rows with the same pk, to generate the final rows.
@@ -370,15 +410,14 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 		prevType := rowChanges[0].RowType
 		for i := 1; i < len(rowChanges); i++ {
 			rowType := rowChanges[i].RowType
-			if rowType != prevType {
-				prevType = rowType
-			} else {
-				log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges), zap.Any("prevType", prevType), zap.Any("currentType", rowType))
+			if rowType == prevType {
+				log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges),
+					zap.Any("prevType", prevType), zap.Any("currentType", rowType))
 			}
+			prevType = rowType
 		}
 		rowsList = append(rowsList, rowChanges[len(rowChanges)-1])
 	}
-
 	// step 3. generate sqls
 	return w.batchSingleTxnDmls(rowsList, tableInfo, false)
 }
@@ -610,15 +649,20 @@ func logDMLTxnErr(
 	}
 	if isRetryableDMLError(err) {
 		log.Warn("execute DMLs with error, retry later",
-			zap.Error(err), zap.Duration("duration", time.Since(start)),
-			zap.String("query", query), zap.Int("count", count),
+			zap.String("changefeed", changefeed),
+			zap.Duration("duration", time.Since(start)),
 			zap.Uint64s("startTs", startTs),
-			zap.String("changefeed", changefeed))
+			zap.Int("count", count),
+			zap.String("query", query),
+			zap.Error(err))
 	} else {
 		log.Error("execute DMLs with error, can not retry",
-			zap.Error(err), zap.Duration("duration", time.Since(start)),
-			zap.String("query", query), zap.Int("count", count),
-			zap.String("changefeed", changefeed))
+			zap.String("changefeed", changefeed),
+			zap.Duration("duration", time.Since(start)),
+			zap.Uint64s("startTs", startTs),
+			zap.Int("count", count),
+			zap.String("query", query),
+			zap.Error(err))
 	}
 	return errors.WithMessage(err, fmt.Sprintf("Failed query info: %s; ", query))
 }
