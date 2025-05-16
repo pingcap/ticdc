@@ -92,7 +92,7 @@ type schemaStore struct {
 func New(
 	ctx context.Context,
 	root string,
-	subClient *logpuller.SubscriptionClient,
+	subClient logpuller.SubscriptionClient,
 	pdCli pd.Client,
 	pdClock pdutil.Clock,
 	kvStorage kv.Storage,

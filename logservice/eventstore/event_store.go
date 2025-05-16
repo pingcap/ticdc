@@ -57,11 +57,7 @@ var (
 type ResolvedTsNotifier func(watermark uint64, latestCommitTs uint64)
 
 type EventStore interface {
-	Name() string
-
-	Run(ctx context.Context) error
-
-	Close(ctx context.Context) error
+	common.SubModule
 
 	RegisterDispatcher(
 		dispatcherID common.DispatcherID,
@@ -151,7 +147,7 @@ func eventWithCallbackSizer(e eventWithCallback) int {
 
 type eventStore struct {
 	pdClock   pdutil.Clock
-	subClient *logpuller.SubscriptionClient
+	subClient logpuller.SubscriptionClient
 
 	dbs            []*pebble.DB
 	chs            []*chann.UnlimitedChannel[eventWithCallback, uint64]
@@ -190,7 +186,7 @@ const (
 func New(
 	ctx context.Context,
 	root string,
-	subClient *logpuller.SubscriptionClient,
+	subClient logpuller.SubscriptionClient,
 	pdClock pdutil.Clock,
 ) EventStore {
 	dbPath := fmt.Sprintf("%s/%s", root, dataDir)
@@ -940,7 +936,11 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 				log.Panic("invalid subscription change type", zap.Int("changeType", int(change.ChangeType)))
 			}
 		case <-tick.C:
-			message := messaging.NewSingleTargetMessage(e.getCoordinatorInfo(), messaging.LogCoordinatorTopic, state)
+			coordinatorID := e.getCoordinatorInfo()
+			if coordinatorID == "" {
+				continue
+			}
+			message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state)
 			// just ignore messagees fail to send
 			if err := e.messageCenter.SendEvent(message); err != nil {
 				log.Warn("send broadcast message to coordinator failed", zap.Error(err))
