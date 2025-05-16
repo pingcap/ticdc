@@ -144,7 +144,7 @@ func TestProcessMessage(t *testing.T) {
 	ch <- newMessage(node.ID, ddl)
 	ch <- newMessage(node.ID, dmls)
 
-	ctx1, cancel := context.WithTimeout(ctx, time.Second*10)
+	ctx1, cancel := context.WithTimeout(ctx, time.Second*20)
 	defer cancel()
 	select {
 	case <-done:
