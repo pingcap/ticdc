@@ -61,7 +61,7 @@ type ddlJobFetcher struct {
 
 func newDDLJobFetcher(
 	ctx context.Context,
-	subClient *logpuller.SubscriptionClient,
+	subClient logpuller.SubscriptionClient,
 	kvStorage kv.Storage,
 	startTs uint64,
 	cacheDDLEvent func(ddlEvent DDLJobWithCommitTs),

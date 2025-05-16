@@ -23,17 +23,22 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func newLogCoordinatorForTest() *logCoordinator {
+	c := &logCoordinator{}
+	c.eventStoreStates.m = make(map[node.ID]*logservicepb.EventStoreState)
+	return c
+}
+
 func TestGetCandidateNodes(t *testing.T) {
-	// Initialize logCoordinator
-	coordinator := &logCoordinator{}
+	coordinator := newLogCoordinatorForTest()
 
 	nodeID1 := node.ID("node-1")
 	nodeID2 := node.ID("node-2")
 	nodeID3 := node.ID("node-3")
 
+	// initialize table spans
 	tableID1 := int64(100)
 	tableID2 := int64(101)
-
 	span1 := &heartbeatpb.TableSpan{
 		TableID: tableID1,
 	}
@@ -43,78 +48,85 @@ func TestGetCandidateNodes(t *testing.T) {
 	}
 	span2.StartKey, span2.EndKey = spanz.GetTableRange(span2.TableID)
 
-	coordinator.eventStoreStates.m = map[node.ID]*eventStoreState{
-		nodeID1: {
-			subscriptionStates: map[int64]subscriptionStates{
-				tableID1: {
+	// initialize event store states
+	coordinator.updateEventStoreState(nodeID1, &logservicepb.EventStoreState{
+		TableStates: map[int64]*logservicepb.TableState{
+			tableID1: {
+				Subscriptions: []*logservicepb.SubscriptionState{
 					{
-						subID:        1,
-						span:         span1,
-						checkpointTs: 100,
-						resolvedTs:   200,
+						SubID:        1,
+						Span:         span1,
+						CheckpointTs: 100,
+						ResolvedTs:   200,
 					},
 				},
 			},
 		},
-		nodeID2: {
-			subscriptionStates: map[int64]subscriptionStates{
-				tableID1: {
+	})
+	coordinator.updateEventStoreState(nodeID2, &logservicepb.EventStoreState{
+		TableStates: map[int64]*logservicepb.TableState{
+			tableID1: {
+				Subscriptions: []*logservicepb.SubscriptionState{
 					{
-						subID:        1,
-						span:         span1,
-						checkpointTs: 90,
-						resolvedTs:   180,
+						SubID:        1,
+						Span:         span1,
+						CheckpointTs: 90,
+						ResolvedTs:   180,
 					},
 					{
-						subID:        2,
-						span:         span1,
-						checkpointTs: 100,
-						resolvedTs:   220,
+						SubID:        2,
+						Span:         span1,
+						CheckpointTs: 100,
+						ResolvedTs:   220,
 					},
 					{
-						subID:        3,
-						span:         span1,
-						checkpointTs: 80,
-						resolvedTs:   160,
+						SubID:        3,
+						Span:         span1,
+						CheckpointTs: 80,
+						ResolvedTs:   160,
 					},
 				},
-				tableID2: {
+			},
+			tableID2: {
+				Subscriptions: []*logservicepb.SubscriptionState{
 					{
-						subID:        4,
-						span:         span2,
-						checkpointTs: 90,
-						resolvedTs:   190,
+						SubID:        4,
+						Span:         span2,
+						CheckpointTs: 90,
+						ResolvedTs:   190,
 					},
 					{
-						subID:        5,
-						span:         span2,
-						checkpointTs: 90,
-						resolvedTs:   240,
+						SubID:        5,
+						Span:         span2,
+						CheckpointTs: 90,
+						ResolvedTs:   240,
 					},
 				},
 			},
 		},
-		nodeID3: {
-			subscriptionStates: map[int64]subscriptionStates{
-				tableID2: {
+	})
+	coordinator.updateEventStoreState(nodeID3, &logservicepb.EventStoreState{
+		TableStates: map[int64]*logservicepb.TableState{
+			tableID2: {
+				Subscriptions: []*logservicepb.SubscriptionState{
 					{
-						subID:        1,
-						span:         span2,
-						checkpointTs: 100,
-						resolvedTs:   290,
+						SubID:        1,
+						Span:         span2,
+						CheckpointTs: 100,
+						ResolvedTs:   290,
 					},
 					{
-						subID:        2,
-						span:         span2,
-						checkpointTs: 100,
-						resolvedTs:   230,
+						SubID:        2,
+						Span:         span2,
+						CheckpointTs: 100,
+						ResolvedTs:   230,
 					},
 				},
 			},
 		},
-	}
+	})
 
-	// test span1
+	// check get candidates
 	{
 		nodes := coordinator.getCandidateNodes(nodeID1, span1, uint64(100))
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
@@ -123,8 +135,6 @@ func TestGetCandidateNodes(t *testing.T) {
 		nodes := coordinator.getCandidateNodes(nodeID3, span1, uint64(100))
 		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
 	}
-
-	// test span2
 	{
 		nodes := coordinator.getCandidateNodes(nodeID1, span2, uint64(100))
 		assert.Equal(t, []string{nodeID3.String(), nodeID2.String()}, nodes)
@@ -134,50 +144,48 @@ func TestGetCandidateNodes(t *testing.T) {
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 
-	// update node1 and test
-	{
-		state := &logservicepb.EventStoreState{
-			Subscriptions: map[int64]*logservicepb.SubscriptionStates{
-				tableID1: {
-					Subscriptions: []*logservicepb.SubscriptionState{
-						{
-							SubID:        1,
-							Span:         span1,
-							CheckpointTs: 100,
-							ResolvedTs:   300,
-						},
+	// update event store state for node1 and check again
+	coordinator.updateEventStoreState(nodeID1, &logservicepb.EventStoreState{
+		TableStates: map[int64]*logservicepb.TableState{
+			tableID1: {
+				Subscriptions: []*logservicepb.SubscriptionState{
+					{
+						SubID:        1,
+						Span:         span1,
+						CheckpointTs: 100,
+						ResolvedTs:   300,
 					},
 				},
 			},
-		}
-		coordinator.updateEventStoreState(nodeID1, state)
+		},
+	})
+	{
 		nodes := coordinator.getCandidateNodes(nodeID3, span1, uint64(100))
 		assert.Equal(t, []string{nodeID1.String(), nodeID2.String()}, nodes)
 	}
 
-	// update node2 and test
-	{
-		state := &logservicepb.EventStoreState{
-			Subscriptions: map[int64]*logservicepb.SubscriptionStates{
-				tableID1: {
-					Subscriptions: []*logservicepb.SubscriptionState{
-						{
-							SubID:        1,
-							Span:         span1,
-							CheckpointTs: 100,
-							ResolvedTs:   230,
-						},
-						{
-							SubID:        2,
-							Span:         span1,
-							CheckpointTs: 100,
-							ResolvedTs:   310,
-						},
+	// update event store state for node2 and check again
+	coordinator.updateEventStoreState(nodeID2, &logservicepb.EventStoreState{
+		TableStates: map[int64]*logservicepb.TableState{
+			tableID1: {
+				Subscriptions: []*logservicepb.SubscriptionState{
+					{
+						SubID:        1,
+						Span:         span1,
+						CheckpointTs: 100,
+						ResolvedTs:   230,
+					},
+					{
+						SubID:        2,
+						Span:         span1,
+						CheckpointTs: 100,
+						ResolvedTs:   310,
 					},
 				},
 			},
-		}
-		coordinator.updateEventStoreState(nodeID2, state)
+		},
+	})
+	{
 		nodes := coordinator.getCandidateNodes(nodeID3, span1, uint64(100))
 		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
 	}

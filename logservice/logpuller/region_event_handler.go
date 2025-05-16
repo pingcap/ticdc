@@ -64,7 +64,7 @@ func (event *regionEvent) getSize() int {
 }
 
 type regionEventHandler struct {
-	subClient *SubscriptionClient
+	subClient *subscriptionClient
 }
 
 func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {

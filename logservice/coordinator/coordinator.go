@@ -14,6 +14,7 @@
 package logcoordinator
 
 import (
+	"bytes"
 	"context"
 	"sort"
 	"sync"
@@ -29,24 +30,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
 type LogCoordinator interface {
 	Run(ctx context.Context) error
-}
-
-type subscriptionState struct {
-	subID        uint64
-	span         *heartbeatpb.TableSpan
-	checkpointTs uint64
-	resolvedTs   uint64
-}
-
-type subscriptionStates []*subscriptionState // sorted by subID for easy update
-
-type eventStoreState struct {
-	subscriptionStates map[int64]subscriptionStates
 }
 
 type requestAndTarget struct {
@@ -58,13 +47,13 @@ type logCoordinator struct {
 	messageCenter messaging.MessageCenter
 
 	nodes struct {
-		sync.RWMutex
+		sync.Mutex
 		m map[node.ID]*node.Info
 	}
 
 	eventStoreStates struct {
-		sync.RWMutex
-		m map[node.ID]*eventStoreState
+		sync.Mutex
+		m map[node.ID]*logservicepb.EventStoreState
 	}
 
 	requestChan *chann.DrainableChann[requestAndTarget]
@@ -77,7 +66,7 @@ func New() LogCoordinator {
 		requestChan:   chann.NewAutoDrainChann[requestAndTarget](),
 	}
 	c.nodes.m = make(map[node.ID]*node.Info)
-	c.eventStoreStates.m = make(map[node.ID]*eventStoreState)
+	c.eventStoreStates.m = make(map[node.ID]*logservicepb.EventStoreState)
 
 	// recv and handle messages
 	messageCenter.RegisterHandler(messaging.LogCoordinatorTopic, c.handleMessage)
@@ -99,13 +88,13 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-tick.C:
 			// send broadcast message to all nodes
-			c.nodes.RLock()
+			c.nodes.Lock()
 			messages := make([]*messaging.TargetMessage, 0, 2*len(c.nodes.m))
 			for id := range c.nodes.m {
 				messages = append(messages, messaging.NewSingleTargetMessage(id, messaging.EventStoreTopic, &common.LogCoordinatorBroadcastRequest{}))
 				messages = append(messages, messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, &common.LogCoordinatorBroadcastRequest{}))
 			}
-			c.nodes.RUnlock()
+			c.nodes.Unlock()
 			for _, message := range messages {
 				// just ignore messagees fail to send
 				if err := c.messageCenter.SendEvent(message); err != nil {
@@ -118,19 +107,22 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 				ID:    req.req.GetID(),
 				Nodes: nodes,
 			}
-			c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(req.target, messaging.EventCollectorTopic, response))
+			err := c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(req.target, messaging.EventCollectorTopic, response))
+			if err != nil {
+				log.Warn("send reusable event service response failed", zap.Error(err))
+			}
 		}
 	}
 }
 
 func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messaging.TargetMessage) error {
 	for _, msg := range targetMessage.Message {
-		switch msg.(type) {
+		switch msg := msg.(type) {
 		case *logservicepb.EventStoreState:
-			c.updateEventStoreState(targetMessage.From, msg.(*logservicepb.EventStoreState))
+			c.updateEventStoreState(targetMessage.From, msg)
 		case *logservicepb.ReusableEventServiceRequest:
 			c.requestChan.In() <- requestAndTarget{
-				req:    msg.(*logservicepb.ReusableEventServiceRequest),
+				req:    msg,
 				target: targetMessage.From,
 			}
 		default:
@@ -157,41 +149,20 @@ func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {
 	}
 }
 
-func (c *logCoordinator) updateEventStoreState(nodeId node.ID, state *logservicepb.EventStoreState) {
+func (c *logCoordinator) updateEventStoreState(nodeID node.ID, newState *logservicepb.EventStoreState) {
 	c.eventStoreStates.Lock()
 	defer c.eventStoreStates.Unlock()
 
-	// TODO: avoid remove all, only update related subscription states
-	delete(c.eventStoreStates.m, nodeId)
-	eventStoreState := &eventStoreState{
-		subscriptionStates: make(map[int64]subscriptionStates),
-	}
-	count := 0
-	for tableId, subscriptions := range state.GetSubscriptions() {
-		subs := subscriptions.GetSubscriptions()
-		subStates := make(subscriptionStates, 0, len(subs))
-		count += len(subs)
-		for _, subscription := range subs {
-			subscriptionState := &subscriptionState{
-				subID:        subscription.GetSubID(),
-				span:         subscription.GetSpan(),
-				checkpointTs: subscription.GetCheckpointTs(),
-				resolvedTs:   subscription.GetResolvedTs(),
-			}
-			subStates = append(subStates, subscriptionState)
-		}
-		eventStoreState.subscriptionStates[tableId] = subStates
-	}
-	c.eventStoreStates.m[nodeId] = eventStoreState
+	c.eventStoreStates.m[nodeID] = newState
 }
 
 // getCandidateNode return all nodes(exclude the request node) which may contain data for `span` from `startTs`,
 // and the return slice should be sorted by resolvedTs(largest first).
 func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbeatpb.TableSpan, startTs uint64) []string {
-	c.eventStoreStates.RLock()
-	defer c.eventStoreStates.RUnlock()
+	c.eventStoreStates.Lock()
+	defer c.eventStoreStates.Unlock()
 
-	// TODO: support incomplete span
+	// FIXME: remove this check
 	if !isCompleteSpan(span) {
 		return nil
 	}
@@ -201,24 +172,33 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 		resolvedTs uint64
 	}
 	var candidates []candidateNode
-	for nodeID, state := range c.eventStoreStates.m {
+	for nodeID, eventStoreState := range c.eventStoreStates.m {
 		if nodeID == requestNodeID {
 			continue
 		}
-		subscriptionStates, ok := state.subscriptionStates[span.GetTableID()]
+		subStates, ok := eventStoreState.GetTableStates()[span.GetTableID()]
 		if !ok {
 			continue
 		}
 		// Find the maximum resolvedTs for the current nodeID
 		var maxResolvedTs uint64
 		found := false
-		for _, subscriptionState := range subscriptionStates {
-			if subscriptionState.checkpointTs <= startTs {
-				if !found || subscriptionState.resolvedTs > maxResolvedTs {
-					maxResolvedTs = subscriptionState.resolvedTs
+		for _, subsState := range subStates.GetSubscriptions() {
+			if bytes.Compare(subsState.Span.StartKey, span.StartKey) <= 0 &&
+				bytes.Compare(span.EndKey, subsState.Span.EndKey) <= 0 &&
+				subsState.CheckpointTs <= startTs {
+				if !found || subsState.ResolvedTs > maxResolvedTs {
+					maxResolvedTs = subsState.ResolvedTs
 					found = true
 				}
 			}
+		}
+		// Check maxResolveTs is not significantly smaller than request startTs to filter out invalid nodes
+		const maxTimeDiff = 3600000 // 1 hour in milliseconds
+		if found &&
+			startTs > maxResolvedTs &&
+			(oracle.ExtractPhysical(startTs)-oracle.ExtractPhysical(maxResolvedTs)) > maxTimeDiff {
+			found = false
 		}
 
 		// If a valid subscription with checkpointTs <= startTs was found, add to candidates
@@ -230,10 +210,10 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 		}
 	}
 
+	// return candidate nodes sorted by resolvedTs in descending order
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].resolvedTs > candidates[j].resolvedTs
 	})
-
 	var candidateNodes []string
 	for _, candidate := range candidates {
 		candidateNodes = append(candidateNodes, string(candidate.nodeID))

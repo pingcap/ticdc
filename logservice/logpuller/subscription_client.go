@@ -69,8 +69,8 @@ var (
 	metricKvIsBusyCounter             = metrics.EventFeedErrorCounter.WithLabelValues("KvIsBusy")
 	metricKvCongestedCounter          = metrics.EventFeedErrorCounter.WithLabelValues("KvCongested")
 
-	metricSubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store")
-	metricSubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store")
+	metricsubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store")
+	metricsubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store")
 	metricEventStoreDSAddPathNum              = metrics.DynamicStreamAddPathNum.WithLabelValues("event-store")
 	metricEventStoreDSRemovePathNum           = metrics.DynamicStreamRemovePathNum.WithLabelValues("event-store")
 	// metricEventStoreDSArrageStreamNum         = metrics.DynamicStreamArrangeStreamNum.WithLabelValues("event-store")
@@ -163,9 +163,27 @@ type sharedClientMetrics struct {
 	// slowInitializeRegion prometheus.Gauge
 }
 
-// SubscriptionClient is used to subscribe events of table ranges from TiKV.
+// subscriptionClient is used to subscribe events of table ranges from TiKV.
 // All exported Methods are thread-safe.
-type SubscriptionClient struct {
+type SubscriptionClient interface {
+	common.SubModule
+	// allocate a unique id for the subscription
+	AllocSubscriptionID() SubscriptionID
+	// subscribe a table span
+	Subscribe(
+		subID SubscriptionID,
+		span heartbeatpb.TableSpan,
+		startTs uint64,
+		consumeKVEvents func(raw []common.RawKVEntry, wakeCallback func()) bool,
+		advanceResolvedTs func(ts uint64),
+		advanceInterval int64,
+		bdrMode bool,
+	)
+	// unsubscribe a table span
+	Unsubscribe(subID SubscriptionID)
+}
+
+type subscriptionClient struct {
 	config    *SubscriptionClientConfig
 	metrics   sharedClientMetrics
 	clusterID uint64
@@ -211,8 +229,8 @@ func NewSubscriptionClient(
 	pdClock pdutil.Clock,
 	lockResolver txnutil.LockResolver,
 	credential *security.Credential,
-) *SubscriptionClient {
-	subClient := &SubscriptionClient{
+) SubscriptionClient {
+	subClient := &subscriptionClient{
 		config: config,
 
 		pd:           pd,
@@ -249,21 +267,21 @@ func NewSubscriptionClient(
 	return subClient
 }
 
-func (s *SubscriptionClient) Name() string {
+func (s *subscriptionClient) Name() string {
 	return appcontext.SubscriptionClient
 }
 
 // AllocsubscriptionID gets an ID can be used in `Subscribe`.
-func (s *SubscriptionClient) AllocSubscriptionID() SubscriptionID {
+func (s *subscriptionClient) AllocSubscriptionID() SubscriptionID {
 	return SubscriptionID(subscriptionIDGen.Add(1))
 }
 
-func (s *SubscriptionClient) initMetrics() {
+func (s *subscriptionClient) initMetrics() {
 	// TODO: fix metrics
 	s.metrics.batchResolvedSize = metrics.BatchResolvedEventSize.WithLabelValues("event-store")
 }
 
-func (s *SubscriptionClient) updateMetrics(ctx context.Context) error {
+func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -276,8 +294,8 @@ func (s *SubscriptionClient) updateMetrics(ctx context.Context) error {
 				metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
 			}
 			dsMetrics := s.ds.GetMetrics()
-			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
-			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
+			metricsubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
+			metricsubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
 			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 1 {
 				log.Panic("subscription client should have only one area")
 			}
@@ -303,7 +321,7 @@ func (s *SubscriptionClient) updateMetrics(ctx context.Context) error {
 // It new a subscribedSpan and store it in `s.totalSpans`,
 // and send a rangeTask to `s.rangeTaskCh`.
 // The rangeTask will be handled in `handleRangeTasks` goroutine.
-func (s *SubscriptionClient) Subscribe(
+func (s *subscriptionClient) Subscribe(
 	subID SubscriptionID,
 	span heartbeatpb.TableSpan,
 	startTs uint64,
@@ -338,7 +356,7 @@ func (s *SubscriptionClient) Subscribe(
 
 // Unsubscribe the given table span. All covered regions will be deregistered asynchronously.
 // NOTE: `span.TableID` must be set correctly.
-func (s *SubscriptionClient) Unsubscribe(subID SubscriptionID) {
+func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
 	// NOTE: `subID` is cleared from `s.totalSpans` in `onTableDrained`.
 	s.totalSpans.Lock()
 	rt := s.totalSpans.spanMap[subID]
@@ -354,11 +372,11 @@ func (s *SubscriptionClient) Unsubscribe(subID SubscriptionID) {
 		zap.Bool("exists", rt != nil))
 }
 
-func (s *SubscriptionClient) wakeSubscription(subID SubscriptionID) {
+func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 	s.ds.Wake(subID)
 }
 
-func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
+func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)
@@ -373,7 +391,7 @@ func (s *SubscriptionClient) pushRegionEventToDS(subID SubscriptionID, event reg
 	s.ds.Push(subID, event)
 }
 
-func (s *SubscriptionClient) handleDSFeedBack(ctx context.Context) error {
+func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -394,17 +412,7 @@ func (s *SubscriptionClient) handleDSFeedBack(ctx context.Context) error {
 	}
 }
 
-// RegionCount returns subscribed region count for the span.
-func (s *SubscriptionClient) RegionCount(subID SubscriptionID) uint64 {
-	s.totalSpans.RLock()
-	defer s.totalSpans.RUnlock()
-	if rt := s.totalSpans.spanMap[subID]; rt != nil {
-		return uint64(rt.rangeLock.Len())
-	}
-	return 0
-}
-
-func (s *SubscriptionClient) Run(ctx context.Context) error {
+func (s *subscriptionClient) Run(ctx context.Context) error {
 	// s.consume = consume
 	if s.pd == nil {
 		log.Warn("subsription client should be in test mode, skip run")
@@ -430,13 +438,13 @@ func (s *SubscriptionClient) Run(ctx context.Context) error {
 }
 
 // Close closes the client. Must be called after `Run` returns.
-func (s *SubscriptionClient) Close(ctx context.Context) error {
+func (s *subscriptionClient) Close(ctx context.Context) error {
 	// FIXME: close and drain all channels
 	s.ds.Close()
 	return nil
 }
 
-func (s *SubscriptionClient) setTableStopped(rt *subscribedSpan) {
+func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 	log.Info("subscription client starts to stop table",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
@@ -451,7 +459,7 @@ func (s *SubscriptionClient) setTableStopped(rt *subscribedSpan) {
 	}
 }
 
-func (s *SubscriptionClient) onTableDrained(rt *subscribedSpan) {
+func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 	log.Info("subscription client stop span is finished",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
@@ -467,7 +475,7 @@ func (s *SubscriptionClient) onTableDrained(rt *subscribedSpan) {
 }
 
 // Note: don't block the caller, otherwise there may be deadlock
-func (s *SubscriptionClient) onRegionFail(errInfo regionErrorInfo) {
+func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
 	// unlock the range early to prevent blocking the range.
 	if errInfo.subscribedSpan.rangeLock.UnlockRange(
 		errInfo.span.StartKey, errInfo.span.EndKey,
@@ -494,7 +502,7 @@ func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
 
 // handleRegions receives regionInfo from regionCh and attch rpcCtx to them,
 // then send them to corresponding requestedStore.
-func (s *SubscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Group) error {
+func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Group) error {
 	stores := make(map[uint64]*requestedStore) // storeId -> requestedStore
 	getStore := func(storeID uint64, storeAddr string) *requestedStore {
 		var rs *requestedStore
@@ -556,7 +564,7 @@ func (s *SubscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 	}
 }
 
-func (s *SubscriptionClient) attachRPCContextForRegion(ctx context.Context, region regionInfo) (regionInfo, bool) {
+func (s *subscriptionClient) attachRPCContextForRegion(ctx context.Context, region regionInfo) (regionInfo, bool) {
 	bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 	rpcCtx, err := s.regionCache.GetTiKVRPCContext(bo, region.verID, kvclientv2.ReplicaReadLeader, 0)
 	if rpcCtx != nil {
@@ -573,7 +581,7 @@ func (s *SubscriptionClient) attachRPCContextForRegion(ctx context.Context, regi
 	return region, false
 }
 
-func (s *SubscriptionClient) handleRangeTasks(ctx context.Context) error {
+func (s *subscriptionClient) handleRangeTasks(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	// Limit the concurrent number of goroutines to convert range tasks to region tasks.
 	g.SetLimit(1024)
@@ -594,7 +602,7 @@ func (s *SubscriptionClient) handleRangeTasks(ctx context.Context) error {
 // 1. Load regions from PD.
 // 2. Find the intersection of each region.span and the subscribedSpan.span.
 // 3. Schedule a region request to subscribe the region.
-func (s *SubscriptionClient) divideSpanAndScheduleRegionRequests(
+func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 	ctx context.Context,
 	span heartbeatpb.TableSpan,
 	subscribedSpan *subscribedSpan,
@@ -676,7 +684,7 @@ func (s *SubscriptionClient) divideSpanAndScheduleRegionRequests(
 
 // scheduleRegionRequest locks the region's range and send the region to regionCh,
 // which will be handled by handleRegions.
-func (s *SubscriptionClient) scheduleRegionRequest(ctx context.Context, region regionInfo) {
+func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region regionInfo) {
 	lockRangeResult := region.subscribedSpan.rangeLock.LockRange(
 		ctx, region.span.StartKey, region.span.EndKey, region.verID.GetID(), region.verID.GetVer())
 
@@ -700,7 +708,7 @@ func (s *SubscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 	}
 }
 
-func (s *SubscriptionClient) scheduleRangeRequest(
+func (s *subscriptionClient) scheduleRangeRequest(
 	ctx context.Context, span heartbeatpb.TableSpan,
 	subscribedSpan *subscribedSpan,
 	filterLoop bool,
@@ -711,7 +719,7 @@ func (s *SubscriptionClient) scheduleRangeRequest(
 	}
 }
 
-func (s *SubscriptionClient) handleErrors(ctx context.Context) error {
+func (s *subscriptionClient) handleErrors(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -724,7 +732,7 @@ func (s *SubscriptionClient) handleErrors(ctx context.Context) error {
 	}
 }
 
-func (s *SubscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
+func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
 	switch eerr := err.(type) {
 	case *eventError:
@@ -804,7 +812,7 @@ type subscriptionAndTargetTs struct {
 	targetTs uint64
 }
 
-func (s *SubscriptionClient) runResolveLockChecker(ctx context.Context) error {
+func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
 	resolveLockTicker := time.NewTicker(resolveLockTickInterval)
 	defer resolveLockTicker.Stop()
 	maxCacheSize := 1024
@@ -853,7 +861,7 @@ func (s *SubscriptionClient) runResolveLockChecker(ctx context.Context) error {
 	}
 }
 
-func (s *SubscriptionClient) handleResolveLockTasks(ctx context.Context) error {
+func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 	resolveLastRun := make(map[uint64]time.Time)
 
 	gcResolveLastRun := func() {
@@ -901,7 +909,7 @@ func (s *SubscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 	}
 }
 
-func (s *SubscriptionClient) logSlowRegions(ctx context.Context) error {
+func (s *subscriptionClient) logSlowRegions(ctx context.Context) error {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -943,7 +951,7 @@ func (s *SubscriptionClient) logSlowRegions(ctx context.Context) error {
 	}
 }
 
-func (s *SubscriptionClient) newSubscribedSpan(
+func (s *subscriptionClient) newSubscribedSpan(
 	subID SubscriptionID,
 	span heartbeatpb.TableSpan,
 	startTs uint64,
@@ -981,7 +989,7 @@ func (s *SubscriptionClient) newSubscribedSpan(
 	return rt
 }
 
-func (s *SubscriptionClient) GetResolvedTsLag() float64 {
+func (s *subscriptionClient) GetResolvedTsLag() float64 {
 	pullerMinResolvedTs := uint64(0)
 	s.totalSpans.RLock()
 	for _, rt := range s.totalSpans.spanMap {

@@ -35,7 +35,7 @@ import (
 )
 
 func TestGenerateResolveLockTask(t *testing.T) {
-	client := &SubscriptionClient{
+	client := &subscriptionClient{
 		resolveLockTaskCh: make(chan resolveLockTask, 10),
 	}
 	rawSpan := heartbeatpb.TableSpan{
