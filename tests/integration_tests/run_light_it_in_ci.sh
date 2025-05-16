@@ -122,7 +122,7 @@ pulsar_groups=(
 	# G06
 	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
 	# G07
-	'kafka_messages kafka_big_messages kafka_big_messages kafka_compression fail_over_ddl_H'
+	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H'
 	# G08
 	'capture_session_done_during_task fail_over_ddl_I'
 	# G09
