@@ -371,8 +371,15 @@ func (e *eventStore) RegisterDispatcher(
 	e.dispatcherMeta.Lock()
 	if subStats, ok := e.dispatcherMeta.tableStats[dispatcherSpan.TableID]; ok {
 		for _, subStat := range subStats {
-			// TODO: find a subscription which is most close to dispactcher span.
-			// TODO: when the subscription contains too much unnecessary data, create a new subscription
+			// dispatcher span is not contained in subscription span, skip it
+			if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) > 0 &&
+				bytes.Compare(dispatcherSpan.EndKey, subStat.tableSpan.EndKey) > 0 {
+				continue
+			}
+			// when `onlyReuse` is false, must find a subscription with the same span, otherwise we create a new one
+			if !onlyReuse && !subStat.tableSpan.Equal(dispatcherSpan) {
+				continue
+			}
 			// check whether startTs is in the range [checkpointTs, resolvedTs]
 			// why `[checkpointTs`:
 			//   1) ts <= checkpointTs may be deleted
@@ -381,9 +388,7 @@ func (e *eventStore) RegisterDispatcher(
 			// why `resolvedTs]`:
 			//   1) actually startTs > resolvedTs is also ok if the difference is small
 			//   2) we use the condition startTs <= resolvedTs for simplicity
-			if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) <= 0 &&
-				bytes.Compare(dispatcherSpan.EndKey, subStat.tableSpan.EndKey) <= 0 &&
-				subStat.checkpointTs.Load() <= startTs && startTs <= subStat.resolvedTs.Load() {
+			if subStat.checkpointTs.Load() <= startTs && startTs <= subStat.resolvedTs.Load() {
 				stat.subStat = subStat
 				e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
 				subStat.idleTime.Store(0)
