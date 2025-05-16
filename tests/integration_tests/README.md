@@ -7,7 +7,7 @@ If you need to specify a version, os or arch, you can use, for example: `make pr
 
    > Note: Please be aware that if you manually specify the versions of the TiDB-related components during the download process, there is a potential risk of incompatibility if the specified versions do not match the current TiCDC version. For example, see issue #11507 where version mismatches caused incompatibility problems during integration tests.
 
-   You should find these executables in the `tiflow/bin` directory after downloading successfully.
+   You should find these executables in the `ticdc/bin` directory after downloading successfully.
    * `tidb-server` # version >= 6.0.0-rc.1
    * `tikv-server` # version >= 6.0.0-rc.1
    * `pd-server`   # version >= 6.0.0-rc.1
@@ -118,5 +118,7 @@ exit with a nonzero error code on failure.
 2. Add TEST_NAME to existing group in [run_group.sh](./run_group.sh), or add a new group for it.
 
 3. If you add a new group, the name of the new group must be added to CI.
-   * [cdc-integration-kafka-test](https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/tiflow/latest/pod-pull_cdc_integration_kafka_test.yaml)
-   * [cdc-integration-mysql-test](https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/tiflow/latest/pull_cdc_integration_test.groovy)
+   * [cdc-kafka-integration-light](https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_kafka_integration_light.yaml)
+   * [cdc-kafka-integration-heavy](https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_kafka_integration_heavy.yaml)
+   * [cdc-mysql-integration-light](https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_mysql_integration_light.yaml)
+   * [cdc-mysql-integration-heavy](https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_mysql_integration_heavy.yaml)
