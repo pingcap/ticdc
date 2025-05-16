@@ -218,11 +218,6 @@ func New(
 	store.dispatcherMeta.dispatcherStats = make(map[common.DispatcherID]*dispatcherStat)
 	store.dispatcherMeta.tableStats = make(map[int64]subscriptionStats)
 
-	// recv and handle messages
-	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-	store.messageCenter = messageCenter
-	messageCenter.RegisterHandler(messaging.EventStoreTopic, store.handleMessage)
-
 	return store
 }
 
@@ -292,6 +287,11 @@ func (e *eventStore) Run(ctx context.Context) error {
 		log.Info("event store exited")
 	}()
 	eg, ctx := errgroup.WithContext(ctx)
+
+	// recv and handle messages
+	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	e.messageCenter = messageCenter
+	messageCenter.RegisterHandler(messaging.EventStoreTopic, e.handleMessage)
 
 	for _, p := range e.writeTaskPools {
 		p := p
