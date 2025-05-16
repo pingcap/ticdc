@@ -119,7 +119,7 @@ type subscriptionStat struct {
 	// the index of the db which stores the data of the subscription
 	// used to clean obselete data of the subscription
 	dbIndex int
-	// used to receive data of the subscription
+	// used to receive data of the subscription from upstream
 	eventCh *chann.UnlimitedChannel[eventWithCallback, uint64]
 	// data <= checkpointTs can be deleted
 	checkpointTs atomic.Uint64
