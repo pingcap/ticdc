@@ -261,7 +261,9 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					if !ok {
 						return
 					}
-					p.store.writeEvents(p.db, events)
+					if err := p.store.writeEvents(p.db, events); err != nil {
+						log.Panic("write events failed")
+					}
 					for i := range events {
 						events[i].callback()
 					}
