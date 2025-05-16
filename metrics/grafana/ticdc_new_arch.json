@@ -2229,21 +2229,21 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "(time() - process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"ticdc\"})",
+              "expr": "(time() - process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"})",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "TiCDC-{{instance}}",
               "refId": "A"
             },
             {
-              "expr": "(time() - process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"tikv\"})",
+              "expr": "(time() - process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"})",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "TiKV-{{instance}}",
               "refId": "B"
             },
             {
-              "expr": "(time() - process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"pd\"})",
+              "expr": "(time() - process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*pd.*\"})",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "PD-{{instance}}",
@@ -2344,14 +2344,14 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": " go_goroutines{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"ticdc\"}",
+              "expr": " go_goroutines{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
               "refId": "A"
             },
             {
-              "expr": "go_threads{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"ticdc\"}",
+              "expr": "go_threads{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"}",
               "format": "time_series",
               "hide": true,
               "intervalFactor": 1,
@@ -2453,7 +2453,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "process_open_fds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"ticdc\"}",
+              "expr": "process_open_fds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
@@ -2562,14 +2562,14 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(process_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"ticdc\"}[1m])",
+              "expr": "rate(process_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"}[1m])",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
               "refId": "A"
             },
             {
-              "expr": "ticdc_server_go_max_procs{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"ticdc\"}",
+              "expr": "ticdc_server_go_max_procs{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "quota-{{instance}}",
@@ -2671,14 +2671,14 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "process_resident_memory_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"ticdc\"}",
+              "expr": "process_resident_memory_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "process-{{instance}}",
               "refId": "A"
             },
             {
-              "expr": "go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"ticdc\"}",
+              "expr": "go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "heap-{{instance}}",
@@ -18095,7 +18095,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_cdc_scan_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\", job=\"tikv\"}[30s])) by (instance)",
+              "expr": "sum(rate(tikv_cdc_scan_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[30s])) by (instance)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
@@ -18206,7 +18206,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(tikv_cdc_scan_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\", job=\"tikv\"}) by (instance)",
+              "expr": "sum(tikv_cdc_scan_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}) by (instance)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 2,
@@ -21472,7 +21472,7 @@
         "allValue": ".*",
         "current": {},
         "datasource": "${DS_TEST-CLUSTER}",
-        "definition": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"ticdc\"}, instance)",
+        "definition": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"}, instance)",
         "description": null,
         "error": null,
         "hide": 0,
@@ -21482,7 +21482,7 @@
         "name": "ticdc_instance",
         "options": [],
         "query": {
-          "query": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"ticdc\"}, instance)",
+          "query": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"}, instance)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 2,
@@ -21582,7 +21582,7 @@
         "allValue": "",
         "current": {},
         "datasource": "${DS_TEST-CLUSTER}",
-        "definition": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"ticdc\"}, instance)",
+        "definition": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"}, instance)",
         "description": null,
         "error": null,
         "hide": 0,
@@ -21592,7 +21592,7 @@
         "name": "runtime_instance",
         "options": [],
         "query": {
-          "query": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"ticdc\"}, instance)",
+          "query": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"}, instance)",
           "refId": "local-runtime_instance-Variable-Query"
         },
         "refresh": 2,
@@ -21609,7 +21609,7 @@
         "allValue": null,
         "current": {},
         "datasource": "${DS_TEST-CLUSTER}",
-        "definition": "label_values(ticdc_actor_number_of_workers{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"ticdc\"}, name)",
+        "definition": "label_values(ticdc_actor_number_of_workers{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"}, name)",
         "description": null,
         "error": null,
         "hide": 0,
@@ -21619,7 +21619,7 @@
         "name": "actor_name",
         "options": [],
         "query": {
-          "query": "label_values(ticdc_actor_number_of_workers{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\"ticdc\"}, name)",
+          "query": "label_values(ticdc_actor_number_of_workers{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=\".*ticdc.*\"}, name)",
           "refId": "local-actor_name-Variable-Query"
         },
         "refresh": 2,
