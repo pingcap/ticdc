@@ -198,7 +198,7 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 		if found &&
 			startTs > maxResolvedTs &&
 			(oracle.ExtractPhysical(startTs)-oracle.ExtractPhysical(maxResolvedTs)) > maxTimeDiff {
-			found = false // Disqualify this candidate if the diff is too large
+			found = false
 		}
 
 		// If a valid subscription with checkpointTs <= startTs was found, add to candidates
