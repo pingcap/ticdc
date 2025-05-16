@@ -29,7 +29,7 @@ fi
 
 # make sure get tso only
 # the tso got above is:
-# "427768583921860609 PASS coverage: 2.7% of statements in github.com/pingcap/tiflow/..."
+# "427768583921860609 PASS coverage: 2.7% of statements in github.com/pingcap/ticdc/..."
 # and only "427768583921860609" is a real tso
 echo $tso | awk -F " " '{print $1}'
 

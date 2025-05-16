@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -40,14 +39,14 @@ type partitionProgress struct {
 	watermark       uint64
 	watermarkOffset kafka.Offset
 
-	eventGroups map[model.TableID]*eventsGroup
+	eventGroups map[int64]*eventsGroup
 	decoder     common.Decoder
 }
 
 func newPartitionProgress(partition int32, decoder common.Decoder) *partitionProgress {
 	return &partitionProgress{
 		partition:   partition,
-		eventGroups: make(map[model.TableID]*eventsGroup),
+		eventGroups: make(map[int64]*eventsGroup),
 		decoder:     decoder,
 	}
 }
@@ -140,9 +139,9 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	// so we can make assumption that the all DMLs received before the DDL event.
 	// since one table's events may be produced to the different partitions, so we have to flush all partitions.
 	// if block the whole database, flush all tables, otherwise flush the blocked tables.
-	tableIDs := make(map[model.TableID]struct{})
+	tableIDs := make(map[int64]struct{})
 	switch ddl.GetBlockedTables().InfluenceType {
-	case commonEvent.InfluenceTypeDB:
+	case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
 		for _, progress := range w.progresses {
 			for tableID := range progress.eventGroups {
 				tableIDs[tableID] = struct{}{}

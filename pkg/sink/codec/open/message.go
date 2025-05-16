@@ -61,6 +61,9 @@ type column struct {
 
 // formatColumn formats a codec column.
 func formatColumn(c column, ft types.FieldType) column {
+	if c.Value == nil {
+		return c
+	}
 	var err error
 	switch c.Type {
 	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
