@@ -140,6 +140,7 @@ func New(serverId node.ID) *EventCollector {
 	eventCollector.ds = NewEventDynamicStream(&eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.RecvEventsMessage)
 
+	// EventCollectorTopic -> RecvEventsMessage -> handle events
 	return &eventCollector
 }
 

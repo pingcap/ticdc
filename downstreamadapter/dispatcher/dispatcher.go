@@ -319,6 +319,7 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	// Only return false when all events are resolvedTs Event.
 	block = false
+
 	dmlWakeOnce := &sync.Once{}
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
@@ -797,7 +798,7 @@ func (d *Dispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
 	h.Watermark.ResolvedTs = d.GetResolvedTs()
 	h.Id = d.GetId()
 	h.ComponentStatus = d.GetComponentStatus()
-	h.TableSpan = d.GetTableSpan()
+	// h.TableSpan = d.GetTableSpan()
 	h.IsRemoving = d.GetRemovingStatus()
 }
 

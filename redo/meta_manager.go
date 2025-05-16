@@ -35,8 +35,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-var _ MetaManager = (*metaManager)(nil)
-
 // MetaManager defines an interface that is used to manage redo meta and gc logs in owner.
 type MetaManager interface {
 	redoManager

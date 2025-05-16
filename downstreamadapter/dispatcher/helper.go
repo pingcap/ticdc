@@ -242,8 +242,8 @@ Mainly about the progress of each dispatcher:
 */
 type HeartBeatInfo struct {
 	heartbeatpb.Watermark
-	Id              common.DispatcherID
-	TableSpan       *heartbeatpb.TableSpan
+	Id common.DispatcherID
+	// TableSpan       *heartbeatpb.TableSpan
 	ComponentStatus heartbeatpb.ComponentState
 	IsRemoving      bool
 }

@@ -428,8 +428,40 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 		return errors.ErrDispatcherFailed.GenWithStackByArgs()
 	}
 
+	// totalQuota := e.config.MemoryQuota
+	// if redoDMLMgr != nil && redoDMLMgr.Enabled() {
+	// 	m.redoDMLMgr = redoDMLMgr
+	// 	m.redoProgressHeap = newTableProgresses()
+	// 	m.redoWorkers = make([]*redoWorker, 0, redoWorkerNum)
+	// 	m.redoTaskChan = make(chan *redoTask)
+	// 	m.redoWorkerAvailable = make(chan struct{}, 1)
+
+	// 	consistentMemoryUsage := m.config.Consistent.MemoryUsage
+	// 	if consistentMemoryUsage == nil {
+	// 		consistentMemoryUsage = pconfig.GetDefaultReplicaConfig().Consistent.MemoryUsage
+	// 	}
+
+	// 	redoQuota := totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
+	// 	sinkQuota := totalQuota - redoQuota
+	// 	m.sinkMemQuota = memquota.NewMemQuota(changefeedID, sinkQuota, "sink")
+	// 	m.redoMemQuota = memquota.NewMemQuota(changefeedID, redoQuota, "redo")
+	// } else {
+	// 	m.sinkMemQuota = memquota.NewMemQuota(changefeedID, totalQuota, "sink")
+	// 	m.redoMemQuota = memquota.NewMemQuota(changefeedID, 0, "redo")
+	// }
+
+	// var resolvedTs model.Ts
+	// // If redo log is enabled, we have to use redo log's resolved ts to calculate processor's min resolved ts.
+	// if m.redoDMLMgr != nil {
+	// 	resolvedTs = m.redoDMLMgr.GetResolvedTs(span)
+	// } else {
+	// 	resolvedTs = tableSink.getReceivedSorterResolvedTs()
+	// }
+
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.config.MemoryQuota, e.config.BDRMode)
+
+	// appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.redoTableTriggerEventDispatcher, e.config.MemoryQuota, e.config.BDRMode)
 
 	// when sink is not mysql-class, table trigger event dispatcher need to receive the checkpointTs message from maintainer.
 	if e.sink.SinkType() != common.MysqlSinkType {

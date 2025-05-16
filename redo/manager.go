@@ -37,12 +37,8 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	_ DDLManager = (*ddlManager)(nil)
-	_ DMLManager = (*dmlManager)(nil)
-)
-
-type redoManager interface {
+// RedoManager defines an interface that is used to manage logs.
+type RedoManager interface {
 	// Run all sub goroutines and block the current one. If an error occurs
 	// in any sub goroutine, return it and cancel all others.
 	//
@@ -58,60 +54,10 @@ type redoManager interface {
 	// Close all internal resources synchronously.
 	Close()
 
+	EmitDDLEvent(ctx context.Context, ddl *pevent.DDLEvent) error
+
 	// Enabled returns whether the manager is enabled
 	Enabled() bool
-}
-
-// DDLManager defines an interface that is used to manage ddl logs in owner.
-type DDLManager interface {
-	redoManager
-	EmitDDLEvent(ctx context.Context, ddl *pevent.DDLEvent) error
-	UpdateResolvedTs(ctx context.Context, resolvedTs uint64) error
-	GetResolvedTs() common.Ts
-}
-
-// NewDisabledDDLManager creates a disabled ddl Manager.
-func NewDisabledDDLManager() *ddlManager {
-	return &ddlManager{
-		logManager: &logManager{enabled: false},
-	}
-}
-
-// NewDDLManager creates a new ddl Manager.
-func NewDDLManager(
-	changefeedID common.ChangeFeedID,
-	cfg *config.ConsistentConfig, ddlStartTs common.Ts,
-) *ddlManager {
-	m := newLogManager(changefeedID, cfg, redo.RedoDDLLogFileType)
-	span := spanz.TableIDToComparableSpan(0)
-	m.AddTable(span, ddlStartTs)
-	return &ddlManager{
-		logManager: m,
-		// The current fakeSpan is meaningless, find a meaningful span in the future.
-		fakeSpan: span,
-	}
-}
-
-type ddlManager struct {
-	*logManager
-	fakeSpan tablepb.Span
-}
-
-func (m *ddlManager) EmitDDLEvent(ctx context.Context, ddl *pevent.DDLEvent) error {
-	return m.logManager.emitRedoEvents(ctx, m.fakeSpan, nil, ddl)
-}
-
-func (m *ddlManager) UpdateResolvedTs(ctx context.Context, resolvedTs uint64) error {
-	return m.logManager.UpdateResolvedTs(ctx, m.fakeSpan, resolvedTs)
-}
-
-func (m *ddlManager) GetResolvedTs() common.Ts {
-	return m.logManager.GetResolvedTs(m.fakeSpan)
-}
-
-// DMLManager defines an interface that is used to manage dml logs in processor.
-type DMLManager interface {
-	redoManager
 	AddTable(span tablepb.Span, startTs uint64)
 	StartTable(span tablepb.Span, startTs uint64)
 	RemoveTable(span tablepb.Span)
@@ -125,28 +71,41 @@ type DMLManager interface {
 	) error
 }
 
-// NewDMLManager creates a new dml Manager.
-func NewDMLManager(changefeedID common.ChangeFeedID,
+// NewRedoManager creates a new dml Manager.
+func NewRedoManager(changefeedID common.ChangeFeedID,
 	cfg *config.ConsistentConfig,
-) *dmlManager {
-	return &dmlManager{
+) *redoManager {
+	return &redoManager{
 		logManager: newLogManager(changefeedID, cfg, redo.RedoRowLogFileType),
 	}
 }
 
 // NewDisabledDMLManager creates a disabled dml Manager.
-func NewDisabledDMLManager() *dmlManager {
-	return &dmlManager{
+func NewDisabledDMLManager() *redoManager {
+	return &redoManager{
 		logManager: &logManager{enabled: false},
 	}
 }
 
-type dmlManager struct {
+type redoManager struct {
 	*logManager
+	fakeSpan tablepb.Span
+}
+
+func (m *redoManager) EmitDDLEvent(ctx context.Context, ddl *pevent.DDLEvent) error {
+	return m.logManager.emitRedoEvents(ctx, m.fakeSpan, nil, ddl)
+}
+
+func (m *redoManager) UpdateResolvedTs(ctx context.Context, resolvedTs uint64) error {
+	return m.logManager.UpdateResolvedTs(ctx, m.fakeSpan, resolvedTs)
+}
+
+func (m *redoManager) GetResolvedTs() common.Ts {
+	return m.logManager.GetResolvedTs(m.fakeSpan)
 }
 
 // EmitDMLEvents emits row changed events to the redo log.
-func (m *dmlManager) EmitDMLEvents(
+func (m *redoManager) EmitDMLEvents(
 	ctx context.Context,
 	span tablepb.Span,
 	releaseRowsMemory func(),
@@ -197,7 +156,7 @@ func (s *statefulRts) checkAndSetFlushed(flushed common.Ts) (ok bool) {
 }
 
 // logManager manages redo log writer, buffers un-persistent redo logs, calculates
-// redo log resolved ts. It implements DDLManager and DMLManager interface.
+// redo log resolved ts. It implements redoManager and DMLManager interface.
 type logManager struct {
 	enabled bool
 	cfg     *writer.LogWriterConfig

@@ -130,7 +130,7 @@ func TestLogManagerInProcessor(t *testing.T) {
 			FlushWorkerNum:        workerNumberForTest,
 			UseFileBackend:        useFileBackend,
 		}
-		dmlMgr := NewDMLManager(common.NewChangeFeedIDWithName("test"), cfg)
+		dmlMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
 		var eg errgroup.Group
 		eg.Go(func() error {
 			return dmlMgr.Run(ctx)
@@ -288,7 +288,7 @@ func TestLogManagerError(t *testing.T) {
 		EncodingWorkerNum:     workerNumberForTest,
 		FlushWorkerNum:        workerNumberForTest,
 	}
-	logMgr := NewDMLManager(common.NewChangeFeedIDWithName("test"), cfg)
+	logMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
 	var eg errgroup.Group
 	eg.Go(func() error {
 		return logMgr.Run(ctx)
@@ -344,7 +344,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
 		UseFileBackend:        useFileBackend,
 	}
-	dmlMgr := NewDMLManager(common.NewChangeFeedIDWithName("test"), cfg)
+	dmlMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
 	var eg errgroup.Group
 	eg.Go(func() error {
 		return dmlMgr.Run(ctx)
