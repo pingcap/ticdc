@@ -11004,90 +11004,6 @@
           }
         },
         {
-          "cards": {
-            "cardPadding": 0,
-            "cardRound": 0
-          },
-          "color": {
-            "cardColor": "#FF9830",
-            "colorScale": "linear",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "min": 0,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 15
-          },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
-          "id": 20005,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "links": [],
-          "maxPerRow": 3,
-          "repeatDirection": "h",
-          "reverseYBuckets": false,
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_event_size_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\",namespace=~\"$namespace\", changefeed=~\"$changefeed\"}[1m])) by (le)",
-              "format": "heatmap",
-              "instant": false,
-              "interval": "",
-              "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "refId": "A"
-            }
-          ],
-          "title": "DML Event Size Heatmap",
-          "tooltip": {
-            "show": true,
-            "showHistogram": true
-          },
-          "tooltipDecimals": 1,
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "bytes",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
-        },
-        {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
@@ -11137,19 +11053,27 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_batch_row_count_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,namespace,changefeed,instance))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_batch_row_count_bucket{k8s_cluster=~\"$k8s_cluster\",tidb_cluster=~\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,namespace,changefeed,instance))",
               "interval": "",
               "legendFormat": "99.9%-{{namespace}}-{{changefeed}}-{{instance}}",
               "queryType": "randomWalk",
-              "refId": "A"
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "PB0C37C6A9EC17FDC"
+              }
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed,instance) / sum(rate(ticdc_sinkv2_batch_row_count_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_batch_row_count_sum{k8s_cluster=~\"$k8s_cluster\",tidb_cluster=~\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\", type=\"TxnSink\"}[1m])) by (namespace,changefeed,instance) / sum(rate(ticdc_sink_batch_row_count_count{k8s_cluster=~\"$k8s_cluster\",tidb_cluster=~\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\", type=\"TxnSink\"}[1m])) by (namespace,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg-{{namespace}}-{{changefeed}}-{{instance}}",
-              "refId": "B"
+              "refId": "B",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "PB0C37C6A9EC17FDC"
+              }
             }
           ],
           "thresholds": [],
@@ -11515,7 +11439,7 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 0,
+            "x": 12,
             "y": 39
           },
           "hiddenSeries": false,
@@ -11561,112 +11485,6 @@
           "timeRegions": [],
           "timeShift": null,
           "title": "Sink Error Count  / m",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": false
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Size of large rows (size >= 2K).",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "fill": 1,
-          "fillGradient": 0,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 39
-          },
-          "hiddenSeries": false,
-          "id": 611,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": false,
-            "show": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
-          "percentage": false,
-          "pluginVersion": "7.5.17",
-          "pointradius": 2,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_large_row_size_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,namespace,changefeed,instance))",
-              "interval": "",
-              "legendFormat": "99.9%-{{namespace}}-{{changefeed}}-{{instance}}",
-              "queryType": "randomWalk",
-              "refId": "A"
-            },
-            {
-              "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_large_row_size_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed,instance) / sum(rate(ticdc_sink_large_row_size_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed,instance)",
-              "hide": false,
-              "interval": "",
-              "legendFormat": "avg-{{namespace}}-{{changefeed}}-{{instance}}",
-              "refId": "B"
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Large Row (size >= 128K) Size",
           "tooltip": {
             "shared": true,
             "sort": 0,
