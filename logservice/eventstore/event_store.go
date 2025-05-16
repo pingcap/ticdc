@@ -556,7 +556,6 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 					zap.Uint64("newCheckpointTs", newCheckpointTs),
 					zap.Uint64("oldCheckpointTs", subStat.checkpointTs.Load()))
 			}
-			subscriptionStat.checkpointTs.CompareAndSwap(subscriptionStat.checkpointTs.Load(), newCheckpointTs)
 		}
 	}
 	return nil
