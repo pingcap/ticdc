@@ -88,9 +88,8 @@ func TableIDToComparableRange(tableID int64) (start, end TableSpan) {
 }
 
 func IsCompleteSpan(tableSpan *TableSpan) bool {
-	TableIDToComparableSpan(tableSpan.TableID)
 	startKey, endKey := GetTableRange(tableSpan.TableID)
-	if StartCompare(ToComparableKey(startKey), tableSpan.StartKey) == 0 && EndCompare(ToComparableKey(endKey), tableSpan.EndKey) == 0 {
+	if StartCompare(startKey, tableSpan.StartKey) == 0 && EndCompare(endKey, tableSpan.EndKey) == 0 {
 		return true
 	}
 	return false

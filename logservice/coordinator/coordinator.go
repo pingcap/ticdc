@@ -15,6 +15,7 @@ package logcoordinator
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -192,6 +193,10 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 
 	// TODO: support incomplete span
 	if !heartbeatpb.IsCompleteSpan(span) {
+		fmt.Println("eeeee")
+		fmt.Println("eeeee")
+		fmt.Println("eeeee")
+		fmt.Println("eeeee")
 		return nil
 	}
 

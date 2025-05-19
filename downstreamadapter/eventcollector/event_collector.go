@@ -52,6 +52,7 @@ type DispatcherRequest struct {
 	StartTs    uint64
 	OnlyUse    bool
 	BDRMode    bool
+	Redo       bool
 }
 
 type DispatcherRequestWithTarget struct {
@@ -91,9 +92,10 @@ EventCollector is the relay between EventService and DispatcherManager, responsi
 EventCollector is an instance-level component.
 */
 type EventCollector struct {
-	serverId        node.ID
-	dispatcherMap   sync.Map // key: dispatcherID, value: dispatcherStat
-	changefeedIDMap sync.Map // key: changefeedID.GID, value: changefeedID
+	serverId          node.ID
+	dispatcherMap     sync.Map // key: dispatcherID, value: dispatcherStat
+	redoDispatcherMap sync.Map // key: dispatcherID, value: dispatcherStat
+	changefeedIDMap   sync.Map // key: changefeedID.GID, value: changefeedID
 
 	mc messaging.MessageCenter
 
@@ -128,6 +130,7 @@ func New(serverId node.ID) *EventCollector {
 	eventCollector := EventCollector{
 		serverId:                             serverId,
 		dispatcherMap:                        sync.Map{},
+		redoDispatcherMap:                    sync.Map{},
 		dispatcherRequestChan:                chann.NewAutoDrainChann[DispatcherRequestWithTarget](),
 		logCoordinatorRequestChan:            chann.NewAutoDrainChann[*logservicepb.ReusableEventServiceRequest](),
 		mc:                                   appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
@@ -140,7 +143,6 @@ func New(serverId node.ID) *EventCollector {
 	eventCollector.ds = NewEventDynamicStream(&eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.RecvEventsMessage)
 
-	// EventCollectorTopic -> RecvEventsMessage -> handle events
 	return &eventCollector
 }
 
@@ -207,7 +209,7 @@ func (c *EventCollector) Close() {
 	log.Info("event collector is closed")
 }
 
-func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64, bdrMode bool) {
+func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64, bdrMode bool, redo bool) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
@@ -218,9 +220,11 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	}
 	stat.reset()
 	stat.sentCommitTs.Store(target.GetStartTs())
-	c.dispatcherMap.Store(target.GetId(), stat)
-	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
-	metrics.EventCollectorRegisteredDispatcherCount.Inc()
+	if !redo {
+		c.dispatcherMap.Store(target.GetId(), stat)
+		c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
+		metrics.EventCollectorRegisteredDispatcherCount.Inc()
+	}
 
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2, "eventCollector")
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
@@ -234,6 +238,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 		StartTs:    target.GetStartTs(),
 		ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
 		BDRMode:    bdrMode,
+		Redo:       redo,
 	})
 
 	c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
@@ -405,6 +410,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 			StartTs:   req.StartTs,
 			OnlyReuse: req.OnlyUse,
 			BdrMode:   req.BDRMode,
+			Redo:      req.Redo,
 		},
 	}
 
@@ -520,6 +526,8 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 		case <-ctx.Done():
 			return
 		case targetMessage := <-inCh:
+			// here will received double messages, one is for sink and another is for redo.
+			// but their dispatcherID are same, we can't send to ds correctly.
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
 				case event.Event:

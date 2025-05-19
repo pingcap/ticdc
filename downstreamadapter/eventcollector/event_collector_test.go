@@ -176,7 +176,7 @@ func TestProcessMessage(t *testing.T) {
 			done <- struct{}{}
 		}
 	}
-	c.AddDispatcher(d, config.GetDefaultReplicaConfig().MemoryQuota, *config.GetDefaultReplicaConfig().BDRMode)
+	c.AddDispatcher(d, config.GetDefaultReplicaConfig().MemoryQuota, *config.GetDefaultReplicaConfig().BDRMode, false)
 
 	ch <- newMessage(node.ID, &readyEvent)
 	ch <- newMessage(node.ID, handshakeEvent)
