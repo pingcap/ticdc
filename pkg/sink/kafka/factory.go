@@ -241,6 +241,13 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if err == nil {
 				return nil
 			}
+			key, _ := err.Msg.Key.Encode()
+			val, _ := err.Msg.Value.Encode()
+			msg := &common.Message{
+				Key:   key,
+				Value: val,
+			}
+			log.Error("received error from kafka", zap.Error(err.Err), zap.String("topic", err.Msg.Topic), zap.Int32("partition", err.Msg.Partition), zap.Any("msg", msg), zap.Int("length", msg.Length()))
 			return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, err)
 		}
 	}
@@ -266,5 +273,6 @@ func (p *saramaAsyncProducer) AsyncSend(
 		return errors.Trace(ctx.Err())
 	case p.producer.Input() <- msg:
 	}
+	log.Error("send error to sarama", zap.Any("msg", msg), zap.Int("length", message.Length()))
 	return nil
 }
