@@ -380,7 +380,7 @@ func (rd *RedoDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 			if len(ddlEvent.GetBlockedTables().TableIDs) > 1 {
 				return true
 			}
-			if !heartbeatpb.IsCompleteSpan(rd.tableSpan) {
+			if !isCompleteSpan(rd.tableSpan) {
 				// if the table is split, even the blockTable only itself, it should block
 				return true
 			}

@@ -461,6 +461,14 @@ func (d *Dispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 	event.PostFlush()
 }
 
+func isCompleteSpan(tableSpan *heartbeatpb.TableSpan) bool {
+	startKey, endKey := heartbeatpb.GetTableRange(tableSpan.TableID)
+	if heartbeatpb.StartCompare(heartbeatpb.ToComparableKey(startKey), tableSpan.StartKey) == 0 && heartbeatpb.EndCompare(heartbeatpb.ToComparableKey(endKey), tableSpan.EndKey) == 0 {
+		return true
+	}
+	return false
+}
+
 // shouldBlock check whether the event should be blocked(to wait maintainer response)
 // For the ddl event with more than one blockedTable, it should block.
 // For the ddl event with only one blockedTable, it should block only if the table is not complete span.
@@ -477,7 +485,7 @@ func (d *Dispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 			if len(ddlEvent.GetBlockedTables().TableIDs) > 1 {
 				return true
 			}
-			if !heartbeatpb.IsCompleteSpan(d.tableSpan) {
+			if !isCompleteSpan(d.tableSpan) {
 				// if the table is split, even the blockTable only itself, it should block
 				return true
 			}
