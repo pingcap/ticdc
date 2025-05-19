@@ -1089,11 +1089,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 	// message key
 	keyJWriter.WriteObject(func() {
 		keyJWriter.WriteObjectField("payload", func() {
-			if e.GetDDLType() == timodel.ActionDropTable {
-				keyJWriter.WriteStringField("databaseName", e.ExtraSchemaName)
-			} else {
-				keyJWriter.WriteStringField("databaseName", dbName)
-			}
+			keyJWriter.WriteStringField("databaseName", dbName)
 		})
 		if !c.config.DebeziumDisableSchema {
 			keyJWriter.WriteObjectField("schema", func() {
@@ -1142,11 +1138,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 			})
 			jWriter.WriteInt64Field("ts_ms", c.nowFunc().UnixMilli())
 
-			if e.GetDDLType() == timodel.ActionDropTable {
-				jWriter.WriteStringField("databaseName", e.ExtraSchemaName)
-			} else {
-				jWriter.WriteStringField("databaseName", dbName)
-			}
+			jWriter.WriteStringField("databaseName", dbName)
 			jWriter.WriteNullField("schemaName")
 			jWriter.WriteStringField("ddl", e.Query)
 			jWriter.WriteArrayField("tableChanges", func() {
