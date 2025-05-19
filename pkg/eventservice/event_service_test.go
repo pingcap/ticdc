@@ -206,7 +206,7 @@ var _ eventstore.EventStore = &mockEventStore{}
 type mockEventStore struct {
 	resolvedTsUpdateInterval time.Duration
 	dispatcherMap            sync.Map // key is common.DispatcherID, value is span
-	spansMap                 sync.Map // key is heartbeatpb.TableSpan
+	spansMap                 sync.Map // key is *heartbeatpb.TableSpan
 }
 
 func newMockEventStore(resolvedTsUpdateInterval int) *mockEventStore {

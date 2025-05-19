@@ -586,7 +586,6 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 	}
 	req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
 	if req.Watermark != nil {
-		// redo ts >= sink ts, so the checkpointTsByCapture always redo ts
 		old, ok := m.checkpointTsByCapture[msg.From]
 		if !ok || req.Watermark.Seq >= old.Seq {
 			m.checkpointTsByCapture[msg.From] = *req.Watermark

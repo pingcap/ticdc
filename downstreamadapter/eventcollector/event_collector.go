@@ -92,10 +92,9 @@ EventCollector is the relay between EventService and DispatcherManager, responsi
 EventCollector is an instance-level component.
 */
 type EventCollector struct {
-	serverId          node.ID
-	dispatcherMap     sync.Map // key: dispatcherID, value: dispatcherStat
-	redoDispatcherMap sync.Map // key: dispatcherID, value: dispatcherStat
-	changefeedIDMap   sync.Map // key: changefeedID.GID, value: changefeedID
+	serverId        node.ID
+	dispatcherMap   sync.Map // key: dispatcherID, value: dispatcherStat
+	changefeedIDMap sync.Map // key: changefeedID.GID, value: changefeedID
 
 	mc messaging.MessageCenter
 
@@ -130,7 +129,6 @@ func New(serverId node.ID) *EventCollector {
 	eventCollector := EventCollector{
 		serverId:                             serverId,
 		dispatcherMap:                        sync.Map{},
-		redoDispatcherMap:                    sync.Map{},
 		dispatcherRequestChan:                chann.NewAutoDrainChann[DispatcherRequestWithTarget](),
 		logCoordinatorRequestChan:            chann.NewAutoDrainChann[*logservicepb.ReusableEventServiceRequest](),
 		mc:                                   appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
@@ -526,8 +524,9 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 		case <-ctx.Done():
 			return
 		case targetMessage := <-inCh:
-			// here will received double messages, one is for sink and another is for redo.
-			// but their dispatcherID are same, we can't send to ds correctly.
+			if targetMessage.Redo {
+				continue
+			}
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
 				case event.Event:

@@ -252,7 +252,6 @@ func (rd *RedoDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	// Only return false when all events are resolvedTs Event.
 	block = false
-
 	dmlWakeOnce := &sync.Once{}
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
@@ -654,7 +653,6 @@ func (rd *RedoDispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
 	h.Watermark.ResolvedTs = rd.GetResolvedTs()
 	h.Id = rd.GetId()
 	h.ComponentStatus = rd.GetComponentStatus()
-	// h.TableSpan = rd.GetTableSpan()
 	h.IsRemoving = rd.GetRemovingStatus()
 }
 

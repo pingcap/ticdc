@@ -216,10 +216,6 @@ func NewEventDispatcherManager(
 			return nil, 0, errors.Trace(err)
 		}
 		// redo meta manager
-		_, err = manager.NewTableTriggerEventDispatcher(tableTriggerEventDispatcherID, startTs, newChangefeed)
-		if err != nil {
-			return nil, 0, errors.Trace(err)
-		}
 		if manager.redoManager.Enabled() {
 			manager.redoTableTriggerEventDispatcher.MetaManager = redo.NewMetaManager(changefeedID, cfConfig.Consistent, startTs)
 			manager.wg.Add(1)

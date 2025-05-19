@@ -56,8 +56,8 @@ func (s *TableSpan) Equal(other *TableSpan) bool {
 		bytes.Equal(s.EndKey, other.EndKey)
 }
 
-func (s *TableSpan) Copy() TableSpan {
-	return TableSpan{
+func (s *TableSpan) Copy() *TableSpan {
+	return &TableSpan{
 		TableID:  s.TableID,
 		StartKey: s.StartKey,
 		EndKey:   s.EndKey,
