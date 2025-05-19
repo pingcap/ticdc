@@ -1142,8 +1142,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 			jWriter.WriteNullField("schemaName")
 			jWriter.WriteStringField("ddl", e.Query)
 			jWriter.WriteArrayField("tableChanges", func() {
-				// return early if there is no table changes
-				if tableName == "" {
+				if tableName == "" || e.Type == timodel.ActionTruncateTable {
 					return
 				}
 				jWriter.WriteObjectElement(func() {
