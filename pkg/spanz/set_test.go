@@ -16,23 +16,23 @@ package spanz
 import (
 	"testing"
 
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSet(t *testing.T) {
 	s := NewSet()
-	s.Add(tablepb.Span{TableID: 1})
-	s.Add(tablepb.Span{TableID: 1})
-	s.Add(tablepb.Span{TableID: 2})
-	s.Add(tablepb.Span{TableID: 3})
+	s.Add(heartbeatpb.TableSpan{TableID: 1})
+	s.Add(heartbeatpb.TableSpan{TableID: 1})
+	s.Add(heartbeatpb.TableSpan{TableID: 2})
+	s.Add(heartbeatpb.TableSpan{TableID: 3})
 
 	require.Equal(t, 3, s.Size())
-	s.Remove(tablepb.Span{TableID: 3})
+	s.Remove(heartbeatpb.TableSpan{TableID: 3})
 	require.Equal(t, 2, s.Size())
 
-	require.True(t, s.Contain(tablepb.Span{TableID: 2}))
-	require.False(t, s.Contain(tablepb.Span{TableID: 5}))
+	require.True(t, s.Contain(heartbeatpb.TableSpan{TableID: 2}))
+	require.False(t, s.Contain(heartbeatpb.TableSpan{TableID: 5}))
 
-	require.Equal(t, []tablepb.Span{{TableID: 1}, {TableID: 2}}, s.Keys())
+	require.Equal(t, []heartbeatpb.TableSpan{{TableID: 1}, {TableID: 2}}, s.Keys())
 }

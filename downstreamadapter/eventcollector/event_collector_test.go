@@ -31,11 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
-	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
-	targetMessage.From = id
-	return targetMessage
-}
+var _ dispatcher.EventDispatcher = (*mockEventDispatcher)(nil)
 
 type mockEventDispatcher struct {
 	id     common.DispatcherID
@@ -55,7 +51,7 @@ func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 }
 
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
-	return &heartbeatpb.TableSpan{}
+	return nil
 }
 
 func (m *mockEventDispatcher) GetFilterConfig() *eventpb.FilterConfig {
@@ -83,6 +79,49 @@ func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.Dispatc
 		m.handle(dispatcherEvent.Event)
 	}
 	return false
+}
+
+func (m *mockEventDispatcher) HandleCheckpointTs(checkpointTs uint64) {
+}
+
+func (m *mockEventDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) {
+}
+
+func (m *mockEventDispatcher) GetSchemaID() int64 {
+	return 0
+}
+
+func (m *mockEventDispatcher) GetComponentStatus() heartbeatpb.ComponentState {
+	return 0
+}
+
+func (m *mockEventDispatcher) GetCheckpointTs() uint64 {
+	return 0
+}
+
+func (m *mockEventDispatcher) GetBlockEventStatus() *heartbeatpb.State {
+	return &heartbeatpb.State{}
+}
+
+func (m *mockEventDispatcher) IsTableTriggerEventDispatcher() bool {
+	return false
+}
+
+func (m *mockEventDispatcher) GetRemovingStatus() bool {
+	return false
+}
+
+func (m *mockEventDispatcher) Remove() {
+}
+
+func (m *mockEventDispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
+	return nil
+}
+
+func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
+	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
+	targetMessage.From = id
+	return targetMessage
 }
 
 func TestProcessMessage(t *testing.T) {

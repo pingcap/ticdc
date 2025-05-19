@@ -27,7 +27,6 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
 	"go.uber.org/zap"
 )
@@ -192,7 +191,7 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 	defer c.eventStoreStates.RUnlock()
 
 	// TODO: support incomplete span
-	if !isCompleteSpan(span) {
+	if !heartbeatpb.IsCompleteSpan(span) {
 		return nil
 	}
 
@@ -240,12 +239,4 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 	}
 
 	return candidateNodes
-}
-
-func isCompleteSpan(tableSpan *heartbeatpb.TableSpan) bool {
-	startKey, endKey := spanz.GetTableRange(tableSpan.TableID)
-	if spanz.StartCompare(startKey, tableSpan.StartKey) == 0 && spanz.EndCompare(endKey, tableSpan.EndKey) == 0 {
-		return true
-	}
-	return false
 }

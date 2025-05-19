@@ -262,7 +262,7 @@ func createBootstrapResponse(
 		response.CheckpointTs = startTs
 	}
 
-	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.Dispatcher) {
+	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d dispatcher.EventDispatcher) {
 		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
 			ID:              id.ToPB(),
 			SchemaID:        d.GetSchemaID(),

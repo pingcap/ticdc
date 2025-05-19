@@ -31,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/prometheus/client_golang/prometheus"
@@ -667,7 +666,7 @@ func (s *SubscriptionClient) divideSpanAndScheduleRegionRequests(
 			nextSpan.StartKey = regionMeta.EndKey
 			// If the nextSpan.StartKey is larger than the subscribedSpan.span.EndKey,
 			// it means all span of the subscribedSpan have been requested. So we return.
-			if spanz.EndCompare(nextSpan.StartKey, span.EndKey) >= 0 {
+			if heartbeatpb.EndCompare(nextSpan.StartKey, span.EndKey) >= 0 {
 				return nil
 			}
 		}

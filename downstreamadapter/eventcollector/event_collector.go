@@ -243,7 +243,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	}
 }
 
-func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
+func (c *EventCollector) RemoveDispatcher(target dispatcher.EventDispatcher) {
 	log.Info("remove dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("remove dispatcher done", zap.Stringer("dispatcher", target.GetId()))

@@ -92,7 +92,7 @@ func EndCompare(lhs []byte, rhs []byte) int {
 }
 
 // GetIntersectSpan return the intersect part of lhs and rhs span
-func GetIntersectSpan(lhs heartbeatpb.TableSpan, rhs heartbeatpb.TableSpan) heartbeatpb.TableSpan {
+func GetIntersectSpan(lhs, rhs heartbeatpb.TableSpan) heartbeatpb.TableSpan {
 	if len(lhs.StartKey) != 0 && EndCompare(lhs.StartKey, rhs.EndKey) >= 0 ||
 		len(rhs.StartKey) != 0 && EndCompare(rhs.StartKey, lhs.EndKey) >= 0 {
 		return heartbeatpb.TableSpan{

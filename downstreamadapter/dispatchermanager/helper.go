@@ -73,10 +73,10 @@ func (d *DispatcherMap) Len() int {
 	return len
 }
 
-func (d *DispatcherMap) Get(id common.DispatcherID) (*dispatcher.Dispatcher, bool) {
+func (d *DispatcherMap) Get(id common.DispatcherID) (dispatcher.EventDispatcher, bool) {
 	dispatcherItem, ok := d.m.Load(id)
 	if ok {
-		return dispatcherItem.(*dispatcher.Dispatcher), ok
+		return dispatcherItem.(dispatcher.EventDispatcher), ok
 	}
 	return nil, false
 }
@@ -89,16 +89,16 @@ func (d *DispatcherMap) Delete(id common.DispatcherID) {
 	d.m.Delete(id)
 }
 
-func (d *DispatcherMap) Set(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) uint64 {
+func (d *DispatcherMap) Set(id common.DispatcherID, dispatcher dispatcher.EventDispatcher) uint64 {
 	d.m.Store(id, dispatcher)
 	d.seq.Add(1)
 	return d.seq.Load()
 }
 
-func (d *DispatcherMap) ForEach(fn func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher)) uint64 {
+func (d *DispatcherMap) ForEach(fn func(id common.DispatcherID, dispatcher dispatcher.EventDispatcher)) uint64 {
 	seq := d.seq.Load()
 	d.m.Range(func(key, value interface{}) bool {
-		fn(key.(common.DispatcherID), value.(*dispatcher.Dispatcher))
+		fn(key.(common.DispatcherID), value.(dispatcher.EventDispatcher))
 		return true
 	})
 	return seq
@@ -306,7 +306,7 @@ func (h *SchedulerDispatcherRequestHandler) GetType(event SchedulerDispatcherReq
 
 func (h *SchedulerDispatcherRequestHandler) OnDrop(event SchedulerDispatcherRequest) {}
 
-func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, *dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]) dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler] {
+func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.EventDispatcher, *dispatcher.DispatcherStatusHandler]) dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler] {
 	ds := dynstream.NewParallelDynamicStream(
 		func(id common.GID) uint64 { return id.FastHash() },
 		newHeartBeatResponseHandler(dds))
@@ -323,10 +323,10 @@ func NewHeartBeatResponse(resp *heartbeatpb.HeartBeatResponse) HeartBeatResponse
 }
 
 type HeartBeatResponseHandler struct {
-	dispatcherStatusDynamicStream dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, *dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]
+	dispatcherStatusDynamicStream dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.EventDispatcher, *dispatcher.DispatcherStatusHandler]
 }
 
-func newHeartBeatResponseHandler(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, *dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]) *HeartBeatResponseHandler {
+func newHeartBeatResponseHandler(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.EventDispatcher, *dispatcher.DispatcherStatusHandler]) *HeartBeatResponseHandler {
 	return &HeartBeatResponseHandler{dispatcherStatusDynamicStream: dds}
 }
 
@@ -362,7 +362,7 @@ func (h *HeartBeatResponseHandler) Handle(eventDispatcherManager *EventDispatche
 			}
 		case heartbeatpb.InfluenceType_All:
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
-			eventDispatcherManager.GetDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.Dispatcher) {
+			eventDispatcherManager.GetDispatcherMap().ForEach(func(id common.DispatcherID, _ dispatcher.EventDispatcher) {
 				if id != excludeDispatcherID {
 					h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
 				}

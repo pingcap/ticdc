@@ -13,7 +13,9 @@
 
 package spanz
 
-import "github.com/pingcap/tiflow/cdc/processor/tablepb"
+import (
+	"github.com/pingcap/ticdc/heartbeatpb"
+)
 
 // Set maintains a set of Span.
 type Set struct {
@@ -28,19 +30,19 @@ func NewSet() *Set {
 }
 
 // Add adds a span to Set.
-func (s *Set) Add(span tablepb.Span) {
+func (s *Set) Add(span heartbeatpb.TableSpan) {
 	s.memo.ReplaceOrInsert(span, struct{}{})
 }
 
 // Remove removes a span from a Set.
-func (s *Set) Remove(span tablepb.Span) {
+func (s *Set) Remove(span heartbeatpb.TableSpan) {
 	s.memo.Delete(span)
 }
 
 // Keys returns a collection of Span.
-func (s *Set) Keys() []tablepb.Span {
-	result := make([]tablepb.Span, 0, s.memo.Len())
-	s.memo.Ascend(func(span tablepb.Span, value struct{}) bool {
+func (s *Set) Keys() []heartbeatpb.TableSpan {
+	result := make([]heartbeatpb.TableSpan, 0, s.memo.Len())
+	s.memo.Ascend(func(span heartbeatpb.TableSpan, value struct{}) bool {
 		result = append(result, span)
 		return true
 	})
@@ -48,7 +50,7 @@ func (s *Set) Keys() []tablepb.Span {
 }
 
 // Contain checks whether a Span is in Set.
-func (s *Set) Contain(span tablepb.Span) bool {
+func (s *Set) Contain(span heartbeatpb.TableSpan) bool {
 	return s.memo.Has(span)
 }
 

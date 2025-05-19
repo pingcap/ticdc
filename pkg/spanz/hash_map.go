@@ -16,8 +16,8 @@ package spanz
 import (
 	"encoding/binary"
 
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/util/seahash"
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
 )
 
 // HashMap is a specialized hash map that map a Span to a value.
@@ -38,32 +38,32 @@ func (m *HashMap[T]) Len() int {
 }
 
 // Has returns true if the given key is in the map.
-func (m *HashMap[T]) Has(span tablepb.Span) bool {
+func (m *HashMap[T]) Has(span heartbeatpb.TableSpan) bool {
 	_, ok := m.hashMap[toHashableSpan(span)]
 	return ok
 }
 
 // Get looks for the key item in the map, returning it.
 // It returns (zeroValue, false) if unable to find that item.
-func (m *HashMap[T]) Get(span tablepb.Span) (T, bool) {
+func (m *HashMap[T]) Get(span heartbeatpb.TableSpan) (T, bool) {
 	item, ok := m.hashMap[toHashableSpan(span)]
 	return item, ok
 }
 
 // GetV looks for the key item in the map, returning it.
 // It returns zeroValue if unable to find that item.
-func (m *HashMap[T]) GetV(span tablepb.Span) T {
+func (m *HashMap[T]) GetV(span heartbeatpb.TableSpan) T {
 	item := m.hashMap[toHashableSpan(span)]
 	return item
 }
 
 // Delete removes an item whose key equals to the span.
-func (m *HashMap[T]) Delete(span tablepb.Span) {
+func (m *HashMap[T]) Delete(span heartbeatpb.TableSpan) {
 	delete(m.hashMap, toHashableSpan(span))
 }
 
 // ReplaceOrInsert adds the given item to the map.
-func (m *HashMap[T]) ReplaceOrInsert(span tablepb.Span, value T) {
+func (m *HashMap[T]) ReplaceOrInsert(span heartbeatpb.TableSpan, value T) {
 	m.hashMap[toHashableSpan(span)] = value
 }
 
@@ -79,7 +79,7 @@ func (m *HashMap[T]) Range(iterator ItemIterator[T]) {
 }
 
 // HashTableSpan hashes the given span to a slot offset.
-func HashTableSpan(span tablepb.Span, slots int) int {
+func HashTableSpan(span heartbeatpb.TableSpan, slots int) int {
 	b := make([]byte, 8+len(span.StartKey))
 	binary.LittleEndian.PutUint64(b[0:8], uint64(span.TableID))
 	copy(b[8:], span.StartKey)

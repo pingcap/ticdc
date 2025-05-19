@@ -38,7 +38,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -182,7 +181,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 			zap.Int64("table", table.TableID))
 		return
 	}
-	span := spanz.TableIDToComparableSpan(table.TableID)
+	span := heartbeatpb.TableIDToComparableSpan(table.TableID)
 	tableSpan := &heartbeatpb.TableSpan{
 		TableID:  table.TableID,
 		StartKey: span.StartKey,
@@ -387,7 +386,7 @@ func (c *Controller) processTableSpans(
 	// Add new table if not working
 	if isTableWorking {
 		// Handle existing table spans
-		span := spanz.TableIDToComparableSpan(table.TableID)
+		span := heartbeatpb.TableIDToComparableSpan(table.TableID)
 		tableSpan := &heartbeatpb.TableSpan{
 			TableID:  table.TableID,
 			StartKey: span.StartKey,
@@ -661,7 +660,7 @@ func (c *Controller) SplitTableByRegionCount(tableID int64) error {
 
 	replications := c.replicationDB.GetTasksByTableID(tableID)
 
-	span := spanz.TableIDToComparableSpan(tableID)
+	span := heartbeatpb.TableIDToComparableSpan(tableID)
 	wholeSpan := &heartbeatpb.TableSpan{
 		TableID:  span.TableID,
 		StartKey: span.StartKey,

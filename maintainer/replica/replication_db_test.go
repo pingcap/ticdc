@@ -19,13 +19,12 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/stretchr/testify/require"
 )
 
 // TODO: refactor all test in maintainer with getTableSpanByID
 func getTableSpanByID(id common.TableID) *heartbeatpb.TableSpan {
-	totalSpan := spanz.TableIDToComparableSpan(id)
+	totalSpan := heartbeatpb.TableIDToComparableSpan(id)
 	return &heartbeatpb.TableSpan{
 		TableID:  totalSpan.TableID,
 		StartKey: totalSpan.StartKey,

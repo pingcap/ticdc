@@ -16,7 +16,7 @@ package spanz
 import (
 	"testing"
 
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
+	"github.com/pingcap/ticdc/heartbeatpb"
 )
 
 func BenchmarkMap(b *testing.B) {
@@ -24,9 +24,9 @@ func BenchmarkMap(b *testing.B) {
 	hm := NewHashMap[int]()
 	sm := SyncMap{}
 
-	spans := [100]tablepb.Span{}
+	spans := [100]heartbeatpb.TableSpan{}
 	for i := 0; i < len(spans); i++ {
-		spans[i] = TableIDToComparableSpan(int64(i))
+		spans[i] = heartbeatpb.TableIDToComparableSpan(int64(i))
 	}
 	for i, span := range spans {
 		bm.ReplaceOrInsert(span, i)
@@ -94,22 +94,22 @@ func BenchmarkMap(b *testing.B) {
 	})
 
 	bench("Range", func(i int) {
-		bm.Ascend(func(span tablepb.Span, value int) bool {
+		bm.Ascend(func(span heartbeatpb.TableSpan, value int) bool {
 			return span.TableID > -1
 		})
 	}, func(i int) {
-		hm.Range(func(span tablepb.Span, value int) bool {
+		hm.Range(func(span heartbeatpb.TableSpan, value int) bool {
 			return span.TableID > -1
 		})
 	}, func(i int) {
-		sm.Range(func(span tablepb.Span, value any) bool {
+		sm.Range(func(span heartbeatpb.TableSpan, value any) bool {
 			return span.TableID > -1
 		})
 	})
 
-	start, end := spans[0], TableIDToComparableSpan(int64(len(spans)))
+	start, end := spans[0], heartbeatpb.TableIDToComparableSpan(int64(len(spans)))
 	bench("AscendRange", func(i int) {
-		bm.AscendRange(start, end, func(span tablepb.Span, value int) bool {
+		bm.AscendRange(start, end, func(span heartbeatpb.TableSpan, value int) bool {
 			return span.TableID > -1
 		})
 	}, nil, nil)

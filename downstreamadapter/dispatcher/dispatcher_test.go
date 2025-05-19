@@ -25,7 +25,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
 	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/stretchr/testify/require"
 )
 
@@ -87,9 +86,9 @@ func getCompleteTableSpanWithTableID(tableID int64) *heartbeatpb.TableSpan {
 	tableSpan := &heartbeatpb.TableSpan{
 		TableID: tableID,
 	}
-	startKey, endKey := spanz.GetTableRange(tableSpan.TableID)
-	tableSpan.StartKey = spanz.ToComparableKey(startKey)
-	tableSpan.EndKey = spanz.ToComparableKey(endKey)
+	startKey, endKey := heartbeatpb.GetTableRange(tableSpan.TableID)
+	tableSpan.StartKey = heartbeatpb.ToComparableKey(startKey)
+	tableSpan.EndKey = heartbeatpb.ToComparableKey(endKey)
 	return tableSpan
 }
 

@@ -16,7 +16,7 @@ package spanz
 import (
 	"testing"
 
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,45 +26,45 @@ func TestHashMap(t *testing.T) {
 	m := NewHashMap[int]()
 
 	// Insert then get.
-	m.ReplaceOrInsert(tablepb.Span{TableID: 1}, 1)
-	v, ok := m.Get(tablepb.Span{TableID: 1})
+	m.ReplaceOrInsert(heartbeatpb.TableSpan{TableID: 1}, 1)
+	v, ok := m.Get(heartbeatpb.TableSpan{TableID: 1})
 	require.Equal(t, v, 1)
 	require.True(t, ok)
 	require.Equal(t, 1, m.Len())
-	require.True(t, m.Has(tablepb.Span{TableID: 1}))
+	require.True(t, m.Has(heartbeatpb.TableSpan{TableID: 1}))
 
 	// Insert then get again.
-	m.ReplaceOrInsert(tablepb.Span{TableID: 1, StartKey: []byte{1}}, 2)
+	m.ReplaceOrInsert(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}}, 2)
 	require.Equal(t, 2, m.Len())
-	v, ok = m.Get(tablepb.Span{TableID: 1, StartKey: []byte{1}})
+	v, ok = m.Get(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}})
 	require.Equal(t, v, 2)
 	require.True(t, ok)
 
 	// Overwrite then get.
 	m.ReplaceOrInsert(
-		tablepb.Span{TableID: 1, StartKey: []byte{1}}, 3)
+		heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}}, 3)
 	require.Equal(t, 2, m.Len())
-	require.True(t, m.Has(tablepb.Span{TableID: 1, StartKey: []byte{1}}))
-	v, ok = m.Get(tablepb.Span{TableID: 1, StartKey: []byte{1}})
+	require.True(t, m.Has(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}}))
+	v, ok = m.Get(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}})
 	require.Equal(t, v, 3)
 	require.True(t, ok)
 
 	// get value
-	v = m.GetV(tablepb.Span{TableID: 1, StartKey: []byte{1}})
+	v = m.GetV(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}})
 	require.Equal(t, v, 3)
 
 	// Delete than get value
-	m.Delete(tablepb.Span{TableID: 1, StartKey: []byte{1}})
+	m.Delete(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}})
 	require.Equal(t, 1, m.Len())
-	require.False(t, m.Has(tablepb.Span{TableID: 1, StartKey: []byte{1}}))
-	v = m.GetV(tablepb.Span{TableID: 1, StartKey: []byte{1}})
+	require.False(t, m.Has(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}}))
+	v = m.GetV(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}})
 	require.Equal(t, v, 0)
 
 	// Pointer value
 	mp := NewHashMap[*int]()
 	vp := &v
-	mp.ReplaceOrInsert(tablepb.Span{TableID: 1}, vp)
-	vp1, ok := mp.Get(tablepb.Span{TableID: 1})
+	mp.ReplaceOrInsert(heartbeatpb.TableSpan{TableID: 1}, vp)
+	vp1, ok := mp.Get(heartbeatpb.TableSpan{TableID: 1})
 	require.Equal(t, vp, vp1)
 	require.True(t, ok)
 	require.Equal(t, 1, m.Len())
@@ -75,11 +75,11 @@ func TestHashMapIter(t *testing.T) {
 
 	m := NewHashMap[int]()
 	for i := 0; i < 4; i++ {
-		m.ReplaceOrInsert(tablepb.Span{TableID: int64(i)}, i)
+		m.ReplaceOrInsert(heartbeatpb.TableSpan{TableID: int64(i)}, i)
 	}
 
 	j := 0
-	m.Range(func(span tablepb.Span, value int) bool {
+	m.Range(func(span heartbeatpb.TableSpan, value int) bool {
 		_, ok := m.Get(span)
 		require.True(t, ok)
 		j++
@@ -88,7 +88,7 @@ func TestHashMapIter(t *testing.T) {
 	require.Equal(t, 4, j)
 
 	j = 0
-	m.Range(func(span tablepb.Span, value int) bool {
+	m.Range(func(span heartbeatpb.TableSpan, value int) bool {
 		ok := m.Has(span)
 		require.True(t, ok)
 		j++

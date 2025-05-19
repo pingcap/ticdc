@@ -274,7 +274,7 @@ func TestGCAndCleanup(t *testing.T) {
 	// write some log files
 	maxCommitTs := 20
 	for i := 1; i <= maxCommitTs; i++ {
-		for _, logType := range []string{redo.RedoRowLogFileType, redo.RedoDDLLogFileType} {
+		for _, logType := range []string{redo.RedoDDLLogFileType, redo.RedoRowLogFileType} {
 			// fileName with different captureID and maxCommitTs
 			curCaptureID := fmt.Sprintf("%s%d", captureID, i%10)
 			maxCommitTs := i
