@@ -42,7 +42,7 @@ type regionFeedStates map[uint64]*regionFeedState
 type regionRequestWorker struct {
 	workerID uint64
 
-	client *SubscriptionClient
+	client *subscriptionClient
 
 	store *requestedStore
 
@@ -63,7 +63,7 @@ type regionRequestWorker struct {
 
 func newRegionRequestWorker(
 	ctx context.Context,
-	client *SubscriptionClient,
+	client *subscriptionClient,
 	credential *security.Credential,
 	g *errgroup.Group,
 	store *requestedStore,
