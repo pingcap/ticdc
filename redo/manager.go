@@ -346,8 +346,8 @@ func (m *logManager) RemoveTable(span heartbeatpb.TableSpan) {
 	}
 }
 
-func (m *logManager) prepareForFlush() *spanz.HashMap[common.Ts] {
-	tableRtsMap := spanz.NewHashMap[common.Ts]()
+func (m *logManager) prepareForFlush() *common.SpanHashMap[common.Ts] {
+	tableRtsMap := common.NewSpanHashMap[common.Ts]()
 	m.rtsMap.Range(func(span heartbeatpb.TableSpan, value interface{}) bool {
 		rts := value.(*statefulRts)
 		unflushed := rts.getUnflushed()
@@ -361,7 +361,7 @@ func (m *logManager) prepareForFlush() *spanz.HashMap[common.Ts] {
 	return tableRtsMap
 }
 
-func (m *logManager) postFlush(tableRtsMap *spanz.HashMap[common.Ts]) {
+func (m *logManager) postFlush(tableRtsMap *common.SpanHashMap[common.Ts]) {
 	tableRtsMap.Range(func(span heartbeatpb.TableSpan, flushed uint64) bool {
 		if value, loaded := m.rtsMap.Load(span); loaded {
 			changed := value.(*statefulRts).checkAndSetFlushed(flushed)

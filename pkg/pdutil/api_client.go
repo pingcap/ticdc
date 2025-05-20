@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/retry"
@@ -226,7 +227,7 @@ func (pc *pdAPIClient) scanRegions(
 	startKey := span.StartKey
 	startKeyHex := strings.ToUpper(hex.EncodeToString(startKey))
 	isFirstStartKey := true
-	for heartbeatpb.EndCompare(startKey, span.EndKey) < 0 || (len(startKey) == 0 && isFirstStartKey) {
+	for common.EndCompare(startKey, span.EndKey) < 0 || (len(startKey) == 0 && isFirstStartKey) {
 		for i, endpoint := range endpoints {
 			r, err := scan(endpoint, startKey, span.EndKey)
 			if err != nil && i+1 == len(endpoints) {

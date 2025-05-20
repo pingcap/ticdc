@@ -674,7 +674,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 			nextSpan.StartKey = regionMeta.EndKey
 			// If the nextSpan.StartKey is larger than the subscribedSpan.span.EndKey,
 			// it means all span of the subscribedSpan have been requested. So we return.
-			if heartbeatpb.EndCompare(nextSpan.StartKey, span.EndKey) >= 0 {
+			if common.EndCompare(nextSpan.StartKey, span.EndKey) >= 0 {
 				return nil
 			}
 		}

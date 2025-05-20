@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/utils"
 	"github.com/stretchr/testify/require"
 )
@@ -87,7 +88,7 @@ func TestMapFindHole(t *testing.T) {
 	}
 
 	for i, cs := range cases {
-		m := utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](heartbeatpb.LessTableSpan)
+		m := utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
 		for _, span := range cs.spans {
 			m.ReplaceOrInsert(span, &replica.SpanReplication{})
 		}

@@ -220,7 +220,7 @@ func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.Schema
 	// Only the table trigger event dispatcher need to create a tableSchemaStore
 	// Because we only need to calculate the tableNames or TableIds in the sink
 	// when the event dispatcher manager have table trigger event dispatcher
-	if !d.tableSpan.Equal(heartbeatpb.DDLSpan) {
+	if !d.tableSpan.Equal(common.DDLSpan) {
 		log.Error("InitializeTableSchemaStore should only be received by table trigger event dispatcher", zap.Any("dispatcher", d.id))
 		return false, apperror.ErrChangefeedInitTableTriggerEventDispatcherFailed.
 			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger event dispatcher")
@@ -462,8 +462,8 @@ func (d *Dispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 }
 
 func isCompleteSpan(tableSpan *heartbeatpb.TableSpan) bool {
-	startKey, endKey := heartbeatpb.GetTableRange(tableSpan.TableID)
-	if heartbeatpb.StartCompare(heartbeatpb.ToComparableKey(startKey), tableSpan.StartKey) == 0 && heartbeatpb.EndCompare(heartbeatpb.ToComparableKey(endKey), tableSpan.EndKey) == 0 {
+	startKey, endKey := common.GetTableRange(tableSpan.TableID)
+	if common.StartCompare(common.ToComparableKey(startKey), tableSpan.StartKey) == 0 && common.EndCompare(common.ToComparableKey(endKey), tableSpan.EndKey) == 0 {
 		return true
 	}
 	return false
@@ -629,7 +629,7 @@ func (d *Dispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	// So there won't be a related db-level ddl event is in dealing when we get update schema id events.
 	// Thus, whether to update schema id before or after current ddl event is not important.
 	// To make it easier, we choose to directly update schema id here.
-	if event.GetUpdatedSchemas() != nil && d.tableSpan != heartbeatpb.DDLSpan {
+	if event.GetUpdatedSchemas() != nil && d.tableSpan != common.DDLSpan {
 		for _, schemaIDChange := range event.GetUpdatedSchemas() {
 			if schemaIDChange.TableID == d.tableSpan.TableID {
 				if schemaIDChange.OldSchemaID != d.schemaID {
@@ -888,7 +888,7 @@ func (d *Dispatcher) EmitBootstrap() bool {
 }
 
 func (d *Dispatcher) IsTableTriggerEventDispatcher() bool {
-	return d.tableSpan == heartbeatpb.DDLSpan
+	return d.tableSpan == common.DDLSpan
 }
 
 func (d *Dispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {

@@ -37,8 +37,8 @@ func TestScheduleEvent(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -89,8 +89,8 @@ func TestResendAction(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -194,8 +194,8 @@ func TestUpdateSchemaID(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,

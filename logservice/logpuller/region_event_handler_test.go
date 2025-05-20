@@ -51,8 +51,8 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 
 	span := heartbeatpb.TableSpan{
 		TableID:  100,
-		StartKey: heartbeatpb.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-		EndKey:   heartbeatpb.ToComparableKey(heartbeatpb.UpperBoundKey),
+		StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
+		EndKey:   common.ToComparableKey(heartbeatpb.UpperBoundKey),
 	}
 	subID := SubscriptionID(999)
 	eventCh := make(chan common.RawKVEntry, 1000)
@@ -217,8 +217,8 @@ func TestHandleResolvedTs(t *testing.T) {
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
-			StartKey: heartbeatpb.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-			EndKey:   heartbeatpb.ToComparableKey(heartbeatpb.UpperBoundKey),
+			StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
+			EndKey:   common.ToComparableKey(heartbeatpb.UpperBoundKey),
 		}
 		subSpan := &subscribedSpan{
 			subID:             subID1,
@@ -241,8 +241,8 @@ func TestHandleResolvedTs(t *testing.T) {
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
-			StartKey: heartbeatpb.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-			EndKey:   heartbeatpb.ToComparableKey(heartbeatpb.UpperBoundKey),
+			StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
+			EndKey:   common.ToComparableKey(heartbeatpb.UpperBoundKey),
 		}
 		subSpan := &subscribedSpan{
 			subID:             subID2,
@@ -265,8 +265,8 @@ func TestHandleResolvedTs(t *testing.T) {
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
-			StartKey: heartbeatpb.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-			EndKey:   heartbeatpb.ToComparableKey(heartbeatpb.UpperBoundKey),
+			StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
+			EndKey:   common.ToComparableKey(heartbeatpb.UpperBoundKey),
 		}
 		subSpan := &subscribedSpan{
 			subID:             subID3,

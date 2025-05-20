@@ -21,7 +21,6 @@ import (
 	"unsafe"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
@@ -180,7 +179,7 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 	tableID := tablecodec.DecodeTableID(rawKV.Key)
 
 	// parse it with tidb_ddl_job
-	if tableID == heartbeatpb.JobTableID {
+	if tableID == common.JobTableID {
 		row, err := decodeRow(rawKV.Value, recordID, ddlTableInfo.DDLJobTable, time.UTC)
 		if err != nil {
 			return nil, errors.Trace(err)
@@ -189,7 +188,7 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 		v = datum.GetBytes()
 
 		return parseJob(v, rawKV.StartTs, rawKV.CRTs, false)
-	} else if tableID == heartbeatpb.JobHistoryID {
+	} else if tableID == common.JobHistoryID {
 		// parse it with tidb_ddl_history
 		row, err := decodeRow(rawKV.Value, recordID, ddlTableInfo.DDLHistoryTable, time.UTC)
 		if err != nil {

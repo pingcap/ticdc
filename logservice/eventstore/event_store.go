@@ -787,7 +787,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 		}
 		metrics.EventStoreScanBytes.Add(float64(len(value)))
 		if iter.needCheckSpan {
-			comparableKey := heartbeatpb.ToComparableKey(rawKV.Key)
+			comparableKey := common.ToComparableKey(rawKV.Key)
 			if bytes.Compare(comparableKey, iter.tableSpan.StartKey) >= 0 &&
 				bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
 				break

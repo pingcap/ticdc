@@ -86,9 +86,9 @@ func getCompleteTableSpanWithTableID(tableID int64) *heartbeatpb.TableSpan {
 	tableSpan := &heartbeatpb.TableSpan{
 		TableID: tableID,
 	}
-	startKey, endKey := heartbeatpb.GetTableRange(tableSpan.TableID)
-	tableSpan.StartKey = heartbeatpb.ToComparableKey(startKey)
-	tableSpan.EndKey = heartbeatpb.ToComparableKey(endKey)
+	startKey, endKey := common.GetTableRange(tableSpan.TableID)
+	tableSpan.StartKey = common.ToComparableKey(startKey)
+	tableSpan.EndKey = common.ToComparableKey(endKey)
 	return tableSpan
 }
 
@@ -491,7 +491,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	count = 0
 
-	ddlTableSpan := heartbeatpb.DDLSpan
+	ddlTableSpan := common.DDLSpan
 	sink := newMockSink(common.MysqlSinkType)
 	tableTriggerEventDispatcher := newDispatcherForTest(sink, ddlTableSpan)
 	require.Nil(t, tableTriggerEventDispatcher.tableSchemaStore)
@@ -571,7 +571,7 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	count = 0
 
-	ddlTableSpan := heartbeatpb.DDLSpan
+	ddlTableSpan := common.DDLSpan
 	sink := newMockSink(common.KafkaSinkType)
 	tableTriggerEventDispatcher := newDispatcherForTest(sink, ddlTableSpan)
 	require.Nil(t, tableTriggerEventDispatcher.tableSchemaStore)

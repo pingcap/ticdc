@@ -162,7 +162,7 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 	defer c.eventStoreStates.Unlock()
 
 	// FIXME: remove this check
-	if !heartbeatpb.IsCompleteSpan(span) {
+	if !common.IsCompleteSpan(span) {
 		return nil
 	}
 

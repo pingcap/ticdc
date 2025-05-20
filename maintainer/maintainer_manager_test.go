@@ -297,7 +297,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	// table1 and table 2 will be reported by remote
 	var remotedIds []common.DispatcherID
 	for i := 1; i < 3; i++ {
-		span := heartbeatpb.TableIDToComparableSpan(int64(i))
+		span := common.TableIDToComparableSpan(int64(i))
 		tableSpan := &heartbeatpb.TableSpan{
 			TableID:  int64(i),
 			StartKey: span.StartKey,
@@ -356,7 +356,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	foundSize := 0
 	hasDDLDispatcher := false
 	for _, stm := range maintainer.controller.replicationDB.GetReplicating() {
-		if stm.Span.Equal(heartbeatpb.DDLSpan) {
+		if stm.Span.Equal(common.DDLSpan) {
 			hasDDLDispatcher = true
 		}
 		for _, remotedId := range remotedIds {

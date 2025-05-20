@@ -128,8 +128,8 @@ func (r *SpanReplication) initGroupID() {
 	r.groupID = replica.DefaultGroupID
 	span := heartbeatpb.TableSpan{TableID: r.Span.TableID, StartKey: r.Span.StartKey, EndKey: r.Span.EndKey}
 	// check if the table is split
-	totalSpan := heartbeatpb.TableIDToComparableSpan(span.TableID)
-	if !heartbeatpb.IsSubSpan(span, totalSpan) {
+	totalSpan := common.TableIDToComparableSpan(span.TableID)
+	if !common.IsSubSpan(span, totalSpan) {
 		log.Warn("invalid span range", zap.String("changefeedID", r.ChangefeedID.Name()),
 			zap.String("id", r.ID.String()), zap.Int64("tableID", span.TableID),
 			zap.String("totalSpan", totalSpan.String()),

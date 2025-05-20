@@ -462,7 +462,7 @@ func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.
 	err := e.newDispatchers([]dispatcherCreateInfo{
 		{
 			Id:          common.NewDispatcherIDFromPB(id),
-			TableSpan:   heartbeatpb.DDLSpan,
+			TableSpan:   common.DDLSpan,
 			StartTs:     startTs,
 			SchemaID:    0,
 			CurrentPDTs: 0,

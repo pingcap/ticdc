@@ -136,10 +136,10 @@ func TestLogManagerInProcessor(t *testing.T) {
 		})
 		// check emit row changed events can move forward resolved ts
 		spans := []heartbeatpb.TableSpan{
-			heartbeatpb.TableIDToComparableSpan(53),
-			heartbeatpb.TableIDToComparableSpan(55),
-			heartbeatpb.TableIDToComparableSpan(57),
-			heartbeatpb.TableIDToComparableSpan(59),
+			common.TableIDToComparableSpan(53),
+			common.TableIDToComparableSpan(55),
+			common.TableIDToComparableSpan(57),
+			common.TableIDToComparableSpan(59),
 		}
 
 		startTs := uint64(100)
@@ -152,7 +152,7 @@ func TestLogManagerInProcessor(t *testing.T) {
 			rows []*pevent.DMLEvent
 		}{
 			{
-				span: heartbeatpb.TableIDToComparableSpan(53),
+				span: common.TableIDToComparableSpan(53),
 				rows: []*pevent.DMLEvent{
 					{CommitTs: 120, PhysicalTableID: 53, TableInfo: tableInfo},
 					{CommitTs: 125, PhysicalTableID: 53, TableInfo: tableInfo},
@@ -160,20 +160,20 @@ func TestLogManagerInProcessor(t *testing.T) {
 				},
 			},
 			{
-				span: heartbeatpb.TableIDToComparableSpan(55),
+				span: common.TableIDToComparableSpan(55),
 				rows: []*pevent.DMLEvent{
 					{CommitTs: 130, PhysicalTableID: 55, TableInfo: tableInfo},
 					{CommitTs: 135, PhysicalTableID: 55, TableInfo: tableInfo},
 				},
 			},
 			{
-				span: heartbeatpb.TableIDToComparableSpan(57),
+				span: common.TableIDToComparableSpan(57),
 				rows: []*pevent.DMLEvent{
 					{CommitTs: 130, PhysicalTableID: 57, TableInfo: tableInfo},
 				},
 			},
 			{
-				span: heartbeatpb.TableIDToComparableSpan(59),
+				span: common.TableIDToComparableSpan(59),
 				rows: []*pevent.DMLEvent{
 					{CommitTs: 128, PhysicalTableID: 59, TableInfo: tableInfo},
 					{CommitTs: 130, PhysicalTableID: 59, TableInfo: tableInfo},
@@ -254,7 +254,7 @@ func TestLogManagerInOwner(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, startTs, ddlMgr.GetResolvedTs())
 
-		ddlMgr.UpdateResolvedTs(ctx, *heartbeatpb.DDLSpan, ddl.FinishedTs)
+		ddlMgr.UpdateResolvedTs(ctx, *common.DDLSpan, ddl.FinishedTs)
 		checkResolvedTs(t, ddlMgr.logManager, ddl.FinishedTs)
 
 		cancel()
@@ -299,7 +299,7 @@ func TestLogManagerError(t *testing.T) {
 		rows []*pevent.DMLEvent
 	}{
 		{
-			span: heartbeatpb.TableIDToComparableSpan(53),
+			span: common.TableIDToComparableSpan(53),
 			rows: []*pevent.DMLEvent{
 				{CommitTs: 120, PhysicalTableID: 53, TableInfo: tableInfo},
 				{CommitTs: 125, PhysicalTableID: 53, TableInfo: tableInfo},
@@ -352,12 +352,12 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	// Init tables
 	numOfTables := 200
 	tables := make([]common.TableID, 0, numOfTables)
-	maxTsMap := spanz.NewHashMap[*common.Ts]()
+	maxTsMap := common.NewSpanHashMap[*common.Ts]()
 	startTs := uint64(100)
 	for i := 0; i < numOfTables; i++ {
 		tableID := common.TableID(i)
 		tables = append(tables, tableID)
-		span := heartbeatpb.TableIDToComparableSpan(tableID)
+		span := common.TableIDToComparableSpan(tableID)
 		ts := startTs
 		maxTsMap.ReplaceOrInsert(span, &ts)
 		dmlMgr.AddTable(span, startTs)
@@ -392,7 +392,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 					dmlMgr.UpdateResolvedTs(ctx, span, *maxCommitTs)
 				}
 			}
-		}(heartbeatpb.TableIDToComparableSpan(tableID))
+		}(common.TableIDToComparableSpan(tableID))
 	}
 	wg.Wait()
 

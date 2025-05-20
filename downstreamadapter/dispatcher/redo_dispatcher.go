@@ -490,7 +490,7 @@ func (rd *RedoDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	// So there won't be a related db-level ddl event is in dealing when we get update schema id events.
 	// Thus, whether to update schema id before or after current ddl event is not important.
 	// To make it easier, we choose to directly update schema id here.
-	if event.GetUpdatedSchemas() != nil && rd.tableSpan != heartbeatpb.DDLSpan {
+	if event.GetUpdatedSchemas() != nil && rd.tableSpan != common.DDLSpan {
 		for _, schemaIDChange := range event.GetUpdatedSchemas() {
 			if schemaIDChange.TableID == rd.tableSpan.TableID {
 				if schemaIDChange.OldSchemaID != rd.schemaID {
@@ -665,7 +665,7 @@ func (rd *RedoDispatcher) HandleCheckpointTs(checkpointTs uint64) {
 }
 
 func (rd *RedoDispatcher) IsTableTriggerEventDispatcher() bool {
-	return rd.tableSpan == heartbeatpb.DDLSpan
+	return rd.tableSpan == common.DDLSpan
 }
 
 func (rd *RedoDispatcher) SetSeq(seq uint64) {

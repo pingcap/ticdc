@@ -48,8 +48,8 @@ func TestSchedule(t *testing.T) {
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		pdClock,
-		heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -80,8 +80,8 @@ func TestRemoveAbsentTask(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -104,8 +104,8 @@ func TestBalanceGlobalEven(t *testing.T) {
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		pdClock,
-		heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -115,7 +115,7 @@ func TestBalanceGlobalEven(t *testing.T) {
 	nodeID := node.ID("node1")
 	for i := 0; i < 100; i++ {
 		// generate 100 groups
-		totalSpan := heartbeatpb.TableIDToComparableSpan(int64(i))
+		totalSpan := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'a'), EndKey: appendNew(totalSpan.StartKey, 'b')}
 		dispatcherID := common.NewDispatcherID()
 		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, pdClock, 1, span, 1)
@@ -177,8 +177,8 @@ func TestBalanceGlobalUneven(t *testing.T) {
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		pdClock,
-		heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -186,7 +186,7 @@ func TestBalanceGlobalUneven(t *testing.T) {
 	s := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
 	for i := 0; i < 100; i++ {
 		// generate 100 groups
-		totalSpan := heartbeatpb.TableIDToComparableSpan(int64(i))
+		totalSpan := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'a'), EndKey: appendNew(totalSpan.StartKey, 'b')}
 		dispatcherID := common.NewDispatcherID()
 		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, pdClock, 1, span, 1)
@@ -253,15 +253,15 @@ func TestBalance(t *testing.T) {
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		pdClock,
-		heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
 	s := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
 	for i := 0; i < 100; i++ {
-		sz := heartbeatpb.TableIDToComparableSpan(int64(i))
+		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
 		dispatcherID := common.NewDispatcherID()
 		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, pdClock, 1, span, 1)
@@ -321,15 +321,15 @@ func TestStoppedWhenMoving(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
 	s := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
 	for i := 0; i < 2; i++ {
-		sz := heartbeatpb.TableIDToComparableSpan(int64(i))
+		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
 		dispatcherID := common.NewDispatcherID()
 		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, pdClock, 1, span, 1)
@@ -365,15 +365,15 @@ func TestFinishBootstrap(t *testing.T) {
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		pdClock,
-		heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
 	s := NewController(cfID, 1, nil, pdClock, nil, &mockThreadPool{},
 		config.GetDefaultReplicaConfig(), ddlSpan, 1000, 0)
-	totalSpan := heartbeatpb.TableIDToComparableSpan(1)
+	totalSpan := common.TableIDToComparableSpan(1)
 	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
 	schemaStore := &mockSchemaStore{
 		tables: []commonEvent.Table{
@@ -436,8 +436,8 @@ func TestBalanceUnEvenTask(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -445,7 +445,7 @@ func TestBalanceUnEvenTask(t *testing.T) {
 	s := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
 
 	for i := 0; i < 4; i++ {
-		sz := heartbeatpb.TableIDToComparableSpan(int64(i))
+		sz := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
 		dispatcherID := common.NewDispatcherID()
 		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, pdClock, 1, span, 1)
@@ -523,8 +523,8 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -544,14 +544,14 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	}}
 	appcontext.SetService(appcontext.SchemaStore, schemaStore)
 
-	totalSpan := heartbeatpb.TableIDToComparableSpan(1)
+	totalSpan := common.TableIDToComparableSpan(1)
 	pdAPI.regions[1] = []pdutil.RegionInfo{
 		pdutil.NewTestRegionInfo(1, totalSpan.StartKey, appendNew(totalSpan.StartKey, 'a'), uint64(1)),
 		pdutil.NewTestRegionInfo(2, appendNew(totalSpan.StartKey, 'a'), appendNew(totalSpan.StartKey, 'b'), uint64(1)),
 		pdutil.NewTestRegionInfo(3, appendNew(totalSpan.StartKey, 'b'), appendNew(totalSpan.StartKey, 'c'), uint64(1)),
 		pdutil.NewTestRegionInfo(4, appendNew(totalSpan.StartKey, 'c'), totalSpan.EndKey, uint64(1)),
 	}
-	totalSpan2 := heartbeatpb.TableIDToComparableSpan(2)
+	totalSpan2 := common.TableIDToComparableSpan(2)
 	pdAPI.regions[2] = []pdutil.RegionInfo{
 		pdutil.NewTestRegionInfo(2, appendNew(totalSpan2.StartKey, 'a'), appendNew(totalSpan2.StartKey, 'b'), uint64(1)),
 		pdutil.NewTestRegionInfo(3, appendNew(totalSpan2.StartKey, 'b'), appendNew(totalSpan2.StartKey, 'c'), uint64(1)),
@@ -607,8 +607,8 @@ func TestDynamicSplitTableBasic(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingReplicaSet(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -624,21 +624,21 @@ func TestDynamicSplitTableBasic(t *testing.T) {
 	s.taskScheduler = &mockThreadPool{}
 
 	for i := 1; i <= 2; i++ {
-		totalSpan := heartbeatpb.TableIDToComparableSpan(int64(i))
+		totalSpan := common.TableIDToComparableSpan(int64(i))
 		span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
 		dispatcherID := common.NewDispatcherID()
 		spanReplica := replica.NewReplicaSet(cfID, dispatcherID, pdClock, 1, span, 1)
 		spanReplica.SetNodeID(node.ID(fmt.Sprintf("node%d", i)))
 		s.replicationDB.AddReplicatingSpan(spanReplica)
 	}
-	totalSpan := heartbeatpb.TableIDToComparableSpan(1)
+	totalSpan := common.TableIDToComparableSpan(1)
 	pdAPI.regions[1] = []pdutil.RegionInfo{
 		pdutil.NewTestRegionInfo(1, totalSpan.StartKey, appendNew(totalSpan.StartKey, 'a'), uint64(1)),
 		pdutil.NewTestRegionInfo(2, appendNew(totalSpan.StartKey, 'a'), appendNew(totalSpan.StartKey, 'b'), uint64(1)),
 		pdutil.NewTestRegionInfo(3, appendNew(totalSpan.StartKey, 'b'), appendNew(totalSpan.StartKey, 'c'), uint64(1)),
 		pdutil.NewTestRegionInfo(4, appendNew(totalSpan.StartKey, 'c'), totalSpan.EndKey, uint64(1)),
 	}
-	totalSpan2 := heartbeatpb.TableIDToComparableSpan(2)
+	totalSpan2 := common.TableIDToComparableSpan(2)
 	pdAPI.regions[2] = []pdutil.RegionInfo{
 		pdutil.NewTestRegionInfo(5, totalSpan2.StartKey, appendNew(totalSpan2.StartKey, 'a'), uint64(1)),
 		pdutil.NewTestRegionInfo(6, appendNew(totalSpan2.StartKey, 'a'), appendNew(totalSpan2.StartKey, 'b'), uint64(1)),
@@ -694,8 +694,8 @@ func TestDynamicMergeAndSplitTable(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -713,7 +713,7 @@ func TestDynamicMergeAndSplitTable(t *testing.T) {
 	totalTables := 10
 	victim := rand.Intn(totalTables) + 1
 	for i := 1; i <= totalTables; i++ {
-		totalSpan := heartbeatpb.TableIDToComparableSpan(int64(i))
+		totalSpan := common.TableIDToComparableSpan(int64(i))
 		partialSpans := []*heartbeatpb.TableSpan{
 			{TableID: int64(i), StartKey: totalSpan.StartKey, EndKey: appendNew(totalSpan.StartKey, 'a')},
 			{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'a'), EndKey: appendNew(totalSpan.StartKey, 'b')},
@@ -787,8 +787,8 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -811,7 +811,7 @@ func TestDynamicMergeTableBasic(t *testing.T) {
 	victim := rand.Intn(totalTables) + 1
 	var holeSpan *heartbeatpb.TableSpan
 	for i := 1; i <= totalTables; i++ {
-		totalSpan := heartbeatpb.TableIDToComparableSpan(int64(i))
+		totalSpan := common.TableIDToComparableSpan(int64(i))
 		partialSpans := []*heartbeatpb.TableSpan{
 			{TableID: int64(i), StartKey: totalSpan.StartKey, EndKey: appendNew(totalSpan.StartKey, 'a')},
 			{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, 'a'), EndKey: appendNew(totalSpan.StartKey, 'b')},

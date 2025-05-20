@@ -181,7 +181,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 			zap.Int64("table", table.TableID))
 		return
 	}
-	span := heartbeatpb.TableIDToComparableSpan(table.TableID)
+	span := common.TableIDToComparableSpan(table.TableID)
 	tableSpan := &heartbeatpb.TableSpan{
 		TableID:  table.TableID,
 		StartKey: span.StartKey,
@@ -345,7 +345,7 @@ func (c *Controller) addToWorkingTaskMap(
 ) {
 	tableSpans, ok := workingTaskMap[span.TableID]
 	if !ok {
-		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](heartbeatpb.LessTableSpan)
+		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
 		workingTaskMap[span.TableID] = tableSpans
 	}
 	tableSpans.ReplaceOrInsert(span, spanReplication)
@@ -386,7 +386,7 @@ func (c *Controller) processTableSpans(
 	// Add new table if not working
 	if isTableWorking {
 		// Handle existing table spans
-		span := heartbeatpb.TableIDToComparableSpan(table.TableID)
+		span := common.TableIDToComparableSpan(table.TableID)
 		tableSpan := &heartbeatpb.TableSpan{
 			TableID:  table.TableID,
 			StartKey: span.StartKey,
@@ -660,7 +660,7 @@ func (c *Controller) SplitTableByRegionCount(tableID int64) error {
 
 	replications := c.replicationDB.GetTasksByTableID(tableID)
 
-	span := heartbeatpb.TableIDToComparableSpan(tableID)
+	span := common.TableIDToComparableSpan(tableID)
 	wholeSpan := &heartbeatpb.TableSpan{
 		TableID:  span.TableID,
 		StartKey: span.StartKey,

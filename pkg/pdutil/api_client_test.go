@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/tidb/pkg/tablecodec"
@@ -157,12 +158,12 @@ func TestMetaLabelDecodeJSON(t *testing.T) {
 	_, startKey, err = codec.DecodeBytes(startKey, nil)
 	require.NoError(t, err)
 	require.EqualValues(
-		t, heartbeatpb.JobTableID, tablecodec.DecodeTableID(startKey), keys["start_key"].(string))
+		t, common.JobTableID, tablecodec.DecodeTableID(startKey), keys["start_key"].(string))
 
 	_, endKey, err = codec.DecodeBytes(endKey, nil)
 	require.NoError(t, err)
 	require.EqualValues(
-		t, heartbeatpb.JobTableID+1, tablecodec.DecodeTableID(endKey), keys["end_key"].(string))
+		t, common.JobTableID+1, tablecodec.DecodeTableID(endKey), keys["end_key"].(string))
 }
 
 func TestScanRegions(t *testing.T) {
