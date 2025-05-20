@@ -304,6 +304,7 @@ func (d *dispatcherStat) resumeDispatcher(eventCollector *EventCollector) {
 
 // TODO: better name
 func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *EventCollector) {
+	log.Info("set remote candidates", zap.Strings("nodes", nodes))
 	if len(nodes) == 0 {
 		return
 	}
@@ -317,7 +318,7 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *Eve
 	for i := 1; i < len(nodes); i++ {
 		d.eventServiceInfo.remoteCandidates = append(d.eventServiceInfo.remoteCandidates, node.ID(nodes[i]))
 	}
-
+	log.Info("send register request to remote event service")
 	eventCollector.addDispatcherRequestToSendingQueue(
 		d.eventServiceInfo.serverID,
 		eventServiceTopic,
