@@ -111,11 +111,22 @@ func (m *mockEventDispatcher) GetRemovingStatus() bool {
 	return false
 }
 
-func (m *mockEventDispatcher) Remove() {
-}
-
 func (m *mockEventDispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
 	return nil
+}
+
+func (m *mockEventDispatcher) GetHeartBeatInfo(h *dispatcher.HeartBeatInfo) {
+}
+
+func (m *mockEventDispatcher) GetEventSizePerSecond() float32 {
+	return 0
+}
+
+func (m *mockEventDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
+	return
+}
+
+func (m *mockEventDispatcher) Remove() {
 }
 
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {

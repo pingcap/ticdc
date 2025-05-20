@@ -402,7 +402,7 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 }
 
 func (e *EventDispatcherManager) closeAllDispatchers() {
-	leftToCloseDispatchers := make([]*dispatcher.Dispatcher, 0)
+	leftToCloseDispatchers := make([]dispatcher.EventDispatcher, 0)
 	e.dispatcherMap.ForEach(func(id common.DispatcherID, d dispatcher.EventDispatcher) {
 		// Remove dispatcher from eventService
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(d)
@@ -417,12 +417,12 @@ func (e *EventDispatcherManager) closeAllDispatchers() {
 			}
 		}
 
-		_, ok := d.(*dispatcher.Dispatcher).TryClose()
+		_, ok := d.TryClose()
 		if !ok {
-			leftToCloseDispatchers = append(leftToCloseDispatchers, d.(*dispatcher.Dispatcher))
+			leftToCloseDispatchers = append(leftToCloseDispatchers, d)
 		} else {
 			// Remove should be called after dispatcher is closed
-			d.(*dispatcher.Dispatcher).Remove()
+			d.Remove()
 		}
 	})
 
@@ -817,8 +817,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 		DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
 	}
 
-	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, d dispatcher.EventDispatcher) {
-		dispatcherItem := d.(*dispatcher.Dispatcher)
+	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem dispatcher.EventDispatcher) {
 		dispatcherItem.GetHeartBeatInfo(heartBeatInfo)
 		// If the dispatcher is in removing state, we need to check if it's closed successfully.
 		// If it's closed successfully, we could clean it up.
