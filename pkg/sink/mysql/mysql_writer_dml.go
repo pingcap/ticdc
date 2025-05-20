@@ -508,15 +508,15 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		// Set session variables first and then execute the transaction.
 		// we try to set write source for each txn,
 		// so we can use it to trace the data source
-		if err = SetWriteSource(w.ctx, w.cfg, tx); err != nil {
-			log.Error("Failed to set write source", zap.Error(err))
-			if rbErr := tx.Rollback(); rbErr != nil {
-				if errors.Cause(rbErr) != context.Canceled {
-					log.Warn("failed to rollback txn", zap.Error(rbErr))
-				}
-			}
-			return 0, 0, err
-		}
+		// if err = SetWriteSource(w.ctx, w.cfg, tx); err != nil {
+		// 	log.Error("Failed to set write source", zap.Error(err))
+		// 	if rbErr := tx.Rollback(); rbErr != nil {
+		// 		if errors.Cause(rbErr) != context.Canceled {
+		// 			log.Warn("failed to rollback txn", zap.Error(rbErr))
+		// 		}
+		// 	}
+		// 	return 0, 0, err
+		// }
 
 		if !fallbackToSeqWay {
 			err = w.multiStmtExecute(dmls, tx, writeTimeout)
