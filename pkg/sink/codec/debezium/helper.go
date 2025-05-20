@@ -280,10 +280,7 @@ func getBitFromUint64(n int, v uint64) []byte {
 }
 
 func getDBTableName(e *commonEvent.DDLEvent) (string, string) {
-	if e.TableInfo == nil {
-		return "", ""
-	}
-	return e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName()
+	return e.SchemaName, e.TableName
 }
 
 func getSchemaTopicName(namespace string, schema string, table string) string {

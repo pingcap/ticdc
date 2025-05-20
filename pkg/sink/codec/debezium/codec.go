@@ -1117,7 +1117,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 				jWriter.WriteStringField("name", c.clusterID)
 				jWriter.WriteInt64Field("ts_ms", commitTime.UnixMilli())
 				jWriter.WriteStringField("snapshot", "false")
-				if e.GetDDLType() == timodel.ActionDropTable {
+				if e.TableInfo == nil {
 					jWriter.WriteStringField("db", "")
 					jWriter.WriteStringField("table", "")
 				} else {
@@ -1142,7 +1142,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 			jWriter.WriteNullField("schemaName")
 			jWriter.WriteStringField("ddl", e.Query)
 			jWriter.WriteArrayField("tableChanges", func() {
-				if tableName == "" || e.GetDDLType() == timodel.ActionTruncateTable || e.GetDDLType() == timodel.ActionDropTable {
+				if tableName == "" || e.GetDDLType() == timodel.ActionTruncateTable {
 					return
 				}
 				jWriter.WriteObjectElement(func() {
@@ -1152,21 +1152,27 @@ func (c *dbzCodec) EncodeDDLEvent(
 					// DROP: Table deleted.
 					jWriter.WriteStringField("type", changeType)
 					// In the case of a table rename, this identifier is a concatenation of <old>,<new> table names.
-					if e.GetDDLType() == timodel.ActionRenameTable {
+					switch e.GetDDLType() {
+					case timodel.ActionRenameTable:
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\",\"%s\".\"%s\"",
 							e.ExtraSchemaName,
 							e.ExtraTableName,
 							dbName,
 							tableName))
-					} else {
+					case timodel.ActionExchangeTablePartition:
+						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\"",
+							e.ExtraSchemaName,
+							e.ExtraTableName))
+					case timodel.ActionDropTable:
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\"",
 							dbName,
 							tableName))
-					}
-					// return early if there is no table info
-					if e.GetDDLType() == timodel.ActionDropTable {
 						jWriter.WriteNullField("table")
 						return
+					default:
+						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\"",
+							dbName,
+							tableName))
 					}
 					jWriter.WriteObjectField("table", func() {
 						jWriter.WriteStringField("defaultCharsetName", e.TableInfo.Charset)
