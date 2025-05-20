@@ -83,7 +83,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	// Pre-check log level to avoid dmls.String() being called unnecessarily
 	// This method is expensive, so we only log it when the log level is debug.
 	if log.GetLevel() == zapcore.DebugLevel {
-		log.Debug("prepareDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
+		log.Debug("prepareDMLs", zap.String("dmls", dmls.String()), zap.Any("events", events))
 	}
 
 	return dmls
