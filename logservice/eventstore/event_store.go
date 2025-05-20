@@ -35,7 +35,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/tikv/client-go/v2/oracle"
@@ -788,7 +787,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 		}
 		metrics.EventStoreScanBytes.Add(float64(len(value)))
 		if iter.needCheckSpan {
-			comparableKey := spanz.ToComparableKey(rawKV.Key)
+			comparableKey := heartbeatpb.ToComparableKey(rawKV.Key)
 			if bytes.Compare(comparableKey, iter.tableSpan.StartKey) >= 0 &&
 				bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
 				break

@@ -257,23 +257,25 @@ func NewEventDispatcherManager(
 	}()
 
 	// redo manager
-	manager.wg.Add(1)
-	go func() {
-		defer manager.wg.Done()
-		err = manager.redoManager.Run(ctx)
-		if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
-			select {
-			case <-ctx.Done():
-				return
-			case manager.errCh <- err:
-			default:
-				log.Error("error channel is full, discard error",
-					zap.Stringer("changefeedID", changefeedID),
-					zap.Error(err),
-				)
+	if manager.redoManager.Enabled() {
+		manager.wg.Add(1)
+		go func() {
+			defer manager.wg.Done()
+			err = manager.redoManager.Run(ctx)
+			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
+				select {
+				case <-ctx.Done():
+					return
+				case manager.errCh <- err:
+				default:
+					log.Error("error channel is full, discard error",
+						zap.Stringer("changefeedID", changefeedID),
+						zap.Error(err),
+					)
+				}
 			}
-		}
-	}()
+		}()
+	}
 
 	// collect errors from error channel
 	manager.wg.Add(1)
@@ -314,7 +316,9 @@ func NewEventDispatcherManager(
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("maintainerID", maintainerID),
 		zap.Uint64("startTs", startTs),
-		zap.Uint64("tableTriggerStartTs", tableTriggerStartTs))
+		zap.Uint64("tableTriggerStartTs", tableTriggerStartTs),
+		zap.Bool("withRedo", manager.redoManager.Enabled()),
+	)
 	return manager, tableTriggerStartTs, nil
 }
 
@@ -640,7 +644,8 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 	log.Info("batch create new dispatchers",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Int("count", len(dispatcherIds)),
-		zap.Duration("duration", time.Since(start)))
+		zap.Duration("duration", time.Since(start)),
+	)
 	return nil
 }
 
