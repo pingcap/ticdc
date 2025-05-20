@@ -536,7 +536,13 @@ func TestDDLEvent(t *testing.T) {
 			"databaseName": "test", 
       		"schemaName": null,
     		"ddl": "DROP TABLE test.table2",
-			"tableChanges": []
+			"tableChanges": [
+				{
+					"type": "DROP", 
+					"id": "\"test\".\"table2\"", 
+					"table": null
+				}
+			]
 		}
 	}`, buf.String())
 }
