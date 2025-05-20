@@ -715,6 +715,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.Dispatcher) {
 		dispatcherItem.GetHeartBeatInfo(heartBeatInfo)
+		log.Info("hyy heartbeatInfo", zap.Any("resolvedTs", heartBeatInfo.Watermark.ResolvedTs), zap.Any("checkpointTs", heartBeatInfo.Watermark.CheckpointTs))
 		// If the dispatcher is in removing state, we need to check if it's closed successfully.
 		// If it's closed successfully, we could clean it up.
 		// TODO: we need to consider how to deal with the checkpointTs of the removed dispatcher if the message will be discarded.

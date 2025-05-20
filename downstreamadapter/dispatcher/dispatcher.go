@@ -653,6 +653,7 @@ func (d *Dispatcher) GetResolvedTs() uint64 {
 
 func (d *Dispatcher) GetCheckpointTs() uint64 {
 	checkpointTs, isEmpty := d.tableProgress.GetCheckpointTs()
+	log.Info("hyy dispatcher checkpointTs", zap.Any("checkpointTs in progress", checkpointTs), zap.Any("isEmpty", isEmpty), zap.Any("resolvedTs", d.GetResolvedTs()))
 	if checkpointTs == 0 {
 		// This means the dispatcher has never send events to the sink,
 		// so we use resolvedTs as checkpointTs
