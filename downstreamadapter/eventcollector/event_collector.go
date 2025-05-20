@@ -112,7 +112,7 @@ type EventCollector struct {
 	ds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
 
 	coordinatorInfo struct {
-		sync.RWMutex
+		sync.Mutex
 		id node.ID
 	}
 
@@ -368,15 +368,32 @@ func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
 	}
 }
 
+func (c *EventCollector) setCoordinatorInfo(id node.ID) {
+	c.coordinatorInfo.Lock()
+	defer c.coordinatorInfo.Unlock()
+	c.coordinatorInfo.id = id
+}
+
+func (c *EventCollector) getCoordinatorInfo() node.ID {
+	c.coordinatorInfo.Lock()
+	defer c.coordinatorInfo.Unlock()
+	return c.coordinatorInfo.id
+}
+
 func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case req := <-c.logCoordinatorRequestChan.Out():
-			c.coordinatorInfo.RLock()
-			targetMessage := messaging.NewSingleTargetMessage(c.coordinatorInfo.id, logCoordinatorTopic, req)
-			c.coordinatorInfo.RUnlock()
+			coordinatorID := c.getCoordinatorInfo()
+			if coordinatorID == "" {
+				log.Info("coordinator info is empty, try send request later")
+				c.logCoordinatorRequestChan.In() <- req
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+			targetMessage := messaging.NewSingleTargetMessage(coordinatorID, logCoordinatorTopic, req)
 			err := c.mc.SendCommand(targetMessage)
 			if err != nil {
 				log.Info("fail to send dispatcher request message to log coordinator, try again later", zap.Error(err))
@@ -494,9 +511,7 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 	for _, msg := range targetMessage.Message {
 		switch msg.(type) {
 		case *common.LogCoordinatorBroadcastRequest:
-			c.coordinatorInfo.Lock()
-			c.coordinatorInfo.id = targetMessage.From
-			c.coordinatorInfo.Unlock()
+			c.setCoordinatorInfo(targetMessage.From)
 		case *logservicepb.ReusableEventServiceResponse:
 			// TODO: can we handle it here?
 			value, ok := c.dispatcherMap.Load(msg.(*logservicepb.ReusableEventServiceResponse).ID)
