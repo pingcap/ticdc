@@ -235,10 +235,12 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 		BDRMode:    bdrMode,
 	})
 
-	c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
-		ID:      target.GetId().ToPB(),
-		Span:    target.GetTableSpan(),
-		StartTs: target.GetStartTs(),
+	if target.GetTableSpan().TableID != 0 {
+		c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
+			ID:      target.GetId().ToPB(),
+			Span:    target.GetTableSpan(),
+			StartTs: target.GetStartTs(),
+		}
 	}
 }
 
