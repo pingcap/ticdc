@@ -1117,7 +1117,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 				jWriter.WriteStringField("name", c.clusterID)
 				jWriter.WriteInt64Field("ts_ms", commitTime.UnixMilli())
 				jWriter.WriteStringField("snapshot", "false")
-				if e.TableInfo == nil {
+				if e.GetDDLType() == timodel.ActionDropTable {
 					jWriter.WriteStringField("db", "")
 					jWriter.WriteStringField("table", "")
 				} else {
@@ -1142,7 +1142,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 			jWriter.WriteNullField("schemaName")
 			jWriter.WriteStringField("ddl", e.Query)
 			jWriter.WriteArrayField("tableChanges", func() {
-				if tableName == "" || e.GetDDLType() == timodel.ActionTruncateTable {
+				if tableName == "" || e.GetDDLType() == timodel.ActionTruncateTable || e.GetDDLType() == timodel.ActionDropTable {
 					return
 				}
 				jWriter.WriteObjectElement(func() {

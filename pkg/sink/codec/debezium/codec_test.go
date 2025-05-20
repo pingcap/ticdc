@@ -47,8 +47,8 @@ func TestDDLEvent(t *testing.T) {
 	e := &commonEvent.DDLEvent{
 		FinishedTs:      1,
 		TableInfo:       tableInfo,
-		SchemaName:      "test",
-		TableName:       "table2",
+		SchemaName:      job.SchemaName,
+		TableName:       job.TableName,
 		ExtraSchemaName: "test",
 		ExtraTableName:  "table1",
 		Type:            byte(timodel.ActionNone),
@@ -62,8 +62,8 @@ func TestDDLEvent(t *testing.T) {
 	e = &commonEvent.DDLEvent{
 		FinishedTs:      1,
 		TableInfo:       tableInfo,
-		SchemaName:      "test",
-		TableName:       "table2",
+		SchemaName:      job.SchemaName,
+		TableName:       job.TableName,
 		ExtraSchemaName: "test",
 		ExtraTableName:  "table1",
 		Query:           job.Query,
@@ -494,12 +494,12 @@ func TestDDLEvent(t *testing.T) {
 	job = helper.DDL2Job("DROP TABLE test.table2")
 	tableInfo = helper.GetTableInfo(job)
 	e = &commonEvent.DDLEvent{
-		FinishedTs:      1,
-		TableInfo:       tableInfo,
-		ExtraSchemaName: job.SchemaName,
-		ExtraTableName:  job.TableName,
-		Query:           job.Query,
-		Type:            byte(timodel.ActionDropTable),
+		FinishedTs: 1,
+		TableInfo:  tableInfo,
+		SchemaName: job.SchemaName,
+		TableName:  job.TableName,
+		Query:      job.Query,
+		Type:       byte(timodel.ActionDropTable),
 	}
 	keyBuf.Reset()
 	buf.Reset()
