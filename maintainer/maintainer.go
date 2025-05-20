@@ -46,7 +46,7 @@ import (
 )
 
 const (
-	periodEventInterval = time.Millisecond * 200
+	periodEventInterval = time.Millisecond * 50
 )
 
 // Maintainer is response for handle changefeed replication tasks. Maintainer should:
@@ -873,7 +873,7 @@ func (m *Maintainer) collectMetrics() {
 }
 
 func (m *Maintainer) runUpdateMetrics(ctx context.Context) {
-	ticker := time.NewTicker(time.Second * 1)
+	ticker := time.NewTicker(time.Millisecond * 50)
 	defer ticker.Stop()
 	for {
 		select {
