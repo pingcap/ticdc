@@ -1084,11 +1084,6 @@ func (c *dbzCodec) EncodeDDLEvent(
 		return errors.ErrDDLUnsupportType.GenWithStackByArgs(e.Type, e.Query)
 	}
 
-	if e.GetDDLType() == timodel.ActionDropTable {
-		log.Error("ddddd", zap.Any("q", e.Query), zap.Any("i", e.TableInfo),
-			zap.Any("n", e.TableName), zap.Any("en", e.ExtraTableName),
-		)
-	}
 	var err error
 	dbName, tableName := getDBTableName(e)
 	// message key
@@ -1122,13 +1117,8 @@ func (c *dbzCodec) EncodeDDLEvent(
 				jWriter.WriteStringField("name", c.clusterID)
 				jWriter.WriteInt64Field("ts_ms", commitTime.UnixMilli())
 				jWriter.WriteStringField("snapshot", "false")
-				if e.TableInfo == nil {
-					jWriter.WriteStringField("db", "")
-					jWriter.WriteStringField("table", "")
-				} else {
-					jWriter.WriteStringField("db", dbName)
-					jWriter.WriteStringField("table", tableName)
-				}
+				jWriter.WriteStringField("db", dbName)
+				jWriter.WriteStringField("table", tableName)
 				jWriter.WriteInt64Field("server_id", 0)
 				jWriter.WriteNullField("gtid")
 				jWriter.WriteStringField("file", "")

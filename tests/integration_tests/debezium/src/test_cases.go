@@ -261,8 +261,8 @@ func replaceString(s any, old any, new any) string {
 }
 
 var ignoredRecordPaths = map[string]bool{
-	// `{map[string]any}["payload"].(map[string]any)["source"]`: true,
-	`{map[string]any}["payload"].(map[string]any)["ts_ms"]`: true,
+	`{map[string]any}["payload"].(map[string]any)["source"]`: true,
+	`{map[string]any}["payload"].(map[string]any)["ts_ms"]`:  true,
 }
 
 var headingColor = color.New(color.FgHiWhite, color.Bold)
