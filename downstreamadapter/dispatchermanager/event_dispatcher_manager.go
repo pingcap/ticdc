@@ -308,8 +308,8 @@ func NewEventDispatcherManager(
 		manager.redoQuota = totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
 		manager.sinkQuota = totalQuota - manager.redoQuota
 	} else {
-		manager.redoQuota = totalQuota
-		manager.sinkQuota = 0
+		manager.sinkQuota = totalQuota
+		manager.redoQuota = 0
 	}
 
 	log.Info("event dispatcher manager created",
@@ -317,6 +317,8 @@ func NewEventDispatcherManager(
 		zap.Stringer("maintainerID", maintainerID),
 		zap.Uint64("startTs", startTs),
 		zap.Uint64("tableTriggerStartTs", tableTriggerStartTs),
+		zap.Uint64("sinkQuota", manager.sinkQuota),
+		zap.Uint64("redoQuota", manager.redoQuota),
 		zap.Bool("withRedo", manager.redoManager.Enabled()),
 	)
 	return manager, tableTriggerStartTs, nil
