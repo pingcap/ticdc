@@ -1084,6 +1084,11 @@ func (c *dbzCodec) EncodeDDLEvent(
 		return errors.ErrDDLUnsupportType.GenWithStackByArgs(e.Type, e.Query)
 	}
 
+	if e.GetDDLType() == timodel.ActionDropTable {
+		log.Error("ddddd", zap.Any("q", e.Query), zap.Any("i", e.TableInfo),
+			zap.Any("n", e.TableName), zap.Any("en", e.ExtraTableName),
+		)
+	}
 	var err error
 	dbName, tableName := getDBTableName(e)
 	// message key
@@ -1142,6 +1147,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 			jWriter.WriteNullField("schemaName")
 			jWriter.WriteStringField("ddl", e.Query)
 			jWriter.WriteArrayField("tableChanges", func() {
+				// return early if there is no table changes
 				if tableName == "" || e.GetDDLType() == timodel.ActionTruncateTable {
 					return
 				}
@@ -1167,6 +1173,7 @@ func (c *dbzCodec) EncodeDDLEvent(
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\"",
 							dbName,
 							tableName))
+						// return early if there is no table info
 						jWriter.WriteNullField("table")
 						return
 					default:

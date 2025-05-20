@@ -47,8 +47,8 @@ func TestDDLEvent(t *testing.T) {
 	e := &commonEvent.DDLEvent{
 		FinishedTs:      1,
 		TableInfo:       tableInfo,
-		SchemaName:      job.SchemaName,
-		TableName:       job.TableName,
+		SchemaName:      "test",
+		TableName:       "table2",
 		ExtraSchemaName: "test",
 		ExtraTableName:  "table1",
 		Type:            byte(timodel.ActionNone),
@@ -62,8 +62,8 @@ func TestDDLEvent(t *testing.T) {
 	e = &commonEvent.DDLEvent{
 		FinishedTs:      1,
 		TableInfo:       tableInfo,
-		SchemaName:      job.SchemaName,
-		TableName:       job.TableName,
+		SchemaName:      "test",
+		TableName:       "table2",
 		ExtraSchemaName: "test",
 		ExtraTableName:  "table1",
 		Query:           job.Query,
