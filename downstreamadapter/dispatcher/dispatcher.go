@@ -351,14 +351,12 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 
 		switch event.GetType() {
 		case commonEvent.TypeResolvedEvent:
-			log.Info("hyy dispatcher receive resolved event", zap.Any("resolvedTs", event.(commonEvent.ResolvedEvent).ResolvedTs), zap.Any("dispatcherID", d.id))
 			atomic.StoreUint64(&d.resolvedTs, event.(commonEvent.ResolvedEvent).ResolvedTs)
 		case commonEvent.TypeDMLEvent:
 			dml := event.(*commonEvent.DMLEvent)
 			if dml.Len() == 0 {
 				return block
 			}
-			log.Info("hyy dispatcher receive dml event", zap.Any("commitTs", event.(*commonEvent.DMLEvent).CommitTs), zap.Any("dispatcherID", d.id))
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
 			dml.AddPostFlushFunc(func() {
@@ -655,7 +653,6 @@ func (d *Dispatcher) GetResolvedTs() uint64 {
 
 func (d *Dispatcher) GetCheckpointTs() uint64 {
 	checkpointTs, isEmpty := d.tableProgress.GetCheckpointTs()
-	log.Info("hyy dispatcher checkpointTs", zap.Any("checkpointTs in progress", checkpointTs), zap.Any("isEmpty", isEmpty), zap.Any("resolvedTs", d.GetResolvedTs()))
 	if checkpointTs == 0 {
 		// This means the dispatcher has never send events to the sink,
 		// so we use resolvedTs as checkpointTs
