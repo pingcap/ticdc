@@ -514,7 +514,9 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 			c.setCoordinatorInfo(targetMessage.From)
 		case *logservicepb.ReusableEventServiceResponse:
 			// TODO: can we handle it here?
-			value, ok := c.dispatcherMap.Load(msg.(*logservicepb.ReusableEventServiceResponse).ID)
+			resp := msg.(*logservicepb.ReusableEventServiceResponse)
+			log.Info("get reusable event service response", zap.String("dispatcherID", resp.ID.String()))
+			value, ok := c.dispatcherMap.Load(resp.ID)
 			if !ok {
 				continue
 			}
