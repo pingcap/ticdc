@@ -332,11 +332,11 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 
 func (e *EventDispatcherManager) closeAllDispatchers() {
 	leftToCloseDispatchers := make([]*dispatcher.Dispatcher, 0)
-	e.dispatcherMap.ForEach(func(id common.DispatcherID, d *dispatcher.Dispatcher) {
+	e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
 		// Remove dispatcher from eventService
-		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(d)
+		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
 
-		if d.IsTableTriggerEventDispatcher() && e.sink.SinkType() != common.MysqlSinkType {
+		if dispatcher.IsTableTriggerEventDispatcher() && e.sink.SinkType() != common.MysqlSinkType {
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(e.changefeedID)
 			if err != nil {
 				log.Error("remove checkpointTs message failed",
@@ -346,12 +346,12 @@ func (e *EventDispatcherManager) closeAllDispatchers() {
 			}
 		}
 
-		_, ok := d.TryClose()
+		_, ok := dispatcher.TryClose()
 		if !ok {
-			leftToCloseDispatchers = append(leftToCloseDispatchers, d)
+			leftToCloseDispatchers = append(leftToCloseDispatchers, dispatcher)
 		} else {
 			// Remove should be called after dispatcher is closed
-			d.Remove()
+			dispatcher.Remove()
 		}
 	})
 
@@ -795,7 +795,6 @@ func (e *EventDispatcherManager) removeDispatcher(id common.DispatcherID) {
 		}
 
 		dispatcherItem.Remove()
-
 	} else {
 		e.statusesChan <- dispatcher.TableSpanStatusWithSeq{
 			TableSpanStatus: &heartbeatpb.TableSpanStatus{

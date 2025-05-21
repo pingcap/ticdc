@@ -29,7 +29,7 @@ import (
 // dispatcherStat is a helper struct to manage the state of a dispatcher.
 type dispatcherStat struct {
 	dispatcherID common.DispatcherID
-	target       dispatcher.EventDispatcher
+	target       *dispatcher.Dispatcher
 
 	eventServiceInfo struct {
 		sync.RWMutex

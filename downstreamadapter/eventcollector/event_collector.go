@@ -47,7 +47,7 @@ var (
 )
 
 type DispatcherRequest struct {
-	Dispatcher dispatcher.EventDispatcher
+	Dispatcher *dispatcher.Dispatcher
 	ActionType eventpb.ActionType
 	StartTs    uint64
 	OnlyUse    bool
@@ -206,7 +206,7 @@ func (c *EventCollector) Close() {
 	log.Info("event collector is closed")
 }
 
-func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64, bdrMode bool) {
+func (c *EventCollector) AddDispatcher(target *dispatcher.Dispatcher, memoryQuota uint64, bdrMode bool) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
@@ -217,6 +217,9 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	}
 	stat.reset()
 	stat.sentCommitTs.Store(target.GetStartTs())
+	c.dispatcherMap.Store(target.GetId(), stat)
+	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
+	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2, "eventCollector")
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
@@ -239,7 +242,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	}
 }
 
-func (c *EventCollector) RemoveDispatcher(target dispatcher.EventDispatcher) {
+func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 	log.Info("remove dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("remove dispatcher done", zap.Stringer("dispatcher", target.GetId()))
