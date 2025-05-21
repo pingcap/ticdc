@@ -939,6 +939,8 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 			if coordinatorID == "" {
 				continue
 			}
+			// When sending an event to the message center itself,
+			// we need to clone the state to prevent data races.
 			message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state.Copy())
 			// just ignore messagees fail to send
 			if err := e.messageCenter.SendEvent(message); err != nil {
