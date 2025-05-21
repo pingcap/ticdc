@@ -939,7 +939,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 			if coordinatorID == "" {
 				continue
 			}
-			message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state)
+			message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state.Copy())
 			// just ignore messagees fail to send
 			if err := e.messageCenter.SendEvent(message); err != nil {
 				log.Warn("send broadcast message to coordinator failed", zap.Error(err))
