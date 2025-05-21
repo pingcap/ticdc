@@ -712,3 +712,7 @@ func (rd *RedoDispatcher) GetSyncPointInterval() time.Duration {
 func (rd *RedoDispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
 	return rd.blockStatusesChan
 }
+
+func (rd *RedoDispatcher) GetType() int {
+	return TypeDispatcherRedo
+}

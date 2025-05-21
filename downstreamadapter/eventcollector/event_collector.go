@@ -211,7 +211,7 @@ func (c *EventCollector) Close() {
 	log.Info("event collector is closed")
 }
 
-func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64, bdrMode bool, redo bool) {
+func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64, bdrMode bool) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
@@ -223,16 +223,17 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	stat.reset()
 	stat.sentCommitTs.Store(target.GetStartTs())
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2, "eventCollector")
-	if redo {
-		err := c.redoDs.AddPath(target.GetId(), stat, areaSetting)
-		if err != nil {
-			log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
-		}
-	} else {
+	switch target.GetType() {
+	case dispatcher.TypeDispatcherCommon:
 		c.dispatcherMap.Store(target.GetId(), stat)
 		c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
 		metrics.EventCollectorRegisteredDispatcherCount.Inc()
 		err := c.ds.AddPath(target.GetId(), stat, areaSetting)
+		if err != nil {
+			log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
+		}
+	case dispatcher.TypeDispatcherRedo:
+		err := c.redoDs.AddPath(target.GetId(), stat, areaSetting)
 		if err != nil {
 			log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 		}
@@ -244,7 +245,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 		StartTs:    target.GetStartTs(),
 		ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
 		BDRMode:    bdrMode,
-		Redo:       redo,
+		Redo:       target.GetType() == dispatcher.TypeDispatcherRedo,
 	})
 
 	c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
@@ -266,13 +267,13 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.EventDispatcher) {
 	stat := value.(*dispatcherStat)
 	stat.unregisterDispatcher(c)
 	c.dispatcherMap.Delete(target.GetId())
-	switch target.(type) {
-	case *dispatcher.Dispatcher:
+	switch target.GetType() {
+	case dispatcher.TypeDispatcherCommon:
 		err := c.ds.RemovePath(target.GetId())
 		if err != nil {
 			log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
 		}
-	case *dispatcher.RedoDispatcher:
+	case dispatcher.TypeDispatcherRedo:
 		err := c.redoDs.RemovePath(target.GetId())
 		if err != nil {
 			log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
@@ -280,8 +281,8 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.EventDispatcher) {
 	}
 }
 
-func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID, redo bool) {
-	if redo {
+func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID, tp int) {
+	if tp == dispatcher.TypeDispatcherRedo {
 		c.redoDs.Wake(dispatcherID)
 		return
 	}

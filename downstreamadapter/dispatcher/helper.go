@@ -406,9 +406,7 @@ func loadBootstrapState(addr *bootstrapState) bootstrapState {
 	return bootstrapState(atomic.LoadInt32((*int32)(addr)))
 }
 
-type DispatcherType int
-
 const (
-	normal DispatcherType = iota
-	redo
+	TypeDispatcherCommon int = iota
+	TypeDispatcherRedo
 )

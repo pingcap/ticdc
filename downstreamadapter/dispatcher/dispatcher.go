@@ -53,6 +53,8 @@ type EventDispatcher interface {
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) bool
 	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
 	HandleDispatcherStatus(*heartbeatpb.DispatcherStatus)
+	// GetType returns the dispatcher type
+	GetType() int
 }
 
 /*
@@ -889,6 +891,10 @@ func (d *Dispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStat
 
 func (d *Dispatcher) SetSeq(seq uint64) {
 	d.seq = seq
+}
+
+func (d *Dispatcher) GetType() int {
+	return TypeDispatcherCommon
 }
 
 func (d *Dispatcher) isFirstEvent(event commonEvent.Event) bool {

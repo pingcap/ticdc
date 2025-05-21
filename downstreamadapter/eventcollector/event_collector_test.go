@@ -74,6 +74,10 @@ func (m *mockEventDispatcher) GetResolvedTs() uint64 {
 	return 0
 }
 
+func (m *mockEventDispatcher) GetType() int {
+	return dispatcher.TypeDispatcherCommon
+}
+
 func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
 	for _, dispatcherEvent := range dispatcherEvents {
 		m.handle(dispatcherEvent.Event)
@@ -187,7 +191,7 @@ func TestProcessMessage(t *testing.T) {
 			done <- struct{}{}
 		}
 	}
-	c.AddDispatcher(d, config.GetDefaultReplicaConfig().MemoryQuota, *config.GetDefaultReplicaConfig().BDRMode, false)
+	c.AddDispatcher(d, config.GetDefaultReplicaConfig().MemoryQuota, *config.GetDefaultReplicaConfig().BDRMode)
 
 	ch <- newMessage(node.ID, &readyEvent)
 	ch <- newMessage(node.ID, handshakeEvent)
