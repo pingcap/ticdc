@@ -65,6 +65,7 @@ var (
 	metricFeedDuplicateRequestCounter = metrics.EventFeedErrorCounter.WithLabelValues("DuplicateRequest")
 	metricFeedUnknownErrorCounter     = metrics.EventFeedErrorCounter.WithLabelValues("Unknown")
 	metricFeedRPCCtxUnavailable       = metrics.EventFeedErrorCounter.WithLabelValues("RPCCtxUnavailable")
+	metricGetStoreErr                 = metrics.EventFeedErrorCounter.WithLabelValues("GetStoreErr")
 	metricStoreSendRequestErr         = metrics.EventFeedErrorCounter.WithLabelValues("SendRequestToStore")
 	metricKvIsBusyCounter             = metrics.EventFeedErrorCounter.WithLabelValues("KvIsBusy")
 	metricKvCongestedCounter          = metrics.EventFeedErrorCounter.WithLabelValues("KvCongested")
@@ -488,7 +489,6 @@ func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
 
 // requestedStore represents a store that has been connected.
 type requestedStore struct {
-	storeID   uint64
 	storeAddr string
 	// Use to select a worker to send request.
 	nextWorker     atomic.Uint32
@@ -503,14 +503,14 @@ func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
 // handleRegions receives regionInfo from regionCh and attch rpcCtx to them,
 // then send them to corresponding requestedStore.
 func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Group) error {
-	stores := make(map[uint64]*requestedStore) // storeId -> requestedStore
-	getStore := func(storeID uint64, storeAddr string) *requestedStore {
+	stores := make(map[string]*requestedStore) // storeAddr -> requestedStore
+	getStore := func(storeAddr string) *requestedStore {
 		var rs *requestedStore
-		if rs = stores[storeID]; rs != nil {
+		if rs = stores[storeAddr]; rs != nil {
 			return rs
 		}
-		rs = &requestedStore{storeID: storeID, storeAddr: storeAddr}
-		stores[storeID] = rs
+		rs = &requestedStore{storeAddr: storeAddr}
+		stores[storeAddr] = rs
 		for i := uint(0); i < s.config.RegionRequestWorkerPerStore; i++ {
 			requestWorker := newRegionRequestWorker(ctx, s, s.credential, eg, rs)
 			rs.requestWorkers = append(rs.requestWorkers, requestWorker)
@@ -550,7 +550,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 				continue
 			}
 
-			store := getStore(region.rpcCtx.Peer.StoreId, region.rpcCtx.Addr)
+			store := getStore(region.rpcCtx.Addr)
 			worker := store.getRequestWorker()
 			worker.requestsCh <- region
 
@@ -558,7 +558,6 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 				zap.Uint64("workID", worker.workerID),
 				zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
 				zap.Uint64("regionID", region.verID.GetID()),
-				zap.Uint64("storeID", store.storeID),
 				zap.String("addr", store.storeAddr))
 		}
 	}
@@ -787,6 +786,13 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
+		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop)
+		return nil
+	case *getStoreErr:
+		metricGetStoreErr.Inc()
+		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
+		// cannot get the store the region belongs to, so we need to reload the region.
+		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
 		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop)
 		return nil
 	case *sendRequestToStoreErr:
