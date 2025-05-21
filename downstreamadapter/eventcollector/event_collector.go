@@ -47,7 +47,7 @@ var (
 )
 
 type DispatcherRequest struct {
-	Dispatcher *dispatcher.Dispatcher
+	Dispatcher dispatcher.EventDispatcher
 	ActionType eventpb.ActionType
 	StartTs    uint64
 	OnlyUse    bool
@@ -206,7 +206,7 @@ func (c *EventCollector) Close() {
 	log.Info("event collector is closed")
 }
 
-func (c *EventCollector) AddDispatcher(target *dispatcher.Dispatcher, memoryQuota uint64, bdrMode bool) {
+func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64, bdrMode bool) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
