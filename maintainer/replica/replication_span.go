@@ -218,8 +218,6 @@ func (r *SpanReplication) GetGroupID() replica.GroupID {
 }
 
 func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.TargetMessage, error) {
-	ts := r.pdClock.CurrentTS()
-
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
@@ -229,7 +227,6 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.Ta
 				SchemaID:     r.schemaID,
 				Span:         r.Span,
 				StartTs:      r.status.Load().CheckpointTs,
-				CurrentPdTs:  ts,
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
 		}), nil
