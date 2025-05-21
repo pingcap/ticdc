@@ -37,7 +37,6 @@ func NewStatistics(
 	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(namespace, changefeedID, sinkType)
 	statistics.metricExecErrCnt = ExecutionErrorCounter.WithLabelValues(namespace, changefeedID, sinkType)
 	statistics.metricExecDMLCnt = ExecDMLEventCounter.WithLabelValues(namespace, changefeedID)
-	statistics.metricExecutionDuration = ExecutionDuration.WithLabelValues(namespace, changefeedID, sinkType)
 	return statistics
 }
 
@@ -59,19 +58,15 @@ type Statistics struct {
 	metricExecErrCnt prometheus.Counter
 	// metricExecDMLCnt record the executed DML event count of the Sink.
 	metricExecDMLCnt prometheus.Counter
-	// metricExecutionDuration record the execution time duration of the Sink.
-	metricExecutionDuration prometheus.Observer
 }
 
 // RecordBatchExecution stats batch executors which return (batchRowCount, batchWriteBytes, error).
 func (b *Statistics) RecordBatchExecution(executor func() (int, int64, error)) error {
-	start := time.Now()
 	batchSize, batchWriteBytes, err := executor()
 	if err != nil {
 		b.metricExecErrCnt.Inc()
 		return err
 	}
-	b.metricExecutionDuration.Observe(time.Since(start).Seconds())
 	b.metricExecBatchHis.Observe(float64(batchSize))
 	b.metricExecDMLCnt.Add(float64(batchSize))
 	b.metricTotalWriteBytesCnt.Add(float64(batchWriteBytes))
@@ -99,5 +94,4 @@ func (b *Statistics) Close() {
 	ExecutionErrorCounter.DeleteLabelValues(namespace, changefeedID)
 	TotalWriteBytesCounter.DeleteLabelValues(namespace, changefeedID)
 	ExecDMLEventCounter.DeleteLabelValues(namespace, changefeedID)
-	ExecutionDuration.DeleteLabelValues(namespace, changefeedID)
 }
