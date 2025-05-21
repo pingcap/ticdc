@@ -381,21 +381,19 @@ func (e *EventDispatcherManager) closeAllDispatchers() {
 }
 
 type dispatcherCreateInfo struct {
-	Id          common.DispatcherID
-	TableSpan   *heartbeatpb.TableSpan
-	StartTs     uint64
-	SchemaID    int64
-	CurrentPDTs uint64
+	Id        common.DispatcherID
+	TableSpan *heartbeatpb.TableSpan
+	StartTs   uint64
+	SchemaID  int64
 }
 
 func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) (uint64, error) {
 	err := e.newDispatchers([]dispatcherCreateInfo{
 		{
-			Id:          common.NewDispatcherIDFromPB(id),
-			TableSpan:   heartbeatpb.DDLSpan,
-			StartTs:     startTs,
-			SchemaID:    0,
-			CurrentPDTs: 0,
+			Id:        common.NewDispatcherIDFromPB(id),
+			TableSpan: heartbeatpb.DDLSpan,
+			StartTs:   startTs,
+			SchemaID:  0,
 		},
 	}, newChangefeed)
 	if err != nil {
@@ -445,13 +443,13 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 // 2. changefeed is total new created, or resumed with overwriteCheckpointTs
 func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, removeDDLTs bool) error {
 	start := time.Now()
+	currentPdTs := e.pdClock.CurrentTS()
 
 	dispatcherIds := make([]common.DispatcherID, 0, len(infos))
 	tableIds := make([]int64, 0, len(infos))
 	startTsList := make([]int64, 0, len(infos))
 	tableSpans := make([]*heartbeatpb.TableSpan, 0, len(infos))
 	schemaIds := make([]int64, 0, len(infos))
-	pdTsList := make([]uint64, 0, len(infos))
 	for _, info := range infos {
 		id := info.Id
 		if _, ok := e.dispatcherMap.Get(id); ok {
@@ -462,7 +460,6 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 		startTsList = append(startTsList, int64(info.StartTs))
 		tableSpans = append(tableSpans, info.TableSpan)
 		schemaIds = append(schemaIds, info.SchemaID)
-		pdTsList = append(pdTsList, info.CurrentPDTs)
 	}
 
 	if len(dispatcherIds) == 0 {
@@ -502,7 +499,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			e.syncPointConfig,
 			startTsIsSyncpointList[idx],
 			e.filterConfig,
-			pdTsList[idx],
+			currentPdTs,
 			e.errCh,
 			e.config.BDRMode)
 

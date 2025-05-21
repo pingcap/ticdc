@@ -56,7 +56,6 @@ func TestSpanReplication_NewAddDispatcherMessage(t *testing.T) {
 	require.Equal(t, "node1", msg.To.String())
 	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	require.Equal(t, heartbeatpb.ScheduleAction_Create, req.ScheduleAction)
-	require.Equal(t, uint64(10), req.Config.CurrentPdTs)
 	require.Equal(t, replicaSet.ID.ToPB(), req.Config.DispatcherID)
 	require.Equal(t, replicaSet.schemaID, req.Config.SchemaID)
 }

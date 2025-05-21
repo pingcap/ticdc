@@ -93,7 +93,7 @@ type Dispatcher struct {
 	// startTs is the timestamp that the dispatcher need to receive and flush events.
 	startTs            uint64
 	startTsIsSyncpoint bool
-	// The ts from pd when the dispatcher is created.
+	// The ts from pdClock when the dispatcher is created.
 	// when downstream is mysql-class, for dml event we need to compare the commitTs with this ts
 	// to determine whether the insert event should use `Replace` or just `Insert`
 	// Because when the dispatcher scheduled or the node restarts, there may be some dml events to receive twice.
