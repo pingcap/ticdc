@@ -495,7 +495,6 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	// approximateSize is multiplied by 2 because in extreme circustumas, every
 	// byte in dmls can be escaped and adds one byte.
 	fallbackToSeqWay := dmls.approximateSize*2 > w.maxAllowedPacket
-	log.Info("hyy execDMLWithMaxRetries", zap.Any("fallbackToSeqWay", fallbackToSeqWay), zap.Any("w.maxAllowedPacket", w.maxAllowedPacket), zap.Any("dmls.approximateSize", dmls.approximateSize))
 
 	writeTimeout, _ := time.ParseDuration(w.cfg.WriteTimeout)
 	writeTimeout += networkDriftDuration
@@ -559,7 +558,6 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 func (w *Writer) sequenceExecute(
 	dmls *preparedDMLs, tx *sql.Tx, writeTimeout time.Duration,
 ) error {
-	log.Info("hyy into sequenceExecute")
 	// Set session variables first and execution the txn.
 	// we try to set write source for each txn,
 	// so we can use it to trace the data source
@@ -632,7 +630,6 @@ func setWriteSourceInSQL(cfg *Config, sql string) string {
 func (w *Writer) multiStmtExecute(
 	dmls *preparedDMLs, tx *sql.Tx, writeTimeout time.Duration,
 ) error {
-	log.Info("hyy into multiStmtExecute")
 	var multiStmtArgs []any
 	for _, value := range dmls.values {
 		multiStmtArgs = append(multiStmtArgs, value...)
