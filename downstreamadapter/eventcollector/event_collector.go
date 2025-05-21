@@ -579,6 +579,9 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						if !ok {
 							continue
 						}
+						log.Info("get handshake event",
+							zap.String("dispatcherID", e.GetDispatcherID().String()),
+							zap.Any("tableInfo", e.(*event.HandshakeEvent).TableInfo))
 						stat.(*dispatcherStat).setTableInfo(e.(*event.HandshakeEvent).TableInfo)
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
