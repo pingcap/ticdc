@@ -1114,7 +1114,7 @@
               "hide": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-resolvedts",
+              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-checkpointTsLag",
               "refId": "B"
             }
           ],
