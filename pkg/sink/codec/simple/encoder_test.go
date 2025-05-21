@@ -193,19 +193,19 @@ func TestE2EPartitionTable(t *testing.T) {
 		partition p1 values less than (20),
 		partition p2 values less than MAXVALUE)`)
 
-	insertEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 1)`)
+	insertEvent := helper.DML2Event4PartitionTable("test", "t", "p0", `insert into test.t values (1, 1)`)
 	require.NotNil(t, insertEvent)
 
-	//insertEvent1 := helper.DML2Event("test", "t", `insert into test.t values (11, 11)`)
-	//require.NotNil(t, insertEvent1)
-	//
-	//insertEvent2 := helper.DML2Event("test", "t", `insert into test.t values (21, 21)`)
-	//require.NotNil(t, insertEvent2)
-	//
+	insertEvent1 := helper.DML2Event4PartitionTable("test", "t", "p1", `insert into test.t values (11, 11)`)
+	require.NotNil(t, insertEvent1)
+
+	insertEvent2 := helper.DML2Event4PartitionTable("test", "t", "p2", `insert into test.t values (21, 21)`)
+	require.NotNil(t, insertEvent2)
+
 	events := []*commonEvent.DMLEvent{
 		insertEvent,
-		//insertEvent1,
-		//insertEvent2,
+		insertEvent1,
+		insertEvent2,
 	}
 
 	ctx := context.Background()
@@ -239,10 +239,11 @@ func TestE2EPartitionTable(t *testing.T) {
 			require.True(t, ok)
 
 			err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
-				TableInfo:      e.TableInfo,
-				Event:          row,
-				CommitTs:       e.CommitTs,
-				ColumnSelector: columnselector.NewDefaultColumnSelector(),
+				TableInfo:       e.TableInfo,
+				PhysicalTableID: e.GetTableID(),
+				Event:           row,
+				CommitTs:        e.CommitTs,
+				ColumnSelector:  columnselector.NewDefaultColumnSelector(),
 			})
 			require.NoError(t, err)
 			m = enc.Build()[0]
@@ -254,7 +255,9 @@ func TestE2EPartitionTable(t *testing.T) {
 
 			decodedEvent := dec.NextDMLEvent()
 			// table id should be set to the partition table id, the PhysicalTableID
-			require.Equal(t, decodedEvent.GetTableID(), event.GetTableID())
+			require.Equal(t, decodedEvent.GetTableID(), e.GetTableID())
+
+			e.Rewind()
 		}
 	}
 }

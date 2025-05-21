@@ -56,6 +56,9 @@ type EventTestHelper struct {
 	mounter Mounter
 
 	tableInfos map[string]*common.TableInfo
+
+	// each partition table's partition ID, Name -> ID.
+	partitionIDs map[string]map[string]int64
 }
 
 // NewEventTestHelperWithTimeZone creates a SchemaTestHelper with time zone
@@ -71,18 +74,14 @@ func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestH
 	require.NoError(t, err)
 	domain.SetStatsUpdating(true)
 	tk := testkit.NewTestKit(t, store)
-
-	require.NoError(t, err)
-
-	mounter := NewMounter(tz, config.GetDefaultReplicaConfig().Integrity)
-
 	return &EventTestHelper{
-		t:          t,
-		tk:         tk,
-		storage:    store,
-		domain:     domain,
-		mounter:    mounter,
-		tableInfos: make(map[string]*common.TableInfo),
+		t:            t,
+		tk:           tk,
+		storage:      store,
+		domain:       domain,
+		mounter:      NewMounter(tz, config.GetDefaultReplicaConfig().Integrity),
+		tableInfos:   make(map[string]*common.TableInfo),
+		partitionIDs: make(map[string]map[string]int64),
 	}
 }
 
@@ -103,9 +102,18 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 			Version: uint16(job.BinlogInfo.FinishedTS),
 		}
 	}
+
 	info := common.WrapTableInfo(job.SchemaName, tableInfo)
 	info.InitPrivateFields()
 	key := toTableInfosKey(info.GetSchemaName(), info.GetTableName())
+	if tableInfo.Partition != nil {
+		if _, ok := s.partitionIDs[key]; !ok {
+			s.partitionIDs[key] = make(map[string]int64)
+		}
+		for _, partition := range tableInfo.Partition.Definitions {
+			s.partitionIDs[key][partition.Name.O] = partition.ID
+		}
+	}
 	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
 	s.tableInfos[key] = info
 }
@@ -205,6 +213,26 @@ func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *
 	return dmlEvent
 }
 
+func (s *EventTestHelper) DML2Event4PartitionTable(schema, table, partition, dml string) *DMLEvent {
+	key := toTableInfosKey(schema, table)
+	tableInfo, ok := s.tableInfos[key]
+	require.True(s.t, ok)
+
+	did := common.NewDispatcherID()
+	ts := tableInfo.UpdateTS()
+	physicalTableID := s.partitionIDs[key][partition]
+
+	dmlEvent := new(BatchDMLEvent)
+	dmlEvent.AppendDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
+
+	rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
+	for _, rawKV := range rawKvs {
+		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
+		require.NoError(s.t, err)
+	}
+	return dmlEvent.DMLEvents[0]
+}
+
 // DML2Event execute the dml(s) and return the corresponding DMLEvent.
 // Note:
 // 1. It dose not support `delete` since the key value cannot be found
@@ -219,11 +247,11 @@ func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEv
 
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
+	physicalTableID := tableInfo.TableName.TableID
 
 	dmlEvent := new(BatchDMLEvent)
-	dmlEvent.AppendDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+	dmlEvent.AppendDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
 
-	var physicalTableID int64
 	rawKvs := s.DML2RawKv(physicalTableID, ts, dmls...)
 	for _, rawKV := range rawKvs {
 		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
