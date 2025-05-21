@@ -440,3 +440,43 @@ func (h *CheckpointTsMessageHandler) GetType(event CheckpointTsMessage) dynstrea
 	return dynstream.DefaultEventType
 }
 func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) {}
+
+type MergeDispatcherRequest struct {
+	*heartbeatpb.MergeDispatcherRequest
+}
+
+func NewMergeDispatcherRequest(req *heartbeatpb.MergeDispatcherRequest) MergeDispatcherRequest {
+	return MergeDispatcherRequest{req}
+}
+
+type MergeDispatcherRequestHandler struct{}
+
+func (h *MergeDispatcherRequestHandler) Path(mergeDispatcherRequest MergeDispatcherRequest) common.GID {
+	return common.NewChangefeedGIDFromPB(mergeDispatcherRequest.ChangefeedID)
+}
+
+func (h *MergeDispatcherRequestHandler) Handle(eventDispatcherManager *EventDispatcherManager, reqs ...MergeDispatcherRequest) bool {
+	if len(reqs) != 1 {
+		panic("invalid request count")
+	}
+
+	mergeDispatcherRequest := reqs[0]
+	eventDispatcherManager.MergeDispatcher(mergeDispatcherRequest.DispatcherIDs)
+	return false
+}
+
+func (h *MergeDispatcherRequestHandler) GetSize(event MergeDispatcherRequest) int   { return 0 }
+func (h *MergeDispatcherRequestHandler) IsPaused(event MergeDispatcherRequest) bool { return false }
+func (h *MergeDispatcherRequestHandler) GetArea(path common.GID, dest *EventDispatcherManager) int {
+	return 0
+}
+
+func (h *MergeDispatcherRequestHandler) GetTimestamp(event MergeDispatcherRequest) dynstream.Timestamp {
+	return 0
+}
+
+func (h *MergeDispatcherRequestHandler) GetType(event MergeDispatcherRequest) dynstream.EventType {
+	return dynstream.DefaultEventType
+}
+
+func (h *MergeDispatcherRequestHandler) OnDrop(event MergeDispatcherRequest) {}

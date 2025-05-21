@@ -346,7 +346,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 		// only when we receive the first event, we can regard the dispatcher begin syncing data
 		// then turning into working status.
 		if d.isFirstEvent(event) {
-			d.updateComponentStatus()
+			d.updateComponentStatusToWorking()
 		}
 
 		switch event.GetType() {
@@ -729,7 +729,7 @@ func (d *Dispatcher) Remove() {
 	}
 }
 
-// addToDynamicStream add self to dynamic stream
+// add dispatcher into status dynamic stream, to get status info from maintainer
 func (d *Dispatcher) addToStatusDynamicStream() {
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
 	err := dispatcherStatusDS.AddPath(d.id, d)
@@ -898,7 +898,7 @@ func (d *Dispatcher) isFirstEvent(event commonEvent.Event) bool {
 	return false
 }
 
-func (d *Dispatcher) updateComponentStatus() {
+func (d *Dispatcher) updateComponentStatusToWorking() {
 	d.componentStatus.Set(heartbeatpb.ComponentState_Working)
 	d.statusesChan <- TableSpanStatusWithSeq{
 		TableSpanStatus: &heartbeatpb.TableSpanStatus{
@@ -909,4 +909,8 @@ func (d *Dispatcher) updateComponentStatus() {
 		ResolvedTs:   d.GetResolvedTs(),
 		Seq:          d.seq,
 	}
+}
+
+func (d *Dispatcher) SetComponentStatus(status heartbeatpb.ComponentState) {
+	d.componentStatus.Set(status)
 }

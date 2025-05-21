@@ -778,6 +778,67 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	return &message
 }
 
+// MergeDispatcher merges the mulitple dispatchers belonging to the same table with adjacent ranges.
+func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID) {
+	// Step 1: check the dispatcherIDs are valid:
+	//         1. whether the dispatcherIDs exist in the dispatcherMap
+	//         2. whether the dispatcherIDs belong to the same table
+	//         3. whether the dispatcherIDs have adjacent ranges
+	//         4. whether the dispatcher in working status.
+
+	if len(dispatcherIDs) < 2 {
+		return
+	}
+	var prevTableSpan *heartbeatpb.TableSpan
+	var startKey []byte
+	var endKey []byte
+	var schemaID int64
+	for idx, id := range dispatcherIDs {
+		dispatcher, ok := e.dispatcherMap.Get(id)
+		if !ok || dispatcher.GetComponentStatus() != heartbeatpb.ComponentState_Working {
+			return
+		}
+		if idx == 0 {
+			prevTableSpan = dispatcher.GetTableSpan()
+			startKey = prevTableSpan.StartKey
+			schemaID = dispatcher.GetSchemaID()
+		} else {
+			currentTableSpan := dispatcher.GetTableSpan()
+			if !common.IsTableSpanAdjacent(prevTableSpan, currentTableSpan) {
+				return
+			}
+			prevTableSpan = currentTableSpan
+			endKey = currentTableSpan.EndKey
+		}
+	}
+
+	// Step 2: create a new dispatcher with the merged ranges, and set prepare state
+	mergedSpan := &heartbeatpb.TableSpan{
+		TableID:  prevTableSpan.TableID,
+		StartKey: startKey,
+		EndKey:   endKey,
+	}
+	mergedDispatcher := dispatcher.NewDispatcher(
+		e.changefeedID,
+		common.NewDispatcherID(),
+		mergedSpan,
+		e.sink,
+		0, // startTs will be calculated later.
+		e.statusesChan,
+		e.blockStatusesChan,
+		schemaID,
+		e.schemaIDToDispatchers,
+		e.syncPointConfig,
+		false,
+		e.filterConfig,
+		e.pdClock.CurrentTS(),
+		e.errCh,
+		e.config.BDRMode,
+	)
+	mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Preparing)
+
+}
+
 func (e *EventDispatcherManager) removeDispatcher(id common.DispatcherID) {
 	dispatcherItem, ok := e.dispatcherMap.Get(id)
 	if ok {

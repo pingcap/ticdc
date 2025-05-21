@@ -14,6 +14,7 @@
 package common
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -69,4 +70,16 @@ func (d *DataRange) Merge(other *DataRange) *DataRange {
 		d.EndTs = other.EndTs
 	}
 	return d
+}
+
+// IsTableSpanAdjacent checks if the two table spans are adjacent.
+// The two table spans are adjacent if they are for the same table and the end key of the previous span is the same as the start key of the current span.
+func IsTableSpanAdjacent(prev *heartbeatpb.TableSpan, current *heartbeatpb.TableSpan) bool {
+	if prev.TableID != current.TableID {
+		return false
+	}
+	if bytes.Equal(prev.EndKey, current.StartKey) {
+		return true
+	}
+	return false
 }
