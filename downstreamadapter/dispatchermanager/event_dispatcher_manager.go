@@ -84,9 +84,9 @@ type EventDispatcherManager struct {
 	tableTriggerEventDispatcher     *dispatcher.Dispatcher
 	redoTableTriggerEventDispatcher *dispatcher.RedoDispatcher
 	// dispatcherMap restore all the dispatchers in the EventDispatcherManager, including table trigger event dispatcher
-	dispatcherMap *DispatcherMap
+	dispatcherMap *DispatcherMap[*dispatcher.Dispatcher]
 	// dispatcherMap restore all the redo dispatchers in the EventDispatcherManager, including redo table trigger event dispatcher
-	redoDispatcherMap *DispatcherMap
+	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
 	// schemaIDToDispatchers is store the schemaID info for all normal dispatchers.
 	schemaIDToDispatchers *dispatcher.SchemaIDToDispatchers
 
@@ -160,8 +160,8 @@ func NewEventDispatcherManager(
 		zap.String("filterConfig", filterCfg.String()),
 	)
 	manager := &EventDispatcherManager{
-		dispatcherMap:                          newDispatcherMap(),
-		redoDispatcherMap:                      newDispatcherMap(),
+		dispatcherMap:                          newDispatcherMap[*dispatcher.Dispatcher](),
+		redoDispatcherMap:                      newDispatcherMap[*dispatcher.RedoDispatcher](),
 		changefeedID:                           changefeedID,
 		pdClock:                                pdClock,
 		statusesChan:                           make(chan dispatcher.TableSpanStatusWithSeq, 8192),
@@ -402,12 +402,12 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 }
 
 func (e *EventDispatcherManager) closeAllDispatchers() {
-	leftToCloseDispatchers := make([]dispatcher.EventDispatcher, 0)
-	e.dispatcherMap.ForEach(func(id common.DispatcherID, d dispatcher.EventDispatcher) {
+	leftToCloseDispatchers := make([]*dispatcher.Dispatcher, 0)
+	e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
 		// Remove dispatcher from eventService
-		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(d)
+		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
 
-		if d.IsTableTriggerEventDispatcher() && e.sink.SinkType() != common.MysqlSinkType {
+		if dispatcher.IsTableTriggerEventDispatcher() && e.sink.SinkType() != common.MysqlSinkType {
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(e.changefeedID)
 			if err != nil {
 				log.Error("remove checkpointTs message failed",
@@ -417,12 +417,12 @@ func (e *EventDispatcherManager) closeAllDispatchers() {
 			}
 		}
 
-		_, ok := d.TryClose()
+		_, ok := dispatcher.TryClose()
 		if !ok {
-			leftToCloseDispatchers = append(leftToCloseDispatchers, d)
+			leftToCloseDispatchers = append(leftToCloseDispatchers, dispatcher)
 		} else {
 			// Remove should be called after dispatcher is closed
-			d.Remove()
+			dispatcher.Remove()
 		}
 	})
 
@@ -817,7 +817,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 		DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
 	}
 
-	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem dispatcher.EventDispatcher) {
+	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.Dispatcher) {
 		dispatcherItem.GetHeartBeatInfo(heartBeatInfo)
 		// If the dispatcher is in removing state, we need to check if it's closed successfully.
 		// If it's closed successfully, we could clean it up.
@@ -943,7 +943,7 @@ func (e *EventDispatcherManager) cleanDispatcher(id common.DispatcherID, schemaI
 	)
 }
 
-func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap {
+func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap[*dispatcher.Dispatcher] {
 	return e.dispatcherMap
 }
 

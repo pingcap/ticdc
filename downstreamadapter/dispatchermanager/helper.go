@@ -28,7 +28,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type DispatcherMap struct {
+type DispatcherMap[T dispatcher.EventDispatcher] struct {
 	m sync.Map
 	// sequence number is increasing when dispatcher is added.
 	//
@@ -56,15 +56,15 @@ type DispatcherMap struct {
 	seq atomic.Uint64
 }
 
-func newDispatcherMap() *DispatcherMap {
-	dispatcherMap := &DispatcherMap{
+func newDispatcherMap[T dispatcher.EventDispatcher]() *DispatcherMap[T] {
+	dispatcherMap := &DispatcherMap[T]{
 		m: sync.Map{},
 	}
 	dispatcherMap.seq.Store(0)
 	return dispatcherMap
 }
 
-func (d *DispatcherMap) Len() int {
+func (d *DispatcherMap[T]) Len() int {
 	len := 0
 	d.m.Range(func(_, _ interface{}) bool {
 		len++
@@ -73,32 +73,32 @@ func (d *DispatcherMap) Len() int {
 	return len
 }
 
-func (d *DispatcherMap) Get(id common.DispatcherID) (dispatcher.EventDispatcher, bool) {
+func (d *DispatcherMap[T]) Get(id common.DispatcherID) (dispatcher T, exist bool) {
 	dispatcherItem, ok := d.m.Load(id)
 	if ok {
-		return dispatcherItem.(dispatcher.EventDispatcher), ok
+		return dispatcherItem.(T), ok
 	}
-	return nil, false
+	return
 }
 
-func (d *DispatcherMap) GetSeq() uint64 {
+func (d *DispatcherMap[T]) GetSeq() uint64 {
 	return d.seq.Load()
 }
 
-func (d *DispatcherMap) Delete(id common.DispatcherID) {
+func (d *DispatcherMap[T]) Delete(id common.DispatcherID) {
 	d.m.Delete(id)
 }
 
-func (d *DispatcherMap) Set(id common.DispatcherID, dispatcher dispatcher.EventDispatcher) uint64 {
+func (d *DispatcherMap[T]) Set(id common.DispatcherID, dispatcher T) uint64 {
 	d.m.Store(id, dispatcher)
 	d.seq.Add(1)
 	return d.seq.Load()
 }
 
-func (d *DispatcherMap) ForEach(fn func(id common.DispatcherID, dispatcher dispatcher.EventDispatcher)) uint64 {
+func (d *DispatcherMap[T]) ForEach(fn func(id common.DispatcherID, dispatcher T)) uint64 {
 	seq := d.seq.Load()
 	d.m.Range(func(key, value interface{}) bool {
-		fn(key.(common.DispatcherID), value.(dispatcher.EventDispatcher))
+		fn(key.(common.DispatcherID), value.(T))
 		return true
 	})
 	return seq
@@ -362,7 +362,7 @@ func (h *HeartBeatResponseHandler) Handle(eventDispatcherManager *EventDispatche
 			}
 		case heartbeatpb.InfluenceType_All:
 			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
-			eventDispatcherManager.GetDispatcherMap().ForEach(func(id common.DispatcherID, _ dispatcher.EventDispatcher) {
+			eventDispatcherManager.GetDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.Dispatcher) {
 				if id != excludeDispatcherID {
 					h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
 				}
