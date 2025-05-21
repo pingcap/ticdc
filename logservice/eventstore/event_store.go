@@ -939,7 +939,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 			if coordinatorID == "" {
 				continue
 			}
-			// When the log coordinator resides on the same node, it will receive the same object reference. 
+			// When the log coordinator resides on the same node, it will receive the same object reference.
 			// To prevent data races, we need to create a clone of the state.
 			message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state.Copy())
 			// just ignore messagees fail to send
