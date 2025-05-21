@@ -611,10 +611,6 @@ func (m *mockDispatcherInfo) GetTimezone() *time.Location {
 	return m.tz
 }
 
-func (m *mockDispatcherInfo) GetRedo() bool {
-	return m.redo
-}
-
 func genEvents(helper *commonEvent.EventTestHelper, t *testing.T, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
 	job := helper.DDL2Job(ddl)
 	schema := job.SchemaName
