@@ -264,7 +264,9 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 	case TypeBatchResolvedTs:
 		m = &commonEvent.BatchResolvedEvent{}
 	case TypeHandshakeEvent:
-		m = &commonEvent.HandshakeEvent{}
+		m = &commonEvent.HandshakeEvent{
+			TableInfo: &common.TableInfo{},
+		}
 	case TypeReadyEvent:
 		m = &commonEvent.ReadyEvent{}
 	case TypeNotReusableEvent:
