@@ -247,10 +247,6 @@ func (r DispatcherRequest) GetTimezone() *time.Location {
 	return tz
 }
 
-func (r DispatcherRequest) GetRedo() bool {
-	return r.Redo
-}
-
 type IOTypeT interface {
 	Unmarshal(data []byte) error
 	Marshal() (data []byte, err error)
@@ -341,7 +337,6 @@ type TargetMessage struct {
 	// Group is used to group messages into a same group.
 	// Different groups can be processed in different goroutines.
 	Group uint64
-	Redo  bool
 }
 
 // NewSingleTargetMessage creates a new TargetMessage to be sent to a target server, with a single message.

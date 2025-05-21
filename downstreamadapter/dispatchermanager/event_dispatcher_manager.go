@@ -38,7 +38,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/ticdc/redo"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -78,15 +77,10 @@ type EventDispatcherManager struct {
 	// TODO: changefeed update config
 	syncPointConfig *syncpoint.SyncPointConfig
 
-	redoManager redo.RedoManager
-
 	// tableTriggerEventDispatcher is a special dispatcher, that is responsible for handling ddl and checkpoint events.
-	tableTriggerEventDispatcher     *dispatcher.Dispatcher
-	redoTableTriggerEventDispatcher *dispatcher.RedoDispatcher
+	tableTriggerEventDispatcher *dispatcher.Dispatcher
 	// dispatcherMap restore all the dispatchers in the EventDispatcherManager, including table trigger event dispatcher
 	dispatcherMap *DispatcherMap
-	// dispatcherMap restore all the redo dispatchers in the EventDispatcherManager, including redo table trigger event dispatcher
-	redoDispatcherMap *DispatcherMap
 	// schemaIDToDispatchers is store the schemaID info for all normal dispatchers.
 	schemaIDToDispatchers *dispatcher.SchemaIDToDispatchers
 
@@ -121,9 +115,6 @@ type EventDispatcherManager struct {
 	closed  atomic.Bool
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
-
-	sinkQuota uint64
-	redoQuota uint64
 
 	metricTableTriggerEventDispatcherCount prometheus.Gauge
 	metricEventDispatcherCount             prometheus.Gauge
@@ -161,7 +152,6 @@ func NewEventDispatcherManager(
 	)
 	manager := &EventDispatcherManager{
 		dispatcherMap:                          newDispatcherMap(),
-		redoDispatcherMap:                      newDispatcherMap(),
 		changefeedID:                           changefeedID,
 		pdClock:                                pdClock,
 		statusesChan:                           make(chan dispatcher.TableSpanStatusWithSeq, 8192),
@@ -170,7 +160,6 @@ func NewEventDispatcherManager(
 		cancel:                                 cancel,
 		config:                                 cfConfig,
 		filterConfig:                           filterCfg,
-		redoManager:                            redo.NewRedoManager(changefeedID, cfConfig.Consistent),
 		schemaIDToDispatchers:                  dispatcher.NewSchemaIDToDispatchers(),
 		latestWatermark:                        NewWatermark(0),
 		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Namespace(), changefeedID.Name()),
@@ -215,27 +204,6 @@ func NewEventDispatcherManager(
 		if err != nil {
 			return nil, 0, errors.Trace(err)
 		}
-		// redo meta manager
-		if manager.redoManager.Enabled() {
-			manager.redoTableTriggerEventDispatcher.MetaManager = redo.NewMetaManager(changefeedID, cfConfig.Consistent, startTs)
-			manager.wg.Add(1)
-			go func() {
-				defer manager.wg.Done()
-				err := manager.redoTableTriggerEventDispatcher.MetaManager.Run(context.Background())
-				if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
-					select {
-					case <-ctx.Done():
-						return
-					case manager.errCh <- err:
-					default:
-						log.Error("error channel is full, discard error",
-							zap.Stringer("changefeedID", changefeedID),
-							zap.Error(err),
-						)
-					}
-				}
-			}()
-		}
 	}
 
 	manager.wg.Add(1)
@@ -255,27 +223,6 @@ func NewEventDispatcherManager(
 			}
 		}
 	}()
-
-	// redo manager
-	if manager.redoManager.Enabled() {
-		manager.wg.Add(1)
-		go func() {
-			defer manager.wg.Done()
-			err = manager.redoManager.Run(ctx)
-			if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
-				select {
-				case <-ctx.Done():
-					return
-				case manager.errCh <- err:
-				default:
-					log.Error("error channel is full, discard error",
-						zap.Stringer("changefeedID", changefeedID),
-						zap.Error(err),
-					)
-				}
-			}
-		}()
-	}
 
 	// collect errors from error channel
 	manager.wg.Add(1)
@@ -298,28 +245,11 @@ func NewEventDispatcherManager(
 		manager.collectBlockStatusRequest(ctx)
 	}()
 
-	totalQuota := manager.config.MemoryQuota
-	if manager.redoManager.Enabled() {
-		consistentMemoryUsage := manager.config.Consistent.MemoryUsage
-		if consistentMemoryUsage == nil {
-			consistentMemoryUsage = config.GetDefaultReplicaConfig().Consistent.MemoryUsage
-		}
-
-		manager.redoQuota = totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
-		manager.sinkQuota = totalQuota - manager.redoQuota
-	} else {
-		manager.sinkQuota = totalQuota
-		manager.redoQuota = 0
-	}
-
 	log.Info("event dispatcher manager created",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("maintainerID", maintainerID),
 		zap.Uint64("startTs", startTs),
 		zap.Uint64("tableTriggerStartTs", tableTriggerStartTs),
-		zap.Uint64("sinkQuota", manager.sinkQuota),
-		zap.Uint64("redoQuota", manager.redoQuota),
-		zap.Bool("withRedo", manager.redoManager.Enabled()),
 	)
 	return manager, tableTriggerStartTs, nil
 }
@@ -384,7 +314,6 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 	}
 
 	e.sink.Close(removeChangefeed)
-	e.redoManager.Close()
 	e.cancel()
 	e.wg.Wait()
 
@@ -501,11 +430,7 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 	}
 
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
-	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.sinkQuota, e.config.BDRMode, false)
-	// redo
-	if e.redoManager.Enabled() {
-		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.redoTableTriggerEventDispatcher, e.redoQuota, e.config.BDRMode, true)
-	}
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.config.MemoryQuota, e.config.BDRMode)
 
 	// when sink is not mysql-class, table trigger event dispatcher need to receive the checkpointTs message from maintainer.
 	if e.sink.SinkType() != common.MysqlSinkType {
@@ -566,7 +491,6 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 		e.latestWatermark = NewWatermark(uint64(smallestStartTs))
 	}
 
-	ctx := context.Background()
 	for idx, id := range dispatcherIds {
 		d := dispatcher.NewDispatcher(
 			e.changefeedID,
@@ -583,24 +507,6 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			e.errCh,
 			e.config.BDRMode)
 
-		var rd *dispatcher.RedoDispatcher
-		if e.redoManager.Enabled() {
-			rd = dispatcher.NewRedoDispatcher(
-				ctx,
-				e.changefeedID,
-				id, tableSpans[idx], e.redoManager,
-				uint64(newStartTsList[idx]),
-				e.statusesChan,
-				e.blockStatusesChan,
-				schemaIds[idx],
-				e.schemaIDToDispatchers,
-				e.syncPointConfig,
-				startTsIsSyncpointList[idx],
-				e.filterConfig,
-				pdTsList[idx],
-				e.errCh,
-				e.config.BDRMode)
-		}
 		if e.heartBeatTask == nil {
 			e.heartBeatTask = newHeartBeatTask(e)
 		}
@@ -610,24 +516,16 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 				d.BootstrapState = dispatcher.BootstrapNotStarted
 			}
 			e.tableTriggerEventDispatcher = d
-			e.redoTableTriggerEventDispatcher = rd
 		} else {
 			e.schemaIDToDispatchers.Set(schemaIds[idx], id)
 			// we don't register table trigger event dispatcher in event collector, when created.
 			// Table trigger event dispatcher is a special dispatcher,
 			// it need to wait get the initial table schema store from the maintainer, then will register to event collector to receive events.
-			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(d, e.sinkQuota, e.config.BDRMode, false)
-			if e.redoManager.Enabled() {
-				appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(rd, e.redoQuota, e.config.BDRMode, true)
-			}
+			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(d, e.config.MemoryQuota, e.config.BDRMode)
 		}
 
 		seq := e.dispatcherMap.Set(id, d)
 		d.SetSeq(seq)
-		if e.redoManager.Enabled() {
-			redoSeq := e.redoDispatcherMap.Set(id, rd)
-			rd.SetSeq(redoSeq)
-		}
 
 		if d.IsTableTriggerEventDispatcher() {
 			e.metricTableTriggerEventDispatcherCount.Inc()
@@ -898,18 +796,6 @@ func (e *EventDispatcherManager) removeDispatcher(id common.DispatcherID) {
 
 		dispatcherItem.Remove()
 
-		if e.redoManager.Enabled() {
-			redoDispatcherItem, ok := e.redoDispatcherMap.Get(id)
-			if !ok {
-				log.Panic("redo dispatcher missing", zap.Any("changefeedID", e.changefeedID), zap.String("id", id.String()))
-			}
-			if redoDispatcherItem.GetRemovingStatus() {
-				return
-			}
-			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(redoDispatcherItem)
-			redoDispatcherItem.Remove()
-		}
-
 	} else {
 		e.statusesChan <- dispatcher.TableSpanStatusWithSeq{
 			TableSpanStatus: &heartbeatpb.TableSpanStatus{
@@ -930,12 +816,6 @@ func (e *EventDispatcherManager) cleanDispatcher(id common.DispatcherID, schemaI
 		e.metricTableTriggerEventDispatcherCount.Dec()
 	} else {
 		e.metricEventDispatcherCount.Dec()
-	}
-	if e.redoManager.Enabled() {
-		e.redoDispatcherMap.Delete(id)
-		if e.redoTableTriggerEventDispatcher != nil && e.redoTableTriggerEventDispatcher.GetId() == id {
-			e.redoTableTriggerEventDispatcher = nil
-		}
 	}
 	log.Info("table event dispatcher completely stopped, and delete it from event dispatcher manager",
 		zap.Stringer("changefeedID", e.changefeedID),

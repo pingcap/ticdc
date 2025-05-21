@@ -52,7 +52,6 @@ type DispatcherRequest struct {
 	StartTs    uint64
 	OnlyUse    bool
 	BDRMode    bool
-	Redo       bool
 }
 
 type DispatcherRequestWithTarget struct {
@@ -207,7 +206,7 @@ func (c *EventCollector) Close() {
 	log.Info("event collector is closed")
 }
 
-func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64, bdrMode bool, redo bool) {
+func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64, bdrMode bool) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
@@ -218,11 +217,6 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	}
 	stat.reset()
 	stat.sentCommitTs.Store(target.GetStartTs())
-	if !redo {
-		c.dispatcherMap.Store(target.GetId(), stat)
-		c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
-		metrics.EventCollectorRegisteredDispatcherCount.Inc()
-	}
 
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2, "eventCollector")
 	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
@@ -236,7 +230,6 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 		StartTs:    target.GetStartTs(),
 		ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
 		BDRMode:    bdrMode,
-		Redo:       redo,
 	})
 
 	c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
@@ -408,7 +401,6 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 			StartTs:   req.StartTs,
 			OnlyReuse: req.OnlyUse,
 			BdrMode:   req.BDRMode,
-			Redo:      req.Redo,
 		},
 	}
 
@@ -524,9 +516,6 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 		case <-ctx.Done():
 			return
 		case targetMessage := <-inCh:
-			if targetMessage.Redo {
-				continue
-			}
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
 				case event.Event:
