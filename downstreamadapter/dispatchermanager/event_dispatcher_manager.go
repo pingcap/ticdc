@@ -391,10 +391,10 @@ type dispatcherCreateInfo struct {
 func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) (uint64, error) {
 	err := e.newDispatchers([]dispatcherCreateInfo{
 		{
-			Id:          common.NewDispatcherIDFromPB(id),
-			TableSpan:   common.DDLSpan,
-			StartTs:     startTs,
-			SchemaID:    0,
+			Id:        common.NewDispatcherIDFromPB(id),
+			TableSpan: common.DDLSpan,
+			StartTs:   startTs,
+			SchemaID:  0,
 		},
 	}, newChangefeed)
 	if err != nil {
