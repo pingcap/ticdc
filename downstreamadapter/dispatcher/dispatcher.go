@@ -50,20 +50,7 @@ type EventDispatcher interface {
 	GetSyncPointInterval() time.Duration
 	GetStartTsIsSyncpoint() bool
 	GetResolvedTs() uint64
-	HandleEvents(events []DispatcherEvent, wakeCallback func()) bool
-	HandleCheckpointTs(uint64)
-	HandleDispatcherStatus(*heartbeatpb.DispatcherStatus)
-	GetSchemaID() int64
-	GetComponentStatus() heartbeatpb.ComponentState
-	GetCheckpointTs() uint64
-	GetBlockEventStatus() *heartbeatpb.State
-	IsTableTriggerEventDispatcher() bool
-	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
-	GetRemovingStatus() bool
-	GetHeartBeatInfo(*HeartBeatInfo)
-	GetEventSizePerSecond() float32
-	TryClose() (heartbeatpb.Watermark, bool)
-	Remove()
+	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 }
 
 /*
@@ -892,10 +879,6 @@ func (d *Dispatcher) EmitBootstrap() bool {
 
 func (d *Dispatcher) IsTableTriggerEventDispatcher() bool {
 	return d.tableSpan == common.DDLSpan
-}
-
-func (d *Dispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
-	return d.blockStatusesChan
 }
 
 func (d *Dispatcher) SetSeq(seq uint64) {

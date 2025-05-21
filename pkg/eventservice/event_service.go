@@ -53,7 +53,6 @@ type DispatcherInfo interface {
 	GetBdrMode() bool
 	GetIntegrity() *integrity.Config
 	GetTimezone() *time.Location
-	GetRedo() bool
 }
 
 type DispatcherHeartBeatWithServerID struct {

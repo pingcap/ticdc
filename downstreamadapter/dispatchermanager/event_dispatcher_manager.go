@@ -331,8 +331,8 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 }
 
 func (e *EventDispatcherManager) closeAllDispatchers() {
-	leftToCloseDispatchers := make([]dispatcher.EventDispatcher, 0)
-	e.dispatcherMap.ForEach(func(id common.DispatcherID, d dispatcher.EventDispatcher) {
+	leftToCloseDispatchers := make([]*dispatcher.Dispatcher, 0)
+	e.dispatcherMap.ForEach(func(id common.DispatcherID, d *dispatcher.Dispatcher) {
 		// Remove dispatcher from eventService
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(d)
 
@@ -715,7 +715,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 		DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
 	}
 
-	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem dispatcher.EventDispatcher) {
+	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.Dispatcher) {
 		dispatcherItem.GetHeartBeatInfo(heartBeatInfo)
 		// If the dispatcher is in removing state, we need to check if it's closed successfully.
 		// If it's closed successfully, we could clean it up.
