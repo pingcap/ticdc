@@ -170,25 +170,6 @@ func (s *EventTestHelper) DDL2Job(ddl string) *timodel.Job {
 	return res
 }
 
-// DDL2Jobs executes the DDL statement and return the corresponding DDL jobs.
-// It is mainly used for "DROP TABLE" and "DROP VIEW" statement because
-// multiple jobs will be generated after executing these two types of
-// DDL statements.
-func (s *EventTestHelper) DDL2Jobs(ddl string, jobCnt int) []*timodel.Job {
-	s.tk.MustExec(ddl)
-	jobs, err := tiddl.GetLastNHistoryDDLJobs(s.GetCurrentMeta(), jobCnt)
-	require.Nil(s.t, err)
-	require.Len(s.t, jobs, jobCnt)
-	// Set State from Synced to Done.
-	// Because jobs are put to history queue after TiDB alter its state from
-	// Done to Synced.
-	for i, job := range jobs {
-		jobs[i].State = timodel.JobStateDone
-		s.ApplyJob(job)
-	}
-	return jobs
-}
-
 func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 	job := s.DDL2Job(ddl)
 	info := s.GetTableInfo(job)
@@ -213,8 +194,9 @@ func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
 	for _, dml := range dmls {
-		dmlEvent.AppendDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
-		rawKvs := s.DML2RawKv(schema, table, ts, dml)
+		var physicalTableID int64
+		dmlEvent.AppendDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
+		rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
 		for _, rawKV := range rawKvs {
 			err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
 			require.NoError(s.t, err)
@@ -234,11 +216,15 @@ func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEv
 	log.Info("dml2event", zap.String("key", key))
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
-	dmlEvent := new(BatchDMLEvent)
+
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
+
+	dmlEvent := new(BatchDMLEvent)
 	dmlEvent.AppendDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
-	rawKvs := s.DML2RawKv(schema, table, ts, dmls...)
+
+	var physicalTableID int64
+	rawKvs := s.DML2RawKv(physicalTableID, ts, dmls...)
 	for _, rawKV := range rawKvs {
 		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
 		require.NoError(s.t, err)
@@ -263,8 +249,10 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) *
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
-	dmlEvent := newDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
-	rawKvs := s.DML2RawKv(schema, table, ts, dml...)
+
+	var physicalTableID int64
+	dmlEvent := newDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
+	rawKvs := s.DML2RawKv(physicalTableID, ts, dml...)
 
 	raw := &common.RawKVEntry{
 		OpType:   common.OpTypePut,
@@ -278,13 +266,11 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) *
 	return dmlEvent
 }
 
-func (s *EventTestHelper) DML2RawKv(schema, table string, ddlFinishedTs uint64, dml ...string) []*common.RawKVEntry {
-	tableInfo, ok := s.tableInfos[toTableInfosKey(schema, table)]
-	require.True(s.t, ok)
+func (s *EventTestHelper) DML2RawKv(physicalTableID int64, ddlFinishedTs uint64, dmls ...string) []*common.RawKVEntry {
 	var rawKVs []*common.RawKVEntry
-	for i, dml := range dml {
+	for i, dml := range dmls {
 		s.tk.MustExec(dml)
-		key, value := s.getLastKeyValue(tableInfo.TableName.TableID)
+		key, value := s.getLastKeyValue(physicalTableID)
 		rawKV := &common.RawKVEntry{
 			OpType:   common.OpTypePut,
 			Key:      key,

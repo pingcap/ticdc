@@ -310,7 +310,7 @@ alter table tp_other modify column c_set set ('a', 'b', 'c', 'd') null;
 update tp_other set c_set = 'b,c' where c_set = 'a,b';
 
 alter table tp_other modify column c_bit bit(20) null;
-
+d
 update tp_other set c_bit = b'1' where c_bit = b'1000001';
 
 alter table tp_other modify column c_bit bit(1) null;
