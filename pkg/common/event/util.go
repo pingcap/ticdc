@@ -27,7 +27,7 @@ import (
 	tiddl "github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/domain"
 	"github.com/pingcap/tidb/pkg/kv"
-	timeta "github.com/pingcap/tidb/pkg/meta"
+	"github.com/pingcap/tidb/pkg/meta"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/format"
@@ -201,8 +201,8 @@ func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *
 	dmlEvent := new(BatchDMLEvent)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
+	physicalTableID := tableInfo.TableName.TableID
 	for _, dml := range dmls {
-		var physicalTableID int64
 		dmlEvent.AppendDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
 		rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
 		for _, rawKV := range rawKvs {
@@ -278,7 +278,7 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) *
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
 
-	var physicalTableID int64
+	physicalTableID := tableInfo.TableName.TableID
 	dmlEvent := newDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
 	rawKvs := s.DML2RawKv(physicalTableID, ts, dml...)
 
@@ -341,10 +341,10 @@ func (s *EventTestHelper) Tk() *testkit.TestKit {
 }
 
 // GetCurrentMeta return the current meta snapshot
-func (s *EventTestHelper) GetCurrentMeta() timeta.Reader {
+func (s *EventTestHelper) GetCurrentMeta() meta.Reader {
 	ver, err := s.storage.CurrentVersion(oracle.GlobalTxnScope)
 	require.Nil(s.t, err)
-	return timeta.NewReader(s.storage.GetSnapshot(ver))
+	return meta.NewReader(s.storage.GetSnapshot(ver))
 }
 
 // Close closes the helper
