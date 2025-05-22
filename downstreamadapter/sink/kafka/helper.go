@@ -70,22 +70,10 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 	if err = options.Apply(changefeedID, sinkURI, sinkConfig); err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
+	options.Topic = topic
 
 	kafkaComponent.factory, err = factoryCreator(ctx, options, changefeedID)
 	if err != nil {
-		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
-	}
-
-	tempAdminClient, err := kafkaComponent.factory.AdminClient()
-	if err != nil {
-		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
-	}
-	defer func() {
-		tempAdminClient.Close()
-	}()
-
-	// adjust the option configuration before creating the kafka client
-	if err = kafka.AdjustOptions(ctx, tempAdminClient, options, topic); err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 

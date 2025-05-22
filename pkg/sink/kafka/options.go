@@ -142,6 +142,7 @@ type urlConfig struct {
 
 // Options stores user specified configurations
 type Options struct {
+	Topic           string
 	BrokerEndpoints []string
 
 	// control whether to create topic
@@ -565,8 +566,8 @@ func NewKafkaClientID(captureAddr string,
 	return
 }
 
-// AdjustOptions adjust the `Options` and `sarama.Config` by condition.
-func AdjustOptions(
+// adjustOptions adjust the `Options` and `sarama.Config` by condition.
+func adjustOptions(
 	ctx context.Context,
 	admin ClusterAdminClient,
 	options *Options,

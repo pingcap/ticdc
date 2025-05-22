@@ -39,8 +39,31 @@ func NewSaramaFactory(
 	changefeedID common.ChangeFeedID,
 ) (Factory, error) {
 	start := time.Now()
-	saramaConfig, err := NewSaramaConfig(ctx, o)
+	config, err := NewSaramaConfig(ctx, o)
 	duration := time.Since(start).Seconds()
+	if duration > 2 {
+		log.Warn("new sarama config cost too much time",
+			zap.Any("duration", duration), zap.Stringer("changefeedID", changefeedID))
+	}
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	admin, err := newAdminClient(changefeedID, o.BrokerEndpoints, config)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	defer func() {
+		_ = admin.Close
+	}()
+
+	if err = adjustOptions(ctx, admin, o, o.Topic); err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	start = time.Now()
+	saramaConfig, err := NewSaramaConfig(ctx, o)
+	duration = time.Since(start).Seconds()
 	if duration > 2 {
 		log.Warn("new sarama config cost too much time",
 			zap.Any("duration", duration), zap.Stringer("changefeedID", changefeedID))
@@ -57,13 +80,13 @@ func NewSaramaFactory(
 	}, nil
 }
 
-func (f *saramaFactory) AdminClient() (ClusterAdminClient, error) {
+func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config *sarama.Config) (ClusterAdminClient, error) {
 	start := time.Now()
-	client, err := sarama.NewClient(f.endpoints, f.config)
+	client, err := sarama.NewClient(endpoints, config)
 	duration := time.Since(start).Seconds()
 	if duration > 2 {
 		log.Warn("new sarama client cost too much time",
-			zap.Any("duration", duration), zap.Stringer("changefeedID", f.changefeedID))
+			zap.Any("duration", duration), zap.Stringer("changefeedID", changefeedID))
 	}
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -74,7 +97,7 @@ func (f *saramaFactory) AdminClient() (ClusterAdminClient, error) {
 	duration = time.Since(start).Seconds()
 	if duration > 2 {
 		log.Warn("new sarama cluster admin cost too much time",
-			zap.Any("duration", duration), zap.Stringer("changefeedID", f.changefeedID))
+			zap.Any("duration", duration), zap.Stringer("changefeedID", changefeedID))
 	}
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -82,8 +105,12 @@ func (f *saramaFactory) AdminClient() (ClusterAdminClient, error) {
 	return &saramaAdminClient{
 		client:     client,
 		admin:      admin,
-		changefeed: f.changefeedID,
+		changefeed: changefeedID,
 	}, nil
+}
+
+func (f *saramaFactory) AdminClient() (ClusterAdminClient, error) {
+	return newAdminClient(f.changefeedID, f.endpoints, f.config)
 }
 
 // SyncProducer returns a Sync SyncProducer,
