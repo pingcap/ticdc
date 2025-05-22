@@ -420,7 +420,7 @@ func (h *CheckpointTsMessageHandler) Handle(eventDispatcherManager *EventDispatc
 	}
 	checkpointTsMessage := messages[0]
 	if eventDispatcherManager.tableTriggerEventDispatcher != nil {
-		eventDispatcherManager.tableTriggerEventDispatcher.HandleCheckpointTs(checkpointTsMessage.CheckpointTs)
+		eventDispatcherManager.tableTriggerEventDispatcher.AddCheckpointTs(checkpointTsMessage.CheckpointTs)
 	}
 	return false
 }
