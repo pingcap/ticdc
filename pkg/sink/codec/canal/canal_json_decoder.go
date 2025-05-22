@@ -18,6 +18,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -88,6 +90,8 @@ type decoder struct {
 var (
 	tableIDAllocator  = common.NewFakeTableIDAllocator()
 	tableInfoAccessor = common.NewTableInfoAccessor()
+
+	physicalTableIDAccessor = common.NewPhysicalTableIDAccessor()
 )
 
 // NewDecoder return a decoder for canal-json
@@ -295,6 +299,12 @@ func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	return b.canalJSONMessage2DMLEvent()
 }
 
+func queryPhysicalTableID() int64 {
+	var result int64
+
+	return result
+}
+
 func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	msg := b.msg
 	tableInfo := queryTableInfo(msg)
@@ -303,7 +313,7 @@ func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	result.TableInfo = tableInfo
 	result.StartTs = msg.getCommitTs()
 	result.CommitTs = msg.getCommitTs()
-	result.PhysicalTableID = result.TableInfo.TableName.TableID
+	result.PhysicalTableID = queryPhysicalTableID()
 	result.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	result.Length++
 
@@ -343,7 +353,65 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 			zap.Any("messageType", b.msg.messageType()), zap.Any("msg", b.msg))
 	}
 
-	result := b.canalJSONMessage2DDLEvent()
+	result := new(commonEvent.DDLEvent)
+	result.FinishedTs = b.msg.getCommitTs()
+	result.SchemaName = *b.msg.getSchema()
+	result.TableName = *b.msg.getTable()
+	result.Query = b.msg.getQuery()
+	actionType := common.GetDDLActionType(result.Query)
+	result.Type = byte(actionType)
+
+	stmt, err := parser.New().ParseOneStmt(result.Query, "", "")
+	if err != nil {
+		log.Panic("parse ddl query failed", zap.String("query", result.Query), zap.Error(err))
+	}
+
+	var physicalTableID []int64
+	switch v := stmt.(type) {
+	case *ast.CreateTableStmt:
+		for _, p := range v.Partition.Definitions {
+			id := tableIDAllocator.AllocatePartitionID(result.SchemaName, result.TableName, p.Name.O)
+			physicalTableIDAccessor.Add(result.SchemaName, result.TableName, p.Name.O, id)
+		}
+	// CreateTable indicates the table not exist yet, so just skip it.
+	case *ast.AlterTableStmt:
+		physicalTableID = physicalTableIDAccessor.Get(result.SchemaName, result.TableName)
+	// care about the add partition / drop partition case.
+	case *ast.DropTableStmt:
+		physicalTableID = physicalTableIDAccessor.Get(result.SchemaName, result.TableName)
+	// all table partitions should be blocked.
+	case *ast.TruncateTableStmt:
+		physicalTableID = physicalTableIDAccessor.Get(result.SchemaName, result.TableName)
+	default:
+		if strings.Contains(result.Query, "partition") {
+			log.Panic("unsupported type partition DDL", zap.String("query", result.Query))
+		}
+	}
+
+	//if v, ok := stmt.(*ast.CreateTableStmt); ok {
+	//tableInfo, err := ddl.BuildTableInfoFromAST(metabuild.NewContext(), v)
+	//if err != nil {
+	//	log.Panic("build table info failed", zap.String("query", result.Query), zap.Error(err))
+	//}
+	//partitions := tableInfo.GetPartitionInfo()
+	//if partitions != nil {
+	//
+	//	//b.partitionInfoCache[cacheKey] = partitions
+	//}
+	//}
+
+	//var tableID int64
+	//// todo: this should be the physical table id.
+	//tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
+	//if ok {
+	//	tableID = tableInfo.TableName.TableID
+	//}
+	result.BlockedTables = common.GetInfluenceTables(actionType, physicalTableID)
+	log.Debug("set blocked tables for the DDL event",
+		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
+
+	tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
 	return result
 }
 
@@ -360,29 +428,6 @@ func (b *decoder) NextResolvedEvent() uint64 {
 			zap.Any("msg", b.msg))
 	}
 	return withExtensionEvent.Extensions.WatermarkTs
-}
-
-func (b *decoder) canalJSONMessage2DDLEvent() *commonEvent.DDLEvent {
-	result := new(commonEvent.DDLEvent)
-	result.FinishedTs = b.msg.getCommitTs()
-	result.SchemaName = *b.msg.getSchema()
-	result.TableName = *b.msg.getTable()
-	result.Query = b.msg.getQuery()
-	actionType := common.GetDDLActionType(result.Query)
-	result.Type = byte(actionType)
-
-	var tableID int64
-	tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
-	if ok {
-		tableID = tableInfo.TableName.TableID
-	}
-	result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
-	log.Debug("set blocked tables for the DDL event",
-		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
-		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
-
-	tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
-	return result
 }
 
 func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {

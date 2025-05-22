@@ -26,25 +26,55 @@ type accessKey struct {
 	table  string
 }
 
-// TableInfoAccessor provide table information, to helper
+type physicalTableIDAccessor struct {
+	memo map[accessKey]map[string]int64
+}
+
+func NewPhysicalTableIDAccessor() *physicalTableIDAccessor {
+	return &physicalTableIDAccessor{
+		memo: make(map[accessKey]map[string]int64),
+	}
+}
+
+func (a *physicalTableIDAccessor) Get(schema, table string) []int64 {
+	key := accessKey{schema, table}
+	memo := a.memo[key]
+	result := make([]int64, 0, len(memo))
+	for _, v := range memo {
+		result = append(result, v)
+	}
+	return result
+}
+
+func (a *physicalTableIDAccessor) Add(schema, table, partition string, id int64) {
+	key := accessKey{schema, table}
+	memo, ok := a.memo[key]
+	if !ok {
+		memo = make(map[string]int64)
+		a.memo[key] = memo
+	}
+	memo[partition] = id
+}
+
+// tableInfoAccessor provide table information, to helper
 // the decoder set table info to the event
-type TableInfoAccessor struct {
+type tableInfoAccessor struct {
 	memo map[accessKey]*commonType.TableInfo
 }
 
-func NewTableInfoAccessor() *TableInfoAccessor {
-	return &TableInfoAccessor{
+func NewTableInfoAccessor() *tableInfoAccessor {
+	return &tableInfoAccessor{
 		memo: make(map[accessKey]*commonType.TableInfo),
 	}
 }
 
-func (a *TableInfoAccessor) Get(schema, table string) (*commonType.TableInfo, bool) {
+func (a *tableInfoAccessor) Get(schema, table string) (*commonType.TableInfo, bool) {
 	key := accessKey{schema, table}
 	tableInfo, ok := a.memo[key]
 	return tableInfo, ok
 }
 
-func (a *TableInfoAccessor) Add(schema, table string, tableInfo *commonType.TableInfo) {
+func (a *tableInfoAccessor) Add(schema, table string, tableInfo *commonType.TableInfo) {
 	key := accessKey{
 		schema: schema,
 		table:  table,
@@ -56,7 +86,7 @@ func (a *TableInfoAccessor) Add(schema, table string, tableInfo *commonType.Tabl
 		zap.Int64("tableID", tableInfo.TableName.TableID))
 }
 
-func (a *TableInfoAccessor) Remove(schema, table string) {
+func (a *tableInfoAccessor) Remove(schema, table string) {
 	key := accessKey{
 		schema: schema,
 		table:  table,
@@ -64,7 +94,7 @@ func (a *TableInfoAccessor) Remove(schema, table string) {
 	delete(a.memo, key)
 }
 
-func (a *TableInfoAccessor) Clean() {
+func (a *tableInfoAccessor) Clean() {
 	clear(a.memo)
 }
 

@@ -185,11 +185,11 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	// since tableInfoAccessor is global, we need to make sure the table info
 	// is not removed by other partitions' decoder.
 	if b.idx == 0 {
-		var tableID int64
-		tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
-		if ok {
-			tableID = tableInfo.TableName.TableID
-		}
+		var tableID []int64
+		//tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
+		//if ok {
+		//	tableID = tableInfo.TableName.TableID
+		//}
 		result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
 		log.Debug("set blocked tables for the DDL event",
 			zap.String("schema", result.SchemaName), zap.String("table", result.TableName),

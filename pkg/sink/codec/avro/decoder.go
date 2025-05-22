@@ -468,14 +468,14 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.Type = byte(actionType)
 
 	if d.idx == 0 {
-		var tableID int64
-		tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
-		if ok {
-			tableID = tableInfo.TableName.TableID
-			log.Info("found tableID for the blocked table in the table accessor",
-				zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
-				zap.Any("actionType", actionType.String()), zap.Int64("tableID", tableID))
-		}
+		var tableID []int64
+		//tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
+		//if ok {
+		//	tableID = tableInfo.TableName.TableID
+		//	log.Info("found tableID for the blocked table in the table accessor",
+		//		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+		//		zap.Any("actionType", actionType.String()), zap.Int64("tableID", tableID))
+		//}
 		result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
 		log.Info("set blocked table", zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
 			zap.Any("actionType", actionType.String()), zap.Any("tableID", tableID))

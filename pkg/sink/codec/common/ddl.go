@@ -134,7 +134,7 @@ func GetDDLActionType(query string) timodel.ActionType {
 	return timodel.ActionNone
 }
 
-func GetInfluenceTables(action timodel.ActionType, tableID int64) *commonEvent.InfluencedTables {
+func GetInfluenceTables(action timodel.ActionType, physicalTableID []int64) *commonEvent.InfluencedTables {
 	switch action {
 	// create schema means the database not exist yet, so should not block tables.
 	case timodel.ActionCreateSchema, timodel.ActionCreateTable:
@@ -157,7 +157,7 @@ func GetInfluenceTables(action timodel.ActionType, tableID int64) *commonEvent.I
 		// only consider normal table now.
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{tableID},
+			TableIDs:      physicalTableID,
 		}
 	case timodel.ActionAddTablePartition:
 		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
