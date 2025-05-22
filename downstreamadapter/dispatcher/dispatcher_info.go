@@ -16,14 +16,24 @@ package dispatcher
 import (
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"go.uber.org/zap"
 )
 
 /*
  dispatcher_info.go is used to store some basic and easy function of the dispatcher
 */
+
+func (d *Dispatcher) GetId() common.DispatcherID {
+	return d.id
+}
+
+func (d *Dispatcher) GetChangefeedID() common.ChangeFeedID {
+	return d.changefeedID
+}
 
 func (d *Dispatcher) GetSchemaID() int64 {
 	return d.schemaID
@@ -52,6 +62,10 @@ func (d *Dispatcher) GetComponentStatus() heartbeatpb.ComponentState {
 	return d.componentStatus.Get()
 }
 
+func (d *Dispatcher) SetComponentStatus(status heartbeatpb.ComponentState) {
+	d.componentStatus.Set(status)
+}
+
 func (d *Dispatcher) GetRemovingStatus() bool {
 	return d.isRemoving.Load()
 }
@@ -68,20 +82,8 @@ func (d *Dispatcher) SetSeq(seq uint64) {
 	d.seq = seq
 }
 
-func (d *Dispatcher) SetComponentStatus(status heartbeatpb.ComponentState) {
-	d.componentStatus.Set(status)
-}
-
 func (d *Dispatcher) GetBDRMode() bool {
 	return d.bdrMode
-}
-
-func (d *Dispatcher) GetId() common.DispatcherID {
-	return d.id
-}
-
-func (d *Dispatcher) GetChangefeedID() common.ChangeFeedID {
-	return d.changefeedID
 }
 
 func (d *Dispatcher) GetTableSpan() *heartbeatpb.TableSpan {
@@ -90,6 +92,18 @@ func (d *Dispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 
 func (d *Dispatcher) GetStartTs() uint64 {
 	return d.startTs
+}
+
+// addToDynamicStream add self to dynamic stream
+func (d *Dispatcher) addToStatusDynamicStream() {
+	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
+	err := dispatcherStatusDS.AddPath(d.id, d)
+	if err != nil {
+		log.Error("add dispatcher to dynamic stream failed",
+			zap.Stringer("changefeedID", d.changefeedID),
+			zap.Stringer("dispatcher", d.id),
+			zap.Error(err))
+	}
 }
 
 func (d *Dispatcher) SetStartTs(startTs uint64) {

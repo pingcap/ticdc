@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -472,10 +473,30 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 	// so we just return the startTs we get.
 	// Besides, we batch the creation for the dispatchers,
 	// mainly because we need to batch the query for startTs when sink is mysql-class to reduce the time cost.
-	newStartTsList, startTsIsSyncpointList, err := e.sink.GetStartTsList(tableIds, startTsList, removeDDLTs)
-	if err != nil {
-		return errors.Trace(err)
+	//
+	// When we enable syncpoint, we also need to know the last ddl commitTs whether is a syncpoint event.
+	// because the commitTs of a syncpoint event can be the same as a ddl event
+	// If there is a ddl event and a syncpoint event at the same time, we ensure the syncpoint event always after the ddl event.
+	// So we need to know whether the commitTs is from a syncpoint event or a ddl event,
+	// to decide whether we need to send generate the syncpoint event of this commitTs to downstream.
+	var newStartTsList []int64
+	startTsIsSyncpointList := make([]bool, len(startTsList))
+	var err error
+	if e.sink.SinkType() == common.MysqlSinkType {
+		newStartTsList, startTsIsSyncpointList, err = e.sink.(*mysql.Sink).GetStartTsList(tableIds, startTsList, removeDDLTs)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		log.Info("calculate real startTs for dispatchers",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Any("receiveStartTs", startTsList),
+			zap.Any("realStartTs", newStartTsList),
+			zap.Bool("removeDDLTs", removeDDLTs),
+		)
+	} else {
+		newStartTsList = startTsList
 	}
+
 	if e.latestWatermark.Get().CheckpointTs == 0 {
 		// If the checkpointTs is 0, means there is no dispatchers before. So we need to init it with the smallest startTs of these dispatchers
 		smallestStartTs := int64(math.MaxInt64)

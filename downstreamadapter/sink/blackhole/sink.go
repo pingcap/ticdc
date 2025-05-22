@@ -68,10 +68,6 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 func (s *sink) AddCheckpointTs(_ uint64) {
 }
 
-func (s *sink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
-	return startTsList, make([]bool, len(startTsList)), nil
-}
-
 func (s *sink) Close(_ bool) {}
 
 func (s *sink) Run(_ context.Context) error {
