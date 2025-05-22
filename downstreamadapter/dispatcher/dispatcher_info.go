@@ -86,8 +86,16 @@ func (d *Dispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return d.tableSpan
 }
 
+func (d *Dispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
+	return d.blockStatusesChan
+}
+
 func (d *Dispatcher) GetStartTs() uint64 {
 	return d.startTs
+}
+
+func (d *Dispatcher) GetType() int {
+	return TypeDispatcherCommon
 }
 
 // addToDynamicStream add self to dynamic stream

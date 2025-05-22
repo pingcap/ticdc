@@ -52,6 +52,7 @@ type DispatcherRequest struct {
 	StartTs    uint64
 	OnlyUse    bool
 	BDRMode    bool
+	Redo       bool
 }
 
 type DispatcherRequestWithTarget struct {
@@ -110,6 +111,8 @@ type EventCollector struct {
 	// All the events from event service will be sent to ds to handle.
 	// ds will dispatch the events to different dispatchers according to the dispatcherID.
 	ds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
+	// redoDs is the dynamicStream for redo dispatcher events.
+	redoDs dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
 
 	coordinatorInfo struct {
 		sync.RWMutex
@@ -138,6 +141,7 @@ func New(serverId node.ID) *EventCollector {
 		metricReceiveEventLagDuration:                metrics.EventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
 	}
 	eventCollector.ds = NewEventDynamicStream(&eventCollector)
+	eventCollector.redoDs = NewEventDynamicStream(&eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.RecvEventsMessage)
 
 	return &eventCollector
@@ -187,6 +191,7 @@ func (c *EventCollector) Close() {
 	c.cancel()
 	c.wg.Wait()
 	c.ds.Close()
+	c.redoDs.Close()
 	c.changefeedIDMap.Range(func(key, value any) bool {
 		cfID := value.(common.ChangeFeedID)
 		// Remove metrics for the changefeed.
@@ -217,14 +222,21 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	}
 	stat.reset()
 	stat.sentCommitTs.Store(target.GetStartTs())
-	c.dispatcherMap.Store(target.GetId(), stat)
-	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
-	metrics.EventCollectorRegisteredDispatcherCount.Inc()
-
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2, "eventCollector")
-	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
-	if err != nil {
-		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
+	switch target.GetType() {
+	case dispatcher.TypeDispatcherCommon:
+		c.dispatcherMap.Store(target.GetId(), stat)
+		c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
+		metrics.EventCollectorRegisteredDispatcherCount.Inc()
+		err := c.ds.AddPath(target.GetId(), stat, areaSetting)
+		if err != nil {
+			log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
+		}
+	case dispatcher.TypeDispatcherRedo:
+		err := c.redoDs.AddPath(target.GetId(), stat, areaSetting)
+		if err != nil {
+			log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
+		}
 	}
 
 	// TODO: handle the return error(now even it return error, it will be retried later, we can just ignore it now)
@@ -233,6 +245,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 		StartTs:    target.GetStartTs(),
 		ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
 		BDRMode:    target.GetBDRMode(),
+		Redo:       target.GetType() == dispatcher.TypeDispatcherRedo,
 	})
 
 	c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
@@ -242,7 +255,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	}
 }
 
-func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
+func (c *EventCollector) RemoveDispatcher(target dispatcher.EventDispatcher) {
 	log.Info("remove dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("remove dispatcher done", zap.Stringer("dispatcher", target.GetId()))
@@ -254,14 +267,25 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 	stat := value.(*dispatcherStat)
 	stat.unregisterDispatcher(c)
 	c.dispatcherMap.Delete(target.GetId())
-
-	err := c.ds.RemovePath(target.GetId())
-	if err != nil {
-		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
+	switch target.GetType() {
+	case dispatcher.TypeDispatcherCommon:
+		err := c.ds.RemovePath(target.GetId())
+		if err != nil {
+			log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
+		}
+	case dispatcher.TypeDispatcherRedo:
+		err := c.redoDs.RemovePath(target.GetId())
+		if err != nil {
+			log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
+		}
 	}
 }
 
-func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID) {
+func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID, tp int) {
+	if tp == dispatcher.TypeDispatcherRedo {
+		c.redoDs.Wake(dispatcherID)
+		return
+	}
 	c.ds.Wake(dispatcherID)
 }
 
@@ -404,6 +428,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 			StartTs:   req.StartTs,
 			OnlyReuse: req.OnlyUse,
 			BdrMode:   req.BDRMode,
+			Redo:      req.Redo,
 		},
 	}
 
@@ -519,6 +544,11 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 		case <-ctx.Done():
 			return
 		case targetMessage := <-inCh:
+			ds := c.ds
+			dispatcherMap := &c.dispatcherMap
+			if targetMessage.Redo {
+				ds = c.redoDs
+			}
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
 				case event.Event:
@@ -527,11 +557,11 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						events := e.(*event.BatchResolvedEvent).Events
 						from := &targetMessage.From
 						for _, resolvedEvent := range events {
-							c.ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
+							ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
 						}
 						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(e.Len()))
 					case event.TypeBatchDMLEvent:
-						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
+						stat, ok := dispatcherMap.Load(e.GetDispatcherID())
 						if !ok {
 							continue
 						}
@@ -543,28 +573,28 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						events.AssembleRows(tableInfo)
 						from := &targetMessage.From
 						for _, dml := range events.DMLEvents {
-							c.ds.Push(dml.DispatcherID, dispatcher.NewDispatcherEvent(from, dml))
+							ds.Push(dml.DispatcherID, dispatcher.NewDispatcherEvent(from, dml))
 						}
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 					case event.TypeDDLEvent:
-						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
+						stat, ok := dispatcherMap.Load(e.GetDispatcherID())
 						if !ok {
 							continue
 						}
 						stat.(*dispatcherStat).setTableInfo(e.(*event.DDLEvent).TableInfo)
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+						ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					case event.TypeHandshakeEvent:
-						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
+						stat, ok := dispatcherMap.Load(e.GetDispatcherID())
 						if !ok {
 							continue
 						}
 						stat.(*dispatcherStat).setTableInfo(e.(*event.HandshakeEvent).TableInfo)
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+						ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					default:
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+						ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					}
 				default:
 					log.Panic("invalid message type", zap.Any("msg", msg))
