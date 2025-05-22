@@ -365,10 +365,6 @@ func (d *Dispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 	event.PostFlush()
 }
 
-func (d *Dispatcher) AddCheckpointTs(checkpointTs uint64) {
-	d.sink.AddCheckpointTs(checkpointTs)
-}
-
 func (d *Dispatcher) isFirstEvent(event commonEvent.Event) bool {
 	if d.componentStatus.Get() == heartbeatpb.ComponentState_Initializing {
 		switch event.GetType() {
