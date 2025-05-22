@@ -54,7 +54,6 @@ type Controller struct {
 	replicationDB       *replica.ReplicationDB
 	messageCenter       messaging.MessageCenter
 	nodeManager         *watcher.NodeManager
-	pdClock             pdutil.Clock
 
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
@@ -73,7 +72,6 @@ type Controller struct {
 func NewController(changefeedID common.ChangeFeedID,
 	checkpointTs uint64,
 	pdAPIClient pdutil.PDAPIClient,
-	pdClock pdutil.Clock,
 	regionCache split.RegionCache,
 	taskPool threadpool.ThreadPool,
 	cfConfig *config.ReplicaConfig,
@@ -114,7 +112,6 @@ func NewController(changefeedID common.ChangeFeedID,
 		nodeManager:            nodeManager,
 		taskPool:               taskPool,
 		cfConfig:               cfConfig,
-		pdClock:                pdClock,
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 	}
@@ -330,7 +327,6 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 	return replica.NewWorkingSpanReplication(
 		c.changefeedID,
 		common.NewDispatcherIDFromPB(spanInfo.ID),
-		c.pdClock,
 		spanInfo.SchemaID,
 		spanInfo.Span,
 		status,
@@ -519,8 +515,7 @@ func (c *Controller) addWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 func (c *Controller) addNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID,
-			dispatcherID, c.pdClock, schemaID, span, startTs)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs)
 		c.replicationDB.AddAbsentReplicaSet(replicaSet)
 	}
 }

@@ -131,7 +131,6 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 		clientConfig,
 		pdClient,
 		regionCache,
-		pdClock,
 		lockResolver,
 		&security.Credential{},
 	)

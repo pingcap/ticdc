@@ -31,12 +31,12 @@ func TestHotSpanChecker(t *testing.T) {
 	t.Parallel()
 
 	db := newDBWithCheckerForTest(t)
-	absent := NewSpanReplication(db.changefeedID, common.NewDispatcherID(), db.ddlSpan.pdClock, 1, getTableSpanByID(4), 1)
+	absent := NewSpanReplication(db.changefeedID, common.NewDispatcherID(), 1, getTableSpanByID(4), 1)
 	db.AddAbsentReplicaSet(absent)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
 	replicaSpan := NewWorkingSpanReplication(db.changefeedID, replicaSpanID,
-		db.ddlSpan.pdClock, 1,
+		1,
 		getTableSpanByID(3), &heartbeatpb.TableSpanStatus{
 			ID:              replicaSpanID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,

@@ -226,7 +226,6 @@ func NewSubscriptionClient(
 	config *SubscriptionClientConfig,
 	pd pd.Client,
 	regionCache *tikv.RegionCache,
-	pdClock pdutil.Clock,
 	lockResolver txnutil.LockResolver,
 	credential *security.Credential,
 ) SubscriptionClient {
@@ -235,7 +234,7 @@ func NewSubscriptionClient(
 
 		pd:           pd,
 		regionCache:  regionCache,
-		pdClock:      pdClock,
+		pdClock:      appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		lockResolver: lockResolver,
 
 		credential: credential,
