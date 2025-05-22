@@ -147,6 +147,7 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	if b.Rows != nil {
 		return
 	}
+	log.Info("assemble rows")
 	if tableInfo == nil {
 		log.Panic("DMLEvent: TableInfo is nil")
 		return
