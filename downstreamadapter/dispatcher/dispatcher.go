@@ -391,7 +391,7 @@ func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		if d.IsTableTriggerEventDispatcher() {
 			d.tableSchemaStore.Clear()
 		}
-		log.Info("dispatcher component status changed to stopping",
+		log.Info("dispatcher component has stopped and is ready for cleanup",
 			zap.Stringer("changefeedID", d.changefeedID),
 			zap.Stringer("dispatcher", d.id),
 			zap.String("table", common.FormatTableSpan(d.tableSpan)),
