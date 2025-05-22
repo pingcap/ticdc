@@ -626,7 +626,7 @@ func AdjustOptions(
 				zap.String("topic", topic), zap.Any("detail", info))
 		}
 
-		if err := options.SetPartitionNum(info.NumPartitions); err != nil {
+		if err = options.SetPartitionNum(info.NumPartitions); err != nil {
 			return errors.Trace(err)
 		}
 
