@@ -39,6 +39,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
@@ -234,6 +235,8 @@ func TestCoordinatorScheduling(t *testing.T) {
 	etcdClient := newMockEtcdClient(string(info.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	nodeManager.GetAliveNodes()[info.ID] = info
 	mc := messaging.NewMessageCenter(ctx,
 		info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
