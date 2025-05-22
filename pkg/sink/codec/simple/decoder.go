@@ -495,7 +495,7 @@ func buidDDLEvent(msg *message) *commonEvent.DDLEvent {
 		FinishedTs:         msg.CommitTs,
 		Query:              msg.SQL,
 		TableInfo:          tableInfo,
-		MultipleTableInfos: []*commonType.TableInfo{preTableInfo, tableInfo},
+		MultipleTableInfos: []*commonType.TableInfo{tableInfo, preTableInfo},
 	}
 }
 

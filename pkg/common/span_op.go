@@ -57,7 +57,7 @@ func TableIDToComparableRange(tableID int64) (start, end heartbeatpb.TableSpan) 
 
 func IsCompleteSpan(tableSpan *heartbeatpb.TableSpan) bool {
 	startKey, endKey := GetTableRange(tableSpan.TableID)
-	if StartCompare(startKey, tableSpan.StartKey) == 0 && EndCompare(endKey, tableSpan.EndKey) == 0 {
+	if StartCompare(ToComparableKey(startKey), tableSpan.StartKey) == 0 && EndCompare(ToComparableKey(endKey), tableSpan.EndKey) == 0 {
 		return true
 	}
 	return false

@@ -939,7 +939,9 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 			if coordinatorID == "" {
 				continue
 			}
-			message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state)
+			// When the log coordinator resides on the same node, it will receive the same object reference.
+			// To prevent data races, we need to create a clone of the state.
+			message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state.Copy())
 			// just ignore messagees fail to send
 			if err := e.messageCenter.SendEvent(message); err != nil {
 				log.Warn("send broadcast message to coordinator failed", zap.Error(err))

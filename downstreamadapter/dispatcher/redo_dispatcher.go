@@ -380,7 +380,7 @@ func (rd *RedoDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 			if len(ddlEvent.GetBlockedTables().TableIDs) > 1 {
 				return true
 			}
-			if !isCompleteSpan(rd.tableSpan) {
+			if !common.IsCompleteSpan(rd.tableSpan) {
 				// if the table is split, even the blockTable only itself, it should block
 				return true
 			}
@@ -670,6 +670,10 @@ func (rd *RedoDispatcher) IsTableTriggerEventDispatcher() bool {
 
 func (rd *RedoDispatcher) SetSeq(seq uint64) {
 	rd.seq = seq
+}
+
+func (rd *RedoDispatcher) GetBDRMode() bool {
+	return rd.bdrMode
 }
 
 func (rd *RedoDispatcher) isFirstEvent(event commonEvent.Event) bool {

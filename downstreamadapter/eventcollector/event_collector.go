@@ -211,7 +211,7 @@ func (c *EventCollector) Close() {
 	log.Info("event collector is closed")
 }
 
-func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64, bdrMode bool) {
+func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
@@ -244,7 +244,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 		Dispatcher: target,
 		StartTs:    target.GetStartTs(),
 		ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
-		BDRMode:    bdrMode,
+		BDRMode:    target.GetBDRMode(),
 		Redo:       target.GetType() == dispatcher.TypeDispatcherRedo,
 	})
 
