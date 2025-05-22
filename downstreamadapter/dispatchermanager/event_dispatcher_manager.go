@@ -615,7 +615,7 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 				e.syncPointConfig,
 				startTsIsSyncpointList[idx],
 				e.filterConfig,
-				pdTsList[idx],
+				currentPdTs,
 				e.errCh,
 				e.config.BDRMode)
 		}
