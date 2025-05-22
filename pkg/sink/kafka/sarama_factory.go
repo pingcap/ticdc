@@ -54,7 +54,7 @@ func NewSaramaFactory(
 		return nil, errors.Trace(err)
 	}
 	defer func() {
-		_ = admin.Close
+		admin.Close()
 	}()
 
 	if err = adjustOptions(ctx, admin, o, o.Topic); err != nil {

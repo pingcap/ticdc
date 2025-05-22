@@ -200,7 +200,7 @@ func getKafkaVersion(config *sarama.Config, o *Options) (sarama.KafkaVersion, er
 		})
 	}
 	for i := range addrs {
-		version, err := getKafkaVersionFromBroker(config, o.RequestVersion, addrs[i])
+		version, err = getKafkaVersionFromBroker(config, o.RequestVersion, addrs[i])
 		if err == nil {
 			return version, err
 		}
@@ -213,7 +213,7 @@ func getKafkaVersionFromBroker(config *sarama.Config, requestVersion int16, addr
 	broker := sarama.NewBroker(addr)
 	err := broker.Open(config)
 	defer func() {
-		broker.Close()
+		_ = broker.Close()
 	}()
 	if err != nil {
 		log.Warn("Kafka fail to open broker", zap.String("addr", addr), zap.Error(err))
