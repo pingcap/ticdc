@@ -186,7 +186,6 @@ func New(
 	ctx context.Context,
 	root string,
 	subClient logpuller.SubscriptionClient,
-	pdClock pdutil.Clock,
 ) EventStore {
 	dbPath := fmt.Sprintf("%s/%s", root, dataDir)
 
@@ -197,7 +196,7 @@ func New(
 	}
 
 	store := &eventStore{
-		pdClock:   pdClock,
+		pdClock:   appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		subClient: subClient,
 
 		dbs:            createPebbleDBs(dbPath, dbCount),

@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
@@ -80,8 +81,10 @@ func (s *mockSubscriptionClient) Unsubscribe(subID logpuller.SubscriptionID) {
 
 func TestEventStoreRegisterDispatcher(t *testing.T) {
 	ctx := context.Background()
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	subClient := NewMockSubscriptionClient()
-	eventStore := New(ctx, fmt.Sprintf("/tmp/%s", t.Name()), subClient, pdutil.NewClock4Test())
+	eventStore := New(ctx, fmt.Sprintf("/tmp/%s", t.Name()), subClient)
 
 	// register a dispatcher
 	{

@@ -18,14 +18,13 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
 
 func TestUpdateStatus(t *testing.T) {
 	t.Parallel()
 
-	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), nil, 1, getTableSpanByID(4), 10)
+	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), 1, getTableSpanByID(4), 10)
 	replicaSet.UpdateStatus(&heartbeatpb.TableSpanStatus{CheckpointTs: 9})
 	require.Equal(t, uint64(10), replicaSet.status.Load().CheckpointTs)
 	replicaSet.UpdateStatus(&heartbeatpb.TableSpanStatus{CheckpointTs: 11})
@@ -35,7 +34,7 @@ func TestUpdateStatus(t *testing.T) {
 func TestNewRemoveDispatcherMessage(t *testing.T) {
 	t.Parallel()
 
-	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), nil, 1, getTableSpanByID(4), 10)
+	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), 1, getTableSpanByID(4), 10)
 	msg := replicaSet.NewRemoveDispatcherMessage("node1")
 	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	require.Equal(t, heartbeatpb.ScheduleAction_Remove, req.ScheduleAction)
@@ -46,10 +45,7 @@ func TestNewRemoveDispatcherMessage(t *testing.T) {
 func TestSpanReplication_NewAddDispatcherMessage(t *testing.T) {
 	t.Parallel()
 
-	pdClock := pdutil.NewClock4Test()
-	innerClock := pdClock.(*pdutil.Clock4Test)
-	innerClock.SetTS(10)
-	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), pdClock, 1, getTableSpanByID(4), 10)
+	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test"), common.NewDispatcherID(), 1, getTableSpanByID(4), 10)
 
 	msg, err := replicaSet.NewAddDispatcherMessage("node1")
 	require.Nil(t, err)
