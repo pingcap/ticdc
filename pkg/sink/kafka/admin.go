@@ -126,6 +126,9 @@ func (a *saramaAdminClient) GetTopicsMeta(
 
 	for _, meta := range metaList {
 		if meta.Err != sarama.ErrNoError {
+			if meta.Err == sarama.ErrUnknownTopicOrPartition {
+				continue
+			}
 			if !ignoreTopicError {
 				return nil, meta.Err
 			}

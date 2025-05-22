@@ -168,9 +168,8 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 
 	// verify sinkURI
-	tempChangefeedID := common.NewChangeFeedIDWithName("sink-uri-verify-changefeed-id")
 	cfConfig := info.ToChangefeedConfig()
-	err = sink.Verify(ctx, cfConfig, tempChangefeedID)
+	err = sink.Verify(ctx, cfConfig, changefeedID)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
 		return
@@ -181,7 +180,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		if !needRemoveGCSafePoint {
 			return
 		}
-		err := gc.UndoEnsureChangefeedStartTsSafety(
+		err = gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			pdClient,
 			createGcServiceID,
@@ -618,14 +617,13 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	}
 
 	// verify sink
-	tempChangefeedID := common.NewChangeFeedIDWithName("sink-uri-verify-changefeed-id")
-	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), tempChangefeedID)
+	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), oldCfInfo.ChangefeedID)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
 		return
 	}
 
-	if err := coordinator.UpdateChangefeed(ctx, oldCfInfo); err != nil {
+	if err = coordinator.UpdateChangefeed(ctx, oldCfInfo); err != nil {
 		_ = c.Error(err)
 		return
 	}
