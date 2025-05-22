@@ -207,13 +207,32 @@ func (c *EventCollector) Close() {
 }
 
 func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64, bdrMode bool) {
+	c.PrepareAddDispatcher(target, memoryQuota, bdrMode, nil)
+
+	if target.GetTableSpan().TableID != 0 {
+		c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
+			ID:      target.GetId().ToPB(),
+			Span:    target.GetTableSpan(),
+			StartTs: target.GetStartTs(),
+		}
+	}
+}
+
+// PrepareAddDispatcher is used to prepare the dispatcher to be added to the event collector.
+// It will send a register request to local event service and call `readyCallback` when local event service is ready.
+func (c *EventCollector) PrepareAddDispatcher(
+	target dispatcher.EventDispatcher,
+	memoryQuota uint64,
+	bdrMode bool,
+	readyCallback func()) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
 	}()
 	stat := &dispatcherStat{
-		dispatcherID: target.GetId(),
-		target:       target,
+		dispatcherID:  target.GetId(),
+		target:        target,
+		readyCallback: readyCallback,
 	}
 	stat.reset()
 	stat.sentCommitTs.Store(target.GetStartTs())
@@ -227,21 +246,29 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
 
-	// TODO: handle the return error(now even it return error, it will be retried later, we can just ignore it now)
-	c.mustSendDispatcherRequest(c.serverId, eventServiceTopic, DispatcherRequest{
+	err = c.mustSendDispatcherRequest(c.serverId, eventServiceTopic, DispatcherRequest{
 		Dispatcher: target,
 		StartTs:    target.GetStartTs(),
 		ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
 		BDRMode:    bdrMode,
 	})
-
-	if target.GetTableSpan().TableID != 0 {
-		c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
-			ID:      target.GetId().ToPB(),
-			Span:    target.GetTableSpan(),
-			StartTs: target.GetStartTs(),
-		}
+	if err != nil {
+		// TODO: handle the return error(now even it return error, it will be retried later, we can just ignore it now)
+		log.Warn("add dispatcher to dynamic stream failed, try again later", zap.Error(err))
 	}
+}
+
+// CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
+func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, startTs uint64) {
+	c.addDispatcherRequestToSendingQueue(
+		c.serverId,
+		eventServiceTopic,
+		DispatcherRequest{
+			Dispatcher: target,
+			StartTs:    startTs,
+			ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
+		},
+	)
 }
 
 func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {

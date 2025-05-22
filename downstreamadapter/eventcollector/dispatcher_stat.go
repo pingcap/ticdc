@@ -31,6 +31,8 @@ type dispatcherStat struct {
 	dispatcherID common.DispatcherID
 	target       dispatcher.EventDispatcher
 
+	readyCallback func()
+
 	eventServiceInfo struct {
 		sync.RWMutex
 		// the server this dispatcher currently connects to(except local event service)
@@ -158,6 +160,13 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 	}
 	if d.eventServiceInfo.serverID == eventCollector.serverId {
 		// already received ready signal from local event service
+		return
+	}
+	// if a dispatcher's readyCallback, it will just register to local event service.
+	if d.readyCallback != nil {
+		d.eventServiceInfo.serverID = eventCollector.serverId
+		d.eventServiceInfo.readyEventReceived = true
+		d.readyCallback()
 		return
 	}
 	eventServiceID := *event.From
