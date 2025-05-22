@@ -81,6 +81,10 @@ func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.Dispatc
 	return false
 }
 
+func (m *mockEventDispatcher) GetBDRMode() bool {
+	return false
+}
+
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
 	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
 	targetMessage.From = id
@@ -139,7 +143,7 @@ func TestProcessMessage(t *testing.T) {
 			done <- struct{}{}
 		}
 	}
-	c.AddDispatcher(d, config.GetDefaultReplicaConfig().MemoryQuota, *config.GetDefaultReplicaConfig().BDRMode)
+	c.AddDispatcher(d, config.GetDefaultReplicaConfig().MemoryQuota)
 
 	ch <- newMessage(node.ID, &readyEvent)
 	ch <- newMessage(node.ID, handshakeEvent)
