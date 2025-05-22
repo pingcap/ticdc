@@ -14,7 +14,6 @@
 package dispatcher
 
 import (
-	"context"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -22,13 +21,12 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/ticdc/redo"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
@@ -36,7 +34,6 @@ import (
 var _ EventDispatcher = (*RedoDispatcher)(nil)
 
 type RedoDispatcher struct {
-	ctx          context.Context
 	changefeedID common.ChangeFeedID
 	id           common.DispatcherID
 	schemaID     int64
@@ -57,7 +54,7 @@ type RedoDispatcher struct {
 	filterConfig *eventpb.FilterConfig
 
 	// shared by the event dispatcher manager
-	redoManager redo.RedoManager
+	redoSink *redo.Sink
 
 	// statusesChan is used to store the status of dispatchers when status changed
 	// and push to heartbeatRequestQueue
@@ -65,12 +62,6 @@ type RedoDispatcher struct {
 	// blockStatusesChan use to collector block status of ddl/sync point event to Maintainer
 	// shared by the event dispatcher manager
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus
-
-	// schemaIDToDispatchers is shared in the eventDispatcherManager,
-	// it store all the infos about schemaID->Dispatchers
-	// Dispatchers may change the schemaID when meets some special events, such as rename ddl
-	// we use schemaIDToDispatchers to calculate the dispatchers that need to receive the dispatcher status
-	schemaIDToDispatchers *SchemaIDToDispatchers
 
 	// if syncPointInfo is not nil, means enable Sync Point feature,
 	syncPointConfig *syncpoint.SyncPointConfig
@@ -89,11 +80,6 @@ type RedoDispatcher struct {
 	// When we receive the ack from maintainer, we will cancel the resend task.
 	resendTaskMap *ResendTaskMap
 
-	// tableSchemaStore only exist when the dispatcher is a table trigger event dispatcher
-	// tableSchemaStore store the schema infos for all the table in the event dispatcher manager
-	// it's used for sink to calculate the tableNames or TableIds
-	tableSchemaStore *util.TableSchemaStore
-
 	isRemoving atomic.Bool
 
 	// errCh is used to collect the errors that need to report to maintainer
@@ -105,21 +91,17 @@ type RedoDispatcher struct {
 	seq     uint64
 
 	BootstrapState bootstrapState
-
-	MetaManager redo.MetaManager
 }
 
 func NewRedoDispatcher(
-	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	id common.DispatcherID,
 	tableSpan *heartbeatpb.TableSpan,
-	redoManager redo.RedoManager,
+	redoSink *redo.Sink,
 	startTs uint64,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	schemaID int64,
-	schemaIDToDispatchers *SchemaIDToDispatchers,
 	syncPointConfig *syncpoint.SyncPointConfig,
 	startTsIsSyncpoint bool,
 	filterConfig *eventpb.FilterConfig,
@@ -128,33 +110,29 @@ func NewRedoDispatcher(
 	bdrMode bool,
 ) *RedoDispatcher {
 	dispatcher := &RedoDispatcher{
-		ctx:                   ctx,
-		changefeedID:          changefeedID,
-		id:                    id,
-		tableSpan:             tableSpan,
-		redoManager:           redoManager,
-		startTs:               startTs,
-		startTsIsSyncpoint:    startTsIsSyncpoint,
-		statusesChan:          statusesChan,
-		blockStatusesChan:     blockStatusesChan,
-		syncPointConfig:       syncPointConfig,
-		componentStatus:       newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
-		resolvedTs:            startTs,
-		filterConfig:          filterConfig,
-		isRemoving:            atomic.Bool{},
-		blockEventStatus:      BlockEventStatus{blockPendingEvent: nil},
-		tableProgress:         NewTableProgress(),
-		schemaID:              schemaID,
-		schemaIDToDispatchers: schemaIDToDispatchers,
-		resendTaskMap:         newResendTaskMap(),
-		creationPDTs:          currentPdTs,
-		errCh:                 errCh,
-		bdrMode:               bdrMode,
-		BootstrapState:        BootstrapFinished,
+		changefeedID:       changefeedID,
+		id:                 id,
+		tableSpan:          tableSpan,
+		redoSink:           redoSink,
+		startTs:            startTs,
+		startTsIsSyncpoint: startTsIsSyncpoint,
+		statusesChan:       statusesChan,
+		blockStatusesChan:  blockStatusesChan,
+		syncPointConfig:    syncPointConfig,
+		componentStatus:    newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
+		filterConfig:       filterConfig,
+		isRemoving:         atomic.Bool{},
+		blockEventStatus:   BlockEventStatus{blockPendingEvent: nil},
+		tableProgress:      NewTableProgress(),
+		schemaID:           schemaID,
+		resendTaskMap:      newResendTaskMap(),
+		creationPDTs:       currentPdTs,
+		errCh:              errCh,
+		bdrMode:            bdrMode,
+		BootstrapState:     BootstrapFinished,
 	}
 
-	dispatcher.addToStatusDynamicStream()
-
+	// dispatcher.addToStatusDynamicStream()
 	return dispatcher
 }
 
@@ -250,12 +228,27 @@ func (rd *RedoDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 // by setting them with different event types in DispatcherEventsHandler.GetType
 // When we handle events, we don't have any previous events still in sink.
 func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
+	// 1. metaManager
+	// if m.redoMetaManager.Enabled() {
+	// 	flushed := m.redoMetaManager.GetFlushedMeta()
+	// 	// Use the same example as above, let say there are some events are replicated by cdc:
+	// 	// [dml-1(ts=5), dml-2(ts=8), dml-3(ts=11), ddl-1(ts=11), ddl-2(ts=12)].
+	// 	// Suppose redoCheckpointTs=10 and ddl-1(ts=11) is executed, the redo apply operation
+	// 	// would fail when applying the old data dml-3(ts=11) to a new schmea. Therefore, We
+	// 	// need to wait `redoCheckpointTs == ddlCommitTs(ts=11)` before executing ddl-1.
+	// 	redoCheckpointReachBarrier = flushed.CheckpointTs == nextDDL.CommitTs
+
+	// 	// If redo is enabled, m.ddlResolvedTs == redoDDLManager.GetResolvedTs(), so we need to
+	// 	// wait nextDDL to be written to redo log before executing this DDL.
+	// 	redoDDLResolvedTsExceedBarrier = m.ddlResolvedTs >= nextDDL.CommitTs
+	// }
+
 	// Only return false when all events are resolvedTs Event.
 	block = false
 	dmlWakeOnce := &sync.Once{}
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
-		log.Debug("dispatcher receive all event",
+		log.Debug("redo dispatcher receive all event",
 			zap.Stringer("dispatcher", rd.id),
 			zap.Any("event", dispatcherEvent.Event))
 		failpoint.Inject("HandleEventsSlowly", func() {
@@ -274,12 +267,6 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				zap.Int("eventType", event.GetType()),
 				zap.Stringer("dispatcher", rd.id))
 			continue
-		}
-
-		// only when we receive the first event, we can regard the dispatcher begin syncing data
-		// then turning into working status.
-		if rd.isFirstEvent(event) {
-			rd.updateComponentStatus()
 		}
 
 		switch event.GetType() {
@@ -325,20 +312,38 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				}
 				return
 			}
-			log.Info("dispatcher receive ddl event",
+			log.Info("redo dispatcher receive ddl event",
 				zap.Stringer("dispatcher", rd.id),
 				zap.String("query", ddl.Query),
 				zap.Int64("table", ddl.TableID),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
 			ddl.AddPostFlushFunc(func() {
-				if rd.tableSchemaStore != nil {
-					rd.tableSchemaStore.AddEvent(ddl)
-				}
 				wakeCallback()
 			})
-			rd.dealWithBlockEvent(ddl)
-		case commonEvent.TypeSyncPointEvent, commonEvent.TypeHandshakeEvent:
+			// rd.dealWithBlockEvent(ddl)
+			// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
+			// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
+			if rd.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
+				rd.PassBlockEventToSink(ddl)
+			} else {
+				err := rd.AddBlockEventToSink(ddl)
+				if err != nil {
+					select {
+					case rd.errCh <- err:
+					default:
+						log.Error("error channel is full, discard error",
+							zap.Stringer("changefeedID", rd.changefeedID),
+							zap.Stringer("dispatcherID", rd.id),
+							zap.Error(err))
+					}
+				}
+			}
+		case commonEvent.TypeSyncPointEvent:
+		case commonEvent.TypeHandshakeEvent:
+			log.Warn("Receive handshake event unexpectedly",
+				zap.Stringer("dispatcher", rd.id),
+				zap.Any("event", event))
 		default:
 			log.Panic("Unexpected event type",
 				zap.Int("eventType", event.GetType()),
@@ -351,12 +356,12 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 
 func (rd *RedoDispatcher) AddDMLEventToSink(event *commonEvent.DMLEvent) {
 	rd.tableProgress.Add(event)
-	rd.redoManager.EmitDMLEvents(rd.ctx, *rd.tableSpan, event)
+	rd.redoSink.AddDMLEvent(event)
 }
 
 func (rd *RedoDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
 	rd.tableProgress.Add(event)
-	return rd.redoManager.EmitDDLEvent(rd.ctx, event.(*commonEvent.DDLEvent))
+	return rd.redoSink.WriteBlockEvent(event)
 }
 
 func (rd *RedoDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
@@ -460,6 +465,7 @@ func (rd *RedoDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 		}
 	} else {
 		rd.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
+
 		message := &heartbeatpb.TableSpanBlockStatus{
 			ID: rd.id.ToPB(),
 			State: &heartbeatpb.State{
@@ -479,34 +485,6 @@ func (rd *RedoDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 		}
 		rd.resendTaskMap.Set(identifier, newResendTask(message, rd, nil))
 		rd.blockStatusesChan <- message
-	}
-
-	// dealing with events which update schema ids
-	// Only rename table and rename tables may update schema ids(rename db1.table1 to db2.table2)
-	// Here we directly update schema id of dispatcher when we begin to handle the ddl event,
-	// but not waiting maintainer response for ready to write/pass the ddl event.
-	// Because the schemaID of each dispatcher is only use to dealing with the db-level ddl event(like drop db) or drop table.
-	// Both the rename table/rename tables, drop table and db-level ddl event will be send to the table trigger event dispatcher in order.
-	// So there won't be a related db-level ddl event is in dealing when we get update schema id events.
-	// Thus, whether to update schema id before or after current ddl event is not important.
-	// To make it easier, we choose to directly update schema id here.
-	if event.GetUpdatedSchemas() != nil && rd.tableSpan != common.DDLSpan {
-		for _, schemaIDChange := range event.GetUpdatedSchemas() {
-			if schemaIDChange.TableID == rd.tableSpan.TableID {
-				if schemaIDChange.OldSchemaID != rd.schemaID {
-					log.Error("Wrong Schema ID",
-						zap.Stringer("dispatcherID", rd.id),
-						zap.Int64("exceptSchemaID", schemaIDChange.OldSchemaID),
-						zap.Int64("actualSchemaID", rd.schemaID),
-						zap.String("tableSpan", common.FormatTableSpan(rd.tableSpan)))
-					return
-				} else {
-					rd.schemaID = schemaIDChange.NewSchemaID
-					rd.schemaIDToDispatchers.Update(schemaIDChange.OldSchemaID, schemaIDChange.NewSchemaID)
-					return
-				}
-			}
-		}
 	}
 }
 
@@ -531,7 +509,8 @@ func (rd *RedoDispatcher) GetCheckpointTs() uint64 {
 	}
 
 	if isEmpty {
-		return max(checkpointTs, rd.GetResolvedTs())
+		// FIXME: return correct checkpointTs
+		return max(checkpointTs+1, rd.GetResolvedTs())
 	}
 	return checkpointTs
 }
@@ -571,30 +550,6 @@ func (rd *RedoDispatcher) Remove() {
 		zap.Uint64("resolvedTs", rd.GetResolvedTs()),
 	)
 	rd.isRemoving.Store(true)
-
-	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
-	err := dispatcherStatusDS.RemovePath(rd.id)
-	if err != nil {
-		log.Error("remove redo dispatcher from dynamic stream failed",
-			zap.Stringer("changefeedID", rd.changefeedID),
-			zap.Stringer("dispatcher", rd.id),
-			zap.String("table", common.FormatTableSpan(rd.tableSpan)),
-			zap.Uint64("checkpointTs", rd.GetCheckpointTs()),
-			zap.Uint64("resolvedTs", rd.GetResolvedTs()),
-			zap.Error(err))
-	}
-}
-
-// addToDynamicStream add self to dynamic stream
-func (rd *RedoDispatcher) addToStatusDynamicStream() {
-	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
-	err := dispatcherStatusDS.AddPath(rd.id, rd)
-	if err != nil {
-		log.Error("add dispatcher to dynamic stream failed",
-			zap.Stringer("changefeedID", rd.changefeedID),
-			zap.Stringer("dispatcher", rd.id),
-			zap.Error(err))
-	}
 }
 
 func (rd *RedoDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
@@ -605,9 +560,6 @@ func (rd *RedoDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		w.ResolvedTs = rd.GetResolvedTs()
 
 		rd.componentStatus.Set(heartbeatpb.ComponentState_Stopped)
-		if rd.IsTableTriggerEventDispatcher() {
-			rd.tableSchemaStore.Clear()
-		}
 		return w, true
 	}
 	return w, false
@@ -648,20 +600,8 @@ func (rd *RedoDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 	}
 }
 
-func (rd *RedoDispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
-	h.Watermark.CheckpointTs = rd.GetCheckpointTs()
-	h.Watermark.ResolvedTs = rd.GetResolvedTs()
-	h.Id = rd.GetId()
-	h.ComponentStatus = rd.GetComponentStatus()
-	h.IsRemoving = rd.GetRemovingStatus()
-}
-
 func (rd *RedoDispatcher) GetEventSizePerSecond() float32 {
 	return rd.tableProgress.GetEventSizePerSecond()
-}
-
-func (rd *RedoDispatcher) HandleCheckpointTs(checkpointTs uint64) {
-	rd.redoManager.UpdateResolvedTs(rd.ctx, *rd.tableSpan, checkpointTs)
 }
 
 func (rd *RedoDispatcher) IsTableTriggerEventDispatcher() bool {
@@ -674,31 +614,6 @@ func (rd *RedoDispatcher) SetSeq(seq uint64) {
 
 func (rd *RedoDispatcher) GetBDRMode() bool {
 	return rd.bdrMode
-}
-
-func (rd *RedoDispatcher) isFirstEvent(event commonEvent.Event) bool {
-	if rd.componentStatus.Get() == heartbeatpb.ComponentState_Initializing {
-		switch event.GetType() {
-		case commonEvent.TypeResolvedEvent, commonEvent.TypeDMLEvent, commonEvent.TypeDDLEvent, commonEvent.TypeSyncPointEvent:
-			if event.GetCommitTs() > rd.startTs {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (rd *RedoDispatcher) updateComponentStatus() {
-	rd.componentStatus.Set(heartbeatpb.ComponentState_Working)
-	rd.statusesChan <- TableSpanStatusWithSeq{
-		TableSpanStatus: &heartbeatpb.TableSpanStatus{
-			ID:              rd.id.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
-		},
-		CheckpointTs: rd.GetCheckpointTs(),
-		ResolvedTs:   rd.GetResolvedTs(),
-		Seq:          rd.seq,
-	}
 }
 
 func (rd *RedoDispatcher) EnableSyncPoint() bool {

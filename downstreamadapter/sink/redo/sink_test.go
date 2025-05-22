@@ -36,18 +36,16 @@ import (
 // Use a smaller worker number for test to speed up the test.
 var workerNumberForTest = 2
 
-func checkResolvedTs(t *testing.T, mgr *logManager, expectedRts uint64) {
+func checkResolvedTs(t *testing.T, mgr *Sink, expectedRts uint64) {
 	require.Eventually(t, func() bool {
 		resolvedTs := uint64(math.MaxUint64)
-		mgr.rtsMap.Range(func(span heartbeatpb.TableSpan, value any) bool {
-			v, ok := value.(*statefulRts)
-			require.True(t, ok)
+		for _, v := range mgr.stateMap.statefuls {
 			ts := v.getFlushed()
 			if ts < resolvedTs {
 				resolvedTs = ts
 			}
 			return true
-		})
+		}
 		return resolvedTs == expectedRts
 		// This retry 80 times, with redo.MinFlushIntervalInMs(50ms) interval,
 		// it will take 4s at most.
@@ -110,8 +108,8 @@ func TestConsistentConfig(t *testing.T) {
 	}
 }
 
-// TestLogManagerInProcessor tests how redo log manager is used in processor.
-func TestLogManagerInProcessor(t *testing.T) {
+// TestredoManagerInProcessor tests how redo log manager is used in processor.
+func TestredoManagerInProcessor(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -128,7 +126,8 @@ func TestLogManagerInProcessor(t *testing.T) {
 			FlushWorkerNum:        workerNumberForTest,
 			UseFileBackend:        useFileBackend,
 		}
-		dmlMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
+		startTs := uint64(100)
+		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test"), startTs, cfg)
 		var eg errgroup.Group
 		eg.Go(func() error {
 			return dmlMgr.Run(ctx)
@@ -141,10 +140,6 @@ func TestLogManagerInProcessor(t *testing.T) {
 			common.TableIDToComparableSpan(59),
 		}
 
-		startTs := uint64(100)
-		for _, span := range spans {
-			dmlMgr.AddTable(span, startTs)
-		}
 		tableInfo := &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t"}}
 		testCases := []struct {
 			span heartbeatpb.TableSpan
@@ -181,18 +176,20 @@ func TestLogManagerInProcessor(t *testing.T) {
 			},
 		}
 		for _, tc := range testCases {
-			err := dmlMgr.EmitDMLEvents(ctx, tc.span, tc.rows...)
-			require.NoError(t, err)
+			for _, row := range tc.rows {
+				err := dmlMgr.EmitDMLEvents(row)
+				require.NoError(t, err)
+			}
 		}
 
 		// check UpdateResolvedTs can move forward the resolved ts when there is not row event.
 		flushResolvedTs := uint64(150)
 		for _, span := range spans {
-			checkResolvedTs(t, dmlMgr.logManager, startTs)
+			checkResolvedTs(t, dmlMgr.redoManager, startTs)
 			err := dmlMgr.UpdateResolvedTs(ctx, span, flushResolvedTs)
 			require.NoError(t, err)
 		}
-		checkResolvedTs(t, dmlMgr.logManager, flushResolvedTs)
+		checkResolvedTs(t, dmlMgr.redoManager, flushResolvedTs)
 
 		// check remove table can work normally
 		removeTable := spans[len(spans)-1]
@@ -203,7 +200,7 @@ func TestLogManagerInProcessor(t *testing.T) {
 			err := dmlMgr.UpdateResolvedTs(ctx, span, flushResolvedTs)
 			require.NoError(t, err)
 		}
-		checkResolvedTs(t, dmlMgr.logManager, flushResolvedTs)
+		checkResolvedTs(t, dmlMgr.redoManager, flushResolvedTs)
 
 		cancel()
 		require.ErrorIs(t, eg.Wait(), context.Canceled)
@@ -220,9 +217,9 @@ func TestLogManagerInProcessor(t *testing.T) {
 	}
 }
 
-// TestLogManagerInOwner tests how redo log manager is used in owner,
+// TestredoManagerInOwner tests how redo log manager is used in owner,
 // where the redo log manager needs to handle DDL event only.
-func TestLogManagerInOwner(t *testing.T) {
+func TestredoManagerInOwner(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -254,7 +251,7 @@ func TestLogManagerInOwner(t *testing.T) {
 		require.Equal(t, startTs, ddlMgr.GetResolvedTs())
 
 		ddlMgr.UpdateResolvedTs(ctx, *common.DDLSpan, ddl.FinishedTs)
-		checkResolvedTs(t, ddlMgr.logManager, ddl.FinishedTs)
+		checkResolvedTs(t, ddlMgr.redoManager, ddl.FinishedTs)
 
 		cancel()
 		require.ErrorIs(t, eg.Wait(), context.Canceled)
@@ -272,7 +269,7 @@ func TestLogManagerInOwner(t *testing.T) {
 }
 
 // TestManagerError tests whether internal error in bgUpdateLog could be managed correctly.
-func TestLogManagerError(t *testing.T) {
+func TestredoManagerError(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()

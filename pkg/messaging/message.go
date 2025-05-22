@@ -73,6 +73,7 @@ const (
 	TypeBlockStatusRequest
 	TypeDispatcherHeartbeat
 	TypeDispatcherHeartbeatResponse
+	TypeRedoTsMessage
 
 	// Coordinator related
 	TypeCoordinatorBootstrapRequest
@@ -152,6 +153,8 @@ func (t IOType) String() string {
 		return "CheckpointTsMessage"
 	case TypeDispatcherHeartbeat:
 		return "DispatcherHeartbeat"
+	case TypeRedoTsMessage:
+		return "RedoTsMessage"
 	default:
 	}
 	return "Unknown"
@@ -319,6 +322,8 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &commonEvent.DispatcherHeartbeat{}
 	case TypeDispatcherHeartbeatResponse:
 		m = &commonEvent.DispatcherHeartbeatResponse{}
+	case TypeRedoTsMessage:
+		m = &heartbeatpb.RedoTsMessage{}
 	default:
 		log.Panic("Unimplemented IOType", zap.Stringer("Type", ioType))
 	}
@@ -411,6 +416,8 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeDispatcherHeartbeat
 	case *commonEvent.DispatcherHeartbeatResponse:
 		ioType = TypeDispatcherHeartbeatResponse
+	case *heartbeatpb.RedoTsMessage:
+		ioType = TypeRedoTsMessage
 	default:
 		panic("unknown io type")
 	}
@@ -431,7 +438,7 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 }
 
 func (m *TargetMessage) String() string {
-	return fmt.Sprintf("From: %s, To: %s, Type: %s, Message: %v", m.From, m.To, m.Type, m.Message)
+	return fmt.Sprintf("From: %s, To: %s, Type: %s, Message: %v, Redo: %v", m.From, m.To, m.Type, m.Message, m.Redo)
 }
 
 func (m *TargetMessage) GetGroup() uint64 {

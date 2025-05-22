@@ -31,16 +31,15 @@ var (
 
 // RedoEvent is the interface for redo event.
 type RedoEvent interface {
+	PostFlush()
 	ToRedoLog() *pevent.RedoLog
+	GetType() int
 }
 
 // RedoLogWriter defines the interfaces used to write redo log, all operations are thread-safe.
 type RedoLogWriter interface {
 	// WriteEvents writes DDL or DML events to the redo log.
 	WriteEvents(ctx context.Context, events ...RedoEvent) error
-
-	// FlushLog flushes all events written by `WriteEvents` into redo storage.
-	FlushLog(ctx context.Context) error
 
 	// Close is used to close the writer.
 	Close() error

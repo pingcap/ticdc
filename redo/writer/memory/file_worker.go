@@ -16,6 +16,7 @@ package memory
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"sync"
@@ -28,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/uuid"
+	"github.com/pingcap/ticdc/redo/codec"
 	misc "github.com/pingcap/ticdc/redo/common"
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -83,26 +85,11 @@ func (f *fileCache) markFlushed() {
 	}
 }
 
-func (f *fileCache) appendData(event *polymorphicRedoEvent) error {
-	_, err := f.writer.Write(event.data.Bytes())
-	if err != nil {
-		return err
-	}
-	f.fileSize += int64(event.data.Len())
-	if event.commitTs > f.maxCommitTs {
-		f.maxCommitTs = event.commitTs
-	}
-	if event.commitTs < f.minCommitTs {
-		f.minCommitTs = event.commitTs
-	}
-	return nil
-}
-
 type fileWorkerGroup struct {
-	cfg       *writer.LogWriterConfig
-	op        *writer.LogWriterOptions
-	workerNum int
-
+	cfg           *writer.LogWriterConfig
+	op            *writer.LogWriterOptions
+	workerNum     int
+	inputCh       chan writer.RedoEvent
 	extStorage    storage.ExternalStorage
 	uuidGenerator uuid.Generator
 
@@ -132,6 +119,7 @@ func newFileWorkerGroup(
 		cfg:           cfg,
 		op:            op,
 		workerNum:     workerNum,
+		inputCh:       make(chan writer.RedoEvent, redo.DefaultEncodingInputChanSize*workerNum),
 		extStorage:    extStorage,
 		uuidGenerator: uuid.NewGenerator(),
 		pool: sync.Pool{
@@ -151,8 +139,7 @@ func newFileWorkerGroup(
 }
 
 func (f *fileWorkerGroup) Run(
-	ctx context.Context, inputCh <-chan *polymorphicRedoEvent,
-) (err error) {
+	ctx context.Context) (err error) {
 	defer func() {
 		f.close()
 		log.Warn("redo file workers closed",
@@ -163,7 +150,7 @@ func (f *fileWorkerGroup) Run(
 
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
-		return f.bgWriteLogs(egCtx, inputCh)
+		return f.bgWriteLogs(egCtx, f.inputCh)
 	})
 	for i := 0; i < f.workerNum; i++ {
 		eg.Go(func() error {
@@ -182,6 +169,15 @@ func (f *fileWorkerGroup) close() {
 		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.cfg.LogType)
 	misc.RedoWriteBytesGauge.
 		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.cfg.LogType)
+}
+
+func (f *fileWorkerGroup) input(ctx context.Context, event writer.RedoEvent) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case f.inputCh <- event:
+	}
+	return nil
 }
 
 func (f *fileWorkerGroup) bgFlushFileCache(egCtx context.Context) error {
@@ -228,7 +224,7 @@ func (f *fileWorkerGroup) multiPartUpload(ctx context.Context, file *fileCache) 
 }
 
 func (f *fileWorkerGroup) bgWriteLogs(
-	egCtx context.Context, inputCh <-chan *polymorphicRedoEvent,
+	egCtx context.Context, inputCh <-chan writer.RedoEvent,
 ) (err error) {
 	for {
 		select {
@@ -240,24 +236,23 @@ func (f *fileWorkerGroup) bgWriteLogs(
 				return errors.ErrUnexpected.FastGenByArgs("inputCh of redo file worker is closed unexpectedly")
 			}
 
-			if event.data != nil {
-				err = f.writeToCache(egCtx, event)
-				event.reset()
-				eventPool.Put(event)
-			} else if event.flushCallback != nil {
-				err = f.flushAll(egCtx)
-				event.flushCallback()
-			}
-
+			// TODO: cache event
+			err = f.writeToCache(egCtx, event)
 			if err != nil {
 				return errors.Trace(err)
 			}
+			err = f.flushAll(egCtx)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			// flush
+			event.PostFlush()
 		}
 	}
 }
 
 // newFileCache write event to a new file cache.
-func (f *fileWorkerGroup) newFileCache(event *polymorphicRedoEvent) error {
+func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) error {
 	bufPtr := f.pool.Get().(*[]byte)
 	buf := *bufPtr
 	buf = buf[:0]
@@ -271,7 +266,7 @@ func (f *fileWorkerGroup) newFileCache(event *polymorphicRedoEvent) error {
 		wr = lz4.NewWriter(bufferWriter)
 		closer = wr.(io.Closer)
 	}
-	_, err := wr.Write(event.data.Bytes())
+	_, err := wr.Write(data)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -283,9 +278,9 @@ func (f *fileWorkerGroup) newFileCache(event *polymorphicRedoEvent) error {
 	}
 	file := &fileCache{
 		data:        buf,
-		fileSize:    int64(len(event.data.Bytes())),
-		maxCommitTs: event.commitTs,
-		minCommitTs: event.commitTs,
+		fileSize:    int64(len(data)),
+		maxCommitTs: commitTs,
+		minCommitTs: commitTs,
 		flushed:     make(chan struct{}),
 		writer:      dw,
 	}
@@ -293,10 +288,23 @@ func (f *fileWorkerGroup) newFileCache(event *polymorphicRedoEvent) error {
 	return nil
 }
 
+// encoding format: lenField(8 bytes) + rawData + padding bytes(force 8 bytes alignment)
 func (f *fileWorkerGroup) writeToCache(
-	egCtx context.Context, event *polymorphicRedoEvent,
+	egCtx context.Context, event writer.RedoEvent,
 ) error {
-	writeLen := int64(event.data.Len())
+	rl := event.ToRedoLog()
+	rawData, err := codec.MarshalRedoLog(rl, nil)
+	if err != nil {
+		return err
+	}
+	uint64buf := make([]byte, 8)
+	lenField, padBytes := writer.EncodeFrameSize(len(rawData))
+	binary.LittleEndian.PutUint64(uint64buf, lenField)
+	data := append(uint64buf, rawData...)
+	if padBytes != 0 {
+		data = append(data, make([]byte, padBytes)...)
+	}
+	writeLen := int64(len(data))
 	if writeLen > f.cfg.MaxLogSizeInBytes {
 		// TODO: maybe we need to deal with the oversized event.
 		return errors.ErrRedoFileSizeExceed.GenWithStackByArgs(writeLen, f.cfg.MaxLogSizeInBytes)
@@ -304,7 +312,7 @@ func (f *fileWorkerGroup) writeToCache(
 	defer f.metricWriteBytes.Add(float64(writeLen))
 
 	if len(f.files) == 0 {
-		return f.newFileCache(event)
+		return f.newFileCache(data, rl.GetCommitTs())
 	}
 
 	file := f.files[len(f.files)-1]
@@ -316,10 +324,23 @@ func (f *fileWorkerGroup) writeToCache(
 		case f.flushCh <- file:
 		}
 
-		return f.newFileCache(event)
+		return f.newFileCache(data, rl.GetCommitTs())
 	}
 
-	return file.appendData(event)
+	_, err = file.writer.Write(data)
+	if err != nil {
+		return err
+	}
+
+	file.fileSize += writeLen
+	commitTs := rl.GetCommitTs()
+	if commitTs > file.maxCommitTs {
+		file.maxCommitTs = commitTs
+	}
+	if commitTs < file.minCommitTs {
+		file.minCommitTs = commitTs
+	}
+	return nil
 }
 
 func (f *fileWorkerGroup) flushAll(egCtx context.Context) error {

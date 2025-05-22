@@ -17,6 +17,7 @@ import (
 	"context"
 
 	"github.com/pingcap/log"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/redo"
@@ -27,9 +28,9 @@ import (
 var _ writer.RedoLogWriter = (*memoryLogWriter)(nil)
 
 type memoryLogWriter struct {
-	cfg           *writer.LogWriterConfig
-	encodeWorkers *encodingWorkerGroup
-	fileWorkers   *fileWorkerGroup
+	cfg            *writer.LogWriterConfig
+	ddlFileWorkers *fileWorkerGroup
+	dmlFileWorkers *fileWorkerGroup
 
 	eg     *errgroup.Group
 	cancel context.CancelFunc
@@ -58,18 +59,20 @@ func NewLogWriter(
 	eg, ctx := errgroup.WithContext(ctx)
 	lwCtx, lwCancel := context.WithCancel(ctx)
 	lw := &memoryLogWriter{
-		cfg:           cfg,
-		encodeWorkers: newEncodingWorkerGroup(cfg),
-		fileWorkers:   newFileWorkerGroup(cfg, cfg.FlushWorkerNum, extStorage, opts...),
-		eg:            eg,
-		cancel:        lwCancel,
+		cfg:    cfg,
+		eg:     eg,
+		cancel: lwCancel,
 	}
+	cfg.LogType = redo.RedoDDLLogFileType
+	lw.ddlFileWorkers = newFileWorkerGroup(cfg, cfg.FlushWorkerNum, extStorage, opts...)
+	cfg.LogType = redo.RedoRowLogFileType
+	lw.dmlFileWorkers = newFileWorkerGroup(cfg, cfg.FlushWorkerNum, extStorage, opts...)
 
 	eg.Go(func() error {
-		return lw.encodeWorkers.Run(lwCtx)
+		return lw.ddlFileWorkers.Run(lwCtx)
 	})
 	eg.Go(func() error {
-		return lw.fileWorkers.Run(lwCtx, lw.encodeWorkers.outputCh)
+		return lw.dmlFileWorkers.Run(lwCtx)
 	})
 	return lw, nil
 }
@@ -84,16 +87,18 @@ func (l *memoryLogWriter) WriteEvents(ctx context.Context, events ...writer.Redo
 				zap.String("capture", l.cfg.CaptureID))
 			continue
 		}
-		if err := l.encodeWorkers.AddEvent(ctx, event); err != nil {
-			return err
+		switch event.GetType() {
+		case commonEvent.TypeDDLEvent:
+			if err := l.ddlFileWorkers.input(ctx, event); err != nil {
+				return err
+			}
+		case commonEvent.TypeDMLEvent:
+			if err := l.dmlFileWorkers.input(ctx, event); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
-}
-
-// FlushLog implement FlushLog api
-func (l *memoryLogWriter) FlushLog(ctx context.Context) error {
-	return l.encodeWorkers.FlushAll(ctx)
 }
 
 // Close implements RedoLogWriter.Close

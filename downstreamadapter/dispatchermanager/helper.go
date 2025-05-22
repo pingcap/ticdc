@@ -418,8 +418,8 @@ func (h *CheckpointTsMessageHandler) Handle(eventDispatcherManager *EventDispatc
 		// TODO: Support batch
 		panic("invalid message count")
 	}
-	checkpointTsMessage := messages[0]
 	if eventDispatcherManager.tableTriggerEventDispatcher != nil {
+		checkpointTsMessage := messages[0]
 		eventDispatcherManager.sink.AddCheckpointTs(checkpointTsMessage.CheckpointTs)
 	}
 	return false
@@ -439,3 +439,58 @@ func (h *CheckpointTsMessageHandler) GetType(event CheckpointTsMessage) dynstrea
 	return dynstream.DefaultEventType
 }
 func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) {}
+
+// redoTsMessageDynamicStream is responsible for push RedoTsMessage to the corresponding table trigger event dispatcher.
+func newRedoTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoTsMessage, *EventDispatcherManager, *RedoTsMessageHandler] {
+	ds := dynstream.NewParallelDynamicStream(
+		func(id common.GID) uint64 { return id.FastHash() },
+		&RedoTsMessageHandler{})
+	ds.Start()
+	return ds
+}
+
+type RedoTsMessage struct {
+	*heartbeatpb.RedoTsMessage
+}
+
+func NewRedoTsMessage(msg *heartbeatpb.RedoTsMessage) RedoTsMessage {
+	return RedoTsMessage{msg}
+}
+
+type RedoTsMessageHandler struct{}
+
+func NewRedoTsMessageHandler() RedoTsMessageHandler {
+	return RedoTsMessageHandler{}
+}
+
+func (h *RedoTsMessageHandler) Path(redoTsMessage RedoTsMessage) common.GID {
+	return common.NewChangefeedGIDFromPB(redoTsMessage.ChangefeedID)
+}
+
+func (h *RedoTsMessageHandler) Handle(eventDispatcherManager *EventDispatcherManager, messages ...RedoTsMessage) bool {
+	if len(messages) != 1 {
+		// TODO: Support batch
+		panic("invalid message count")
+	}
+	ts := messages[0].CheckpointTs
+	eventDispatcherManager.SetGlobalRedoTs(ts)
+	eventDispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
+		dispatcher.HandleCacheEvents()
+	})
+	return false
+}
+
+func (h *RedoTsMessageHandler) GetSize(event RedoTsMessage) int   { return 0 }
+func (h *RedoTsMessageHandler) IsPaused(event RedoTsMessage) bool { return false }
+func (h *RedoTsMessageHandler) GetArea(path common.GID, dest *EventDispatcherManager) int {
+	return 0
+}
+
+func (h *RedoTsMessageHandler) GetTimestamp(event RedoTsMessage) dynstream.Timestamp {
+	return 0
+}
+
+func (h *RedoTsMessageHandler) GetType(event RedoTsMessage) dynstream.EventType {
+	return dynstream.DefaultEventType
+}
+func (h *RedoTsMessageHandler) OnDrop(event RedoTsMessage) {}

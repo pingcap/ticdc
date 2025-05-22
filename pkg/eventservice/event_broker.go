@@ -437,6 +437,7 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 			log.Info("checkAndSendHandshake", zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex), zap.Bool("isHandshaked", task.isHandshaked.Load()))
 			task.isHandshaked.Store(true)
 		},
+		redo: task.info.GetRedo(),
 	}
 	c.getMessageCh(task.messageWorkerIndex) <- wrapE
 	metricEventServiceSendCommandCount.Inc()
@@ -668,29 +669,8 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 			return
 		default:
 		}
-		// Send redo message at first
-		if redo {
-			tMsg.Redo = redo
-			err := c.msgSender.SendEvent(tMsg)
-			if err != nil {
-				_, ok := err.(apperror.AppError)
-				log.Debug("send redo msg failed, retry it later", zap.Error(err), zap.Any("tMsg", tMsg), zap.Bool("castOk", ok))
-				if strings.Contains(err.Error(), "congested") {
-					log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))
-					// Wait for a while and retry to avoid the dropped message flood.
-					time.Sleep(congestedRetryInterval)
-					continue
-				} else {
-					log.Info("send redo message failed, drop it", zap.Error(err), zap.Any("tMsg", tMsg))
-					// Drop the message, and return.
-					// If the dispatcher finds the events are not continuous, it will send a reset message.
-					// And the broker will send the missed events to the dispatcher again.
-					return
-				}
-			}
-		}
-		tMsg.Redo = false
 		// Send the message to the dispatcher.
+		tMsg.Redo = redo
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
 			_, ok := err.(apperror.AppError)
@@ -1085,6 +1065,7 @@ func (c *eventBroker) handleDispatcherHeartbeat(ctx context.Context, heartbeat *
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
 	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
 		dispatcher, ok := c.getDispatcher(dp.DispatcherID)
+		// dispatcher.info.GetRedo()
 		// Can't find the dispatcher, it means the dispatcher is removed.
 		if !ok {
 			response, ok := responseMap[heartbeat.serverID]

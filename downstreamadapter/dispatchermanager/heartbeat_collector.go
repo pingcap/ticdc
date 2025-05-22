@@ -53,6 +53,7 @@ type HeartBeatCollector struct {
 	heartBeatResponseDynamicStream          dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler]
 	schedulerDispatcherRequestDynamicStream dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler]
 	checkpointTsMessageDynamicStream        dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler]
+	redoTsMessageDynamicStream              dynstream.DynamicStream[int, common.GID, RedoTsMessage, *EventDispatcherManager, *RedoTsMessageHandler]
 
 	mc messaging.MessageCenter
 
@@ -70,6 +71,7 @@ func NewHeartBeatCollector(serverId node.ID) *HeartBeatCollector {
 		heartBeatResponseDynamicStream:          newHeartBeatResponseDynamicStream(dStatusDS),
 		schedulerDispatcherRequestDynamicStream: newSchedulerDispatcherRequestDynamicStream(),
 		checkpointTsMessageDynamicStream:        newCheckpointTsMessageDynamicStream(),
+		redoTsMessageDynamicStream:              newRedoTsMessageDynamicStream(),
 		mc:                                      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 	}
 	heartBeatCollector.mc.RegisterHandler(messaging.HeartbeatCollectorTopic, heartBeatCollector.RecvMessages)
@@ -120,6 +122,11 @@ func (c *HeartBeatCollector) RegisterCheckpointTsMessageDs(m *EventDispatcherMan
 	return errors.Trace(err)
 }
 
+func (c *HeartBeatCollector) RegisterRedoTsMessageDs(m *EventDispatcherManager) error {
+	err := c.redoTsMessageDynamicStream.AddPath(m.changefeedID.Id, m)
+	return errors.Trace(err)
+}
+
 func (c *HeartBeatCollector) RemoveEventDispatcherManager(m *EventDispatcherManager) error {
 	err := c.heartBeatResponseDynamicStream.RemovePath(m.changefeedID.Id)
 	if err != nil {
@@ -137,6 +144,14 @@ func (c *HeartBeatCollector) RemoveCheckpointTsMessage(changefeedID common.Chang
 		return nil
 	}
 	err := c.checkpointTsMessageDynamicStream.RemovePath(changefeedID.Id)
+	return errors.Trace(err)
+}
+
+func (c *HeartBeatCollector) RemoveRedoTsMessage(changefeedID common.ChangeFeedID) error {
+	if c.redoTsMessageDynamicStream == nil {
+		return nil
+	}
+	err := c.redoTsMessageDynamicStream.RemovePath(changefeedID.Id)
 	return errors.Trace(err)
 }
 
@@ -204,10 +219,16 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 		// TODO: check metrics
 		metrics.HandleDispatcherRequsetCounter.WithLabelValues("default", schedulerDispatcherRequest.ChangefeedID.Name, "receive").Inc()
 	case messaging.TypeCheckpointTsMessage:
+		// here received checkpoint all dispatchers(include redo)?
 		checkpointTsMessage := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		c.checkpointTsMessageDynamicStream.Push(
 			common.NewChangefeedIDFromPB(checkpointTsMessage.ChangefeedID).Id,
 			NewCheckpointTsMessage(checkpointTsMessage))
+	case messaging.TypeRedoTsMessage:
+		redoTsMessage := msg.Message[0].(*heartbeatpb.RedoTsMessage)
+		c.redoTsMessageDynamicStream.Push(
+			common.NewChangefeedIDFromPB(redoTsMessage.ChangefeedID).Id,
+			NewRedoTsMessage(redoTsMessage))
 	default:
 		log.Panic("unknown message type", zap.Any("message", msg.Message))
 	}

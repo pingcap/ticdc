@@ -84,13 +84,13 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 				continue
 			}
 		}
-		return stat.target.HandleEvents(events[validEventStart:], func() { h.eventCollector.WakeDispatcher(stat.dispatcherID, stat.target.GetType()) })
+		return stat.target.HandleEvents(events[validEventStart:], func() { h.eventCollector.WakeDispatcher(stat.dispatcherID, stat.isRedo) })
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent:
 		if stat.shouldIgnoreDataEvent(events[0], h.eventCollector) {
 			return false
 		}
-		return stat.target.HandleEvents(events, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID, stat.target.GetType()) })
+		return stat.target.HandleEvents(events, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID, stat.isRedo) })
 	case commonEvent.TypeHandshakeEvent:
 		stat.handleHandshakeEvent(events[0], h.eventCollector)
 		return false

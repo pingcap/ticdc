@@ -187,7 +187,7 @@ func TestPreCleanupAndWriteMeta(t *testing.T) {
 	require.ErrorIs(t, eg.Wait(), context.Canceled)
 }
 
-func testWriteMeta(ctx context.Context, t *testing.T, m *metaManager) {
+func testWriteMeta(ctx context.Context, t *testing.T, m *RedoMeta) {
 	checkMeta := func(targetCheckpointTs, targetResolvedTs uint64) {
 		var checkpointTs, resolvedTs uint64
 		var metas []*misc.LogMeta

@@ -48,14 +48,11 @@ func (bs *blackHoleWriter) WriteEvents(_ context.Context, events ...writer.RedoE
 	current := rl.GetCommitTs()
 	log.Debug("write redo events", zap.Int("count", len(events)),
 		zap.Uint64("current", current))
-	return
-}
-
-func (bs *blackHoleWriter) FlushLog(_ context.Context) error {
-	if bs.invalid {
-		return errors.New("[FlushLog] invalid black hole writer")
+	// FIXME: post flush after writing?
+	for _, rl := range events {
+		rl.PostFlush()
 	}
-	return nil
+	return
 }
 
 func (bs *blackHoleWriter) Close() error {

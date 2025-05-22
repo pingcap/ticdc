@@ -410,3 +410,23 @@ const (
 	TypeDispatcherCommon int = iota
 	TypeDispatcherRedo
 )
+
+func IsRedoDispatcher(dispatcher EventDispatcher) bool {
+	return dispatcher.GetType() == TypeDispatcherRedo
+}
+
+type cacheEvents struct {
+	events       []DispatcherEvent
+	wakeCallback func()
+}
+
+func newCacheEvents(events []DispatcherEvent, wakeCallback func()) cacheEvents {
+	cacheEvents := cacheEvents{
+		events:       make([]DispatcherEvent, 0, len(events)),
+		wakeCallback: wakeCallback,
+	}
+	for _, event := range events {
+		cacheEvents.events = append(cacheEvents.events, NewDispatcherEvent(event.From, event.Event))
+	}
+	return cacheEvents
+}

@@ -93,6 +93,8 @@ type Maintainer struct {
 	// It is sent to dispatcher managers during bootstrap to initialize their
 	// checkpointTs.
 	startCheckpointTs uint64
+	// redoTs is global redo checkpointTs
+	redoTs uint64
 
 	// ddlSpan represents the table trigger event dispatcher that handles DDL events.
 	// This dispatcher is always created on the same node as the maintainer and has a
@@ -178,6 +180,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
+		redoTs:            checkpointTs,
 		controller: NewController(cfID, checkpointTs, pdAPI, pdClock, regionCache, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
@@ -421,6 +424,9 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		m.onCheckpointTsPersisted(req)
+	case messaging.TypeRedoTsMessage:
+		req := msg.Message[0].(*heartbeatpb.RedoTsMessage)
+		m.onRedoTsPersisted(req)
 	default:
 		log.Panic("unexpected message type",
 			zap.String("changefeed", m.id.Name()),
@@ -450,6 +456,15 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 	m.sendMessages([]*messaging.TargetMessage{
 		messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, msg),
 	})
+}
+
+func (m *Maintainer) onRedoTsPersisted(msg *heartbeatpb.RedoTsMessage) {
+	if msg.CheckpointTs > m.redoTs {
+		m.redoTs = msg.CheckpointTs
+		m.sendMessages([]*messaging.TargetMessage{
+			messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, msg),
+		})
+	}
 }
 
 func (m *Maintainer) onNodeChanged() {
