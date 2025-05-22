@@ -133,6 +133,10 @@ func (m *mockEventDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 func (m *mockEventDispatcher) Remove() {
 }
 
+func (m *mockEventDispatcher) GetBDRMode() bool {
+	return false
+}
+
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
 	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
 	targetMessage.From = id
