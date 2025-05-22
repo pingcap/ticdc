@@ -94,11 +94,9 @@ type TableInfo struct {
 }
 
 func (ti *TableInfo) InitPrivateFields() {
-	log.Info("initialize table info")
 	if ti == nil {
 		return
 	}
-	log.Info("initialize table info", zap.String("table", ti.TableName.String()))
 
 	ti.preSQLs.mutex.Lock()
 	defer ti.preSQLs.mutex.Unlock()
