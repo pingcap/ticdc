@@ -75,7 +75,7 @@ func (d *Dispatcher) GetEventSizePerSecond() float32 {
 }
 
 func (d *Dispatcher) IsTableTriggerEventDispatcher() bool {
-	return d.tableSpan == heartbeatpb.DDLSpan
+	return d.tableSpan == common.DDLSpan
 }
 
 func (d *Dispatcher) SetSeq(seq uint64) {

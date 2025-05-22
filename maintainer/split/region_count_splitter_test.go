@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/spanz"
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
 )
@@ -32,12 +31,12 @@ func TestRegionCountSplitSpan(t *testing.T) {
 	t.Parallel()
 
 	cache := NewMockRegionCache(nil)
-	cache.regions.ReplaceOrInsert(tablepb.Span{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")}, 1)
-	cache.regions.ReplaceOrInsert(tablepb.Span{StartKey: []byte("t1_1"), EndKey: []byte("t1_2")}, 2)
-	cache.regions.ReplaceOrInsert(tablepb.Span{StartKey: []byte("t1_2"), EndKey: []byte("t1_3")}, 3)
-	cache.regions.ReplaceOrInsert(tablepb.Span{StartKey: []byte("t1_3"), EndKey: []byte("t1_4")}, 4)
-	cache.regions.ReplaceOrInsert(tablepb.Span{StartKey: []byte("t1_4"), EndKey: []byte("t2_2")}, 5)
-	cache.regions.ReplaceOrInsert(tablepb.Span{StartKey: []byte("t2_2"), EndKey: []byte("t2_3")}, 6)
+	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")}, 1)
+	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_1"), EndKey: []byte("t1_2")}, 2)
+	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_2"), EndKey: []byte("t1_3")}, 3)
+	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_3"), EndKey: []byte("t1_4")}, 4)
+	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_4"), EndKey: []byte("t2_2")}, 5)
+	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t2_2"), EndKey: []byte("t2_3")}, 6)
 
 	cases := []struct {
 		span        *heartbeatpb.TableSpan
@@ -118,7 +117,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 	cache := NewMockRegionCache(nil)
 	totalRegion := 1000
 	for i := 0; i < totalRegion; i++ {
-		cache.regions.ReplaceOrInsert(tablepb.Span{
+		cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{
 			StartKey: []byte(fmt.Sprintf("t1_%09d", i)),
 			EndKey:   []byte(fmt.Sprintf("t1_%09d", i+1)),
 		}, uint64(i+1))
@@ -199,9 +198,9 @@ func TestSplitSpanRegionOutOfOrder(t *testing.T) {
 	t.Parallel()
 
 	cache := NewMockRegionCache(nil)
-	cache.regions.ReplaceOrInsert(tablepb.Span{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")}, 1)
-	cache.regions.ReplaceOrInsert(tablepb.Span{StartKey: []byte("t1_1"), EndKey: []byte("t1_4")}, 2)
-	cache.regions.ReplaceOrInsert(tablepb.Span{StartKey: []byte("t1_2"), EndKey: []byte("t1_3")}, 3)
+	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")}, 1)
+	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_1"), EndKey: []byte("t1_4")}, 2)
+	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_2"), EndKey: []byte("t1_3")}, 3)
 
 	cfg := &config.ChangefeedSchedulerConfig{
 		RegionThreshold:    1,
@@ -221,7 +220,7 @@ type mockCache struct {
 }
 
 // NewMockRegionCache returns a new MockCache.
-func NewMockRegionCache(regions []tablepb.Span) *mockCache {
+func NewMockRegionCache(regions []heartbeatpb.TableSpan) *mockCache {
 	return &mockCache{regions: spanz.NewBtreeMap[uint64]()}
 }
 
@@ -229,7 +228,7 @@ func NewMockRegionCache(regions []tablepb.Span) *mockCache {
 func (m *mockCache) ListRegionIDsInKeyRange(
 	bo *tikv.Backoffer, startKey, endKey []byte,
 ) (regionIDs []uint64, err error) {
-	m.regions.Ascend(func(loc tablepb.Span, id uint64) bool {
+	m.regions.Ascend(func(loc heartbeatpb.TableSpan, id uint64) bool {
 		if bytes.Compare(loc.StartKey, endKey) >= 0 ||
 			bytes.Compare(loc.EndKey, startKey) <= 0 {
 			return true
@@ -244,7 +243,7 @@ func (m *mockCache) ListRegionIDsInKeyRange(
 func (m *mockCache) LocateRegionByID(
 	bo *tikv.Backoffer, regionID uint64,
 ) (loc *tikv.KeyLocation, err error) {
-	m.regions.Ascend(func(span tablepb.Span, id uint64) bool {
+	m.regions.Ascend(func(span heartbeatpb.TableSpan, id uint64) bool {
 		if id != regionID {
 			return true
 		}

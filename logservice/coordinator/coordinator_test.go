@@ -16,10 +16,9 @@ package logcoordinator
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logservicepb"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -39,14 +38,8 @@ func TestGetCandidateNodes(t *testing.T) {
 	// initialize table spans
 	tableID1 := int64(100)
 	tableID2 := int64(101)
-	span1 := &heartbeatpb.TableSpan{
-		TableID: tableID1,
-	}
-	span1.StartKey, span1.EndKey = spanz.GetTableRange(span1.TableID)
-	span2 := &heartbeatpb.TableSpan{
-		TableID: tableID2,
-	}
-	span2.StartKey, span2.EndKey = spanz.GetTableRange(span2.TableID)
+	span1 := common.TableIDToComparableSpan(tableID1)
+	span2 := common.TableIDToComparableSpan(tableID2)
 
 	// initialize event store states
 	coordinator.updateEventStoreState(nodeID1, &logservicepb.EventStoreState{
@@ -55,7 +48,7 @@ func TestGetCandidateNodes(t *testing.T) {
 				Subscriptions: []*logservicepb.SubscriptionState{
 					{
 						SubID:        1,
-						Span:         span1,
+						Span:         &span1,
 						CheckpointTs: 100,
 						ResolvedTs:   200,
 					},
@@ -69,19 +62,19 @@ func TestGetCandidateNodes(t *testing.T) {
 				Subscriptions: []*logservicepb.SubscriptionState{
 					{
 						SubID:        1,
-						Span:         span1,
+						Span:         &span1,
 						CheckpointTs: 90,
 						ResolvedTs:   180,
 					},
 					{
 						SubID:        2,
-						Span:         span1,
+						Span:         &span1,
 						CheckpointTs: 100,
 						ResolvedTs:   220,
 					},
 					{
 						SubID:        3,
-						Span:         span1,
+						Span:         &span1,
 						CheckpointTs: 80,
 						ResolvedTs:   160,
 					},
@@ -91,13 +84,13 @@ func TestGetCandidateNodes(t *testing.T) {
 				Subscriptions: []*logservicepb.SubscriptionState{
 					{
 						SubID:        4,
-						Span:         span2,
+						Span:         &span2,
 						CheckpointTs: 90,
 						ResolvedTs:   190,
 					},
 					{
 						SubID:        5,
-						Span:         span2,
+						Span:         &span2,
 						CheckpointTs: 90,
 						ResolvedTs:   240,
 					},
@@ -111,13 +104,13 @@ func TestGetCandidateNodes(t *testing.T) {
 				Subscriptions: []*logservicepb.SubscriptionState{
 					{
 						SubID:        1,
-						Span:         span2,
+						Span:         &span2,
 						CheckpointTs: 100,
 						ResolvedTs:   290,
 					},
 					{
 						SubID:        2,
-						Span:         span2,
+						Span:         &span2,
 						CheckpointTs: 100,
 						ResolvedTs:   230,
 					},
@@ -128,19 +121,19 @@ func TestGetCandidateNodes(t *testing.T) {
 
 	// check get candidates
 	{
-		nodes := coordinator.getCandidateNodes(nodeID1, span1, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID1, &span1, uint64(100))
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, span1, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
 		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID1, span2, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID1, &span2, uint64(100))
 		assert.Equal(t, []string{nodeID3.String(), nodeID2.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, span2, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID3, &span2, uint64(100))
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 
@@ -151,7 +144,7 @@ func TestGetCandidateNodes(t *testing.T) {
 				Subscriptions: []*logservicepb.SubscriptionState{
 					{
 						SubID:        1,
-						Span:         span1,
+						Span:         &span1,
 						CheckpointTs: 100,
 						ResolvedTs:   300,
 					},
@@ -160,7 +153,7 @@ func TestGetCandidateNodes(t *testing.T) {
 		},
 	})
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, span1, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
 		assert.Equal(t, []string{nodeID1.String(), nodeID2.String()}, nodes)
 	}
 
@@ -171,13 +164,13 @@ func TestGetCandidateNodes(t *testing.T) {
 				Subscriptions: []*logservicepb.SubscriptionState{
 					{
 						SubID:        1,
-						Span:         span1,
+						Span:         &span1,
 						CheckpointTs: 100,
 						ResolvedTs:   230,
 					},
 					{
 						SubID:        2,
-						Span:         span1,
+						Span:         &span1,
 						CheckpointTs: 100,
 						ResolvedTs:   310,
 					},
@@ -186,7 +179,7 @@ func TestGetCandidateNodes(t *testing.T) {
 		},
 	})
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, span1, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
 		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
 	}
 }

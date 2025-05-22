@@ -19,13 +19,12 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/stretchr/testify/require"
 )
 
 // TODO: refactor all test in maintainer with getTableSpanByID
 func getTableSpanByID(id common.TableID) *heartbeatpb.TableSpan {
-	totalSpan := spanz.TableIDToComparableSpan(id)
+	totalSpan := common.TableIDToComparableSpan(id)
 	return &heartbeatpb.TableSpan{
 		TableID:  totalSpan.TableID,
 		StartKey: totalSpan.StartKey,
@@ -102,7 +101,7 @@ func TestBasicFunction(t *testing.T) {
 	require.Equal(t, db.GetReplicatingSize(), 0)
 	// ddl table id
 	require.Len(t, db.tableTasks[0], 1)
-	require.Len(t, db.schemaTasks[heartbeatpb.DDLSpanSchemaID], 1)
+	require.Len(t, db.schemaTasks[common.DDLSpanSchemaID], 1)
 	require.Len(t, db.GetTaskSizePerNode(), 0)
 }
 
@@ -225,8 +224,8 @@ func newDBWithCheckerForTest(t *testing.T) *ReplicationDB {
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,

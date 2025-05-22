@@ -36,6 +36,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var _ EventDispatcher = (*Dispatcher)(nil)
+
 // EventDispatcher is the interface that responsible for receiving events from Event Service
 type EventDispatcher interface {
 	GetId() common.DispatcherID
@@ -209,7 +211,7 @@ func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.Schema
 	// Only the table trigger event dispatcher need to create a tableSchemaStore
 	// Because we only need to calculate the tableNames or TableIds in the sink
 	// when the event dispatcher manager have table trigger event dispatcher
-	if !d.tableSpan.Equal(heartbeatpb.DDLSpan) {
+	if !d.tableSpan.Equal(common.DDLSpan) {
 		log.Error("InitializeTableSchemaStore should only be received by table trigger event dispatcher", zap.Any("dispatcher", d.id))
 		return false, apperror.ErrChangefeedInitTableTriggerEventDispatcherFailed.
 			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger event dispatcher")
@@ -377,8 +379,9 @@ func (d *Dispatcher) isFirstEvent(event commonEvent.Event) bool {
 	return false
 }
 
-// TryClose should be called first when the dispatcher is should be removed.
-// TryClose will return the watermark of current dispatcher, and return true when the dispatcher stop to send events to sink.
+// TryClose should be called after remove the dispatcher from eventCollector to stop receiving events from eventCollector.
+// TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
+// EventDispatcherManager will clean the dispatcher info after TryClose returns true.
 func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully.
 	// If sink is not normal, we can close the dispatcher immediately.
@@ -390,20 +393,26 @@ func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		if d.IsTableTriggerEventDispatcher() {
 			d.tableSchemaStore.Clear()
 		}
+		log.Info("dispatcher component has stopped and is ready for cleanup",
+			zap.Stringer("changefeedID", d.changefeedID),
+			zap.Stringer("dispatcher", d.id),
+			zap.String("table", common.FormatTableSpan(d.tableSpan)),
+			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
+			zap.Uint64("resolvedTs", d.GetResolvedTs()),
+		)
 		return w, true
 	}
 	return w, false
 }
 
-// Remove should be called after TryClose returns true
+// Remove is called when we want to remove the dispatcher,
+// It set isRemoving to true,
+// remove the dispatcher from status dynamic stream to stop receiving status info from maintainer.
 func (d *Dispatcher) Remove() {
-	log.Info("table event dispatcher component status changed to stopping",
-		zap.Stringer("changefeedID", d.changefeedID),
+	log.Info("Remove dispatcher",
 		zap.Stringer("dispatcher", d.id),
-		zap.String("table", common.FormatTableSpan(d.tableSpan)),
-		zap.Uint64("checkpointTs", d.GetCheckpointTs()),
-		zap.Uint64("resolvedTs", d.GetResolvedTs()),
-	)
+		zap.Stringer("changefeedID", d.changefeedID),
+		zap.String("table", common.FormatTableSpan(d.tableSpan)))
 	d.isRemoving.Store(true)
 
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
@@ -424,7 +433,6 @@ func (d *Dispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
 	h.Watermark.ResolvedTs = d.GetResolvedTs()
 	h.Id = d.GetId()
 	h.ComponentStatus = d.GetComponentStatus()
-	h.TableSpan = d.GetTableSpan()
 	h.IsRemoving = d.GetRemovingStatus()
 }
 

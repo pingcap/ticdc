@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/apperror"
@@ -245,7 +244,8 @@ func (c *eventBroker) sendResolvedTs(
 	resolvedEvent := newWrapResolvedEvent(
 		server,
 		re,
-		d.getEventSenderState())
+		d.getEventSenderState(),
+	)
 	c.getMessageCh(d.messageWorkerIndex) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
 	metricEventServiceSendResolvedTsCount.Inc()
@@ -871,7 +871,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 	scanWorkerIndex := int((common.GID)(id).Hash(uint64(c.scanWorkerCount)))
 
 	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, changefeedStatus)
-	if span.Equal(heartbeatpb.DDLSpan) {
+	if span.Equal(common.DDLSpan) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
 		log.Info("table trigger dispatcher register dispatcher",
 			zap.Uint64("clusterID", c.tidbClusterID),

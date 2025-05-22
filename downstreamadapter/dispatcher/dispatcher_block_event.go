@@ -19,7 +19,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
@@ -127,7 +126,7 @@ func (d *Dispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 			if len(ddlEvent.GetBlockedTables().TableIDs) > 1 {
 				return true
 			}
-			if !isCompleteSpan(d.tableSpan) {
+			if !common.IsCompleteSpan(d.tableSpan) {
 				// if the table is split, even the blockTable only itself, it should block
 				return true
 			}
@@ -271,7 +270,7 @@ func (d *Dispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	// So there won't be a related db-level ddl event is in dealing when we get update schema id events.
 	// Thus, whether to update schema id before or after current ddl event is not important.
 	// To make it easier, we choose to directly update schema id here.
-	if event.GetUpdatedSchemas() != nil && d.tableSpan != heartbeatpb.DDLSpan {
+	if event.GetUpdatedSchemas() != nil && d.tableSpan != common.DDLSpan {
 		for _, schemaIDChange := range event.GetUpdatedSchemas() {
 			if schemaIDChange.TableID == d.tableSpan.TableID {
 				if schemaIDChange.OldSchemaID != d.schemaID {
@@ -326,13 +325,4 @@ func (d *Dispatcher) GetBlockEventStatus() *heartbeatpb.State {
 		IsSyncPoint:       pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,         // sync point event must should block
 		Stage:             blockStage,
 	}
-}
-
-func isCompleteSpan(tableSpan *heartbeatpb.TableSpan) bool {
-	spanz.TableIDToComparableSpan(tableSpan.TableID)
-	startKey, endKey := spanz.GetTableRange(tableSpan.TableID)
-	if spanz.StartCompare(spanz.ToComparableKey(startKey), tableSpan.StartKey) == 0 && spanz.EndCompare(spanz.ToComparableKey(endKey), tableSpan.EndKey) == 0 {
-		return true
-	}
-	return false
 }

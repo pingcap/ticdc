@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
@@ -146,7 +145,7 @@ func (s *splitScheduler) valid(c replica.CheckResult) (*heartbeatpb.TableSpan, b
 			zap.Int64("tableId", c.Replications[0].Span.TableID),
 			zap.Stringer("checkResult", c))
 	}
-	span := spanz.TableIDToComparableSpan(c.Replications[0].Span.TableID)
+	span := common.TableIDToComparableSpan(c.Replications[0].Span.TableID)
 	totalSpan := &heartbeatpb.TableSpan{
 		TableID:  span.TableID,
 		StartKey: span.StartKey,
@@ -160,7 +159,7 @@ func (s *splitScheduler) valid(c replica.CheckResult) (*heartbeatpb.TableSpan, b
 				zap.Int64("tableId", c.Replications[0].Span.TableID),
 				zap.Stringer("checkResult", c))
 		}
-		spanMap := utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](heartbeatpb.LessTableSpan)
+		spanMap := utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
 		for _, r := range c.Replications {
 			spanMap.ReplaceOrInsert(r.Span, r)
 		}
