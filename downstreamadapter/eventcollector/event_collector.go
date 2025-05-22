@@ -206,7 +206,7 @@ func (c *EventCollector) Close() {
 	log.Info("event collector is closed")
 }
 
-func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64, bdrMode bool) {
+func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
@@ -232,7 +232,7 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 		Dispatcher: target,
 		StartTs:    target.GetStartTs(),
 		ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
-		BDRMode:    bdrMode,
+		BDRMode:    target.GetBDRMode(),
 	})
 
 	c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
@@ -240,6 +240,20 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 		Span:    target.GetTableSpan(),
 		StartTs: target.GetStartTs(),
 	}
+}
+
+func (c *EventCollector) MergeDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64) {
+	log.Info("merge dispatcher", zap.Stringer("dispatcher", target.GetId()))
+	defer func() {
+		log.Info("merge dispatcher done", zap.Stringer("dispatcher", target.GetId()))
+	}()
+
+	// TODO: Communicate with event service to merge the dispatcher.
+
+}
+
+func (c *EventCollector) UpdateMergedDispatcherStartTs(dispatcherID common.DispatcherID, startTs uint64) {
+	// TODO
 }
 
 func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {

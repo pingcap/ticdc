@@ -42,6 +42,7 @@ import (
 type EventDispatcher interface {
 	GetId() common.DispatcherID
 	GetStartTs() uint64
+	GetBDRMode() bool
 	GetChangefeedID() common.ChangeFeedID
 	GetTableSpan() *heartbeatpb.TableSpan
 	GetFilterConfig() *eventpb.FilterConfig
@@ -93,7 +94,7 @@ type Dispatcher struct {
 	// startTs is the timestamp that the dispatcher need to receive and flush events.
 	startTs            uint64
 	startTsIsSyncpoint bool
-	// The ts from pd when the dispatcher is created.
+	// The ts from pdClock when the dispatcher is created.
 	// when downstream is mysql-class, for dml event we need to compare the commitTs with this ts
 	// to determine whether the insert event should use `Replace` or just `Insert`
 	// Because when the dispatcher scheduled or the node restarts, there may be some dml events to receive twice.
@@ -639,14 +640,6 @@ func (d *Dispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	}
 }
 
-func (d *Dispatcher) GetTableSpan() *heartbeatpb.TableSpan {
-	return d.tableSpan
-}
-
-func (d *Dispatcher) GetStartTs() uint64 {
-	return d.startTs
-}
-
 func (d *Dispatcher) GetResolvedTs() uint64 {
 	return atomic.LoadUint64(&d.resolvedTs)
 }
@@ -665,14 +658,6 @@ func (d *Dispatcher) GetCheckpointTs() uint64 {
 	return checkpointTs
 }
 
-func (d *Dispatcher) GetId() common.DispatcherID {
-	return d.id
-}
-
-func (d *Dispatcher) GetChangefeedID() common.ChangeFeedID {
-	return d.changefeedID
-}
-
 func (d *Dispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 	task := d.resendTaskMap.Get(identifier)
 	if task == nil {
@@ -681,29 +666,6 @@ func (d *Dispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 
 	task.Cancel()
 	d.resendTaskMap.Delete(identifier)
-}
-
-func (d *Dispatcher) GetSchemaID() int64 {
-	return d.schemaID
-}
-
-func (d *Dispatcher) EnableSyncPoint() bool {
-	return d.syncPointConfig != nil
-}
-
-func (d *Dispatcher) GetFilterConfig() *eventpb.FilterConfig {
-	return d.filterConfig
-}
-
-func (d *Dispatcher) GetSyncPointInterval() time.Duration {
-	if d.syncPointConfig != nil {
-		return d.syncPointConfig.SyncPointInterval
-	}
-	return time.Duration(0)
-}
-
-func (d *Dispatcher) GetStartTsIsSyncpoint() bool {
-	return d.startTsIsSyncpoint
 }
 
 func (d *Dispatcher) Remove() {
@@ -757,14 +719,6 @@ func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	return w, false
 }
 
-func (d *Dispatcher) GetComponentStatus() heartbeatpb.ComponentState {
-	return d.componentStatus.Get()
-}
-
-func (d *Dispatcher) GetRemovingStatus() bool {
-	return d.isRemoving.Load()
-}
-
 func (d *Dispatcher) GetBlockEventStatus() *heartbeatpb.State {
 	pendingEvent, blockStage := d.blockEventStatus.getEventAndStage()
 
@@ -799,10 +753,6 @@ func (d *Dispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
 	h.ComponentStatus = d.GetComponentStatus()
 	h.TableSpan = d.GetTableSpan()
 	h.IsRemoving = d.GetRemovingStatus()
-}
-
-func (d *Dispatcher) GetEventSizePerSecond() float32 {
-	return d.tableProgress.GetEventSizePerSecond()
 }
 
 func (d *Dispatcher) HandleCheckpointTs(checkpointTs uint64) {
@@ -878,14 +828,6 @@ func (d *Dispatcher) EmitBootstrap() bool {
 	return true
 }
 
-func (d *Dispatcher) IsTableTriggerEventDispatcher() bool {
-	return d.tableSpan == heartbeatpb.DDLSpan
-}
-
-func (d *Dispatcher) SetSeq(seq uint64) {
-	d.seq = seq
-}
-
 func (d *Dispatcher) isFirstEvent(event commonEvent.Event) bool {
 	if d.componentStatus.Get() == heartbeatpb.ComponentState_Initializing {
 		switch event.GetType() {
@@ -909,8 +851,4 @@ func (d *Dispatcher) updateComponentStatusToWorking() {
 		ResolvedTs:   d.GetResolvedTs(),
 		Seq:          d.seq,
 	}
-}
-
-func (d *Dispatcher) SetComponentStatus(status heartbeatpb.ComponentState) {
-	d.componentStatus.Set(status)
 }
