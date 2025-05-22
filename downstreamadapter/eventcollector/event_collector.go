@@ -544,119 +544,62 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 		case <-ctx.Done():
 			return
 		case targetMessage := <-inCh:
+			ds := c.ds
+			dispatcherMap := &c.dispatcherMap
 			if targetMessage.Redo {
-				c.handleRedoMessage(targetMessage)
-			} else {
-				c.handleMessage(targetMessage)
+				ds = c.redoDs
 			}
-		}
-	}
-}
-
-func (c *EventCollector) handleRedoMessage(targetMessage *messaging.TargetMessage) {
-	for _, msg := range targetMessage.Message {
-		switch e := msg.(type) {
-		case event.Event:
-			switch e.GetType() {
-			case event.TypeBatchResolvedEvent:
-				events := e.(*event.BatchResolvedEvent).Events
-				from := &targetMessage.From
-				for _, resolvedEvent := range events {
-					c.ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
+			for _, msg := range targetMessage.Message {
+				switch e := msg.(type) {
+				case event.Event:
+					switch e.GetType() {
+					case event.TypeBatchResolvedEvent:
+						events := e.(*event.BatchResolvedEvent).Events
+						from := &targetMessage.From
+						for _, resolvedEvent := range events {
+							ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
+						}
+						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(e.Len()))
+					case event.TypeBatchDMLEvent:
+						stat, ok := dispatcherMap.Load(e.GetDispatcherID())
+						if !ok {
+							continue
+						}
+						tableInfo, ok := stat.(*dispatcherStat).tableInfo.Load().(*common.TableInfo)
+						if !ok {
+							continue
+						}
+						events := e.(*event.BatchDMLEvent)
+						events.AssembleRows(tableInfo)
+						from := &targetMessage.From
+						for _, dml := range events.DMLEvents {
+							ds.Push(dml.DispatcherID, dispatcher.NewDispatcherEvent(from, dml))
+						}
+						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
+					case event.TypeDDLEvent:
+						stat, ok := dispatcherMap.Load(e.GetDispatcherID())
+						if !ok {
+							continue
+						}
+						stat.(*dispatcherStat).setTableInfo(e.(*event.DDLEvent).TableInfo)
+						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
+						ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+					case event.TypeHandshakeEvent:
+						stat, ok := dispatcherMap.Load(e.GetDispatcherID())
+						if !ok {
+							continue
+						}
+						stat.(*dispatcherStat).setTableInfo(e.(*event.HandshakeEvent).TableInfo)
+						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
+						ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+					default:
+						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
+						ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+					}
+				default:
+					log.Panic("invalid message type", zap.Any("msg", msg))
 				}
-				c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(e.Len()))
-			case event.TypeBatchDMLEvent:
-				stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
-				if !ok {
-					continue
-				}
-				tableInfo, ok := stat.(*dispatcherStat).tableInfo.Load().(*common.TableInfo)
-				if !ok {
-					continue
-				}
-				events := e.(*event.BatchDMLEvent)
-				events.AssembleRows(tableInfo)
-				from := &targetMessage.From
-				for _, dml := range events.DMLEvents {
-					c.ds.Push(dml.DispatcherID, dispatcher.NewDispatcherEvent(from, dml))
-				}
-				c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-			case event.TypeDDLEvent:
-				stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
-				if !ok {
-					continue
-				}
-				stat.(*dispatcherStat).setTableInfo(e.(*event.DDLEvent).TableInfo)
-				c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-				c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
-			case event.TypeHandshakeEvent:
-				stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
-				if !ok {
-					continue
-				}
-				stat.(*dispatcherStat).setTableInfo(e.(*event.HandshakeEvent).TableInfo)
-				c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-				c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
-			default:
-				c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-				c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 			}
-		default:
-			log.Panic("invalid message type", zap.Any("msg", msg))
-		}
-	}
-}
-
-func (c *EventCollector) handleMessage(targetMessage *messaging.TargetMessage) {
-	for _, msg := range targetMessage.Message {
-		switch e := msg.(type) {
-		case event.Event:
-			switch e.GetType() {
-			case event.TypeBatchResolvedEvent:
-				events := e.(*event.BatchResolvedEvent).Events
-				from := &targetMessage.From
-				for _, resolvedEvent := range events {
-					c.ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
-				}
-				c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(e.Len()))
-			case event.TypeBatchDMLEvent:
-				stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
-				if !ok {
-					continue
-				}
-				tableInfo, ok := stat.(*dispatcherStat).tableInfo.Load().(*common.TableInfo)
-				if !ok {
-					continue
-				}
-				events := e.(*event.BatchDMLEvent)
-				events.AssembleRows(tableInfo)
-				from := &targetMessage.From
-				for _, dml := range events.DMLEvents {
-					c.ds.Push(dml.DispatcherID, dispatcher.NewDispatcherEvent(from, dml))
-				}
-				c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-			case event.TypeDDLEvent:
-				stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
-				if !ok {
-					continue
-				}
-				stat.(*dispatcherStat).setTableInfo(e.(*event.DDLEvent).TableInfo)
-				c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-				c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
-			case event.TypeHandshakeEvent:
-				stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
-				if !ok {
-					continue
-				}
-				stat.(*dispatcherStat).setTableInfo(e.(*event.HandshakeEvent).TableInfo)
-				c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-				c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
-			default:
-				c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-				c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
-			}
-		default:
-			log.Panic("invalid message type", zap.Any("msg", msg))
 		}
 	}
 }
