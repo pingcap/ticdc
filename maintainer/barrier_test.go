@@ -34,8 +34,8 @@ func TestOneBlockEvent(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -163,8 +163,8 @@ func TestNormalBlock(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -330,8 +330,8 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -475,8 +475,8 @@ func TestSchemaBlock(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -652,8 +652,8 @@ func TestSyncPointBlock(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -813,8 +813,8 @@ func TestNonBlocked(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -863,8 +863,8 @@ func TestUpdateCheckpointTs(t *testing.T) {
 
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -920,8 +920,8 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
@@ -1085,8 +1085,8 @@ func TestSyncPointBlockPerf(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test")
 	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,

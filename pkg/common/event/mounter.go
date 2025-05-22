@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/types"
@@ -180,7 +179,7 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 	tableID := tablecodec.DecodeTableID(rawKV.Key)
 
 	// parse it with tidb_ddl_job
-	if tableID == spanz.JobTableID {
+	if tableID == common.JobTableID {
 		row, err := decodeRow(rawKV.Value, recordID, ddlTableInfo.DDLJobTable, time.UTC)
 		if err != nil {
 			return nil, errors.Trace(err)
@@ -189,7 +188,7 @@ func ParseDDLJob(rawKV *common.RawKVEntry, ddlTableInfo *DDLTableInfo) (*model.J
 		v = datum.GetBytes()
 
 		return parseJob(v, rawKV.StartTs, rawKV.CRTs, false)
-	} else if tableID == spanz.JobHistoryID {
+	} else if tableID == common.JobHistoryID {
 		// parse it with tidb_ddl_history
 		row, err := decodeRow(rawKV.Value, recordID, ddlTableInfo.DDLHistoryTable, time.UTC)
 		if err != nil {

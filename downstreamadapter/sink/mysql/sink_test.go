@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func MysqlSinkForTest() (*sink, sqlmock.Sqlmock) {
+func MysqlSinkForTest() (*Sink, sqlmock.Sqlmock) {
 	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	ctx := context.Background()
 	changefeedID := common.NewChangefeedID4Test("test", "test")

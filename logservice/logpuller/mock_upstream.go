@@ -83,12 +83,14 @@ type mockPDClient struct {
 
 var _ pdClient.Client = &mockPDClient{}
 
-func (m *mockPDClient) GetStore(ctx context.Context, storeID uint64) (*metapb.Store, error) {
-	s, err := m.Client.GetStore(ctx, storeID)
+func (m *mockPDClient) GetAllStores(ctx context.Context, _ ...pdClient.GetStoreOption) ([]*metapb.Store, error) {
+	s, err := m.Client.GetAllStores(ctx)
 	if err != nil {
 		return nil, err
 	}
-	s.Version = m.versionGen()
+	for _, store := range s {
+		store.Version = m.versionGen()
+	}
 	return s, nil
 }
 

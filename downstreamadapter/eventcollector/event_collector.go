@@ -206,8 +206,8 @@ func (c *EventCollector) Close() {
 	log.Info("event collector is closed")
 }
 
-func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64, bdrMode bool) {
-	c.PrepareAddDispatcher(target, memoryQuota, bdrMode, nil)
+func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64) {
+	c.PrepareAddDispatcher(target, memoryQuota, nil)
 
 	if target.GetTableSpan().TableID != 0 {
 		c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
@@ -223,7 +223,6 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 func (c *EventCollector) PrepareAddDispatcher(
 	target dispatcher.EventDispatcher,
 	memoryQuota uint64,
-	bdrMode bool,
 	readyCallback func()) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
@@ -250,7 +249,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 		Dispatcher: target,
 		StartTs:    target.GetStartTs(),
 		ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
-		BDRMode:    bdrMode,
+		BDRMode:    target.GetBDRMode(),
 	})
 	if err != nil {
 		// TODO: handle the return error(now even it return error, it will be retried later, we can just ignore it now)
