@@ -42,6 +42,7 @@ import (
 type EventDispatcher interface {
 	GetId() common.DispatcherID
 	GetStartTs() uint64
+	GetBDRMode() bool
 	GetChangefeedID() common.ChangeFeedID
 	GetTableSpan() *heartbeatpb.TableSpan
 	GetFilterConfig() *eventpb.FilterConfig
@@ -909,4 +910,8 @@ func (d *Dispatcher) updateComponentStatus() {
 		ResolvedTs:   d.GetResolvedTs(),
 		Seq:          d.seq,
 	}
+}
+
+func (d *Dispatcher) GetBDRMode() bool {
+	return d.bdrMode
 }
