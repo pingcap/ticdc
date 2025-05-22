@@ -247,7 +247,7 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 				Key:   key,
 				Value: val,
 			}
-			log.Error("received error from kafka", zap.Error(err.Err), zap.String("topic", err.Msg.Topic), zap.Int32("partition", err.Msg.Partition), zap.Any("msg", msg), zap.Int("length", msg.Length()))
+			log.Error("received error from kafka", zap.Error(err.Err), zap.String("topic", err.Msg.Topic), zap.Int32("partition", err.Msg.Partition), zap.Int("length", msg.Length()))
 			return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, err)
 		}
 	}
@@ -273,6 +273,6 @@ func (p *saramaAsyncProducer) AsyncSend(
 		return errors.Trace(ctx.Err())
 	case p.producer.Input() <- msg:
 	}
-	log.Error("send error to sarama", zap.Any("msg", msg), zap.Int("length", message.Length()))
+	log.Error("send error to sarama", zap.Any("topic",topic),zap.Any("partition",partition), zap.Int("length", message.Length()))
 	return nil
 }
