@@ -802,7 +802,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 }
 
 // MergeDispatcher merges the mulitple dispatchers belonging to the same table with adjacent ranges.
-func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID) {
+func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID) {
 	// Step 1: check the dispatcherIDs are valid:
 	//         1. whether the dispatcherIDs exist in the dispatcherMap
 	//         2. whether the dispatcherIDs belong to the same table
@@ -845,7 +845,7 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 	}
 	mergedDispatcher := dispatcher.NewDispatcher(
 		e.changefeedID,
-		common.NewDispatcherID(),
+		mergedDispatcherID,
 		mergedSpan,
 		e.sink,
 		0, // startTs will be calculated later.
@@ -861,9 +861,9 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 		e.config.BDRMode,
 	)
 	mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Preparing)
-	seq := e.dispatcherMap.Set(mergedDispatcher.GetId(), mergedDispatcher)
+	seq := e.dispatcherMap.Set(mergedDispatcherID, mergedDispatcher)
 	mergedDispatcher.SetSeq(seq)
-	e.schemaIDToDispatchers.Set(mergedDispatcher.GetSchemaID(), mergedDispatcher.GetId())
+	e.schemaIDToDispatchers.Set(mergedDispatcher.GetSchemaID(), mergedDispatcherID)
 	e.metricEventDispatcherCount.Inc()
 
 	for _, id := range dispatcherIDs {

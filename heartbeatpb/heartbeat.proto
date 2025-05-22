@@ -85,7 +85,8 @@ message ScheduleDispatcherRequest {
 
 message MergeDispatcherRequest {
     ChangefeedID changefeedID = 1;
-    repeated DispatcherID dispatcherIDs = 2;
+    repeated DispatcherID dispatcherIDs = 2; // dispatcherIDs from the dispatchers that need to be merged
+    DispatcherID mergedDispatcherID = 3;  // the dispatcherID of the new dispatcher to be merged to.
 }
 
 message MaintainerHeartbeat {

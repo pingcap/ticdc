@@ -410,7 +410,7 @@ func (h *MergeDispatcherRequestHandler) Handle(eventDispatcherManager *EventDisp
 	for _, id := range mergeDispatcherRequest.DispatcherIDs {
 		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherIDFromPB(id))
 	}
-	eventDispatcherManager.MergeDispatcher(dispatcherIDs)
+	eventDispatcherManager.MergeDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID))
 	return false
 }
 
