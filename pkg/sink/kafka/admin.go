@@ -33,7 +33,7 @@ type saramaAdminClient struct {
 	admin  sarama.ClusterAdmin
 }
 
-func (a *saramaAdminClient) GetAllBrokers(_ context.Context) ([]Broker, error) {
+func (a *saramaAdminClient) GetAllBrokers(_ context.Context) []Broker {
 	brokers := a.client.Brokers()
 	result := make([]Broker, 0, len(brokers))
 	for _, broker := range brokers {
@@ -41,8 +41,7 @@ func (a *saramaAdminClient) GetAllBrokers(_ context.Context) ([]Broker, error) {
 			ID: broker.ID(),
 		})
 	}
-
-	return result, nil
+	return result
 }
 
 func (a *saramaAdminClient) GetBrokerConfig(

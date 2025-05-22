@@ -92,18 +92,7 @@ func (m *saramaMetricsCollector) Run(ctx context.Context) {
 }
 
 func (m *saramaMetricsCollector) updateBrokers(ctx context.Context) {
-	start := time.Now()
-	brokers, err := m.adminClient.GetAllBrokers(ctx)
-	if err != nil {
-		log.Warn("Get Kafka brokers failed, "+
-			"use historical brokers to collect kafka broker level metrics",
-			zap.String("namespace", m.changefeedID.Namespace()),
-			zap.String("changefeed", m.changefeedID.Name()),
-			zap.Duration("duration", time.Since(start)),
-			zap.Error(err))
-		return
-	}
-
+	brokers := m.adminClient.GetAllBrokers(ctx)
 	for _, b := range brokers {
 		m.brokers[b.ID] = struct{}{}
 	}
