@@ -162,7 +162,7 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 		// already received ready signal from local event service
 		return
 	}
-	// if a dispatcher's readyCallback, it will just register to local event service.
+	// if a dispatcher's readyCallback is set, it will just register to local event service.
 	if d.readyCallback != nil {
 		d.eventServiceInfo.serverID = eventCollector.serverId
 		d.eventServiceInfo.readyEventReceived = true
@@ -331,7 +331,6 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *Eve
 	for i := 1; i < len(nodes); i++ {
 		d.eventServiceInfo.remoteCandidates = append(d.eventServiceInfo.remoteCandidates, node.ID(nodes[i]))
 	}
-	log.Info("send register request to remote event service", zap.String("serverID", d.eventServiceInfo.serverID.String()))
 	eventCollector.addDispatcherRequestToSendingQueue(
 		d.eventServiceInfo.serverID,
 		eventServiceTopic,

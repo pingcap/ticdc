@@ -223,7 +223,8 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 func (c *EventCollector) PrepareAddDispatcher(
 	target dispatcher.EventDispatcher,
 	memoryQuota uint64,
-	readyCallback func()) {
+	readyCallback func(),
+) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
