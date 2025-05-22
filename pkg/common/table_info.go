@@ -94,6 +94,7 @@ type TableInfo struct {
 }
 
 func (ti *TableInfo) InitPrivateFields() {
+	log.Info("initialize table info", zap.String("table", ti.TableName.String()))
 	if ti == nil {
 		return
 	}
