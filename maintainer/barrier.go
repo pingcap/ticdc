@@ -161,6 +161,8 @@ func (b *Barrier) HandleStatus(from node.ID,
 			zap.String("changefeed", request.ChangefeedID.String()))
 		return nil
 	}
+
+	log.Info("hyy handle block status send dispatcher status", zap.Any("dispatcherStatus", dispatcherStatus))
 	// send ack or write action message to dispatcher
 	return messaging.NewSingleTargetMessage(from,
 		messaging.HeartbeatCollectorTopic,
