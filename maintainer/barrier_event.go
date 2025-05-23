@@ -127,7 +127,7 @@ func (be *BarrierEvent) createRangeCheckerForTypeAll() {
 		for _, rep := range reps {
 			tbls = append(tbls, rep.Span.TableID)
 		}
-		tbls = append(tbls, heartbeatpb.DDLSpan.TableID)
+		tbls = append(tbls, common.DDLSpan.TableID)
 		be.rangeChecker = range_checker.NewTableSpanRangeChecker(tbls)
 	} else {
 		be.rangeChecker = range_checker.NewTableCountChecker(be.controller.TaskSize())
@@ -143,7 +143,7 @@ func (be *BarrierEvent) createRangeCheckerForTypeDB() {
 			tbls = append(tbls, rep.Span.TableID)
 		}
 
-		tbls = append(tbls, heartbeatpb.DDLSpan.TableID)
+		tbls = append(tbls, common.DDLSpan.TableID)
 		be.rangeChecker = range_checker.NewTableSpanRangeChecker(tbls)
 	} else {
 		be.rangeChecker = range_checker.NewTableCountChecker(

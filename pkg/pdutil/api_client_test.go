@@ -22,12 +22,12 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/codec"
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 )
@@ -158,12 +158,12 @@ func TestMetaLabelDecodeJSON(t *testing.T) {
 	_, startKey, err = codec.DecodeBytes(startKey, nil)
 	require.NoError(t, err)
 	require.EqualValues(
-		t, spanz.JobTableID, tablecodec.DecodeTableID(startKey), keys["start_key"].(string))
+		t, common.JobTableID, tablecodec.DecodeTableID(startKey), keys["start_key"].(string))
 
 	_, endKey, err = codec.DecodeBytes(endKey, nil)
 	require.NoError(t, err)
 	require.EqualValues(
-		t, spanz.JobTableID+1, tablecodec.DecodeTableID(endKey), keys["end_key"].(string))
+		t, common.JobTableID+1, tablecodec.DecodeTableID(endKey), keys["end_key"].(string))
 }
 
 func TestScanRegions(t *testing.T) {
@@ -208,14 +208,14 @@ func TestScanRegions(t *testing.T) {
 		}
 		return RegionsInfo{Regions: regions[start:end]}
 	}
-	rs, err := pc.scanRegions(context.Background(), tablepb.Span{}, []string{mockPDServer.URL}, 1)
+	rs, err := pc.scanRegions(context.Background(), heartbeatpb.TableSpan{}, []string{mockPDServer.URL}, 1)
 	require.NoError(t, err)
 	require.Equal(t, 7, len(rs))
 
 	handler = func() RegionsInfo {
 		return RegionsInfo{Regions: regions}
 	}
-	rs, err = pc.scanRegions(context.Background(), tablepb.Span{}, []string{mockPDServer.URL}, 1024)
+	rs, err = pc.scanRegions(context.Background(), heartbeatpb.TableSpan{}, []string{mockPDServer.URL}, 1024)
 	require.NoError(t, err)
 	require.Equal(t, 7, len(rs))
 
@@ -229,7 +229,7 @@ func TestScanRegions(t *testing.T) {
 	}
 	rs, err = pc.scanRegions(
 		context.Background(),
-		tablepb.Span{StartKey: []byte{0, 2, 0}, EndKey: []byte{0, 3}},
+		heartbeatpb.TableSpan{StartKey: []byte{0, 2, 0}, EndKey: []byte{0, 3}},
 		[]string{mockPDServer.URL}, 1)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(rs))
@@ -252,7 +252,7 @@ func TestScanRegions(t *testing.T) {
 	}
 	rs, err = pc.scanRegions(
 		context.Background(),
-		tablepb.Span{StartKey: []byte{0, 2, 0}, EndKey: []byte{0, 4, 0}},
+		heartbeatpb.TableSpan{StartKey: []byte{0, 2, 0}, EndKey: []byte{0, 4, 0}},
 		[]string{mockPDServer.URL}, 1)
 	require.NoError(t, err)
 	require.Equal(t, 3, len(rs))

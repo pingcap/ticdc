@@ -65,7 +65,7 @@ mysql_groups=(
 
 kafka_groups=(
 	# G00
-	#'debezium'
+	'debezium'
 	# G01
 	''
 	# G02

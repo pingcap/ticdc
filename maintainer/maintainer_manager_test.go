@@ -34,7 +34,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -78,8 +77,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		AddTableBatchSize:    1000,
 		CheckBalanceInterval: 0,
 	}
-	pdClock := pdutil.NewClock4Test()
-	manager := NewMaintainerManager(selfNode, schedulerConf, nil, pdClock, nil)
+	manager := NewMaintainerManager(selfNode, schedulerConf, nil, nil)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -284,8 +282,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		return nil
 	})
-	pdClock := pdutil.NewClock4Test()
-	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, nil, pdClock, nil)
+	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, nil, nil)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -298,7 +295,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	// table1 and table 2 will be reported by remote
 	var remotedIds []common.DispatcherID
 	for i := 1; i < 3; i++ {
-		span := spanz.TableIDToComparableSpan(int64(i))
+		span := common.TableIDToComparableSpan(int64(i))
 		tableSpan := &heartbeatpb.TableSpan{
 			TableID:  int64(i),
 			StartKey: span.StartKey,
@@ -357,7 +354,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	foundSize := 0
 	hasDDLDispatcher := false
 	for _, stm := range maintainer.controller.replicationDB.GetReplicating() {
-		if stm.Span.Equal(heartbeatpb.DDLSpan) {
+		if stm.Span.Equal(common.DDLSpan) {
 			hasDDLDispatcher = true
 		}
 		for _, remotedId := range remotedIds {
@@ -404,8 +401,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 		return nil
 	})
 	schedulerConf := &config.SchedulerConfig{AddTableBatchSize: 1000}
-	pdClock := pdutil.NewClock4Test()
-	manager := NewMaintainerManager(selfNode, schedulerConf, nil, pdClock, nil)
+	manager := NewMaintainerManager(selfNode, schedulerConf, nil, nil)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})

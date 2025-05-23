@@ -45,7 +45,7 @@ func TestGetChangefeedFiles(t *testing.T) {
 				"captureID_n2_test-2_uuid5.log",
 				"captureID_n1_test-1_uuid6.log",
 			},
-			changefeed: common.ChangeFeedID{Namespace: "n1", ID: "test-2"},
+			changefeed: common.NewChangefeedID4Test("n1", "test-2"),
 			want: []string{
 				"captureID_n1_test-2_uuid4.log",
 			},

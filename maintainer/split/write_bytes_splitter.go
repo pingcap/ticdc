@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
 	"go.uber.org/zap"
 )
 
@@ -60,7 +59,7 @@ func (m *writeSplitter) split(
 	if m.writeKeyThreshold == 0 {
 		return nil
 	}
-	regions, err := m.pdAPIClient.ScanRegions(ctx, tablepb.Span{
+	regions, err := m.pdAPIClient.ScanRegions(ctx, heartbeatpb.TableSpan{
 		TableID:  span.TableID,
 		StartKey: span.StartKey,
 		EndKey:   span.EndKey,

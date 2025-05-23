@@ -16,10 +16,10 @@ package spanz
 import (
 	"sync"
 
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
+	"github.com/pingcap/ticdc/heartbeatpb"
 )
 
-// SyncMap is thread-safe map, its key is tablepb.Span.
+// SyncMap is thread-safe map, its key is heartbeatpb.TableSpan.
 type SyncMap struct {
 	m sync.Map
 }
@@ -27,36 +27,36 @@ type SyncMap struct {
 // Load returns the value stored in the map for a key, or nil if no
 // value is present.
 // The ok result indicates whether value was found in the map.
-func (m *SyncMap) Load(key tablepb.Span) (value any, ok bool) {
+func (m *SyncMap) Load(key heartbeatpb.TableSpan) (value any, ok bool) {
 	return m.m.Load(toHashableSpan(key))
 }
 
 // Store sets the value for a key.
-func (m *SyncMap) Store(key tablepb.Span, value any) {
+func (m *SyncMap) Store(key heartbeatpb.TableSpan, value any) {
 	m.m.Store(toHashableSpan(key), value)
 }
 
 // LoadOrStore returns the existing value for the key if present.
 // Otherwise, it stores and returns the given value.
 // The loaded result is true if the value was loaded, false if stored.
-func (m *SyncMap) LoadOrStore(key tablepb.Span, value any) (actual any, loaded bool) {
+func (m *SyncMap) LoadOrStore(key heartbeatpb.TableSpan, value any) (actual any, loaded bool) {
 	return m.m.LoadOrStore(toHashableSpan(key), value)
 }
 
 // Delete deletes the value for a key.
-func (m *SyncMap) Delete(key tablepb.Span) {
+func (m *SyncMap) Delete(key heartbeatpb.TableSpan) {
 	m.m.Delete(toHashableSpan(key))
 }
 
 // LoadAndDelete deletes the value for a key, returning the previous value if any.
 // The loaded result reports whether the key was present.
-func (m *SyncMap) LoadAndDelete(key tablepb.Span) (value any, loaded bool) {
+func (m *SyncMap) LoadAndDelete(key heartbeatpb.TableSpan) (value any, loaded bool) {
 	return m.m.LoadAndDelete(toHashableSpan(key))
 }
 
 // Range calls f sequentially for each key and value present in the map.
 // If f returns false, range stops the iteration.
-func (m *SyncMap) Range(f func(span tablepb.Span, value any) bool) {
+func (m *SyncMap) Range(f func(span heartbeatpb.TableSpan, value any) bool) {
 	m.m.Range(func(key, value any) bool {
 		span := key.(hashableSpan).toSpan()
 		return f(span, value)

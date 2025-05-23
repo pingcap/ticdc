@@ -38,7 +38,6 @@ type Sink interface {
 	WriteBlockEvent(event commonEvent.BlockEvent) error
 	AddCheckpointTs(ts uint64)
 
-	GetStartTsList(tableIds []int64, startTsList []int64, removeDDLTs bool) ([]int64, []bool, error)
 	SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore)
 	Close(removeChangefeed bool)
 	Run(ctx context.Context) error
