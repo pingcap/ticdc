@@ -109,6 +109,19 @@ func Wrap(cli *clientV3.Client, metrics map[string]prometheus.Counter) *ClientIm
 	return &ClientImpl{cli: cli, metrics: metrics, clock: clock.New()}
 }
 
+// NewWrappedClient creates a new ClientImpl with given raw clientV3.Client
+func NewWrappedClient(cli *clientV3.Client) *ClientImpl {
+	metrics := map[string]prometheus.Counter{
+		EtcdPut:    etcdRequestCounter.WithLabelValues(EtcdPut),
+		EtcdGet:    etcdRequestCounter.WithLabelValues(EtcdGet),
+		EtcdDel:    etcdRequestCounter.WithLabelValues(EtcdDel),
+		EtcdTxn:    etcdRequestCounter.WithLabelValues(EtcdTxn),
+		EtcdGrant:  etcdRequestCounter.WithLabelValues(EtcdGrant),
+		EtcdRevoke: etcdRequestCounter.WithLabelValues(EtcdRevoke),
+	}
+	return Wrap(cli, metrics)
+}
+
 // Unwrap returns a clientV3.Client
 func (c *ClientImpl) Unwrap() *clientV3.Client {
 	return c.cli

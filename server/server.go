@@ -42,6 +42,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/security"
 	tiserver "github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/tcpserver"
+	"github.com/pingcap/ticdc/pkg/upstream"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/tikv/client-go/v2/tikv"
@@ -64,11 +65,12 @@ type server struct {
 
 	liveness api.Liveness
 
-	pdClient      pd.Client
-	pdAPIClient   pdutil.PDAPIClient
-	pdEndpoints   []string
-	coordinatorMu sync.Mutex
-	coordinator   tiserver.Coordinator
+	pdClient        pd.Client
+	pdAPIClient     pdutil.PDAPIClient
+	pdEndpoints     []string
+	coordinatorMu   sync.Mutex
+	coordinator     tiserver.Coordinator
+	upstreamManager *upstream.Manager
 
 	// session keeps alive between the server and etcd
 	session *concurrency.Session
@@ -149,6 +151,16 @@ func (c *server) initialize(ctx context.Context) error {
 	schemaStore := schemastore.New(ctx, conf.DataDir, subscriptionClient, c.pdClient, c.KVStorage)
 	eventStore := eventstore.New(ctx, conf.DataDir, subscriptionClient)
 	eventService := eventservice.New(eventStore, schemaStore)
+	c.upstreamManager = upstream.NewManager(ctx, upstream.NodeTopologyCfg{
+		Info:        c.info,
+		GCServiceID: c.EtcdClient.GetGCServiceID(),
+		SessionTTL:  int64(conf.CaptureSessionTTL),
+	})
+	_, err := c.upstreamManager.AddDefaultUpstream(c.pdEndpoints, conf.Security, c.pdClient, c.EtcdClient.GetEtcdClient())
+	if err != nil {
+		return errors.Trace(err)
+	}
+
 	c.subModules = []common.SubModule{
 		nodeManager,
 		subscriptionClient,
