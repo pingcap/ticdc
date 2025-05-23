@@ -130,7 +130,7 @@ func GetDDLActionType(query string) timodel.ActionType {
 		return timodel.ActionModifyColumn
 	}
 
-	log.Panic("how to set action for the DDL", zap.String("query", query))
+	log.Warn("how to set action for the DDL", zap.String("query", query))
 	return timodel.ActionNone
 }
 
@@ -175,6 +175,10 @@ func GetInfluenceTables(action timodel.ActionType, tableID int64) *commonEvent.I
 		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
 	case timodel.ActionModifySchemaCharsetAndCollate:
 		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
+	case timodel.ActionRecoverTable, timodel.ActionNone:
+		return &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeAll,
+		}
 	default:
 		log.Panic("unsupported DDL action", zap.String("action", action.String()))
 	}
