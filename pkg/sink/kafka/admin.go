@@ -19,10 +19,9 @@ import (
 	"strings"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -75,7 +74,7 @@ func (a *saramaAdminClient) GetBrokerConfig(
 		zap.String("namespace", a.changefeed.Namespace()),
 		zap.String("changefeed", a.changefeed.Name()),
 		zap.String("configName", configName))
-	return "", cerror.ErrKafkaConfigNotFound.GenWithStack(
+	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
 		"cannot find the `%s` from the broker's configuration", configName)
 }
 
@@ -109,7 +108,7 @@ func (a *saramaAdminClient) GetTopicConfig(
 		zap.String("namespace", a.changefeed.Namespace()),
 		zap.String("changefeed", a.changefeed.Name()),
 		zap.String("configName", configName))
-	return "", cerror.ErrKafkaConfigNotFound.GenWithStack(
+	return "", errors.ErrKafkaConfigNotFound.GenWithStack(
 		"cannot find the `%s` from the topic's configuration", configName)
 }
 

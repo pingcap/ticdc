@@ -35,11 +35,11 @@ type saramaFactory struct {
 // NewSaramaFactory constructs a Factory with sarama implementation.
 func NewSaramaFactory(
 	ctx context.Context,
-	o *Options,
+	o *options,
 	changefeedID common.ChangeFeedID,
 ) (Factory, error) {
 	start := time.Now()
-	config, err := NewSaramaConfig(ctx, o)
+	config, err := newSaramaConfig(ctx, o)
 	duration := time.Since(start).Seconds()
 	if duration > 2 {
 		log.Warn("new sarama config cost too much time",
@@ -68,7 +68,7 @@ func NewSaramaFactory(
 	}
 
 	start = time.Now()
-	saramaConfig, err := NewSaramaConfig(ctx, o)
+	saramaConfig, err := newSaramaConfig(ctx, o)
 	duration = time.Since(start).Seconds()
 	if duration > 2 {
 		log.Warn("new sarama config cost too much time",

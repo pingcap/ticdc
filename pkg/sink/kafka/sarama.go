@@ -21,9 +21,8 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"go.uber.org/zap"
 )
@@ -33,8 +32,8 @@ var (
 	maxKafkaVersion     = sarama.V2_8_0_0
 )
 
-// NewSaramaConfig return the default config and set the according version and metrics
-func NewSaramaConfig(ctx context.Context, o *Options) (*sarama.Config, error) {
+// newSaramaConfig return the default config and set the according version and metrics
+func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	config := sarama.NewConfig()
 	config.ClientID = o.ClientID
 	var err error
@@ -118,12 +117,12 @@ func NewSaramaConfig(ctx context.Context, o *Options) (*sarama.Config, error) {
 
 	err = completeSaramaSASLConfig(ctx, config, o)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
+		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
 	return config, nil
 }
 
-func completeSaramaSASLConfig(ctx context.Context, config *sarama.Config, o *Options) error {
+func completeSaramaSASLConfig(ctx context.Context, config *sarama.Config, o *options) error {
 	if o.SASL != nil && o.SASL.SASLMechanism != "" {
 		config.Net.SASL.Enable = true
 		config.Net.SASL.Mechanism = sarama.SASLMechanism(o.SASL.SASLMechanism)
@@ -166,7 +165,7 @@ func completeSaramaSASLConfig(ctx context.Context, config *sarama.Config, o *Opt
 	return nil
 }
 
-func getKafkaVersion(config *sarama.Config, o *Options) (sarama.KafkaVersion, error) {
+func getKafkaVersion(config *sarama.Config, o *options) (sarama.KafkaVersion, error) {
 	addrs := o.BrokerEndpoints
 	if len(addrs) > 1 {
 		// Shuffle the list of addresses to randomize the order in which
@@ -196,7 +195,7 @@ func getKafkaVersion(config *sarama.Config, o *Options) (sarama.KafkaVersion, er
 	if o.IsAssignedVersion {
 		assignedVersion, err := sarama.ParseKafkaVersion(o.Version)
 		if err != nil {
-			return assignedVersion, cerror.WrapError(cerror.ErrKafkaInvalidVersion, err)
+			return assignedVersion, errors.WrapError(errors.ErrKafkaInvalidVersion, err)
 		}
 		if !assignedVersion.IsAtLeast(maxKafkaVersion) && assignedVersion.String() != targetVersion.String() {
 			log.Warn("The Kafka version you assigned may not be correct. "+
