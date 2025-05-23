@@ -178,7 +178,7 @@ func (m *MergeDispatcherOperator) PostFinish() {
 
 	newReplicaSet := replica.NewSpanReplication(
 		m.toMergedReplicaSets[0].ChangefeedID,
-		m.id, m.toMergedReplicaSets[0].GetPDClock(),
+		m.id,
 		m.toMergedReplicaSets[0].GetSchemaID(),
 		mergeTableSpan,
 		m.checkpointTs)
