@@ -338,6 +338,7 @@ func (h *HeartBeatResponseHandler) Handle(eventDispatcherManager *EventDispatche
 		// TODO: Support batch
 		panic("invalid response count")
 	}
+	log.Info("hyy handle heartbeat response", zap.Any("resps", resps))
 	heartbeatResponse := resps[0]
 	dispatcherStatuses := heartbeatResponse.GetDispatcherStatuses()
 	for _, dispatcherStatus := range dispatcherStatuses {
