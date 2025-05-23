@@ -1107,6 +1107,45 @@ func TestE2EPartitionTable(t *testing.T) {
 	decodedDDL = dec.NextDDLEvent()
 	require.NotNil(t, decodedDDL)
 	require.Len(t, decodedDDL.BlockedTables.TableIDs, 3)
+
+	truncateTableDDL := helper.DDL2Event(`truncate table test.t`)
+	m, err = encoder.EncodeDDLEvent(truncateTableDDL)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+	tp, hasNext = dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, tp)
+
+	decodedDDL = dec.NextDDLEvent()
+	require.NotNil(t, decodedDDL)
+	require.Len(t, decodedDDL.BlockedTables.TableIDs, 3)
+
+	dropPartitionDDL := helper.DDL2Event("alter table test.t drop partition p2")
+	m, err = encoder.EncodeDDLEvent(dropPartitionDDL)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+	tp, hasNext = dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, tp)
+
+	decodedDDL = dec.NextDDLEvent()
+	require.NotNil(t, decodedDDL)
+	require.Len(t, decodedDDL.BlockedTables.TableIDs, 3)
+
+	addPartitionDDL := helper.DDL2Event("alter table test.t add partition (partition `p2` values less than (30))")
+	m, err = encoder.EncodeDDLEvent(addPartitionDDL)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+	tp, hasNext = dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, tp)
+
+	decodedDDL = dec.NextDDLEvent()
+	require.NotNil(t, decodedDDL)
+	require.Len(t, decodedDDL.BlockedTables.TableIDs, 2)
 }
 
 func TestDDLSequence(t *testing.T) {

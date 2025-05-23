@@ -159,10 +159,11 @@ func GetInfluenceTables(action timodel.ActionType, physicalTableID []int64) *com
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      physicalTableID,
 		}
-	case timodel.ActionAddTablePartition:
-		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
-	case timodel.ActionDropTablePartition:
-		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
+	case timodel.ActionAddTablePartition, timodel.ActionDropTablePartition:
+		return &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      physicalTableID,
+		}
 	case timodel.ActionTruncateTablePartition:
 		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
 	case timodel.ActionReorganizePartition:

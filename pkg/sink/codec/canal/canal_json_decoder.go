@@ -426,6 +426,28 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 		partitionInfoAccessor.Add(result.SchemaName, result.TableName, partitionInfo)
 	case *ast.AlterTableStmt:
 		physicalTableID = partitionInfoAccessor.GetPhysicalTableIDs(result.SchemaName, result.TableName)
+		partitionInfo := partitionInfoAccessor.Get(result.SchemaName, result.TableName)
+		switch v.Specs[0].Tp {
+		case ast.AlterTableDropPartition:
+			// partition dropped, should also remove partition definition.
+			remained := make([]timodel.PartitionDefinition, 0, len(physicalTableID))
+			for _, def := range partitionInfo.Definitions {
+				if def.Name.O != v.Specs[0].PartitionNames[0].O {
+					remained = append(remained, def)
+				}
+			}
+			partitionInfo.Definitions = remained
+		case ast.AlterTableAddPartitions:
+			for _, p := range v.Specs[0].PartDefinitions {
+				var definition timodel.PartitionDefinition
+				definition.Name = p.Name
+				definition.ID = tableIDAllocator.AllocatePartitionID(result.SchemaName, result.TableName, definition.Name.O)
+				var lessThan string
+				// todo: how to get the less than value?
+				definition.LessThan = append(definition.LessThan, lessThan)
+				partitionInfo.Definitions = append(partitionInfo.Definitions, definition)
+			}
+		}
 	// care about the add partition / drop partition case.
 	case *ast.DropTableStmt:
 		physicalTableID = partitionInfoAccessor.GetPhysicalTableIDs(result.SchemaName, result.TableName)
