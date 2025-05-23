@@ -49,6 +49,12 @@ func NewSaramaFactory(
 		return nil, errors.Trace(err)
 	}
 
+	version, err := getKafkaVersion(config, o)
+	if err != nil {
+		return nil, err
+	}
+	config.Version = version
+
 	admin, err := newAdminClient(changefeedID, o.BrokerEndpoints, config)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -72,6 +78,7 @@ func NewSaramaFactory(
 		return nil, errors.Trace(err)
 	}
 	saramaConfig.MetricRegistry = metrics.NewRegistry()
+	saramaConfig.Version = version
 
 	return &saramaFactory{
 		changefeedID: changefeedID,
