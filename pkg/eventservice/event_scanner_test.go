@@ -79,12 +79,7 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
 	require.Equal(t, e.GetCommitTs(), uint64(102))
 
-	// case 2: Contains DDL, DML and resolvedTs events
-	// Tests that the scanner can handle mixed event types (DDL + DML + resolvedTs)
-	// Event sequence:
-	//   DDL(ts=x) -> DML(ts=x+1) -> DML(ts=x+2) -> DML(ts=x+3) -> DML(ts=x+4) -> Resolved(ts=x+5)
-	// Expected result:
-	// [DDL(x), DML(x+1), DML(x+2), DML(x+3), DML(x+4), Resolved(x+5)]
+	// case 2: Only has resolvedTs and DDL event
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
@@ -94,8 +89,6 @@ func TestEventScanner(t *testing.T) {
 		`insert into test.t(id,c) values (3, "c3")`,
 	}...)
 	resolvedTs := kvEvents[len(kvEvents)-1].CRTs + 1
-	err = mockEventStore.AppendEvents(dispatcherID, resolvedTs, kvEvents...)
-	require.NoError(t, err)
 	mockSchemaStore.AppendDDLEvent(tableID, ddlEvent)
 
 	disp.eventStoreResolvedTs.Store(resolvedTs)
@@ -109,9 +102,35 @@ func TestEventScanner(t *testing.T) {
 	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
+	require.Equal(t, 2, len(events))
+	e = events[0]
+	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
+	require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
+	e = events[1]
+	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
+	require.Equal(t, resolvedTs, e.GetCommitTs())
+
+	// case 3: Contains DDL, DML and resolvedTs events
+	// Tests that the scanner can handle mixed event types (DDL + DML + resolvedTs)
+	// Event sequence:
+	//   DDL(ts=x) -> DML(ts=x+1) -> DML(ts=x+2) -> DML(ts=x+3) -> DML(ts=x+4) -> Resolved(ts=x+5)
+	// Expected result:
+	// [DDL(x), DML(x+1), DML(x+2), DML(x+3), DML(x+4), Resolved(x+5)]
+	err = mockEventStore.AppendEvents(dispatcherID, resolvedTs, kvEvents...)
+	require.NoError(t, err)
+	disp.eventStoreResolvedTs.Store(resolvedTs)
+	needScan, dataRange = broker.checkNeedScan(disp, true)
+	require.True(t, needScan)
+	sl = scanLimit{
+		MaxBytes: 1000,
+		Timeout:  10 * time.Second,
+	}
+	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
+	require.NoError(t, err)
+	require.False(t, isBroken)
 	require.Equal(t, 4, len(events))
 
-	// case 3: Reaches scan limit, only 1 DDL and 1 DML event scanned
+	// case 4: Reaches scan limit, only 1 DDL and 1 DML event scanned
 	// Tests that when MaxBytes limit is reached, the scanner returns partial events with isBroken=true
 	// Expected result:
 	// [DDL(x), DML(x+1), Resolved(x+1)] (partial events due to size limit)
@@ -135,7 +154,7 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
 	require.Equal(t, kvEvents[0].CRTs, e.GetCommitTs())
 
-	// case4: Tests transaction atomicity during scanning
+	// case 5: Tests transaction atomicity during scanning
 	// Tests that transactions with same commitTs are scanned atomically (not split even when limit is reached)
 	// Modified events: first 3 DMLs have same commitTs=x:
 	//   DDL(x) -> DML-1(x+1) -> DML-2(x+1) -> DML-3(x+1) -> DML-4(x+4)
@@ -177,7 +196,7 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
 	require.Equal(t, firstCommitTs, e.GetCommitTs())
 
-	// case 5: Tests timeout behavior
+	// case 6: Tests timeout behavior
 	// Tests that with Timeout=0, the scanner immediately returns scanned events
 	// Expected result:
 	// [DDL(x), DML(x+1), DML(x+1), DML(x+1), Resolved(x+1)]
@@ -192,7 +211,7 @@ func TestEventScanner(t *testing.T) {
 	require.True(t, isBroken)
 	require.Equal(t, 4, len(events))
 
-	// case 6: Tests DMLs are returned before DDLs when they share same commitTs
+	// case 7: Tests DMLs are returned before DDLs when they share same commitTs
 	// Tests that DMLs take precedence over DDLs with same commitTs
 	// Event sequence after adding fakeDDL(ts=x):
 	//   DDL(x) -> DML(x+1) -> DML(x+1) -> DML(x+1) -> fakeDDL(x+1) -> DML(x+4)
