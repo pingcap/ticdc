@@ -221,7 +221,9 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 					rowKey := rowLists[i].PreRowKeys
 					if nextRowType == commonEvent.RowTypeUpdate {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
-							log.Panic("Here are two invalid rows, one is Delete A, the other is Update A to B", zap.Any("Events", events))
+							sql, values := w.generateNormalSQLs(events)
+							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
+							log.Panic("Here are two invalid rows, one is Delete A, the other is Update A to B", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j))
 						}
 					}
 				case commonEvent.RowTypeInsert:
