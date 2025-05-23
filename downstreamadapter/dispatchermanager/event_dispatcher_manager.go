@@ -670,15 +670,34 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 }
 
 // MergeDispatcher merges the mulitple dispatchers belonging to the same table with adjacent ranges.
-func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID) {
-	// Step 1: check the dispatcherIDs are valid:
-	//         1. whether the dispatcherIDs exist in the dispatcherMap
-	//         2. whether the dispatcherIDs belong to the same table
-	//         3. whether the dispatcherIDs have adjacent ranges
-	//         4. whether the dispatcher in working status.
+func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID) *MergeCheckTask {
+	// Step 1: check the dispatcherIDs and mergedDispatcherID are valid:
+	//         1. whether the mergedDispatcherID is not exist in the dispatcherMap
+	//         2. whether the dispatcherIDs exist in the dispatcherMap
+	//         3. whether the dispatcherIDs belong to the same table
+	//         4. whether the dispatcherIDs have adjacent ranges
+	//         5. whether the dispatcher in working status.
 
 	if len(dispatcherIDs) < 2 {
-		return
+		log.Error("merge dispatcher failed, invalid dispatcherIDs",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Any("dispatcherIDs", dispatcherIDs))
+		return nil
+	}
+	if dispatcherItem, ok := e.dispatcherMap.Get(mergedDispatcherID); ok {
+		// if the status is working, means the mergeDispatcher is outdated, return the latest status info
+		if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_Working {
+			e.statusesChan <- dispatcher.TableSpanStatusWithSeq{
+				TableSpanStatus: &heartbeatpb.TableSpanStatus{
+					ID:              mergedDispatcherID.ToPB(),
+					CheckpointTs:    dispatcherItem.GetCheckpointTs(),
+					ComponentStatus: heartbeatpb.ComponentState_Working,
+				},
+				Seq: e.dispatcherMap.GetSeq(),
+			}
+		}
+		// otherwise, merge is in process, just return.
+		return nil
 	}
 	var prevTableSpan *heartbeatpb.TableSpan
 	var startKey []byte
@@ -686,8 +705,18 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 	var schemaID int64
 	for idx, id := range dispatcherIDs {
 		dispatcher, ok := e.dispatcherMap.Get(id)
-		if !ok || dispatcher.GetComponentStatus() != heartbeatpb.ComponentState_Working {
-			return
+		if !ok {
+			log.Error("merge dispatcher failed, the dispatcher is not found",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Any("dispatcherID", id))
+			return nil
+		}
+		if dispatcher.GetComponentStatus() != heartbeatpb.ComponentState_Working {
+			log.Error("merge dispatcher failed, the dispatcher is not working",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Any("dispatcherID", id),
+				zap.Any("componentStatus", dispatcher.GetComponentStatus()))
+			return nil
 		}
 		if idx == 0 {
 			prevTableSpan = dispatcher.GetTableSpan()
@@ -696,7 +725,13 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 		} else {
 			currentTableSpan := dispatcher.GetTableSpan()
 			if !common.IsTableSpanAdjacent(prevTableSpan, currentTableSpan) {
-				return
+				log.Error("merge dispatcher failed, the dispatcherIDs are not adjacent",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Any("dispatcherIDs", dispatcherIDs),
+					zap.Any("prevTableSpan", prevTableSpan),
+					zap.Any("currentTableSpan", currentTableSpan),
+				)
+				return nil
 			}
 			prevTableSpan = currentTableSpan
 			endKey = currentTableSpan.EndKey
@@ -743,7 +778,7 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 
 	// Step 3: register mergeDispatcher into event collector, and generate a task to check the merged dispatcher status
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).MergeDispatcher(mergedDispatcher, e.config.MemoryQuota)
-	newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
+	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
 }
 
 func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
