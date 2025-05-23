@@ -192,10 +192,6 @@ func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	s.tableSchemaStore = tableSchemaStore
 }
 
-func (s *sink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
-	return startTsList, make([]bool, len(startTsList)), nil
-}
-
 func (s *sink) sendCheckpoint(ctx context.Context) error {
 	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())
 	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(s.changefeedID.Namespace(), s.changefeedID.Name())

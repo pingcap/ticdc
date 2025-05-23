@@ -13,25 +13,7 @@
 
 package heartbeatpb
 
-import (
-	"bytes"
-
-	"github.com/pingcap/ticdc/pkg/spanz"
-)
-
-// DDLSpanSchemaID is the special schema id for DDL
-var DDLSpanSchemaID int64 = 0
-
-// DDLSpan is the special span for Table Trigger Event Dispatcher
-var DDLSpan = &TableSpan{
-	TableID:  0,
-	StartKey: spanz.TableIDToComparableSpan(0).StartKey,
-	EndKey:   spanz.TableIDToComparableSpan(0).EndKey,
-}
-
-func LessTableSpan(t1, t2 *TableSpan) bool {
-	return t1.Less(t2)
-}
+import "bytes"
 
 // Less compares two Spans, defines the order between spans.
 func (s *TableSpan) Less(other *TableSpan) bool {

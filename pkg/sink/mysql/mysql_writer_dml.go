@@ -514,19 +514,6 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			return 0, 0, errors.Trace(err)
 		}
 
-		// Set session variables first and then execute the transaction.
-		// we try to set write source for each txn,
-		// so we can use it to trace the data source
-		if err = SetWriteSource(w.ctx, w.cfg, tx); err != nil {
-			log.Error("Failed to set write source", zap.Error(err))
-			if rbErr := tx.Rollback(); rbErr != nil {
-				if errors.Cause(rbErr) != context.Canceled {
-					log.Warn("failed to rollback txn", zap.Error(rbErr))
-				}
-			}
-			return 0, 0, err
-		}
-
 		if !fallbackToSeqWay {
 			err = w.multiStmtExecute(dmls, tx, writeTimeout)
 			if err != nil {
@@ -580,6 +567,19 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 func (w *Writer) sequenceExecute(
 	dmls *preparedDMLs, tx *sql.Tx, writeTimeout time.Duration,
 ) error {
+	// Set session variables first and execution the txn.
+	// we try to set write source for each txn,
+	// so we can use it to trace the data source
+	if err := SetWriteSource(w.ctx, w.cfg, tx); err != nil {
+		log.Error("Failed to set write source", zap.Error(err))
+		if rbErr := tx.Rollback(); rbErr != nil {
+			if errors.Cause(rbErr) != context.Canceled {
+				log.Warn("failed to rollback txn", zap.Error(rbErr))
+			}
+		}
+		return err
+	}
+
 	for i, query := range dmls.sqls {
 		args := dmls.values[i]
 		log.Debug("exec row", zap.String("sql", query), zap.Any("args", args))
@@ -622,6 +622,19 @@ func (w *Writer) sequenceExecute(
 	return nil
 }
 
+// SetWriteSource sets write source for the transaction.
+// When this variable is set to a value other than 0, data written in this session is considered to be written by TiCDC.
+// DDLs executed in a PRIMARY cluster can be replicated to a SECONDARY cluster by TiCDC.
+func setWriteSourceInSQL(cfg *Config, sql string) string {
+	if !cfg.IsWriteSourceExisted {
+		return sql
+	}
+
+	query := fmt.Sprintf("SET SESSION %s = %d;", "tidb_cdc_write_source", cfg.SourceID)
+	finalSql := query + sql
+	return finalSql
+}
+
 // execute SQLs in the multi statements way.
 func (w *Writer) multiStmtExecute(
 	dmls *preparedDMLs, tx *sql.Tx, writeTimeout time.Duration,
@@ -631,20 +644,24 @@ func (w *Writer) multiStmtExecute(
 		multiStmtArgs = append(multiStmtArgs, value...)
 	}
 	multiStmtSQL := strings.Join(dmls.sqls, ";")
+	// Set session variables first in the sql.
+	// we try to set write source for each txn,
+	// so we can use it to trace the data source
+	finalMultiStmtSQL := setWriteSourceInSQL(w.cfg, multiStmtSQL)
 
 	ctx, cancel := context.WithTimeout(w.ctx, writeTimeout)
 	defer cancel()
 
-	_, err := tx.ExecContext(ctx, multiStmtSQL, multiStmtArgs...)
+	_, err := tx.ExecContext(ctx, finalMultiStmtSQL, multiStmtArgs...)
 	if err != nil {
-		log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", multiStmtSQL), zap.Any("multiStmtArgs", multiStmtArgs))
+		log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", finalMultiStmtSQL), zap.Any("multiStmtArgs", multiStmtArgs))
 		if rbErr := tx.Rollback(); rbErr != nil {
 			if errors.Cause(rbErr) != context.Canceled {
 				log.Warn("failed to rollback txn", zap.Error(rbErr))
 			}
 		}
 		cancel()
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQL, multiStmtArgs)))
+		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", finalMultiStmtSQL, multiStmtArgs)))
 	}
 	return nil
 }

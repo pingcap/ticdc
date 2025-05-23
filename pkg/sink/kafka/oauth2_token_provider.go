@@ -51,7 +51,7 @@ func (t *tokenProvider) Token() (*sarama.AccessToken, error) {
 	return &sarama.AccessToken{Token: token.AccessToken}, nil
 }
 
-func newTokenProvider(ctx context.Context, o *Options) (sarama.AccessTokenProvider, error) {
+func newTokenProvider(ctx context.Context, o *options) (sarama.AccessTokenProvider, error) {
 	// grant_type is by default going to be set to 'client_credentials' by the
 	// client credentials library as defined by the spec, however non-compliant
 	// auth server implementations may want a custom type

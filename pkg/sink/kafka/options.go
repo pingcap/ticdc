@@ -140,8 +140,9 @@ type urlConfig struct {
 	InsecureSkipVerify           *bool   `form:"insecure-skip-verify"`
 }
 
-// Options stores user specified configurations
-type Options struct {
+// options stores user specified configurations
+type options struct {
+	Topic           string
 	BrokerEndpoints []string
 
 	// control whether to create topic
@@ -173,8 +174,8 @@ type Options struct {
 }
 
 // NewOptions returns a default Kafka configuration
-func NewOptions() *Options {
-	return &Options{
+func NewOptions() *options {
+	return &options{
 		Version: "2.4.0",
 		// MaxMessageBytes will be used to initialize producer
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
@@ -191,8 +192,8 @@ func NewOptions() *Options {
 	}
 }
 
-// SetPartitionNum set the partition-num by the topic's partition count.
-func (o *Options) SetPartitionNum(realPartitionCount int32) error {
+// setPartitionNum set the partition-num by the topic's partition count.
+func (o *options) setPartitionNum(realPartitionCount int32) error {
 	// user does not specify the `partition-num` in the sink-uri
 	if o.PartitionNum == 0 {
 		o.PartitionNum = realPartitionCount
@@ -220,8 +221,8 @@ func (o *Options) SetPartitionNum(realPartitionCount int32) error {
 	return nil
 }
 
-// Apply the sinkURI to update Options
-func (o *Options) Apply(changefeedID common.ChangeFeedID,
+// Apply the sinkURI to update options
+func (o *options) Apply(changefeedID common.ChangeFeedID,
 	sinkURI *url.URL, sinkConfig *config.SinkConfig,
 ) error {
 	o.BrokerEndpoints = strings.Split(sinkURI.Host, ",")
@@ -362,7 +363,7 @@ func mergeConfig(
 	return dest, nil
 }
 
-func (o *Options) applyTLS(params *urlConfig) error {
+func (o *options) applyTLS(params *urlConfig) error {
 	if params.CA != nil && *params.CA != "" {
 		o.Credential.CAPath = *params.CA
 	}
@@ -409,7 +410,7 @@ func (o *Options) applyTLS(params *urlConfig) error {
 	return nil
 }
 
-func (o *Options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConfig) error {
+func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConfig) error {
 	if urlParameter.SASLUser != nil && *urlParameter.SASLUser != "" {
 		o.SASL.SASLUser = *urlParameter.SASLUser
 	}
@@ -534,7 +535,7 @@ type AutoCreateTopicConfig struct {
 	ReplicationFactor int16
 }
 
-func (o *Options) DeriveTopicConfig() *AutoCreateTopicConfig {
+func (o *options) DeriveTopicConfig() *AutoCreateTopicConfig {
 	return &AutoCreateTopicConfig{
 		AutoCreate:        o.AutoCreate,
 		PartitionNum:      o.PartitionNum,
@@ -565,11 +566,11 @@ func NewKafkaClientID(captureAddr string,
 	return
 }
 
-// AdjustOptions adjust the `Options` and `sarama.Config` by condition.
-func AdjustOptions(
+// adjustOptions adjust the `options` and `sarama.Config` by condition.
+func adjustOptions(
 	ctx context.Context,
 	admin ClusterAdminClient,
-	options *Options,
+	options *options,
 	topic string,
 ) error {
 	topics, err := admin.GetTopicsMeta(ctx, []string{topic}, true)
@@ -626,7 +627,7 @@ func AdjustOptions(
 				zap.String("topic", topic), zap.Any("detail", info))
 		}
 
-		if err := options.SetPartitionNum(info.NumPartitions); err != nil {
+		if err = options.setPartitionNum(info.NumPartitions); err != nil {
 			return errors.Trace(err)
 		}
 
@@ -731,7 +732,7 @@ func validateMinInsyncReplicas(
 		log.Error(msg, zap.Int("replication-factor", replicationFactor),
 			zap.Int("min.insync.replicas", minInsyncReplicas))
 		return cerror.ErrKafkaInvalidConfig.GenWithStack(
-			"TiCDC Kafka producer's `request.required.acks` defaults to -1, "+
+			"TiCDC Kafka sink's `request.required.acks` defaults to -1, "+
 				"TiCDC cannot deliver messages when the `replication-factor` %d "+
 				"is smaller than the `min.insync.replicas` %d of %s",
 			replicationFactor, minInsyncReplicas, configFrom,
@@ -756,7 +757,7 @@ func getTopicConfig(
 		return c, nil
 	}
 
-	log.Info("TiCDC cannot find the configuration from topic, try to get it from broker",
+	log.Info("kafka sink cannot find the configuration from topic, try to get it from broker",
 		zap.String("topic", topicName), zap.String("config", topicConfigName))
 	return admin.GetBrokerConfig(ctx, brokerConfigName)
 }

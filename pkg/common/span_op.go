@@ -16,11 +16,52 @@ package common
 import (
 	"bytes"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/codec"
+	"go.uber.org/zap"
 )
+
+const (
+	// JobTableID is the id of `tidb_ddl_job`.
+	JobTableID = ddl.JobTableID
+	// JobHistoryID is the id of `tidb_ddl_history`
+	JobHistoryID = ddl.HistoryTableID
+)
+
+// TableIDToComparableSpan converts a TableID to a Span whose
+// StartKey and EndKey are encoded in Comparable format.
+func TableIDToComparableSpan(tableID int64) heartbeatpb.TableSpan {
+	startKey, endKey := GetTableRange(tableID)
+	return heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: ToComparableKey(startKey),
+		EndKey:   ToComparableKey(endKey),
+	}
+}
+
+// TableIDToComparableRange returns a range of a table,
+// start and end are encoded in Comparable format.
+func TableIDToComparableRange(tableID int64) (start, end heartbeatpb.TableSpan) {
+	tableSpan := TableIDToComparableSpan(tableID)
+	start = tableSpan
+	start.EndKey = nil
+	end = tableSpan
+	end.StartKey = tableSpan.EndKey
+	end.EndKey = nil
+	return
+}
+
+func IsCompleteSpan(tableSpan *heartbeatpb.TableSpan) bool {
+	startKey, endKey := GetTableRange(tableSpan.TableID)
+	if StartCompare(ToComparableKey(startKey), tableSpan.StartKey) == 0 && EndCompare(ToComparableKey(endKey), tableSpan.EndKey) == 0 {
+		return true
+	}
+	return false
+}
 
 // UpperBoundKey represents the maximum value.
 var UpperBoundKey = []byte{255, 255, 255, 255, 255}
@@ -92,7 +133,7 @@ func EndCompare(lhs []byte, rhs []byte) int {
 }
 
 // GetIntersectSpan return the intersect part of lhs and rhs span
-func GetIntersectSpan(lhs heartbeatpb.TableSpan, rhs heartbeatpb.TableSpan) heartbeatpb.TableSpan {
+func GetIntersectSpan(lhs, rhs heartbeatpb.TableSpan) heartbeatpb.TableSpan {
 	if len(lhs.StartKey) != 0 && EndCompare(lhs.StartKey, rhs.EndKey) >= 0 ||
 		len(rhs.StartKey) != 0 && EndCompare(rhs.StartKey, lhs.EndKey) >= 0 {
 		return heartbeatpb.TableSpan{
@@ -117,6 +158,20 @@ func GetIntersectSpan(lhs heartbeatpb.TableSpan, rhs heartbeatpb.TableSpan) hear
 		StartKey: start,
 		EndKey:   end,
 	}
+}
+
+// IsSubSpan returns true if the sub span is parents spans
+func IsSubSpan(sub heartbeatpb.TableSpan, parents ...heartbeatpb.TableSpan) bool {
+	if bytes.Compare(sub.StartKey, sub.EndKey) >= 0 {
+		log.Panic("the sub span is invalid", zap.Reflect("subSpan", sub))
+	}
+	for _, parent := range parents {
+		if StartCompare(parent.StartKey, sub.StartKey) <= 0 &&
+			EndCompare(sub.EndKey, parent.EndKey) <= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // IsEmptySpan returns true if the span is empty.
