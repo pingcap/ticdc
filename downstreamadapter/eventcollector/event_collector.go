@@ -242,6 +242,20 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	}
 }
 
+func (c *EventCollector) MergeDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64) {
+	log.Info("merge dispatcher", zap.Stringer("dispatcher", target.GetId()))
+	defer func() {
+		log.Info("merge dispatcher done", zap.Stringer("dispatcher", target.GetId()))
+	}()
+
+	// TODO: Communicate with event service to merge the dispatcher.
+
+}
+
+func (c *EventCollector) UpdateMergedDispatcherStartTs(dispatcherID common.DispatcherID, startTs uint64) {
+	// TODO
+}
+
 func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 	log.Info("remove dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
