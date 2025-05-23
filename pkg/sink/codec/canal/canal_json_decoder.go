@@ -18,8 +18,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"github.com/pingcap/tidb/pkg/parser"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -31,7 +29,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/ddl"
+	"github.com/pingcap/tidb/pkg/meta/metabuild"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
@@ -91,7 +93,7 @@ var (
 	tableIDAllocator  = common.NewFakeTableIDAllocator()
 	tableInfoAccessor = common.NewTableInfoAccessor()
 
-	physicalTableIDAccessor = common.NewPhysicalTableIDAccessor()
+	partitionInfoAccessor = common.NewPartitionInfoAccessor()
 )
 
 // NewDecoder return a decoder for canal-json
@@ -118,6 +120,7 @@ func NewDecoder(
 
 	tableIDAllocator.Clean()
 	tableInfoAccessor.Clean()
+	partitionInfoAccessor.Clean()
 	return &decoder{
 		config:       codecConfig,
 		decoder:      newBufferedJSONDecoder(),
@@ -299,10 +302,42 @@ func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	return b.canalJSONMessage2DMLEvent()
 }
 
-func queryPhysicalTableID() int64 {
-	var result int64
+func queryPhysicalTableID(msg canalJSONMessageInterface, logicalTableID int64) int64 {
+	schemaName := *msg.getSchema()
+	tableName := *msg.getTable()
 
-	return result
+	partitionInfo := partitionInfoAccessor.Get(schemaName, tableName)
+	// partitionInfo is nil, indicate it's not partition table, so the logical table id is identical to the physical table id.
+	if partitionInfo == nil {
+		return logicalTableID
+	}
+
+	data := msg.getData()
+	if data == nil {
+		data = msg.getOld()
+	}
+	switch partitionInfo.Type {
+	case pmodel.PartitionTypeRange:
+		columnName := strings.ReplaceAll(partitionInfo.Expr, "`", "")
+		columnValue := data[columnName]
+		for _, def := range partitionInfo.Definitions {
+			if def.LessThan[0] == "MAXVALUE" {
+				return def.ID
+			}
+			if strings.Compare(columnValue.(string), def.LessThan[0]) == -1 {
+				return def.ID
+			}
+		}
+		log.Panic("cannot assign partition id", zap.String("schema", schemaName),
+			zap.String("table", tableName), zap.Any("value", columnValue))
+	case pmodel.PartitionTypeHash:
+	case pmodel.PartitionTypeKey:
+	case pmodel.PartitionTypeList:
+	case pmodel.PartitionTypeNone:
+	default:
+	}
+	log.Panic("manually set partition id for partition type not supported yet", zap.Stringer("partitionType", partitionInfo.Type))
+	return 0
 }
 
 func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
@@ -313,7 +348,7 @@ func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	result.TableInfo = tableInfo
 	result.StartTs = msg.getCommitTs()
 	result.CommitTs = msg.getCommitTs()
-	result.PhysicalTableID = queryPhysicalTableID()
+	result.PhysicalTableID = queryPhysicalTableID(msg, tableInfo.TableName.TableID)
 	result.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	result.Length++
 
@@ -369,43 +404,39 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	var physicalTableID []int64
 	switch v := stmt.(type) {
 	case *ast.CreateTableStmt:
-		for _, p := range v.Partition.Definitions {
-			id := tableIDAllocator.AllocatePartitionID(result.SchemaName, result.TableName, p.Name.O)
-			physicalTableIDAccessor.Add(result.SchemaName, result.TableName, p.Name.O, id)
+		// CreateTable indicates the table not exist yet
+		// for normal table, just skip it, let the DML events allocate the table id
+		// but for the partition table, allocate physical table id now,
+		// since cannot know whether the table is partitioned or not by the DML.
+		if v.Partition == nil {
+			break
 		}
-	// CreateTable indicates the table not exist yet, so just skip it.
+		tableInfo, err := ddl.BuildTableInfoFromAST(metabuild.NewContext(), v)
+		if err != nil {
+			log.Panic("cannot build table info from the DDL statement", zap.String("query", result.Query), zap.Error(err))
+		}
+		partitionInfo := new(timodel.PartitionInfo)
+		partitionInfo.Type = tableInfo.GetPartitionInfo().Type
+		partitionInfo.Expr = tableInfo.GetPartitionInfo().Expr
+		partitionInfo.Definitions = tableInfo.GetPartitionInfo().Definitions
+		for i := 0; i < len(partitionInfo.Definitions); i++ {
+			name := partitionInfo.Definitions[i].Name.O
+			partitionInfo.Definitions[i].ID = tableIDAllocator.AllocatePartitionID(result.SchemaName, result.TableName, name)
+		}
+		partitionInfoAccessor.Add(result.SchemaName, result.TableName, partitionInfo)
 	case *ast.AlterTableStmt:
-		physicalTableID = physicalTableIDAccessor.Get(result.SchemaName, result.TableName)
+		physicalTableID = partitionInfoAccessor.GetPhysicalTableIDs(result.SchemaName, result.TableName)
 	// care about the add partition / drop partition case.
 	case *ast.DropTableStmt:
-		physicalTableID = physicalTableIDAccessor.Get(result.SchemaName, result.TableName)
+		physicalTableID = partitionInfoAccessor.GetPhysicalTableIDs(result.SchemaName, result.TableName)
 	// all table partitions should be blocked.
 	case *ast.TruncateTableStmt:
-		physicalTableID = physicalTableIDAccessor.Get(result.SchemaName, result.TableName)
+		physicalTableID = partitionInfoAccessor.GetPhysicalTableIDs(result.SchemaName, result.TableName)
 	default:
 		if strings.Contains(result.Query, "partition") {
 			log.Panic("unsupported type partition DDL", zap.String("query", result.Query))
 		}
 	}
-
-	//if v, ok := stmt.(*ast.CreateTableStmt); ok {
-	//tableInfo, err := ddl.BuildTableInfoFromAST(metabuild.NewContext(), v)
-	//if err != nil {
-	//	log.Panic("build table info failed", zap.String("query", result.Query), zap.Error(err))
-	//}
-	//partitions := tableInfo.GetPartitionInfo()
-	//if partitions != nil {
-	//
-	//	//b.partitionInfoCache[cacheKey] = partitions
-	//}
-	//}
-
-	//var tableID int64
-	//// todo: this should be the physical table id.
-	//tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
-	//if ok {
-	//	tableID = tableInfo.TableName.TableID
-	//}
 	result.BlockedTables = common.GetInfluenceTables(actionType, physicalTableID)
 	log.Debug("set blocked tables for the DDL event",
 		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
