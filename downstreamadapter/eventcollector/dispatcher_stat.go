@@ -31,6 +31,8 @@ type dispatcherStat struct {
 	dispatcherID common.DispatcherID
 	target       dispatcher.EventDispatcher
 
+	readyCallback func()
+
 	eventServiceInfo struct {
 		sync.RWMutex
 		// the server this dispatcher currently connects to(except local event service)
@@ -156,14 +158,25 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 	if event.GetType() != commonEvent.TypeReadyEvent {
 		log.Panic("should not happen")
 	}
-	server := *event.From
-	if d.eventServiceInfo.serverID == server {
+	if d.eventServiceInfo.serverID == eventCollector.serverId {
+		// already received ready signal from local event service
+		return
+	}
+	// if a dispatcher's readyCallback is set, it will just register to local event service.
+	if d.readyCallback != nil {
+		d.eventServiceInfo.serverID = eventCollector.serverId
+		d.eventServiceInfo.readyEventReceived = true
+		d.readyCallback()
+		return
+	}
+	eventServiceID := *event.From
+	if d.eventServiceInfo.serverID == eventServiceID {
 		// case 1: already received ready signal from the same server
 		if d.eventServiceInfo.readyEventReceived {
 			log.Info("received ready signal from the same server again, ignore it",
 				zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 				zap.Stringer("dispatcher", d.target.GetId()),
-				zap.Stringer("server", server))
+				zap.Stringer("eventServiceID", eventServiceID))
 			return
 		}
 		// case 2: first ready signal from the server
@@ -171,12 +184,12 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 		log.Info("received ready signal from the remote server, prepare to reset the dispatcher",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Stringer("dispatcher", d.target.GetId()),
-			zap.Stringer("server", server))
+			zap.Stringer("eventServiceID", eventServiceID))
 
-		d.eventServiceInfo.serverID = server
+		d.eventServiceInfo.serverID = eventServiceID
 		d.eventServiceInfo.readyEventReceived = true
 		eventCollector.addDispatcherRequestToSendingQueue(
-			server,
+			eventServiceID,
 			eventServiceTopic,
 			DispatcherRequest{
 				Dispatcher: d.target,
@@ -184,7 +197,7 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 				ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
 			},
 		)
-	} else if server == eventCollector.serverId {
+	} else if eventServiceID == eventCollector.serverId {
 		// case 3: received first ready signal from local event service
 		if d.eventServiceInfo.serverID != "" {
 			eventCollector.addDispatcherRequestToSendingQueue(
@@ -199,13 +212,13 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 		log.Info("received ready signal from local event service, prepare to reset the dispatcher",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Stringer("dispatcher", d.target.GetId()),
-			zap.Stringer("server", server))
+			zap.Stringer("eventServiceID", eventServiceID))
 
-		d.eventServiceInfo.serverID = server
+		d.eventServiceInfo.serverID = eventServiceID
 		d.eventServiceInfo.readyEventReceived = true
 		d.eventServiceInfo.remoteCandidates = nil
 		eventCollector.addDispatcherRequestToSendingQueue(
-			server,
+			eventServiceID,
 			eventServiceTopic,
 			DispatcherRequest{
 				Dispatcher: d.target,
@@ -217,8 +230,8 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 		log.Panic("should not happen: we have received ready signal from other remote server",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Stringer("dispatcher", d.target.GetId()),
-			zap.Stringer("newRemote", server),
-			zap.Stringer("oldRemote", d.eventServiceInfo.serverID))
+			zap.Stringer("newRemoteEventService", eventServiceID),
+			zap.Stringer("oldRemoteEventService", d.eventServiceInfo.serverID))
 	}
 }
 
@@ -304,6 +317,7 @@ func (d *dispatcherStat) resumeDispatcher(eventCollector *EventCollector) {
 
 // TODO: better name
 func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *EventCollector) {
+	log.Info("set remote candidates", zap.Strings("nodes", nodes))
 	if len(nodes) == 0 {
 		return
 	}
@@ -317,7 +331,6 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *Eve
 	for i := 1; i < len(nodes); i++ {
 		d.eventServiceInfo.remoteCandidates = append(d.eventServiceInfo.remoteCandidates, node.ID(nodes[i]))
 	}
-
 	eventCollector.addDispatcherRequestToSendingQueue(
 		d.eventServiceInfo.serverID,
 		eventServiceTopic,

@@ -312,7 +312,12 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 				zap.Uint64("resolvedTs", ts))
 		}
 		lastResolvedTs := span.resolvedTs.Load()
-		if ts > lastResolvedTs {
+		// Generally, we don't want to send duplicate resolved ts,
+		// so we check whether `ts` is larger than `lastResolvedTs` before send it.
+		// but when `ts` == `lastResolvedTs` == `span.startTs`,
+		// the span may just be initialized and have not receive any resolved ts before,
+		// so we also send ts in this case for quick notification to downstream.
+		if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
 			span.resolvedTs.Store(ts)
 			span.resolvedTsUpdated.Store(time.Now().Unix())
 			return ts
