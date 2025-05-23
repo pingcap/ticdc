@@ -217,18 +217,13 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 				rowType := rowLists[i].RowChange.RowType
 				nextRowType := rowLists[j].RowChange.RowType
 				switch rowType {
-				case commonEvent.RowTypeDelete:
-					rowKey := rowLists[i].PreRowKeys
-					if nextRowType == commonEvent.RowTypeUpdate {
-						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
-							log.Panic("Here are two invalid rows, one is Delete A, the other is Update A to B", zap.Any("Events", events))
-						}
-					}
 				case commonEvent.RowTypeInsert:
 					rowKey := rowLists[i].RowKeys
 					if nextRowType == commonEvent.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							sql, values := w.generateNormalSQLs(events)
+							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
+							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j))
 						}
 					} else if nextRowType == commonEvent.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
@@ -260,7 +255,9 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 					preRowKey := rowLists[i].PreRowKeys
 					if nextRowType == commonEvent.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							sql, values := w.generateNormalSQLs(events)
+							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
+							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j))
 						}
 					} else if nextRowType == commonEvent.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
@@ -411,8 +408,10 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 		for i := 1; i < len(rowChanges); i++ {
 			rowType := rowChanges[i].RowType
 			if rowType == prevType {
+				sql, values := w.generateNormalSQLs(events)
+				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
 				log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges),
-					zap.Any("prevType", prevType), zap.Any("currentType", rowType))
+					zap.Any("prevType", prevType), zap.Any("currentType", rowType), zap.Any("i", i))
 			}
 			prevType = rowType
 		}
