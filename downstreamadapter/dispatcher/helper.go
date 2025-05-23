@@ -46,7 +46,7 @@ func (r *ResendTaskMap) Get(identifier BlockEventIdentifier) *ResendTask {
 }
 
 func (r *ResendTaskMap) Set(identifier BlockEventIdentifier, task *ResendTask) {
-	log.Info("set resend task", zap.Any("identifier", identifier), zap.Any("task", task))
+	log.Info("set resend task", zap.Any("identifier", identifier), zap.Any("taskDispatcherID", task.dispatcher.id))
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	r.m[identifier] = task
