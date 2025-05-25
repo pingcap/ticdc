@@ -18,7 +18,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"go.uber.org/zap"
 )
 
 // TableProgress maintains event timestamp information in the sink.
@@ -62,6 +64,7 @@ func NewTableProgress() *TableProgress {
 
 // Add inserts a new event into the TableProgress.
 func (p *TableProgress) Add(event commonEvent.FlushableEvent) {
+	log.Info("hyy into Add", zap.Any("event", event), zap.Any("commitTs", event.GetCommitTs()))
 	commitTs := event.GetCommitTs()
 	if event.GetType() == commonEvent.TypeSyncPointEvent {
 		// if the event is a sync point event, we use the last commitTs(the largest commitTs in the event) to calculate the progress.
@@ -85,6 +88,7 @@ func (p *TableProgress) Add(event commonEvent.FlushableEvent) {
 // Remove deletes an event from the TableProgress.
 // Note: Consider implementing batch removal in the future if needed.
 func (p *TableProgress) Remove(event commonEvent.Event) {
+	log.Info("hyy into Remove", zap.Any("event", event), zap.Any("commitTs", event.GetCommitTs()))
 	ts := Ts{startTs: event.GetStartTs(), commitTs: event.GetCommitTs()}
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()
@@ -105,6 +109,7 @@ func (p *TableProgress) Empty() bool {
 
 // Pass updates the maxCommitTs with the given event's commit timestamp.
 func (p *TableProgress) Pass(event commonEvent.BlockEvent) {
+	log.Info("hyy into Pass", zap.Any("event", event), zap.Any("commitTs", event.GetCommitTs()))
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()
 
