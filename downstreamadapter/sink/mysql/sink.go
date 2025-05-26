@@ -149,7 +149,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	writer := s.dmlWriter[idx]
 
 	totalStart := time.Now()
-	events := make([]*commonEvent.DMLEvent, 0, s.maxTxnRows)
+	buffer := make([]*commonEvent.DMLEvent, 0, s.maxTxnRows)
 	//rows := 0
 	for {
 		// needFlush := false
@@ -157,7 +157,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		default:
-			txnEvents, ok := inputCh.GetMultipleNoGroup(events)
+			txnEvents, ok := inputCh.GetMultipleNoGroup(buffer)
 			if !ok {
 				return errors.Trace(ctx.Err())
 			}
@@ -168,7 +168,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			// rows += int(txnEvent.Len())
 			start := time.Now()
 			log.Info("mysql sink flush event", zap.Any("worker id", idx))
-			err := writer.Flush(events)
+			err := writer.Flush(txnEvents)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -178,7 +178,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			// flush time and total time
 			workerTotalDuration.Observe(time.Since(totalStart).Seconds())
 			totalStart = time.Now()
-			events = events[:0]
+			buffer = buffer[:0]
 		}
 		// rows = 0
 		// case txnEvent := <-inputCh:
