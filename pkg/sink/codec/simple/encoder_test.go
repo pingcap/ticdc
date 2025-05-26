@@ -208,11 +208,13 @@ func TestE2EPartitionTable(t *testing.T) {
 		insertEvent2,
 	}
 
+	dropTableDDL := helper.DDL2Event("drop table if exists test.t")
+
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolSimple)
 	for _, format := range []common.EncodingFormatType{
-		common.EncodingFormatAvro,
 		common.EncodingFormatJSON,
+		common.EncodingFormatAvro,
 	} {
 		codecConfig.EncodingFormat = format
 		enc, err := NewEncoder(ctx, codecConfig)
@@ -232,7 +234,9 @@ func TestE2EPartitionTable(t *testing.T) {
 		decodedDDL := dec.NextDDLEvent()
 		require.NoError(t, err)
 		require.NotNil(t, decodedDDL)
+		require.Equal(t, decodedDDL.TableID, createPartitionTableDDL.TableID, format)
 
+		physicalTableID := make([]int64, 0, len(events))
 		for _, e := range events {
 			row, ok := e.GetNextRow()
 			require.True(t, ok)
@@ -256,7 +260,25 @@ func TestE2EPartitionTable(t *testing.T) {
 			// table id should be set to the partition table id, the PhysicalTableID
 			require.Equal(t, decodedEvent.GetTableID(), e.GetTableID())
 
+			physicalTableID = append(physicalTableID, e.GetTableID())
 			e.Rewind()
+		}
+
+		require.NotEqual(t, physicalTableID[0], physicalTableID[1])
+		require.NotEqual(t, physicalTableID[0], physicalTableID[2])
+		require.NotEqual(t, physicalTableID[1], physicalTableID[2])
+
+		m, err = enc.EncodeDDLEvent(dropTableDDL)
+		require.NoError(t, err)
+
+		dec.AddKeyValue(m.Key, m.Value)
+		tp, hasNext = dec.HasNext()
+		require.True(t, hasNext)
+		require.Equal(t, common.MessageTypeDDL, tp)
+
+		decodedDDL = dec.NextDDLEvent()
+		for _, item := range physicalTableID {
+			require.Contains(t, decodedDDL.GetBlockedTables().TableIDs, item)
 		}
 	}
 }
@@ -308,6 +330,8 @@ func TestEncodeDDLSequence(t *testing.T) {
 	helper.Tk().MustExec("set @@tidb_allow_remove_auto_inc = 1")
 	renameColumnDDLEvent := helper.DDL2Event("ALTER TABLE TBL2 CHANGE COLUMN `id` `id2` INT")
 
+	_ = helper.DDL2Event("CREATE TABLE TBL1 LIKE TBL2")
+
 	partitionTableDDLEvent := helper.DDL2Event("ALTER TABLE TBL2 PARTITION BY RANGE (id2) (PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN (20))")
 
 	addPartitionDDLEvent := helper.DDL2Event("ALTER TABLE TBL2 ADD PARTITION (PARTITION p2 VALUES LESS THAN (30))")
@@ -317,6 +341,8 @@ func TestEncodeDDLSequence(t *testing.T) {
 	truncatePartitionDDLevent := helper.DDL2Event("ALTER TABLE TBL2 TRUNCATE PARTITION p1")
 
 	reorganizePartitionDDLEvent := helper.DDL2Event("ALTER TABLE TBL2 REORGANIZE PARTITION p1 INTO (PARTITION p3 VALUES LESS THAN (40))")
+
+	exchangePartitionDDLEvent := helper.DDL2Event("ALTER TABLE TBL2 EXCHANGE PARTITION p0 WITH TABLE TBL1")
 
 	removePartitionDDLEvent := helper.DDL2Event("ALTER TABLE TBL2 REMOVE PARTITIONING")
 
@@ -692,6 +718,16 @@ func TestEncodeDDLSequence(t *testing.T) {
 			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
+
+			m, err = enc.EncodeDDLEvent(exchangePartitionDDLEvent)
+			require.NoError(t, err)
+
+			dec.AddKeyValue(m.Key, m.Value)
+			_, _ = dec.HasNext()
+			require.Equal(t, DDLTypeAlter, dec.msg.Type)
+
+			decodedDDL := dec.NextDDLEvent()
+			require.NotNil(t, decodedDDL.BlockedTables)
 
 			m, err = enc.EncodeDDLEvent(removePartitionDDLEvent)
 			require.NoError(t, err)

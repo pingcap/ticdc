@@ -89,7 +89,7 @@ func getDDLType(t timodel.ActionType) MessageType {
 		timodel.ActionSetDefaultValue, timodel.ActionModifyTableComment, timodel.ActionRenameIndex, timodel.ActionAddTablePartition,
 		timodel.ActionDropTablePartition, timodel.ActionModifyTableCharsetAndCollate, timodel.ActionTruncateTablePartition,
 		timodel.ActionAlterIndexVisibility, timodel.ActionMultiSchemaChange, timodel.ActionReorganizePartition,
-		timodel.ActionAlterTablePartitioning, timodel.ActionRemovePartitioning:
+		timodel.ActionAlterTablePartitioning, timodel.ActionRemovePartitioning, timodel.ActionExchangeTablePartition:
 		return DDLTypeAlter
 	default:
 		return DDLTypeQuery

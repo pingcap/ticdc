@@ -92,7 +92,8 @@ func GetDDLActionType(query string) timodel.ActionType {
 		strings.Contains(query, "add unique index") ||
 		strings.Contains(query, "add unique key") ||
 		strings.Contains(query, "add fulltext index") ||
-		strings.Contains(query, "add fulltext key") {
+		strings.Contains(query, "add fulltext key") ||
+		strings.HasPrefix(query, "create index") {
 		return timodel.ActionAddIndex
 	}
 	// todo: add unit test to verify this
@@ -112,7 +113,7 @@ func GetDDLActionType(query string) timodel.ActionType {
 		return timodel.ActionRenameIndex
 	}
 
-	if strings.Contains(query, "set default") {
+	if strings.Contains(query, "set default") || strings.Contains(query, "drop default") {
 		return timodel.ActionSetDefaultValue
 	}
 
@@ -130,7 +131,15 @@ func GetDDLActionType(query string) timodel.ActionType {
 		return timodel.ActionModifyColumn
 	}
 
-	log.Panic("how to set action for the DDL", zap.String("query", query))
+	if strings.Contains(query, "auto_increment") {
+		return timodel.ActionRebaseAutoID
+	}
+
+	if strings.Contains(query, "invisible") {
+		return timodel.ActionAlterIndexVisibility
+	}
+
+	log.Panic("how to set action for the DDL ?", zap.String("query", query))
 	return timodel.ActionNone
 }
 
@@ -141,7 +150,7 @@ func GetInfluenceTables(action timodel.ActionType, physicalTableID []int64) *com
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 		}
-	case timodel.ActionDropSchema:
+	case timodel.ActionDropSchema, timodel.ActionModifySchemaCharsetAndCollate:
 		// schemaID is not set now, can be set if only block the table belongs to the schema.
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeDB,
@@ -152,30 +161,20 @@ func GetInfluenceTables(action timodel.ActionType, physicalTableID []int64) *com
 		timodel.ActionAddIndex, timodel.ActionDropIndex, timodel.ActionRenameIndex,
 		timodel.ActionAddForeignKey, timodel.ActionDropForeignKey,
 		timodel.ActionAddPrimaryKey, timodel.ActionDropPrimaryKey,
-		timodel.ActionModifyTableCharsetAndCollate:
-		// todo: how to handle the partition tables, all partitions should be blocked
-		// only consider normal table now.
+		timodel.ActionModifyTableCharsetAndCollate, timodel.ActionAlterIndexVisibility,
+		timodel.ActionRebaseAutoID:
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      physicalTableID,
 		}
-	case timodel.ActionAddTablePartition, timodel.ActionDropTablePartition:
+	case timodel.ActionAddTablePartition, timodel.ActionDropTablePartition,
+		timodel.ActionTruncateTablePartition, timodel.ActionReorganizePartition,
+		timodel.ActionAlterTablePartitioning, timodel.ActionRemovePartitioning,
+		timodel.ActionExchangeTablePartition:
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      physicalTableID,
 		}
-	case timodel.ActionTruncateTablePartition:
-		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
-	case timodel.ActionReorganizePartition:
-		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
-	case timodel.ActionExchangeTablePartition:
-		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
-	case timodel.ActionAlterTablePartitioning:
-		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
-	case timodel.ActionRemovePartitioning:
-		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
-	case timodel.ActionModifySchemaCharsetAndCollate:
-		log.Panic("unsupported DDL action, influence tables not set", zap.String("action", action.String()))
 	default:
 		log.Panic("unsupported DDL action", zap.String("action", action.String()))
 	}
