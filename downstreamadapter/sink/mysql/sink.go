@@ -136,7 +136,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
 	workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
 	workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
-	workerEventSyncDuration := metrics.EventSyncDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
+	//workerEventSyncDuration := metrics.EventSyncDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
 
 	defer func() {
 		metrics.WorkerFlushDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
@@ -149,44 +149,23 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	writer := s.dmlWriter[idx]
 
 	totalStart := time.Now()
-	events := make([]*commonEvent.DMLEvent, 0)
-	rows := 0
+	events := make([]*commonEvent.DMLEvent, 0, s.maxTxnRows)
+	//rows := 0
 	for {
-		needFlush := false
+		// needFlush := false
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case txnEvent := <-inputCh:
-			log.Info("mysql sink receive event", zap.Any("worker id", idx), zap.Any("time cost", time.Since(txnEvent.RecordTimestamp).Nanoseconds()))
-			workerEventSyncDuration.Observe(time.Since(txnEvent.RecordTimestamp).Seconds())
-			events = append(events, txnEvent)
-			rows += int(txnEvent.Len())
-			if rows > s.maxTxnRows {
-				needFlush = true
+		default:
+			txnEvents, ok := inputCh.GetMultipleNoGroup(events)
+			if !ok {
+				return errors.Trace(ctx.Err())
 			}
-			if !needFlush {
-				delay := time.NewTimer(10 * time.Millisecond)
-				for !needFlush {
-					select {
-					case txnEvent = <-inputCh:
-						workerHandledRows.Add(float64(txnEvent.Len()))
-						events = append(events, txnEvent)
-						rows += int(txnEvent.Len())
-						if rows > s.maxTxnRows {
-							needFlush = true
-						}
-					case <-delay.C:
-						needFlush = true
-					}
-				}
-				// Release resources promptly
-				if !delay.Stop() {
-					select {
-					case <-delay.C:
-					default:
-					}
-				}
+			log.Info("mysql sink receive event", zap.Any("worker id", idx), zap.Any("first time cost", time.Since(txnEvents[0].RecordTimestamp).Nanoseconds()), zap.Any("last time cost", time.Since(txnEvents[len(txnEvents)-1].RecordTimestamp).Nanoseconds()))
+			for _, txnEvent := range txnEvents {
+				workerHandledRows.Add(float64(txnEvent.Len()))
 			}
+			// rows += int(txnEvent.Len())
 			start := time.Now()
 			log.Info("mysql sink flush event", zap.Any("worker id", idx))
 			err := writer.Flush(events)
@@ -200,8 +179,54 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			workerTotalDuration.Observe(time.Since(totalStart).Seconds())
 			totalStart = time.Now()
 			events = events[:0]
-			rows = 0
 		}
+		// rows = 0
+		// case txnEvent := <-inputCh:
+		// 	log.Info("mysql sink receive event", zap.Any("worker id", idx), zap.Any("time cost", time.Since(txnEvent.RecordTimestamp).Nanoseconds()))
+		// 	workerEventSyncDuration.Observe(time.Since(txnEvent.RecordTimestamp).Seconds())
+		// 	events = append(events, txnEvent)
+		// 	rows += int(txnEvent.Len())
+		// 	if rows > s.maxTxnRows {
+		// 		needFlush = true
+		// 	}
+		// 	if !needFlush {
+		// 		delay := time.NewTimer(10 * time.Millisecond)
+		// 		for !needFlush {
+		// 			select {
+		// 			case txnEvent = <-inputCh:
+		// 				workerHandledRows.Add(float64(txnEvent.Len()))
+		// 				events = append(events, txnEvent)
+		// 				rows += int(txnEvent.Len())
+		// 				if rows > s.maxTxnRows {
+		// 					needFlush = true
+		// 				}
+		// 			case <-delay.C:
+		// 				needFlush = true
+		// 			}
+		// 		}
+		// 		// Release resources promptly
+		// 		if !delay.Stop() {
+		// 			select {
+		// 			case <-delay.C:
+		// 			default:
+		// 			}
+		// 		}
+		// 	}
+		// 	start := time.Now()
+		// 	log.Info("mysql sink flush event", zap.Any("worker id", idx))
+		// 	err := writer.Flush(events)
+		// 	if err != nil {
+		// 		return errors.Trace(err)
+		// 	}
+		// 	workerFlushDuration.Observe(time.Since(start).Seconds())
+		// 	// we record total time to calculate the worker busy ratio.
+		// 	// so we record the total time after flushing, to unified statistics on
+		// 	// flush time and total time
+		// 	workerTotalDuration.Observe(time.Since(totalStart).Seconds())
+		// 	totalStart = time.Now()
+		// 	events = events[:0]
+		// 	rows = 0
+		// }
 	}
 }
 

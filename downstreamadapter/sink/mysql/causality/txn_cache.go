@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/utils/chann"
 )
 
 const (
@@ -46,7 +47,8 @@ type txnCache interface {
 	// add adds a event to the Cache.
 	add(txn *commonEvent.DMLEvent) bool
 	// out returns a channel to receive events which are ready to be executed.
-	out() <-chan *commonEvent.DMLEvent
+	// out() <-chan *commonEvent.DMLEvent
+	out() *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
 }
 
 func newTxnCache(opt TxnCacheOption) txnCache {
@@ -55,10 +57,10 @@ func newTxnCache(opt TxnCacheOption) txnCache {
 	}
 
 	switch opt.BlockStrategy {
-	case BlockStrategyWaitAvailable:
-		return &boundedTxnCache{ch: make(chan *commonEvent.DMLEvent, opt.Size)}
+	// case BlockStrategyWaitAvailable:
+	// 	return &boundedTxnCache{ch: make(chan *commonEvent.DMLEvent, opt.Size)}
 	case BlockStrategyWaitEmpty:
-		return &boundedTxnCacheWithBlock{ch: make(chan *commonEvent.DMLEvent, opt.Size)}
+		return &boundedTxnCacheWithBlock{ch: chann.NewUnlimitedChannel[*commonEvent.DMLEvent, any](nil, nil), upperSize: opt.Size}
 	default:
 		return nil
 	}
@@ -79,6 +81,7 @@ func (w *boundedTxnCache) add(txn *commonEvent.DMLEvent) bool {
 	default:
 		return false
 	}
+
 }
 
 //nolint:unused
@@ -89,29 +92,31 @@ func (w *boundedTxnCache) out() <-chan *commonEvent.DMLEvent {
 // boundedTxnCacheWithBlock is a special boundedWorker. Once the cache
 // is full, it will block until all cached txns are consumed.
 type boundedTxnCacheWithBlock struct {
-	ch chan *commonEvent.DMLEvent
+	ch *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
+	// ch chan *commonEvent.DMLEvent
 	//nolint:unused
 	isBlocked atomic.Bool
+	upperSize int
 }
 
 //nolint:unused
 func (w *boundedTxnCacheWithBlock) add(txn *commonEvent.DMLEvent) bool {
-	if w.isBlocked.Load() && len(w.ch) <= 0 {
+	if w.isBlocked.Load() && w.ch.Len() <= 0 {
 		w.isBlocked.Store(false)
 	}
 
 	if !w.isBlocked.Load() {
-		select {
-		case w.ch <- txn:
-			return true
-		default:
+		if w.ch.Len() > w.upperSize {
 			w.isBlocked.CompareAndSwap(false, true)
+			return false
 		}
+		w.ch.Push(txn)
+		return true
 	}
 	return false
 }
 
 //nolint:unused
-func (w *boundedTxnCacheWithBlock) out() <-chan *commonEvent.DMLEvent {
+func (w *boundedTxnCacheWithBlock) out() *chann.UnlimitedChannel[*commonEvent.DMLEvent, any] {
 	return w.ch
 }
