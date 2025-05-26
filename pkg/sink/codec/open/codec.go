@@ -57,6 +57,9 @@ func encodeRowChangedEvent(
 			keyWriter.WriteBoolField("ohk", false)
 			keyWriter.WriteStringField("ccl", claimCheckLocationName)
 		}
+		if e.TableInfo.IsPartitionTable() {
+			keyWriter.WriteInt64Field("ptn", e.GetTableID())
+		}
 	})
 	var err error
 	if e.IsDelete() {

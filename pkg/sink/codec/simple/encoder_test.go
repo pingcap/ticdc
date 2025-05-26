@@ -210,7 +210,6 @@ func TestE2EPartitionTable(t *testing.T) {
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolSimple)
-
 	for _, format := range []common.EncodingFormatType{
 		common.EncodingFormatAvro,
 		common.EncodingFormatJSON,

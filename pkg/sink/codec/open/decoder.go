@@ -227,9 +227,7 @@ func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 		return b.assembleHandleKeyOnlyDMLEvent(ctx, nextRow)
 	}
 
-	result := b.assembleDMLEvent(nextRow)
-	b.nextKey = nil
-	return result
+	return b.assembleDMLEvent(nextRow)
 }
 
 func buildColumns(
@@ -340,12 +338,20 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 		tableInfo = b.newTableInfo(key, value)
 		tableInfoAccessor.Add(key.Schema, key.Table, tableInfo)
 	}
+	if key.Partition != nil {
+		tableInfo.TableName.TableID = *key.Partition
+	}
+	tableInfoAccessor.AddBlockTableID(key.Schema, key.Table, tableInfo.TableName.TableID)
 	return tableInfo
 }
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+	if key.Partition == nil {
+		physicalTableID := tableIDAllocator.AllocateTableID(key.Schema, key.Table)
+		key.Partition = &physicalTableID
+	}
 	tableInfo := new(timodel.TableInfo)
-	tableInfo.ID = tableIDAllocator.AllocateTableID(key.Schema, key.Table)
+	tableInfo.ID = *key.Partition
 	tableInfo.Name = pmodel.NewCIStr(key.Table)
 
 	var rawColumns map[string]column
@@ -446,10 +452,6 @@ func (b *decoder) assembleDMLEvent(value *messageRow) *commonEvent.DMLEvent {
 	result.StartTs = key.Ts
 	result.CommitTs = key.Ts
 	result.Length++
-	if key.Partition != nil {
-		result.PhysicalTableID = *key.Partition
-		result.TableInfo.TableName.IsPartition = true
-	}
 
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	columns := tableInfo.GetColumns()
