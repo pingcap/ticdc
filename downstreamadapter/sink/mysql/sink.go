@@ -157,7 +157,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case txnEvent := <-inputCh:
-			log.Info("mysql sink receive event", zap.Any("worker id", idx), zap.Any("time cost", time.Since(txnEvent.RecordTimestamp).Milliseconds()))
+			log.Info("mysql sink receive event", zap.Any("worker id", idx), zap.Any("time cost", time.Since(txnEvent.RecordTimestamp).Nanoseconds()))
 			workerEventSyncDuration.Observe(time.Since(txnEvent.RecordTimestamp).Seconds())
 			events = append(events, txnEvent)
 			rows += int(txnEvent.Len())
