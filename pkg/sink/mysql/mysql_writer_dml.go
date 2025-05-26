@@ -638,7 +638,7 @@ func (w *Writer) multiStmtExecute(
 	}
 	multiStmtSQL := strings.Join(dmls.sqls, ";")
 	// we use BEGIN and COMMIT to ensure the transaction is atomic.
-	multiStmtSQLWithTxn := "BEGIN;" + multiStmtSQL + "COMMIT;"
+	multiStmtSQLWithTxn := "BEGIN;" + multiStmtSQL + ";COMMIT;"
 
 	// Set session variables first in the sql.
 	// we try to set write source for each txn,
