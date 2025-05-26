@@ -540,16 +540,20 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	result := new(commonEvent.DDLEvent)
 	result.Query = msg.SQL
 	result.TableInfo = tableInfo
-	actionType := common.GetDDLActionType(result.Query)
-	result.Type = byte(actionType)
+
 	result.FinishedTs = msg.CommitTs
 	result.SchemaName = msg.Schema
 	result.TableName = msg.Table
 	result.TableID = tableInfo.TableName.TableID
 	result.MultipleTableInfos = []*commonType.TableInfo{tableInfo, preTableInfo}
 
-	physicalTableIDs := d.blockedTablesMemo.blockedTables(tableInfo.GetSchemaName(), tableInfo.GetTableName())
+	if result.Query == "" {
+		return result
+	}
 
+	actionType := common.GetDDLActionType(result.Query)
+	result.Type = byte(actionType)
+	physicalTableIDs := d.blockedTablesMemo.blockedTables(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	if actionType == timodel.ActionExchangeTablePartition {
 		stmt, err := parser.New().ParseOneStmt(result.Query, "", "")
 		if err != nil {
@@ -560,7 +564,6 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 		exchangedTableID := d.blockedTablesMemo.blockedTables(tableInfo.GetSchemaName(), exchangedTableName)
 		physicalTableIDs = append(physicalTableIDs, exchangedTableID...)
 	}
-
 	result.BlockedTables = common.GetInfluenceTables(actionType, physicalTableIDs)
 	return result
 }
