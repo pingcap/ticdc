@@ -298,13 +298,6 @@ func (s *eventScanner) handleNewTransaction(
 
 	session.lastCommitTs = rawEvent.CRTs
 	session.dmlCount++
-
-	log.Info("fizz append dml",
-		zap.Stringer("dispatcherID", session.dispatcherStat.id),
-		zap.Int64("tableID", tableID),
-		zap.Uint64("startTs", rawEvent.StartTs),
-		zap.Uint64("commitTs", rawEvent.CRTs))
-
 	return nil
 }
 

@@ -55,6 +55,7 @@ var (
 )
 
 type ResolvedTsNotifier func(watermark uint64, latestCommitTs uint64)
+type ShouldSpiltUpdateChecker func(rawKV *common.RawKVEntry) (bool, error)
 
 type EventStore interface {
 	common.SubModule
@@ -66,6 +67,7 @@ type EventStore interface {
 		notifier ResolvedTsNotifier,
 		onlyReuse bool,
 		bdrMode bool,
+		shouldSpiltUpdateChecker ShouldSpiltUpdateChecker,
 	) (bool, error)
 
 	UnregisterDispatcher(dispatcherID common.DispatcherID) error
@@ -344,6 +346,7 @@ func (e *eventStore) RegisterDispatcher(
 	notifier ResolvedTsNotifier,
 	onlyReuse bool,
 	bdrMode bool,
+	shouldSpiltUpdateChecker ShouldSpiltUpdateChecker,
 ) (bool, error) {
 	log.Info("register dispatcher",
 		zap.Stringer("dispatcherID", dispatcherID),
@@ -437,17 +440,29 @@ func (e *eventStore) RegisterDispatcher(
 
 	consumeKVEvents := func(kvs []common.RawKVEntry, finishCallback func()) bool {
 		maxCommitTs := uint64(0)
+
+		processedKvs := make([]common.RawKVEntry, 0, len(kvs))
 		// Must find the max commit ts in the kvs, since the kvs is not sorted yet.
 		for _, kv := range kvs {
 			if kv.CRTs > maxCommitTs {
 				maxCommitTs = kv.CRTs
 			}
+			shouldSpilt, err := shouldSpiltUpdateChecker(&kv)
+			if err != nil {
+				log.Error("shouldSpiltUpdateChecker failed", zap.Error(err), zap.Any("kv", kv))
+			}
+			if shouldSpilt {
+				processedKvs = append(processedKvs, kv.SplitUpdate()...)
+			} else {
+				processedKvs = append(processedKvs, kv)
+			}
 		}
+
 		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
 		subStat.eventCh.Push(eventWithCallback{
 			subID:    subStat.subID,
 			tableID:  subStat.tableSpan.TableID,
-			kvs:      kvs,
+			kvs:      processedKvs,
 			callback: finishCallback,
 		})
 		return true

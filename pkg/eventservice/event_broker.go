@@ -897,7 +897,11 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		func(resolvedTs uint64, latestCommitTs uint64) { c.onNotify(dispatcher, resolvedTs, latestCommitTs) },
 		info.IsOnlyReuse(),
 		info.GetBdrMode(),
+		func(rawKV *common.RawKVEntry) (bool, error) {
+			return dispatcher.shouldSpiltUpdate(rawKV, c.schemaStore)
+		},
 	)
+
 	if err != nil {
 		log.Error("register dispatcher to eventStore failed",
 			zap.Stringer("dispatcherID", id),

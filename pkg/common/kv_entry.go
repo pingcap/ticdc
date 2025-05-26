@@ -68,6 +68,32 @@ func (v *RawKVEntry) IsUpdate() bool {
 	return v.OpType == OpTypePut && v.OldValue != nil && v.Value != nil
 }
 
+func (v *RawKVEntry) SplitUpdate() []RawKVEntry {
+	if !v.IsUpdate() {
+		return nil
+	}
+
+	oldKV := RawKVEntry{
+		OpType:   OpTypeDelete,
+		CRTs:     v.CRTs,
+		StartTs:  v.StartTs,
+		RegionID: v.RegionID,
+		Key:      v.Key,
+		Value:    v.OldValue,
+	}
+
+	newKv := RawKVEntry{
+		OpType:   OpTypePut,
+		CRTs:     v.CRTs,
+		StartTs:  v.StartTs,
+		RegionID: v.RegionID,
+		Key:      v.Key,
+		Value:    v.Value,
+	}
+
+	return []RawKVEntry{oldKV, newKv}
+}
+
 func (v *RawKVEntry) String() string {
 	// TODO: redact values.
 	return fmt.Sprintf(

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/kv"
@@ -26,6 +27,7 @@ import (
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/codec"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
+	"go.uber.org/zap"
 )
 
 var (
@@ -214,4 +216,30 @@ func unflatten(datum types.Datum, ft *types.FieldType, loc *time.Location) (type
 		return datum, nil
 	}
 	return datum, nil
+}
+
+func IsUKChanged(rawKV *common.RawKVEntry, tableInfo *common.TableInfo) (bool, error) {
+	recordID, err := tablecodec.DecodeRowKey(rawKV.Key)
+	if err != nil {
+		return false, errors.Trace(err)
+	}
+	oldDatum, err := decodeRow(rawKV.OldValue, recordID, tableInfo, time.UTC)
+	if err != nil {
+		return false, errors.Trace(err)
+	}
+
+	newDatum, err := decodeRow(rawKV.Value, recordID, tableInfo, time.UTC)
+	if err != nil {
+		return false, errors.Trace(err)
+	}
+
+	for _, colIDs := range tableInfo.GetIndexColumns() {
+		for _, colID := range colIDs {
+			if oldDatum[colID].String() != newDatum[colID].String() {
+				log.Info("fizz UK changed", zap.String("oldColumn", oldDatum[colID].String()), zap.String("newColumn", newDatum[colID].String()))
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
