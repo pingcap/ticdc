@@ -285,3 +285,45 @@ func Benchmark100KRegions(b *testing.B) {
 		l.ResolvedTs()
 	}
 }
+
+func TestRangeLockGetHeapMinTs(t *testing.T) {
+	t.Parallel()
+
+	// Test case 1: empty heap
+	l := NewRangeLock(1, []byte("a"), []byte("z"), 100)
+	require.Equal(t, uint64(100), l.GetHeapMinTs())
+
+	// Test case 2: Lock a range and then unlock it
+	l = NewRangeLock(1, []byte("a"), []byte("z"), 50)
+	res := l.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
+	res.LockedRangeState.ResolvedTs.Store(101)
+	require.Equal(t, LockRangeStatusSuccess, res.Status)
+	require.Equal(t, uint64(50), l.GetHeapMinTs())
+	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
+	res = l.LockRange(context.Background(), []byte("m"), []byte("z"), 2, 1)
+	res.LockedRangeState.ResolvedTs.Store(60)
+	require.Equal(t, LockRangeStatusSuccess, res.Status)
+	require.Equal(t, uint64(60), l.GetHeapMinTs())
+	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
+	l.UnlockRange([]byte("a"), []byte("m"), 1, 1, 100)
+	require.Equal(t, uint64(60), l.GetHeapMinTs())
+	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
+	l.UnlockRange([]byte("m"), []byte("z"), 2, 1, 100)
+	require.Equal(t, uint64(100), l.GetHeapMinTs())
+	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
+
+	l = NewRangeLock(1, []byte("a"), []byte("z"), 100)
+	res = l.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
+	res.LockedRangeState.ResolvedTs.Store(101)
+	require.Equal(t, LockRangeStatusSuccess, res.Status)
+	res = l.LockRange(context.Background(), []byte("m"), []byte("z"), 2, 1)
+	res.LockedRangeState.ResolvedTs.Store(102)
+	require.Equal(t, LockRangeStatusSuccess, res.Status)
+	require.Equal(t, uint64(101), l.GetHeapMinTs())
+	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
+
+	// Update the resolvedTs of the first range
+	res.LockedRangeState.ResolvedTs.Store(50)
+	require.Equal(t, uint64(50), l.GetHeapMinTs())
+	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
+}
