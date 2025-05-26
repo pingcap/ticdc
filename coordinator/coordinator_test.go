@@ -235,6 +235,8 @@ func TestCoordinatorScheduling(t *testing.T) {
 	etcdClient := newMockEtcdClient(string(info.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	nodeManager.GetAliveNodes()[info.ID] = info
 	mc := messaging.NewMessageCenter(ctx,
 		info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
@@ -278,7 +280,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 		}
 	}
 
-	cr := New(info, &mockPdClient{}, pdutil.NewClock4Test(), backend, "default", 100, 10000, time.Minute)
+	cr := New(info, &mockPdClient{}, backend, "default", 100, 10000, time.Minute)
 	co := cr.(*coordinator)
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -335,7 +337,7 @@ func TestScaleNode(t *testing.T) {
 	}
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(cfs, nil).AnyTimes()
 
-	cr := New(info, &mockPdClient{}, pdutil.NewClock4Test(), backend, serviceID, 100, 10000, time.Millisecond*1)
+	cr := New(info, &mockPdClient{}, backend, serviceID, 100, 10000, time.Millisecond*1)
 
 	// run coordinator
 	go func() { cr.Run(ctx) }()
@@ -482,7 +484,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	}, nil).AnyTimes()
 	backend.EXPECT().DeleteChangefeed(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	backend.EXPECT().SetChangefeedProgress(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	cr := New(info, &mockPdClient{}, pdutil.NewClock4Test(), backend, serviceID, 100, 10000, time.Millisecond*10)
+	cr := New(info, &mockPdClient{}, backend, serviceID, 100, 10000, time.Millisecond*10)
 
 	// run coordinator
 	go func() { cr.Run(ctx) }()
@@ -521,7 +523,7 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper{}, nil).AnyTimes()
 
 	// Create coordinator
-	cr := New(info, &mockPdClient{}, pdutil.NewClock4Test(), backend, "test-gc-service", 100, 10000, time.Millisecond*10)
+	cr := New(info, &mockPdClient{}, backend, "test-gc-service", 100, 10000, time.Millisecond*10)
 	co := cr.(*coordinator)
 
 	// Number of goroutines for each operation

@@ -16,7 +16,8 @@ package spanz
 import (
 	"testing"
 
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
+	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,12 +29,12 @@ func TestHashableSpan(t *testing.T) {
 	m[hashableSpan{}] = 1
 	require.Equal(t, 1, m[hashableSpan{}])
 
-	span := toHashableSpan(TableIDToComparableSpan(1))
-	require.EqualValues(t, TableIDToComparableSpan(1), span.toSpan())
+	span := toHashableSpan(common.TableIDToComparableSpan(1))
+	require.EqualValues(t, common.TableIDToComparableSpan(1), span.toSpan())
 }
 
 func TestHashableSpanHeapAlloc(t *testing.T) {
-	span := tablepb.Span{TableID: 1}
+	span := heartbeatpb.TableSpan{TableID: 1}
 	for i := 0; i < 10; i++ {
 		span.StartKey = append(span.StartKey, byte(i))
 		span.EndKey = append(span.EndKey, byte(i))
@@ -67,7 +68,7 @@ func TestUnsafeStringByte(t *testing.T) {
 }
 
 func TestHexKey(t *testing.T) {
-	span := TableIDToComparableSpan(8616)
+	span := common.TableIDToComparableSpan(8616)
 	require.Equal(t, "7480000000000021FFA85F720000000000FA", HexKey(span.StartKey))
 	require.Equal(t, "7480000000000021FFA85F730000000000FA", HexKey(span.EndKey))
 }

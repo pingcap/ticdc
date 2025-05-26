@@ -61,45 +61,21 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, config.ProtocolUnknown, errors.Trace(err)
 	}
 
+	topic, err := helper.GetTopic(sinkURI)
+	if err != nil {
+		return kafkaComponent, protocol, errors.Trace(err)
+	}
+
 	options := kafka.NewOptions()
 	if err = options.Apply(changefeedID, sinkURI, sinkConfig); err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
+	options.Topic = topic
 
 	kafkaComponent.factory, err = factoryCreator(ctx, options, changefeedID)
 	if err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
-
-	kafkaComponent.adminClient, err = kafkaComponent.factory.AdminClient()
-	if err != nil {
-		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
-	}
-
-	// We must close adminClient when this func return cause by an error
-	// otherwise the adminClient will never be closed and lead to a goroutine leak.
-	defer func() {
-		if err != nil && kafkaComponent.adminClient != nil {
-			kafkaComponent.adminClient.Close()
-		}
-	}()
-
-	topic, err := helper.GetTopic(sinkURI)
-	if err != nil {
-		return kafkaComponent, protocol, errors.Trace(err)
-	}
-	// adjust the option configuration before creating the kafka client
-	if err = kafka.AdjustOptions(ctx, kafkaComponent.adminClient, options, topic); err != nil {
-		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
-	}
-
-	kafkaComponent.topicManager, err = topicmanager.GetTopicManagerAndTryCreateTopic(
-		ctx,
-		changefeedID,
-		topic,
-		options.DeriveTopicConfig(),
-		kafkaComponent.adminClient,
-	)
 
 	kafkaComponent.eventRouter, err = eventrouter.NewEventRouter(
 		sinkConfig, topic, false, protocol == config.ProtocolAvro)
@@ -126,6 +102,27 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 	if err != nil {
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
+
+	kafkaComponent.adminClient, err = kafkaComponent.factory.AdminClient()
+	if err != nil {
+		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+
+	// We must close adminClient when this func return cause by an error
+	// otherwise the adminClient will never be closed and lead to a goroutine leak.
+	defer func() {
+		if err != nil && kafkaComponent.adminClient != nil {
+			kafkaComponent.adminClient.Close()
+		}
+	}()
+
+	kafkaComponent.topicManager, err = topicmanager.GetTopicManagerAndTryCreateTopic(
+		ctx,
+		changefeedID,
+		topic,
+		options.DeriveTopicConfig(),
+		kafkaComponent.adminClient,
+	)
 	return kafkaComponent, protocol, nil
 }
 

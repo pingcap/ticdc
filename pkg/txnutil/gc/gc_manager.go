@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -54,7 +55,7 @@ type gcManager struct {
 }
 
 // NewManager creates a new Manager.
-func NewManager(gcServiceID string, pdClient pd.Client, pdClock pdutil.Clock) Manager {
+func NewManager(gcServiceID string, pdClient pd.Client) Manager {
 	serverConfig := config.GetGlobalServerConfig()
 	failpoint.Inject("InjectGcSafepointUpdateInterval", func(val failpoint.Value) {
 		gcSafepointUpdateInterval = time.Duration(val.(int) * int(time.Millisecond))
@@ -62,7 +63,7 @@ func NewManager(gcServiceID string, pdClient pd.Client, pdClock pdutil.Clock) Ma
 	return &gcManager{
 		gcServiceID:       gcServiceID,
 		pdClient:          pdClient,
-		pdClock:           pdClock,
+		pdClock:           appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		lastUpdatedTime:   atomic.NewTime(time.Now()),
 		lastSucceededTime: atomic.NewTime(time.Now()),
 		gcTTL:             serverConfig.GcTTL,
