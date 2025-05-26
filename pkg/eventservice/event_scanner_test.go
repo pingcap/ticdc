@@ -66,12 +66,12 @@ func TestEventScanner(t *testing.T) {
 	// [Resolved(ts=102)]
 	disp.eventStoreResolvedTs.Store(102)
 	sl := scanLimit{
-		MaxBytes: 1000,
-		Timeout:  10 * time.Second,
+		maxBytes: 1000,
+		timeout:  10 * time.Second,
 	}
 	needScan, dataRange := broker.checkNeedScan(disp, true)
 	require.True(t, needScan)
-	events, isBroken, err := scanner.Scan(context.Background(), disp, dataRange, sl)
+	events, isBroken, err := scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
 	require.Equal(t, 1, len(events))
@@ -96,10 +96,10 @@ func TestEventScanner(t *testing.T) {
 	require.True(t, needScan)
 
 	sl = scanLimit{
-		MaxBytes: 1000,
-		Timeout:  10 * time.Second,
+		maxBytes: 1000,
+		timeout:  10 * time.Second,
 	}
-	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
+	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
 	require.Equal(t, 2, len(events))
@@ -122,10 +122,10 @@ func TestEventScanner(t *testing.T) {
 	needScan, dataRange = broker.checkNeedScan(disp, true)
 	require.True(t, needScan)
 	sl = scanLimit{
-		MaxBytes: 1000,
-		Timeout:  10 * time.Second,
+		maxBytes: 1000,
+		timeout:  10 * time.Second,
 	}
-	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
+	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
 	require.Equal(t, 4, len(events))
@@ -149,10 +149,10 @@ func TestEventScanner(t *testing.T) {
 	//               ▲
 	//               └── Scanning interrupted here
 	sl = scanLimit{
-		MaxBytes: 1,
-		Timeout:  10 * time.Second,
+		maxBytes: 1,
+		timeout:  10 * time.Second,
 	}
-	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
+	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
 	require.Equal(t, 3, len(events))
@@ -181,10 +181,10 @@ func TestEventScanner(t *testing.T) {
 		kvEvents[i].CRTs = firstCommitTs
 	}
 	sl = scanLimit{
-		MaxBytes: 1,
-		Timeout:  10 * time.Second,
+		maxBytes: 1,
+		timeout:  10 * time.Second,
 	}
-	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
+	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
 	require.Equal(t, 4, len(events))
@@ -215,10 +215,10 @@ func TestEventScanner(t *testing.T) {
 	//                               ▲
 	//                               └── Scanning interrupted due to timeout
 	sl = scanLimit{
-		MaxBytes: 1000,
-		Timeout:  0 * time.Millisecond,
+		maxBytes: 1000,
+		timeout:  0 * time.Millisecond,
 	}
-	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
+	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
 	require.Equal(t, 4, len(events))
@@ -238,10 +238,10 @@ func TestEventScanner(t *testing.T) {
 	}
 	mockSchemaStore.AppendDDLEvent(tableID, fakeDDL)
 	sl = scanLimit{
-		MaxBytes: 1000,
-		Timeout:  10 * time.Second,
+		maxBytes: 1000,
+		timeout:  10 * time.Second,
 	}
-	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
+	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
 	require.Equal(t, 6, len(events))
@@ -334,10 +334,10 @@ func TestEventScannerWithDDL(t *testing.T) {
 	//             ▲
 	//             └── Scanning interrupted at DML1
 	sl := scanLimit{
-		MaxBytes: int64(1 * eSize),
-		Timeout:  10 * time.Second,
+		maxBytes: int64(1 * eSize),
+		timeout:  10 * time.Second,
 	}
-	events, isBroken, err := scanner.Scan(context.Background(), disp, dataRange, sl)
+	events, isBroken, err := scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
 	require.Equal(t, 3, len(events))
@@ -362,10 +362,10 @@ func TestEventScannerWithDDL(t *testing.T) {
 	//                                               ▲
 	//                                               └── Events with same commitTs must be returned together
 	sl = scanLimit{
-		MaxBytes: int64(2 * eSize),
-		Timeout:  10 * time.Second,
+		maxBytes: int64(2 * eSize),
+		timeout:  10 * time.Second,
 	}
-	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
+	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
 	require.Equal(t, 5, len(events))
@@ -399,8 +399,8 @@ func TestEventScannerWithDDL(t *testing.T) {
 	// Expected result:
 	// [..., fakeDDL2(x+5), fakeDDL3(x+6), Resolved(x+7)]
 	sl = scanLimit{
-		MaxBytes: int64(100 * eSize),
-		Timeout:  10 * time.Second,
+		maxBytes: int64(100 * eSize),
+		timeout:  10 * time.Second,
 	}
 
 	// Add more fake DDL events
@@ -421,7 +421,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	needScan, dataRange = broker.checkNeedScan(disp, true)
 	require.True(t, needScan)
 
-	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
+	events, isBroken, err = scanner.scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
 	require.Equal(t, 8, len(events))
