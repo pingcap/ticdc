@@ -520,6 +520,7 @@ func queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 
 	tableInfo = newTableInfo(msg)
 	tableInfoAccessor.Add(schema, table, tableInfo)
+	tableInfoAccessor.AddBlockTableID(schema, table, tableInfo.TableName.TableID)
 	return tableInfo
 }
 
