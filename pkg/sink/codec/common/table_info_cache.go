@@ -18,55 +18,12 @@ import (
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
 )
 
 type accessKey struct {
 	schema string
 	table  string
-}
-
-// partitionInfoAccessor track each partition physical id
-// for normal table, not record into it.
-type partitionInfoAccessor struct {
-	memo map[accessKey]*timodel.PartitionInfo
-}
-
-func NewPartitionInfoAccessor() *partitionInfoAccessor {
-	return &partitionInfoAccessor{
-		memo: make(map[accessKey]*timodel.PartitionInfo),
-	}
-}
-
-func (a *partitionInfoAccessor) Get(schema, table string) *timodel.PartitionInfo {
-	key := accessKey{schema, table}
-	return a.memo[key]
-}
-
-func (a *partitionInfoAccessor) GetPhysicalTableIDs(schema, table string) []int64 {
-	partitionInfo := a.Get(schema, table)
-	if partitionInfo == nil {
-		return nil
-	}
-	result := make([]int64, 0, len(partitionInfo.Definitions))
-	for _, p := range partitionInfo.Definitions {
-		result = append(result, p.ID)
-	}
-	return result
-}
-
-func (a *partitionInfoAccessor) Add(schema, table string, partitionInfo *timodel.PartitionInfo) {
-	key := accessKey{schema, table}
-	_, ok := a.memo[key]
-	if ok {
-		log.Panic("partition info already exists", zap.String("schema", schema), zap.String("table", table))
-	}
-	a.memo[key] = partitionInfo
-}
-
-func (a *partitionInfoAccessor) Clean() {
-	clear(a.memo)
 }
 
 // tableInfoAccessor provide table information, to helper
