@@ -189,7 +189,8 @@ func (s *eventScanner) Scan(
 
 		e, isNewTxn, err := iter.Next()
 		if err != nil {
-			log.Panic("read events failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
+			log.Error("read events from eventStore failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
+			return nil, false, err
 		}
 
 		if e == nil {
@@ -223,7 +224,9 @@ func (s *eventScanner) Scan(
 					log.Warn("get table info failed, since the table is deleted", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 					return events, false, nil
 				}
-				log.Panic("get table info failed, unknown reason", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
+
+				log.Error("get table info failed, unknown reason", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID), zap.Int64("tableID", tableID), zap.Uint64("getTableInfoStartTs", e.CRTs-1))
+				return nil, false, err
 			}
 			hasDDL := batchDML != nil && len(ddlEvents) > 0 && e.CRTs > ddlEvents[0].FinishedTs
 			// updateTs may be less than the previous updateTs
@@ -239,7 +242,8 @@ func (s *eventScanner) Scan(
 		}
 
 		if err = batchDML.AppendRow(e, s.mounter.DecodeToChunk); err != nil {
-			log.Panic("append row failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
+			log.Error("append row failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID), zap.Int64("tableID", tableID), zap.Uint64("startTs", e.StartTs), zap.Uint64("commitTs", e.CRTs))
+			return nil, false, err
 		}
 	}
 }
