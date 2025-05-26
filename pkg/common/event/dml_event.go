@@ -15,6 +15,7 @@ package event
 
 import (
 	"encoding/binary"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -257,6 +258,9 @@ type DMLEvent struct {
 	// and TiCDC set the integrity check level to the correctness.
 	Checksum       []*integrity.Checksum `json:"-"`
 	checksumOffset int                   `json:"-"`
+
+	// for metrics
+	RecordTimestamp time.Time `json:"-"`
 }
 
 func newDMLEvent(

@@ -136,11 +136,13 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
 	workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
 	workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
+	workerEventSyncDuration := metrics.EventSyncDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
 
 	defer func() {
 		metrics.WorkerFlushDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
 		metrics.WorkerTotalDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
 		metrics.WorkerHandledRows.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
+		metrics.EventSyncDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
 	}()
 
 	inputCh := s.conflictDetector.GetOutChByCacheID(idx)
@@ -155,6 +157,8 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case txnEvent := <-inputCh:
+			log.Info("mysql sink receive event", zap.Any("worker id", idx), zap.Any("time cost", time.Since(txnEvent.RecordTimestamp).Milliseconds()))
+			workerEventSyncDuration.Observe(time.Since(txnEvent.RecordTimestamp).Seconds())
 			events = append(events, txnEvent)
 			rows += int(txnEvent.Len())
 			if rows > s.maxTxnRows {
@@ -184,6 +188,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 				}
 			}
 			start := time.Now()
+			log.Info("mysql sink flush event", zap.Any("worker id", idx))
 			err := writer.Flush(events)
 			if err != nil {
 				return errors.Trace(err)
