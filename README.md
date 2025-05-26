@@ -104,5 +104,3 @@ make cdc
 cd bin
 tar -czf newarch_cdc.tar.gz cdc
 ```
-
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/pingcap/ticdc)
