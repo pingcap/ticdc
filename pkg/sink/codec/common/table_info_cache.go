@@ -29,12 +29,14 @@ type accessKey struct {
 // tableInfoAccessor provide table information, to helper
 // the decoder set table info to the event
 type tableInfoAccessor struct {
-	memo map[accessKey]*commonType.TableInfo
+	memo            map[accessKey]*commonType.TableInfo
+	blockedTableIDs map[accessKey][]int64
 }
 
 func NewTableInfoAccessor() *tableInfoAccessor {
 	return &tableInfoAccessor{
-		memo: make(map[accessKey]*commonType.TableInfo),
+		memo:            make(map[accessKey]*commonType.TableInfo),
+		blockedTableIDs: make(map[accessKey][]int64),
 	}
 }
 
@@ -44,6 +46,11 @@ func (a *tableInfoAccessor) Get(schema, table string) (*commonType.TableInfo, bo
 	return tableInfo, ok
 }
 
+func (a *tableInfoAccessor) GetBlockedTables(schema, table string) []int64 {
+	key := accessKey{schema, table}
+	return a.blockedTableIDs[key]
+}
+
 func (a *tableInfoAccessor) Add(schema, table string, tableInfo *commonType.TableInfo) {
 	key := accessKey{
 		schema: schema,
@@ -51,6 +58,9 @@ func (a *tableInfoAccessor) Add(schema, table string, tableInfo *commonType.Tabl
 	}
 	if _, ok := a.memo[key]; !ok {
 		a.memo[key] = tableInfo
+	}
+	if _, ok := a.blockedTableIDs[key]; !ok {
+		a.blockedTableIDs[key] = append(a.blockedTableIDs[key], tableInfo.TableName.TableID)
 	}
 	log.Info("add table info to cache", zap.String("schema", schema), zap.String("table", table),
 		zap.Int64("tableID", tableInfo.TableName.TableID))

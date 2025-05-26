@@ -510,7 +510,8 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
 		return
 	case config.ProtocolCanalJSON:
-		// for partition table, the canal-json message cannot assign physical table id to each dml message, so just ignore it.
+		// for partition table, the canal-json message cannot assign physical table id to each dml message,
+		// we cannot distinguish whether it's a real fallback event or not, still append it.
 		if w.partitionTableAccessor.isPartitionTable(schema, table) {
 			log.Warn("DML events fallback, but it's canal-json and partition table, still append it",
 				zap.Int32("partition", group.partition), zap.Any("offset", offset),
