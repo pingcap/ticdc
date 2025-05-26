@@ -45,6 +45,25 @@ type BatchDMLEvent struct {
 	TableInfo *common.TableInfo `json:"table_info"`
 }
 
+// NewBatchDMLEvent creates a new BatchDMLEvent with proper initialization
+func NewBatchDMLEvent() *BatchDMLEvent {
+	return &BatchDMLEvent{
+		Version:   0,
+		DMLEvents: make([]*DMLEvent, 0),
+	}
+}
+
+// Init initializes the BatchDMLEvent with the given table info.
+func (b *BatchDMLEvent) Init(tableInfo *common.TableInfo) {
+	if b.TableInfo != nil {
+		return
+	}
+	b.TableInfo = tableInfo
+	b.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), defaultRowCount)
+}
+
+// FIXME: this function is not used now, but it is used in the old code.
+// We should remove it after refactoring the event service.
 func (b *BatchDMLEvent) AppendDMLEvent(dispatcherID common.DispatcherID, tableID int64, startTs, commitTs uint64, tableInfo *common.TableInfo) {
 	dml := newDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo)
 	if b.TableInfo == nil {
@@ -58,6 +77,26 @@ func (b *BatchDMLEvent) AppendDMLEvent(dispatcherID common.DispatcherID, tableID
 	}
 	dml.Rows = b.Rows
 	b.DMLEvents = append(b.DMLEvents, dml)
+}
+
+// AddDMLEvent adds a completed DMLEvent to the BatchDMLEvent
+// The DMLEvent should already have all its rows populated
+func (b *BatchDMLEvent) AddDMLEvent(dmlEvent *DMLEvent) {
+	if dmlEvent == nil {
+		return
+	}
+	if b.TableInfo == nil {
+		b.TableInfo = dmlEvent.TableInfo
+		// FIXME: check if chk isFull in the future
+		b.Rows = chunk.NewChunkWithCapacity(dmlEvent.TableInfo.GetFieldSlice(), defaultRowCount)
+	}
+	if len(b.DMLEvents) > 0 {
+		pre := b.DMLEvents[len(b.DMLEvents)-1]
+		dmlEvent.previousTotalOffset = pre.previousTotalOffset + len(pre.RowTypes)
+	}
+	// Set the shared Rows chunk
+	dmlEvent.Rows = b.Rows
+	b.DMLEvents = append(b.DMLEvents, dmlEvent)
 }
 
 func (b *BatchDMLEvent) AppendRow(raw *common.RawKVEntry,
@@ -275,6 +314,22 @@ func newDMLEvent(
 		TableInfo:       tableInfo,
 		RowTypes:        make([]RowType, 0),
 	}
+}
+
+// NewDMLEvent creates a new DMLEvent with the given parameters
+func NewDMLEvent(
+	dispatcherID common.DispatcherID,
+	tableID int64,
+	startTs,
+	commitTs uint64,
+	tableInfo *common.TableInfo,
+) *DMLEvent {
+	return newDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo)
+}
+
+// SetRows sets the Rows chunk for this DMLEvent
+func (t *DMLEvent) SetRows(rows *chunk.Chunk) {
+	t.Rows = rows
 }
 
 func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,

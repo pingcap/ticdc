@@ -115,7 +115,7 @@ func TestEventScanner(t *testing.T) {
 	// Event sequence:
 	//   DDL(ts=x) -> DML(ts=x+1) -> DML(ts=x+2) -> DML(ts=x+3) -> DML(ts=x+4) -> Resolved(ts=x+5)
 	// Expected result:
-	// [DDL(x), DML(x+1), DML(x+2), DML(x+3), DML(x+4), Resolved(x+5)]
+	// [DDL(x), BatchDML_1[DML(x+1)], BatchDML_2[DML(x+2), DML(x+3), DML(x+4)], Resolved(x+5)]
 	err = mockEventStore.AppendEvents(dispatcherID, resolvedTs, kvEvents...)
 	require.NoError(t, err)
 	disp.eventStoreResolvedTs.Store(resolvedTs)
@@ -129,11 +129,23 @@ func TestEventScanner(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, isBroken)
 	require.Equal(t, 4, len(events))
+	require.Equal(t, pevent.TypeDDLEvent, events[0].GetType())
+	require.Equal(t, pevent.TypeBatchDMLEvent, events[1].GetType())
+	require.Equal(t, pevent.TypeBatchDMLEvent, events[2].GetType())
+	require.Equal(t, pevent.TypeResolvedEvent, events[3].GetType())
+	batchDML1 := events[1].(*pevent.BatchDMLEvent)
+	require.Equal(t, int32(1), batchDML1.Len())
+	require.Equal(t, batchDML1.DMLEvents[0].GetCommitTs(), kvEvents[0].CRTs)
+	batchDML2 := events[2].(*pevent.BatchDMLEvent)
+	require.Equal(t, int32(3), batchDML2.Len())
+	require.Equal(t, batchDML2.DMLEvents[0].GetCommitTs(), kvEvents[1].CRTs)
+	require.Equal(t, batchDML2.DMLEvents[1].GetCommitTs(), kvEvents[2].CRTs)
+	require.Equal(t, batchDML2.DMLEvents[2].GetCommitTs(), kvEvents[3].CRTs)
 
 	// case 4: Reaches scan limit, only 1 DDL and 1 DML event scanned
 	// Tests that when MaxBytes limit is reached, the scanner returns partial events with isBroken=true
 	// Expected result:
-	// [DDL(x), DML(x+1), Resolved(x+1)] (partial events due to size limit)
+	// [DDL(x), BatchDML[DML(x+1)], Resolved(x+1)] (partial events due to size limit)
 	//               ▲
 	//               └── Scanning interrupted here
 	sl = scanLimit{
@@ -159,7 +171,7 @@ func TestEventScanner(t *testing.T) {
 	// Modified events: first 3 DMLs have same commitTs=x:
 	//   DDL(x) -> DML-1(x+1) -> DML-2(x+1) -> DML-3(x+1) -> DML-4(x+4)
 	// Expected result (MaxBytes=1):
-	// [DDL(x), DML-1(x+1), DML-2(x+1), DML-3(x+1), Resolved(x+1)]
+	// [DDL(x), BatchDML_1[DML-1(x+1)], BatchDML_2[DML-2(x+1), DML-3(x+1)], Resolved(x+1)]
 	//                               ▲
 	//                               └── Scanning interrupted here
 	// The length of the result here is 4.
@@ -199,7 +211,7 @@ func TestEventScanner(t *testing.T) {
 	// case 6: Tests timeout behavior
 	// Tests that with Timeout=0, the scanner immediately returns scanned events
 	// Expected result:
-	// [DDL(x), DML(x+1), DML(x+1), DML(x+1), Resolved(x+1)]
+	// [DDL(x), BatchDML_1[DML(x+1)], BatchDML_2[DML(x+1), DML(x+1)], Resolved(x+1)]
 	//                               ▲
 	//                               └── Scanning interrupted due to timeout
 	sl = scanLimit{
@@ -216,7 +228,7 @@ func TestEventScanner(t *testing.T) {
 	// Event sequence after adding fakeDDL(ts=x):
 	//   DDL(x) -> DML(x+1) -> DML(x+1) -> DML(x+1) -> fakeDDL(x+1) -> DML(x+4)
 	// Expected result:
-	// [DDL(x), DML(x+1), DML(x+1), DML(x+1), fakeDDL(x+1), DML(x+4), Resolved(x+5)]
+	// [DDL(x), BatchDML_1[DML(x+1)], BatchDML_2[DML(x+1), DML(x+1)], fakeDDL(x+1), BatchDML_3[DML(x+4)], Resolved(x+5)]
 	//                                ▲
 	//                                └── DMLs take precedence over DDL with same ts
 	fakeDDL := event.DDLEvent{
@@ -233,12 +245,13 @@ func TestEventScanner(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, isBroken)
 	require.Equal(t, 6, len(events))
-	// First DML should appear before fake DDL
+	// First 2 BatchDMLs should appear before fake DDL
+	// BatchDML_1
 	firstDML := events[1]
 	require.Equal(t, firstDML.GetType(), pevent.TypeBatchDMLEvent)
 	require.Equal(t, len(firstDML.(*pevent.BatchDMLEvent).DMLEvents), 1)
 	require.Equal(t, kvEvents[0].CRTs, firstDML.GetCommitTs())
-	// DMLs
+	// BatchDML_2
 	dml := events[2]
 	require.Equal(t, dml.GetType(), pevent.TypeBatchDMLEvent)
 	require.Equal(t, len(dml.(*pevent.BatchDMLEvent).DMLEvents), 2)
@@ -248,6 +261,12 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, ddl.GetType(), pevent.TypeDDLEvent)
 	require.Equal(t, fakeDDL.FinishedTs, ddl.GetCommitTs())
 	require.Equal(t, fakeDDL.FinishedTs, firstDML.GetCommitTs())
+	// BatchDML_3
+	batchDML3 := events[4]
+	require.Equal(t, batchDML3.GetType(), pevent.TypeBatchDMLEvent)
+	require.Equal(t, len(batchDML3.(*pevent.BatchDMLEvent).DMLEvents), 1)
+	require.Equal(t, kvEvents[3].CRTs, batchDML3.GetCommitTs())
+	// Resolved
 	e = events[5]
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
 	require.Equal(t, resolvedTs, e.GetCommitTs())
