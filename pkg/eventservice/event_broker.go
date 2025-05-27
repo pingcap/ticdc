@@ -16,6 +16,7 @@ package eventservice
 import (
 	"context"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -731,7 +732,7 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 
 				// fizz remove these part
 				// If the update Diff is too large, we skip to count it in the lag metrics below.
-				updateDiff := time.Since(dispatcher.lastReceivedResolvedTsTime.Load()) - time.Since(dispatcher.lastSentResolvedTsTime.Load())
+				updateDiff := dispatcher.lastReceivedResolvedTsTime.Load().Sub(dispatcher.lastSentResolvedTsTime.Load())
 				if updateDiff > time.Millisecond*5 {
 					receivedAndSentLagDiffDispatchers = append(receivedAndSentLagDiffDispatchers, dispatcher)
 					return true
@@ -841,7 +842,21 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 					)
 				}
 
-				for _, d := range receivedAndSentLagDiffDispatchers {
+				slices.SortFunc(receivedAndSentLagDiffDispatchers, func(a, b *dispatcherStat) int {
+					aDiff := a.lastReceivedResolvedTsTime.Load().Sub(a.lastSentResolvedTsTime.Load())
+					bDiff := b.lastReceivedResolvedTsTime.Load().Sub(b.lastSentResolvedTsTime.Load())
+					if aDiff < bDiff {
+						return 1
+					} else if aDiff > bDiff {
+						return -1
+					}
+					return 0
+				})
+
+				for i, d := range receivedAndSentLagDiffDispatchers {
+					if i > 10 {
+						break
+					}
 					log.Info("received and sent lag diff dispatcher", zap.Stringer("dispatcherID", d.id), zap.Duration("diff", time.Since(d.lastReceivedResolvedTsTime.Load())-time.Since(d.lastSentResolvedTsTime.Load())),
 						zap.Uint64("sentResolvedTs", d.sentResolvedTs.Load()),
 						zap.Uint64("receivedResolvedTs", d.eventStoreResolvedTs.Load()),

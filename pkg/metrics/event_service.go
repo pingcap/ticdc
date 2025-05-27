@@ -84,6 +84,14 @@ var (
 			Name:      "dispatcher_status_count",
 			Help:      "The number of different dispatcher status",
 		}, []string{"status"})
+	EventServiceDispatcherUpdateResolvedTsDiff = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "dispatcher_update_resolved_ts_diff",
+			Help:      "The lag difference between received and sent resolved ts of dispatchers",
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
+		})
 )
 
 // InitEventServiceMetrics registers all metrics in this file.
