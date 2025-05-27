@@ -28,12 +28,12 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
-	"github.com/pingcap/ticdc/pkg/spanz"
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
@@ -100,7 +100,7 @@ type PDAPIClient interface {
 	ListGcServiceSafePoint(ctx context.Context) (*ListServiceGCSafepoint, error)
 	CollectMemberEndpoints(ctx context.Context) ([]string, error)
 	Healthy(ctx context.Context, endpoint string) error
-	ScanRegions(ctx context.Context, span tablepb.Span) ([]RegionInfo, error)
+	ScanRegions(ctx context.Context, span heartbeatpb.TableSpan) ([]RegionInfo, error)
 	Close()
 }
 
@@ -180,7 +180,7 @@ type RegionsInfo struct {
 }
 
 // ScanRegions is a reentrant function that updates the meta-region label of upstream cluster.
-func (pc *pdAPIClient) ScanRegions(ctx context.Context, span tablepb.Span) ([]RegionInfo, error) {
+func (pc *pdAPIClient) ScanRegions(ctx context.Context, span heartbeatpb.TableSpan) ([]RegionInfo, error) {
 	scanLimit := 1024
 	endpoints, err := pc.CollectMemberEndpoints(ctx)
 	if err != nil {
@@ -191,7 +191,7 @@ func (pc *pdAPIClient) ScanRegions(ctx context.Context, span tablepb.Span) ([]Re
 }
 
 func (pc *pdAPIClient) scanRegions(
-	ctx context.Context, span tablepb.Span, endpoints []string, scanLimit int,
+	ctx context.Context, span heartbeatpb.TableSpan, endpoints []string, scanLimit int,
 ) ([]RegionInfo, error) {
 	scan := func(endpoint string, startKey, endKey []byte) ([]RegionInfo, error) {
 		query := url.Values{}
@@ -227,7 +227,7 @@ func (pc *pdAPIClient) scanRegions(
 	startKey := span.StartKey
 	startKeyHex := strings.ToUpper(hex.EncodeToString(startKey))
 	isFirstStartKey := true
-	for spanz.EndCompare(startKey, span.EndKey) < 0 || (len(startKey) == 0 && isFirstStartKey) {
+	for common.EndCompare(startKey, span.EndKey) < 0 || (len(startKey) == 0 && isFirstStartKey) {
 		for i, endpoint := range endpoints {
 			r, err := scan(endpoint, startKey, span.EndKey)
 			if err != nil && i+1 == len(endpoints) {
@@ -256,7 +256,7 @@ func (pc *pdAPIClient) scanRegions(
 					zap.Uint64("regionID", r[len(regions)-1].ID))
 				return nil, errors.Trace(err)
 			}
-			startKey = tablepb.Key(key)
+			startKey = key
 			startKeyHex = strings.ToUpper(hex.EncodeToString(startKey))
 			isFirstStartKey = false
 			break

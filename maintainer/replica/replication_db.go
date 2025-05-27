@@ -223,7 +223,6 @@ func (db *ReplicationDB) ReplaceReplicaSet(
 		new := NewSpanReplication(
 			old.ChangefeedID,
 			common.NewDispatcherID(),
-			old.GetPDClock(),
 			old.GetSchemaID(),
 			span, checkpointTs)
 		news = append(news, new)

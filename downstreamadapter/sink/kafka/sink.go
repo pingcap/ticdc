@@ -536,10 +536,6 @@ func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 	s.tableSchemaStore = tableSchemaStore
 }
 
-func (s *sink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
-	return startTsList, make([]bool, len(startTsList)), nil
-}
-
 func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 	if s.tableSchemaStore == nil {
 		log.Warn("kafka sink table schema store is not set",

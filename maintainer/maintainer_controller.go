@@ -38,7 +38,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -55,7 +54,6 @@ type Controller struct {
 	replicationDB       *replica.ReplicationDB
 	messageCenter       messaging.MessageCenter
 	nodeManager         *watcher.NodeManager
-	pdClock             pdutil.Clock
 
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
@@ -74,7 +72,6 @@ type Controller struct {
 func NewController(changefeedID common.ChangeFeedID,
 	checkpointTs uint64,
 	pdAPIClient pdutil.PDAPIClient,
-	pdClock pdutil.Clock,
 	regionCache split.RegionCache,
 	taskPool threadpool.ThreadPool,
 	cfConfig *config.ReplicaConfig,
@@ -115,7 +112,6 @@ func NewController(changefeedID common.ChangeFeedID,
 		nodeManager:            nodeManager,
 		taskPool:               taskPool,
 		cfConfig:               cfConfig,
-		pdClock:                pdClock,
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 	}
@@ -182,7 +178,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 			zap.Int64("table", table.TableID))
 		return
 	}
-	span := spanz.TableIDToComparableSpan(table.TableID)
+	span := common.TableIDToComparableSpan(table.TableID)
 	tableSpan := &heartbeatpb.TableSpan{
 		TableID:  table.TableID,
 		StartKey: span.StartKey,
@@ -331,7 +327,6 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 	return replica.NewWorkingSpanReplication(
 		c.changefeedID,
 		common.NewDispatcherIDFromPB(spanInfo.ID),
-		c.pdClock,
 		spanInfo.SchemaID,
 		spanInfo.Span,
 		status,
@@ -346,7 +341,7 @@ func (c *Controller) addToWorkingTaskMap(
 ) {
 	tableSpans, ok := workingTaskMap[span.TableID]
 	if !ok {
-		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](heartbeatpb.LessTableSpan)
+		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
 		workingTaskMap[span.TableID] = tableSpans
 	}
 	tableSpans.ReplaceOrInsert(span, spanReplication)
@@ -387,7 +382,7 @@ func (c *Controller) processTableSpans(
 	// Add new table if not working
 	if isTableWorking {
 		// Handle existing table spans
-		span := spanz.TableIDToComparableSpan(table.TableID)
+		span := common.TableIDToComparableSpan(table.TableID)
 		tableSpan := &heartbeatpb.TableSpan{
 			TableID:  table.TableID,
 			StartKey: span.StartKey,
@@ -520,8 +515,7 @@ func (c *Controller) addWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 func (c *Controller) addNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID,
-			dispatcherID, c.pdClock, schemaID, span, startTs)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs)
 		c.replicationDB.AddAbsentReplicaSet(replicaSet)
 	}
 }
@@ -661,7 +655,7 @@ func (c *Controller) SplitTableByRegionCount(tableID int64) error {
 
 	replications := c.replicationDB.GetTasksByTableID(tableID)
 
-	span := spanz.TableIDToComparableSpan(tableID)
+	span := common.TableIDToComparableSpan(tableID)
 	wholeSpan := &heartbeatpb.TableSpan{
 		TableID:  span.TableID,
 		StartKey: span.StartKey,

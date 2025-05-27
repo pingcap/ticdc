@@ -96,8 +96,8 @@ func NewClusterAdminClientMockImpl() *ClusterAdminClientMockImpl {
 }
 
 // GetAllBrokers implement the ClusterAdminClient interface
-func (c *ClusterAdminClientMockImpl) GetAllBrokers(context.Context) ([]Broker, error) {
-	return nil, nil
+func (c *ClusterAdminClientMockImpl) GetAllBrokers(context.Context) []Broker {
+	return nil
 }
 
 // GetBrokerConfig implement the ClusterAdminClient interface

@@ -31,11 +31,11 @@ import (
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/tikv/client-go/v2/oracle"
@@ -187,7 +187,6 @@ func New(
 	ctx context.Context,
 	root string,
 	subClient logpuller.SubscriptionClient,
-	pdClock pdutil.Clock,
 ) EventStore {
 	dbPath := fmt.Sprintf("%s/%s", root, dataDir)
 
@@ -198,7 +197,7 @@ func New(
 	}
 
 	store := &eventStore{
-		pdClock:   pdClock,
+		pdClock:   appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		subClient: subClient,
 
 		dbs:            createPebbleDBs(dbPath, dbCount),
@@ -469,8 +468,11 @@ func (e *eventStore) RegisterDispatcher(
 			CounterResolved.Inc()
 		}
 	}
+
+	serverConfig := config.GetGlobalServerConfig()
+	resolvedTsAdvanceInterval := int64(serverConfig.KVClient.AdvanceIntervalInMs)
 	// Note: don't hold any lock when call Subscribe
-	e.subClient.Subscribe(stat.subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, 600, bdrMode)
+	e.subClient.Subscribe(stat.subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
 		ChangeType:   SubscriptionChangeTypeAdd,
 		SubID:        uint64(stat.subStat.subID),
@@ -788,7 +790,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 		}
 		metrics.EventStoreScanBytes.Add(float64(len(value)))
 		if iter.needCheckSpan {
-			comparableKey := spanz.ToComparableKey(rawKV.Key)
+			comparableKey := common.ToComparableKey(rawKV.Key)
 			if bytes.Compare(comparableKey, iter.tableSpan.StartKey) >= 0 &&
 				bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
 				break
@@ -940,7 +942,9 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 			if coordinatorID == "" {
 				continue
 			}
-			message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state)
+			// When the log coordinator resides on the same node, it will receive the same object reference.
+			// To prevent data races, we need to create a clone of the state.
+			message := messaging.NewSingleTargetMessage(coordinatorID, messaging.LogCoordinatorTopic, state.Copy())
 			// just ignore messagees fail to send
 			if err := e.messageCenter.SendEvent(message); err != nil {
 				log.Warn("send broadcast message to coordinator failed", zap.Error(err))

@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
@@ -52,8 +51,8 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 
 	span := heartbeatpb.TableSpan{
 		TableID:  100,
-		StartKey: spanz.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-		EndKey:   spanz.ToComparableKey(spanz.UpperBoundKey),
+		StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
+		EndKey:   common.ToComparableKey(common.UpperBoundKey),
 	}
 	subID := SubscriptionID(999)
 	eventCh := make(chan common.RawKVEntry, 1000)
@@ -218,8 +217,8 @@ func TestHandleResolvedTs(t *testing.T) {
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
-			StartKey: spanz.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-			EndKey:   spanz.ToComparableKey(spanz.UpperBoundKey),
+			StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
+			EndKey:   common.ToComparableKey(common.UpperBoundKey),
 		}
 		subSpan := &subscribedSpan{
 			subID:             subID1,
@@ -242,8 +241,8 @@ func TestHandleResolvedTs(t *testing.T) {
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
-			StartKey: spanz.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-			EndKey:   spanz.ToComparableKey(spanz.UpperBoundKey),
+			StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
+			EndKey:   common.ToComparableKey(common.UpperBoundKey),
 		}
 		subSpan := &subscribedSpan{
 			subID:             subID2,
@@ -266,8 +265,8 @@ func TestHandleResolvedTs(t *testing.T) {
 	{
 		span := heartbeatpb.TableSpan{
 			TableID:  100,
-			StartKey: spanz.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-			EndKey:   spanz.ToComparableKey(spanz.UpperBoundKey),
+			StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
+			EndKey:   common.ToComparableKey(common.UpperBoundKey),
 		}
 		subSpan := &subscribedSpan{
 			subID:             subID3,

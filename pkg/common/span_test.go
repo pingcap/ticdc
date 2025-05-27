@@ -11,14 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package spanz
+package common
 
 import (
 	"bytes"
 	"testing"
 
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/tidb/pkg/tablecodec"
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,52 +70,48 @@ func TestIntersect(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		lhs tablepb.Span
-		rhs tablepb.Span
+		lhs heartbeatpb.TableSpan
+		rhs heartbeatpb.TableSpan
 		// Set nil for non-intersect
-		res *tablepb.Span
+		res *heartbeatpb.TableSpan
 	}{
 		{
-			lhs: tablepb.Span{StartKey: nil, EndKey: []byte{1}},
-			rhs: tablepb.Span{StartKey: []byte{1}, EndKey: nil},
+			lhs: heartbeatpb.TableSpan{StartKey: nil, EndKey: []byte{1}},
+			rhs: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: nil},
 			res: nil,
 		},
 		{
-			lhs: tablepb.Span{StartKey: nil, EndKey: nil},
-			rhs: tablepb.Span{StartKey: nil, EndKey: nil},
-			res: &tablepb.Span{StartKey: nil, EndKey: nil},
+			lhs: heartbeatpb.TableSpan{StartKey: nil, EndKey: nil},
+			rhs: heartbeatpb.TableSpan{StartKey: nil, EndKey: nil},
+			res: &heartbeatpb.TableSpan{StartKey: nil, EndKey: nil},
 		},
 		{
-			lhs: tablepb.Span{StartKey: nil, EndKey: nil},
-			rhs: tablepb.Span{StartKey: []byte{1}, EndKey: []byte{2}},
-			res: &tablepb.Span{StartKey: []byte{1}, EndKey: []byte{2}},
+			lhs: heartbeatpb.TableSpan{StartKey: nil, EndKey: nil},
+			rhs: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
+			res: &heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
 		},
 		{
-			lhs: tablepb.Span{StartKey: []byte{0}, EndKey: []byte{3}},
-			rhs: tablepb.Span{StartKey: []byte{1}, EndKey: []byte{2}},
-			res: &tablepb.Span{StartKey: []byte{1}, EndKey: []byte{2}},
+			lhs: heartbeatpb.TableSpan{StartKey: []byte{0}, EndKey: []byte{3}},
+			rhs: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
+			res: &heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
 		},
 		{
-			lhs: tablepb.Span{StartKey: []byte{0}, EndKey: []byte{2}},
-			rhs: tablepb.Span{StartKey: []byte{1}, EndKey: []byte{2}},
-			res: &tablepb.Span{StartKey: []byte{1}, EndKey: []byte{2}},
+			lhs: heartbeatpb.TableSpan{StartKey: []byte{0}, EndKey: []byte{2}},
+			rhs: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
+			res: &heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
 		},
 	}
 
 	for _, test := range tests {
 		t.Logf("running.., %v", test)
-		res, err := Intersect(test.lhs, test.rhs)
-		if test.res == nil {
-			require.NotNil(t, err)
-		} else {
+		res := GetIntersectSpan(test.lhs, test.rhs)
+		if test.res != nil {
 			require.Equal(t, *test.res, res)
 		}
 
 		// Swap lhs and rhs, should get the same result
-		res2, err2 := Intersect(test.rhs, test.lhs)
-		if test.res == nil {
-			require.NotNil(t, err2)
-		} else {
+		res2 := GetIntersectSpan(test.rhs, test.lhs)
+		if test.res != nil {
 			require.Equal(t, *test.res, res2)
 		}
 	}

@@ -322,7 +322,6 @@ func TestMaintainerSchedule(t *testing.T) {
 	}()
 
 	taskScheduler := threadpool.NewThreadPoolDefault()
-	pdClock := pdutil.NewClock4Test()
 	maintainer := NewMaintainer(cfID,
 		&config.SchedulerConfig{
 			CheckBalanceInterval: config.TomlDuration(time.Minute),
@@ -330,7 +329,7 @@ func TestMaintainerSchedule(t *testing.T) {
 		},
 		&config.ChangeFeedInfo{
 			Config: config.GetDefaultReplicaConfig(),
-		}, n, taskScheduler, nil, pdClock, nil, 10, true)
+		}, n, taskScheduler, nil, nil, 10, true)
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic,
 		func(ctx context.Context, msg *messaging.TargetMessage) error {
