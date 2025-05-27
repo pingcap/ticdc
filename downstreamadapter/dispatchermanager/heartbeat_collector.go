@@ -40,6 +40,7 @@ Receiving messages include:
  1. HeartBeatResponse: the ack and actions for block events(Need a better name)
  2. SchedulerDispatcherRequest: ask for create or remove a dispatcher
  3. CheckpointTsMessage: the latest checkpoint ts of the changefeed, it only for the MQ-class Sink
+ 4. MergeDispatcherRequest: ask for merge dispatchers
 
 HeartBeatCollector is an server level component.
 */
@@ -53,8 +54,8 @@ type HeartBeatCollector struct {
 	heartBeatResponseDynamicStream          dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *EventDispatcherManager, *HeartBeatResponseHandler]
 	schedulerDispatcherRequestDynamicStream dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *EventDispatcherManager, *SchedulerDispatcherRequestHandler]
 	checkpointTsMessageDynamicStream        dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *EventDispatcherManager, *CheckpointTsMessageHandler]
-
-	mc messaging.MessageCenter
+	mergeDispatcherRequestDynamicStream     dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *EventDispatcherManager, *MergeDispatcherRequestHandler]
+	mc                                      messaging.MessageCenter
 
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
@@ -208,6 +209,11 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 		c.checkpointTsMessageDynamicStream.Push(
 			common.NewChangefeedIDFromPB(checkpointTsMessage.ChangefeedID).Id,
 			NewCheckpointTsMessage(checkpointTsMessage))
+	case messaging.TypeMergeDispatcherRequest:
+		mergeDispatcherRequest := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
+		c.mergeDispatcherRequestDynamicStream.Push(
+			common.NewChangefeedIDFromPB(mergeDispatcherRequest.ChangefeedID).Id,
+			NewMergeDispatcherRequest(mergeDispatcherRequest))
 	default:
 		log.Panic("unknown message type", zap.Any("message", msg.Message))
 	}
@@ -224,6 +230,7 @@ func (c *HeartBeatCollector) Close() {
 	c.heartBeatResponseDynamicStream.Close()
 	c.schedulerDispatcherRequestDynamicStream.Close()
 	c.dispatcherStatusDynamicStream.Close()
+	c.mergeDispatcherRequestDynamicStream.Close()
 
 	log.Info("heartbeat collector is closed")
 }

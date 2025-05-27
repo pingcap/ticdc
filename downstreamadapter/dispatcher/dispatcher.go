@@ -263,7 +263,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 		// only when we receive the first event, we can regard the dispatcher begin syncing data
 		// then turning into working status.
 		if d.isFirstEvent(event) {
-			d.updateComponentStatus()
+			d.updateComponentStatusToWorking()
 		}
 
 		switch event.GetType() {
@@ -379,7 +379,7 @@ func (d *Dispatcher) isFirstEvent(event commonEvent.Event) bool {
 	return false
 }
 
-// TryClose should be called after Remove(),
+// TryClose should be called after remove the dispatcher from eventCollector to stop receiving events from eventCollector.
 // TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
 // EventDispatcherManager will clean the dispatcher info after TryClose returns true.
 func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
@@ -523,7 +523,7 @@ func (d *Dispatcher) EmitBootstrap() bool {
 	return true
 }
 
-func (d *Dispatcher) updateComponentStatus() {
+func (d *Dispatcher) updateComponentStatusToWorking() {
 	d.componentStatus.Set(heartbeatpb.ComponentState_Working)
 	d.statusesChan <- TableSpanStatusWithSeq{
 		TableSpanStatus: &heartbeatpb.TableSpanStatus{
