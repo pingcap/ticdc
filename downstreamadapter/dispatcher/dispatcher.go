@@ -240,7 +240,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	dmlWakeOnce := &sync.Once{}
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
-		log.Info("dispatcher receive all event",
+		log.Debug("dispatcher receive all event",
 			zap.Stringer("dispatcher", d.id),
 			zap.Any("event", dispatcherEvent.Event))
 		failpoint.Inject("HandleEventsSlowly", func() {
@@ -278,7 +278,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
 			dml.RecordTimestamp = time.Now()
-			log.Info("dispatcher receive dml event", zap.Any("time cost", time.Since(start).Nanoseconds()), zap.Any("dispatcher ID", d.id))
+			//log.Info("dispatcher receive dml event", zap.Any("time cost", time.Since(start).Nanoseconds()), zap.Any("dispatcher ID", d.id))
 			dml.AddPostFlushFunc(func() {
 				// Considering dml event in sink may be written to downstream not in order,
 				// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
