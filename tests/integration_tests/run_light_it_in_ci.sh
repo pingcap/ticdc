@@ -32,37 +32,37 @@ group_num=${group#G}
 # 4 CPU, 16 Gi memory.
 mysql_groups=(
 	# G00
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
 	# G01
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
 	# G02
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'new_ci_collation safe_mode savepoint fail_over_ddl_C'
 	# G03
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'ci_collation_compatibility multi_capture resourcecontrol fail_over_ddl_E'
 	# G05
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'vector simple partition_table fail_over_ddl_F'
 	# G06
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'http_api http_api_tls ddl_wait fail_over_ddl_G'
 	# G07
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'http_api_tls_with_user_auth fail_over_ddl_H'
 	# G08
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
 	# G09
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
 	# G10
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'changefeed_error bdr_mode fail_over_ddl_K'
 	# G11
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'row_format tiflash multi_rocks fail_over_ddl_M'
 	# G13
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'batch_add_table batch_update_to_no_batch fail_over_ddl_O'
 	# G15
-	'batch_update_to_no_batch batch_update_to_no_batch batch_update_to_no_batch'
+	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:

@@ -37,9 +37,6 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 		zap.Stringer("dispatcher", d.id),
 		zap.Any("action", dispatcherStatus.GetAction()),
 		zap.Any("ack", dispatcherStatus.GetAck()))
-	defer func() {
-		log.Info("hyy after handle dispatcher status", zap.Any("dispatcherStatus", dispatcherStatus), zap.Stringer("dispatcher", d.id))
-	}()
 	// Step1: deal with the ack info
 	ack := dispatcherStatus.GetAck()
 	if ack != nil {
@@ -49,8 +46,6 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 		}
 		d.cancelResendTask(identifier)
 	}
-
-	log.Info("hyy line 53")
 
 	// Step2: deal with the dispatcher action
 	action := dispatcherStatus.GetAction()
@@ -65,9 +60,6 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 			// we have not received the block event, and the action is for the future event, so just ignore
 			return
 		}
-
-		log.Info("hyy line 69")
-
 		if d.blockEventStatus.actionMatchs(action) {
 			log.Info("pending event get the action",
 				zap.Any("action", action),
@@ -105,8 +97,6 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 			}
 		}
 
-		log.Info("hyy line 108")
-
 		// Step3: whether the outdate message or not, we need to return message show we have finished the event.
 		d.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
 			ID: d.id.ToPB(),
@@ -117,8 +107,6 @@ func (d *Dispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.Dispat
 				Stage:       heartbeatpb.BlockStage_DONE,
 			},
 		}
-
-		log.Info("hyy line 121")
 	}
 }
 

@@ -348,9 +348,7 @@ func (h *DispatcherStatusHandler) Path(event DispatcherStatusWithID) common.Disp
 }
 
 func (h *DispatcherStatusHandler) Handle(dispatcher *Dispatcher, events ...DispatcherStatusWithID) (await bool) {
-	log.Info("hyy into DispatcherStatusHandler", zap.Any("dispatcherID", dispatcher.GetId()))
 	for _, event := range events {
-		log.Info("hyy into DispatcherStatusHandler", zap.Any("event GetDispatcherStatus", event.GetDispatcherStatus()), zap.Any("dispatcherID", dispatcher.GetId()))
 		dispatcher.HandleDispatcherStatus(event.GetDispatcherStatus())
 	}
 	return false

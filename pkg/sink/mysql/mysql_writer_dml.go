@@ -97,13 +97,13 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 // 4. There's more than one row in the group
 // 5. All events have the same safe mode status
 func shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent, cfg *Config) bool {
-	// if !cfg.BatchDMLEnable {
-	// 	return false
-	// }
+	if !cfg.BatchDMLEnable {
+		return false
+	}
 
-	// if len(events) == 1 && events[0].Len() == 1 {
-	// 	return false
-	// }
+	if len(events) == 1 && events[0].Len() == 1 {
+		return false
+	}
 
 	if !hasPK || hasVirtualCols {
 		return false
