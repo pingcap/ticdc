@@ -402,7 +402,6 @@ func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		)
 		return w, true
 	}
-	log.Info("hyy into TryClose", zap.Any("dispatcherID", d.id), zap.Any("sink is normal", d.sink.IsNormal()), zap.Any("tableProgress is empty", d.tableProgress.Empty()))
 	return w, false
 }
 
