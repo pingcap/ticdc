@@ -124,6 +124,14 @@ var (
 			Help:      "Event sync duration (s) for txn worker.",
 		}, []string{"namespace", "changefeed", "id"})
 
+	InnerSyncDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "txn_inner_event_sync_duration",
+			Help:      "Event sync duration (s) for txn worker.",
+		}, []string{"namespace", "changefeed", "id"})
+
 	WorkerHandledRows = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -227,6 +235,7 @@ func InitSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(SinkDMLBatchCallback)
 	registry.MustRegister(PrepareStatementErrors)
 	registry.MustRegister(EventSyncDuration)
+	registry.MustRegister(InnerSyncDuration)
 
 	// kafka sink metrics
 	registry.MustRegister(WorkerSendMessageDuration)

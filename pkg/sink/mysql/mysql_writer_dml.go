@@ -654,6 +654,7 @@ func (w *Writer) multiStmtExecute(
 	}
 	defer conn.Close()
 
+	start := time.Now()
 	// we use conn.ExecContext to reduce the overhead of network latency.
 	// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
 	// when some error occurs, we just need to close the conn to avoid the session to be reuse unexpectedly.
@@ -663,6 +664,7 @@ func (w *Writer) multiStmtExecute(
 		log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", finalMultiStmtSQL), zap.Any("multiStmtArgs", multiStmtArgs))
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", finalMultiStmtSQL, multiStmtArgs)))
 	}
+	w.innerSyncDuration.Observe(time.Since(start).Seconds())
 	return nil
 }
 

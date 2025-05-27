@@ -136,13 +136,12 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
 	workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
 	workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
-	//workerEventSyncDuration := metrics.EventSyncDuration.WithLabelValues(namespace, changefeed, strconv.Itoa(idx))
 
 	defer func() {
 		metrics.WorkerFlushDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
 		metrics.WorkerTotalDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
 		metrics.WorkerHandledRows.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
-		metrics.EventSyncDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
+		//metrics.EventSyncDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
 	}()
 
 	inputCh := s.conflictDetector.GetOutChByCacheID(idx)
