@@ -161,7 +161,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			if !ok {
 				return errors.Trace(ctx.Err())
 			}
-			log.Info("mysql sink receive event", zap.Any("worker id", idx), zap.Any("first time cost", time.Since(txnEvents[0].RecordTimestamp).Nanoseconds()), zap.Any("last time cost", time.Since(txnEvents[len(txnEvents)-1].RecordTimestamp).Nanoseconds()))
+			log.Info("mysql sink receive event", zap.Any("worker id", idx), zap.Any("first time cost", time.Since(txnEvents[0].RecordTimestamp).Nanoseconds()), zap.Any("last time cost", time.Since(txnEvents[len(txnEvents)-1].RecordTimestamp).Nanoseconds()), zap.Any("events length", len(txnEvents)))
 			for _, txnEvent := range txnEvents {
 				workerHandledRows.Add(float64(txnEvent.Len()))
 			}
