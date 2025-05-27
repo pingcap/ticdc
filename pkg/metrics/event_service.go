@@ -105,4 +105,5 @@ func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceScanTaskCount)
 	registry.MustRegister(EventServiceDispatcherStatusCount)
 	registry.MustRegister(EventServicePendingScanTaskCount)
+	registry.MustRegister(EventServiceDispatcherUpdateResolvedTsDiff)
 }

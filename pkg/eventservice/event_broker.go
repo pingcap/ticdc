@@ -733,7 +733,7 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 				// fizz remove these part
 				// If the update Diff is too large, we skip to count it in the lag metrics below.
 				updateDiff := dispatcher.lastReceivedResolvedTsTime.Load().Sub(dispatcher.lastSentResolvedTsTime.Load())
-				if updateDiff > time.Millisecond*5 {
+				if updateDiff > time.Microsecond*150 {
 					receivedAndSentLagDiffDispatchers = append(receivedAndSentLagDiffDispatchers, dispatcher)
 					return true
 				}
@@ -805,6 +805,7 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 						zap.Uint64("sentResolvedTs", slowestDispatchers.sentResolvedTs.Load()),
 						zap.Uint64("receivedResolvedTs", slowestDispatchers.eventStoreResolvedTs.Load()),
 						zap.Duration("lag", lag),
+						zap.Duration("updateDiff", time.Since(slowestDispatchers.lastReceivedResolvedTsTime.Load())-time.Since(slowestDispatchers.lastSentResolvedTsTime.Load())),
 						zap.Bool("isPaused", slowestDispatchers.isRunning.Load()),
 						zap.Bool("isHandshaked", slowestDispatchers.isHandshaked.Load()),
 						zap.Bool("isTaskScanning", slowestDispatchers.isTaskScanning.Load()),
