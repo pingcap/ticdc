@@ -736,9 +736,9 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 
 				metrics.EventServiceDispatcherUpdateResolvedTsDiff.Observe(updateDiff.Seconds())
 
-				if updateDiff > time.Microsecond*150 {
+				if updateDiff > time.Millisecond*150 {
 					receivedAndSentLagDiffDispatchers = append(receivedAndSentLagDiffDispatchers, dispatcher)
-					return true
+					//return true
 				}
 
 				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
