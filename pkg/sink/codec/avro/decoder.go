@@ -289,6 +289,7 @@ func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo,
 	}
 	tableInfo = newTableInfo(schemaName, tableName, columns, keyMap)
 	tableInfoAccessor.Add(schemaName, tableName, tableInfo)
+	tableInfoAccessor.AddBlockTableID(schemaName, tableName, tableInfo.TableName.TableID)
 	return tableInfo
 }
 
@@ -460,17 +461,17 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	d.value = nil
 
 	result := new(commonEvent.DDLEvent)
-	result.FinishedTs = baseDDLEvent.CommitTs
 	result.SchemaName = baseDDLEvent.Schema
 	result.TableName = baseDDLEvent.Table
 	result.Query = baseDDLEvent.Query
+	result.FinishedTs = baseDDLEvent.CommitTs
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 
 	if d.idx == 0 {
 		physicalTableIDs := tableInfoAccessor.GetBlockedTables(result.SchemaName, result.TableName)
 		result.BlockedTables = common.GetInfluenceTables(actionType, physicalTableIDs)
-		log.Info("set blocked table", zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+		log.Debug("set blocked table", zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
 			zap.Any("actionType", actionType.String()), zap.Any("tableID", physicalTableIDs))
 		tableInfoAccessor.Remove(result.SchemaName, result.TableName)
 	}

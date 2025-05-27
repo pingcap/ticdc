@@ -196,8 +196,6 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	}
 
 	if total == 0 {
-		log.Info("no DML events found before DDL",
-			zap.Uint64("DDLCommitTs", commitTs), zap.Any("tables", tableIDs))
 		return w.mysqlSink.WriteBlockEvent(ddl)
 	}
 
