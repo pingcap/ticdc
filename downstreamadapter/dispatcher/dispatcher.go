@@ -240,7 +240,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	dmlWakeOnce := &sync.Once{}
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
-		log.Debug("dispatcher receive all event",
+		log.Info("dispatcher receive all event",
 			zap.Stringer("dispatcher", d.id),
 			zap.Any("event", dispatcherEvent.Event))
 		failpoint.Inject("HandleEventsSlowly", func() {
