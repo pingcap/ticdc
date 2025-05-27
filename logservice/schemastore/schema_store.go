@@ -276,9 +276,9 @@ func (s *schemaStore) FetchTableDDLEvents(tableID int64, tableFilter filter.Filt
 
 	currentResolvedTs := s.resolvedTs.Load()
 	if end > currentResolvedTs {
-		// log.Panic("end should not be greater than current resolved ts",
-		// 	zap.Uint64("end", end),
-		// 	zap.Uint64("currentResolvedTs", currentResolvedTs))
+		log.Panic("end should not be greater than current resolved ts",
+			zap.Uint64("end", end),
+			zap.Uint64("currentResolvedTs", currentResolvedTs))
 		end = currentResolvedTs
 	}
 	events, err := s.dataStorage.fetchTableDDLEvents(tableID, tableFilter, start, end)
