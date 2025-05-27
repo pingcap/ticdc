@@ -850,9 +850,9 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 					aDiff := a.lastReceivedResolvedTsTime.Load().Sub(a.lastSentResolvedTsTime.Load())
 					bDiff := b.lastReceivedResolvedTsTime.Load().Sub(b.lastSentResolvedTsTime.Load())
 					if aDiff < bDiff {
-						return 1
-					} else if aDiff > bDiff {
 						return -1
+					} else if aDiff > bDiff {
+						return 1
 					}
 					return 0
 				})
