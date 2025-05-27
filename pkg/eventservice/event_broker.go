@@ -733,6 +733,9 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 				// fizz remove these part
 				// If the update Diff is too large, we skip to count it in the lag metrics below.
 				updateDiff := dispatcher.lastReceivedResolvedTsTime.Load().Sub(dispatcher.lastSentResolvedTsTime.Load())
+
+				metrics.EventServiceDispatcherUpdateResolvedTsDiff.Observe(updateDiff.Seconds())
+
 				if updateDiff > time.Microsecond*150 {
 					receivedAndSentLagDiffDispatchers = append(receivedAndSentLagDiffDispatchers, dispatcher)
 					return true
