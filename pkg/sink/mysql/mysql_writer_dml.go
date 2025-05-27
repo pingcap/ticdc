@@ -101,10 +101,6 @@ func shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DM
 		return false
 	}
 
-	if len(events) == 1 && events[0].Len() == 1 {
-		return false
-	}
-
 	if !hasPK || hasVirtualCols {
 		return false
 	}
