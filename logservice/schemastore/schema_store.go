@@ -272,12 +272,14 @@ func (s *schemaStore) GetTableDDLEventState(tableID int64) DDLEventState {
 }
 
 func (s *schemaStore) FetchTableDDLEvents(tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
+	return nil, nil
+
 	currentResolvedTs := s.resolvedTs.Load()
 	if end > currentResolvedTs {
-		log.Panic("end should not be greater than current resolved ts",
-			zap.Uint64("end", end),
-			zap.Uint64("currentResolvedTs", currentResolvedTs))
-		//end = currentResolvedTs
+		// log.Panic("end should not be greater than current resolved ts",
+		// 	zap.Uint64("end", end),
+		// 	zap.Uint64("currentResolvedTs", currentResolvedTs))
+		end = currentResolvedTs
 	}
 	events, err := s.dataStorage.fetchTableDDLEvents(tableID, tableFilter, start, end)
 	if err != nil {

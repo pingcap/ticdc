@@ -523,6 +523,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		return
 	}
 
+	start := time.Now()
+
 	for _, e := range events {
 		if task.isRemoved.Load() {
 			return
@@ -560,6 +562,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
+	cost := time.Since(start)
+
+	if cost > 100*time.Millisecond {
+		log.Info("fizz send events cost too long", zap.Duration("cost", cost), zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex), zap.Int("eventCount", len(events)), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
+	}
 }
 
 func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int) {
@@ -694,7 +701,7 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 
 // updateMetrics updates the metrics of the event broker periodically.
 func (c *eventBroker) updateMetrics(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	log.Info("update metrics goroutine is started")
 	for {
 		select {
@@ -707,6 +714,9 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			dispatcherCount := 0
 			runningDispatcherCount := 0
 			pausedDispatcherCount := 0
+			// 收集 sentMinResolvedTs 最小的 10 个 dispatcher, 并打印出来
+			slowDispatchers := make([]*dispatcherStat, 0, 10)
+
 			var slowestDispatchers *dispatcherStat
 
 			c.dispatchers.Range(func(key, value any) bool {
@@ -723,6 +733,25 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 
 				if slowestDispatchers == nil || slowestDispatchers.sentResolvedTs.Load() < watermark {
 					slowestDispatchers = dispatcher
+				}
+
+				// 收集最慢的 10 个 dispatcher
+				if len(slowDispatchers) < 10 {
+					slowDispatchers = append(slowDispatchers, dispatcher)
+				} else {
+					// 找到 slowDispatchers 中最快的那个 (sentResolvedTs 最大)
+					fastestIdx := 0
+					fastestTs := slowDispatchers[0].sentResolvedTs.Load()
+					for i, d := range slowDispatchers {
+						if d.sentResolvedTs.Load() > fastestTs {
+							fastestTs = d.sentResolvedTs.Load()
+							fastestIdx = i
+						}
+					}
+					// 如果当前 dispatcher 比 slowDispatchers 中最快的还要慢，则替换
+					if watermark < fastestTs {
+						slowDispatchers[fastestIdx] = dispatcher
+					}
 				}
 
 				if dispatcher.isRunning.Load() {
@@ -769,6 +798,37 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 						zap.Bool("isPaused", slowestDispatchers.isRunning.Load()),
 						zap.Bool("isHandshaked", slowestDispatchers.isHandshaked.Load()),
 						zap.Bool("isTaskScanning", slowestDispatchers.isTaskScanning.Load()),
+					)
+				}
+			}
+
+			// 打印最慢的 10 个 dispatcher
+			if len(slowDispatchers) > 0 {
+				// 按 sentResolvedTs 排序 (升序，最慢的在前面)
+				for i := 0; i < len(slowDispatchers); i++ {
+					for j := i + 1; j < len(slowDispatchers); j++ {
+						if slowDispatchers[i].sentResolvedTs.Load() > slowDispatchers[j].sentResolvedTs.Load() {
+							slowDispatchers[i], slowDispatchers[j] = slowDispatchers[j], slowDispatchers[i]
+						}
+					}
+				}
+
+				log.Info("Top slowest dispatchers", zap.Int("count", len(slowDispatchers)))
+				for i, d := range slowDispatchers {
+					sentLag := time.Since(oracle.GetTimeFromTS(d.sentResolvedTs.Load()))
+					receivedLag := time.Since(oracle.GetTimeFromTS(d.eventStoreResolvedTs.Load()))
+					lagDiff := sentLag - receivedLag
+					log.Info("slow dispatcher",
+						zap.Int("rank", i+1),
+						zap.Stringer("dispatcherID", d.id),
+						zap.Uint64("sentResolvedTs", d.sentResolvedTs.Load()),
+						zap.Uint64("receivedResolvedTs", d.eventStoreResolvedTs.Load()),
+						zap.Duration("sentLag", sentLag),
+						zap.Duration("receivedLag", receivedLag),
+						zap.Duration("lagDiff", lagDiff),
+						zap.Bool("isRunning", d.isRunning.Load()),
+						zap.Bool("isHandshaked", d.isHandshaked.Load()),
+						zap.Bool("isTaskScanning", d.isTaskScanning.Load()),
 					)
 				}
 			}
