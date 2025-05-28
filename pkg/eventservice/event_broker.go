@@ -16,7 +16,6 @@ package eventservice
 import (
 	"context"
 	"math"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,6 +64,18 @@ var (
 	metricEventServiceSendDDLCount        = metrics.EventServiceSendEventCount.WithLabelValues("ddl")
 	metricEventServiceSendCommandCount    = metrics.EventServiceSendEventCount.WithLabelValues("command")
 )
+
+// metricsSnapshot holds all metrics data collected at a point in time
+type metricsSnapshot struct {
+	receivedMinResolvedTs  uint64
+	sentMinResolvedTs      uint64
+	dispatcherCount        int
+	runningDispatcherCount int
+	pausedDispatcherCount  int
+	pendingTaskCount       int
+	slowestDispatcher      *dispatcherStat
+	pdTime                 time.Time
+}
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
 // Every TiDB cluster has a eventBroker.
@@ -703,6 +714,8 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 // updateMetrics updates the metrics of the event broker periodically.
 func (c *eventBroker) updateMetrics(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
 	log.Info("update metrics goroutine is started")
 	for {
 		select {
@@ -710,167 +723,118 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			log.Info("update metrics goroutine is closing")
 			return
 		case <-ticker.C:
-			receivedMinResolvedTs := uint64(math.MaxUint64)
-			sentMinResolvedTs := uint64(math.MaxUint64)
-			dispatcherCount := 0
-			runningDispatcherCount := 0
-			pausedDispatcherCount := 0
-			// 收集 sentMinResolvedTs 最小的 10 个 dispatcher, 并打印出来
-			slowDispatchers := make([]*dispatcherStat, 0, 10)
-			receivedAndSentLagDiffDispatchers := make([]*dispatcherStat, 0, 10)
-
-			var slowestDispatchers *dispatcherStat
-
-			c.dispatchers.Range(func(key, value any) bool {
-				dispatcherCount++
-				dispatcher := value.(*dispatcherStat)
-				if dispatcher.isRunning.Load() {
-					runningDispatcherCount++
-				} else {
-					pausedDispatcherCount++
-				}
-
-				// fizz remove these part
-				// If the update Diff is too large, we skip to count it in the lag metrics below.
-				updateDiff := dispatcher.lastReceivedResolvedTsTime.Load().Sub(dispatcher.lastSentResolvedTsTime.Load())
-
-				metrics.EventServiceDispatcherUpdateResolvedTsDiff.Observe(updateDiff.Seconds())
-
-				if updateDiff > time.Millisecond*150 {
-					receivedAndSentLagDiffDispatchers = append(receivedAndSentLagDiffDispatchers, dispatcher)
-					//return true
-				}
-
-				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
-				if resolvedTs < receivedMinResolvedTs {
-					receivedMinResolvedTs = resolvedTs
-				}
-				watermark := dispatcher.sentResolvedTs.Load()
-				if watermark < sentMinResolvedTs {
-					sentMinResolvedTs = watermark
-				}
-
-				if slowestDispatchers == nil || slowestDispatchers.sentResolvedTs.Load() < watermark {
-					slowestDispatchers = dispatcher
-				}
-
-				// 收集最慢的 10 个 dispatcher
-				if len(slowDispatchers) < 10 {
-					slowDispatchers = append(slowDispatchers, dispatcher)
-				} else {
-					// 找到 slowDispatchers 中最快的那个 (sentResolvedTs 最大)
-					fastestIdx := 0
-					fastestTs := slowDispatchers[0].sentResolvedTs.Load()
-					for i, d := range slowDispatchers {
-						if d.sentResolvedTs.Load() > fastestTs {
-							fastestTs = d.sentResolvedTs.Load()
-							fastestIdx = i
-						}
-					}
-					// 如果当前 dispatcher 比 slowDispatchers 中最快的还要慢，则替换
-					if watermark < fastestTs {
-						slowDispatchers[fastestIdx] = dispatcher
-					}
-				}
-
-				return true
-			})
-
-			pdTime := c.pdClock.CurrentTime()
-			pdTSO := oracle.GoTimeToTS(pdTime)
-
-			// If there are no dispatchers, set the receivedMinResolvedTs and sentMinWaterMark to the pdTime.
-			if dispatcherCount == 0 {
-				receivedMinResolvedTs = uint64(pdTSO)
-				sentMinResolvedTs = uint64(pdTSO)
-			}
-
-			receivedLag := float64(oracle.GetPhysical(pdTime)-oracle.ExtractPhysical(receivedMinResolvedTs)) / 1e3
-			c.metricEventServiceReceivedResolvedTsLag.Set(receivedLag)
-
-			sentLag := float64(oracle.GetPhysical(pdTime)-oracle.ExtractPhysical(sentMinResolvedTs)) / 1e3
-			c.metricEventServiceSentResolvedTsLag.Set(sentLag)
-
-			pendingTaskCount := 0
-			for i := 0; i < c.scanWorkerCount; i++ {
-				pendingTaskCount += len(c.taskChan[i])
-			}
-			metricEventBrokerPendingScanTaskCount.Set(float64(pendingTaskCount))
-
-			metrics.EventServiceDispatcherStatusCount.WithLabelValues("running").Set(float64(runningDispatcherCount))
-			metrics.EventServiceDispatcherStatusCount.WithLabelValues("paused").Set(float64(pausedDispatcherCount))
-			metrics.EventServiceDispatcherStatusCount.WithLabelValues("total").Set(float64(dispatcherCount))
-
-			if slowestDispatchers != nil {
-				lag := time.Since(oracle.GetTimeFromTS(slowestDispatchers.sentResolvedTs.Load()))
-				if lag > 30*time.Second {
-					log.Warn("slowest dispatcher", zap.Stringer("dispatcherID", slowestDispatchers.id),
-						zap.Uint64("sentResolvedTs", slowestDispatchers.sentResolvedTs.Load()),
-						zap.Uint64("receivedResolvedTs", slowestDispatchers.eventStoreResolvedTs.Load()),
-						zap.Duration("lag", lag),
-						zap.Duration("updateDiff", time.Since(slowestDispatchers.lastReceivedResolvedTsTime.Load())-time.Since(slowestDispatchers.lastSentResolvedTsTime.Load())),
-						zap.Bool("isPaused", slowestDispatchers.isRunning.Load()),
-						zap.Bool("isHandshaked", slowestDispatchers.isHandshaked.Load()),
-						zap.Bool("isTaskScanning", slowestDispatchers.isTaskScanning.Load()),
-					)
-				}
-			}
-
-			// 打印最慢的 10 个 dispatcher
-			if len(slowDispatchers) > 0 {
-				// 按 sentResolvedTs 排序 (升序，最慢的在前面)
-				for i := 0; i < len(slowDispatchers); i++ {
-					for j := i + 1; j < len(slowDispatchers); j++ {
-						if slowDispatchers[i].sentResolvedTs.Load() > slowDispatchers[j].sentResolvedTs.Load() {
-							slowDispatchers[i], slowDispatchers[j] = slowDispatchers[j], slowDispatchers[i]
-						}
-					}
-				}
-
-				log.Info("Top slowest dispatchers", zap.Int("count", len(slowDispatchers)))
-				for i, d := range slowDispatchers {
-					sentLag := time.Since(oracle.GetTimeFromTS(d.sentResolvedTs.Load()))
-					receivedLag := time.Since(oracle.GetTimeFromTS(d.eventStoreResolvedTs.Load()))
-					lagDiff := sentLag - receivedLag
-					log.Info("slow dispatcher",
-						zap.Int("rank", i+1),
-						zap.Stringer("dispatcherID", d.id),
-						zap.Uint64("sentResolvedTs", d.sentResolvedTs.Load()),
-						zap.Uint64("receivedResolvedTs", d.eventStoreResolvedTs.Load()),
-						zap.Duration("sentLag", sentLag),
-						zap.Duration("receivedLag", receivedLag),
-						zap.Duration("lagDiff", lagDiff),
-						zap.Bool("isRunning", d.isRunning.Load()),
-						zap.Bool("isHandshaked", d.isHandshaked.Load()),
-						zap.Bool("isTaskScanning", d.isTaskScanning.Load()),
-					)
-				}
-
-				slices.SortFunc(receivedAndSentLagDiffDispatchers, func(a, b *dispatcherStat) int {
-					aDiff := a.lastReceivedResolvedTsTime.Load().Sub(a.lastSentResolvedTsTime.Load())
-					bDiff := b.lastReceivedResolvedTsTime.Load().Sub(b.lastSentResolvedTsTime.Load())
-					if aDiff < bDiff {
-						return -1
-					} else if aDiff > bDiff {
-						return 1
-					}
-					return 0
-				})
-
-				for i, d := range receivedAndSentLagDiffDispatchers {
-					if i > 10 {
-						break
-					}
-					log.Info("received and sent lag diff dispatcher", zap.Stringer("dispatcherID", d.id), zap.Duration("diff", time.Since(d.lastReceivedResolvedTsTime.Load())-time.Since(d.lastSentResolvedTsTime.Load())),
-						zap.Uint64("sentResolvedTs", d.sentResolvedTs.Load()),
-						zap.Uint64("receivedResolvedTs", d.eventStoreResolvedTs.Load()),
-						zap.Duration("sentLag", time.Since(oracle.GetTimeFromTS(d.sentResolvedTs.Load()))),
-						zap.Duration("receivedLag", time.Since(oracle.GetTimeFromTS(d.eventStoreResolvedTs.Load()))),
-					)
-				}
-			}
+			snapshot := c.collectMetrics()
+			c.updateMetricsFromSnapshot(snapshot)
+			c.logSlowDispatchers(snapshot)
 		}
 	}
+}
+
+// collectMetrics gathers all metrics data from the event broker
+func (c *eventBroker) collectMetrics() *metricsSnapshot {
+	snapshot := &metricsSnapshot{
+		receivedMinResolvedTs: uint64(math.MaxUint64),
+		sentMinResolvedTs:     uint64(math.MaxUint64),
+		pdTime:                c.pdClock.CurrentTime(),
+	}
+
+	c.collectDispatcherMetrics(snapshot)
+	c.collectPendingTaskMetrics(snapshot)
+
+	// If there are no dispatchers, use current time as resolved timestamps
+	if snapshot.dispatcherCount == 0 {
+		pdTSO := oracle.GoTimeToTS(snapshot.pdTime)
+		snapshot.receivedMinResolvedTs = uint64(pdTSO)
+		snapshot.sentMinResolvedTs = uint64(pdTSO)
+	}
+
+	return snapshot
+}
+
+// collectDispatcherMetrics collects metrics related to dispatchers
+func (c *eventBroker) collectDispatcherMetrics(snapshot *metricsSnapshot) {
+	c.dispatchers.Range(func(key, value any) bool {
+		snapshot.dispatcherCount++
+		dispatcher := value.(*dispatcherStat)
+
+		if dispatcher.isRunning.Load() {
+			snapshot.runningDispatcherCount++
+		} else {
+			snapshot.pausedDispatcherCount++
+		}
+
+		// Record update time difference
+		updateDiff := dispatcher.lastReceivedResolvedTsTime.Load().Sub(dispatcher.lastSentResolvedTsTime.Load())
+		metrics.EventServiceDispatcherUpdateResolvedTsDiff.Observe(updateDiff.Seconds())
+
+		// Track min resolved timestamps
+		resolvedTs := dispatcher.eventStoreResolvedTs.Load()
+		if resolvedTs < snapshot.receivedMinResolvedTs {
+			snapshot.receivedMinResolvedTs = resolvedTs
+		}
+
+		watermark := dispatcher.sentResolvedTs.Load()
+		if watermark < snapshot.sentMinResolvedTs {
+			snapshot.sentMinResolvedTs = watermark
+		}
+
+		// Track slowest dispatcher
+		if snapshot.slowestDispatcher == nil || snapshot.slowestDispatcher.sentResolvedTs.Load() < watermark {
+			snapshot.slowestDispatcher = dispatcher
+		}
+
+		return true
+	})
+}
+
+// collectPendingTaskMetrics collects metrics about pending tasks
+func (c *eventBroker) collectPendingTaskMetrics(snapshot *metricsSnapshot) {
+	for i := 0; i < c.scanWorkerCount; i++ {
+		snapshot.pendingTaskCount += len(c.taskChan[i])
+	}
+}
+
+// updateMetricsFromSnapshot updates all prometheus metrics based on the snapshot
+func (c *eventBroker) updateMetricsFromSnapshot(snapshot *metricsSnapshot) {
+	// Update lag metrics
+	receivedLag := float64(oracle.GetPhysical(snapshot.pdTime)-oracle.ExtractPhysical(snapshot.receivedMinResolvedTs)) / 1e3
+	c.metricEventServiceReceivedResolvedTsLag.Set(receivedLag)
+
+	sentLag := float64(oracle.GetPhysical(snapshot.pdTime)-oracle.ExtractPhysical(snapshot.sentMinResolvedTs)) / 1e3
+	c.metricEventServiceSentResolvedTsLag.Set(sentLag)
+
+	// Update task count metrics
+	metricEventBrokerPendingScanTaskCount.Set(float64(snapshot.pendingTaskCount))
+
+	// Update dispatcher status metrics
+	metrics.EventServiceDispatcherStatusCount.WithLabelValues("running").Set(float64(snapshot.runningDispatcherCount))
+	metrics.EventServiceDispatcherStatusCount.WithLabelValues("paused").Set(float64(snapshot.pausedDispatcherCount))
+	metrics.EventServiceDispatcherStatusCount.WithLabelValues("total").Set(float64(snapshot.dispatcherCount))
+}
+
+// logSlowDispatchers logs warnings for dispatchers that are too slow
+func (c *eventBroker) logSlowDispatchers(snapshot *metricsSnapshot) {
+	if snapshot.slowestDispatcher == nil {
+		return
+	}
+
+	lag := time.Since(oracle.GetTimeFromTS(snapshot.slowestDispatcher.sentResolvedTs.Load()))
+	if lag <= 30*time.Second {
+		return
+	}
+
+	log.Warn("slowest dispatcher",
+		zap.Stringer("dispatcherID", snapshot.slowestDispatcher.id),
+		zap.Uint64("sentResolvedTs", snapshot.slowestDispatcher.sentResolvedTs.Load()),
+		zap.Uint64("receivedResolvedTs", snapshot.slowestDispatcher.eventStoreResolvedTs.Load()),
+		zap.Duration("lag", lag),
+		zap.Duration("updateDiff",
+			time.Since(snapshot.slowestDispatcher.lastReceivedResolvedTsTime.Load())-
+				time.Since(snapshot.slowestDispatcher.lastSentResolvedTsTime.Load())),
+		zap.Bool("isPaused", !snapshot.slowestDispatcher.isRunning.Load()),
+		zap.Bool("isHandshaked", snapshot.slowestDispatcher.isHandshaked.Load()),
+		zap.Bool("isTaskScanning", snapshot.slowestDispatcher.isTaskScanning.Load()),
+	)
 }
 
 // updateDispatcherSendTs updates the sendTs of the dispatcher periodically.
