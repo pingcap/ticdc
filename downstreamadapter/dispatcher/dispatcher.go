@@ -241,7 +241,10 @@ func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.Schema
 func (d *Dispatcher) HandleCacheEvents() {
 	select {
 	case cacheEvents := <-d.cacheEvents:
-		d.HandleEvents(cacheEvents.events, cacheEvents.wakeCallback)
+		block := d.HandleEvents(cacheEvents.events, cacheEvents.wakeCallback)
+		if !block {
+			cacheEvents.wakeCallback()
+		}
 	default:
 	}
 }

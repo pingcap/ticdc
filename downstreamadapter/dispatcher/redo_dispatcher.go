@@ -120,6 +120,7 @@ func NewRedoDispatcher(
 		blockStatusesChan:  blockStatusesChan,
 		syncPointConfig:    syncPointConfig,
 		componentStatus:    newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
+		resolvedTs:         startTs,
 		filterConfig:       filterConfig,
 		isRemoving:         atomic.Bool{},
 		blockEventStatus:   BlockEventStatus{blockPendingEvent: nil},

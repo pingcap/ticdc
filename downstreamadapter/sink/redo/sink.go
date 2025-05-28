@@ -94,7 +94,6 @@ func (m *Sink) Run(ctx context.Context) error {
 		return nil
 	}
 
-	defer m.close()
 	start := time.Now()
 	w, err := factory.NewRedoLogWriter(m.ctx, m.cfg)
 	if err != nil {
