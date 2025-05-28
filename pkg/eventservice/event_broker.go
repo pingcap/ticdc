@@ -15,8 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"math"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,10 +30,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -48,34 +44,6 @@ const (
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
 )
-
-// Limit the max time range of a scan task to avoid too many rows in a single scan task.
-var maxTaskTimeRange = 3 * time.Minute
-
-var (
-	metricEventServiceSendEventDuration   = metrics.EventServiceSendEventDuration.WithLabelValues("txn")
-	metricEventBrokerScanTaskCount        = metrics.EventServiceScanTaskCount
-	metricEventBrokerPendingScanTaskCount = metrics.EventServicePendingScanTaskCount
-	metricEventStoreOutputKv              = metrics.EventStoreOutputEventCount.WithLabelValues("kv")
-	metricEventStoreOutputResolved        = metrics.EventStoreOutputEventCount.WithLabelValues("resolved")
-
-	metricEventServiceSendKvCount         = metrics.EventServiceSendEventCount.WithLabelValues("kv")
-	metricEventServiceSendResolvedTsCount = metrics.EventServiceSendEventCount.WithLabelValues("resolved_ts")
-	metricEventServiceSendDDLCount        = metrics.EventServiceSendEventCount.WithLabelValues("ddl")
-	metricEventServiceSendCommandCount    = metrics.EventServiceSendEventCount.WithLabelValues("command")
-)
-
-// metricsSnapshot holds all metrics data collected at a point in time
-type metricsSnapshot struct {
-	receivedMinResolvedTs  uint64
-	sentMinResolvedTs      uint64
-	dispatcherCount        int
-	runningDispatcherCount int
-	pausedDispatcherCount  int
-	pendingTaskCount       int
-	slowestDispatcher      *dispatcherStat
-	pdTime                 time.Time
-}
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
 // Every TiDB cluster has a eventBroker.
@@ -113,9 +81,8 @@ type eventBroker struct {
 	cancel context.CancelFunc
 	g      *errgroup.Group
 
-	metricDispatcherCount                   prometheus.Gauge
-	metricEventServiceReceivedResolvedTsLag prometheus.Gauge
-	metricEventServiceSentResolvedTsLag     prometheus.Gauge
+	// metricsCollector handles all metrics collection and reporting
+	metricsCollector *metricsCollector
 }
 
 func newEventBroker(
@@ -160,11 +127,10 @@ func newEventBroker(
 		scanWorkerCount:         scanWorkerCount,
 		cancel:                  cancel,
 		g:                       g,
-
-		metricDispatcherCount:                   metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
-		metricEventServiceReceivedResolvedTsLag: metrics.EventServiceResolvedTsLagGauge.WithLabelValues("received"),
-		metricEventServiceSentResolvedTsLag:     metrics.EventServiceResolvedTsLagGauge.WithLabelValues("sent"),
 	}
+
+	// Initialize metrics collector
+	c.metricsCollector = newMetricsCollector(c)
 
 	for i := 0; i < scanWorkerCount; i++ {
 		c.taskChan[i] = make(chan scanTask, conf.ScanTaskQueueSize/scanWorkerCount)
@@ -198,8 +164,7 @@ func newEventBroker(
 	})
 
 	g.Go(func() error {
-		c.updateMetrics(ctx)
-		return nil
+		return c.metricsCollector.Run(ctx)
 	})
 
 	for i := 0; i < c.sendMessageWorkerCount; i++ {
@@ -711,134 +676,6 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 	}
 }
 
-// updateMetrics updates the metrics of the event broker periodically.
-func (c *eventBroker) updateMetrics(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	log.Info("update metrics goroutine is started")
-	for {
-		select {
-		case <-ctx.Done():
-			log.Info("update metrics goroutine is closing")
-			return
-		case <-ticker.C:
-			snapshot := c.collectMetrics()
-			c.updateMetricsFromSnapshot(snapshot)
-			c.logSlowDispatchers(snapshot)
-		}
-	}
-}
-
-// collectMetrics gathers all metrics data from the event broker
-func (c *eventBroker) collectMetrics() *metricsSnapshot {
-	snapshot := &metricsSnapshot{
-		receivedMinResolvedTs: uint64(math.MaxUint64),
-		sentMinResolvedTs:     uint64(math.MaxUint64),
-		pdTime:                c.pdClock.CurrentTime(),
-	}
-
-	c.collectDispatcherMetrics(snapshot)
-	c.collectPendingTaskMetrics(snapshot)
-
-	// If there are no dispatchers, use current time as resolved timestamps
-	if snapshot.dispatcherCount == 0 {
-		pdTSO := oracle.GoTimeToTS(snapshot.pdTime)
-		snapshot.receivedMinResolvedTs = uint64(pdTSO)
-		snapshot.sentMinResolvedTs = uint64(pdTSO)
-	}
-
-	return snapshot
-}
-
-// collectDispatcherMetrics collects metrics related to dispatchers
-func (c *eventBroker) collectDispatcherMetrics(snapshot *metricsSnapshot) {
-	c.dispatchers.Range(func(key, value any) bool {
-		snapshot.dispatcherCount++
-		dispatcher := value.(*dispatcherStat)
-
-		if dispatcher.isRunning.Load() {
-			snapshot.runningDispatcherCount++
-		} else {
-			snapshot.pausedDispatcherCount++
-		}
-
-		// Record update time difference
-		updateDiff := dispatcher.lastReceivedResolvedTsTime.Load().Sub(dispatcher.lastSentResolvedTsTime.Load())
-		metrics.EventServiceDispatcherUpdateResolvedTsDiff.Observe(updateDiff.Seconds())
-
-		// Track min resolved timestamps
-		resolvedTs := dispatcher.eventStoreResolvedTs.Load()
-		if resolvedTs < snapshot.receivedMinResolvedTs {
-			snapshot.receivedMinResolvedTs = resolvedTs
-		}
-
-		watermark := dispatcher.sentResolvedTs.Load()
-		if watermark < snapshot.sentMinResolvedTs {
-			snapshot.sentMinResolvedTs = watermark
-		}
-
-		// Track slowest dispatcher
-		if snapshot.slowestDispatcher == nil || snapshot.slowestDispatcher.sentResolvedTs.Load() < watermark {
-			snapshot.slowestDispatcher = dispatcher
-		}
-
-		return true
-	})
-}
-
-// collectPendingTaskMetrics collects metrics about pending tasks
-func (c *eventBroker) collectPendingTaskMetrics(snapshot *metricsSnapshot) {
-	for i := 0; i < c.scanWorkerCount; i++ {
-		snapshot.pendingTaskCount += len(c.taskChan[i])
-	}
-}
-
-// updateMetricsFromSnapshot updates all prometheus metrics based on the snapshot
-func (c *eventBroker) updateMetricsFromSnapshot(snapshot *metricsSnapshot) {
-	// Update lag metrics
-	receivedLag := float64(oracle.GetPhysical(snapshot.pdTime)-oracle.ExtractPhysical(snapshot.receivedMinResolvedTs)) / 1e3
-	c.metricEventServiceReceivedResolvedTsLag.Set(receivedLag)
-
-	sentLag := float64(oracle.GetPhysical(snapshot.pdTime)-oracle.ExtractPhysical(snapshot.sentMinResolvedTs)) / 1e3
-	c.metricEventServiceSentResolvedTsLag.Set(sentLag)
-
-	// Update task count metrics
-	metricEventBrokerPendingScanTaskCount.Set(float64(snapshot.pendingTaskCount))
-
-	// Update dispatcher status metrics
-	metrics.EventServiceDispatcherStatusCount.WithLabelValues("running").Set(float64(snapshot.runningDispatcherCount))
-	metrics.EventServiceDispatcherStatusCount.WithLabelValues("paused").Set(float64(snapshot.pausedDispatcherCount))
-	metrics.EventServiceDispatcherStatusCount.WithLabelValues("total").Set(float64(snapshot.dispatcherCount))
-}
-
-// logSlowDispatchers logs warnings for dispatchers that are too slow
-func (c *eventBroker) logSlowDispatchers(snapshot *metricsSnapshot) {
-	if snapshot.slowestDispatcher == nil {
-		return
-	}
-
-	lag := time.Since(oracle.GetTimeFromTS(snapshot.slowestDispatcher.sentResolvedTs.Load()))
-	if lag <= 30*time.Second {
-		return
-	}
-
-	log.Warn("slowest dispatcher",
-		zap.Stringer("dispatcherID", snapshot.slowestDispatcher.id),
-		zap.Uint64("sentResolvedTs", snapshot.slowestDispatcher.sentResolvedTs.Load()),
-		zap.Uint64("receivedResolvedTs", snapshot.slowestDispatcher.eventStoreResolvedTs.Load()),
-		zap.Duration("lag", lag),
-		zap.Duration("updateDiff",
-			time.Since(snapshot.slowestDispatcher.lastReceivedResolvedTsTime.Load())-
-				time.Since(snapshot.slowestDispatcher.lastSentResolvedTsTime.Load())),
-		zap.Bool("isPaused", !snapshot.slowestDispatcher.isRunning.Load()),
-		zap.Bool("isHandshaked", snapshot.slowestDispatcher.isHandshaked.Load()),
-		zap.Bool("isTaskScanning", snapshot.slowestDispatcher.isTaskScanning.Load()),
-	)
-}
-
-// updateDispatcherSendTs updates the sendTs of the dispatcher periodically.
-// The eventStore need to know this to GC the stale data.
 func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) {
 	ticker := time.NewTicker(time.Second * 10)
 	log.Info("update dispatcher send ts goroutine is started")
@@ -920,7 +757,7 @@ func (c *eventBroker) getDispatcher(id common.DispatcherID) (*dispatcherStat, bo
 }
 
 func (c *eventBroker) addDispatcher(info DispatcherInfo) {
-	defer c.metricDispatcherCount.Inc()
+	defer c.metricsCollector.metricDispatcherCount.Inc()
 	filter := info.GetFilter()
 
 	start := time.Now()
@@ -1005,7 +842,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 }
 
 func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
-	defer c.metricDispatcherCount.Dec()
+	defer c.metricsCollector.metricDispatcherCount.Dec()
 	id := dispatcherInfo.GetID()
 
 	stat, ok := c.dispatchers.Load(id)
