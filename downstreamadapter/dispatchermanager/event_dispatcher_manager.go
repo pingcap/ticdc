@@ -851,7 +851,9 @@ func (e *EventDispatcherManager) close(removeChangefeed bool) {
 	}
 
 	e.sink.Close(removeChangefeed)
-	e.redoSink.Close(removeChangefeed)
+	if e.redoSink.Enabled() {
+		e.redoSink.Close(removeChangefeed)
+	}
 	e.cancel()
 	e.wg.Wait()
 
@@ -988,8 +990,9 @@ func (e *EventDispatcherManager) cleanDispatcher(id common.DispatcherID, schemaI
 
 func (e *EventDispatcherManager) SetGlobalRedoTs(checkpointTs uint64) bool {
 	log.Debug("SetGlobalRedoTs", zap.Any("checkpointTs", checkpointTs))
+	// FIXME: select correct resolveTs
 	var resolveTs uint64 = math.MaxUint64
-	e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
+	e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
 		resolveTs = min(resolveTs, dispatcher.GetResolvedTs())
 	})
 	// only update meta on the one node

@@ -237,7 +237,7 @@ func TestredoManagerInOwner(t *testing.T) {
 			UseFileBackend:        useFileBackend,
 		}
 		startTs := common.Ts(10)
-		ddlMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
+		ddlMgr := New(common.NewChangeFeedIDWithName("test"), cfg)
 
 		var eg errgroup.Group
 		eg.Go(func() error {
@@ -283,7 +283,7 @@ func TestredoManagerError(t *testing.T) {
 		EncodingWorkerNum:     workerNumberForTest,
 		FlushWorkerNum:        workerNumberForTest,
 	}
-	logMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
+	logMgr := New(common.NewChangeFeedIDWithName("test"), cfg)
 	var eg errgroup.Group
 	eg.Go(func() error {
 		return logMgr.Run(ctx)
@@ -339,7 +339,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
 		UseFileBackend:        useFileBackend,
 	}
-	dmlMgr := NewRedoManager(common.NewChangeFeedIDWithName("test"), cfg)
+	dmlMgr := New(common.NewChangeFeedIDWithName("test"), cfg)
 	var eg errgroup.Group
 	eg.Go(func() error {
 		return dmlMgr.Run(ctx)
@@ -356,7 +356,6 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		span := common.TableIDToComparableSpan(tableID)
 		ts := startTs
 		maxTsMap.ReplaceOrInsert(span, &ts)
-		dmlMgr.AddTable(span, startTs)
 	}
 
 	// write rows
