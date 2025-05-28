@@ -15,6 +15,7 @@ package regionlock
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -100,6 +101,27 @@ func (e *rangeLockEntry) String() string {
 		len(e.waiterSignalChs))
 }
 
+// rangeLockEntryHeap is a min heap of rangeLockEntry based on ResolvedTs
+type rangeLockEntryHeap []*rangeLockEntry
+
+func (h rangeLockEntryHeap) Len() int { return len(h) }
+func (h rangeLockEntryHeap) Less(i, j int) bool {
+	return h[i].lockedRangeState.ResolvedTs.Load() < h[j].lockedRangeState.ResolvedTs.Load()
+}
+func (h rangeLockEntryHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *rangeLockEntryHeap) Push(x interface{}) {
+	*h = append(*h, x.(*rangeLockEntry))
+}
+
+func (h *rangeLockEntryHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
+}
+
 // RangeLock is used to ensure that a table's same range is only requested once at a time.
 // Before sending a region request to TiKV, the client should lock the region's range to avoid sending another
 // request to the same region. After stopping the table or removing the region, the client should unlock the range.
@@ -118,7 +140,9 @@ type RangeLock struct {
 	lockedRanges *btree.BTreeG[*rangeLockEntry]
 	// regionIDToLockedRanges is used to quickly locate the lock entry by regionID.
 	regionIDToLockedRanges map[uint64]*rangeLockEntry
-	stopped                bool
+	// rangeLockEntryHeap is a min heap of all rangeLockEntry based on ResolvedTs
+	rangeLockEntryHeap *rangeLockEntryHeap
+	stopped            bool
 }
 
 // NewRangeLock creates a new RangeLock.
@@ -126,12 +150,15 @@ func NewRangeLock(
 	id uint64,
 	startKey, endKey []byte, startTs uint64,
 ) *RangeLock {
+	h := &rangeLockEntryHeap{}
+	heap.Init(h)
 	return &RangeLock{
 		id:                     id,
 		totalSpan:              heartbeatpb.TableSpan{StartKey: startKey, EndKey: endKey},
 		unlockedRanges:         newRangeTsMap(startKey, endKey, startTs),
 		lockedRanges:           btree.NewG(16, rangeLockEntryLess),
 		regionIDToLockedRanges: make(map[uint64]*rangeLockEntry),
+		rangeLockEntryHeap:     h,
 	}
 }
 
@@ -214,6 +241,14 @@ func (l *RangeLock) UnlockRange(
 
 	if entry, ok = l.lockedRanges.Delete(entry); !ok {
 		panic("unreachable")
+	}
+
+	// Remove the entry from the heap
+	for i, r := range *l.rangeLockEntryHeap {
+		if r == entry {
+			heap.Remove(l.rangeLockEntryHeap, i)
+			break
+		}
 	}
 
 	var newResolvedTs uint64
@@ -393,6 +428,28 @@ func (l *RangeLock) getOverlappedLockEntries(startKey, endKey []byte, regionID u
 	return overlappedLocks
 }
 
+// GetHeapMinTs returns the minimum ResolvedTs from the heap.
+func (l *RangeLock) GetHeapMinTs() uint64 {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	heap.Fix(l.rangeLockEntryHeap, 0)
+
+	minTs := uint64(math.MaxUint64)
+
+	if l.rangeLockEntryHeap.Len() > 0 {
+		minTs = (*l.rangeLockEntryHeap)[0].lockedRangeState.ResolvedTs.Load()
+	}
+
+	unlockedMinTs := l.unlockedRanges.getMinTs()
+
+	if unlockedMinTs < minTs {
+		minTs = unlockedMinTs
+	}
+
+	return minTs
+}
+
 // tryLockRange works in this way:
 // 1. If the range is totally disjointed with all locked ranges, it will be directly locked.
 // 2. If the range is overlapping with some locked ranges:
@@ -421,6 +478,7 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		newEntry.lockedRangeState.Created = time.Now()
 		l.lockedRanges.ReplaceOrInsert(newEntry)
 		l.regionIDToLockedRanges[regionID] = newEntry
+		heap.Push(l.rangeLockEntryHeap, newEntry)
 
 		l.unlockedRanges.unset(startKey, endKey)
 		log.Debug("range locked",

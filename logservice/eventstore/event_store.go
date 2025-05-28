@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -186,7 +187,6 @@ func New(
 	ctx context.Context,
 	root string,
 	subClient logpuller.SubscriptionClient,
-	pdClock pdutil.Clock,
 ) EventStore {
 	dbPath := fmt.Sprintf("%s/%s", root, dataDir)
 
@@ -197,7 +197,7 @@ func New(
 	}
 
 	store := &eventStore{
-		pdClock:   pdClock,
+		pdClock:   appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		subClient: subClient,
 
 		dbs:            createPebbleDBs(dbPath, dbCount),
@@ -468,8 +468,11 @@ func (e *eventStore) RegisterDispatcher(
 			CounterResolved.Inc()
 		}
 	}
+
+	serverConfig := config.GetGlobalServerConfig()
+	resolvedTsAdvanceInterval := int64(serverConfig.KVClient.AdvanceIntervalInMs)
 	// Note: don't hold any lock when call Subscribe
-	e.subClient.Subscribe(stat.subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, 600, bdrMode)
+	e.subClient.Subscribe(stat.subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
 		ChangeType:   SubscriptionChangeTypeAdd,
 		SubID:        uint64(stat.subStat.subID),

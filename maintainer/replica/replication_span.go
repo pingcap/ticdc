@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -44,18 +43,15 @@ type SpanReplication struct {
 	groupID     replica.GroupID
 	status      *atomic.Pointer[heartbeatpb.TableSpanStatus]
 	blockState  *atomic.Pointer[heartbeatpb.State]
-
-	pdClock pdutil.Clock
 }
 
 func NewSpanReplication(cfID common.ChangeFeedID,
 	id common.DispatcherID,
-	pdClock pdutil.Clock,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
 	checkpointTs uint64,
 ) *SpanReplication {
-	r := newSpanReplication(cfID, id, pdClock, SchemaID, span)
+	r := newSpanReplication(cfID, id, SchemaID, span)
 	r.initStatus(&heartbeatpb.TableSpanStatus{
 		ID:           id.ToPB(),
 		CheckpointTs: checkpointTs,
@@ -75,13 +71,12 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 func NewWorkingSpanReplication(
 	cfID common.ChangeFeedID,
 	id common.DispatcherID,
-	pdClock pdutil.Clock,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
 	status *heartbeatpb.TableSpanStatus,
 	nodeID node.ID,
 ) *SpanReplication {
-	r := newSpanReplication(cfID, id, pdClock, SchemaID, span)
+	r := newSpanReplication(cfID, id, SchemaID, span)
 	// Must set Node ID when creating a working span replication
 	r.SetNodeID(nodeID)
 	r.initStatus(status)
@@ -99,10 +94,9 @@ func NewWorkingSpanReplication(
 	return r
 }
 
-func newSpanReplication(cfID common.ChangeFeedID, id common.DispatcherID, pdClock pdutil.Clock, SchemaID int64, span *heartbeatpb.TableSpan) *SpanReplication {
+func newSpanReplication(cfID common.ChangeFeedID, id common.DispatcherID, SchemaID int64, span *heartbeatpb.TableSpan) *SpanReplication {
 	r := &SpanReplication{
 		ID:           id,
-		pdClock:      pdClock,
 		schemaID:     SchemaID,
 		Span:         span,
 		ChangefeedID: cfID,
@@ -180,10 +174,6 @@ func (r *SpanReplication) UpdateBlockState(newState heartbeatpb.State) {
 
 func (r *SpanReplication) GetSchemaID() int64 {
 	return r.schemaID
-}
-
-func (r *SpanReplication) GetPDClock() pdutil.Clock {
-	return r.pdClock
 }
 
 func (r *SpanReplication) SetSchemaID(schemaID int64) {

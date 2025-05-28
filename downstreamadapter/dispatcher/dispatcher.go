@@ -411,8 +411,9 @@ func (d *Dispatcher) isFirstEvent(event commonEvent.Event) bool {
 	return false
 }
 
-// TryClose should be called first when the dispatcher is should be removed.
-// TryClose will return the watermark of current dispatcher, and return true when the dispatcher stop to send events to sink.
+// TryClose should be called after Remove(),
+// TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
+// EventDispatcherManager will clean the dispatcher info after TryClose returns true.
 func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully.
 	// If sink is not normal, we can close the dispatcher immediately.
@@ -424,20 +425,26 @@ func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		if d.IsTableTriggerEventDispatcher() {
 			d.tableSchemaStore.Clear()
 		}
+		log.Info("dispatcher component has stopped and is ready for cleanup",
+			zap.Stringer("changefeedID", d.changefeedID),
+			zap.Stringer("dispatcher", d.id),
+			zap.String("table", common.FormatTableSpan(d.tableSpan)),
+			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
+			zap.Uint64("resolvedTs", d.GetResolvedTs()),
+		)
 		return w, true
 	}
 	return w, false
 }
 
-// Remove should be called after TryClose returns true
+// Remove is called when we want to remove the dispatcher,
+// It set isRemoving to true,
+// remove the dispatcher from status dynamic stream to stop receiving status info from maintainer.
 func (d *Dispatcher) Remove() {
-	log.Info("table event dispatcher component status changed to stopping",
-		zap.Stringer("changefeedID", d.changefeedID),
+	log.Info("Remove dispatcher",
 		zap.Stringer("dispatcher", d.id),
-		zap.String("table", common.FormatTableSpan(d.tableSpan)),
-		zap.Uint64("checkpointTs", d.GetCheckpointTs()),
-		zap.Uint64("resolvedTs", d.GetResolvedTs()),
-	)
+		zap.Stringer("changefeedID", d.changefeedID),
+		zap.String("table", common.FormatTableSpan(d.tableSpan)))
 	d.isRemoving.Store(true)
 
 	close(d.cacheEvents)

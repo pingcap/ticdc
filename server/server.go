@@ -143,11 +143,11 @@ func (c *server) initialize(ctx context.Context) error {
 	subscriptionClient := logpuller.NewSubscriptionClient(
 		&logpuller.SubscriptionClientConfig{
 			RegionRequestWorkerPerStore: 8,
-		}, c.pdClient, c.RegionCache, c.PDClock,
+		}, c.pdClient, c.RegionCache,
 		txnutil.NewLockerResolver(c.KVStorage.(tikv.Storage)), c.security,
 	)
-	schemaStore := schemastore.New(ctx, conf.DataDir, subscriptionClient, c.pdClient, c.PDClock, c.KVStorage)
-	eventStore := eventstore.New(ctx, conf.DataDir, subscriptionClient, c.PDClock)
+	schemaStore := schemastore.New(ctx, conf.DataDir, subscriptionClient, c.pdClient, c.KVStorage)
+	eventStore := eventstore.New(ctx, conf.DataDir, subscriptionClient)
 	eventService := eventservice.New(eventStore, schemaStore)
 	c.subModules = []common.SubModule{
 		nodeManager,
@@ -156,8 +156,7 @@ func (c *server) initialize(ctx context.Context) error {
 		NewElector(c),
 		NewHttpServer(c, c.tcpServer.HTTP1Listener()),
 		NewGrpcServer(c.tcpServer.GrpcListener()),
-		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler,
-			c.pdAPIClient, c.PDClock, c.RegionCache),
+		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler, c.pdAPIClient, c.RegionCache),
 		eventStore,
 		eventService,
 	}
