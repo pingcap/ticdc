@@ -139,7 +139,8 @@ func newFileWorkerGroup(
 }
 
 func (f *fileWorkerGroup) Run(
-	ctx context.Context) (err error) {
+	ctx context.Context,
+) (err error) {
 	defer func() {
 		f.close()
 		log.Warn("redo file workers closed",
