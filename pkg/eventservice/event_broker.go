@@ -360,6 +360,7 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
+		metricEventServiceSkipResolvedTsCount.Inc()
 		return false, common.DataRange{}
 	}
 
@@ -367,9 +368,17 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 	ddlState := c.schemaStore.GetTableDDLEventState(task.info.GetTableSpan().TableID)
 	dataRange.EndTs = min(dataRange.EndTs, ddlState.ResolvedTs)
 
+	if ddlState.ResolvedTs <= dataRange.StartTs {
+		log.Info("skip scan since ddlState.ResolvedTs is less than dataRange.StartTs", zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Uint64("latestCommitTs", task.latestCommitTs.Load()), zap.Uint64("ddlState.MaxEventCommitTs", ddlState.MaxEventCommitTs))
+		metricEventServiceSkipResolvedTsCount.Inc()
+		return false, common.DataRange{}
+	}
+
 	// Note: Maybe we should still send a resolvedTs to downstream to tell that
 	// the dispatcher is alive?
 	if dataRange.EndTs <= dataRange.StartTs {
+		log.Info("skip scan since endTs is less than startTs", zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Uint64("latestCommitTs", task.latestCommitTs.Load()), zap.Uint64("ddlState.MaxEventCommitTs", ddlState.MaxEventCommitTs))
+		metricEventServiceSkipResolvedTsCount.Inc()
 		return false, common.DataRange{}
 	}
 

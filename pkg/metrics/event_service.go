@@ -92,6 +92,13 @@ var (
 			Help:      "The lag difference between received and sent resolved ts of dispatchers",
 			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 		})
+	EventServiceSkipResolvedTsCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "skip_resolved_ts_count",
+			Help:      "The number of skipped resolved ts",
+		})
 )
 
 // InitEventServiceMetrics registers all metrics in this file.
@@ -106,4 +113,5 @@ func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceDispatcherStatusCount)
 	registry.MustRegister(EventServicePendingScanTaskCount)
 	registry.MustRegister(EventServiceDispatcherUpdateResolvedTsDiff)
+	registry.MustRegister(EventServiceSkipResolvedTsCount)
 }
