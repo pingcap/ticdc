@@ -108,6 +108,9 @@ type dispatcherStat struct {
 	currentScanLimitInBytes atomic.Int64
 	maxScanLimitInBytes     atomic.Int64
 	lastUpdateScanLimitTime atomic.Time
+
+	lastReceivedResolvedTsTime atomic.Time
+	lastSentResolvedTsTime     atomic.Time
 }
 
 func newDispatcherStat(
@@ -141,6 +144,9 @@ func newDispatcherStat(
 
 	dispStat.resetScanLimit()
 	dispStat.maxScanLimitInBytes.Store(maxScanLimitInBytes)
+
+	dispStat.lastReceivedResolvedTsTime.Store(time.Now())
+	dispStat.lastSentResolvedTsTime.Store(time.Now())
 	return dispStat
 }
 
@@ -159,6 +165,7 @@ func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 	// Only update the sentResolvedTs when the dispatcher is handshaked.
 	if a.isHandshaked.Load() {
 		a.sentResolvedTs.Store(resolvedTs)
+		a.lastSentResolvedTsTime.Store(time.Now())
 	}
 }
 

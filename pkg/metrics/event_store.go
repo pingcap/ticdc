@@ -55,7 +55,7 @@ var (
 		Subsystem: "event_store",
 		Name:      "write_duration",
 		Help:      "Bucketed histogram of event store write duration",
-		Buckets:   prometheus.ExponentialBuckets(0.004, 2.0, 10),
+		Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 10),
 	})
 
 	EventStoreScanRequestsCount = prometheus.NewCounter(
@@ -161,7 +161,7 @@ var (
 		Subsystem: "event_store",
 		Name:      "read_duration",
 		Help:      "Bucketed histogram of event store sorter iterator read duration",
-		Buckets:   prometheus.ExponentialBuckets(0.004, 2.0, 20),
+		Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 	}, []string{"type"})
 )
 

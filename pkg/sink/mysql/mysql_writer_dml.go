@@ -499,11 +499,14 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	writeTimeout += networkDriftDuration
 
 	tryExec := func() (int, int64, error) {
+		beginStart := time.Now()
 		tx, err := w.db.BeginTx(w.ctx, nil)
+		beginDuration := time.Since(beginStart)
 		if err != nil {
 			return 0, 0, errors.Trace(err)
 		}
 
+		execStart := time.Now()
 		if !fallbackToSeqWay {
 			err = w.multiStmtExecute(dmls, tx, writeTimeout)
 			if err != nil {
@@ -516,10 +519,20 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 				return 0, 0, err
 			}
 		}
+		execDuration := time.Since(execStart)
 
+		commitStart := time.Now()
 		if err = tx.Commit(); err != nil {
 			return 0, 0, err
 		}
+		commitDuration := time.Since(commitStart)
+
+		log.Debug("Transaction timing breakdown",
+			zap.Duration("beginTx", beginDuration),
+			zap.Duration("execute", execDuration),
+			zap.Duration("commit", commitDuration),
+			zap.Duration("total", time.Since(beginStart)))
+
 		log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount))
 		return dmls.rowCount, dmls.approximateSize, nil
 	}
@@ -560,6 +573,7 @@ func (w *Writer) sequenceExecute(
 	// Set session variables first and execution the txn.
 	// we try to set write source for each txn,
 	// so we can use it to trace the data source
+	setWriteSourceStart := time.Now()
 	if err := SetWriteSource(w.ctx, w.cfg, tx); err != nil {
 		log.Error("Failed to set write source", zap.Error(err))
 		if rbErr := tx.Rollback(); rbErr != nil {
@@ -569,6 +583,8 @@ func (w *Writer) sequenceExecute(
 		}
 		return err
 	}
+	setWriteSourceDuration := time.Since(setWriteSourceStart)
+	log.Debug("SetWriteSource timing", zap.Duration("duration", setWriteSourceDuration))
 
 	for i, query := range dmls.sqls {
 		args := dmls.values[i]
