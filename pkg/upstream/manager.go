@@ -21,11 +21,21 @@ import (
 	"github.com/benbjohnson/clock"
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/security"
 	pd "github.com/tikv/pd/client"
-	clientV3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 )
+
+// NodeTopologyCfg stores the information of the capture topology.
+type NodeTopologyCfg struct {
+	*node.Info
+
+	// GCServiceID identify the cdc cluster gc service id
+	GCServiceID string
+	SessionTTL  int64
+}
 
 // Manager manages all upstream.
 type Manager struct {
@@ -40,18 +50,20 @@ type Manager struct {
 
 	defaultUpstream *Upstream
 
-	initUpstreamFunc func(context.Context, *Upstream) error
+	initUpstreamFunc func(context.Context, *Upstream, *NodeTopologyCfg) error
+	nodeCfg          NodeTopologyCfg
 }
 
 // NewManager creates a new Manager.
 // ctx will be used to initialize upstream spawned by this Manager.
-func NewManager(ctx context.Context) *Manager {
+func NewManager(ctx context.Context, cfg NodeTopologyCfg) *Manager {
 	ctx, cancel := context.WithCancel(ctx)
 	return &Manager{
 		ups:              new(sync.Map),
 		ctx:              ctx,
 		cancel:           cancel,
 		initUpstreamFunc: initUpstream,
+		nodeCfg:          cfg,
 	}
 }
 
@@ -60,7 +72,7 @@ func (m *Manager) AddDefaultUpstream(
 	pdEndpoints []string,
 	conf *security.Credential,
 	pdClient pd.Client,
-	etcdClient *clientV3.Client,
+	etcdClient etcd.Client,
 ) (*Upstream, error) {
 	// use the pdClient and etcdClient pass from cdc server as the default upstream
 	// to reduce the creation times of pdClient to make cdc server more stable
@@ -74,7 +86,7 @@ func (m *Manager) AddDefaultUpstream(
 		wg:                new(sync.WaitGroup),
 		clock:             clock.New(),
 	}
-	if err := m.initUpstreamFunc(m.ctx, up); err != nil {
+	if err := m.initUpstreamFunc(m.ctx, up, &m.nodeCfg); err != nil {
 		return nil, cerror.Trace(err)
 	}
 	m.defaultUpstream = up
@@ -114,7 +126,7 @@ func (m *Manager) add(upstreamID uint64,
 	up := newUpstream(pdEndpoints, securityConf)
 	m.ups.Store(upstreamID, up)
 	go func() {
-		err := m.initUpstreamFunc(m.ctx, up)
+		err := m.initUpstreamFunc(m.ctx, up, &m.nodeCfg)
 		up.err.Store(err)
 	}()
 	up.resetIdleTime()

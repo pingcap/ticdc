@@ -15,8 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"math"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,10 +30,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -47,22 +43,6 @@ const (
 
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
-)
-
-// Limit the max time range of a scan task to avoid too many rows in a single scan task.
-var maxTaskTimeRange = 3 * time.Minute
-
-var (
-	metricEventServiceSendEventDuration   = metrics.EventServiceSendEventDuration.WithLabelValues("txn")
-	metricEventBrokerScanTaskCount        = metrics.EventServiceScanTaskCount
-	metricEventBrokerPendingScanTaskCount = metrics.EventServicePendingScanTaskCount
-	metricEventStoreOutputKv              = metrics.EventStoreOutputEventCount.WithLabelValues("kv")
-	metricEventStoreOutputResolved        = metrics.EventStoreOutputEventCount.WithLabelValues("resolved")
-
-	metricEventServiceSendKvCount         = metrics.EventServiceSendEventCount.WithLabelValues("kv")
-	metricEventServiceSendResolvedTsCount = metrics.EventServiceSendEventCount.WithLabelValues("resolved_ts")
-	metricEventServiceSendDDLCount        = metrics.EventServiceSendEventCount.WithLabelValues("ddl")
-	metricEventServiceSendCommandCount    = metrics.EventServiceSendEventCount.WithLabelValues("command")
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -101,9 +81,8 @@ type eventBroker struct {
 	cancel context.CancelFunc
 	g      *errgroup.Group
 
-	metricDispatcherCount                   prometheus.Gauge
-	metricEventServiceReceivedResolvedTsLag prometheus.Gauge
-	metricEventServiceSentResolvedTsLag     prometheus.Gauge
+	// metricsCollector handles all metrics collection and reporting
+	metricsCollector *metricsCollector
 }
 
 func newEventBroker(
@@ -148,11 +127,10 @@ func newEventBroker(
 		scanWorkerCount:         scanWorkerCount,
 		cancel:                  cancel,
 		g:                       g,
-
-		metricDispatcherCount:                   metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(id, 10)),
-		metricEventServiceReceivedResolvedTsLag: metrics.EventServiceResolvedTsLagGauge.WithLabelValues("received"),
-		metricEventServiceSentResolvedTsLag:     metrics.EventServiceResolvedTsLagGauge.WithLabelValues("sent"),
 	}
+
+	// Initialize metrics collector
+	c.metricsCollector = newMetricsCollector(c)
 
 	for i := 0; i < scanWorkerCount; i++ {
 		c.taskChan[i] = make(chan scanTask, conf.ScanTaskQueueSize/scanWorkerCount)
@@ -186,8 +164,7 @@ func newEventBroker(
 	})
 
 	g.Go(func() error {
-		c.updateMetrics(ctx)
-		return nil
+		return c.metricsCollector.Run(ctx)
 	})
 
 	for i := 0; i < c.sendMessageWorkerCount; i++ {
@@ -523,6 +500,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		return
 	}
 
+	start := time.Now()
+
 	for _, e := range events {
 		if task.isRemoved.Load() {
 			return
@@ -560,6 +539,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
+	cost := time.Since(start)
+
+	if cost > 100*time.Millisecond {
+		log.Info("fizz send events cost too long", zap.Duration("cost", cost), zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex), zap.Int("eventCount", len(events)), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
+	}
 }
 
 func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int) {
@@ -692,92 +676,6 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 	}
 }
 
-// updateMetrics updates the metrics of the event broker periodically.
-func (c *eventBroker) updateMetrics(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Second)
-	log.Info("update metrics goroutine is started")
-	for {
-		select {
-		case <-ctx.Done():
-			log.Info("update metrics goroutine is closing")
-			return
-		case <-ticker.C:
-			receivedMinResolvedTs := uint64(math.MaxUint64)
-			sentMinResolvedTs := uint64(math.MaxUint64)
-			dispatcherCount := 0
-			runningDispatcherCount := 0
-			pausedDispatcherCount := 0
-			var slowestDispatchers *dispatcherStat
-
-			c.dispatchers.Range(func(key, value any) bool {
-				dispatcherCount++
-				dispatcher := value.(*dispatcherStat)
-				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
-				if resolvedTs < receivedMinResolvedTs {
-					receivedMinResolvedTs = resolvedTs
-				}
-				watermark := dispatcher.sentResolvedTs.Load()
-				if watermark < sentMinResolvedTs {
-					sentMinResolvedTs = watermark
-				}
-
-				if slowestDispatchers == nil || slowestDispatchers.sentResolvedTs.Load() < watermark {
-					slowestDispatchers = dispatcher
-				}
-
-				if dispatcher.isRunning.Load() {
-					runningDispatcherCount++
-				} else {
-					pausedDispatcherCount++
-				}
-
-				return true
-			})
-
-			pdTime := c.pdClock.CurrentTime()
-			pdTSO := oracle.GoTimeToTS(pdTime)
-
-			// If there are no dispatchers, set the receivedMinResolvedTs and sentMinWaterMark to the pdTime.
-			if dispatcherCount == 0 {
-				receivedMinResolvedTs = uint64(pdTSO)
-				sentMinResolvedTs = uint64(pdTSO)
-			}
-
-			receivedLag := float64(oracle.GetPhysical(pdTime)-oracle.ExtractPhysical(receivedMinResolvedTs)) / 1e3
-			c.metricEventServiceReceivedResolvedTsLag.Set(receivedLag)
-
-			sentLag := float64(oracle.GetPhysical(pdTime)-oracle.ExtractPhysical(sentMinResolvedTs)) / 1e3
-			c.metricEventServiceSentResolvedTsLag.Set(sentLag)
-
-			pendingTaskCount := 0
-			for i := 0; i < c.scanWorkerCount; i++ {
-				pendingTaskCount += len(c.taskChan[i])
-			}
-			metricEventBrokerPendingScanTaskCount.Set(float64(pendingTaskCount))
-
-			metrics.EventServiceDispatcherStatusCount.WithLabelValues("running").Set(float64(runningDispatcherCount))
-			metrics.EventServiceDispatcherStatusCount.WithLabelValues("paused").Set(float64(pausedDispatcherCount))
-			metrics.EventServiceDispatcherStatusCount.WithLabelValues("total").Set(float64(dispatcherCount))
-
-			if slowestDispatchers != nil {
-				lag := time.Since(oracle.GetTimeFromTS(slowestDispatchers.sentResolvedTs.Load()))
-				if lag > 30*time.Second {
-					log.Warn("slowest dispatcher", zap.Stringer("dispatcherID", slowestDispatchers.id),
-						zap.Uint64("sentResolvedTs", slowestDispatchers.sentResolvedTs.Load()),
-						zap.Uint64("receivedResolvedTs", slowestDispatchers.eventStoreResolvedTs.Load()),
-						zap.Duration("lag", lag),
-						zap.Bool("isPaused", slowestDispatchers.isRunning.Load()),
-						zap.Bool("isHandshaked", slowestDispatchers.isHandshaked.Load()),
-						zap.Bool("isTaskScanning", slowestDispatchers.isTaskScanning.Load()),
-					)
-				}
-			}
-		}
-	}
-}
-
-// updateDispatcherSendTs updates the sendTs of the dispatcher periodically.
-// The eventStore need to know this to GC the stale data.
 func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context) {
 	ticker := time.NewTicker(time.Second * 10)
 	log.Info("update dispatcher send ts goroutine is started")
@@ -822,6 +720,7 @@ func (c *eventBroker) close() {
 
 func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommitTs uint64) {
 	if d.onResolvedTs(resolvedTs) {
+		d.lastReceivedResolvedTsTime.Store(time.Now())
 		metricEventStoreOutputResolved.Inc()
 		d.onLatestCommitTs(latestCommitTs)
 		needScan, _ := c.checkNeedScan(d, false)
@@ -858,7 +757,7 @@ func (c *eventBroker) getDispatcher(id common.DispatcherID) (*dispatcherStat, bo
 }
 
 func (c *eventBroker) addDispatcher(info DispatcherInfo) {
-	defer c.metricDispatcherCount.Inc()
+	defer c.metricsCollector.metricDispatcherCount.Inc()
 	filter := info.GetFilter()
 
 	start := time.Now()
@@ -943,7 +842,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 }
 
 func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
-	defer c.metricDispatcherCount.Dec()
+	defer c.metricsCollector.metricDispatcherCount.Dec()
 	id := dispatcherInfo.GetID()
 
 	stat, ok := c.dispatchers.Load(id)
