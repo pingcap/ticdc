@@ -594,6 +594,14 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	db := e.dbs[subscriptionStat.dbIndex]
 	e.dispatcherMeta.RUnlock()
 
+	log.Debug("get iterator",
+		zap.Stringer("dispatcherID", dispatcherID),
+		zap.Uint64("subID", uint64(subscriptionStat.subID)),
+		zap.Int64("tableID", stat.tableSpan.TableID),
+		zap.Uint64("startTs", dataRange.StartTs),
+		zap.Uint64("endTs", dataRange.EndTs),
+		zap.String("span", common.FormatTableSpan(stat.tableSpan)))
+
 	// convert range before pass it to pebble: (startTs, endTs] is equal to [startTs + 1, endTs + 1)
 	start := EncodeKeyPrefix(uint64(subscriptionStat.subID), stat.tableSpan.TableID, dataRange.StartTs+1)
 	end := EncodeKeyPrefix(uint64(subscriptionStat.subID), stat.tableSpan.TableID, dataRange.EndTs+1)
