@@ -388,9 +388,9 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 
 	// 2. Constrain the data range by the ddl state of the table.
 	ddlState := c.schemaStore.GetTableDDLEventState(task.info.GetTableSpan().TableID)
-	// if ddlState.ResolvedTs < dataRange.EndTs {
-	// 	dataRange.EndTs = ddlState.ResolvedTs
-	// }
+	if ddlState.ResolvedTs < dataRange.EndTs {
+		dataRange.EndTs = ddlState.ResolvedTs
+	}
 
 	// Note: Maybe we should still send a resolvedTs to downstream to tell that
 	// the dispatcher is alive?
