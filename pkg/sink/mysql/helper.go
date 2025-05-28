@@ -328,6 +328,7 @@ func GenerateDSN(cfg *Config) (string, error) {
 	}
 	// NOTE: quote the string is necessary to avoid ambiguities.
 	dsn.Params["sql_mode"] = strconv.Quote(dsn.Params["sql_mode"])
+	//dsn.Params["foreign_key_checks"] = "OFF"
 
 	dsnStr, err := generateDSNByConfig(dsn, cfg, testDB)
 	if err != nil {

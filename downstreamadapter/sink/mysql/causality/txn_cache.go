@@ -46,8 +46,7 @@ type TxnCacheOption struct {
 type txnCache interface {
 	// add adds a event to the Cache.
 	add(txn *commonEvent.DMLEvent) bool
-	// out returns a channel to receive events which are ready to be executed.
-	// out() <-chan *commonEvent.DMLEvent
+	// out returns a unlimited channel to receive events which are ready to be executed.
 	out() *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
 }
 
@@ -57,8 +56,8 @@ func newTxnCache(opt TxnCacheOption) txnCache {
 	}
 
 	switch opt.BlockStrategy {
-	// case BlockStrategyWaitAvailable:
-	// 	return &boundedTxnCache{ch: make(chan *commonEvent.DMLEvent, opt.Size)}
+	case BlockStrategyWaitAvailable:
+		return &boundedTxnCache{ch: chann.NewUnlimitedChannel[*commonEvent.DMLEvent, any](nil, nil)}
 	case BlockStrategyWaitEmpty:
 		return &boundedTxnCacheWithBlock{ch: chann.NewUnlimitedChannel[*commonEvent.DMLEvent, any](nil, nil), upperSize: opt.Size}
 	default:
@@ -70,22 +69,17 @@ func newTxnCache(opt TxnCacheOption) txnCache {
 //
 //nolint:unused
 type boundedTxnCache struct {
-	ch chan *commonEvent.DMLEvent
+	ch *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
 }
 
 //nolint:unused
 func (w *boundedTxnCache) add(txn *commonEvent.DMLEvent) bool {
-	select {
-	case w.ch <- txn:
-		return true
-	default:
-		return false
-	}
-
+	w.ch.Push(txn)
+	return true
 }
 
 //nolint:unused
-func (w *boundedTxnCache) out() <-chan *commonEvent.DMLEvent {
+func (w *boundedTxnCache) out() *chann.UnlimitedChannel[*commonEvent.DMLEvent, any] {
 	return w.ch
 }
 
@@ -93,7 +87,6 @@ func (w *boundedTxnCache) out() <-chan *commonEvent.DMLEvent {
 // is full, it will block until all cached txns are consumed.
 type boundedTxnCacheWithBlock struct {
 	ch *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
-	// ch chan *commonEvent.DMLEvent
 	//nolint:unused
 	isBlocked atomic.Bool
 	upperSize int

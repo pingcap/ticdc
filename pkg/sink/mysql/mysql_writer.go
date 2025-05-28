@@ -26,7 +26,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
@@ -64,8 +63,6 @@ type Writer struct {
 
 	// for dry-run mode
 	blockerTicker *time.Ticker
-
-	innerSyncDuration prometheus.Observer
 }
 
 func NewWriter(
@@ -89,7 +86,6 @@ func NewWriter(
 		stmtCache:              cfg.stmtCache,
 		statistics:             statistics,
 		needFormat:             needFormatVectorType,
-		innerSyncDuration:      metrics.InnerSyncDuration.WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "mysql"),
 	}
 
 	if cfg.DryRun && cfg.DryRunBlockInterval > 0 {
@@ -223,5 +219,4 @@ func (w *Writer) Close() {
 	if w.blockerTicker != nil {
 		w.blockerTicker.Stop()
 	}
-	metrics.InnerSyncDuration.DeleteLabelValues(w.ChangefeedID.Namespace(), w.ChangefeedID.Name(), "mysql")
 }

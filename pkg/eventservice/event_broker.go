@@ -16,7 +16,6 @@ package eventservice
 import (
 	"context"
 	"math"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -524,8 +523,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		return
 	}
 
-	start := time.Now()
-
 	for _, e := range events {
 		if task.isRemoved.Load() {
 			return
@@ -563,11 +560,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
-	cost := time.Since(start)
-
-	if cost > 100*time.Millisecond {
-		log.Info("fizz send events cost too long", zap.Duration("cost", cost), zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex), zap.Int("eventCount", len(events)), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
-	}
 }
 
 func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int) {
@@ -702,7 +694,7 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 
 // updateMetrics updates the metrics of the event broker periodically.
 func (c *eventBroker) updateMetrics(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	log.Info("update metrics goroutine is started")
 	for {
 		select {
@@ -715,29 +707,11 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 			dispatcherCount := 0
 			runningDispatcherCount := 0
 			pausedDispatcherCount := 0
-			// 收集 sentMinResolvedTs 最小的 10 个 dispatcher, 并打印出来
-			slowDispatchers := make([]*dispatcherStat, 0, 10)
-			receivedAndSentLagDiffDispatchers := make([]*dispatcherStat, 0, 10)
-
 			var slowestDispatchers *dispatcherStat
 
 			c.dispatchers.Range(func(key, value any) bool {
 				dispatcherCount++
 				dispatcher := value.(*dispatcherStat)
-				if dispatcher.isRunning.Load() {
-					runningDispatcherCount++
-				} else {
-					pausedDispatcherCount++
-				}
-
-				// fizz remove these part
-				// If the update Diff is too large, we skip to count it in the lag metrics below.
-				updateDiff := dispatcher.lastReceivedResolvedTsTime.Load().Sub(dispatcher.lastSentResolvedTsTime.Load())
-				if updateDiff > time.Millisecond*5 {
-					receivedAndSentLagDiffDispatchers = append(receivedAndSentLagDiffDispatchers, dispatcher)
-					return true
-				}
-
 				resolvedTs := dispatcher.eventStoreResolvedTs.Load()
 				if resolvedTs < receivedMinResolvedTs {
 					receivedMinResolvedTs = resolvedTs
@@ -751,23 +725,10 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 					slowestDispatchers = dispatcher
 				}
 
-				// 收集最慢的 10 个 dispatcher
-				if len(slowDispatchers) < 10 {
-					slowDispatchers = append(slowDispatchers, dispatcher)
+				if dispatcher.isRunning.Load() {
+					runningDispatcherCount++
 				} else {
-					// 找到 slowDispatchers 中最快的那个 (sentResolvedTs 最大)
-					fastestIdx := 0
-					fastestTs := slowDispatchers[0].sentResolvedTs.Load()
-					for i, d := range slowDispatchers {
-						if d.sentResolvedTs.Load() > fastestTs {
-							fastestTs = d.sentResolvedTs.Load()
-							fastestIdx = i
-						}
-					}
-					// 如果当前 dispatcher 比 slowDispatchers 中最快的还要慢，则替换
-					if watermark < fastestTs {
-						slowDispatchers[fastestIdx] = dispatcher
-					}
+					pausedDispatcherCount++
 				}
 
 				return true
@@ -808,60 +769,6 @@ func (c *eventBroker) updateMetrics(ctx context.Context) {
 						zap.Bool("isPaused", slowestDispatchers.isRunning.Load()),
 						zap.Bool("isHandshaked", slowestDispatchers.isHandshaked.Load()),
 						zap.Bool("isTaskScanning", slowestDispatchers.isTaskScanning.Load()),
-					)
-				}
-			}
-
-			// 打印最慢的 10 个 dispatcher
-			if len(slowDispatchers) > 0 {
-				// 按 sentResolvedTs 排序 (升序，最慢的在前面)
-				for i := 0; i < len(slowDispatchers); i++ {
-					for j := i + 1; j < len(slowDispatchers); j++ {
-						if slowDispatchers[i].sentResolvedTs.Load() > slowDispatchers[j].sentResolvedTs.Load() {
-							slowDispatchers[i], slowDispatchers[j] = slowDispatchers[j], slowDispatchers[i]
-						}
-					}
-				}
-
-				log.Info("Top slowest dispatchers", zap.Int("count", len(slowDispatchers)))
-				for i, d := range slowDispatchers {
-					sentLag := time.Since(oracle.GetTimeFromTS(d.sentResolvedTs.Load()))
-					receivedLag := time.Since(oracle.GetTimeFromTS(d.eventStoreResolvedTs.Load()))
-					lagDiff := sentLag - receivedLag
-					log.Info("slow dispatcher",
-						zap.Int("rank", i+1),
-						zap.Stringer("dispatcherID", d.id),
-						zap.Uint64("sentResolvedTs", d.sentResolvedTs.Load()),
-						zap.Uint64("receivedResolvedTs", d.eventStoreResolvedTs.Load()),
-						zap.Duration("sentLag", sentLag),
-						zap.Duration("receivedLag", receivedLag),
-						zap.Duration("lagDiff", lagDiff),
-						zap.Bool("isRunning", d.isRunning.Load()),
-						zap.Bool("isHandshaked", d.isHandshaked.Load()),
-						zap.Bool("isTaskScanning", d.isTaskScanning.Load()),
-					)
-				}
-
-				slices.SortFunc(receivedAndSentLagDiffDispatchers, func(a, b *dispatcherStat) int {
-					aDiff := a.lastReceivedResolvedTsTime.Load().Sub(a.lastSentResolvedTsTime.Load())
-					bDiff := b.lastReceivedResolvedTsTime.Load().Sub(b.lastSentResolvedTsTime.Load())
-					if aDiff < bDiff {
-						return 1
-					} else if aDiff > bDiff {
-						return -1
-					}
-					return 0
-				})
-
-				for i, d := range receivedAndSentLagDiffDispatchers {
-					if i > 10 {
-						break
-					}
-					log.Info("received and sent lag diff dispatcher", zap.Stringer("dispatcherID", d.id), zap.Duration("diff", time.Since(d.lastReceivedResolvedTsTime.Load())-time.Since(d.lastSentResolvedTsTime.Load())),
-						zap.Uint64("sentResolvedTs", d.sentResolvedTs.Load()),
-						zap.Uint64("receivedResolvedTs", d.eventStoreResolvedTs.Load()),
-						zap.Duration("sentLag", time.Since(oracle.GetTimeFromTS(d.sentResolvedTs.Load()))),
-						zap.Duration("receivedLag", time.Since(oracle.GetTimeFromTS(d.eventStoreResolvedTs.Load()))),
 					)
 				}
 			}
@@ -915,7 +822,6 @@ func (c *eventBroker) close() {
 
 func (c *eventBroker) onNotify(d *dispatcherStat, resolvedTs uint64, latestCommitTs uint64) {
 	if d.onResolvedTs(resolvedTs) {
-		d.lastReceivedResolvedTsTime.Store(time.Now())
 		metricEventStoreOutputResolved.Inc()
 		d.onLatestCommitTs(latestCommitTs)
 		needScan, _ := c.checkNeedScan(d, false)

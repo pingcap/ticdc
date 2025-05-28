@@ -141,7 +141,6 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 		metrics.WorkerFlushDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
 		metrics.WorkerTotalDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
 		metrics.WorkerHandledRows.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
-		//metrics.EventSyncDuration.DeleteLabelValues(namespace, changefeed, strconv.Itoa(idx))
 	}()
 
 	inputCh := s.conflictDetector.GetOutChByCacheID(idx)
@@ -149,9 +148,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 
 	totalStart := time.Now()
 	buffer := make([]*commonEvent.DMLEvent, 0, s.maxTxnRows)
-	//rows := 0
 	for {
-		// needFlush := false
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
@@ -160,14 +157,10 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			if !ok {
 				return errors.Trace(ctx.Err())
 			}
-			//log.Info("mysql sink receive event", zap.Any("worker id", idx), zap.Any("first time cost", time.Since(txnEvents[0].RecordTimestamp).Nanoseconds()), zap.Any("last time cost", time.Since(txnEvents[len(txnEvents)-1].RecordTimestamp).Nanoseconds()), zap.Any("events length", len(txnEvents)))
 			for _, txnEvent := range txnEvents {
-				//log.Info("mysql sink receive event", zap.Any("worker id", idx), zap.Any("id", id), zap.Any("time cost", time.Since(txnEvent.RecordTimestamp).Nanoseconds()), zap.Any("dispatcherID", txnEvent.DispatcherID))
 				workerHandledRows.Add(float64(txnEvent.Len()))
 			}
-			// rows += int(txnEvent.Len())
 			start := time.Now()
-			//log.Info("mysql sink flush event", zap.Any("worker id", idx))
 			err := writer.Flush(txnEvents)
 			if err != nil {
 				return errors.Trace(err)
@@ -180,53 +173,6 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			totalStart = time.Now()
 			buffer = buffer[:0]
 		}
-		// rows = 0
-		// case txnEvent := <-inputCh:
-		// 	log.Info("mysql sink receive event", zap.Any("worker id", idx), zap.Any("time cost", time.Since(txnEvent.RecordTimestamp).Nanoseconds()))
-		// 	workerEventSyncDuration.Observe(time.Since(txnEvent.RecordTimestamp).Seconds())
-		// 	events = append(events, txnEvent)
-		// 	rows += int(txnEvent.Len())
-		// 	if rows > s.maxTxnRows {
-		// 		needFlush = true
-		// 	}
-		// 	if !needFlush {
-		// 		delay := time.NewTimer(10 * time.Millisecond)
-		// 		for !needFlush {
-		// 			select {
-		// 			case txnEvent = <-inputCh:
-		// 				workerHandledRows.Add(float64(txnEvent.Len()))
-		// 				events = append(events, txnEvent)
-		// 				rows += int(txnEvent.Len())
-		// 				if rows > s.maxTxnRows {
-		// 					needFlush = true
-		// 				}
-		// 			case <-delay.C:
-		// 				needFlush = true
-		// 			}
-		// 		}
-		// 		// Release resources promptly
-		// 		if !delay.Stop() {
-		// 			select {
-		// 			case <-delay.C:
-		// 			default:
-		// 			}
-		// 		}
-		// 	}
-		// 	start := time.Now()
-		// 	log.Info("mysql sink flush event", zap.Any("worker id", idx))
-		// 	err := writer.Flush(events)
-		// 	if err != nil {
-		// 		return errors.Trace(err)
-		// 	}
-		// 	workerFlushDuration.Observe(time.Since(start).Seconds())
-		// 	// we record total time to calculate the worker busy ratio.
-		// 	// so we record the total time after flushing, to unified statistics on
-		// 	// flush time and total time
-		// 	workerTotalDuration.Observe(time.Since(totalStart).Seconds())
-		// 	totalStart = time.Now()
-		// 	events = events[:0]
-		// 	rows = 0
-		// }
 	}
 }
 

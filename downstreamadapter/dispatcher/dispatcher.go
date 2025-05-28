@@ -236,7 +236,6 @@ func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.Schema
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	// Only return false when all events are resolvedTs Event.
 	block = false
-	//start := time.Now()
 	dmlWakeOnce := &sync.Once{}
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
@@ -277,8 +276,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			}
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
-			dml.RecordTimestamp = time.Now()
-			//log.Info("dispatcher receive dml event", zap.Any("time cost", time.Since(start).Nanoseconds()), zap.Any("dispatcher ID", d.id))
 			dml.AddPostFlushFunc(func() {
 				// Considering dml event in sink may be written to downstream not in order,
 				// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
