@@ -57,7 +57,7 @@ func newTxnCache(opt TxnCacheOption) txnCache {
 
 	switch opt.BlockStrategy {
 	case BlockStrategyWaitAvailable:
-		return &boundedTxnCache{ch: chann.NewUnlimitedChannel[*commonEvent.DMLEvent, any](nil, nil)}
+		return &boundedTxnCache{ch: chann.NewUnlimitedChannel[*commonEvent.DMLEvent, any](nil, nil), upperSize: opt.Size}
 	case BlockStrategyWaitEmpty:
 		return &boundedTxnCacheWithBlock{ch: chann.NewUnlimitedChannel[*commonEvent.DMLEvent, any](nil, nil), upperSize: opt.Size}
 	default:
@@ -69,11 +69,15 @@ func newTxnCache(opt TxnCacheOption) txnCache {
 //
 //nolint:unused
 type boundedTxnCache struct {
-	ch *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
+	ch        *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
+	upperSize int
 }
 
 //nolint:unused
 func (w *boundedTxnCache) add(txn *commonEvent.DMLEvent) bool {
+	if w.ch.Len() > w.upperSize {
+		return false
+	}
 	w.ch.Push(txn)
 	return true
 }

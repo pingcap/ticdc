@@ -499,28 +499,32 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	writeTimeout += networkDriftDuration
 
 	tryExec := func() (int, int64, error) {
-		tx, err := w.db.BeginTx(w.ctx, nil)
-		if err != nil {
-			return 0, 0, errors.Trace(err)
-		}
 
-		if !fallbackToSeqWay {
-			err = w.multiStmtExecute(dmls, tx, writeTimeout)
+		if fallbackToSeqWay {
+			// use sequence way to execute the dmls
+			tx, err := w.db.BeginTx(w.ctx, nil)
 			if err != nil {
-				fallbackToSeqWay = true
-				return 0, 0, err
+				return 0, 0, errors.Trace(err)
 			}
-		} else {
+
 			err = w.sequenceExecute(dmls, tx, writeTimeout)
 			if err != nil {
 				return 0, 0, err
 			}
+
+			if err = tx.Commit(); err != nil {
+				return 0, 0, err
+			}
+			log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount))
+		} else {
+			// use multi stmt way to execute the dmls
+			err := w.multiStmtExecute(dmls, writeTimeout)
+			if err != nil {
+				fallbackToSeqWay = true
+				return 0, 0, err
+			}
 		}
 
-		if err = tx.Commit(); err != nil {
-			return 0, 0, err
-		}
-		log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount))
 		return dmls.rowCount, dmls.approximateSize, nil
 	}
 	return retry.Do(w.ctx, func() error {
@@ -627,31 +631,40 @@ func setWriteSourceInSQL(cfg *Config, sql string) string {
 
 // execute SQLs in the multi statements way.
 func (w *Writer) multiStmtExecute(
-	dmls *preparedDMLs, tx *sql.Tx, writeTimeout time.Duration,
+	dmls *preparedDMLs, writeTimeout time.Duration,
 ) error {
 	var multiStmtArgs []any
 	for _, value := range dmls.values {
 		multiStmtArgs = append(multiStmtArgs, value...)
 	}
 	multiStmtSQL := strings.Join(dmls.sqls, ";")
+	// we use BEGIN and COMMIT to ensure the transaction is atomic.
+	multiStmtSQLWithTxn := "BEGIN;" + multiStmtSQL + ";COMMIT;"
 	// Set session variables first in the sql.
 	// we try to set write source for each txn,
 	// so we can use it to trace the data source
-	finalMultiStmtSQL := setWriteSourceInSQL(w.cfg, multiStmtSQL)
+	finalMultiStmtSQL := setWriteSourceInSQL(w.cfg, multiStmtSQLWithTxn)
 
 	ctx, cancel := context.WithTimeout(w.ctx, writeTimeout)
 	defer cancel()
 
-	_, err := tx.ExecContext(ctx, finalMultiStmtSQL, multiStmtArgs...)
+	conn, err := w.db.Conn(w.ctx)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	defer conn.Close()
+
+	// we use conn.ExecContext to reduce the overhead of network latency.
+	// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
+	// when some error occurs, we just need to close the conn to avoid the session to be reuse unexpectedly.
+	// The txn can ensure the atomicity of the transaction.
+	_, err = conn.ExecContext(ctx, finalMultiStmtSQL, multiStmtArgs...)
 	if err != nil {
 		log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", finalMultiStmtSQL), zap.Any("multiStmtArgs", multiStmtArgs))
-		if rbErr := tx.Rollback(); rbErr != nil {
-			if errors.Cause(rbErr) != context.Canceled {
-				log.Warn("failed to rollback txn", zap.Error(rbErr))
-			}
+		if err != nil {
+			log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", finalMultiStmtSQL), zap.Any("multiStmtArgs", multiStmtArgs))
+			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", finalMultiStmtSQL, multiStmtArgs)))
 		}
-		cancel()
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", finalMultiStmtSQL, multiStmtArgs)))
 	}
 	return nil
 }
