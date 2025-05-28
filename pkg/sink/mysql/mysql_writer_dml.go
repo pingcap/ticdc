@@ -661,10 +661,7 @@ func (w *Writer) multiStmtExecute(
 	_, err = conn.ExecContext(ctx, finalMultiStmtSQL, multiStmtArgs...)
 	if err != nil {
 		log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", finalMultiStmtSQL), zap.Any("multiStmtArgs", multiStmtArgs))
-		if err != nil {
-			log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", finalMultiStmtSQL), zap.Any("multiStmtArgs", multiStmtArgs))
-			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", finalMultiStmtSQL, multiStmtArgs)))
-		}
+		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", finalMultiStmtSQL, multiStmtArgs)))
 	}
 	return nil
 }
