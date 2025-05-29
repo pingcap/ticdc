@@ -42,7 +42,7 @@ type ConflictDetector struct {
 
 	notifiedNodes *chann.DrainableChann[func()]
 
-	closed atomic.Bool
+	cacheClosed atomic.Bool
 }
 
 // New creates a new ConflictDetector.
@@ -63,7 +63,7 @@ func New(
 }
 
 func (d *ConflictDetector) Run(ctx context.Context) error {
-	defer d.Close()
+	defer d.closeCache()
 	for {
 		select {
 		case <-ctx.Done():
@@ -81,9 +81,6 @@ func (d *ConflictDetector) Run(ctx context.Context) error {
 // NOTE: if multiple threads access this concurrently,
 // ConflictKeys must be sorted by the slot index.
 func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
-	if d.closed.Load() {
-		return
-	}
 	hashes := ConflictKeys(event)
 	node := d.slots.AllocNode(hashes)
 
@@ -106,9 +103,6 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 
 // sendToCache should not call txn.Callback if it returns an error.
 func (d *ConflictDetector) sendToCache(event *commonEvent.DMLEvent, id int64) bool {
-	if d.closed.Load() {
-		return false
-	}
 	cache := d.resolvedTxnCaches[id]
 	ok := cache.add(event)
 	return ok
@@ -120,13 +114,19 @@ func (d *ConflictDetector) GetOutChByCacheID(id int) *chann.UnlimitedChannel[*co
 	return d.resolvedTxnCaches[id].out()
 }
 
-func (d *ConflictDetector) Close() {
-	if d.closed.Load() {
+func (d *ConflictDetector) closeCache() {
+	if d.cacheClosed.Load() {
 		return
 	}
-	d.notifiedNodes.CloseAndDrain()
-	for _, cache := range d.resolvedTxnCaches { // the unlimited channel should be closed, otherwise dmlWriter will be blocked
+	// the unlimited channel should be closed, otherwise dmlWriter will be blocked
+	for _, cache := range d.resolvedTxnCaches {
 		cache.out().Close()
 	}
-	d.closed.Store(true)
+	d.cacheClosed.Store(true)
+}
+
+func (d *ConflictDetector) Close() {
+	d.notifiedNodes.CloseAndDrain()
+	d.closeCache()
+
 }
