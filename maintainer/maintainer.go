@@ -46,7 +46,7 @@ import (
 )
 
 const (
-	periodEventInterval = time.Millisecond * 200
+	periodEventInterval = time.Millisecond * 100
 )
 
 // Maintainer is response for handle changefeed replication tasks. Maintainer should:

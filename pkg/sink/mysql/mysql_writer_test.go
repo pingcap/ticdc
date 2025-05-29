@@ -96,11 +96,9 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 	dmlEvent2.ReplicatingTs = 1
 	dmlEvent2.DispatcherID = dmlEvent.DispatcherID
 
-	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?)").
+	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2", 3, "test3").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
 
 	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent, dmlEvent2})
 	require.NoError(t, err)
@@ -129,11 +127,9 @@ func TestMysqlWriter_FlushMultiDML(t *testing.T) {
 	dmlEvent2.CommitTs = 3
 	dmlEvent2.DispatcherID = dmlEvent.DispatcherID
 
-	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)").
+	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
 
 	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent, dmlEvent2})
 	require.NoError(t, err)
@@ -446,11 +442,9 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectCommit()
 
 	// for dml event
-	mock.ExpectBegin()
-	mock.ExpectExec("REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?)").
+	mock.ExpectExec("BEGIN;REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
 		WithArgs(3, "test3").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
 
 	// for ddl job for table t1
 	mock.ExpectBegin()
