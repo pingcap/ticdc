@@ -113,4 +113,7 @@ func (d *ConflictDetector) GetOutChByCacheID(id int) *chann.UnlimitedChannel[*co
 
 func (d *ConflictDetector) Close() {
 	d.notifiedNodes.CloseAndDrain()
+	for _, cache := range d.resolvedTxnCaches {
+		cache.out().Close()
+	}
 }
