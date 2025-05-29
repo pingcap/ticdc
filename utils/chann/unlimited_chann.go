@@ -69,7 +69,7 @@ func (c *UnlimitedChannel[T, G]) Push(values ...T) {
 	defer c.mu.Unlock()
 
 	if c.closed {
-		log.Warn("hyy push to closed ulimited channel")
+		log.Warn("push to closed ulimited channel")
 		return
 	}
 	for _, v := range values {
