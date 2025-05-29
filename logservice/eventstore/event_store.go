@@ -16,6 +16,7 @@ package eventstore
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
@@ -442,6 +443,13 @@ func (e *eventStore) RegisterDispatcher(
 			if kv.CRTs > maxCommitTs {
 				maxCommitTs = kv.CRTs
 			}
+			if kv.CRTs <= subStat.resolvedTs.Load() {
+				log.Warn("event store received kv with commitTs less than resolvedTs",
+					zap.Uint64("commitTs", kv.CRTs),
+					zap.Uint64("resolvedTs", subStat.resolvedTs.Load()),
+					zap.Uint64("subID", uint64(subStat.subID)),
+					zap.Int64("tableID", subStat.tableSpan.TableID))
+			}
 		}
 		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
 		subStat.eventCh.Push(eventWithCallback{
@@ -597,14 +605,6 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	db := e.dbs[subscriptionStat.dbIndex]
 	e.dispatcherMeta.RUnlock()
 
-	log.Debug("get iterator",
-		zap.Stringer("dispatcherID", dispatcherID),
-		zap.Uint64("subID", uint64(subscriptionStat.subID)),
-		zap.Int64("tableID", stat.tableSpan.TableID),
-		zap.Uint64("startTs", dataRange.StartTs),
-		zap.Uint64("endTs", dataRange.EndTs),
-		zap.String("span", common.FormatTableSpan(stat.tableSpan)))
-
 	// convert range before pass it to pebble: (startTs, endTs] is equal to [startTs + 1, endTs + 1)
 	start := EncodeKeyPrefix(uint64(subscriptionStat.subID), stat.tableSpan.TableID, dataRange.StartTs+1)
 	end := EncodeKeyPrefix(uint64(subscriptionStat.subID), stat.tableSpan.TableID, dataRange.EndTs+1)
@@ -625,6 +625,14 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	if stat.tableSpan.Equal(subscriptionStat.tableSpan) {
 		needCheckSpan = false
 	}
+
+	log.Debug("get iterator",
+		zap.Stringer("dispatcherID", dispatcherID),
+		zap.Uint64("subID", uint64(subscriptionStat.subID)),
+		zap.Uint64("startTs", dataRange.StartTs),
+		zap.Uint64("endTs", dataRange.EndTs),
+		zap.Bool("needCheckSpan", needCheckSpan),
+		zap.String("subStatSpan", common.FormatTableSpan(stat.tableSpan)))
 
 	return &eventStoreIter{
 		tableSpan:     stat.tableSpan,
@@ -806,6 +814,11 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 				bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
 				break
 			}
+			log.Warn("event store iter skip kv not in table span",
+				zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
+				zap.String("key", hex.EncodeToString(rawKV.Key)),
+				zap.Uint64("startTs", rawKV.StartTs),
+				zap.Uint64("commitTs", rawKV.CRTs))
 		} else {
 			break
 		}
