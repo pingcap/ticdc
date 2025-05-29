@@ -43,92 +43,17 @@ jobs:
         with:
           go-version: '1.23'
 
-      - name: Integration Build
-        run: |
-          tests/scripts/download-integration-test-binaries.sh master true
-          go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
-          make integration_test_build
-          ls -l bin/ && ls -l tools/bin/
+      # - name: Integration Build
+      #   run: |
+      #     tests/scripts/download-integration-test-binaries.sh master true
+      #     go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
+      #     make integration_test_build
+      #     ls -l bin/ && ls -l tools/bin/
 
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_for_split_tables_with_random_move_table 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_for_split_tables_with_random_move_table 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_for_split_tables_with_random_move_table 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_for_split_tables_with_random_move_table 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_for_split_tables_with_random_move_table 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_for_split_tables_with_random_move_table 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_for_split_tables_with_random_move_table 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
-
-      - name: Test ddl_for_split_tables_with_random_move_table
-        run: |
-          pwd && ls -l bin/ && ls -l tools/bin/
-          export TICDC_NEWARCH=true && make integration_test CASE=ddl_for_split_tables_with_random_move_table 
+      # - name: Test charset_gbk
+      #   run: |
+      #     pwd && ls -l bin/ && ls -l tools/bin/
+      #     export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
 
       - name: Note
         run: |
@@ -138,8 +63,8 @@ jobs:
           echo "we can use GitHub Actions as a convenient way to do so. You can achieve this by adding your"
           echo "test case to the group and pushing a PR to run them concurrently in the GitHub Actions environment."
 
-      - name: Upload test logs
-        if: always()
-        uses: ./.github/actions/upload-test-logs
-        with:
-          log-name: e2e_test_group_1
+      # - name: Upload test logs
+      #   if: always()
+      #   uses: ./.github/actions/upload-test-logs
+      #   with:
+      #     log-name: e2e_test_group_1
