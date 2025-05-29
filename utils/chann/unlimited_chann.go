@@ -17,6 +17,7 @@ import (
 	"math"
 	"sync"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/utils/deque"
 )
 
@@ -68,7 +69,8 @@ func (c *UnlimitedChannel[T, G]) Push(values ...T) {
 	defer c.mu.Unlock()
 
 	if c.closed {
-		panic("push to closed ulimited channel")
+		log.Warn("push to closed ulimited channel")
+		return
 	}
 	for _, v := range values {
 		c.queue.PushBack(v)

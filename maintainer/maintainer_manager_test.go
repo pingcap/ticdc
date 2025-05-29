@@ -77,8 +77,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		AddTableBatchSize:    1000,
 		CheckBalanceInterval: 0,
 	}
-	pdClock := pdutil.NewClock4Test()
-	manager := NewMaintainerManager(selfNode, schedulerConf, nil, pdClock, nil)
+	manager := NewMaintainerManager(selfNode, schedulerConf, nil, nil)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -283,8 +282,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		return nil
 	})
-	pdClock := pdutil.NewClock4Test()
-	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, nil, pdClock, nil)
+	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, nil, nil)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -403,8 +401,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 		return nil
 	})
 	schedulerConf := &config.SchedulerConfig{AddTableBatchSize: 1000}
-	pdClock := pdutil.NewClock4Test()
-	manager := NewMaintainerManager(selfNode, schedulerConf, nil, pdClock, nil)
+	manager := NewMaintainerManager(selfNode, schedulerConf, nil, nil)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})

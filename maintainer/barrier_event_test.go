@@ -35,15 +35,14 @@ func TestScheduleEvent(t *testing.T) {
 	setNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
-	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpanSchemaID,
 		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "test1")
-	controller := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
+	controller := NewController(cfID, 1, nil, nil, nil, nil, ddlSpan, 1000, 0)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, controller, &heartbeatpb.State{
 		IsBlocked:         true,
@@ -87,15 +86,14 @@ func TestResendAction(t *testing.T) {
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
-	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpanSchemaID,
 		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
+	controller := NewController(cfID, 1, nil, nil, nil, nil, ddlSpan, 1000, 0)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
 	var dispatcherIDs []common.DispatcherID
@@ -192,15 +190,14 @@ func TestUpdateSchemaID(t *testing.T) {
 	setNodeManagerAndMessageCenter()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test")
-	pdClock := pdutil.NewClock4Test()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		pdClock, common.DDLSpanSchemaID,
+		common.DDLSpanSchemaID,
 		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1")
-	controller := NewController(cfID, 1, nil, pdClock, nil, nil, nil, ddlSpan, 1000, 0)
+	controller := NewController(cfID, 1, nil, nil, nil, nil, ddlSpan, 1000, 0)
 	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	require.Equal(t, 1, controller.replicationDB.GetAbsentSize())
 	require.Len(t, controller.GetTasksBySchemaID(1), 1)

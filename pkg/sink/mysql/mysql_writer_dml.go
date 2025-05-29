@@ -72,7 +72,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	)
 	for _, eventsInGroup := range eventsGroup {
 		tableInfo := eventsInGroup[0].TableInfo
-		if !shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup, w.cfg.SafeMode) {
+		if !shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup, w.cfg) {
 			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 		} else {
 			queryList, argsList = w.generateBatchSQL(eventsInGroup)
@@ -91,11 +91,16 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 
 // shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.
 // Batch SQL generation is used when:
-// 1. The table has a primary key
-// 2. The table doesn't have virtual columns
-// 3. There's more than one row in the group
-// 4. All events have the same safe mode status
-func shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent, safemode bool) bool {
+// 1. BatchDMLEnable = true, and rows > 1
+// 2. The table has a primary key
+// 3. The table doesn't have virtual columns
+// 4. There's more than one row in the group
+// 5. All events have the same safe mode status
+func shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent, cfg *Config) bool {
+	if !cfg.BatchDMLEnable {
+		return false
+	}
+
 	if !hasPK || hasVirtualCols {
 		return false
 	}
@@ -104,7 +109,7 @@ func shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DM
 		return false
 	}
 
-	return allRowInSameSafeMode(safemode, events)
+	return allRowInSameSafeMode(cfg.SafeMode, events)
 }
 
 // allRowInSameSafeMode determines whether all DMLEvents in a batch have the same safe mode status.
@@ -217,18 +222,13 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 				rowType := rowLists[i].RowChange.RowType
 				nextRowType := rowLists[j].RowChange.RowType
 				switch rowType {
-				case commonEvent.RowTypeDelete:
-					rowKey := rowLists[i].PreRowKeys
-					if nextRowType == commonEvent.RowTypeUpdate {
-						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
-							log.Panic("Here are two invalid rows, one is Delete A, the other is Update A to B", zap.Any("Events", events))
-						}
-					}
 				case commonEvent.RowTypeInsert:
 					rowKey := rowLists[i].RowKeys
 					if nextRowType == commonEvent.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							sql, values := w.generateNormalSQLs(events)
+							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
+							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j))
 						}
 					} else if nextRowType == commonEvent.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
@@ -260,7 +260,9 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 					preRowKey := rowLists[i].PreRowKeys
 					if nextRowType == commonEvent.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events))
+							sql, values := w.generateNormalSQLs(events)
+							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
+							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j))
 						}
 					} else if nextRowType == commonEvent.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
@@ -411,8 +413,10 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 		for i := 1; i < len(rowChanges); i++ {
 			rowType := rowChanges[i].RowType
 			if rowType == prevType {
+				sql, values := w.generateNormalSQLs(events)
+				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
 				log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges),
-					zap.Any("prevType", prevType), zap.Any("currentType", rowType))
+					zap.Any("prevType", prevType), zap.Any("currentType", rowType), zap.Any("i", i))
 			}
 			prevType = rowType
 		}
@@ -500,41 +504,30 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	writeTimeout += networkDriftDuration
 
 	tryExec := func() (int, int64, error) {
-		tx, err := w.db.BeginTx(w.ctx, nil)
-		if err != nil {
-			return 0, 0, errors.Trace(err)
-		}
-
-		// Set session variables first and then execute the transaction.
-		// we try to set write source for each txn,
-		// so we can use it to trace the data source
-		if err = SetWriteSource(w.ctx, w.cfg, tx); err != nil {
-			log.Error("Failed to set write source", zap.Error(err))
-			if rbErr := tx.Rollback(); rbErr != nil {
-				if errors.Cause(rbErr) != context.Canceled {
-					log.Warn("failed to rollback txn", zap.Error(rbErr))
-				}
-			}
-			return 0, 0, err
-		}
-
-		if !fallbackToSeqWay {
-			err = w.multiStmtExecute(dmls, tx, writeTimeout)
+		if fallbackToSeqWay {
+			// use sequence way to execute the dmls
+			tx, err := w.db.BeginTx(w.ctx, nil)
 			if err != nil {
-				fallbackToSeqWay = true
-				return 0, 0, err
+				return 0, 0, errors.Trace(err)
 			}
-		} else {
+
 			err = w.sequenceExecute(dmls, tx, writeTimeout)
 			if err != nil {
 				return 0, 0, err
 			}
-		}
 
-		if err = tx.Commit(); err != nil {
-			return 0, 0, err
+			if err = tx.Commit(); err != nil {
+				return 0, 0, err
+			}
+			log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount))
+		} else {
+			// use multi stmt way to execute the dmls
+			err := w.multiStmtExecute(dmls, writeTimeout)
+			if err != nil {
+				fallbackToSeqWay = true
+				return 0, 0, err
+			}
 		}
-		log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount))
 		return dmls.rowCount, dmls.approximateSize, nil
 	}
 	return retry.Do(w.ctx, func() error {
@@ -571,6 +564,22 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 func (w *Writer) sequenceExecute(
 	dmls *preparedDMLs, tx *sql.Tx, writeTimeout time.Duration,
 ) error {
+	// Set session variables first and execution the txn.
+	// we try to set write source for each txn,
+	// so we can use it to trace the data source
+	setWriteSourceStart := time.Now()
+	if err := SetWriteSource(w.ctx, w.cfg, tx); err != nil {
+		log.Error("Failed to set write source", zap.Error(err))
+		if rbErr := tx.Rollback(); rbErr != nil {
+			if errors.Cause(rbErr) != context.Canceled {
+				log.Warn("failed to rollback txn", zap.Error(rbErr))
+			}
+		}
+		return err
+	}
+	setWriteSourceDuration := time.Since(setWriteSourceStart)
+	log.Debug("SetWriteSource timing", zap.Duration("duration", setWriteSourceDuration))
+
 	for i, query := range dmls.sqls {
 		args := dmls.values[i]
 		log.Debug("exec row", zap.String("sql", query), zap.Any("args", args))
@@ -613,29 +622,52 @@ func (w *Writer) sequenceExecute(
 	return nil
 }
 
+// SetWriteSource sets write source for the transaction.
+// When this variable is set to a value other than 0, data written in this session is considered to be written by TiCDC.
+// DDLs executed in a PRIMARY cluster can be replicated to a SECONDARY cluster by TiCDC.
+func setWriteSourceInSQL(cfg *Config, sql string) string {
+	if !cfg.IsWriteSourceExisted {
+		return sql
+	}
+
+	query := fmt.Sprintf("SET SESSION %s = %d;", "tidb_cdc_write_source", cfg.SourceID)
+	finalSql := query + sql
+	return finalSql
+}
+
 // execute SQLs in the multi statements way.
 func (w *Writer) multiStmtExecute(
-	dmls *preparedDMLs, tx *sql.Tx, writeTimeout time.Duration,
+	dmls *preparedDMLs, writeTimeout time.Duration,
 ) error {
 	var multiStmtArgs []any
 	for _, value := range dmls.values {
 		multiStmtArgs = append(multiStmtArgs, value...)
 	}
 	multiStmtSQL := strings.Join(dmls.sqls, ";")
+	// we use BEGIN and COMMIT to ensure the transaction is atomic.
+	multiStmtSQLWithTxn := "BEGIN;" + multiStmtSQL + ";COMMIT;"
+	// Set session variables first in the sql.
+	// we try to set write source for each txn,
+	// so we can use it to trace the data source
+	finalMultiStmtSQL := setWriteSourceInSQL(w.cfg, multiStmtSQLWithTxn)
 
 	ctx, cancel := context.WithTimeout(w.ctx, writeTimeout)
 	defer cancel()
 
-	_, err := tx.ExecContext(ctx, multiStmtSQL, multiStmtArgs...)
+	conn, err := w.db.Conn(w.ctx)
 	if err != nil {
-		log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", multiStmtSQL), zap.Any("multiStmtArgs", multiStmtArgs))
-		if rbErr := tx.Rollback(); rbErr != nil {
-			if errors.Cause(rbErr) != context.Canceled {
-				log.Warn("failed to rollback txn", zap.Error(rbErr))
-			}
-		}
-		cancel()
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQL, multiStmtArgs)))
+		return errors.Trace(err)
+	}
+	defer conn.Close()
+
+	// we use conn.ExecContext to reduce the overhead of network latency.
+	// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
+	// when some error occurs, we just need to close the conn to avoid the session to be reuse unexpectedly.
+	// The txn can ensure the atomicity of the transaction.
+	_, err = conn.ExecContext(ctx, finalMultiStmtSQL, multiStmtArgs...)
+	if err != nil {
+		log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", finalMultiStmtSQL), zap.Any("multiStmtArgs", multiStmtArgs))
+		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", finalMultiStmtSQL, multiStmtArgs)))
 	}
 	return nil
 }
