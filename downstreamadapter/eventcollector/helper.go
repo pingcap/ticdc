@@ -78,14 +78,23 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 	// note: TypeDMLEvent and TypeResolvedEvent can be in the same batch, so we should handle them together.
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeResolvedEvent:
-		validEventStart := 0
+		hasInvalidEvent := false
 		for _, event := range events {
 			if stat.shouldIgnoreDataEvent(event, h.eventCollector) {
-				validEventStart += 1
-				continue
+				hasInvalidEvent = true
+				break
 			}
 		}
-		return stat.target.HandleEvents(events[validEventStart:], func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
+		if hasInvalidEvent {
+			validEvents := make([]dispatcher.DispatcherEvent, 0, len(events))
+			for _, event := range events {
+				if !stat.shouldIgnoreDataEvent(event, h.eventCollector) {
+					validEvents = append(validEvents, event)
+				}
+			}
+			events = validEvents
+		}
+		return stat.target.HandleEvents(events, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent:
 		if stat.shouldIgnoreDataEvent(events[0], h.eventCollector) {
