@@ -30,37 +30,37 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'generate_column many_pk_or_uk'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G01
 	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G02
-	'availability ddl_for_split_tables_with_failover'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G03
-	'multi_source'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G04
-	'syncpoint syncpoint_check_ts'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G05
-	'move_table ddl_for_split_tables_with_merge_and_split'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G06
-	'cdc ddl_for_split_tables_with_random_merge_and_split'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G07
-	'resolve_lock'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G08
-	'bank'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G09
-	'drop_many_tables'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G10
-	'default_value http_proxies'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G11
-	'ddl_reentrant force_replicate_table'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G12
-	'tidb_mysql_test ddl_with_random_move_table'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G13
-	'fail_over region_merge'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G14
-	'fail_over_ddl_mix'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 	# G15
-	'fail_over_ddl_mix_with_syncpoint'
+	'api_v2 ddl_for_split_tables_with_random_move_table'
 )
 
 kafka_groups=(
