@@ -379,9 +379,9 @@ func (d *Dispatcher) isFirstEvent(event commonEvent.Event) bool {
 	return false
 }
 
-// TryClose should be called after Remove(),
+// TryClose should be called before Remove(), because the dispatcher may still wait the dispatcher status from maintainer.
 // TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
-// EventDispatcherManager will clean the dispatcher info after TryClose returns true.
+// EventDispatcherManager will clean the dispatcher info after Remove() is called.
 func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully.
 	// If sink is not normal, we can close the dispatcher immediately.
@@ -405,9 +405,9 @@ func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	return w, false
 }
 
-// Remove is called when we want to remove the dispatcher,
-// It set isRemoving to true,
-// remove the dispatcher from status dynamic stream to stop receiving status info from maintainer.
+// Remove is called when TryClose returns true,
+// It set isRemoving to true, to make the dispatcher can be clean by the eventDispatcherManager.
+// it also remove the dispatcher from status dynamic stream to stop receiving status info from maintainer.
 func (d *Dispatcher) Remove() {
 	log.Info("Remove dispatcher",
 		zap.Stringer("dispatcher", d.id),
