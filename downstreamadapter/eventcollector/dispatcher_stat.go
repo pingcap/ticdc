@@ -89,6 +89,8 @@ func (d *dispatcherStat) checkEventSeq(event dispatcher.DispatcherEvent, eventCo
 }
 
 func (d *dispatcherStat) shouldIgnoreDataEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) bool {
+	d.eventServiceInfo.Lock()
+	defer d.eventServiceInfo.Unlock()
 	if d.eventServiceInfo.serverID != *event.From {
 		// FIXME: unregister from this invalid event service if it send events for a long time
 		return true
