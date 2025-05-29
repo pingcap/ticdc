@@ -1,6 +1,6 @@
 #!/bin/bash
-# This test is to detect that SQL statements that violate FK can also be successfully synchronized to the 
-# downstream MySQL class with FK detection enabled. 
+# This test is to detect that SQL statements that violate FK can also be successfully synchronized to the
+# downstream MySQL class with FK detection enabled.
 # This is because during the synchronization process, CDC may generate some intermediate SQL statements that violate FK.
 
 # we first disable foreign key check in upstream, and create two tables with FK constraints.
@@ -36,4 +36,3 @@ run_sql_file $CUR/data/pre.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 
 cleanup_process $CDC_BINARY
-
