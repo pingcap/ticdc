@@ -49,8 +49,9 @@ type fileWriter interface {
 
 // Writer is a redo log event Writer which writes redo log events to a file.
 type Writer struct {
-	cfg *writer.LogWriterConfig
-	op  *writer.LogWriterOptions
+	cfg     *writer.LogWriterConfig
+	logType string
+	op      *writer.LogWriterOptions
 	// maxCommitTS is the max commitTS among the events in one log file
 	maxCommitTS atomic.Uint64
 	// the ts used in file name
@@ -76,7 +77,7 @@ type Writer struct {
 
 // NewFileWriter return a file rotated writer, TODO: extract to a common rotate Writer
 func NewFileWriter(
-	ctx context.Context, cfg *writer.LogWriterConfig, opts ...writer.Option,
+	ctx context.Context, cfg *writer.LogWriterConfig, logType string, opts ...writer.Option,
 ) (*Writer, error) {
 	if cfg == nil {
 		err := errors.New("FileWriterConfig can not be nil")
@@ -99,16 +100,17 @@ func NewFileWriter(
 
 	w := &Writer{
 		cfg:       cfg,
+		logType:   logType,
 		op:        op,
 		uint64buf: make([]byte, 8),
 		storage:   extStorage,
 
 		metricFsyncDuration: misc.RedoFsyncDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
 		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
 		metricWriteBytes: misc.RedoWriteBytesGauge.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
 	}
 	if w.op.GetUUIDGenerator != nil {
 		w.uuidGenerator = w.op.GetUUIDGenerator()
@@ -130,7 +132,7 @@ func NewFileWriter(
 	// pre-allocate files for us.
 	// TODO: test whether this improvement can also be applied to NFS.
 	if w.cfg.UseExternalStorage {
-		w.allocator = fsutil.NewFileAllocator(cfg.Dir, cfg.LogType, cfg.MaxLogSizeInBytes)
+		w.allocator = fsutil.NewFileAllocator(cfg.Dir, logType, cfg.MaxLogSizeInBytes)
 	}
 
 	w.running.Store(true)
@@ -213,11 +215,11 @@ func (w *Writer) Close() error {
 	}
 
 	misc.RedoFlushAllDurationHistogram.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.cfg.LogType)
+		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.logType)
 	misc.RedoFsyncDurationHistogram.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.cfg.LogType)
+		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.logType)
 	misc.RedoWriteBytesGauge.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.cfg.LogType)
+		DeleteLabelValues(w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(), w.logType)
 
 	ctx, cancel := context.WithTimeout(context.Background(), redo.CloseTimeout)
 	defer cancel()
@@ -297,12 +299,12 @@ func (w *Writer) getLogFileName() string {
 	uid := w.uuidGenerator.NewString()
 	if common.DefaultNamespace == w.cfg.ChangeFeedID.Namespace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
-			w.cfg.CaptureID, w.cfg.ChangeFeedID.Name(), w.cfg.LogType,
+			w.cfg.CaptureID, w.cfg.ChangeFeedID.Name(), w.logType,
 			w.commitTS.Load(), uid, redo.LogEXT)
 	}
 	return fmt.Sprintf(redo.RedoLogFileFormatV2,
 		w.cfg.CaptureID, w.cfg.ChangeFeedID.Namespace(), w.cfg.ChangeFeedID.Name(),
-		w.cfg.LogType, w.commitTS.Load(), uid, redo.LogEXT)
+		w.logType, w.commitTS.Load(), uid, redo.LogEXT)
 }
 
 // filePath always creates a new, unique file path, note this function is not

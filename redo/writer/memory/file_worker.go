@@ -87,6 +87,7 @@ func (f *fileCache) markFlushed() {
 
 type fileWorkerGroup struct {
 	cfg           *writer.LogWriterConfig
+	logType       string
 	op            *writer.LogWriterOptions
 	workerNum     int
 	inputCh       chan writer.RedoEvent
@@ -103,6 +104,7 @@ type fileWorkerGroup struct {
 
 func newFileWorkerGroup(
 	cfg *writer.LogWriterConfig, workerNum int,
+	logType string,
 	extStorage storage.ExternalStorage,
 	opts ...writer.Option,
 ) *fileWorkerGroup {
@@ -117,6 +119,7 @@ func newFileWorkerGroup(
 
 	return &fileWorkerGroup{
 		cfg:           cfg,
+		logType:       logType,
 		op:            op,
 		workerNum:     workerNum,
 		inputCh:       make(chan writer.RedoEvent, redo.DefaultEncodingInputChanSize*workerNum),
@@ -132,9 +135,9 @@ func newFileWorkerGroup(
 		},
 		flushCh: make(chan *fileCache),
 		metricWriteBytes: misc.RedoWriteBytesGauge.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
 		metricFlushAllDuration: misc.RedoFlushAllDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), cfg.LogType),
+			WithLabelValues(cfg.ChangeFeedID.Namespace(), cfg.ChangeFeedID.Name(), logType),
 	}
 }
 
@@ -167,9 +170,9 @@ func (f *fileWorkerGroup) Run(
 
 func (f *fileWorkerGroup) close() {
 	misc.RedoFlushAllDurationHistogram.
-		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.cfg.LogType)
+		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.logType)
 	misc.RedoWriteBytesGauge.
-		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.cfg.LogType)
+		DeleteLabelValues(f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(), f.logType)
 }
 
 func (f *fileWorkerGroup) input(ctx context.Context, event writer.RedoEvent) error {
@@ -375,10 +378,10 @@ func (f *fileWorkerGroup) getLogFileName(maxCommitTS common.Ts) string {
 	uid := f.uuidGenerator.NewString()
 	if common.DefaultNamespace == f.cfg.ChangeFeedID.Namespace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
-			f.cfg.CaptureID, f.cfg.ChangeFeedID.Name(), f.cfg.LogType,
+			f.cfg.CaptureID, f.cfg.ChangeFeedID.Name(), f.logType,
 			maxCommitTS, uid, redo.LogEXT)
 	}
 	return fmt.Sprintf(redo.RedoLogFileFormatV2,
 		f.cfg.CaptureID, f.cfg.ChangeFeedID.Namespace(), f.cfg.ChangeFeedID.Name(),
-		f.cfg.LogType, maxCommitTS, uid, redo.LogEXT)
+		f.logType, maxCommitTS, uid, redo.LogEXT)
 }

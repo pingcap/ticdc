@@ -58,12 +58,10 @@ func NewLogWriter(
 	}
 
 	lw = &logWriter{cfg: cfg}
-	cfg.LogType = redo.RedoDDLLogFileType
-	if lw.ddlWriter, err = NewFileWriter(ctx, cfg, opts...); err != nil {
+	if lw.ddlWriter, err = NewFileWriter(ctx, cfg, redo.RedoDDLLogFileType, opts...); err != nil {
 		return nil, err
 	}
-	cfg.LogType = redo.RedoRowLogFileType
-	if lw.dmlWriter, err = NewFileWriter(ctx, cfg, opts...); err != nil {
+	if lw.dmlWriter, err = NewFileWriter(ctx, cfg, redo.RedoRowLogFileType, opts...); err != nil {
 		return nil, err
 	}
 	return

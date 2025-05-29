@@ -229,7 +229,6 @@ func (rd *RedoDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 // by setting them with different event types in DispatcherEventsHandler.GetType
 // When we handle events, we don't have any previous events still in sink.
 func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
-	// 1. metaManager
 	// if m.redoMetaManager.Enabled() {
 	// 	flushed := m.redoMetaManager.GetFlushedMeta()
 	// 	// Use the same example as above, let say there are some events are replicated by cdc:
@@ -270,9 +269,10 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			continue
 		}
 
+		atomic.StoreUint64(&rd.resolvedTs, event.GetCommitTs())
 		switch event.GetType() {
 		case commonEvent.TypeResolvedEvent:
-			atomic.StoreUint64(&rd.resolvedTs, event.(commonEvent.ResolvedEvent).ResolvedTs)
+			// atomic.StoreUint64(&rd.resolvedTs, event.(commonEvent.ResolvedEvent).ResolvedTs)
 		case commonEvent.TypeDMLEvent:
 			dml := event.(*commonEvent.DMLEvent)
 			if dml.Len() == 0 {
@@ -398,95 +398,6 @@ func (rd *RedoDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 		log.Error("invalid event type", zap.Any("eventType", event.GetType()))
 	}
 	return false
-}
-
-// 1.If the event is a single table DDL, it will be added to the sink for writing to downstream.
-// If the ddl leads to add new tables or drop tables, it should send heartbeat to maintainer
-// 2. If the event is a multi-table DDL / sync point Event, it will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
-func (rd *RedoDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
-	if !rd.shouldBlock(event) {
-		ddl := event.(*commonEvent.DDLEvent)
-		// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
-		// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
-		if rd.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
-			rd.PassBlockEventToSink(event)
-		} else {
-			err := rd.AddBlockEventToSink(event)
-			if err != nil {
-				select {
-				case rd.errCh <- err:
-				default:
-					log.Error("error channel is full, discard error",
-						zap.Stringer("changefeedID", rd.changefeedID),
-						zap.Stringer("dispatcherID", rd.id),
-						zap.Error(err))
-				}
-				return
-			}
-		}
-		if event.GetNeedAddedTables() != nil || event.GetNeedDroppedTables() != nil {
-			message := &heartbeatpb.TableSpanBlockStatus{
-				ID: rd.id.ToPB(),
-				State: &heartbeatpb.State{
-					IsBlocked:         false,
-					BlockTs:           event.GetCommitTs(),
-					NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
-					NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-					IsSyncPoint:       false, // sync point event must should block
-					Stage:             heartbeatpb.BlockStage_NONE,
-				},
-			}
-			identifier := BlockEventIdentifier{
-				CommitTs:    event.GetCommitTs(),
-				IsSyncPoint: false,
-			}
-
-			if event.GetNeedAddedTables() != nil {
-				// When the ddl need add tables, we need the maintainer to block the forwarding of checkpointTs
-				// Because the the new add table should join the calculation of checkpointTs
-				// So the forwarding of checkpointTs should be blocked until the new dispatcher is createrd.
-				// While there is a time gap between dispatcher send the block status and
-				// maintainer begin to create dispatcher(and block the forwaring checkpoint)
-				// in order to avoid the checkpointTs forward unexceptedly,
-				// we need to block the checkpoint forwarding in this dispatcher until receive the ack from maintainer.
-				//
-				//     |----> block checkpointTs forwaring of this dispatcher ------>|-----> forwarding checkpointTs normally
-				//     |        send block stauts                 send ack           |
-				// dispatcher -------------------> maintainer ----------------> dispatcher
-				//                                     |
-				//                                     |----------> Block CheckpointTs Forwarding and create new dispatcher
-				// Thus, we add the event to tableProgress again, and call event postFunc when the ack is received from maintainer.
-				event.ClearPostFlushFunc()
-				rd.tableProgress.Add(event)
-				rd.resendTaskMap.Set(identifier, newResendTask(message, rd, event.PostFlush))
-			} else {
-				rd.resendTaskMap.Set(identifier, newResendTask(message, rd, nil))
-			}
-			rd.blockStatusesChan <- message
-		}
-	} else {
-		rd.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
-
-		message := &heartbeatpb.TableSpanBlockStatus{
-			ID: rd.id.ToPB(),
-			State: &heartbeatpb.State{
-				IsBlocked:         true,
-				BlockTs:           event.GetCommitTs(),
-				BlockTables:       event.GetBlockedTables().ToPB(),
-				NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
-				NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-				UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()), // only exists for rename table and rename tables
-				IsSyncPoint:       false,
-				Stage:             heartbeatpb.BlockStage_WAITING,
-			},
-		}
-		identifier := BlockEventIdentifier{
-			CommitTs:    event.GetCommitTs(),
-			IsSyncPoint: false,
-		}
-		rd.resendTaskMap.Set(identifier, newResendTask(message, rd, nil))
-		rd.blockStatusesChan <- message
-	}
 }
 
 func (rd *RedoDispatcher) GetTableSpan() *heartbeatpb.TableSpan {

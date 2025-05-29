@@ -69,8 +69,6 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			CaptureID:         config.GetGlobalServerConfig().AdvertiseAddr,
 			ChangeFeedID:      changefeedID,
 			MaxLogSizeInBytes: cfg.MaxLogSize * redo.Megabyte,
-			// FIXME
-			LogType: redo.RedoDDLLogFileType,
 		},
 		logBuffer: make(chan writer.RedoEvent, 32),
 		// metricWriteLogDuration: misc.RedoWriteLogDurationHistogram.
@@ -151,7 +149,6 @@ func (m *Sink) getFlushDuration() time.Duration {
 			zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
 			zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
 			zap.Int("default", defaultFlushIntervalInMs),
-			zap.String("logType", m.cfg.LogType),
 			zap.Int64("interval", flushIntervalInMs))
 		flushIntervalInMs = int64(defaultFlushIntervalInMs)
 	}

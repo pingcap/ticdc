@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/redo/writer"
@@ -72,7 +71,6 @@ func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 	extStorage, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
 	require.NoError(t, err)
 	lwcfg := &writer.LogWriterConfig{
-		LogType:            redo.RedoDDLLogFileType,
 		CaptureID:          "test-capture",
 		ChangeFeedID:       common.NewChangeFeedIDWithName("test-changefeed"),
 		URI:                uri,
@@ -87,14 +85,13 @@ func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 
 	require.NoError(t, lw.WriteEvents(ctx, events...))
 	require.Eventually(t, func() bool {
-		if len(lw.encodeWorkers.outputCh) != 0 {
-			log.Warn(fmt.Sprintf("eventCh len %d", len(lw.encodeWorkers.outputCh)))
+		if len(lw.ddlFileWorkers.inputCh) != 0 {
+			log.Warn(fmt.Sprintf("eventCh len %d", len(lw.ddlFileWorkers.inputCh)))
 		}
-		return len(lw.encodeWorkers.outputCh) == 0
+		return len(lw.ddlFileWorkers.inputCh) == 0
 	}, 2*time.Second, 10*time.Millisecond)
 
 	// test flush
-	require.NoError(t, lw.FlushLog(ctx))
 	err = extStorage.WalkDir(ctx, nil, func(path string, size int64) error {
 		require.Equal(t, filename, path)
 		return nil
@@ -104,42 +101,4 @@ func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 	require.ErrorIs(t, lw.Close(), context.Canceled)
 	// duplicate close should return the same error
 	require.ErrorIs(t, lw.Close(), context.Canceled)
-
-	functions := map[string]func(error){
-		"WriteEvents": func(expected error) {
-			if expected == nil {
-				err := lw.WriteEvents(ctx, events...)
-				require.NoError(t, err)
-			} else {
-				require.Eventually(
-					t, func() bool {
-						err := lw.WriteEvents(ctx, events...)
-						return errors.Is(errors.Cause(err), expected)
-					}, time.Second*2, time.Microsecond*10,
-				)
-			}
-		},
-		"FlushLog": func(expected error) {
-			if expected == nil {
-				err := lw.FlushLog(ctx)
-				require.NoError(t, err)
-			} else {
-				require.Eventually(
-					t, func() bool {
-						err := lw.WriteEvents(ctx, events...)
-						return errors.Is(errors.Cause(err), expected)
-					}, time.Second*2, time.Microsecond*10,
-				)
-			}
-		},
-	}
-	firstCall := true
-	for _, f := range functions {
-		if firstCall {
-			firstCall = false
-			f(context.Canceled)
-		} else {
-			f(nil)
-		}
-	}
 }

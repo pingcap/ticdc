@@ -990,14 +990,13 @@ func (e *EventDispatcherManager) cleanDispatcher(id common.DispatcherID, schemaI
 
 func (e *EventDispatcherManager) SetGlobalRedoTs(checkpointTs uint64) bool {
 	log.Debug("SetGlobalRedoTs", zap.Any("checkpointTs", checkpointTs))
-	// FIXME: select correct resolveTs
-	var resolveTs uint64 = math.MaxUint64
-	e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
-		resolveTs = min(resolveTs, dispatcher.GetResolvedTs())
+	var resolvedTs uint64 = math.MaxUint64
+	e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
+		resolvedTs = min(resolvedTs, dispatcher.GetResolvedTs())
 	})
 	// only update meta on the one node
 	if e.tableTriggerEventDispatcher != nil {
-		e.redoMeta.UpdateMeta(checkpointTs, resolveTs)
+		e.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
 	}
 	return atomic.CompareAndSwapUint64(&e.redoGlobalTs, e.redoGlobalTs, checkpointTs)
 }

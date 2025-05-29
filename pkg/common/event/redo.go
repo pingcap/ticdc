@@ -161,8 +161,15 @@ func (r *DMLEvent) ToRedoLog() *RedoLog {
 				}
 			}
 		}
-		redoLog.RedoRow.Row.Columns = columns
-		redoLog.RedoRow.Row.PreColumns = columns
+		switch row.RowType {
+		case RowTypeInsert:
+			redoLog.RedoRow.Row.Columns = columns
+		case RowTypeDelete:
+			redoLog.RedoRow.Row.PreColumns = columns
+		case RowTypeUpdate:
+			redoLog.RedoRow.Row.Columns = columns
+			redoLog.RedoRow.Row.PreColumns = columns
+		}
 	}
 	return redoLog
 }

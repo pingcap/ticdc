@@ -63,10 +63,8 @@ func NewLogWriter(
 		eg:     eg,
 		cancel: lwCancel,
 	}
-	cfg.LogType = redo.RedoDDLLogFileType
-	lw.ddlFileWorkers = newFileWorkerGroup(cfg, cfg.FlushWorkerNum, extStorage, opts...)
-	cfg.LogType = redo.RedoRowLogFileType
-	lw.dmlFileWorkers = newFileWorkerGroup(cfg, cfg.FlushWorkerNum, extStorage, opts...)
+	lw.ddlFileWorkers = newFileWorkerGroup(cfg, cfg.FlushWorkerNum, redo.RedoDDLLogFileType, extStorage, opts...)
+	lw.dmlFileWorkers = newFileWorkerGroup(cfg, cfg.FlushWorkerNum, redo.RedoRowLogFileType, extStorage, opts...)
 
 	eg.Go(func() error {
 		return lw.ddlFileWorkers.Run(lwCtx)
