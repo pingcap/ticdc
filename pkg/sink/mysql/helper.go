@@ -50,11 +50,9 @@ const checkRunningSQL = `SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE
 
 // CheckIfBDRModeIsSupported checks if the downstream supports set tidb_cdc_write_source variable
 func CheckIfBDRModeIsSupported(ctx context.Context, db *sql.DB) (bool, error) {
-	testSourceID := 1
-	// downstream is TiDB, set system variables.
 	// We should always try to set this variable, and ignore the error if
 	// downstream does not support this variable, it is by design.
-	query := fmt.Sprintf("SET SESSION tidb_cdc_write_source = %d", testSourceID)
+	query := fmt.Sprintf("SET SESSION tidb_cdc_write_source = %d", 1)
 	_, err := db.ExecContext(ctx, query)
 	if err != nil {
 		if mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError); ok &&
