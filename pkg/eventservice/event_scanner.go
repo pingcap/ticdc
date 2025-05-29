@@ -521,13 +521,9 @@ func (p *dmlProcessor) processNewTransaction(
 		}
 		p.insertRowCache = make([]*common.RawKVEntry, 0)
 	}
-
 	// Create a new DMLEvent for the current transaction
 	p.currentDML = pevent.NewDMLEvent(dispatcherID, tableID, rawEvent.StartTs, rawEvent.CRTs, tableInfo)
-	p.batchDML.Init(tableInfo)
-	p.currentDML.SetRows(p.batchDML.Rows)
-	p.batchDML.AddDMLEvent(p.currentDML)
-
+	p.batchDML.AppendDMLEvent(p.currentDML)
 	return nil
 }
 

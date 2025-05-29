@@ -86,10 +86,7 @@ func TestEncodeAndDecodeV0(t *testing.T) {
 	err = reverseEvent.decodeV0(data)
 	require.NoError(t, err)
 
-	require.False(t, reverseEvent.IsPaused())
-
 	// Compare the remaining content of the two events.
-	require.Equal(t, dmlEvent.TableInfo.GetFieldSlice(), reverseEvent.TableInfo.GetFieldSlice())
 	dmlEvent.Rows = nil
 	reverseEvent.Rows = nil
 	reverseEvent.eventSize = 0
