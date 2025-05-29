@@ -484,8 +484,13 @@ func (m *eventMerger) nextDDLFinishedTs() uint64 {
 
 // dmlProcessor handles DML event processing and batching
 type dmlProcessor struct {
-	mounter               pevent.Mounter
-	schemaGetter          schemaGetter
+	mounter      pevent.Mounter
+	schemaGetter schemaGetter
+
+	// insertRowCache is used to cache the split update event's insert part of the current transaction.
+	// It will be used to append to the current DML event when the transaction is finished.
+	// And it will be cleared when the transaction is finished.
+	insertRowCache        []*common.RawKVEntry
 	currentDML            *pevent.DMLEvent
 	batchDML              *pevent.BatchDMLEvent
 	lastTableInfoUpdateTs uint64
@@ -494,9 +499,10 @@ type dmlProcessor struct {
 // newDMLProcessor creates a new DML processor
 func newDMLProcessor(mounter pevent.Mounter, schemaGetter schemaGetter) *dmlProcessor {
 	return &dmlProcessor{
-		mounter:      mounter,
-		schemaGetter: schemaGetter,
-		batchDML:     pevent.NewBatchDMLEvent(),
+		mounter:        mounter,
+		schemaGetter:   schemaGetter,
+		batchDML:       pevent.NewBatchDMLEvent(),
+		insertRowCache: make([]*common.RawKVEntry, 0),
 	}
 }
 
@@ -507,6 +513,15 @@ func (p *dmlProcessor) processNewTransaction(
 	tableInfo *common.TableInfo,
 	dispatcherID common.DispatcherID,
 ) error {
+	if p.currentDML != nil && len(p.insertRowCache) > 0 {
+		for _, insertRow := range p.insertRowCache {
+			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk); err != nil {
+				return err
+			}
+		}
+		p.insertRowCache = make([]*common.RawKVEntry, 0)
+	}
+
 	// Create a new DMLEvent for the current transaction
 	p.currentDML = pevent.NewDMLEvent(dispatcherID, tableID, rawEvent.StartTs, rawEvent.CRTs, tableInfo)
 	p.batchDML.Init(tableInfo)
@@ -516,11 +531,54 @@ func (p *dmlProcessor) processNewTransaction(
 	return nil
 }
 
-// appendRow appends a row to the current DML event
+// appendRow appends a row to the current DML event.
+//
+// This method processes a raw KV entry and appends it to the current DML event. It handles
+// different types of operations (insert, delete, update) with special handling for updates
+// that modify unique key values.
+//
+// Parameters:
+//   - rawEvent: The raw KV entry containing the row data and operation type
+//
+// Returns:
+//   - error: Returns an error if:
+//   - No current DML event exists to append to
+//   - Unique key change detection fails
+//   - Update split operation fails
+//   - Row append operation fails
+//
+// The method follows this logic:
+// 1. Checks if there's a current DML event to append to
+// 2. For non-update operations, directly appends the row
+// 3. For update operations:
+//   - Checks if the update modifies any unique key values
+//   - If unique keys are modified, splits the update into delete+insert operations
+//   - Caches the insert part for later processing
+//   - Appends the delete part to the current event
+//
+// 4. For normal updates (no unique key changes), appends the row directly
 func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	if p.currentDML == nil {
 		return errors.New("no current DML event to append to")
 	}
+
+	if !rawEvent.IsUpdate() {
+		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
+	}
+
+	shouldSplit, err := pevent.IsUKChanged(rawEvent, p.currentDML.TableInfo)
+	if err != nil {
+		return err
+	}
+	if shouldSplit {
+		deleteRow, insertRow, err := rawEvent.SplitUpdate()
+		if err != nil {
+			return err
+		}
+		p.insertRowCache = append(p.insertRowCache, insertRow)
+		return p.currentDML.AppendRow(deleteRow, p.mounter.DecodeToChunk)
+	}
+
 	return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
 }
 

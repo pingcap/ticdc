@@ -32,6 +32,8 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/util/chunk"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -246,7 +248,7 @@ func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEv
 	return dmlEvent.DMLEvents[0]
 }
 
-func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) *DMLEvent {
+func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) (*DMLEvent, *common.RawKVEntry) {
 	if len(dml) != 2 {
 		log.Fatal("DML2UpdateEvent must have 2 dml statements, the first one is insert, the second one is update", zap.Any("dml", dml))
 	}
@@ -264,18 +266,23 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) *
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
 	dmlEvent := newDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
+
 	rawKvs := s.DML2RawKv(schema, table, ts, dml...)
 
 	raw := &common.RawKVEntry{
 		OpType:   common.OpTypePut,
-		Key:      rawKvs[0].Key,
-		Value:    rawKvs[0].Value,
-		OldValue: rawKvs[1].Value,
+		Key:      rawKvs[1].Key,
+		Value:    rawKvs[1].Value,
+		OldValue: rawKvs[0].Value,
 		StartTs:  rawKvs[0].StartTs,
 		CRTs:     rawKvs[1].CRTs,
 	}
+
+	log.Info("fizz", zap.Any("raw", raw))
 	dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk)
-	return dmlEvent
+
+	return dmlEvent, raw
 }
 
 func (s *EventTestHelper) DML2RawKv(schema, table string, ddlFinishedTs uint64, dml ...string) []*common.RawKVEntry {

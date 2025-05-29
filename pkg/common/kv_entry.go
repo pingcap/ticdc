@@ -68,12 +68,12 @@ func (v *RawKVEntry) IsUpdate() bool {
 	return v.OpType == OpTypePut && v.OldValue != nil && v.Value != nil
 }
 
-func (v *RawKVEntry) SplitUpdate() []RawKVEntry {
+func (v *RawKVEntry) SplitUpdate() (deleteRow, insertRow *RawKVEntry, err error) {
 	if !v.IsUpdate() {
-		return nil
+		return nil, nil, nil
 	}
 
-	oldKV := RawKVEntry{
+	deleteRow = &RawKVEntry{
 		OpType:   OpTypeDelete,
 		CRTs:     v.CRTs,
 		StartTs:  v.StartTs,
@@ -82,7 +82,7 @@ func (v *RawKVEntry) SplitUpdate() []RawKVEntry {
 		Value:    v.OldValue,
 	}
 
-	newKv := RawKVEntry{
+	insertRow = &RawKVEntry{
 		OpType:   OpTypePut,
 		CRTs:     v.CRTs,
 		StartTs:  v.StartTs,
@@ -91,7 +91,7 @@ func (v *RawKVEntry) SplitUpdate() []RawKVEntry {
 		Value:    v.Value,
 	}
 
-	return []RawKVEntry{oldKV, newKv}
+	return deleteRow, insertRow, nil
 }
 
 func (v *RawKVEntry) String() string {
