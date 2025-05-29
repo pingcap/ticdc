@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/kv"
@@ -27,7 +26,6 @@ import (
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/codec"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
-	"go.uber.org/zap"
 )
 
 var (
@@ -235,8 +233,9 @@ func IsUKChanged(rawKV *common.RawKVEntry, tableInfo *common.TableInfo) (bool, e
 
 	for _, colIDs := range tableInfo.GetIndexColumns() {
 		for _, colID := range colIDs {
-			if oldDatum[colID].String() != newDatum[colID].String() {
-				log.Info("fizz UK changed", zap.String("oldColumn", oldDatum[colID].String()), zap.String("newColumn", newDatum[colID].String()))
+			d1 := oldDatum[colID]
+			d2 := newDatum[colID]
+			if !d1.Equals(d2) {
 				return true, nil
 			}
 		}

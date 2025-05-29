@@ -145,5 +145,25 @@ func TestIsUKChanged(t *testing.T) {
 
 	isChanged, err = IsUKChanged(rawKV11, dmlEvent11.TableInfo)
 	require.NoError(t, err)
-	require.True(t, isChanged, "UK should be detected as changed when UK is declared in the first column")
+	require.True(t, isChanged, "UK should be detected as changed when UK is changed")
+
+	// Test case 12: table with PK, UK, Key and key changed
+	createTableSQL12 := "create table t12 (id int primary key, name varchar(32), age int, unique key uk_name (name), key idx_age (age));"
+	helper.DDL2Job(createTableSQL12)
+
+	insertSQL12 := "insert into t12 values (1, 'alice', 20);"
+	updateSQL12 := "update t12 set age = 30 where id = 1;"
+	dmlEvent12, rawKV12 := helper.DML2UpdateEvent("test", "t12", insertSQL12, updateSQL12)
+
+	isChanged, err = IsUKChanged(rawKV12, dmlEvent12.TableInfo)
+	require.NoError(t, err)
+	require.False(t, isChanged, "UK should not be detected as changed when only key is modified")
+
+	insertSQL13 := "insert into t12 values (2, 'bob', 30);"
+	updateSQL13 := "update t12 set name = 'dongmen' where id = 2;"
+	dmlEvent13, rawKV13 := helper.DML2UpdateEvent("test", "t12", insertSQL13, updateSQL13)
+
+	isChanged, err = IsUKChanged(rawKV13, dmlEvent13.TableInfo)
+	require.NoError(t, err)
+	require.True(t, isChanged, "UK should be detected as changed when UK is changed")
 }
