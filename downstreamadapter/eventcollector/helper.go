@@ -81,6 +81,7 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		validEventStart := 0
 		for _, event := range events {
 			if stat.shouldIgnoreDataEvent(event, h.eventCollector) {
+				validEventStart += 1
 				continue
 			}
 		}

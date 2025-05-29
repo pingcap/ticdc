@@ -183,7 +183,7 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 		}
 		// case 2: first ready signal from the server
 		// (must be a remote candidate, because we won't set d.eventServiceInfo.serverID to local event service until we receive ready signal)
-		log.Info("received ready signal from the remote server, prepare to reset the dispatcher",
+		log.Info("received ready signal from remote event service, prepare to reset the dispatcher",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Stringer("dispatcher", d.target.GetId()),
 			zap.Stringer("eventServiceID", eventServiceID))
