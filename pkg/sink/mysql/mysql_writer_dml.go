@@ -72,7 +72,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 	)
 	for _, eventsInGroup := range eventsGroup {
 		tableInfo := eventsInGroup[0].TableInfo
-		if !shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup, w.cfg.SafeMode) {
+		if !shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup, w.cfg) {
 			queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 		} else {
 			queryList, argsList = w.generateBatchSQL(eventsInGroup)
@@ -91,11 +91,16 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 
 // shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.
 // Batch SQL generation is used when:
-// 1. The table has a primary key
-// 2. The table doesn't have virtual columns
-// 3. There's more than one row in the group
-// 4. All events have the same safe mode status
-func shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent, safemode bool) bool {
+// 1. BatchDMLEnable = true, and rows > 1
+// 2. The table has a primary key
+// 3. The table doesn't have virtual columns
+// 4. There's more than one row in the group
+// 5. All events have the same safe mode status
+func shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent, cfg *Config) bool {
+	if !cfg.BatchDMLEnable {
+		return false
+	}
+
 	if !hasPK || hasVirtualCols {
 		return false
 	}
@@ -104,7 +109,7 @@ func shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DM
 		return false
 	}
 
-	return allRowInSameSafeMode(safemode, events)
+	return allRowInSameSafeMode(cfg.SafeMode, events)
 }
 
 // allRowInSameSafeMode determines whether all DMLEvents in a batch have the same safe mode status.

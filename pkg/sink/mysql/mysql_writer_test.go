@@ -41,6 +41,7 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 		MaxAllowedPacket:   int64(variable.DefMaxAllowedPacket),
 		SyncPointRetention: 100 * time.Second,
 		MaxTxnRow:          256,
+		BatchDMLEnable:     true,
 		EnableDDLTs:        defaultEnableDDLTs,
 	}
 	changefeedID := common.NewChangefeedID4Test("test", "test")

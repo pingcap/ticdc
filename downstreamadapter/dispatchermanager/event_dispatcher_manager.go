@@ -589,8 +589,8 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 		Watermark:       heartbeatpb.NewMaxWatermark(),
 	}
 
-	toRemoveDispatcherIDs := make([]common.DispatcherID, 0)
-	removedDispatcherSchemaIDs := make([]int64, 0)
+	toCleanDispatcherIDs := make([]common.DispatcherID, 0)
+	cleanDispatcherSchemaIDs := make([]int64, 0)
 	heartBeatInfo := &dispatcher.HeartBeatInfo{}
 
 	eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{
@@ -607,7 +607,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 		if heartBeatInfo.IsRemoving {
 			watermark, ok := dispatcherItem.TryClose()
 			if ok {
-				// remove successfully
+				// it's ok to clean the dispatcher
 				message.Watermark.UpdateMin(watermark)
 				// If the dispatcher is removed successfully, we need to add the tableSpan into message whether needCompleteStatus is true or not.
 				message.Statuses = append(message.Statuses, &heartbeatpb.TableSpanStatus{
@@ -615,8 +615,8 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 					ComponentStatus: heartbeatpb.ComponentState_Stopped,
 					CheckpointTs:    watermark.CheckpointTs,
 				})
-				toRemoveDispatcherIDs = append(toRemoveDispatcherIDs, id)
-				removedDispatcherSchemaIDs = append(removedDispatcherSchemaIDs, dispatcherItem.GetSchemaID())
+				toCleanDispatcherIDs = append(toCleanDispatcherIDs, id)
+				cleanDispatcherSchemaIDs = append(cleanDispatcherSchemaIDs, dispatcherItem.GetSchemaID())
 			}
 		}
 
@@ -636,8 +636,8 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 
 	// if the event dispatcher manager is closing, we don't to remove the stopped dispatchers.
 	if !e.closing.Load() {
-		for idx, id := range toRemoveDispatcherIDs {
-			e.cleanDispatcher(id, removedDispatcherSchemaIDs[idx])
+		for idx, id := range toCleanDispatcherIDs {
+			e.cleanDispatcher(id, cleanDispatcherSchemaIDs[idx])
 		}
 	}
 
@@ -737,11 +737,11 @@ func (e *EventDispatcherManager) closeAllDispatchers() {
 			}
 		}
 
-		dispatcher.Remove()
-
 		_, ok := dispatcher.TryClose()
 		if !ok {
 			leftToCloseDispatchers = append(leftToCloseDispatchers, dispatcher)
+		} else {
+			dispatcher.Remove()
 		}
 	})
 	// wait all dispatchers finish syncing the data to sink
@@ -766,6 +766,8 @@ func (e *EventDispatcherManager) closeAllDispatchers() {
 				)
 			}
 		}
+		// Remove should be called after dispatcher is closed
+		dispatcher.Remove()
 	}
 }
 
@@ -784,7 +786,26 @@ func (e *EventDispatcherManager) removeDispatcher(id common.DispatcherID) {
 			log.Error("remove checkpointTs message ds failed", zap.Error(err))
 		}
 
-		dispatcherItem.Remove()
+		count := 0
+		ok := false
+		// We don't want to block the ds handle function, so we just try 10 times.
+		// If the dispatcher is not closed, we can wait for the next message to check it again
+		for !ok && count < 10 {
+			_, ok = dispatcherItem.TryClose()
+			time.Sleep(10 * time.Millisecond)
+			count += 1
+			if count%5 == 0 {
+				log.Info("waiting for dispatcher to close",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Stringer("dispatcherID", dispatcherItem.GetId()),
+					zap.Any("tableSpan", common.FormatTableSpan(dispatcherItem.GetTableSpan())),
+					zap.Int("count", count),
+				)
+			}
+		}
+		if ok {
+			dispatcherItem.Remove()
+		}
 	} else {
 		e.statusesChan <- dispatcher.TableSpanStatusWithSeq{
 			TableSpanStatus: &heartbeatpb.TableSpanStatus{
