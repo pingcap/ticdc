@@ -41,8 +41,6 @@ type ConflictDetector struct {
 	nextCacheID atomic.Int64
 
 	notifiedNodes *chann.DrainableChann[func()]
-
-	cacheClosed atomic.Bool
 }
 
 // New creates a new ConflictDetector.
@@ -115,18 +113,12 @@ func (d *ConflictDetector) GetOutChByCacheID(id int) *chann.UnlimitedChannel[*co
 }
 
 func (d *ConflictDetector) closeCache() {
-	if d.cacheClosed.Load() {
-		return
-	}
-	// the unlimited channel should be closed, otherwise dmlWriter will be blocked
+	// the unlimited channel should be closed when quit wait group, otherwise dmlWriter will be blocked
 	for _, cache := range d.resolvedTxnCaches {
 		cache.out().Close()
 	}
-	d.cacheClosed.Store(true)
 }
 
 func (d *ConflictDetector) Close() {
 	d.notifiedNodes.CloseAndDrain()
-	d.closeCache()
-
 }
