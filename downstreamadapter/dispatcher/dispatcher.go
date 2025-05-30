@@ -50,7 +50,11 @@ type EventDispatcher interface {
 	GetSyncPointInterval() time.Duration
 	GetStartTsIsSyncpoint() bool
 	GetResolvedTs() uint64
-	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
+	HandleEvents(events []DispatcherEvent, wakeCallback func()) bool
+	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
+	HandleDispatcherStatus(*heartbeatpb.DispatcherStatus)
+	// GetType returns the dispatcher type
+	GetType() int
 }
 
 /*
@@ -156,6 +160,9 @@ type Dispatcher struct {
 	seq     uint64
 
 	BootstrapState bootstrapState
+
+	redoGlobalTs *common.Ts
+	cacheEvents  chan cacheEvents
 }
 
 func NewDispatcher(
@@ -174,6 +181,7 @@ func NewDispatcher(
 	currentPdTs uint64,
 	errCh chan error,
 	bdrMode bool,
+	redoGlobalTs *common.Ts,
 ) *Dispatcher {
 	dispatcher := &Dispatcher{
 		changefeedID:          changefeedID,
@@ -198,6 +206,9 @@ func NewDispatcher(
 		errCh:                 errCh,
 		bdrMode:               bdrMode,
 		BootstrapState:        BootstrapFinished,
+		// block first
+		redoGlobalTs: redoGlobalTs,
+		cacheEvents:  make(chan cacheEvents, 1),
 	}
 
 	dispatcher.addToStatusDynamicStream()
@@ -227,13 +238,37 @@ func (d *Dispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.Schema
 	return true, nil
 }
 
-// HandleEvents can batch handle events about resolvedTs Event and DML Event.
+func (d *Dispatcher) HandleCacheEvents() {
+	select {
+	case cacheEvents := <-d.cacheEvents:
+		block := d.HandleEvents(cacheEvents.events, cacheEvents.wakeCallback)
+		if !block {
+			cacheEvents.wakeCallback()
+		}
+	default:
+	}
+}
+
+// handleEvents can batch handle events about resolvedTs Event and DML Event.
 // While for DDLEvent and SyncPointEvent, they should be handled separately,
 // because they are block events.
 // We ensure we only will receive one event when it's ddl event or sync point event
 // by setting them with different event types in DispatcherEventsHandler.GetType
 // When we handle events, we don't have any previous events still in sink.
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
+	// redo check
+	if len(dispatcherEvents) > 0 && atomic.LoadUint64(d.redoGlobalTs) < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
+		// cache here
+		cacheEvents := newCacheEvents(dispatcherEvents, wakeCallback)
+		d.cacheEvents <- cacheEvents
+		log.Warn("Cache event",
+			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
+			zap.Stringer("dispatcher", d.id),
+			zap.Uint64("redoGlobalTs", *d.redoGlobalTs),
+			zap.Any("dispatcherEvents", cacheEvents.events),
+		)
+		return true
+	}
 	// Only return false when all events are resolvedTs Event.
 	block = false
 	dmlWakeOnce := &sync.Once{}
@@ -409,22 +444,23 @@ func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 // It set isRemoving to true, to make the dispatcher can be clean by the eventDispatcherManager.
 // it also remove the dispatcher from status dynamic stream to stop receiving status info from maintainer.
 func (d *Dispatcher) Remove() {
-	log.Info("Remove dispatcher",
-		zap.Stringer("dispatcher", d.id),
-		zap.Stringer("changefeedID", d.changefeedID),
-		zap.String("table", common.FormatTableSpan(d.tableSpan)))
-	d.isRemoving.Store(true)
-
-	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
-	err := dispatcherStatusDS.RemovePath(d.id)
-	if err != nil {
-		log.Error("remove dispatcher from dynamic stream failed",
-			zap.Stringer("changefeedID", d.changefeedID),
+	if d.isRemoving.CompareAndSwap(false, true) {
+		log.Info("Remove dispatcher",
 			zap.Stringer("dispatcher", d.id),
-			zap.String("table", common.FormatTableSpan(d.tableSpan)),
-			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
-			zap.Uint64("resolvedTs", d.GetResolvedTs()),
-			zap.Error(err))
+			zap.Stringer("changefeedID", d.changefeedID),
+			zap.String("table", common.FormatTableSpan(d.tableSpan)))
+		close(d.cacheEvents)
+		dispatcherStatusDS := GetDispatcherStatusDynamicStream()
+		err := dispatcherStatusDS.RemovePath(d.id)
+		if err != nil {
+			log.Error("remove dispatcher from dynamic stream failed",
+				zap.Stringer("changefeedID", d.changefeedID),
+				zap.Stringer("dispatcher", d.id),
+				zap.String("table", common.FormatTableSpan(d.tableSpan)),
+				zap.Uint64("checkpointTs", d.GetCheckpointTs()),
+				zap.Uint64("resolvedTs", d.GetResolvedTs()),
+				zap.Error(err))
+		}
 	}
 }
 

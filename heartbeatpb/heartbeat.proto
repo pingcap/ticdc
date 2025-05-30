@@ -65,6 +65,11 @@ message CheckpointTsMessage {
     uint64 checkpointTs = 2;
 }
 
+message RedoTsMessage {
+    ChangefeedID changefeedID = 1;
+    uint64 checkpointTs = 2;
+}
+
 enum ScheduleAction {
     Create = 0;
     Remove = 1;
