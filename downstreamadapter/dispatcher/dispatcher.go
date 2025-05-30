@@ -444,23 +444,23 @@ func (d *Dispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 // It set isRemoving to true, to make the dispatcher can be clean by the eventDispatcherManager.
 // it also remove the dispatcher from status dynamic stream to stop receiving status info from maintainer.
 func (d *Dispatcher) Remove() {
-	log.Info("Remove dispatcher",
-		zap.Stringer("dispatcher", d.id),
-		zap.Stringer("changefeedID", d.changefeedID),
-		zap.String("table", common.FormatTableSpan(d.tableSpan)))
-	d.isRemoving.Store(true)
-
-	close(d.cacheEvents)
-	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
-	err := dispatcherStatusDS.RemovePath(d.id)
-	if err != nil {
-		log.Error("remove dispatcher from dynamic stream failed",
-			zap.Stringer("changefeedID", d.changefeedID),
+	if d.isRemoving.CompareAndSwap(false, true) {
+		log.Info("Remove dispatcher",
 			zap.Stringer("dispatcher", d.id),
-			zap.String("table", common.FormatTableSpan(d.tableSpan)),
-			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
-			zap.Uint64("resolvedTs", d.GetResolvedTs()),
-			zap.Error(err))
+			zap.Stringer("changefeedID", d.changefeedID),
+			zap.String("table", common.FormatTableSpan(d.tableSpan)))
+		close(d.cacheEvents)
+		dispatcherStatusDS := GetDispatcherStatusDynamicStream()
+		err := dispatcherStatusDS.RemovePath(d.id)
+		if err != nil {
+			log.Error("remove dispatcher from dynamic stream failed",
+				zap.Stringer("changefeedID", d.changefeedID),
+				zap.Stringer("dispatcher", d.id),
+				zap.String("table", common.FormatTableSpan(d.tableSpan)),
+				zap.Uint64("checkpointTs", d.GetCheckpointTs()),
+				zap.Uint64("resolvedTs", d.GetResolvedTs()),
+				zap.Error(err))
+		}
 	}
 }
 

@@ -698,7 +698,7 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) {
 				ts = min(ts, dispatcher.GetCheckpointTs())
 			})
 			if previousTs >= ts {
-				log.Debug("previousTs >= current ts, ignore it", zap.Uint64("previousTs", previousTs), zap.Uint64("ts", ts))
+				log.Debug("previous ts is bigger or equal than current ts, ignore it", zap.Uint64("previousTs", previousTs), zap.Uint64("ts", ts))
 				continue
 			}
 			previousTs = ts
