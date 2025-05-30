@@ -370,8 +370,8 @@ func (e *eventStore) RegisterDispatcher(
 	if subStats, ok := e.dispatcherMeta.tableStats[dispatcherSpan.TableID]; ok {
 		for _, subStat := range subStats {
 			// dispatcher span is not contained in subscription span, skip it
-			if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) > 0 &&
-				bytes.Compare(dispatcherSpan.EndKey, subStat.tableSpan.EndKey) > 0 {
+			if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) > 0 ||
+				bytes.Compare(subStat.tableSpan.EndKey, dispatcherSpan.EndKey) < 0 {
 				continue
 			}
 			// when `onlyReuse` is false, must find a subscription with the same span, otherwise we create a new one
