@@ -31,6 +31,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -52,6 +54,8 @@ type Decoder struct {
 	value []byte
 	msg   *message
 	memo  TableInfoProvider
+
+	blockedTablesMemo *blockedTablesMemo
 
 	// cachedMessages is used to store the messages which does not have received corresponding table info yet.
 	cachedMessages *list.List
@@ -87,6 +91,8 @@ func NewDecoder(
 
 		storage:      externalStorage,
 		upstreamTiDB: db,
+
+		blockedTablesMemo: newBlockedTablesMemo(),
 
 		memo:           newMemoryTableInfoProvider(),
 		cachedMessages: list.New(),
@@ -172,6 +178,8 @@ func (d *Decoder) NextDMLEvent() *commonEvent.DMLEvent {
 
 	event := buildDMLEvent(d.msg, tableInfo, d.config.EnableRowChecksum, d.upstreamTiDB)
 	d.msg = nil
+
+	d.blockedTablesMemo.add(event.TableInfo.GetSchemaName(), event.TableInfo.GetTableName(), event.GetTableID())
 
 	log.Debug("row changed event assembled", zap.Any("event", event))
 	return event
@@ -279,7 +287,7 @@ func (d *Decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if d.msg == nil {
 		log.Panic("msg is not set when parse the DDL event")
 	}
-	ddl := buidDDLEvent(d.msg)
+	ddl := d.buildDDLEvent(d.msg)
 	d.msg = nil
 
 	d.memo.Write(ddl.TableInfo)
@@ -482,7 +490,44 @@ func newTableInfo(m *TableSchema) *commonType.TableInfo {
 	return commonType.NewTableInfo4Decoder(m.Schema, tidbTableInfo)
 }
 
-func buidDDLEvent(msg *message) *commonEvent.DDLEvent {
+type accessKey struct {
+	schema string
+	table  string
+}
+
+type blockedTablesMemo struct {
+	memo map[accessKey]map[int64]struct{}
+}
+
+func newBlockedTablesMemo() *blockedTablesMemo {
+	return &blockedTablesMemo{
+		memo: make(map[accessKey]map[int64]struct{}),
+	}
+}
+
+func (m *blockedTablesMemo) add(schema, table string, tableID int64) {
+	key := accessKey{schema, table}
+	if _, ok := m.memo[key]; !ok {
+		m.memo[key] = make(map[int64]struct{})
+	}
+	if _, exists := m.memo[key][tableID]; !exists {
+		m.memo[key][tableID] = struct{}{}
+		log.Info("add table id to blocked list",
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID))
+	}
+}
+
+func (m *blockedTablesMemo) blockedTables(schema, table string) []int64 {
+	key := accessKey{schema, table}
+	blocked := m.memo[key]
+	result := make([]int64, 0, len(blocked))
+	for item := range blocked {
+		result = append(result, item)
+	}
+	return result
+}
+
+func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 	var (
 		tableInfo    *commonType.TableInfo
 		preTableInfo *commonType.TableInfo
@@ -491,12 +536,36 @@ func buidDDLEvent(msg *message) *commonEvent.DDLEvent {
 	if msg.PreTableSchema != nil {
 		preTableInfo = newTableInfo(msg.PreTableSchema)
 	}
-	return &commonEvent.DDLEvent{
-		FinishedTs:         msg.CommitTs,
-		Query:              msg.SQL,
-		TableInfo:          tableInfo,
-		MultipleTableInfos: []*commonType.TableInfo{tableInfo, preTableInfo},
+
+	result := new(commonEvent.DDLEvent)
+	result.Query = msg.SQL
+	result.TableInfo = tableInfo
+
+	result.FinishedTs = msg.CommitTs
+	result.SchemaName = msg.Schema
+	result.TableName = msg.Table
+	result.TableID = tableInfo.TableName.TableID
+	result.MultipleTableInfos = []*commonType.TableInfo{tableInfo, preTableInfo}
+
+	if result.Query == "" {
+		return result
 	}
+
+	actionType := common.GetDDLActionType(result.Query)
+	result.Type = byte(actionType)
+	physicalTableIDs := d.blockedTablesMemo.blockedTables(tableInfo.GetSchemaName(), tableInfo.GetTableName())
+	if actionType == timodel.ActionExchangeTablePartition {
+		stmt, err := parser.New().ParseOneStmt(result.Query, "", "")
+		if err != nil {
+			log.Panic("parse DDL failed", zap.String("DDL", result.Query), zap.Error(err))
+		}
+		exchangedTableName := stmt.(*ast.AlterTableStmt).Specs[0].NewTable.Name.O
+		// assuming it's the same database.
+		exchangedTableID := d.blockedTablesMemo.blockedTables(tableInfo.GetSchemaName(), exchangedTableName)
+		physicalTableIDs = append(physicalTableIDs, exchangedTableID...)
+	}
+	result.BlockedTables = common.GetInfluenceTables(actionType, physicalTableIDs)
+	return result
 }
 
 func parseValue(

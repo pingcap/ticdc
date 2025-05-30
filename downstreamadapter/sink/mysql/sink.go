@@ -147,44 +147,21 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	writer := s.dmlWriter[idx]
 
 	totalStart := time.Now()
-	events := make([]*commonEvent.DMLEvent, 0)
-	rows := 0
+	buffer := make([]*commonEvent.DMLEvent, 0, s.maxTxnRows)
 	for {
-		needFlush := false
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case txnEvent := <-inputCh:
-			events = append(events, txnEvent)
-			rows += int(txnEvent.Len())
-			if rows > s.maxTxnRows {
-				needFlush = true
+		default:
+			txnEvents, ok := inputCh.GetMultipleNoGroup(buffer)
+			if !ok {
+				return errors.Trace(ctx.Err())
 			}
-			if !needFlush {
-				delay := time.NewTimer(10 * time.Millisecond)
-				for !needFlush {
-					select {
-					case txnEvent = <-inputCh:
-						workerHandledRows.Add(float64(txnEvent.Len()))
-						events = append(events, txnEvent)
-						rows += int(txnEvent.Len())
-						if rows > s.maxTxnRows {
-							needFlush = true
-						}
-					case <-delay.C:
-						needFlush = true
-					}
-				}
-				// Release resources promptly
-				if !delay.Stop() {
-					select {
-					case <-delay.C:
-					default:
-					}
-				}
+			for _, txnEvent := range txnEvents {
+				workerHandledRows.Add(float64(txnEvent.Len()))
 			}
 			start := time.Now()
-			err := writer.Flush(events)
+			err := writer.Flush(txnEvents)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -194,8 +171,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			// flush time and total time
 			workerTotalDuration.Observe(time.Since(totalStart).Seconds())
 			totalStart = time.Now()
-			events = events[:0]
-			rows = 0
+			buffer = buffer[:0]
 		}
 	}
 }
