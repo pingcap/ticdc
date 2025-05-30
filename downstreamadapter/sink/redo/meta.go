@@ -358,7 +358,7 @@ func (m *RedoMeta) maybeFlushMeta(ctx context.Context) error {
 	if !hasChange {
 		// check stuck
 		if time.Since(m.lastFlushTime) > redo.FlushWarnDuration {
-			log.Warn("Redo meta has not changed for a long time, owner may be stuck",
+			log.Debug("Redo meta has not changed for a long time, owner may be stuck",
 				zap.String("namespace", m.changeFeedID.Namespace()),
 				zap.String("changefeed", m.changeFeedID.Name()),
 				zap.Duration("lastFlushTime", time.Since(m.lastFlushTime)),
