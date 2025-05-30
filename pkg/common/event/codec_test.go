@@ -166,4 +166,16 @@ func TestIsUKChanged(t *testing.T) {
 	isChanged, err = IsUKChanged(rawKV13, dmlEvent13.TableInfo)
 	require.NoError(t, err)
 	require.True(t, isChanged, "UK should be detected as changed when UK is changed")
+
+	// UK is int type and is in the column list
+	createTableSQL14 := "create table t14 (id int primary key, name varchar(32), age int unique key);"
+	helper.DDL2Job(createTableSQL14)
+
+	insertSQL14 := "insert into t14 values (1, 'alice', 20);"
+	updateSQL14 := "update t14 set age = '30' where id = 1;"
+	dmlEvent14, rawKV14 := helper.DML2UpdateEvent("test", "t14", insertSQL14, updateSQL14)
+
+	isChanged, err = IsUKChanged(rawKV14, dmlEvent14.TableInfo)
+	require.NoError(t, err)
+	require.True(t, isChanged, "UK should be detected as changed when UK is changed")
 }

@@ -88,8 +88,8 @@ type TableInfo struct {
 	Sequence *model.SequenceInfo `json:"sequence"`
 
 	preSQLs struct {
-		mutex         sync.Mutex
 		isInitialized atomic.Bool
+		mutex         sync.Mutex
 		m             [4]string
 	} `json:"-"`
 }
@@ -105,6 +105,11 @@ func (ti *TableInfo) InitPrivateFields() {
 
 	ti.preSQLs.mutex.Lock()
 	defer ti.preSQLs.mutex.Unlock()
+
+	// Double-checked locking
+	if ti.preSQLs.isInitialized.Load() {
+		return
+	}
 
 	ti.TableName.quotedName = QuoteSchema(ti.TableName.Schema, ti.TableName.Table)
 	ti.preSQLs.m[preSQLInsert] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLInsert], ti.TableName.QuoteString())

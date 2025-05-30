@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -281,7 +282,6 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) (
 		CRTs:     rawKvs[1].CRTs,
 	}
 
-	log.Info("fizz", zap.Any("raw", raw))
 	dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk)
 
 	return dmlEvent, raw
