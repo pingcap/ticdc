@@ -54,7 +54,9 @@ type DDLEvent struct {
 	// The seq of the event. It is set by event service.
 	Seq uint64 `json:"seq"`
 	// State is the state of sender when sending this event.
-	State              EventSenderState    `json:"state"`
+	State EventSenderState `json:"state"`
+	// MultipleTableInfos holds information for multiple versions of a table.
+	// The first entry always represents the current table information.
 	MultipleTableInfos []*common.TableInfo `json:"-"`
 
 	BlockedTables     *InfluencedTables `json:"blocked_tables"`

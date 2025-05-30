@@ -196,7 +196,7 @@ func queryRowChecksum(
 	var (
 		schema   = event.TableInfo.GetSchemaName()
 		table    = event.TableInfo.GetTableName()
-		commitTs = event.CommitTs
+		commitTs = event.GetCommitTs()
 	)
 
 	pkNames := event.TableInfo.GetPrimaryKeyColumnNames()
@@ -215,49 +215,50 @@ func queryRowChecksum(
 	defer conn.Close()
 
 	event.Rewind()
-	row, ok := event.GetNextRow()
-	if !ok {
-		log.Error("get RowChange failed")
-	}
-	columns := event.TableInfo.GetColumns()
-	if row.Checksum.Current != 0 {
-		conditions := make(map[string]any)
-		for _, name := range pkNames {
-			for idx, col := range columns {
-				if col.Name.O == name {
-					d := row.Row.GetDatum(idx, &col.FieldType)
-					conditions[name] = d.GetValue()
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			break
+		}
+		columns := event.TableInfo.GetColumns()
+		if row.Checksum.Current != 0 {
+			conditions := make(map[string]any)
+			for _, name := range pkNames {
+				for idx, col := range columns {
+					if col.Name.O == name {
+						d := row.Row.GetDatum(idx, &col.FieldType)
+						conditions[name] = d.GetValue()
+					}
 				}
 			}
-		}
-		result := queryRowChecksumAux(ctx, conn, commitTs, schema, table, conditions)
-		if result != 0 && result != row.Checksum.Current {
-			log.Error("verify upstream TiDB columns-level checksum, current checksum mismatch",
-				zap.Uint32("expected", row.Checksum.Current),
-				zap.Uint32("actual", result))
-			return errors.New("checksum mismatch")
-		}
-	}
-
-	if row.Checksum.Previous != 0 {
-		conditions := make(map[string]any)
-		for _, name := range pkNames {
-			for idx, col := range columns {
-				if col.Name.O == name {
-					d := row.PreRow.GetDatum(idx, &col.FieldType)
-					conditions[name] = d.GetValue()
-				}
+			result := queryRowChecksumAux(ctx, conn, commitTs, schema, table, conditions)
+			if result != 0 && result != row.Checksum.Current {
+				log.Error("verify upstream TiDB columns-level checksum, current checksum mismatch",
+					zap.Uint32("expected", row.Checksum.Current),
+					zap.Uint32("actual", result))
+				return errors.New("checksum mismatch")
 			}
 		}
-		result := queryRowChecksumAux(ctx, conn, commitTs-1, schema, table, conditions)
-		if result != 0 && result != row.Checksum.Previous {
-			log.Error("verify upstream TiDB columns-level checksum, previous checksum mismatch",
-				zap.Uint32("expected", row.Checksum.Previous),
-				zap.Uint32("actual", result))
-			return errors.New("checksum mismatch")
+
+		if row.Checksum.Previous != 0 {
+			conditions := make(map[string]any)
+			for _, name := range pkNames {
+				for idx, col := range columns {
+					if col.Name.O == name {
+						d := row.PreRow.GetDatum(idx, &col.FieldType)
+						conditions[name] = d.GetValue()
+					}
+				}
+			}
+			result := queryRowChecksumAux(ctx, conn, commitTs-1, schema, table, conditions)
+			if result != 0 && result != row.Checksum.Previous {
+				log.Error("verify upstream TiDB columns-level checksum, previous checksum mismatch",
+					zap.Uint32("expected", row.Checksum.Previous),
+					zap.Uint32("actual", result))
+				return errors.New("checksum mismatch")
+			}
 		}
 	}
-
 	return nil
 }
 

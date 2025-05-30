@@ -40,9 +40,9 @@ mysql_groups=(
 	# G04
 	'syncpoint syncpoint_check_ts'
 	# G05
-	'move_table'
+	'move_table ddl_for_split_tables_with_merge_and_split'
 	# G06
-	'cdc'
+	'cdc ddl_for_split_tables_with_random_merge_and_split'
 	# G07
 	'resolve_lock'
 	# G08

@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
@@ -35,7 +34,7 @@ import (
 type IOType int32
 
 var LogServiceEventTypes = []IOType{
-	TypeDMLEvent,
+	TypeBatchDMLEvent,
 	TypeDDLEvent,
 	TypeBatchResolvedTs,
 	TypeSyncPointEvent,
@@ -51,7 +50,7 @@ func (t IOType) IsLogServiceEvent() bool {
 const (
 	TypeInvalid IOType = iota
 	// LogService related
-	TypeDMLEvent
+	TypeBatchDMLEvent
 	TypeDDLEvent
 	TypeBatchResolvedTs
 	TypeSyncPointEvent
@@ -93,8 +92,8 @@ const (
 
 func (t IOType) String() string {
 	switch t {
-	case TypeDMLEvent:
-		return "DMLEvent"
+	case TypeBatchDMLEvent:
+		return "BatchDMLEvent"
 	case TypeDDLEvent:
 		return "DDLEvent"
 	case TypeSyncPointEvent:
@@ -256,8 +255,8 @@ type IOTypeT interface {
 func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 	var m IOTypeT
 	switch ioType {
-	case TypeDMLEvent:
-		m = &commonEvent.DMLEvent{}
+	case TypeBatchDMLEvent:
+		m = &commonEvent.BatchDMLEvent{}
 	case TypeDDLEvent:
 		m = &commonEvent.DDLEvent{}
 	case TypeSyncPointEvent:
@@ -313,9 +312,9 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 	case TypeCheckpointTsMessage:
 		m = &heartbeatpb.CheckpointTsMessage{}
 	case TypeDispatcherHeartbeat:
-		m = &event.DispatcherHeartbeat{}
+		m = &commonEvent.DispatcherHeartbeat{}
 	case TypeDispatcherHeartbeatResponse:
-		m = &event.DispatcherHeartbeatResponse{}
+		m = &commonEvent.DispatcherHeartbeatResponse{}
 	default:
 		log.Panic("Unimplemented IOType", zap.Stringer("Type", ioType))
 	}
@@ -347,8 +346,8 @@ type TargetMessage struct {
 func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...uint64) *TargetMessage {
 	var ioType IOType
 	switch Message.(type) {
-	case *commonEvent.DMLEvent:
-		ioType = TypeDMLEvent
+	case *commonEvent.BatchDMLEvent:
+		ioType = TypeBatchDMLEvent
 	case *commonEvent.DDLEvent:
 		ioType = TypeDDLEvent
 	case *commonEvent.SyncPointEvent:
@@ -403,9 +402,9 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeMaintainerCloseResponse
 	case *heartbeatpb.CheckpointTsMessage:
 		ioType = TypeCheckpointTsMessage
-	case *event.DispatcherHeartbeat:
+	case *commonEvent.DispatcherHeartbeat:
 		ioType = TypeDispatcherHeartbeat
-	case *event.DispatcherHeartbeatResponse:
+	case *commonEvent.DispatcherHeartbeatResponse:
 		ioType = TypeDispatcherHeartbeatResponse
 	default:
 		panic("unknown io type")

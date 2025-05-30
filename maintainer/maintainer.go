@@ -46,7 +46,7 @@ import (
 )
 
 const (
-	periodEventInterval = time.Millisecond * 200
+	periodEventInterval = time.Millisecond * 100
 )
 
 // Maintainer is response for handle changefeed replication tasks. Maintainer should:
@@ -156,7 +156,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	pdAPI pdutil.PDAPIClient,
-	pdClock pdutil.Clock,
 	regionCache split.RegionCache,
 	checkpointTs uint64,
 	newChangefeed bool,
@@ -164,9 +163,9 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID, pdClock,
-		heartbeatpb.DDLSpanSchemaID,
-		heartbeatpb.DDLSpan, &heartbeatpb.TableSpanStatus{
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.DDLSpan, &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
@@ -174,11 +173,10 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	m := &Maintainer{
 		id:                cfID,
-		pdClock:           pdClock,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
-		controller: NewController(cfID, checkpointTs, pdAPI, pdClock, regionCache, taskScheduler,
+		controller: NewController(cfID, checkpointTs, pdAPI, regionCache, taskScheduler,
 			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
 		removed:         atomic.NewBool(false),
@@ -187,6 +185,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		statusChanged:   atomic.NewBool(true),
 		cascadeRemoving: false,
 		config:          cfg,
+		pdClock:         appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 
 		ddlSpan:               ddlSpan,
 		checkpointTsByCapture: make(map[node.ID]heartbeatpb.Watermark),
@@ -237,7 +236,6 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	pdAPI pdutil.PDAPIClient,
-	pdClock pdutil.Clock,
 	regionCache split.RegionCache,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
@@ -245,8 +243,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 		SinkURI:      "",
 		Config:       config.GetDefaultReplicaConfig(),
 	}
-	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI,
-		pdClock, regionCache, 1, false)
+	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, pdAPI, regionCache, 1, false)
 	m.cascadeRemoving = true
 	return m
 }
@@ -952,4 +949,16 @@ func (m *Maintainer) MoveSplitTable(tableId int64, targetNode node.ID) error {
 // GetTables returns all tables.
 func (m *Maintainer) GetTables() []*replica.SpanReplication {
 	return m.controller.replicationDB.GetAllTasks()
+}
+
+// SplitTableByRegionCount split table based on region count
+// it can split the table whether the table have one dispatcher or multiple dispatchers
+func (m *Maintainer) SplitTableByRegionCount(tableId int64) error {
+	return m.controller.SplitTableByRegionCount(tableId)
+}
+
+// MergeTable merge two dispatchers in this table into one dispatcher,
+// so after merge table, the table may also have multiple dispatchers
+func (m *Maintainer) MergeTable(tableId int64) error {
+	return m.controller.MergeTable(tableId)
 }

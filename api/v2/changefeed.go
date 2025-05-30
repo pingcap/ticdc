@@ -168,9 +168,8 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 
 	// verify sinkURI
-	tempChangefeedID := common.NewChangeFeedIDWithName("sink-uri-verify-changefeed-id")
 	cfConfig := info.ToChangefeedConfig()
-	err = sink.Verify(ctx, cfConfig, tempChangefeedID)
+	err = sink.Verify(ctx, cfConfig, changefeedID)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
 		return
@@ -181,7 +180,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		if !needRemoveGCSafePoint {
 			return
 		}
-		err := gc.UndoEnsureChangefeedStartTsSafety(
+		err = gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			pdClient,
 			createGcServiceID,
@@ -618,14 +617,13 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	}
 
 	// verify sink
-	tempChangefeedID := common.NewChangeFeedIDWithName("sink-uri-verify-changefeed-id")
-	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), tempChangefeedID)
+	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), oldCfInfo.ChangefeedID)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err))
 		return
 	}
 
-	if err := coordinator.UpdateChangefeed(ctx, oldCfInfo); err != nil {
+	if err = coordinator.UpdateChangefeed(ctx, oldCfInfo); err != nil {
 		_ = c.Error(err)
 		return
 	}
@@ -819,6 +817,149 @@ func (h *OpenAPIV2) MoveSplitTable(c *gin.Context) {
 	err = maintainer.MoveSplitTable(int64(tableId), node.ID(targetNodeID))
 	if err != nil {
 		log.Error("failed to move split table", zap.Error(err), zap.Int64("tableID", tableId), zap.String("targetNodeID", targetNodeID))
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(getStatus(c), &EmptyResponse{})
+}
+
+// SplitTableByRegionCount do split table by region count in changefeed,
+// it can also split the table when there are multiple dispatchers in the table.
+// it returns the split result(success or err)
+// This api is for inner test use, not public use. It may be removed in the future.
+// Usage:
+// curl -X POST http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/split_table_by_region_count?tableID={tableID}
+// Note:
+// 1. tableID is the table id in the changefeed
+func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
+	tableIdStr := c.Query("tableID")
+	tableId, err := strconv.ParseInt(tableIdStr, 10, 64)
+	if err != nil {
+		log.Error("failed to parse tableID", zap.Error(err), zap.String("tableID", tableIdStr))
+		_ = c.Error(err)
+		return
+	}
+
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
+			changefeedDisplayName.Name))
+		return
+	}
+
+	// get changefeedID first
+	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Name)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	if cfInfo.MaintainerAddr == "" {
+		_ = c.Error(errors.New("Can't not find maintainer for changefeed: " + changefeedDisplayName.Name))
+		return
+	}
+
+	selfInfo, err := h.server.SelfInfo()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	if cfInfo.MaintainerAddr != selfInfo.AdvertiseAddr {
+		// Forward the request to the maintainer
+		middleware.ForwardToServer(c, selfInfo.ID, cfInfo.MaintainerAddr)
+		c.Abort()
+		return
+	}
+
+	changefeedID := common.ChangeFeedID{
+		Id:          cfInfo.GID,
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+	}
+
+	maintainerManager := h.server.GetMaintainerManager()
+	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
+
+	if !ok {
+		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("Name", changefeedID.DisplayName.String()))
+		_ = c.Error(apperror.ErrMaintainerNotFounded)
+		return
+	}
+
+	err = maintainer.SplitTableByRegionCount(int64(tableId))
+	if err != nil {
+		log.Error("failed to split table by region count", zap.Error(err), zap.Int64("tableID", tableId))
+		_ = c.Error(err)
+		return
+	}
+	c.JSON(getStatus(c), &EmptyResponse{})
+}
+
+// MergeTable merges the split table in changefeed, it just merge two nearby dispatchers into one dispatcher in this table.
+// it returns the split result(success or err)
+// This api is for inner test use, not public use. It may be removed in the future.
+// Usage:
+// curl -X POST http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/merge_table?tableID={tableID}
+// Note:
+// 1. tableID is the table id in the changefeed
+func (h *OpenAPIV2) MergeTable(c *gin.Context) {
+	tableIdStr := c.Query("tableID")
+	tableId, err := strconv.ParseInt(tableIdStr, 10, 64)
+	if err != nil {
+		log.Error("failed to parse tableID", zap.Error(err), zap.String("tableID", tableIdStr))
+		_ = c.Error(err)
+		return
+	}
+
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetNamespaceValueWithDefault(c))
+	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
+			changefeedDisplayName.Name))
+		return
+	}
+
+	// get changefeedID first
+	cfInfo, err := getChangeFeed(c.Request.Host, changefeedDisplayName.Name)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	if cfInfo.MaintainerAddr == "" {
+		_ = c.Error(errors.New("Can't not find maintainer for changefeed: " + changefeedDisplayName.Name))
+		return
+	}
+
+	selfInfo, err := h.server.SelfInfo()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	if cfInfo.MaintainerAddr != selfInfo.AdvertiseAddr {
+		// Forward the request to the maintainer
+		middleware.ForwardToServer(c, selfInfo.ID, cfInfo.MaintainerAddr)
+		c.Abort()
+		return
+	}
+
+	changefeedID := common.ChangeFeedID{
+		Id:          cfInfo.GID,
+		DisplayName: common.NewChangeFeedDisplayName(cfInfo.ID, cfInfo.Namespace),
+	}
+
+	maintainerManager := h.server.GetMaintainerManager()
+	maintainer, ok := maintainerManager.GetMaintainerForChangefeed(changefeedID)
+
+	if !ok {
+		log.Error("maintainer not found for changefeed in this node", zap.String("GID", changefeedID.Id.String()), zap.String("Name", changefeedID.DisplayName.String()))
+		_ = c.Error(apperror.ErrMaintainerNotFounded)
+		return
+	}
+
+	err = maintainer.MergeTable(int64(tableId))
+	if err != nil {
+		log.Error("failed to merge table", zap.Error(err), zap.Int64("tableID", tableId))
 		_ = c.Error(err)
 		return
 	}

@@ -130,25 +130,27 @@ func (s *eventScanner) Scan(
 	//
 	// Example ordering:
 	//    TS10 (DDL1) → TS20 (DML1) → TS30 (DML2) → TS30 (DDL2) → TS40 (DML3)
-	appendDML := func(dml *pevent.DMLEvent) {
-		if dml == nil || dml.Length == 0 {
+	appendDML := func(dml *pevent.BatchDMLEvent) {
+		if dml == nil || dml.Len() == 0 {
 			return
 		}
-		for len(ddlEvents) > 0 && dml.CommitTs > ddlEvents[0].FinishedTs {
+		commitTs := dml.GetCommitTs()
+		for len(ddlEvents) > 0 && commitTs > ddlEvents[0].FinishedTs {
 			events = append(events, &ddlEvents[0])
 			ddlEvents = ddlEvents[1:]
 		}
 		events = append(events, dml)
-		lastCommitTs = dml.CommitTs
+		lastCommitTs = commitTs
 	}
 
 	// appendDDLs appends all ddl events with finishedTs <= endTs
 	appendDDLs := func(endTs uint64) {
-		for _, e := range ddlEvents {
-			ep := &e
-			if ep.FinishedTs <= endTs {
-				events = append(events, ep)
+		for i := 0; i < len(ddlEvents); i++ {
+			ep := &ddlEvents[i]
+			if ep.FinishedTs > endTs {
+				break
 			}
+			events = append(events, ep)
 		}
 		events = append(events, pevent.ResolvedEvent{
 			DispatcherID: dispatcherID,
@@ -168,8 +170,10 @@ func (s *eventScanner) Scan(
 		}
 	}()
 
-	var dml *pevent.DMLEvent
+	var batchDML *pevent.BatchDMLEvent
+	var lastTableInfoUpdateTs uint64
 	dmlCount := 0
+	tableID := dataRange.Span.TableID
 	for {
 		select {
 		case <-ctx.Done():
@@ -178,13 +182,18 @@ func (s *eventScanner) Scan(
 		default:
 		}
 
+		// If the dispatcher is not running, we don't scan any events.
+		if !dispatcherStat.isRunning.Load() {
+			return nil, false, nil
+		}
+
 		e, isNewTxn, err := iter.Next()
 		if err != nil {
 			log.Panic("read events failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 		}
 
 		if e == nil {
-			appendDML(dml)
+			appendDML(batchDML)
 			appendDDLs(dataRange.EndTs)
 			return events, false, nil
 		}
@@ -194,13 +203,11 @@ func (s *eventScanner) Scan(
 		elapsed := time.Since(startTime)
 
 		if isNewTxn {
-			appendDML(dml)
-
 			if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs && dmlCount > 0 {
+				appendDML(batchDML)
 				appendDDLs(lastCommitTs)
 				return events, true, nil
 			}
-			tableID := dataRange.Span.TableID
 			tableInfo, err := s.schemaStore.GetTableInfo(tableID, e.CRTs-1)
 			if err != nil {
 				if dispatcherStat.isRemoved.Load() {
@@ -218,11 +225,20 @@ func (s *eventScanner) Scan(
 				}
 				log.Panic("get table info failed, unknown reason", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 			}
-			dml = pevent.NewDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
+			hasDDL := batchDML != nil && len(ddlEvents) > 0 && e.CRTs > ddlEvents[0].FinishedTs
+			// updateTs may be less than the previous updateTs
+			if tableInfo.UpdateTS() != lastTableInfoUpdateTs || hasDDL {
+				appendDML(batchDML)
+				lastTableInfoUpdateTs = tableInfo.UpdateTS()
+				batchDML = new(pevent.BatchDMLEvent)
+			}
+			batchDML.AppendDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
+
+			lastCommitTs = batchDML.GetCommitTs()
 			dmlCount++
 		}
 
-		if err = dml.AppendRow(e, s.mounter.DecodeToChunk); err != nil {
+		if err = batchDML.AppendRow(e, s.mounter.DecodeToChunk); err != nil {
 			log.Panic("append row failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
 		}
 	}

@@ -25,7 +25,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
 	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,10 +47,6 @@ func (s *mockSink) AddCheckpointTs(_ uint64) {
 }
 
 func (s *mockSink) SetTableSchemaStore(_ *sinkutil.TableSchemaStore) {
-}
-
-func (s *mockSink) GetStartTsList(_ []int64, startTsList []int64, _ bool) ([]int64, []bool, error) {
-	return startTsList, make([]bool, len(startTsList)), nil
 }
 
 func (s *mockSink) Close(bool) {}
@@ -87,9 +82,9 @@ func getCompleteTableSpanWithTableID(tableID int64) *heartbeatpb.TableSpan {
 	tableSpan := &heartbeatpb.TableSpan{
 		TableID: tableID,
 	}
-	startKey, endKey := spanz.GetTableRange(tableSpan.TableID)
-	tableSpan.StartKey = spanz.ToComparableKey(startKey)
-	tableSpan.EndKey = spanz.ToComparableKey(endKey)
+	startKey, endKey := common.GetTableRange(tableSpan.TableID)
+	tableSpan.StartKey = common.ToComparableKey(startKey)
+	tableSpan.EndKey = common.ToComparableKey(endKey)
 	return tableSpan
 }
 
@@ -152,7 +147,6 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	sink := newMockSink(common.MysqlSinkType)
 	tableSpan := getCompleteTableSpan()
 	dispatcher := newDispatcherForTest(sink, tableSpan)
-	dispatcher.SetInitialTableInfo(tableInfo)
 	require.Equal(t, uint64(0), dispatcher.GetCheckpointTs())
 	require.Equal(t, uint64(0), dispatcher.GetResolvedTs())
 	tableProgress := dispatcher.tableProgress
@@ -493,7 +487,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	count = 0
 
-	ddlTableSpan := heartbeatpb.DDLSpan
+	ddlTableSpan := common.DDLSpan
 	sink := newMockSink(common.MysqlSinkType)
 	tableTriggerEventDispatcher := newDispatcherForTest(sink, ddlTableSpan)
 	require.Nil(t, tableTriggerEventDispatcher.tableSchemaStore)
@@ -573,7 +567,7 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	count = 0
 
-	ddlTableSpan := heartbeatpb.DDLSpan
+	ddlTableSpan := common.DDLSpan
 	sink := newMockSink(common.KafkaSinkType)
 	tableTriggerEventDispatcher := newDispatcherForTest(sink, ddlTableSpan)
 	require.Nil(t, tableTriggerEventDispatcher.tableSchemaStore)
@@ -664,13 +658,9 @@ func TestDispatcherClose(t *testing.T) {
 	dmlEvent.CommitTs = 2
 	dmlEvent.Length = 1
 
-	tableInfo := dmlEvent.TableInfo
-
 	{
 		sink := newMockSink(common.MysqlSinkType)
 		dispatcher := newDispatcherForTest(sink, getCompleteTableSpan())
-
-		dispatcher.SetInitialTableInfo(tableInfo)
 
 		// ===== dml event =====
 		nodeID := node.NewID()
@@ -692,8 +682,6 @@ func TestDispatcherClose(t *testing.T) {
 	{
 		sink := newMockSink(common.MysqlSinkType)
 		dispatcher := newDispatcherForTest(sink, getCompleteTableSpan())
-
-		dispatcher.SetInitialTableInfo(tableInfo)
 
 		// ===== dml event =====
 		nodeID := node.NewID()

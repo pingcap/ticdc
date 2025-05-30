@@ -14,7 +14,10 @@
 package maintainer
 
 import (
+	"bytes"
 	"context"
+	"math/rand"
+	"sort"
 	"time"
 
 	"github.com/pingcap/log"
@@ -35,7 +38,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -52,7 +54,6 @@ type Controller struct {
 	replicationDB       *replica.ReplicationDB
 	messageCenter       messaging.MessageCenter
 	nodeManager         *watcher.NodeManager
-	pdClock             pdutil.Clock
 
 	splitter               *split.Splitter
 	enableTableAcrossNodes bool
@@ -71,7 +72,6 @@ type Controller struct {
 func NewController(changefeedID common.ChangeFeedID,
 	checkpointTs uint64,
 	pdAPIClient pdutil.PDAPIClient,
-	pdClock pdutil.Clock,
 	regionCache split.RegionCache,
 	taskPool threadpool.ThreadPool,
 	cfConfig *config.ReplicaConfig,
@@ -112,7 +112,6 @@ func NewController(changefeedID common.ChangeFeedID,
 		nodeManager:            nodeManager,
 		taskPool:               taskPool,
 		cfConfig:               cfConfig,
-		pdClock:                pdClock,
 		splitter:               splitter,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 	}
@@ -179,7 +178,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 			zap.Int64("table", table.TableID))
 		return
 	}
-	span := spanz.TableIDToComparableSpan(table.TableID)
+	span := common.TableIDToComparableSpan(table.TableID)
 	tableSpan := &heartbeatpb.TableSpan{
 		TableID:  table.TableID,
 		StartKey: span.StartKey,
@@ -328,7 +327,6 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 	return replica.NewWorkingSpanReplication(
 		c.changefeedID,
 		common.NewDispatcherIDFromPB(spanInfo.ID),
-		c.pdClock,
 		spanInfo.SchemaID,
 		spanInfo.Span,
 		status,
@@ -343,7 +341,7 @@ func (c *Controller) addToWorkingTaskMap(
 ) {
 	tableSpans, ok := workingTaskMap[span.TableID]
 	if !ok {
-		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](heartbeatpb.LessTableSpan)
+		tableSpans = utils.NewBtreeMap[*heartbeatpb.TableSpan, *replica.SpanReplication](common.LessTableSpan)
 		workingTaskMap[span.TableID] = tableSpans
 	}
 	tableSpans.ReplaceOrInsert(span, spanReplication)
@@ -384,7 +382,7 @@ func (c *Controller) processTableSpans(
 	// Add new table if not working
 	if isTableWorking {
 		// Handle existing table spans
-		span := spanz.TableIDToComparableSpan(table.TableID)
+		span := common.TableIDToComparableSpan(table.TableID)
 		tableSpan := &heartbeatpb.TableSpan{
 			TableID:  table.TableID,
 			StartKey: span.StartKey,
@@ -517,8 +515,7 @@ func (c *Controller) addWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 func (c *Controller) addNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID,
-			dispatcherID, c.pdClock, schemaID, span, startTs)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs)
 		c.replicationDB.AddAbsentReplicaSet(replicaSet)
 	}
 }
@@ -589,7 +586,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID) error {
 	}
 
 	if !op.IsFinished() {
-		return apperror.ErrMoveTableTimeout.GenWithStackByArgs("move table operator is timeout")
+		return apperror.ErrTimeout.GenWithStackByArgs("move table operator is timeout")
 	}
 
 	return nil
@@ -640,7 +637,118 @@ func (c *Controller) moveSplitTable(tableId int64, targetNode node.ID) error {
 		log.Info("wait for move split table operator finished", zap.Int("count", count))
 	}
 
-	return apperror.ErrMoveTableTimeout.GenWithStackByArgs("move table operator is timeout")
+	return apperror.ErrTimeout.GenWithStackByArgs("move split table operator is timeout")
+}
+
+// only for test
+// SplitTableByRegionCount split table based on region count
+// it can split the table whether the table have one dispatcher or multiple dispatchers
+func (c *Controller) SplitTableByRegionCount(tableID int64) error {
+	if !c.replicationDB.IsTableExists(tableID) {
+		// the table is not exist in this node
+		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
+	}
+
+	if tableID == 0 {
+		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID)
+	}
+
+	replications := c.replicationDB.GetTasksByTableID(tableID)
+
+	span := common.TableIDToComparableSpan(tableID)
+	wholeSpan := &heartbeatpb.TableSpan{
+		TableID:  span.TableID,
+		StartKey: span.StartKey,
+		EndKey:   span.EndKey,
+	}
+	splitTableSpans := c.splitter.SplitSpansByRegion(context.Background(), wholeSpan)
+
+	if len(splitTableSpans) == len(replications) {
+		log.Info("Split Table is finished; There is no need to do split", zap.Any("tableID", tableID))
+		return nil
+	}
+
+	randomIdx := rand.Intn(len(replications))
+	primaryID := replications[randomIdx].ID
+	primaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[randomIdx], replications, splitTableSpans, nil)
+	for _, replicaSet := range replications {
+		var op *operator.MergeSplitDispatcherOperator
+		if replicaSet.ID == primaryID {
+			op = primaryOp
+		} else {
+			op = operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replicaSet, nil, nil, primaryOp.GetOnFinished())
+		}
+		c.operatorController.AddOperator(op)
+	}
+
+	count := 0
+	maxTry := 30
+	for count < maxTry {
+		if primaryOp.IsFinished() {
+			return nil
+		}
+
+		time.Sleep(1 * time.Second)
+		count += 1
+		log.Info("wait for split table operator finished", zap.Int("count", count))
+	}
+
+	return apperror.ErrTimeout.GenWithStackByArgs("split table operator is timeout")
+}
+
+// only for test
+// MergeTable merge two nearby dispatchers in this table into one dispatcher,
+// so after merge table, the table may also have multiple dispatchers
+func (c *Controller) MergeTable(tableID int64) error {
+	if !c.replicationDB.IsTableExists(tableID) {
+		// the table is not exist in this node
+		return apperror.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
+	}
+
+	if tableID == 0 {
+		return apperror.ErrTableNotSupportMove.GenWithStackByArgs("tableID", tableID)
+	}
+
+	replications := c.replicationDB.GetTasksByTableID(tableID)
+
+	if len(replications) == 1 {
+		log.Info("Merge Table is finished; There is only one replication for this table, so no need to do merge", zap.Any("tableID", tableID))
+		return nil
+	}
+
+	// sort by startKey
+	sort.Slice(replications, func(i, j int) bool {
+		return bytes.Compare(replications[i].Span.StartKey, replications[j].Span.StartKey) < 0
+	})
+
+	// choose the first two replication to merge a new replication
+	newSpan := &heartbeatpb.TableSpan{
+		TableID:  replications[0].Span.TableID,
+		StartKey: replications[0].Span.StartKey,
+		EndKey:   replications[1].Span.EndKey,
+	}
+
+	mergeReplication := replications[:2]
+
+	primaryID := replications[0].ID
+	primaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[0], mergeReplication, []*heartbeatpb.TableSpan{newSpan}, nil)
+	secondaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[1], nil, nil, primaryOp.GetOnFinished())
+	c.operatorController.AddOperator(primaryOp)
+	c.operatorController.AddOperator(secondaryOp)
+
+	count := 0
+	maxTry := 30
+	for count < maxTry {
+		if primaryOp.IsFinished() {
+			return nil
+		}
+
+		time.Sleep(1 * time.Second)
+		count += 1
+		log.Info("wait for merge table table operator finished", zap.Int("count", count))
+	}
+
+	return apperror.ErrTimeout.GenWithStackByArgs("merge table operator is timeout")
 }
 
 func (c *Controller) isDDLDispatcher(dispatcherID common.DispatcherID) bool {

@@ -253,7 +253,7 @@ func (a *avroMarshaller) newDMLMessageMap(
 	dmlMessagePayload["version"] = defaultVersion
 	dmlMessagePayload["database"] = event.TableInfo.GetSchemaName()
 	dmlMessagePayload["table"] = event.TableInfo.GetTableName()
-	dmlMessagePayload["tableID"] = event.TableInfo.TableName.TableID
+	dmlMessagePayload["tableID"] = event.GetTableID()
 	dmlMessagePayload["commitTs"] = int64(event.CommitTs)
 	dmlMessagePayload["buildTs"] = time.Now().UnixMilli()
 	dmlMessagePayload["schemaVersion"] = int64(event.TableInfo.UpdateTS())

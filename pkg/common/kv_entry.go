@@ -135,13 +135,17 @@ func (v *RawKVEntry) Decode(data []byte) error {
 		return fmt.Errorf("insufficient data for variable-length fields")
 	}
 
-	v.Key = data[offset : offset+int(v.KeyLen)]
+	// the `data` slice may be changed, so we copy it here
+	v.Key = make([]byte, v.KeyLen)
+	copy(v.Key, data[offset:offset+int(v.KeyLen)])
 	offset += int(v.KeyLen)
 
-	v.Value = data[offset : offset+int(v.ValueLen)]
+	v.Value = make([]byte, v.ValueLen)
+	copy(v.Value, data[offset:offset+int(v.ValueLen)])
 	offset += int(v.ValueLen)
 
-	v.OldValue = data[offset : offset+int(v.OldValueLen)]
+	v.OldValue = make([]byte, v.OldValueLen)
+	copy(v.OldValue, data[offset:offset+int(v.OldValueLen)])
 
 	return nil
 }

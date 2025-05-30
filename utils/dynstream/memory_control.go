@@ -150,7 +150,7 @@ func (as *areaMemStat[A, P, T, D, H]) updatePathPauseState(path *pathInfo[A, P, 
 
 		log.Info("send path feedback", zap.Any("area", as.area),
 			zap.Any("path", path.path), zap.Stringer("feedbackType", feedbackType),
-			zap.Float64("memoryUsageRatio", memoryUsageRatio), zap.String("component", as.settings.Load().component))
+			zap.Float64("pathMemoryUsageRatio", memoryUsageRatio), zap.String("component", as.settings.Load().component))
 	}
 
 	failpoint.Inject("PausePath", func() {
@@ -473,7 +473,8 @@ func calculateThresholds(pathCount int64, areaMemoryUsageRatio float64) (pauseLi
 		{0.8, 0.1, 0.05},  // area usage <= 80%
 		{1.0, 0.05, 0.01}, // area usage <= 100%
 		// Default maxPendingSize is 1024MB, so the default lowest pause limit is 10 MB.
-		{1.2, 0.01, 0.005}, // area usage > 100%
+		{1.2, 0.01, 0.005},  // area usage > 100%
+		{1.5, 0.005, 0.001}, // area usage > 150%, set the lowest pause limit to 1 MB.
 	}
 
 	// find applicable threshold

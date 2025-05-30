@@ -53,8 +53,10 @@ type BlockEvent interface {
 }
 
 const (
-	// TEvent is the event type of a transaction.
+	// DMLEvent is the event type of a transaction.
 	TypeDMLEvent = iota
+	// BatchDMLEvent is the event type of a batch transactions.
+	TypeBatchDMLEvent
 	// DDLEvent is the event type of a DDL.
 	TypeDDLEvent
 	// ResolvedEvent is the event type of a resolvedTs.

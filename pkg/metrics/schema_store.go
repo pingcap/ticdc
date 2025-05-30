@@ -45,7 +45,7 @@ var (
 			Subsystem: "schema_store",
 			Name:      "get_table_info_duration",
 			Help:      "The duration of GetTableInfo requests",
-			Buckets:   prometheus.DefBuckets,
+			Buckets:   prometheus.ExponentialBuckets(0.00001, 2.0, 28), // 10us to 1.5h
 		})
 )
 

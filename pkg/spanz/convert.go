@@ -20,7 +20,7 @@ import (
 	"unsafe"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/tiflow/cdc/processor/tablepb"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"go.uber.org/zap"
 )
 
@@ -35,57 +35,34 @@ func HexKey(key []byte) string {
 }
 
 // ArrayToSpan converts an array of TableID to an array of Span.
-func ArrayToSpan(in []tablepb.TableID) []tablepb.Span {
-	out := make([]tablepb.Span, 0, len(in))
-	for _, tableID := range in {
-		out = append(out, tablepb.Span{TableID: tableID})
+func ArrayToSpan(in []heartbeatpb.Table) []heartbeatpb.TableSpan {
+	out := make([]heartbeatpb.TableSpan, 0, len(in))
+	for _, table := range in {
+		out = append(out, heartbeatpb.TableSpan{TableID: table.GetTableID()})
 	}
 	return out
 }
 
-// TableIDToComparableSpan converts a TableID to a Span whose
-// StartKey and EndKey are encoded in Comparable format.
-func TableIDToComparableSpan(tableID tablepb.TableID) tablepb.Span {
-	startKey, endKey := GetTableRange(tableID)
-	return tablepb.Span{
-		TableID:  tableID,
-		StartKey: ToComparableKey(startKey),
-		EndKey:   ToComparableKey(endKey),
-	}
-}
-
-// TableIDToComparableRange returns a range of a table,
-// start and end are encoded in Comparable format.
-func TableIDToComparableRange(tableID tablepb.TableID) (start, end tablepb.Span) {
-	tableSpan := TableIDToComparableSpan(tableID)
-	start = tableSpan
-	start.EndKey = nil
-	end = tableSpan
-	end.StartKey = tableSpan.EndKey
-	end.EndKey = nil
-	return
-}
-
-type sortableSpans []tablepb.Span
+type sortableSpans []heartbeatpb.TableSpan
 
 func (a sortableSpans) Len() int           { return len(a) }
 func (a sortableSpans) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a sortableSpans) Less(i, j int) bool { return a[i].Less(&a[j]) }
 
 // Sort sorts a slice of Span.
-func Sort(spans []tablepb.Span) {
+func Sort(spans []heartbeatpb.TableSpan) {
 	sort.Sort(sortableSpans(spans))
 }
 
 // hashableSpan is a hashable span, which can be used as a map key.
 type hashableSpan struct {
-	TableID  tablepb.TableID
+	TableID  int64
 	StartKey string
 	EndKey   string
 }
 
 // toHashableSpan converts a Span to a hashable span.
-func toHashableSpan(span tablepb.Span) hashableSpan {
+func toHashableSpan(span heartbeatpb.TableSpan) hashableSpan {
 	return hashableSpan{
 		TableID:  span.TableID,
 		StartKey: unsafeBytesToString(span.StartKey),
@@ -94,8 +71,8 @@ func toHashableSpan(span tablepb.Span) hashableSpan {
 }
 
 // toSpan converts to Span.
-func (h hashableSpan) toSpan() tablepb.Span {
-	return tablepb.Span{
+func (h hashableSpan) toSpan() heartbeatpb.TableSpan {
+	return heartbeatpb.TableSpan{
 		TableID:  h.TableID,
 		StartKey: unsafeStringToBytes(h.StartKey),
 		EndKey:   unsafeStringToBytes(h.EndKey),

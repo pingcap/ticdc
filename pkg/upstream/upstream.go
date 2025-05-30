@@ -63,7 +63,7 @@ type Upstream struct {
 	PdEndpoints    []string
 	SecurityConfig *security.Credential
 	PDClient       pd.Client
-	etcdCli        *clientV3.Client
+	etcdCli        etcd.Client
 	session        *concurrency.Session
 
 	KVStorage   tidbkv.Storage
@@ -122,7 +122,7 @@ func CreateTiStore(urls string, credential *security.Credential) (tidbkv.Storage
 }
 
 // init initializes the upstream
-func initUpstream(ctx context.Context, up *Upstream) error {
+func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error {
 	ctx, up.cancel = context.WithCancel(ctx)
 	grpcTLSOption, err := up.SecurityConfig.ToGRPCDialOption()
 	if err != nil {
@@ -159,7 +159,7 @@ func initUpstream(ctx context.Context, up *Upstream) error {
 		if err != nil {
 			return errors.Trace(err)
 		}
-		up.etcdCli = etcdCli
+		up.etcdCli = etcd.NewWrappedClient(etcdCli)
 	}
 	clusterID := up.PDClient.GetClusterID(ctx)
 	if up.ID != 0 && up.ID != clusterID {
@@ -198,6 +198,11 @@ func initUpstream(ctx context.Context, up *Upstream) error {
 			zap.Error(err),
 			zap.Uint64("upstreamID", up.ID),
 			zap.Strings("upstreamEndpoints", up.PdEndpoints))
+	}
+
+	err = up.registerTopologyInfo(ctx, cfg)
+	if err != nil {
+		return errors.Trace(err)
 	}
 
 	up.wg.Add(1)
@@ -328,4 +333,28 @@ func (up *Upstream) shouldClose() bool {
 	}
 
 	return false
+}
+
+// Put ticdc topology information to etcd, the prefix is
+// "/topology/ticdc/{clusterID}/{ip:port}"
+// tidb-dashboard will use this information to show the topology
+// information of the ticdc cluster.
+func (up *Upstream) registerTopologyInfo(ctx context.Context, cfg *NodeTopologyCfg) error {
+	lease, err := up.etcdCli.Grant(ctx, cfg.SessionTTL)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	up.session, err = up.etcdCli.NewSession(concurrency.WithLease(lease.ID))
+	if err != nil {
+		return errors.Trace(err)
+	}
+	// register capture info to upstream pd
+	key := fmt.Sprintf(topologyTiCDC, cfg.GCServiceID, cfg.AdvertiseAddr)
+	value, err := cfg.Info.Marshal()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	_, err = up.etcdCli.Put(ctx, key, string(value), clientV3.WithLease(up.session.Lease()))
+	return errors.WrapError(errors.ErrPDEtcdAPIError, err)
 }

@@ -182,91 +182,106 @@ func TestEncodeDMLEnableChecksum(t *testing.T) {
 	// require.Nil(t, decodedRow)
 }
 
-// FIXME: support partition table
-// func TestE2EPartitionTable(t *testing.T) {
-// 	helper := commonEvent.NewEventTestHelper(t)
-// 	defer helper.Close()
+func TestE2EPartitionTable(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
 
-// 	helper.Tk().MustExec("use test")
+	helper.Tk().MustExec("use test")
 
-// 	createPartitionTableJob := helper.DDL2Job(`create table test.t(a int primary key, b int) partition by range (a) (
-// 		partition p0 values less than (10),
-// 		partition p1 values less than (20),
-// 		partition p2 values less than MAXVALUE)`)
-// 	tableInfo := helper.GetTableInfo(createPartitionTableJob)
-// 	createPartitionTableDDL := &commonEvent.DDLEvent{
-// 		SchemaID:   createPartitionTableJob.SchemaID,
-// 		TableID:    createPartitionTableJob.TableID,
-// 		Query:      createPartitionTableJob.Query,
-// 		TableInfo:  tableInfo,
-// 		FinishedTs: createPartitionTableJob.BinlogInfo.FinishedTS,
-// 	}
+	createPartitionTableDDL := helper.DDL2Event(`create table test.t(a int primary key, b int) partition by range (a) (
+		partition p0 values less than (10),
+		partition p1 values less than (20),
+		partition p2 values less than MAXVALUE)`)
 
-// 	insertEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 1)`)
-// 	require.NotNil(t, insertEvent)
+	insertEvent := helper.DML2Event4PartitionTable("test", "t", "p0", `insert into test.t values (1, 1)`)
+	require.NotNil(t, insertEvent)
 
-// 	insertEvent1 := helper.DML2Event("test", "t", `insert into test.t values (11, 11)`)
-// 	require.NotNil(t, insertEvent1)
+	insertEvent1 := helper.DML2Event4PartitionTable("test", "t", "p1", `insert into test.t values (11, 11)`)
+	require.NotNil(t, insertEvent1)
 
-// 	insertEvent2 := helper.DML2Event("test", "t", `insert into test.t values (21, 21)`)
-// 	require.NotNil(t, insertEvent2)
+	insertEvent2 := helper.DML2Event4PartitionTable("test", "t", "p2", `insert into test.t values (21, 21)`)
+	require.NotNil(t, insertEvent2)
 
-// 	events := []*commonEvent.DMLEvent{insertEvent, insertEvent1, insertEvent2}
+	events := []*commonEvent.DMLEvent{
+		insertEvent,
+		insertEvent1,
+		insertEvent2,
+	}
 
-// 	ctx := context.Background()
-// 	codecConfig := common.NewConfig(config.ProtocolSimple)
+	dropTableDDL := helper.DDL2Event("drop table if exists test.t")
 
-// 	for _, format := range []common.EncodingFormatType{
-// 		common.EncodingFormatAvro,
-// 		common.EncodingFormatJSON,
-// 	} {
-// 		codecConfig.EncodingFormat = format
-// 		enc, err := NewEncoder(ctx, codecConfig)
-// 		require.NoError(t, err)
-// 		Decoder, err := NewDecoder(ctx, codecConfig, nil)
-// 		require.NoError(t, err)
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolSimple)
+	for _, format := range []common.EncodingFormatType{
+		common.EncodingFormatJSON,
+		common.EncodingFormatAvro,
+	} {
+		codecConfig.EncodingFormat = format
+		enc, err := NewEncoder(ctx, codecConfig)
+		require.NoError(t, err)
+		dec, err := NewDecoder(ctx, codecConfig, nil)
+		require.NoError(t, err)
 
-// 		message, err := enc.EncodeDDLEvent(createPartitionTableDDL)
-// 		require.NoError(t, err)
+		m, err := enc.EncodeDDLEvent(createPartitionTableDDL)
+		require.NoError(t, err)
 
-// 		err = Decoder.AddKeyValue(message.Key, message.Value)
-// 		require.NoError(t, err)
-// 		tp, hasNext, err := Decoder.HasNext()
-// 		require.NoError(t, err)
-// 		require.True(t, hasNext)
-// 		require.Equal(t, common.MessageTypeDDL, tp)
+		dec.AddKeyValue(m.Key, m.Value)
+		require.NoError(t, err)
+		tp, hasNext := dec.HasNext()
+		require.True(t, hasNext)
+		require.Equal(t, common.MessageTypeDDL, tp)
 
-// 		decodedDDL, err := Decoder.NextDDLEvent()
-// 		require.NoError(t, err)
-// 		require.NotNil(t, decodedDDL)
+		decodedDDL := dec.NextDDLEvent()
+		require.NoError(t, err)
+		require.NotNil(t, decodedDDL)
+		require.Equal(t, decodedDDL.TableID, createPartitionTableDDL.TableID, format)
 
-// 		for _, event := range events {
-// 			row, ok := event.GetNextRow()
-// 			require.True(t, ok)
+		physicalTableID := make([]int64, 0, len(events))
+		for _, e := range events {
+			row, ok := e.GetNextRow()
+			require.True(t, ok)
 
-// 			err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
-// 				TableInfo:      tableInfo,
-// 				Event:          row,
-// 				CommitTs:       event.CommitTs,
-// 				ColumnSelector: columnselector.NewDefaultColumnSelector(),
-// 			})
-// 			require.NoError(t, err)
-// 			message := enc.Build()[0]
+			err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
+				TableInfo:       e.TableInfo,
+				PhysicalTableID: e.GetTableID(),
+				Event:           row,
+				CommitTs:        e.CommitTs,
+				ColumnSelector:  columnselector.NewDefaultColumnSelector(),
+			})
+			require.NoError(t, err)
+			m = enc.Build()[0]
 
-// 			err = Decoder.AddKeyValue(message.Key, message.Value)
-// 			require.NoError(t, err)
-// 			tp, hasNext, err := Decoder.HasNext()
-// 			require.NoError(t, err)
-// 			require.True(t, hasNext)
-// 			require.Equal(t, common.MessageTypeRow, tp)
+			dec.AddKeyValue(m.Key, m.Value)
+			tp, hasNext = dec.HasNext()
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeRow, tp)
 
-// 			decodedEvent, err := Decoder.NextDMLEvent()
-// 			require.NoError(t, err)
-// 			// table id should be set to the partition table id, the PhysicalTableID
-// 			require.Equal(t, decodedEvent.GetTableID(), event.GetTableID())
-// 		}
-// 	}
-// }
+			decodedEvent := dec.NextDMLEvent()
+			// table id should be set to the partition table id, the PhysicalTableID
+			require.Equal(t, decodedEvent.GetTableID(), e.GetTableID())
+
+			physicalTableID = append(physicalTableID, e.GetTableID())
+			e.Rewind()
+		}
+
+		require.NotEqual(t, physicalTableID[0], physicalTableID[1])
+		require.NotEqual(t, physicalTableID[0], physicalTableID[2])
+		require.NotEqual(t, physicalTableID[1], physicalTableID[2])
+
+		m, err = enc.EncodeDDLEvent(dropTableDDL)
+		require.NoError(t, err)
+
+		dec.AddKeyValue(m.Key, m.Value)
+		tp, hasNext = dec.HasNext()
+		require.True(t, hasNext)
+		require.Equal(t, common.MessageTypeDDL, tp)
+
+		decodedDDL = dec.NextDDLEvent()
+		for _, item := range physicalTableID {
+			require.Contains(t, decodedDDL.GetBlockedTables().TableIDs, item)
+		}
+	}
+}
 
 func TestEncodeDDLSequence(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
@@ -315,6 +330,8 @@ func TestEncodeDDLSequence(t *testing.T) {
 	helper.Tk().MustExec("set @@tidb_allow_remove_auto_inc = 1")
 	renameColumnDDLEvent := helper.DDL2Event("ALTER TABLE TBL2 CHANGE COLUMN `id` `id2` INT")
 
+	_ = helper.DDL2Event("CREATE TABLE TBL1 LIKE TBL2")
+
 	partitionTableDDLEvent := helper.DDL2Event("ALTER TABLE TBL2 PARTITION BY RANGE (id2) (PARTITION p0 VALUES LESS THAN (10), PARTITION p1 VALUES LESS THAN (20))")
 
 	addPartitionDDLEvent := helper.DDL2Event("ALTER TABLE TBL2 ADD PARTITION (PARTITION p2 VALUES LESS THAN (30))")
@@ -324,6 +341,8 @@ func TestEncodeDDLSequence(t *testing.T) {
 	truncatePartitionDDLevent := helper.DDL2Event("ALTER TABLE TBL2 TRUNCATE PARTITION p1")
 
 	reorganizePartitionDDLEvent := helper.DDL2Event("ALTER TABLE TBL2 REORGANIZE PARTITION p1 INTO (PARTITION p3 VALUES LESS THAN (40))")
+
+	exchangePartitionDDLEvent := helper.DDL2Event("ALTER TABLE TBL2 EXCHANGE PARTITION p0 WITH TABLE TBL1")
 
 	removePartitionDDLEvent := helper.DDL2Event("ALTER TABLE TBL2 REMOVE PARTITIONING")
 
@@ -699,6 +718,16 @@ func TestEncodeDDLSequence(t *testing.T) {
 			event = dec.NextDDLEvent()
 			require.Equal(t, 1, len(event.TableInfo.GetIndices()))
 			require.Equal(t, 4, len(event.TableInfo.GetColumns()))
+
+			m, err = enc.EncodeDDLEvent(exchangePartitionDDLEvent)
+			require.NoError(t, err)
+
+			dec.AddKeyValue(m.Key, m.Value)
+			_, _ = dec.HasNext()
+			require.Equal(t, DDLTypeAlter, dec.msg.Type)
+
+			decodedDDL := dec.NextDDLEvent()
+			require.NotNil(t, decodedDDL.BlockedTables)
 
 			m, err = enc.EncodeDDLEvent(removePartitionDDLEvent)
 			require.NoError(t, err)
@@ -1123,94 +1152,91 @@ func TestEncoderOtherTypes(t *testing.T) {
 	}
 }
 
-// FIXME: support partition table
-// func TestE2EPartitionTableDMLBeforeDDL(t *testing.T) {
-// 	helper := commonEvent.NewEventTestHelper(t)
-// 	defer helper.Close()
+func TestE2EPartitionTableDMLBeforeDDL(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
 
-// 	helper.Tk().MustExec("use test")
+	helper.Tk().MustExec("use test")
 
-// 	createPartitionTableDDL := helper.DDL2Event(`create table test.t(a int primary key, b int) partition by range (a) (
-// 		partition p0 values less than (10),
-// 		partition p1 values less than (20),
-// 		partition p2 values less than MAXVALUE)`)
-// 	require.NotNil(t, createPartitionTableDDL)
+	createPartitionTableDDL := helper.DDL2Event(`create table test.t(a int primary key, b int) partition by range (a) (
+		partition p0 values less than (10),
+		partition p1 values less than (20),
+		partition p2 values less than MAXVALUE)`)
+	require.NotNil(t, createPartitionTableDDL)
 
-// 	insertEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 1)`)
-// 	require.NotNil(t, insertEvent)
+	insertEvent := helper.DML2Event4PartitionTable("test", "t", "p0", `insert into test.t values (1, 1)`)
+	require.NotNil(t, insertEvent)
 
-// 	insertEvent1 := helper.DML2Event("test", "t", `insert into test.t values (11, 11)`)
-// 	require.NotNil(t, insertEvent1)
+	insertEvent1 := helper.DML2Event4PartitionTable("test", "t", "p1", `insert into test.t values (11, 11)`)
+	require.NotNil(t, insertEvent1)
 
-// 	insertEvent2 := helper.DML2Event("test", "t", `insert into test.t values (21, 21)`)
-// 	require.NotNil(t, insertEvent2)
+	insertEvent2 := helper.DML2Event4PartitionTable("test", "t", "p2", `insert into test.t values (21, 21)`)
+	require.NotNil(t, insertEvent2)
 
-// 	events := []*commonEvent.DMLEvent{insertEvent, insertEvent1, insertEvent2}
+	events := []*commonEvent.DMLEvent{insertEvent, insertEvent1, insertEvent2}
 
-// 	ctx := context.Background()
-// 	codecConfig := common.NewConfig(config.ProtocolSimple)
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolSimple)
 
-// 	for _, format := range []common.EncodingFormatType{
-// 		common.EncodingFormatAvro,
-// 		common.EncodingFormatJSON,
-// 	} {
-// 		codecConfig.EncodingFormat = format
-// 		enc, err := NewEncoder(ctx, codecConfig)
-// 		require.NoError(t, err)
+	for _, format := range []common.EncodingFormatType{
+		common.EncodingFormatJSON,
+		common.EncodingFormatAvro,
+	} {
+		codecConfig.EncodingFormat = format
+		enc, err := NewEncoder(ctx, codecConfig)
+		require.NoError(t, err)
 
-// 		Decoder, err := NewDecoder(ctx, codecConfig, nil)
-// 		require.NoError(t, err)
+		dec, err := NewDecoder(ctx, codecConfig, nil)
+		require.NoError(t, err)
 
-// 		codecConfig.EncodingFormat = format
-// 		for _, event := range events {
-// 			insertEvent.Rewind()
-// 			insertEvent1.Rewind()
-// 			insertEvent2.Rewind()
-// 			row, ok := event.GetNextRow()
-// 			require.True(t, ok)
-// 			err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
-// 				TableInfo:      event.TableInfo,
-// 				Event:          row,
-// 				CommitTs:       event.CommitTs,
-// 				ColumnSelector: columnselector.NewDefaultColumnSelector(),
-// 			})
-// 			require.NoError(t, err)
-// 			message := enc.Build()[0]
+		columnSelector := columnselector.NewDefaultColumnSelector()
+		codecConfig.EncodingFormat = format
+		for _, e := range events {
+			row, ok := e.GetNextRow()
+			require.True(t, ok)
 
-// 			err = Decoder.AddKeyValue(message.Key, message.Value)
-// 			require.NoError(t, err)
-// 			tp, hasNext, err := Decoder.HasNext()
-// 			require.NoError(t, err)
-// 			require.True(t, hasNext)
-// 			require.Equal(t, common.MessageTypeRow, tp)
+			rowEvent := &commonEvent.RowEvent{
+				TableInfo:       e.TableInfo,
+				PhysicalTableID: e.PhysicalTableID,
+				Event:           row,
+				CommitTs:        e.CommitTs,
+				ColumnSelector:  columnSelector,
+			}
 
-// 			decodedEvent, err := Decoder.NextDMLEvent()
-// 			require.NoError(t, err)
-// 			require.Nil(t, decodedEvent)
-// 		}
+			err = enc.AppendRowChangedEvent(ctx, "", rowEvent)
+			require.NoError(t, err)
+			m := enc.Build()[0]
 
-// 		message, err := enc.EncodeDDLEvent(createPartitionTableDDL)
-// 		require.NoError(t, err)
+			dec.AddKeyValue(m.Key, m.Value)
+			tp, hasNext := dec.HasNext()
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeRow, tp)
 
-// 		err = Decoder.AddKeyValue(message.Key, message.Value)
-// 		require.NoError(t, err)
-// 		tp, hasNext, err := Decoder.HasNext()
-// 		require.NoError(t, err)
-// 		require.True(t, hasNext)
-// 		require.Equal(t, common.MessageTypeDDL, tp)
+			decodedEvent := dec.NextDMLEvent()
+			require.Nil(t, decodedEvent)
 
-// 		decodedDDL, err := Decoder.NextDDLEvent()
-// 		require.NoError(t, err)
-// 		require.NotNil(t, decodedDDL)
+			e.Rewind()
+		}
 
-// 		cachedEvents := Decoder.GetCachedEvents()
-// 		for idx, decodedRow := range cachedEvents {
-// 			require.NotNil(t, decodedRow)
-// 			require.NotNil(t, decodedRow.TableInfo)
-// 			require.Equal(t, decodedRow.GetTableID(), events[idx].GetTableID())
-// 		}
-// 	}
-// }
+		m, err := enc.EncodeDDLEvent(createPartitionTableDDL)
+		require.NoError(t, err)
+
+		dec.AddKeyValue(m.Key, m.Value)
+		tp, hasNext := dec.HasNext()
+		require.True(t, hasNext)
+		require.Equal(t, common.MessageTypeDDL, tp)
+
+		decodedDDL := dec.NextDDLEvent()
+		require.NotNil(t, decodedDDL)
+
+		cachedEvents := dec.(*Decoder).GetCachedEvents()
+		for idx, decodedRow := range cachedEvents {
+			require.NotNil(t, decodedRow)
+			require.NotNil(t, decodedRow.TableInfo)
+			require.Equal(t, decodedRow.GetTableID(), events[idx].GetTableID())
+		}
+	}
+}
 
 func TestEncodeDMLBeforeDDL(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)

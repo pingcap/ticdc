@@ -64,7 +64,7 @@ func (event *regionEvent) getSize() int {
 }
 
 type regionEventHandler struct {
-	subClient *SubscriptionClient
+	subClient *subscriptionClient
 }
 
 func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
@@ -303,8 +303,8 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 
 	now := time.Now().UnixMilli()
 	lastAdvance := span.lastAdvanceTime.Load()
-	if now-lastAdvance > span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
-		ts := span.rangeLock.ResolvedTs()
+	if now-lastAdvance >= span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
+		ts := span.rangeLock.GetHeapMinTs()
 		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
 			log.Info("subscription client is initialized",
 				zap.Uint64("subscriptionID", uint64(span.subID)),

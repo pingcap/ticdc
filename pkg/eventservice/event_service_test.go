@@ -68,9 +68,6 @@ func TestEventServiceBasic(t *testing.T) {
 
 	log.Info("start event service basic test")
 
-	// Set the max task time range to a very large value to avoid the test case being blocked.
-	maxTaskTimeRange = time.Duration(math.MaxInt64)
-
 	mockStore := newMockEventStore(100)
 	mockStore.Run(ctx)
 
@@ -89,7 +86,7 @@ func TestEventServiceBasic(t *testing.T) {
 	// add events to eventStore
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
-	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
 		`insert into test.t(id,c) values (0, "c0")`,
 		`insert into test.t(id,c) values (1, "c1")`,
 		`insert into test.t(id,c) values (2, "c2")`,
@@ -127,13 +124,18 @@ func TestEventServiceBasic(t *testing.T) {
 				require.Equal(t, dispatcherInfo.startTs, e.GetStartTs())
 				require.Equal(t, uint64(1), e.Seq)
 				log.Info("receive handshake event", zap.Any("event", e))
-			case *commonEvent.DMLEvent:
+			case *commonEvent.BatchDMLEvent:
 				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
-				require.Equal(t, int32(1), e.Len())
-				require.Equal(t, kvEvents[dmlCount].CRTs, e.CommitTs)
-				require.Equal(t, uint64(dmlCount+3), e.Seq)
-				dmlCount++
+				// first dml has one event, sencond dml has two events
+				if dmlCount == 0 {
+					require.Equal(t, int32(1), e.Len())
+				} else if dmlCount == 1 {
+					require.Equal(t, int32(2), e.Len())
+				}
+				dmlCount += len(e.DMLEvents)
+				require.Equal(t, kvEvents[dmlCount-1].CRTs, e.GetCommitTs())
+				require.Equal(t, uint64(dmlCount+2), e.GetSeq())
 			case *commonEvent.DDLEvent:
 				require.NotNil(t, msg)
 				require.Equal(t, "event-collector", msg.Topic)
@@ -605,11 +607,9 @@ func (m *mockDispatcherInfo) GetTimezone() *time.Location {
 	return m.tz
 }
 
-func genEvents(helper *commonEvent.EventTestHelper, t *testing.T, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
+func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
 	job := helper.DDL2Job(ddl)
-	schema := job.SchemaName
-	table := job.TableName
-	kvEvents := helper.DML2RawKv(schema, table, job.BinlogInfo.FinishedTS, dmls...)
+	kvEvents := helper.DML2RawKv(job.TableID, job.BinlogInfo.FinishedTS, dmls...)
 	return commonEvent.DDLEvent{
 		Version:    commonEvent.DDLEventVersion,
 		FinishedTs: job.BinlogInfo.FinishedTS,

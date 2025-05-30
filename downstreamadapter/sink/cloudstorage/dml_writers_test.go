@@ -78,7 +78,6 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 
 	var cnt uint64 = 0
 	batch := 100
-	var tableInfoVersion uint64 = 33
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -95,7 +94,6 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
-	event.TableInfoVersion = tableInfoVersion
 
 	cloudStorageSink.AddDMLEvent(event)
 	time.Sleep(3 * time.Second)
@@ -104,7 +102,7 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, files, 1)
 
-	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d", job.SchemaName, job.TableName, tableInfoVersion))
+	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d", job.SchemaName, job.TableName, event.TableInfo.UpdateTS()))
 	fileNames := getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{"CDC000001.csv", "CDC.index"}, fileNames)
@@ -174,7 +172,6 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 
 	var cnt uint64 = 0
 	batch := 100
-	var tableInfoVersion uint64 = 33
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -192,11 +189,10 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
-	event.TableInfoVersion = tableInfoVersion
 	cloudStorageSink.AddDMLEvent(event)
 	time.Sleep(5 * time.Second)
 
-	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d/2023-03-08", job.SchemaName, job.TableName, tableInfoVersion))
+	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d/2023-03-08", job.SchemaName, job.TableName, event.TableInfo.UpdateTS()))
 	fileNames := getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{"CDC000001.csv", "CDC.index"}, fileNames)
@@ -231,7 +227,6 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
-	event.TableInfoVersion = tableInfoVersion
 	cloudStorageSink.AddDMLEvent(event)
 	time.Sleep(5 * time.Second)
 
@@ -274,11 +269,10 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
-	event.TableInfoVersion = tableInfoVersion
 	cloudStorageSink.AddDMLEvent(event)
 	time.Sleep(5 * time.Second)
 
-	tableDir = path.Join(parentDir, "test/table1/33/2023-03-09")
+	tableDir = path.Join(parentDir, fmt.Sprintf("test/table1/%d/2023-03-09", event.TableInfo.UpdateTS()))
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{"CDC000001.csv", "CDC.index"}, fileNames)
@@ -314,7 +308,6 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
-	event.TableInfoVersion = tableInfoVersion
 	cloudStorageSink.AddDMLEvent(event)
 	time.Sleep(5 * time.Second)
 

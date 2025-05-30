@@ -142,12 +142,8 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	event.Type = byte(actionType)
 
 	if d.idx == 0 {
-		var tableID int64
-		tableInfo, ok := tableInfoAccessor.Get(schemaName, tableName)
-		if ok {
-			tableID = tableInfo.TableName.TableID
-		}
-		event.BlockedTables = common.GetInfluenceTables(actionType, tableID)
+		physicalTableIDs := tableInfoAccessor.GetBlockedTables(schemaName, tableName)
+		event.BlockedTables = common.GetInfluenceTables(actionType, physicalTableIDs)
 		log.Debug("set blocked tables for the DDL event",
 			zap.String("schema", schemaName), zap.String("table", tableName),
 			zap.String("query", event.Query), zap.Any("blocked", event.BlockedTables))
@@ -181,12 +177,12 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	columns := tableInfo.GetColumns()
 	before, ok1 := d.valuePayload["before"].(map[string]interface{})
 	if ok1 {
-		data := assembleColumnData(before, columns)
+		data := assembleColumnData(before, columns, d.config.TimeZone)
 		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
 	after, ok2 := d.valuePayload["after"].(map[string]interface{})
 	if ok2 {
-		data := assembleColumnData(after, columns)
+		data := assembleColumnData(after, columns, d.config.TimeZone)
 		common.AppendRow2Chunk(data, columns, event.Rows)
 	}
 	if ok1 && ok2 {
@@ -290,19 +286,19 @@ func (d *decoder) queryTableInfo() *commonType.TableInfo {
 	return result
 }
 
-func assembleColumnData(data map[string]interface{}, columns []*timodel.ColumnInfo) map[string]interface{} {
+func assembleColumnData(data map[string]interface{}, columns []*timodel.ColumnInfo, timeZone *time.Location) map[string]interface{} {
 	result := make(map[string]interface{}, 0)
 	for _, col := range columns {
 		val, ok := data[col.Name.O]
 		if !ok {
 			continue
 		}
-		result[col.Name.O] = decodeColumn(val, col)
+		result[col.Name.O] = decodeColumn(val, col, timeZone)
 	}
 	return result
 }
 
-func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
+func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo, timeZone *time.Location) interface{} {
 	if value == nil {
 		return value
 	}
@@ -325,12 +321,17 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
 			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
 		t := time.Unix(val*60*60*24, 0)
-		value = types.NewTime(types.FromGoTime(t), colInfo.GetType(), colInfo.GetDecimal())
+		value = types.NewTime(types.FromGoTime(t.UTC()), colInfo.GetType(), colInfo.GetDecimal())
 	case mysql.TypeTimestamp:
-		value, err = types.ParseTimestamp(types.DefaultStmtNoWarningContext, value.(string))
+		t, err := types.ParseTimestamp(types.DefaultStmtNoWarningContext, value.(string))
 		if err != nil {
 			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
 		}
+		err = t.ConvertTimeZone(time.UTC, timeZone)
+		if err != nil {
+			log.Panic("decode value failed", zap.Error(err), zap.Any("value", value))
+		}
+		value = t
 	case mysql.TypeDatetime:
 		val, err := value.(json.Number).Int64()
 		if err != nil {
@@ -342,7 +343,7 @@ func decodeColumn(value interface{}, colInfo *timodel.ColumnInfo) interface{} {
 		} else {
 			t = time.UnixMicro(val)
 		}
-		value = types.NewTime(types.FromGoTime(t), colInfo.GetType(), colInfo.GetDecimal())
+		value = types.NewTime(types.FromGoTime(t.UTC()), colInfo.GetType(), colInfo.GetDecimal())
 	case mysql.TypeDuration:
 		val, err := value.(json.Number).Int64()
 		if err != nil {

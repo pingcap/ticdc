@@ -120,7 +120,6 @@ func TestBasicFunctionality(t *testing.T) {
 			count.Add(1)
 		},
 	}
-	dmlEvent.TableInfoVersion = 1
 
 	err = cloudStorageSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)

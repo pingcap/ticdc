@@ -12,12 +12,15 @@ message SubscriptionState {
     uint64 ResolvedTs = 4;
 }
 
-message SubscriptionStates {
-    repeated SubscriptionState Subscriptions = 1; // must be sorted by SubscriptionState.SubId
+// TableState stores all subscription states for the same table
+message TableState {
+    repeated SubscriptionState Subscriptions = 1;
 }
 
+// EventStoreState stores a single node's event store state
 message EventStoreState {
-    map<int64, SubscriptionStates> Subscriptions = 1;
+    // tableID -> TableState
+    map<int64, TableState> TableStates = 1; 
 }
 
 message ReusableEventServiceRequest {

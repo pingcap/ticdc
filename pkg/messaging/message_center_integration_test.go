@@ -117,7 +117,7 @@ func waitForTargetsReady(mc *messageCenter) {
 	}
 }
 
-func sendAndReceiveMessage(t *testing.T, sender *messageCenter, receiver *messageCenter, topic string, event *commonEvent.DMLEvent) {
+func sendAndReceiveMessage(t *testing.T, sender *messageCenter, receiver *messageCenter, topic string, event *commonEvent.BatchDMLEvent) {
 	targetMsg := NewSingleTargetMessage(receiver.id, topic, event)
 	ch := make(chan *TargetMessage, 1)
 	receiver.RegisterHandler(topic, func(ctx context.Context, msg *TargetMessage) error {
@@ -142,11 +142,11 @@ func sendAndReceiveMessage(t *testing.T, sender *messageCenter, receiver *messag
 	}
 }
 
-func validateReceivedMessage(t *testing.T, targetMsg *TargetMessage, receivedMsg *TargetMessage, senderID node.ID, event *commonEvent.DMLEvent) {
+func validateReceivedMessage(t *testing.T, targetMsg *TargetMessage, receivedMsg *TargetMessage, senderID node.ID, event *commonEvent.BatchDMLEvent) {
 	require.Equal(t, targetMsg.To, receivedMsg.To)
 	require.Equal(t, senderID, receivedMsg.From)
 	require.Equal(t, targetMsg.Type, receivedMsg.Type)
-	receivedEvent := receivedMsg.Message[0].(*commonEvent.DMLEvent)
+	receivedEvent := receivedMsg.Message[0].(*commonEvent.BatchDMLEvent)
 	receivedEvent.AssembleRows(event.TableInfo)
 	require.Equal(t, event.Rows.ToString(event.TableInfo.GetFieldSlice()), receivedEvent.Rows.ToString(event.TableInfo.GetFieldSlice()))
 }
@@ -178,14 +178,14 @@ func TestMessageCenterBasic(t *testing.T) {
 	waitForTargetsReady(mc3)
 
 	// Case 1: Send a message from mc1 to mc1 (local message)
-	sendAndReceiveMessage(t, mc1, mc1, topic1, dml1)
+	sendAndReceiveMessage(t, mc1, mc1, topic1, event.BatchDML(dml1))
 	log.Info("Pass test 1: send and receive local message")
 
 	// Case 2: Send a message from mc1 to mc2 (remote message)
-	sendAndReceiveMessage(t, mc1, mc2, topic2, dml2)
+	sendAndReceiveMessage(t, mc1, mc2, topic2, event.BatchDML(dml2))
 	log.Info("Pass test 2: send and receive remote message")
 
 	// Case 3: Send a message from mc2 to mc3 (remote message)
-	sendAndReceiveMessage(t, mc2, mc3, topic3, dml3)
+	sendAndReceiveMessage(t, mc2, mc3, topic3, event.BatchDML(dml3))
 	log.Info("Pass test 3: send and receive remote message")
 }

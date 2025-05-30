@@ -87,7 +87,7 @@ func TestEventScanner(t *testing.T) {
 	// [DDL(x), DML(x+1), DML(x+2), DML(x+3), DML(x+4), Resolved(x+5)]
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
-	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
 		`insert into test.t(id,c) values (0, "c0")`,
 		`insert into test.t(id,c) values (1, "c1")`,
 		`insert into test.t(id,c) values (2, "c2")`,
@@ -109,7 +109,7 @@ func TestEventScanner(t *testing.T) {
 	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
-	require.Equal(t, 6, len(events))
+	require.Equal(t, 4, len(events))
 
 	// case 3: Reaches scan limit, only 1 DDL and 1 DML event scanned
 	// Tests that when MaxBytes limit is reached, the scanner returns partial events with isBroken=true
@@ -129,7 +129,7 @@ func TestEventScanner(t *testing.T) {
 	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
 	require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
 	e = events[1]
-	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
+	require.Equal(t, e.GetType(), pevent.TypeBatchDMLEvent)
 	require.Equal(t, kvEvents[0].CRTs, e.GetCommitTs())
 	e = events[2]
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
@@ -138,11 +138,13 @@ func TestEventScanner(t *testing.T) {
 	// case4: Tests transaction atomicity during scanning
 	// Tests that transactions with same commitTs are scanned atomically (not split even when limit is reached)
 	// Modified events: first 3 DMLs have same commitTs=x:
-	//   DDL(x) -> DML(x+1) -> DML(x+1) -> DML(x+1) -> DML(x+4)
+	//   DDL(x) -> DML-1(x+1) -> DML-2(x+1) -> DML-3(x+1) -> DML-4(x+4)
 	// Expected result (MaxBytes=1):
-	// [DDL(x), DML(x+1), DML(x+1), DML(x+1), Resolved(x+1)]
+	// [DDL(x), DML-1(x+1), DML-2(x+1), DML-3(x+1), Resolved(x+1)]
 	//                               ▲
-	//                               └── Scanning interrupted, events with same commitTs must be returned together
+	//                               └── Scanning interrupted here
+	// The length of the result here is 4.
+	// The DML-1(x+1) will appear separately because it encounters DDL(x), which will immediately append it.
 	firstCommitTs := kvEvents[0].CRTs
 	for i := 0; i < 3; i++ {
 		kvEvents[i].CRTs = firstCommitTs
@@ -154,26 +156,26 @@ func TestEventScanner(t *testing.T) {
 	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
-	require.Equal(t, 5, len(events))
+	require.Equal(t, 4, len(events))
 
 	// DDL
 	e = events[0]
 	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
 	require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
-	// DMLs
+	// DML-1
 	e = events[1]
-	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
-	require.Equal(t, kvEvents[0].CRTs, e.GetCommitTs())
+	require.Equal(t, e.GetType(), pevent.TypeBatchDMLEvent)
+	require.Equal(t, len(e.(*pevent.BatchDMLEvent).DMLEvents), 1)
+	require.Equal(t, firstCommitTs, e.GetCommitTs())
+	// DML-2, DML-3
 	e = events[2]
-	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
-	require.Equal(t, kvEvents[1].CRTs, e.GetCommitTs())
-	e = events[3]
-	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
-	require.Equal(t, kvEvents[2].CRTs, e.GetCommitTs())
+	require.Equal(t, e.GetType(), pevent.TypeBatchDMLEvent)
+	require.Equal(t, len(e.(*pevent.BatchDMLEvent).DMLEvents), 2)
+	require.Equal(t, firstCommitTs, e.GetCommitTs())
 	// resolvedTs
-	e = events[4]
+	e = events[3]
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
-	require.Equal(t, kvEvents[2].CRTs, e.GetCommitTs())
+	require.Equal(t, firstCommitTs, e.GetCommitTs())
 
 	// case 5: Tests timeout behavior
 	// Tests that with Timeout=0, the scanner immediately returns scanned events
@@ -188,7 +190,7 @@ func TestEventScanner(t *testing.T) {
 	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
-	require.Equal(t, 5, len(events))
+	require.Equal(t, 4, len(events))
 
 	// case 6: Tests DMLs are returned before DDLs when they share same commitTs
 	// Tests that DMLs take precedence over DDLs with same commitTs
@@ -211,17 +213,23 @@ func TestEventScanner(t *testing.T) {
 	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
-	require.Equal(t, 7, len(events))
+	require.Equal(t, 6, len(events))
 	// First DML should appear before fake DDL
 	firstDML := events[1]
-	require.Equal(t, firstDML.GetType(), pevent.TypeDMLEvent)
+	require.Equal(t, firstDML.GetType(), pevent.TypeBatchDMLEvent)
+	require.Equal(t, len(firstDML.(*pevent.BatchDMLEvent).DMLEvents), 1)
 	require.Equal(t, kvEvents[0].CRTs, firstDML.GetCommitTs())
+	// DMLs
+	dml := events[2]
+	require.Equal(t, dml.GetType(), pevent.TypeBatchDMLEvent)
+	require.Equal(t, len(dml.(*pevent.BatchDMLEvent).DMLEvents), 2)
+	require.Equal(t, kvEvents[2].CRTs, dml.GetCommitTs())
 	// Fake DDL should appear after DMLs
-	ddl := events[4]
+	ddl := events[3]
 	require.Equal(t, ddl.GetType(), pevent.TypeDDLEvent)
 	require.Equal(t, fakeDDL.FinishedTs, ddl.GetCommitTs())
 	require.Equal(t, fakeDDL.FinishedTs, firstDML.GetCommitTs())
-	e = events[6]
+	e = events[5]
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
 	require.Equal(t, resolvedTs, e.GetCommitTs())
 }
@@ -251,7 +259,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	// Construct events: dml2 and dml3 share commitTs, fakeDDL shares commitTs with them
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
-	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
 		`insert into test.t(id,c) values (0, "c0")`,
 		`insert into test.t(id,c) values (1, "c1")`,
 		`insert into test.t(id,c) values (2, "c2")`,
@@ -301,7 +309,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
 	// DML1
 	e = events[1]
-	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
+	require.Equal(t, e.GetType(), pevent.TypeBatchDMLEvent)
 	require.Equal(t, dml1.CRTs, e.GetCommitTs())
 	// resolvedTs
 	e = events[2]
@@ -322,7 +330,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.True(t, isBroken)
-	require.Equal(t, 6, len(events))
+	require.Equal(t, 5, len(events))
 
 	// DDL1
 	e = events[0]
@@ -330,23 +338,19 @@ func TestEventScannerWithDDL(t *testing.T) {
 	require.Equal(t, ddlEvent.FinishedTs, e.GetCommitTs())
 	// DML1
 	e = events[1]
-	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
+	require.Equal(t, e.GetType(), pevent.TypeBatchDMLEvent)
 	require.Equal(t, dml1.CRTs, e.GetCommitTs())
-	// DML2
+	// DML2 DML3
 	e = events[2]
-	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
-	require.Equal(t, dml2.CRTs, e.GetCommitTs())
-	// DML3
-	e = events[3]
-	require.Equal(t, e.GetType(), pevent.TypeDMLEvent)
+	require.Equal(t, e.GetType(), pevent.TypeBatchDMLEvent)
 	require.Equal(t, dml3.CRTs, e.GetCommitTs())
 	// fake DDL
-	e = events[4]
+	e = events[3]
 	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
 	require.Equal(t, fakeDDL.FinishedTs, e.GetCommitTs())
 	require.Equal(t, dml3.CRTs, e.GetCommitTs())
 	// resolvedTs
-	e = events[5]
+	e = events[4]
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
 	require.Equal(t, dml3.CRTs, e.GetCommitTs())
 
@@ -382,14 +386,14 @@ func TestEventScannerWithDDL(t *testing.T) {
 	events, isBroken, err = scanner.Scan(context.Background(), disp, dataRange, sl)
 	require.NoError(t, err)
 	require.False(t, isBroken)
-	require.Equal(t, 9, len(events))
-	e = events[6]
+	require.Equal(t, 8, len(events))
+	e = events[5]
 	require.Equal(t, fakeDDL2.GetType(), pevent.TypeDDLEvent)
 	require.Equal(t, fakeDDL2.GetCommitTs(), fakeDDL2.FinishedTs)
-	e = events[7]
+	e = events[6]
 	require.Equal(t, fakeDDL3.GetType(), pevent.TypeDDLEvent)
 	require.Equal(t, fakeDDL3.GetCommitTs(), fakeDDL3.FinishedTs)
-	e = events[8]
+	e = events[7]
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
 	require.Equal(t, resolvedTs, e.GetCommitTs())
 }

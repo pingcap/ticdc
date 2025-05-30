@@ -160,6 +160,32 @@ func (mr *MockChangefeedInterfaceMockRecorder) MoveSplitTable(ctx, namespace, na
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MoveSplitTable", reflect.TypeOf((*MockChangefeedInterface)(nil).MoveSplitTable), ctx, namespace, name, tableID, targetNode)
 }
 
+// SplitTableByRegionCount mocks base method.
+func (m *MockChangefeedInterface) SplitTableByRegionCount(ctx context.Context, namespace, name string, tableID int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SplitTableByRegionCount", ctx, namespace, name, tableID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+// SplitTableByRegionCount indicates an expected call of SplitTableByRegionCount.
+func (mr *MockChangefeedInterfaceMockRecorder) SplitTableByRegionCount(ctx, namespace, name, tableID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SplitTableByRegionCount", reflect.TypeOf((*MockChangefeedInterface)(nil).SplitTableByRegionCount), ctx, namespace, name, tableID)
+}
+
+// MergeTable mocks base method.
+func (m *MockChangefeedInterface) MergeTable(ctx context.Context, namespace, name string, tableID int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "MergeTable", ctx, namespace, name, tableID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+// MergeTable indicates an expected call of MergeTable.
+func (mr *MockChangefeedInterfaceMockRecorder) MergeTable(ctx, namespace, name, tableID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MergeTable", reflect.TypeOf((*MockChangefeedInterface)(nil).MergeTable), ctx, namespace, name, tableID)
+}
+
 // Pause mocks base method.
 func (m *MockChangefeedInterface) Pause(ctx context.Context, namespace, name string) error {
 	m.ctrl.T.Helper()
