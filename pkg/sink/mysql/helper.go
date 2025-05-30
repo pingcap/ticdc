@@ -52,7 +52,7 @@ const checkRunningSQL = `SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE
 func CheckIfBDRModeIsSupported(ctx context.Context, db *sql.DB) (bool, error) {
 	// We should always try to set this variable, and ignore the error if
 	// downstream does not support this variable, it is by design.
-	query := fmt.Sprintf("SET SESSION tidb_cdc_write_source = %d", 1)
+	query := "SET SESSION tidb_cdc_write_source = 1"
 	_, err := db.ExecContext(ctx, query)
 	if err != nil {
 		if mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError); ok &&
@@ -323,6 +323,20 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 	// NOTE: quote the string is necessary to avoid ambiguities.
 	dsn.Params["sql_mode"] = strconv.Quote(dsn.Params["sql_mode"])
 
+	cfg.IsTiDB = CheckIsTiDB(ctx, testDB)
+
+	if cfg.IsTiDB {
+		// check if tidb_cdc_write_source is supported
+		// only tidb downstream and version is greater than or equal to v6.5.0 supports this variable
+		bdrModeSupported, err := CheckIfBDRModeIsSupported(ctx, testDB)
+		if err != nil {
+			return "", err
+		}
+		if bdrModeSupported {
+			dsn.Params["tidb_cdc_write_source"] = "1"
+		}
+	}
+
 	dsnStr, err := generateDSNByConfig(dsn, cfg, testDB)
 	if err != nil {
 		return "", err
@@ -338,20 +352,6 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 		log.Warn("GBK charset is not supported by the downstream. "+
 			"Some types of DDLs may fail to execute",
 			zap.String("host", dsn.Addr))
-	}
-
-	cfg.IsTiDB = CheckIsTiDB(ctx, testDB)
-
-	if cfg.IsTiDB {
-		// check if tidb_cdc_write_source is supported
-		// only tidb downstream and version is greater than or equal to v6.5.0 supports this variable
-		bdrModeSupported, err := CheckIfBDRModeIsSupported(ctx, testDB)
-		if err != nil {
-			return "", err
-		}
-		if bdrModeSupported {
-			dsn.Params["tidb_cdc_write_source"] = "1"
-		}
 	}
 
 	return dsnStr, nil
