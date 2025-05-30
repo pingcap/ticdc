@@ -44,7 +44,7 @@ func NewDefaultKVClientConfig() *KVClientConfig {
 		EnableMultiplexing:   true,
 		WorkerConcurrent:     8,
 		GrpcStreamConcurrent: 1,
-		AdvanceIntervalInMs:  0,
+		AdvanceIntervalInMs:  500,
 		FrontierConcurrent:   8,
 		WorkerPoolSize:       0, // 0 will use NumCPU() * 2
 		RegionScanLimit:      40,

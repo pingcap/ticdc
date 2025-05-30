@@ -443,7 +443,10 @@ func (e *eventStore) RegisterDispatcher(
 			if kv.CRTs > maxCommitTs {
 				maxCommitTs = kv.CRTs
 			}
-			log.Info("event store received kv", zap.Uint64("commitTs", kv.CRTs), zap.Uint64("subID", uint64(subStat.subID)))
+			log.Info("event store received kv",
+				zap.Uint64("commitTs", kv.CRTs),
+				zap.String("key", hex.EncodeToString(kv.Key)),
+				zap.Uint64("subID", uint64(subStat.subID)))
 			if kv.CRTs <= subStat.resolvedTs.Load() {
 				log.Warn("event store received kv with commitTs less than resolvedTs",
 					zap.Uint64("commitTs", kv.CRTs),
