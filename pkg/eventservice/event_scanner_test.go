@@ -889,7 +889,6 @@ func TestScanSession(t *testing.T) {
 		session.events = append(session.events, nil) // Add a nil event for testing
 		require.Equal(t, 1, len(session.events))
 	})
-
 }
 
 func TestLimitChecker(t *testing.T) {

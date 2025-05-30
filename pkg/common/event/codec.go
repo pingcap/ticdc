@@ -217,7 +217,6 @@ func unflatten(datum types.Datum, ft *types.FieldType, loc *time.Location) (type
 }
 
 func IsUKChanged(rawKV *common.RawKVEntry, tableInfo *common.TableInfo) (bool, error) {
-
 	recordID, err := tablecodec.DecodeRowKey(rawKV.Key)
 	if err != nil {
 		return false, errors.Trace(err)
