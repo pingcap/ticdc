@@ -60,9 +60,6 @@ type dispatcherStat struct {
 }
 
 func (d *dispatcherStat) reset() {
-	if d.waitHandshake.Load() {
-		return
-	}
 	d.lastEventSeq.Store(0)
 	d.waitHandshake.Store(true)
 }
