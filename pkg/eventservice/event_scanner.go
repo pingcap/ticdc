@@ -189,7 +189,6 @@ func (s *eventScanner) scanAndMergeEvents(
 	tableID := session.dataRange.Span.TableID
 
 	for {
-		// Check scan conditions
 		shouldStop, err := s.checkScanConditions(session)
 		if err != nil {
 			return nil, false, err
@@ -198,7 +197,6 @@ func (s *eventScanner) scanAndMergeEvents(
 			return nil, false, nil
 		}
 
-		// Get next event
 		rawEvent, isNewTxn, err := iter.Next()
 		if err != nil {
 			return nil, false, errorHandler.handleIteratorError(err)
@@ -208,25 +206,22 @@ func (s *eventScanner) scanAndMergeEvents(
 			return s.finalizeScan(session, merger, processor)
 		}
 
-		// Update bytes count
 		eventSize := int64(len(rawEvent.Key) + len(rawEvent.Value) + len(rawEvent.OldValue))
 		session.addBytes(eventSize)
 
-		// Check for scan interruption
 		if isNewTxn && checker.checkLimits(session.totalBytes) {
 			if checker.canInterrupt(rawEvent.CRTs, session.lastCommitTs, session.dmlCount) {
 				return s.interruptScan(session, merger, processor)
 			}
 		}
 
-		// Handle new transaction
 		if isNewTxn {
 			if err := s.handleNewTransaction(session, merger, processor, rawEvent, tableID); err != nil {
 				return nil, false, err
 			}
+			continue
 		}
 
-		// Append row to current transaction
 		if err := processor.appendRow(rawEvent); err != nil {
 			log.Error("append row failed", zap.Error(err),
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
@@ -253,7 +248,7 @@ func (s *eventScanner) checkScanConditions(session *scanSession) (bool, error) {
 	return false, nil
 }
 
-// handleNewTransaction processes a new transaction event
+// handleNewTransaction processes a new transaction event, and append the rawEvent to it.
 func (s *eventScanner) handleNewTransaction(
 	session *scanSession,
 	merger *eventMerger,
@@ -524,7 +519,7 @@ func (p *dmlProcessor) processNewTransaction(
 	// Create a new DMLEvent for the current transaction
 	p.currentDML = pevent.NewDMLEvent(dispatcherID, tableID, rawEvent.StartTs, rawEvent.CRTs, tableInfo)
 	p.batchDML.AppendDMLEvent(p.currentDML)
-	return nil
+	return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
 }
 
 // appendRow appends a row to the current DML event.

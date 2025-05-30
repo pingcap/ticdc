@@ -369,7 +369,6 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 	dataRange.EndTs = min(dataRange.EndTs, ddlState.ResolvedTs)
 
 	if ddlState.ResolvedTs <= dataRange.StartTs {
-		log.Info("skip scan since ddlState.ResolvedTs is less than dataRange.StartTs", zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Uint64("latestCommitTs", task.latestCommitTs.Load()), zap.Uint64("ddlState.MaxEventCommitTs", ddlState.MaxEventCommitTs))
 		metricEventServiceSkipResolvedTsCount.Inc()
 		return false, common.DataRange{}
 	}
@@ -377,7 +376,6 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 	// Note: Maybe we should still send a resolvedTs to downstream to tell that
 	// the dispatcher is alive?
 	if dataRange.EndTs <= dataRange.StartTs {
-		log.Info("skip scan since endTs is less than startTs", zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Uint64("latestCommitTs", task.latestCommitTs.Load()), zap.Uint64("ddlState.MaxEventCommitTs", ddlState.MaxEventCommitTs))
 		metricEventServiceSkipResolvedTsCount.Inc()
 		return false, common.DataRange{}
 	}
@@ -509,8 +507,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		return
 	}
 
-	start := time.Now()
-
 	for _, e := range events {
 		if task.isRemoved.Load() {
 			return
@@ -548,11 +544,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
-	cost := time.Since(start)
-
-	if cost > 100*time.Millisecond {
-		log.Info("fizz send events cost too long", zap.Duration("cost", cost), zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex), zap.Int("eventCount", len(events)), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
-	}
 }
 
 func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int) {
@@ -804,7 +795,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		info.IsOnlyReuse(),
 		info.GetBdrMode(),
 	)
-
 	if err != nil {
 		log.Error("register dispatcher to eventStore failed",
 			zap.Stringer("dispatcherID", id),

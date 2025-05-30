@@ -62,7 +62,6 @@ func (b *BatchDMLEvent) AppendDMLEvent(dmlEvent *DMLEvent) {
 
 	if b.TableInfo == nil {
 		b.TableInfo = dmlEvent.TableInfo
-		// FIXME: check if chk isFull in the future
 		b.Rows = chunk.NewChunkWithCapacity(dmlEvent.TableInfo.GetFieldSlice(), defaultRowCount)
 	}
 	dmlEvent.SetRows(b.Rows)
@@ -213,7 +212,7 @@ func (b *BatchDMLEvent) IsPaused() bool {
 	return b.DMLEvents[len(b.DMLEvents)-1].IsPaused()
 }
 
-// Len returns the number of row change events all transaction.
+// Len returns the number of DML events in the batch.
 func (b *BatchDMLEvent) Len() int32 {
 	var length int32
 	for _, dml := range b.DMLEvents {

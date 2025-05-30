@@ -426,12 +426,312 @@ func TestEventScannerWithDDL(t *testing.T) {
 	require.False(t, isBroken)
 	require.Equal(t, 8, len(events))
 	e = events[5]
-	require.Equal(t, fakeDDL2.GetType(), pevent.TypeDDLEvent)
-	require.Equal(t, fakeDDL2.GetCommitTs(), fakeDDL2.FinishedTs)
+	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
+	require.Equal(t, e.GetCommitTs(), fakeDDL2.FinishedTs)
 	e = events[6]
-	require.Equal(t, fakeDDL3.GetType(), pevent.TypeDDLEvent)
-	require.Equal(t, fakeDDL3.GetCommitTs(), fakeDDL3.FinishedTs)
+	require.Equal(t, e.GetType(), pevent.TypeDDLEvent)
+	require.Equal(t, e.GetCommitTs(), fakeDDL3.FinishedTs)
 	e = events[7]
 	require.Equal(t, e.GetType(), pevent.TypeResolvedEvent)
 	require.Equal(t, resolvedTs, e.GetCommitTs())
+}
+
+// TestDMLProcessorProcessNewTransaction tests the processNewTransaction method of dmlProcessor
+func TestDMLProcessorProcessNewTransaction(t *testing.T) {
+	// Setup helper and table info
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
+		`insert into test.t(id,c) values (0, "c0")`,
+		`insert into test.t(id,c) values (1, "c1")`,
+	}...)
+	tableInfo := ddlEvent.TableInfo
+	tableID := ddlEvent.TableID
+	dispatcherID := common.NewDispatcherID()
+
+	// Create a mock mounter and schema getter
+	mockMounter := &mockMounter{}
+	mockSchemaGetter := newMockSchemaStore()
+	mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
+
+	// Test case 1: Process first transaction without insert cache
+	t.Run("FirstTransactionWithoutCache", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
+		rawEvent := kvEvents[0]
+
+		err := processor.processNewTransaction(rawEvent, tableID, tableInfo, dispatcherID)
+		require.NoError(t, err)
+
+		// Verify that a new DML event was created
+		require.NotNil(t, processor.currentDML)
+		require.Equal(t, dispatcherID, processor.currentDML.GetDispatcherID())
+		require.Equal(t, tableID, processor.currentDML.GetTableID())
+		require.Equal(t, rawEvent.StartTs, processor.currentDML.GetStartTs())
+		require.Equal(t, rawEvent.CRTs, processor.currentDML.GetCommitTs())
+
+		// Verify that the DML was added to the batch
+		require.Equal(t, 1, len(processor.batchDML.DMLEvents))
+		require.Equal(t, processor.currentDML, processor.batchDML.DMLEvents[0])
+
+		// Verify insert cache is empty
+		require.Empty(t, processor.insertRowCache)
+	})
+
+	// Test case 2: Process new transaction when there are cached insert rows
+	t.Run("NewTransactionWithInsertCache", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
+
+		// Setup first transaction
+		firstEvent := kvEvents[0]
+		err := processor.processNewTransaction(firstEvent, tableID, tableInfo, dispatcherID)
+		require.NoError(t, err)
+
+		// Add some insert rows to cache (simulating split update)
+		insertRow1 := &common.RawKVEntry{
+			StartTs: firstEvent.StartTs,
+			CRTs:    firstEvent.CRTs,
+			Key:     []byte("insert_key_1"),
+			Value:   []byte("insert_value_1"),
+		}
+		insertRow2 := &common.RawKVEntry{
+			StartTs: firstEvent.StartTs,
+			CRTs:    firstEvent.CRTs,
+			Key:     []byte("insert_key_2"),
+			Value:   []byte("insert_value_2"),
+		}
+		processor.insertRowCache = append(processor.insertRowCache, insertRow1, insertRow2)
+
+		// Process second transaction
+		secondEvent := kvEvents[1]
+		err = processor.processNewTransaction(secondEvent, tableID, tableInfo, dispatcherID)
+		require.NoError(t, err)
+
+		// Verify that insert cache has been processed and cleared
+		require.Empty(t, processor.insertRowCache)
+
+		// Verify new DML event was created for second transaction
+		require.NotNil(t, processor.currentDML)
+		require.Equal(t, secondEvent.StartTs, processor.currentDML.GetStartTs())
+		require.Equal(t, secondEvent.CRTs, processor.currentDML.GetCommitTs())
+
+		// Verify batch now contains two DML events
+		require.Equal(t, 2, len(processor.batchDML.DMLEvents))
+		require.Equal(t, int32(4), processor.batchDML.Len())
+	})
+
+	// Test case 3: Process transaction with different table info
+	t.Run("TransactionWithDifferentTableInfo", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
+
+		// Create a different table info by cloning and using it directly
+		// (In real scenarios, this would come from schema store with different updateTS)
+		differentTableInfo := tableInfo
+
+		rawEvent := kvEvents[0]
+		err := processor.processNewTransaction(rawEvent, tableID, differentTableInfo, dispatcherID)
+		require.NoError(t, err)
+
+		// Verify that the DML event uses the correct table info
+		require.NotNil(t, processor.currentDML)
+		require.Equal(t, differentTableInfo, processor.currentDML.TableInfo)
+		require.Equal(t, differentTableInfo.UpdateTS(), processor.currentDML.TableInfo.UpdateTS())
+	})
+
+	// Test case 4: Multiple consecutive transactions
+	t.Run("ConsecutiveTransactions", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
+
+		// Process multiple transactions
+		for i, event := range kvEvents {
+			err := processor.processNewTransaction(event, tableID, tableInfo, dispatcherID)
+			require.NoError(t, err)
+
+			// Verify current DML matches the event
+			require.NotNil(t, processor.currentDML)
+			require.Equal(t, event.StartTs, processor.currentDML.GetStartTs())
+			require.Equal(t, event.CRTs, processor.currentDML.GetCommitTs())
+
+			// Verify batch size increases
+			require.Equal(t, int32(i+1), processor.batchDML.Len())
+		}
+
+		// Verify all events are in the batch
+		require.Equal(t, int32(len(kvEvents)), processor.batchDML.Len())
+		for i, dmlEvent := range processor.batchDML.DMLEvents {
+			require.Equal(t, kvEvents[i].StartTs, dmlEvent.GetStartTs())
+			require.Equal(t, kvEvents[i].CRTs, dmlEvent.GetCommitTs())
+		}
+	})
+
+	// Test case 5: Process transaction with empty insert cache followed by one with cache
+	t.Run("EmptyThenNonEmptyCache", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
+
+		// First transaction - no cache
+		firstEvent := kvEvents[0]
+		err := processor.processNewTransaction(firstEvent, tableID, tableInfo, dispatcherID)
+		require.NoError(t, err)
+		require.Empty(t, processor.insertRowCache)
+
+		// Add insert rows to cache
+		insertRow := &common.RawKVEntry{
+			StartTs: firstEvent.StartTs,
+			CRTs:    firstEvent.CRTs,
+			Key:     []byte("cached_insert"),
+			Value:   []byte("cached_value"),
+		}
+		processor.insertRowCache = append(processor.insertRowCache, insertRow)
+
+		// Second transaction - should process and clear cache
+		secondEvent := kvEvents[1]
+		err = processor.processNewTransaction(secondEvent, tableID, tableInfo, dispatcherID)
+		require.NoError(t, err)
+
+		// Verify cache was cleared
+		require.Empty(t, processor.insertRowCache)
+
+		// Verify all events are in the batch
+		require.Equal(t, 2, len(processor.batchDML.DMLEvents))
+		require.Equal(t, int32(3), processor.batchDML.Len())
+	})
+}
+
+// TestDMLProcessorAppendRow tests the appendRow method of dmlProcessor
+func TestDMLProcessorAppendRow(t *testing.T) {
+	// Setup helper and table info
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, a char(50), b char(50), unique key uk_a(a))`, []string{
+		`insert into test.t(id,a,b) values (0, "a0", "b0")`,
+		`insert into test.t(id,a,b) values (1, "a1", "b1")`,
+		`insert into test.t(id,a,b) values (2, "a2", "b2")`,
+	}...)
+
+	tableInfo := ddlEvent.TableInfo
+	tableID := ddlEvent.TableID
+	dispatcherID := common.NewDispatcherID()
+
+	// Create a mock mounter and schema getter
+	mockMounter := &mockMounter{}
+	mockSchemaGetter := newMockSchemaStore()
+	mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
+
+	// Test case 1: appendRow when no current DML event exists - should return error
+	t.Run("NoCurrentDMLEvent", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
+		rawEvent := kvEvents[0]
+
+		err := processor.appendRow(rawEvent)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "no current DML event to append to")
+	})
+
+	// Test case 2: appendRow for insert operation (non-update)
+	t.Run("AppendInsertRow", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
+
+		firstEvent := kvEvents[0]
+		err := processor.processNewTransaction(firstEvent, tableID, tableInfo, dispatcherID)
+		require.NoError(t, err)
+
+		secondEvent := kvEvents[1]
+		err = processor.appendRow(secondEvent)
+		require.NoError(t, err)
+
+		// Verify insert cache remains empty (since it's not a split update)
+		require.Empty(t, processor.insertRowCache)
+	})
+
+	// Test case 3: appendRow for delete operation (non-update)
+	t.Run("AppendDeleteRow", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
+
+		rawEvent := kvEvents[0]
+		deleteRow := insertToDeleteRow(rawEvent)
+		err := processor.processNewTransaction(rawEvent, tableID, tableInfo, dispatcherID)
+		require.NoError(t, err)
+		err = processor.appendRow(deleteRow)
+		require.NoError(t, err)
+
+		// Verify insert cache remains empty
+		require.Empty(t, processor.insertRowCache)
+	})
+
+	// Test case 4: appendRow for update operation without unique key change
+	t.Run("AppendUpdateRowWithoutUKChange", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
+
+		// Create a current DML event first
+		rawEvent := kvEvents[0]
+		deleteRow := insertToDeleteRow(rawEvent)
+		err := processor.processNewTransaction(rawEvent, tableID, tableInfo, dispatcherID)
+		require.NoError(t, err)
+		err = processor.appendRow(deleteRow)
+		require.NoError(t, err)
+
+		insertSQL, updateSQL := "insert into test.t(id,a,b) values (3, 'a3', 'b3')", "update test.t set b = 'b3_updated' where id = 3"
+		_, updateEvent := helper.DML2UpdateEvent("test", "t", insertSQL, updateSQL)
+		err = processor.appendRow(updateEvent)
+		require.NoError(t, err)
+
+		// For normal update without UK change, insert cache should remain empty
+		require.Empty(t, processor.insertRowCache)
+	})
+
+	// Test case 5: appendRow for update operation with unique key change (split update)
+	t.Run("AppendUpdateRowWithUKChange", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
+
+		// Create a current DML event first
+		rawEvent := kvEvents[0]
+		deleteRow := insertToDeleteRow(rawEvent)
+		err := processor.processNewTransaction(rawEvent, tableID, tableInfo, dispatcherID)
+		require.NoError(t, err)
+		err = processor.appendRow(deleteRow)
+		require.NoError(t, err)
+
+		// Generate a real update event that changes unique key using helper
+		// This updates the unique key column 'a' from 'a1' to 'a1_new'
+		insertSQL, updateSQL := "insert into test.t(id,a,b) values (4, 'a4', 'b4')", "update test.t set a = 'a4_updated' where id = 4"
+		_, updateEvent := helper.DML2UpdateEvent("test", "t", insertSQL, updateSQL)
+		err = processor.appendRow(updateEvent)
+		require.NoError(t, err)
+
+		// Verify insert cache
+		require.Len(t, processor.insertRowCache, 1)
+		require.Equal(t, common.OpTypePut, processor.insertRowCache[0].OpType)
+		require.False(t, processor.insertRowCache[0].IsUpdate())
+	})
+
+	// Test case 6: Test multiple appendRow calls
+	t.Run("MultipleAppendRows", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
+
+		// Create a current DML event first
+		rawEvent := kvEvents[0]
+		err := processor.processNewTransaction(rawEvent, tableID, tableInfo, dispatcherID)
+		require.NoError(t, err)
+
+		// Append multiple rows of different types using real events generated by helper
+		// 1. Append a delete row (converted from insert)
+		deleteRow := insertToDeleteRow(kvEvents[1])
+		err = processor.appendRow(deleteRow)
+		require.NoError(t, err)
+
+		// 2. Append an insert row (use existing kvEvent)
+		insertRow := kvEvents[2]
+		err = processor.appendRow(insertRow)
+		require.NoError(t, err)
+
+		// 3. Append an update row using helper
+		insertSQL, updateSQL := "insert into test.t(id,a,b) values (10, 'a10', 'b10')", "update test.t set b = 'b10_updated' where id = 10"
+		_, updateEvent := helper.DML2UpdateEvent("test", "t", insertSQL, updateSQL)
+		err = processor.appendRow(updateEvent)
+		require.NoError(t, err)
+
+		// All operations should succeed and insert cache should remain empty
+		require.Empty(t, processor.insertRowCache)
+	})
 }

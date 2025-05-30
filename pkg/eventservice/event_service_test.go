@@ -623,6 +623,18 @@ func genEvents(helper *commonEvent.EventTestHelper, t *testing.T, ddl string, dm
 	}, kvEvents
 }
 
+// insertToDeleteRow converts an insert row to a delete row to facilitate the test.
+func insertToDeleteRow(rawEvent *common.RawKVEntry) *common.RawKVEntry {
+	res := &common.RawKVEntry{
+		StartTs:  rawEvent.StartTs,
+		CRTs:     rawEvent.CRTs,
+		Key:      rawEvent.Key,
+		OldValue: rawEvent.Value,
+		OpType:   common.OpTypeDelete,
+	}
+	return res
+}
+
 // This test is to test the mockEventIterator works as expected.
 func TestMockEventIterator(t *testing.T) {
 	iter := &mockEventIterator{
