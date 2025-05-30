@@ -73,6 +73,11 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		return false
 	}
 
+	log.Debug("handle events",
+		zap.Any("dispatcher", stat.dispatcherID),
+		zap.Int("eventCount", len(events)),
+		zap.Int("firstEventType", int(events[0].GetType())))
+
 	// Only check the first event type, because all event types should be same
 	switch events[0].GetType() {
 	// note: TypeDMLEvent and TypeResolvedEvent can be in the same batch, so we should handle them together.
