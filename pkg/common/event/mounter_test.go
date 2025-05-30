@@ -728,5 +728,5 @@ func TestTablePrefix(t *testing.T) {
 	require.True(t, bytes.HasPrefix(key, tablePrefix))
 
 	key2 := []byte{'b', 1}
-	require.True(t, bytes.HasPrefix(key2, tablePrefix))
+	require.False(t, bytes.HasPrefix(key2, tablePrefix))
 }

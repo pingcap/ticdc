@@ -86,6 +86,8 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) *preparedDMLs {
 		log.Debug("prepareDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
 	}
 
+	log.Info("prepareDMLs", zap.Any("dmls", dmls.String()), zap.Any("events", events))
+
 	return dmls
 }
 

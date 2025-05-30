@@ -32,18 +32,18 @@ import (
 // hash representation for columnSchema of TableInfo
 // Considering sha-256 output is 32 bytes, we use 4 uint64 to represent the hash value.
 type Digest struct {
-	a uint64
-	b uint64
-	c uint64
-	d uint64
+	A uint64 `json:"a"`
+	B uint64 `json:"b"`
+	C uint64 `json:"c"`
+	D uint64 `json:"d"`
 }
 
 func ToDigest(b []byte) Digest {
 	return Digest{
-		a: binary.BigEndian.Uint64(b[0:8]),
-		b: binary.BigEndian.Uint64(b[8:16]),
-		c: binary.BigEndian.Uint64(b[16:24]),
-		d: binary.BigEndian.Uint64(b[24:32]),
+		A: binary.BigEndian.Uint64(b[0:8]),
+		B: binary.BigEndian.Uint64(b[8:16]),
+		C: binary.BigEndian.Uint64(b[16:24]),
+		D: binary.BigEndian.Uint64(b[24:32]),
 	}
 }
 
@@ -359,7 +359,7 @@ type columnSchema struct {
 	RowColumnsOffset map[int64]int `json:"row_columns_offset"`
 
 	// store handle key column ids
-	handleKeyIDs map[int64]struct{}
+	HandleKeyIDs map[int64]struct{} `json:"handle_key_ids"`
 	// IndexColumns store the colID of the columns in row changed events for
 	// unique index and primary key
 	// The reason why we need this is that the Indexes in TableInfo
@@ -432,7 +432,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		ColumnsOffset:    make(map[int64]int, len(tableInfo.Columns)),
 		NameToColID:      make(map[string]int64, len(tableInfo.Columns)),
 		RowColumnsOffset: make(map[int64]int, len(tableInfo.Columns)),
-		handleKeyIDs:     make(map[int64]struct{}),
+		HandleKeyIDs:     make(map[int64]struct{}),
 		HandleColID:      []int64{-1},
 		RowColInfos:      make([]rowcodec.ColInfo, len(tableInfo.Columns)),
 		RowColFieldTps:   make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
@@ -452,12 +452,12 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 			pkIsHandle = (tableInfo.PKIsHandle && mysql.HasPriKeyFlag(col.GetFlag())) || col.ID == model.ExtraHandleID
 			if pkIsHandle {
 				// pk is handle
-				colSchema.handleKeyIDs[col.ID] = struct{}{}
+				colSchema.HandleKeyIDs[col.ID] = struct{}{}
 				colSchema.HandleColID = []int64{col.ID}
 				colSchema.IndexColumns = append(colSchema.IndexColumns, []int64{col.ID})
 				colSchema.PKIndex = []int64{col.ID}
 			} else if tableInfo.IsCommonHandle {
-				colSchema.handleKeyIDs[col.ID] = struct{}{}
+				colSchema.HandleKeyIDs[col.ID] = struct{}{}
 				colSchema.HandleColID = colSchema.HandleColID[:0]
 				pkIdx := tables.FindPrimaryIndex(tableInfo)
 				for _, pkCol := range pkIdx.Columns {
@@ -585,7 +585,7 @@ func (s *columnSchema) initRowColInfosWithoutVirtualCols() {
 // 3. If the table has no primary key and no not null unique key, it has no handleKey.
 func (s *columnSchema) initIndex(tableName string) {
 	handleIndexOffset := -1
-	hasPrimary := len(s.handleKeyIDs) != 0
+	hasPrimary := len(s.HandleKeyIDs) != 0
 	for i, idx := range s.Indices {
 		if idx.Primary {
 			// append index
@@ -603,7 +603,7 @@ func (s *columnSchema) initIndex(tableName string) {
 			// check handle key with primary key
 			if !hasPrimary {
 				for _, col := range idx.Columns {
-					s.handleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
+					s.HandleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
 				}
 				hasPrimary = true
 			}
@@ -641,12 +641,12 @@ func (s *columnSchema) initIndex(tableName string) {
 		}
 	}
 	if handleIndexOffset < 0 {
-		log.Info("not find handle index", zap.String("table", tableName), zap.Any("handleKeyIDs", s.handleKeyIDs))
+		log.Info("not find handle index", zap.String("table", tableName), zap.Any("handleKeyIDs", s.HandleKeyIDs))
 		return
 	}
 	selectCols := s.Indices[handleIndexOffset].Columns
 	for _, col := range selectCols {
-		s.handleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
+		s.HandleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
 	}
 }
 
@@ -776,7 +776,7 @@ func (s *columnSchema) getColumnSchemaWithoutVirtualColumns() *columnSchema {
 		ColumnsOffset:                 s.ColumnsOffset,
 		NameToColID:                   s.NameToColID,
 		RowColumnsOffset:              s.RowColumnsOffset,
-		handleKeyIDs:                  s.handleKeyIDs,
+		HandleKeyIDs:                  s.HandleKeyIDs,
 		IndexColumns:                  s.IndexColumns,
 		RowColInfos:                   s.RowColInfos,
 		RowColFieldTps:                s.RowColFieldTps,
