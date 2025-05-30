@@ -68,6 +68,13 @@ func (d *dispatcherStat) reset() {
 }
 
 func (d *dispatcherStat) checkEventSeq(event dispatcher.DispatcherEvent, eventCollector *EventCollector) bool {
+	log.Debug("check event sequence",
+		zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+		zap.Stringer("dispatcher", d.target.GetId()),
+		zap.Int("eventType", event.GetType()),
+		zap.Uint64("receivedSeq", event.GetSeq()),
+		zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
+		zap.Uint64("commitTs", event.GetCommitTs()))
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,

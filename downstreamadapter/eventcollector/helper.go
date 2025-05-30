@@ -84,11 +84,16 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeResolvedEvent:
 		hasInvalidEvent := false
+		hasValidEvent := false
 		for _, event := range events {
 			if stat.shouldIgnoreDataEvent(event, h.eventCollector) {
 				hasInvalidEvent = true
-				break
+			} else {
+				hasValidEvent = true
 			}
+		}
+		if !hasValidEvent {
+			return false
 		}
 		if hasInvalidEvent {
 			validEvents := make([]dispatcher.DispatcherEvent, 0, len(events))
