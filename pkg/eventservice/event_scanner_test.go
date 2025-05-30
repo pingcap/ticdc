@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
 type mockMounter struct {
@@ -450,6 +451,7 @@ func TestDMLProcessorProcessNewTransaction(t *testing.T) {
 		`insert into test.t(id,c) values (0, "c0")`,
 		`insert into test.t(id,c) values (1, "c1")`,
 	}...)
+
 	tableInfo := ddlEvent.TableInfo
 	tableID := ddlEvent.TableID
 	dispatcherID := common.NewDispatcherID()
@@ -598,6 +600,28 @@ func TestDMLProcessorProcessNewTransaction(t *testing.T) {
 		// Verify all events are in the batch
 		require.Equal(t, 2, len(processor.batchDML.DMLEvents))
 		require.Equal(t, int32(3), processor.batchDML.Len())
+	})
+
+	// Test 6: First event is update that changes UK
+	t.Run("UpdateThatChangesUK", func(t *testing.T) {
+		processor := newDMLProcessor(mockMounter, mockSchemaGetter)
+
+		helper.Tk().MustExec("use test")
+		ddlEvent := helper.DDL2Event("create table t2 (id int primary key, a int(50), b char(50), unique key uk_a(a))")
+		tableInfo := ddlEvent.TableInfo
+		tableID := ddlEvent.TableID
+
+		_, updateEvent := helper.DML2UpdateEvent("test", "t2", "insert into test.t2(id,a,b) values (0, 1, 'b0')", "update test.t2 set a = 2 where id = 0")
+		err := processor.processNewTransaction(updateEvent, tableID, tableInfo, dispatcherID)
+		require.NoError(t, err)
+
+		require.NotNil(t, processor.currentDML)
+		require.Equal(t, updateEvent.StartTs, processor.currentDML.GetStartTs())
+		require.Equal(t, updateEvent.CRTs, processor.currentDML.GetCommitTs())
+
+		require.Equal(t, 1, len(processor.insertRowCache))
+		require.Equal(t, common.OpTypePut, processor.insertRowCache[0].OpType)
+		require.False(t, processor.insertRowCache[0].IsUpdate())
 	})
 }
 
@@ -1227,4 +1251,113 @@ func TestErrorHandler(t *testing.T) {
 			require.Nil(t, returnErr4)
 		})
 	})
+}
+
+// TestScanAndMergeEventsSingleUKUpdate tests scanAndMergeEvents function with a single event that updates UK
+func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
+	// Setup helper and table info with unique key
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	// Create table with unique key on column 'a'
+	helper.Tk().MustExec("use test")
+	ddlEvent := helper.DDL2Event("create table t_uk (id int primary key, a int, b char(50), unique key uk_a(a))")
+	tableID := ddlEvent.TableID
+	dispatcherID := common.NewDispatcherID()
+
+	// Generate update event that changes UK
+	_, updateEvent := helper.DML2UpdateEvent("test", "t_uk",
+		"insert into test.t_uk(id,a,b) values (1, 10, 'old_b')",
+		"update test.t_uk set a = 20 where id = 1")
+
+	// Create mock components
+	mockSchemaGetter := newMockSchemaStore()
+	mockSchemaGetter.AppendDDLEvent(tableID, *ddlEvent)
+
+	// Create a mock iterator that returns only the single update event
+	mockIter := &mockEventIterator{
+		events: []*common.RawKVEntry{updateEvent},
+	}
+
+	// Create event scanner
+	scanner := &eventScanner{
+		mounter:      pevent.NewMounter(time.UTC, &integrity.Config{}),
+		schemaGetter: mockSchemaGetter,
+	}
+
+	// Create scan session
+	ctx := context.Background()
+	dispatcherStat := &dispatcherStat{
+		id:        dispatcherID,
+		isRunning: atomic.Bool{},
+		isRemoved: atomic.Bool{},
+	}
+	dispatcherStat.isRunning.Store(true)
+
+	dataRange := common.DataRange{
+		Span: &heartbeatpb.TableSpan{
+			TableID: tableID,
+		},
+		StartTs: updateEvent.StartTs,
+		EndTs:   updateEvent.CRTs + 100,
+	}
+
+	limit := scanLimit{
+		maxBytes: 1000,
+		timeout:  10 * time.Second,
+	}
+
+	session := &scanSession{
+		ctx:            ctx,
+		dispatcherStat: dispatcherStat,
+		dataRange:      dataRange,
+		limit:          limit,
+		startTime:      time.Now(),
+		events:         make([]event.Event, 0),
+	}
+
+	// Execute scanAndMergeEvents
+	events, isBroken, err := scanner.scanAndMergeEvents(session, []pevent.DDLEvent{}, mockIter)
+
+	// Verify results
+	require.NoError(t, err)
+	require.False(t, isBroken)
+	require.Equal(t, 2, len(events)) // BatchDML + ResolvedEvent
+
+	// Verify first event is BatchDMLEvent
+	batchDML, ok := events[0].(*pevent.BatchDMLEvent)
+	require.True(t, ok)
+	require.Equal(t, dispatcherID, batchDML.GetDispatcherID())
+	require.Equal(t, updateEvent.CRTs, batchDML.GetCommitTs())
+	require.Equal(t, 1, len(batchDML.DMLEvents)) // One DML event in the batch
+
+	// Verify the DML event contains the update
+	dmlEvent := batchDML.DMLEvents[0]
+	require.Equal(t, 2, int(dmlEvent.Len()))
+	require.Equal(t, updateEvent.StartTs, dmlEvent.GetStartTs())
+	require.Equal(t, updateEvent.CRTs, dmlEvent.GetCommitTs())
+	require.Equal(t, tableID, dmlEvent.GetTableID())
+	row1, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, pevent.RowTypeDelete, row1.RowType)
+	require.Equal(t, int64(1), row1.PreRow.GetInt64(0))
+	require.Equal(t, int64(10), row1.PreRow.GetInt64(1))
+	require.Equal(t, "old_b", string(row1.PreRow.GetBytes(2)))
+	row2, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, pevent.RowTypeInsert, row2.RowType)
+	require.Equal(t, int64(1), row2.Row.GetInt64(0))
+	require.Equal(t, int64(20), row2.Row.GetInt64(1))
+	require.Equal(t, "old_b", string(row2.Row.GetBytes(2)))
+
+	// Verify second event is ResolvedEvent
+	resolvedEvent, ok := events[1].(pevent.ResolvedEvent)
+	require.True(t, ok)
+	require.Equal(t, dispatcherID, resolvedEvent.DispatcherID)
+	require.Equal(t, dataRange.EndTs, resolvedEvent.ResolvedTs)
+
+	// Verify session state was updated correctly
+	require.Equal(t, updateEvent.CRTs, session.lastCommitTs)
+	require.Equal(t, 1, session.dmlCount)
+	require.True(t, session.totalBytes > 0) // Some bytes were processed
 }

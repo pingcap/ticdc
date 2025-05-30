@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/kv"
@@ -27,7 +26,6 @@ import (
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/codec"
 	"github.com/pingcap/tidb/pkg/util/rowcodec"
-	"go.uber.org/zap"
 )
 
 var (
@@ -219,12 +217,12 @@ func unflatten(datum types.Datum, ft *types.FieldType, loc *time.Location) (type
 }
 
 func IsUKChanged(rawKV *common.RawKVEntry, tableInfo *common.TableInfo) (bool, error) {
-	log.Info("fizz index", zap.Any("indices", tableInfo.GetIndices()), zap.Any("index_columns", tableInfo.GetIndexColumns()))
 
 	recordID, err := tablecodec.DecodeRowKey(rawKV.Key)
 	if err != nil {
 		return false, errors.Trace(err)
 	}
+
 	oldDatum, err := decodeRow(rawKV.OldValue, recordID, tableInfo, time.UTC)
 	if err != nil {
 		return false, errors.Trace(err)
@@ -244,5 +242,19 @@ func IsUKChanged(rawKV *common.RawKVEntry, tableInfo *common.TableInfo) (bool, e
 			}
 		}
 	}
+
+	for _, colInfo := range tableInfo.GetColumns() {
+		colID := colInfo.ID
+		if colInfo.GetFlag()&mysql.UniqueKeyFlag == 0 {
+			continue
+		}
+		d1 := oldDatum[colID]
+		d2 := newDatum[colID]
+
+		if !d1.Equals(d2) {
+			return true, nil
+		}
+	}
+
 	return false, nil
 }

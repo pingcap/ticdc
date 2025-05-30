@@ -302,6 +302,9 @@ func (s *eventScanner) finalizeScan(
 	merger *eventMerger,
 	processor *dmlProcessor,
 ) ([]event.Event, bool, error) {
+	if err := processor.clearCache(); err != nil {
+		return nil, false, err
+	}
 	// Append final batch
 	events := merger.appendDMLEvent(processor.getCurrentBatch(), &session.lastCommitTs)
 	session.events = append(session.events, events...)
@@ -319,6 +322,9 @@ func (s *eventScanner) interruptScan(
 	merger *eventMerger,
 	processor *dmlProcessor,
 ) ([]event.Event, bool, error) {
+	if err := processor.clearCache(); err != nil {
+		return nil, false, err
+	}
 	// Append current batch
 	events := merger.appendDMLEvent(processor.getCurrentBatch(), &session.lastCommitTs)
 	session.events = append(session.events, events...)
@@ -501,6 +507,18 @@ func newDMLProcessor(mounter pevent.Mounter, schemaGetter schemaGetter) *dmlProc
 	}
 }
 
+func (p *dmlProcessor) clearCache() error {
+	if len(p.insertRowCache) > 0 {
+		for _, insertRow := range p.insertRowCache {
+			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk); err != nil {
+				return err
+			}
+		}
+		p.insertRowCache = make([]*common.RawKVEntry, 0)
+	}
+	return nil
+}
+
 // processNewTransaction processes a new transaction event
 func (p *dmlProcessor) processNewTransaction(
 	rawEvent *common.RawKVEntry,
@@ -519,7 +537,7 @@ func (p *dmlProcessor) processNewTransaction(
 	// Create a new DMLEvent for the current transaction
 	p.currentDML = pevent.NewDMLEvent(dispatcherID, tableID, rawEvent.StartTs, rawEvent.CRTs, tableInfo)
 	p.batchDML.AppendDMLEvent(p.currentDML)
-	return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk)
+	return p.appendRow(rawEvent)
 }
 
 // appendRow appends a row to the current DML event.
