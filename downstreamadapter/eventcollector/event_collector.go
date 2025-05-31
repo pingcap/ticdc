@@ -589,6 +589,12 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						events.AssembleRows(tableInfo)
 						from := &targetMessage.From
 						for _, dml := range events.DMLEvents {
+							log.Info("receive dml event",
+								zap.Stringer("dispatcherID", dml.GetDispatcherID()),
+								zap.String("serverID", from.String()),
+								zap.Uint64("commitTs", dml.GetCommitTs()),
+								zap.Uint64("seq", dml.GetSeq()),
+							)
 							c.ds.Push(dml.DispatcherID, dispatcher.NewDispatcherEvent(from, dml))
 						}
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
