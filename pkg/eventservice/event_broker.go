@@ -182,6 +182,11 @@ func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, e *pevent.B
 	// Set sequence number for the event
 	for _, dml := range e.DMLEvents {
 		dml.Seq = d.seq.Add(1)
+		log.Info("send dml event",
+			zap.Stringer("dispatcherID", dml.GetDispatcherID()),
+			zap.Uint64("seq", dml.GetSeq()),
+			zap.Uint64("commitTs", dml.GetCommitTs()),
+		)
 		// Emit sync point event if needed
 		c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)
 	}
@@ -520,6 +525,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				log.Error("expect a DMLEvent, but got", zap.Any("event", e))
 				continue
 			}
+
 			c.sendDML(ctx, remoteID, dmls, task)
 		case pevent.TypeDDLEvent:
 			ddl, ok := e.(*pevent.DDLEvent)

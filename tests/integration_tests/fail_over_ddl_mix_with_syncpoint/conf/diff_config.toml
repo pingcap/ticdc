@@ -6,11 +6,11 @@ export-fix-sql = true
 check-struct-only = false
 
 [task]
-output-dir = "/tmp/tidb_cdc_test/fail_over_ddl_mix/sync_diff/output"
+output-dir = "/tmp/tidb_cdc_test/fail_over_ddl_mix_with_syncpoint/sync_diff/output"
 
-source-instances = ["mysql1"]
+source-instances = ["tidb0"]
 
-target-instance = "tidb0"
+target-instance = "mysql1"
 
 target-check-tables = ["test.*"]
 

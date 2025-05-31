@@ -205,6 +205,10 @@ func (a *dispatcherStat) onLatestCommitTs(latestCommitTs uint64) bool {
 func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 	startTs := a.sentResolvedTs.Load()
 	if startTs < a.resetTs.Load() {
+		log.Warn("resetTs is greater than sentResolvedTs, reset startTs",
+			zap.Uint64("resetTs", a.resetTs.Load()),
+			zap.Uint64("sentResolvedTs", startTs),
+			zap.Stringer("dispatcherID", a.id))
 		startTs = a.resetTs.Load()
 	}
 

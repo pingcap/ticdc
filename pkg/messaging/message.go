@@ -296,7 +296,9 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 	case TypeCoordinatorBootstrapResponse:
 		m = &heartbeatpb.CoordinatorBootstrapResponse{}
 	case TypeDispatcherRequest:
-		m = &DispatcherRequest{}
+		m = &DispatcherRequest{
+			DispatcherRequest: &eventpb.DispatcherRequest{},
+		}
 	case TypeMaintainerBootstrapResponse:
 		m = &heartbeatpb.MaintainerBootstrapResponse{}
 	case TypeMaintainerPostBootstrapRequest:

@@ -73,18 +73,39 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		return false
 	}
 
+	log.Debug("handle events",
+		zap.Any("dispatcher", stat.dispatcherID),
+		zap.Int("eventCount", len(events)),
+		zap.Int("firstEventType", int(events[0].GetType())))
+
 	// Only check the first event type, because all event types should be same
 	switch events[0].GetType() {
 	// note: TypeDMLEvent and TypeResolvedEvent can be in the same batch, so we should handle them together.
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeResolvedEvent:
-		validEventStart := 0
+		hasInvalidEvent := false
+		hasValidEvent := false
 		for _, event := range events {
 			if stat.shouldIgnoreDataEvent(event, h.eventCollector) {
-				continue
+				hasInvalidEvent = true
+			} else {
+				hasValidEvent = true
 			}
 		}
-		return stat.target.HandleEvents(events[validEventStart:], func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
+		if !hasValidEvent {
+			return false
+		}
+		var validEvents []dispatcher.DispatcherEvent
+		if hasInvalidEvent {
+			for _, event := range events {
+				if !stat.shouldIgnoreDataEvent(event, h.eventCollector) {
+					validEvents = append(validEvents, event)
+				}
+			}
+		} else {
+			validEvents = events
+		}
+		return stat.target.HandleEvents(validEvents, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent:
 		if stat.shouldIgnoreDataEvent(events[0], h.eventCollector) {

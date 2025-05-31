@@ -398,12 +398,12 @@ func (p *persistentStorage) fetchTableDDLEvents(tableID int64, tableFilter filte
 			events = append(events, ddlEvent)
 		}
 	}
-	// log.Info("fetchTableDDLEvents",
-	// 	zap.Int64("tableID", tableID),
-	// 	zap.Uint64("start", start),
-	// 	zap.Uint64("end", end),
-	// 	zap.Any("history", history),
-	// 	zap.Any("allTargetTs", allTargetTs))
+	log.Debug("fetchTableDDLEvents",
+		zap.Int64("tableID", tableID),
+		zap.Uint64("start", start),
+		zap.Uint64("end", end),
+		zap.Any("history", history),
+		zap.Any("allTargetTs", allTargetTs))
 
 	return events, nil
 }
