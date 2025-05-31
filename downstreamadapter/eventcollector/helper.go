@@ -95,16 +95,17 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		if !hasValidEvent {
 			return false
 		}
+		var validEvents []dispatcher.DispatcherEvent
 		if hasInvalidEvent {
-			validEvents := make([]dispatcher.DispatcherEvent, 0, len(events))
 			for _, event := range events {
 				if !stat.shouldIgnoreDataEvent(event, h.eventCollector) {
 					validEvents = append(validEvents, event)
 				}
 			}
-			events = validEvents
+		} else {
+			validEvents = events
 		}
-		return stat.target.HandleEvents(events, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
+		return stat.target.HandleEvents(validEvents, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent:
 		if stat.shouldIgnoreDataEvent(events[0], h.eventCollector) {
