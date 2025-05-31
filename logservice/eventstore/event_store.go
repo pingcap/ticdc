@@ -87,6 +87,7 @@ type DMLEventState struct {
 }
 
 type EventIterator interface {
+	// Next returns the next event in the iterator and whether this event is from a new txn.
 	Next() (*common.RawKVEntry, bool, error)
 
 	// Close closes the iterator.

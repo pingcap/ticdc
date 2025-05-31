@@ -327,7 +327,9 @@ func (d *dispatcherStat) resumeDispatcher(eventCollector *EventCollector) {
 
 // TODO: better name
 func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *EventCollector) {
-	log.Info("set remote candidates", zap.Strings("nodes", nodes))
+	log.Info("set remote candidates",
+		zap.Strings("nodes", nodes),
+		zap.Stringer("dispatcherID", d.target.GetId()))
 	if len(nodes) == 0 {
 		return
 	}
