@@ -86,10 +86,16 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		hasInvalidEvent := false
 		hasValidEvent := false
 		for _, event := range events {
-			if stat.shouldIgnoreDataEvent(event, h.eventCollector) {
+			if stat.isEventFromCurrentEventService(event) {
 				hasInvalidEvent = true
 			} else {
 				hasValidEvent = true
+				if !stat.isEventSeqValid(event) {
+					// if event seq is invalid, there must be some events dropped
+					// we need drop all events in this batch and reset the dispatcher
+					h.eventCollector.resetDispatcher(stat)
+					return false
+				}
 			}
 		}
 		if !hasValidEvent {
@@ -98,17 +104,34 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		var validEvents []dispatcher.DispatcherEvent
 		if hasInvalidEvent {
 			for _, event := range events {
-				if !stat.shouldIgnoreDataEvent(event, h.eventCollector) {
+				if stat.isEventFromCurrentEventService(event) && stat.isEventCommitTsValid(event) {
 					validEvents = append(validEvents, event)
 				}
 			}
 		} else {
-			validEvents = events
+			// event is sort by commitTs, so we can find the first valid event
+			validEventStartIndex := 0
+			for _, event := range events {
+				if stat.isEventCommitTsValid(event) {
+					break
+				} else {
+					validEventStartIndex++
+				}
+			}
+			validEvents = events[validEventStartIndex:]
 		}
 		return stat.target.HandleEvents(validEvents, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent:
-		if stat.shouldIgnoreDataEvent(events[0], h.eventCollector) {
+		// TypeDDLEvent and TypeSyncPointEvent is handled one by one
+		if !stat.isEventFromCurrentEventService(events[0]) {
+			return false
+		}
+		if !stat.isEventSeqValid(events[0]) {
+			h.eventCollector.resetDispatcher(stat)
+			return false
+		}
+		if !stat.isEventCommitTsValid(events[0]) {
 			return false
 		}
 		return stat.target.HandleEvents(events, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })

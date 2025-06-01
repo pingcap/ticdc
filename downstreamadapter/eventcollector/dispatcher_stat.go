@@ -64,7 +64,21 @@ func (d *dispatcherStat) reset() {
 	d.waitHandshake.Store(true)
 }
 
-func (d *dispatcherStat) checkEventSeq(event dispatcher.DispatcherEvent, eventCollector *EventCollector) bool {
+// TODO: add and check epoch to event
+func (d *dispatcherStat) isEventFromCurrentEventService(event dispatcher.DispatcherEvent) bool {
+	d.eventServiceInfo.RLock()
+	defer d.eventServiceInfo.RUnlock()
+	return *event.From == d.eventServiceInfo.serverID
+}
+
+// isEventSeqValid check whether there are any events being dropped
+func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool {
+	if d.waitHandshake.Load() {
+		log.Warn("Receive event before handshake event, ignore it",
+			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Stringer("dispatcher", d.target.GetId()))
+		return false
+	}
 	log.Debug("check event sequence",
 		zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 		zap.Stringer("dispatcher", d.target.GetId()),
@@ -85,29 +99,13 @@ func (d *dispatcherStat) checkEventSeq(event dispatcher.DispatcherEvent, eventCo
 				zap.Uint64("receivedSeq", event.GetSeq()),
 				zap.Uint64("expectedSeq", expectedSeq),
 				zap.Uint64("commitTs", event.GetCommitTs()))
-			eventCollector.resetDispatcher(d)
 			return false
 		}
 	}
 	return true
 }
 
-func (d *dispatcherStat) shouldIgnoreDataEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) bool {
-	d.eventServiceInfo.Lock()
-	defer d.eventServiceInfo.Unlock()
-	if d.eventServiceInfo.serverID != *event.From {
-		// FIXME: unregister from this invalid event service if it send events for a long time
-		return true
-	}
-	if d.waitHandshake.Load() {
-		log.Warn("Receive event before handshake event, ignore it",
-			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-			zap.Stringer("dispatcher", d.target.GetId()))
-		return true
-	}
-	if !d.checkEventSeq(event, eventCollector) {
-		return true
-	}
+func (d *dispatcherStat) isEventCommitTsValid(event dispatcher.DispatcherEvent) bool {
 	// Note: a commit ts may have multiple transactions.
 	// it is ok to send the same txn multiple times?
 	// (we just want to avoid send old dml after new ddl)
@@ -119,10 +117,10 @@ func (d *dispatcherStat) shouldIgnoreDataEvent(event dispatcher.DispatcherEvent,
 			zap.Any("event", event.Event),
 			zap.Uint64("eventCommitTs", event.GetCommitTs()),
 			zap.Uint64("sentCommitTs", d.sentCommitTs.Load()))
-		return true
+		return false
 	}
 	d.sentCommitTs.Store(event.GetCommitTs())
-	return false
+	return true
 }
 
 func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, eventCollector *EventCollector) {
@@ -148,7 +146,8 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent, 
 			zap.Stringer("from", event.From))
 		return
 	}
-	if !d.checkEventSeq(event, eventCollector) {
+	if !d.isEventSeqValid(event) {
+		eventCollector.resetDispatcher(d)
 		return
 	}
 	d.waitHandshake.Store(false)
