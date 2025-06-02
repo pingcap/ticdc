@@ -87,8 +87,6 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		hasValidEvent := false
 		for _, event := range events {
 			if stat.isEventFromCurrentEventService(event) {
-				hasInvalidEvent = true
-			} else {
 				hasValidEvent = true
 				if !stat.isEventSeqValid(event) {
 					// if event seq is invalid, there must be some events dropped
@@ -96,6 +94,8 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 					h.eventCollector.resetDispatcher(stat)
 					return false
 				}
+			} else {
+				hasInvalidEvent = true
 			}
 		}
 		if !hasValidEvent {

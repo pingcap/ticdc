@@ -69,6 +69,8 @@ func (d *dispatcherStat) isEventFromCurrentEventService(event dispatcher.Dispatc
 	d.eventServiceInfo.RLock()
 	defer d.eventServiceInfo.RUnlock()
 	if *event.From != d.eventServiceInfo.serverID {
+		log.Warn("Receive event from other event service, ignore it",
+			zap.Stringer("dispatcher", d.target.GetId()))
 		return false
 	}
 	// TODO: maybe we can remove this when add epoch?
