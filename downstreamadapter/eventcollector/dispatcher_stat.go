@@ -68,17 +68,21 @@ func (d *dispatcherStat) reset() {
 func (d *dispatcherStat) isEventFromCurrentEventService(event dispatcher.DispatcherEvent) bool {
 	d.eventServiceInfo.RLock()
 	defer d.eventServiceInfo.RUnlock()
-	return *event.From == d.eventServiceInfo.serverID
-}
-
-// isEventSeqValid check whether there are any events being dropped
-func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool {
+	if *event.From != d.eventServiceInfo.serverID {
+		return false
+	}
+	// TODO: maybe we can remove this when add epoch?
 	if d.waitHandshake.Load() {
 		log.Warn("Receive event before handshake event, ignore it",
 			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Stringer("dispatcher", d.target.GetId()))
 		return false
 	}
+	return true
+}
+
+// isEventSeqValid check whether there are any events being dropped
+func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool {
 	log.Debug("check event sequence",
 		zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 		zap.Stringer("dispatcher", d.target.GetId()),
