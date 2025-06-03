@@ -306,13 +306,12 @@ func TestLogWriterFlushLog(t *testing.T) {
 			cfg:           cfg,
 			backendWriter: mockWriter,
 		}
-
 		if tt.name == "context cancel" {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			tt.args.ctx = ctx
 		}
-		err := w.FlushLog(tt.args.ctx)
+		err := w.backendWriter.Flush()
 		if tt.wantErr != nil {
 			log.Info("log error",
 				zap.String("wantErr", tt.wantErr.Error()),

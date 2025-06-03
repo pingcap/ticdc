@@ -52,6 +52,7 @@ type DispatcherRequest struct {
 	StartTs    uint64
 	OnlyUse    bool
 	BDRMode    bool
+	Redo       bool
 }
 
 type DispatcherRequestWithTarget struct {
@@ -77,18 +78,13 @@ func (d *DispatcherHeartbeatWithTarget) incRetryCounter() {
 	d.retryCounter++
 }
 
-const (
-	eventServiceTopic         = messaging.EventServiceTopic
-	eventCollectorTopic       = messaging.EventCollectorTopic
-	logCoordinatorTopic       = messaging.LogCoordinatorTopic
-	typeRegisterDispatcherReq = messaging.TypeDispatcherRequest
-)
-
 /*
 EventCollector is the relay between EventService and DispatcherManager, responsible for:
 1. Send dispatcher request to EventService.
 2. Collect the events from EvenService and dispatch them to different dispatchers.
 EventCollector is an instance-level component.
+
+here exist two dispatcherMap and two dynamicStream
 */
 type EventCollector struct {
 	serverId        node.ID
@@ -110,6 +106,8 @@ type EventCollector struct {
 	// All the events from event service will be sent to ds to handle.
 	// ds will dispatch the events to different dispatchers according to the dispatcherID.
 	ds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
+	// redoDs is the dynamicStream for redo dispatcher events.
+	redoDs dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
 
 	coordinatorInfo struct {
 		sync.RWMutex
@@ -138,6 +136,7 @@ func New(serverId node.ID) *EventCollector {
 		metricReceiveEventLagDuration:                metrics.EventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
 	}
 	eventCollector.ds = NewEventDynamicStream(&eventCollector)
+	eventCollector.redoDs = NewEventDynamicStream(&eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.RecvEventsMessage)
 
 	return &eventCollector
@@ -187,6 +186,7 @@ func (c *EventCollector) Close() {
 	c.cancel()
 	c.wg.Wait()
 	c.ds.Close()
+	c.redoDs.Close()
 	c.changefeedIDMap.Range(func(key, value any) bool {
 		cfID := value.(common.ChangeFeedID)
 		// Remove metrics for the changefeed.
@@ -207,34 +207,37 @@ func (c *EventCollector) Close() {
 }
 
 func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64) {
-	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
+	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()), zap.Int("type", target.GetType()))
 	defer func() {
-		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
+		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()), zap.Int("type", target.GetType()))
 	}()
+	isRedo := dispatcher.IsRedoDispatcher(target)
 	stat := &dispatcherStat{
 		dispatcherID: target.GetId(),
 		target:       target,
+		isRedo:       isRedo,
 	}
 	stat.reset()
 	stat.sentCommitTs.Store(target.GetStartTs())
 	c.dispatcherMap.Store(target.GetId(), stat)
-	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
-	metrics.EventCollectorRegisteredDispatcherCount.Inc()
-
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlAlgorithmV2, "eventCollector")
-	err := c.ds.AddPath(target.GetId(), stat, areaSetting)
+	ds := c.getDynamicStream(isRedo)
+	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
-
+	c.changefeedIDMap.Store(target.GetChangefeedID().ID(), target.GetChangefeedID())
+	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 	// TODO: handle the return error(now even it return error, it will be retried later, we can just ignore it now)
-	c.mustSendDispatcherRequest(c.serverId, eventServiceTopic, DispatcherRequest{
+	c.mustSendDispatcherRequest(c.serverId, messaging.EventServiceTopic, DispatcherRequest{
 		Dispatcher: target,
 		StartTs:    target.GetStartTs(),
 		ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
 		BDRMode:    target.GetBDRMode(),
+		Redo:       isRedo,
 	})
 
+	// here!
 	c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
 		ID:      target.GetId().ToPB(),
 		Span:    target.GetTableSpan(),
@@ -242,11 +245,12 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 	}
 }
 
-func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
+func (c *EventCollector) RemoveDispatcher(target dispatcher.EventDispatcher) {
 	log.Info("remove dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("remove dispatcher done", zap.Stringer("dispatcher", target.GetId()))
 	}()
+	isRedo := dispatcher.IsRedoDispatcher(target)
 	value, ok := c.dispatcherMap.Load(target.GetId())
 	if !ok {
 		return
@@ -255,13 +259,18 @@ func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
 	stat.unregisterDispatcher(c)
 	c.dispatcherMap.Delete(target.GetId())
 
-	err := c.ds.RemovePath(target.GetId())
+	ds := c.getDynamicStream(isRedo)
+	err := ds.RemovePath(target.GetId())
 	if err != nil {
 		log.Error("remove dispatcher from dynamic stream failed", zap.Error(err))
 	}
 }
 
-func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID) {
+func (c *EventCollector) WakeDispatcher(dispatcherID common.DispatcherID, isRedo bool) {
+	if isRedo {
+		c.redoDs.Wake(dispatcherID)
+		return
+	}
 	c.ds.Wake(dispatcherID)
 }
 
@@ -309,7 +318,7 @@ func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) ma
 func (c *EventCollector) resetDispatcher(d *dispatcherStat) {
 	c.addDispatcherRequestToSendingQueue(
 		d.eventServiceInfo.serverID,
-		eventServiceTopic,
+		messaging.EventServiceTopic,
 		DispatcherRequest{
 			Dispatcher: d.target,
 			StartTs:    d.sentCommitTs.Load(),
@@ -337,6 +346,15 @@ func (c *EventCollector) processFeedback(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case feedback := <-c.ds.Feedback():
+			switch feedback.FeedbackType {
+			case dynstream.PauseArea, dynstream.ResumeArea:
+				// Ignore it, because it is no need to pause and resume an area in event collector.
+			case dynstream.PausePath:
+				feedback.Dest.pauseDispatcher(c)
+			case dynstream.ResumePath:
+				feedback.Dest.resumeDispatcher(c)
+			}
+		case feedback := <-c.redoDs.Feedback():
 			switch feedback.FeedbackType {
 			case dynstream.PauseArea, dynstream.ResumeArea:
 				// Ignore it, because it is no need to pause and resume an area in event collector.
@@ -375,7 +393,7 @@ func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) {
 			return
 		case req := <-c.logCoordinatorRequestChan.Out():
 			c.coordinatorInfo.RLock()
-			targetMessage := messaging.NewSingleTargetMessage(c.coordinatorInfo.id, logCoordinatorTopic, req)
+			targetMessage := messaging.NewSingleTargetMessage(c.coordinatorInfo.id, messaging.LogCoordinatorTopic, req)
 			c.coordinatorInfo.RUnlock()
 			err := c.mc.SendCommand(targetMessage)
 			if err != nil {
@@ -404,6 +422,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 			StartTs:   req.StartTs,
 			OnlyReuse: req.OnlyUse,
 			BdrMode:   req.BDRMode,
+			Redo:      req.Redo,
 		},
 	}
 
@@ -416,7 +435,7 @@ func (c *EventCollector) mustSendDispatcherRequest(target node.ID, topic string,
 		message.DispatcherRequest.SyncPointTs = syncpoint.CalculateStartSyncPointTs(req.StartTs, req.Dispatcher.GetSyncPointInterval(), req.Dispatcher.GetStartTsIsSyncpoint())
 	}
 
-	err := c.mc.SendCommand(messaging.NewSingleTargetMessage(target, eventServiceTopic, message))
+	err := c.mc.SendCommand(messaging.NewSingleTargetMessage(target, messaging.EventServiceTopic, message))
 	if err != nil {
 		log.Info("failed to send dispatcher request message to event service, try again later",
 			zap.String("changefeedID", req.Dispatcher.GetChangefeedID().ID().String()),
@@ -519,6 +538,7 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 		case <-ctx.Done():
 			return
 		case targetMessage := <-inCh:
+			ds := c.getDynamicStream(targetMessage.Redo)
 			for _, msg := range targetMessage.Message {
 				switch e := msg.(type) {
 				case event.Event:
@@ -527,7 +547,7 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						events := e.(*event.BatchResolvedEvent).Events
 						from := &targetMessage.From
 						for _, resolvedEvent := range events {
-							c.ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
+							ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
 						}
 						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(e.Len()))
 					case event.TypeBatchDMLEvent:
@@ -543,7 +563,7 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						events.AssembleRows(tableInfo)
 						from := &targetMessage.From
 						for _, dml := range events.DMLEvents {
-							c.ds.Push(dml.DispatcherID, dispatcher.NewDispatcherEvent(from, dml))
+							ds.Push(dml.DispatcherID, dispatcher.NewDispatcherEvent(from, dml))
 						}
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 					case event.TypeDDLEvent:
@@ -553,7 +573,7 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						}
 						stat.(*dispatcherStat).setTableInfo(e.(*event.DDLEvent).TableInfo)
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+						ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					case event.TypeHandshakeEvent:
 						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
 						if !ok {
@@ -561,10 +581,10 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						}
 						stat.(*dispatcherStat).setTableInfo(e.(*event.HandshakeEvent).TableInfo)
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+						ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					default:
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
-						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
+						ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
 					}
 				default:
 					log.Panic("invalid message type", zap.Any("msg", msg))
@@ -582,6 +602,7 @@ func (c *EventCollector) updateMetrics(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// FIXME: record ds?
 			dsMetrics := c.ds.GetMetrics()
 			metricsDSInputChanLen.Set(float64(dsMetrics.EventChanSize))
 			metricsDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
@@ -604,4 +625,11 @@ func (c *EventCollector) updateMetrics(ctx context.Context) {
 			}
 		}
 	}
+}
+
+func (c *EventCollector) getDynamicStream(redo bool) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+	if redo {
+		return c.redoDs
+	}
+	return c.ds
 }

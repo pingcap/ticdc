@@ -27,9 +27,8 @@ import (
 var _ writer.RedoLogWriter = (*memoryLogWriter)(nil)
 
 type memoryLogWriter struct {
-	cfg           *writer.LogWriterConfig
-	encodeWorkers *encodingWorkerGroup
-	fileWorkers   *fileWorkerGroup
+	cfg         *writer.LogWriterConfig
+	fileWorkers *fileWorkerGroup
 
 	eg     *errgroup.Group
 	cancel context.CancelFunc
@@ -37,7 +36,7 @@ type memoryLogWriter struct {
 
 // NewLogWriter creates a new memoryLogWriter.
 func NewLogWriter(
-	ctx context.Context, cfg *writer.LogWriterConfig, opts ...writer.Option,
+	ctx context.Context, cfg *writer.LogWriterConfig, fileType string, opts ...writer.Option,
 ) (*memoryLogWriter, error) {
 	if cfg == nil {
 		return nil, errors.WrapError(errors.ErrRedoConfigInvalid,
@@ -58,18 +57,14 @@ func NewLogWriter(
 	eg, ctx := errgroup.WithContext(ctx)
 	lwCtx, lwCancel := context.WithCancel(ctx)
 	lw := &memoryLogWriter{
-		cfg:           cfg,
-		encodeWorkers: newEncodingWorkerGroup(cfg),
-		fileWorkers:   newFileWorkerGroup(cfg, cfg.FlushWorkerNum, extStorage, opts...),
-		eg:            eg,
-		cancel:        lwCancel,
+		cfg:    cfg,
+		eg:     eg,
+		cancel: lwCancel,
 	}
+	lw.fileWorkers = newFileWorkerGroup(cfg, cfg.FlushWorkerNum, fileType, extStorage, opts...)
 
 	eg.Go(func() error {
-		return lw.encodeWorkers.Run(lwCtx)
-	})
-	eg.Go(func() error {
-		return lw.fileWorkers.Run(lwCtx, lw.encodeWorkers.outputCh)
+		return lw.fileWorkers.Run(lwCtx)
 	})
 	return lw, nil
 }
@@ -84,16 +79,11 @@ func (l *memoryLogWriter) WriteEvents(ctx context.Context, events ...writer.Redo
 				zap.String("capture", l.cfg.CaptureID))
 			continue
 		}
-		if err := l.encodeWorkers.AddEvent(ctx, event); err != nil {
+		if err := l.fileWorkers.input(ctx, event); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// FlushLog implement FlushLog api
-func (l *memoryLogWriter) FlushLog(ctx context.Context) error {
-	return l.encodeWorkers.FlushAll(ctx)
 }
 
 // Close implements RedoLogWriter.Close

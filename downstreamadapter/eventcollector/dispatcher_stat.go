@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
 )
@@ -30,6 +31,7 @@ import (
 type dispatcherStat struct {
 	dispatcherID common.DispatcherID
 	target       dispatcher.EventDispatcher
+	isRedo       bool
 
 	eventServiceInfo struct {
 		sync.RWMutex
@@ -177,7 +179,7 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 		d.eventServiceInfo.readyEventReceived = true
 		eventCollector.addDispatcherRequestToSendingQueue(
 			server,
-			eventServiceTopic,
+			messaging.EventServiceTopic,
 			DispatcherRequest{
 				Dispatcher: d.target,
 				StartTs:    d.sentCommitTs.Load(),
@@ -189,7 +191,7 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 		if d.eventServiceInfo.serverID != "" {
 			eventCollector.addDispatcherRequestToSendingQueue(
 				d.eventServiceInfo.serverID,
-				eventServiceTopic,
+				messaging.EventServiceTopic,
 				DispatcherRequest{
 					Dispatcher: d.target,
 					ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
@@ -206,7 +208,7 @@ func (d *dispatcherStat) handleReadyEvent(event dispatcher.DispatcherEvent, even
 		d.eventServiceInfo.remoteCandidates = nil
 		eventCollector.addDispatcherRequestToSendingQueue(
 			server,
-			eventServiceTopic,
+			messaging.EventServiceTopic,
 			DispatcherRequest{
 				Dispatcher: d.target,
 				StartTs:    d.sentCommitTs.Load(),
@@ -232,7 +234,7 @@ func (d *dispatcherStat) handleNotReusableEvent(event dispatcher.DispatcherEvent
 		if len(d.eventServiceInfo.remoteCandidates) > 0 {
 			eventCollector.addDispatcherRequestToSendingQueue(
 				d.eventServiceInfo.remoteCandidates[0],
-				eventServiceTopic,
+				messaging.EventServiceTopic,
 				DispatcherRequest{
 					Dispatcher: d.target,
 					StartTs:    d.target.GetStartTs(),
@@ -250,13 +252,13 @@ func (d *dispatcherStat) unregisterDispatcher(eventCollector *EventCollector) {
 	d.eventServiceInfo.RLock()
 	defer d.eventServiceInfo.RUnlock()
 	// must unregister from local event service
-	eventCollector.mustSendDispatcherRequest(eventCollector.serverId, eventServiceTopic, DispatcherRequest{
+	eventCollector.mustSendDispatcherRequest(eventCollector.serverId, messaging.EventServiceTopic, DispatcherRequest{
 		Dispatcher: d.target,
 		ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
 	})
 	// unregister from remote event service if have
 	if d.eventServiceInfo.serverID != "" && d.eventServiceInfo.serverID != eventCollector.serverId {
-		eventCollector.mustSendDispatcherRequest(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
+		eventCollector.mustSendDispatcherRequest(d.eventServiceInfo.serverID, messaging.EventServiceTopic, DispatcherRequest{
 			Dispatcher: d.target,
 			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
 		})
@@ -278,7 +280,7 @@ func (d *dispatcherStat) pauseDispatcher(eventCollector *EventCollector) {
 		return
 	}
 
-	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
+	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, messaging.EventServiceTopic, DispatcherRequest{
 		Dispatcher: d.target,
 		ActionType: eventpb.ActionType_ACTION_TYPE_PAUSE,
 	})
@@ -296,7 +298,7 @@ func (d *dispatcherStat) resumeDispatcher(eventCollector *EventCollector) {
 		return
 	}
 
-	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, eventServiceTopic, DispatcherRequest{
+	eventCollector.addDispatcherRequestToSendingQueue(d.eventServiceInfo.serverID, messaging.EventServiceTopic, DispatcherRequest{
 		Dispatcher: d.target,
 		ActionType: eventpb.ActionType_ACTION_TYPE_RESUME,
 	})
@@ -320,7 +322,7 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string, eventCollector *Eve
 
 	eventCollector.addDispatcherRequestToSendingQueue(
 		d.eventServiceInfo.serverID,
-		eventServiceTopic,
+		messaging.EventServiceTopic,
 		DispatcherRequest{
 			Dispatcher: d.target,
 			StartTs:    d.target.GetStartTs(),

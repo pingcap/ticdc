@@ -29,7 +29,7 @@ type dispatcherCreateInfo struct {
 	SchemaID  int64
 }
 
-func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap {
+func (e *EventDispatcherManager) GetDispatcherMap() *DispatcherMap[*dispatcher.Dispatcher] {
 	return e.dispatcherMap
 }
 

@@ -35,7 +35,7 @@ type logWriter struct {
 
 // NewLogWriter create a new logWriter.
 func NewLogWriter(
-	ctx context.Context, cfg *writer.LogWriterConfig, opts ...writer.Option,
+	ctx context.Context, cfg *writer.LogWriterConfig, fileType string, opts ...writer.Option,
 ) (lw *logWriter, err error) {
 	if cfg == nil {
 		err := errors.New("LogWriterConfig can not be nil")
@@ -55,7 +55,7 @@ func NewLogWriter(
 	}
 
 	lw = &logWriter{cfg: cfg}
-	if lw.backendWriter, err = NewFileWriter(ctx, cfg, opts...); err != nil {
+	if lw.backendWriter, err = NewFileWriter(ctx, cfg, fileType, opts...); err != nil {
 		return nil, err
 	}
 	return
@@ -87,29 +87,20 @@ func (l *logWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent)
 		if err != nil {
 			return errors.WrapError(errors.ErrMarshalFailed, err)
 		}
-
 		l.backendWriter.AdvanceTs(rl.GetCommitTs())
 		_, err = l.backendWriter.Write(data)
 		if err != nil {
 			return err
 		}
 	}
+	err := l.backendWriter.Flush()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	for _, event := range events {
+		event.PostFlush()
+	}
 	return nil
-}
-
-// FlushLog implement FlushLog api
-func (l *logWriter) FlushLog(ctx context.Context) (err error) {
-	select {
-	case <-ctx.Done():
-		return errors.Trace(ctx.Err())
-	default:
-	}
-
-	if l.isStopped() {
-		return errors.ErrRedoWriterStopped.GenWithStackByArgs()
-	}
-
-	return l.backendWriter.Flush()
 }
 
 // Close implements RedoLogWriter.Close.
