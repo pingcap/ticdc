@@ -205,7 +205,9 @@ func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, batchEvent 
 			i++
 		}
 	}
-	doSendDML(batchEvent)
+	if len(batchEvent.DMLEvents) > 0 {
+		doSendDML(batchEvent)
+	}
 }
 
 func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.DDLEvent, d *dispatcherStat) {
