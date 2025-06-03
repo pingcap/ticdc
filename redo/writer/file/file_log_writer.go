@@ -18,8 +18,6 @@ import (
 	"path/filepath"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/redo/codec"
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/tiflow/pkg/config"
@@ -31,14 +29,13 @@ var _ writer.RedoLogWriter = &logWriter{}
 
 // logWriter implement the RedoLogWriter interface
 type logWriter struct {
-	cfg       *writer.LogWriterConfig
-	ddlWriter fileWriter
-	dmlWriter fileWriter
+	cfg           *writer.LogWriterConfig
+	backendWriter fileWriter
 }
 
 // NewLogWriter create a new logWriter.
 func NewLogWriter(
-	ctx context.Context, cfg *writer.LogWriterConfig, opts ...writer.Option,
+	ctx context.Context, cfg *writer.LogWriterConfig, fileType string, opts ...writer.Option,
 ) (lw *logWriter, err error) {
 	if cfg == nil {
 		err := errors.New("LogWriterConfig can not be nil")
@@ -58,10 +55,7 @@ func NewLogWriter(
 	}
 
 	lw = &logWriter{cfg: cfg}
-	if lw.ddlWriter, err = NewFileWriter(ctx, cfg, redo.RedoDDLLogFileType, opts...); err != nil {
-		return nil, err
-	}
-	if lw.dmlWriter, err = NewFileWriter(ctx, cfg, redo.RedoRowLogFileType, opts...); err != nil {
+	if lw.backendWriter, err = NewFileWriter(ctx, cfg, fileType, opts...); err != nil {
 		return nil, err
 	}
 	return
@@ -81,10 +75,6 @@ func (l *logWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent)
 		return nil
 	}
 
-	backendWriter := l.dmlWriter
-	if events[0].GetType() == event.TypeDDLEvent {
-		backendWriter = l.ddlWriter
-	}
 	for _, event := range events {
 		if event == nil {
 			log.Warn("writing nil event to redo log, ignore this",
@@ -97,14 +87,13 @@ func (l *logWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent)
 		if err != nil {
 			return errors.WrapError(errors.ErrMarshalFailed, err)
 		}
-		backendWriter.AdvanceTs(rl.GetCommitTs())
-		_, err = backendWriter.Write(data)
+		l.backendWriter.AdvanceTs(rl.GetCommitTs())
+		_, err = l.backendWriter.Write(data)
 		if err != nil {
 			return err
 		}
 	}
-	// flush
-	err := backendWriter.Flush()
+	err := l.backendWriter.Flush()
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -116,13 +105,9 @@ func (l *logWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent)
 
 // Close implements RedoLogWriter.Close.
 func (l *logWriter) Close() (err error) {
-	err = l.ddlWriter.Close()
-	if err != nil {
-		return err
-	}
-	return l.dmlWriter.Close()
+	return l.backendWriter.Close()
 }
 
 func (l *logWriter) isStopped() bool {
-	return !l.ddlWriter.IsRunning() && !l.dmlWriter.IsRunning()
+	return !l.backendWriter.IsRunning()
 }

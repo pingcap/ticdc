@@ -17,7 +17,6 @@ import (
 	"context"
 
 	"github.com/pingcap/log"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/redo"
@@ -28,9 +27,8 @@ import (
 var _ writer.RedoLogWriter = (*memoryLogWriter)(nil)
 
 type memoryLogWriter struct {
-	cfg            *writer.LogWriterConfig
-	ddlFileWorkers *fileWorkerGroup
-	dmlFileWorkers *fileWorkerGroup
+	cfg         *writer.LogWriterConfig
+	fileWorkers *fileWorkerGroup
 
 	eg     *errgroup.Group
 	cancel context.CancelFunc
@@ -38,7 +36,7 @@ type memoryLogWriter struct {
 
 // NewLogWriter creates a new memoryLogWriter.
 func NewLogWriter(
-	ctx context.Context, cfg *writer.LogWriterConfig, opts ...writer.Option,
+	ctx context.Context, cfg *writer.LogWriterConfig, fileType string, opts ...writer.Option,
 ) (*memoryLogWriter, error) {
 	if cfg == nil {
 		return nil, errors.WrapError(errors.ErrRedoConfigInvalid,
@@ -63,14 +61,10 @@ func NewLogWriter(
 		eg:     eg,
 		cancel: lwCancel,
 	}
-	lw.ddlFileWorkers = newFileWorkerGroup(cfg, cfg.FlushWorkerNum, redo.RedoDDLLogFileType, extStorage, opts...)
-	lw.dmlFileWorkers = newFileWorkerGroup(cfg, cfg.FlushWorkerNum, redo.RedoRowLogFileType, extStorage, opts...)
+	lw.fileWorkers = newFileWorkerGroup(cfg, cfg.FlushWorkerNum, fileType, extStorage, opts...)
 
 	eg.Go(func() error {
-		return lw.ddlFileWorkers.Run(lwCtx)
-	})
-	eg.Go(func() error {
-		return lw.dmlFileWorkers.Run(lwCtx)
+		return lw.fileWorkers.Run(lwCtx)
 	})
 	return lw, nil
 }
@@ -85,15 +79,8 @@ func (l *memoryLogWriter) WriteEvents(ctx context.Context, events ...writer.Redo
 				zap.String("capture", l.cfg.CaptureID))
 			continue
 		}
-		switch event.GetType() {
-		case commonEvent.TypeDDLEvent:
-			if err := l.ddlFileWorkers.input(ctx, event); err != nil {
-				return err
-			}
-		case commonEvent.TypeDMLEvent:
-			if err := l.dmlFileWorkers.input(ctx, event); err != nil {
-				return err
-			}
+		if err := l.fileWorkers.input(ctx, event); err != nil {
+			return err
 		}
 	}
 	return nil

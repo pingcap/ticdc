@@ -219,7 +219,6 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 		// TODO: check metrics
 		metrics.HandleDispatcherRequsetCounter.WithLabelValues("default", schedulerDispatcherRequest.ChangefeedID.Name, "receive").Inc()
 	case messaging.TypeCheckpointTsMessage:
-		// here received checkpoint all dispatchers(include redo)?
 		checkpointTsMessage := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		c.checkpointTsMessageDynamicStream.Push(
 			common.NewChangefeedIDFromPB(checkpointTsMessage.ChangefeedID).Id,

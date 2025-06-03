@@ -133,7 +133,6 @@ func NewRedoDispatcher(
 		BootstrapState:     BootstrapFinished,
 	}
 
-	// dispatcher.addToStatusDynamicStream()
 	return dispatcher
 }
 
@@ -144,82 +143,6 @@ func NewRedoDispatcher(
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream.
 // 2. If the action is a pass, we just need to pass the event
 func (rd *RedoDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) {
-	log.Info("dispatcher handle dispatcher status",
-		zap.Any("dispatcherStatus", dispatcherStatus),
-		zap.Stringer("dispatcher", rd.id),
-		zap.Any("action", dispatcherStatus.GetAction()),
-		zap.Any("ack", dispatcherStatus.GetAck()))
-	// deal with the ack info
-	ack := dispatcherStatus.GetAck()
-	if ack != nil {
-		identifier := BlockEventIdentifier{
-			CommitTs:    ack.CommitTs,
-			IsSyncPoint: ack.IsSyncPoint,
-		}
-		rd.cancelResendTask(identifier)
-	}
-
-	// deal with the dispatcher action
-	action := dispatcherStatus.GetAction()
-	if action != nil {
-		pendingEvent := rd.blockEventStatus.getEvent()
-		if pendingEvent == nil && action.CommitTs > rd.GetResolvedTs() {
-			// we have not received the block event, and the action is for the future event, so just ignore
-			log.Info("pending event is nil, and the action's commit is larger than dispatchers resolvedTs",
-				zap.Uint64("resolvedTs", rd.GetResolvedTs()),
-				zap.Uint64("actionCommitTs", action.CommitTs),
-				zap.Stringer("dispatcher", rd.id))
-			// we have not received the block event, and the action is for the future event, so just ignore
-			return
-		}
-		if rd.blockEventStatus.actionMatchs(action) {
-			log.Info("pending event get the action",
-				zap.Any("action", action),
-				zap.Any("innerAction", int(action.Action)),
-				zap.Stringer("dispatcher", rd.id),
-				zap.Uint64("pendingEventCommitTs", pendingEvent.GetCommitTs()))
-			rd.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
-			pendingEvent.PushFrontFlushFunc(func() {
-				// clear blockEventStatus should be before wake ds.
-				// otherwise, there may happen:
-				// 1. wake ds
-				// 2. get new ds and set new pending event
-				// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
-				rd.blockEventStatus.clear()
-			})
-			if action.Action == heartbeatpb.Action_Write {
-				failpoint.Inject("BlockOrWaitBeforeWrite", nil)
-				err := rd.AddBlockEventToSink(pendingEvent)
-				if err != nil {
-					select {
-					case rd.errCh <- err:
-					default:
-						log.Error("error channel is full, discard error",
-							zap.Stringer("changefeedID", rd.changefeedID),
-							zap.Stringer("dispatcherID", rd.id),
-							zap.Error(err))
-					}
-					return
-				}
-				failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
-			} else {
-				failpoint.Inject("BlockOrWaitBeforePass", nil)
-				rd.PassBlockEventToSink(pendingEvent)
-				failpoint.Inject("BlockAfterPass", nil)
-			}
-		}
-
-		// whether the outdate message or not, we need to return message show we have finished the event.
-		rd.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
-			ID: rd.id.ToPB(),
-			State: &heartbeatpb.State{
-				IsBlocked:   true,
-				BlockTs:     dispatcherStatus.GetAction().CommitTs,
-				IsSyncPoint: dispatcherStatus.GetAction().IsSyncPoint,
-				Stage:       heartbeatpb.BlockStage_DONE,
-			},
-		}
-	}
 }
 
 // HandleEvents can batch handle events about resolvedTs Event and DML Event.
@@ -269,10 +192,9 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			continue
 		}
 
-		atomic.StoreUint64(&rd.resolvedTs, event.GetCommitTs())
 		switch event.GetType() {
 		case commonEvent.TypeResolvedEvent:
-			// atomic.StoreUint64(&rd.resolvedTs, event.(commonEvent.ResolvedEvent).ResolvedTs)
+			atomic.StoreUint64(&rd.resolvedTs, event.(commonEvent.ResolvedEvent).ResolvedTs)
 		case commonEvent.TypeDMLEvent:
 			dml := event.(*commonEvent.DMLEvent)
 			if dml.Len() == 0 {
@@ -370,36 +292,6 @@ func (rd *RedoDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 	event.PostFlush()
 }
 
-// shouldBlock check whether the event should be blocked(to wait maintainer response)
-// For the ddl event with more than one blockedTable, it should block.
-// For the ddl event with only one blockedTable, it should block only if the table is not complete span.
-// Sync point event should always block.
-func (rd *RedoDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
-	switch event.GetType() {
-	case commonEvent.TypeDDLEvent:
-		ddlEvent := event.(*commonEvent.DDLEvent)
-		if ddlEvent.BlockedTables == nil {
-			return false
-		}
-		switch ddlEvent.GetBlockedTables().InfluenceType {
-		case commonEvent.InfluenceTypeNormal:
-			if len(ddlEvent.GetBlockedTables().TableIDs) > 1 {
-				return true
-			}
-			if !common.IsCompleteSpan(rd.tableSpan) {
-				// if the table is split, even the blockTable only itself, it should block
-				return true
-			}
-			return false
-		case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
-			return true
-		}
-	default:
-		log.Error("invalid event type", zap.Any("eventType", event.GetType()))
-	}
-	return false
-}
-
 func (rd *RedoDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return rd.tableSpan
 }
@@ -419,10 +311,8 @@ func (rd *RedoDispatcher) GetCheckpointTs() uint64 {
 		// so we use resolvedTs as checkpointTs
 		return rd.GetResolvedTs()
 	}
-
 	if isEmpty {
-		// FIXME: return correct checkpointTs
-		return max(checkpointTs+1, rd.GetResolvedTs())
+		return max(checkpointTs, rd.GetResolvedTs())
 	}
 	return checkpointTs
 }
@@ -433,16 +323,6 @@ func (rd *RedoDispatcher) GetId() common.DispatcherID {
 
 func (rd *RedoDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return rd.changefeedID
-}
-
-func (rd *RedoDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
-	task := rd.resendTaskMap.Get(identifier)
-	if task == nil {
-		return
-	}
-
-	task.Cancel()
-	rd.resendTaskMap.Delete(identifier)
 }
 
 func (rd *RedoDispatcher) GetSchemaID() int64 {
@@ -486,30 +366,7 @@ func (rd *RedoDispatcher) GetRemovingStatus() bool {
 }
 
 func (rd *RedoDispatcher) GetBlockEventStatus() *heartbeatpb.State {
-	pendingEvent, blockStage := rd.blockEventStatus.getEventAndStage()
-
-	// we only need to report the block status for the ddl that block others and not finisherd.
-	if pendingEvent == nil || !rd.shouldBlock(pendingEvent) {
-		return nil
-	}
-
-	// we only need to report the block status of these block ddls when maintainer is restarterd.
-	// For the non-block but with needDroppedTables and needAddTables ddls,
-	// we don't need to report it when maintainer is restarted, because:
-	// 1. the ddl not block other dispatchers
-	// 2. maintainer can get current available tables based on table trigger event dispatcher's startTs,
-	//    so don't need to do extra add and drop actions.
-
-	return &heartbeatpb.State{
-		IsBlocked:         true,
-		BlockTs:           pendingEvent.GetCommitTs(),
-		BlockTables:       pendingEvent.GetBlockedTables().ToPB(),
-		NeedDroppedTables: pendingEvent.GetNeedDroppedTables().ToPB(),
-		NeedAddedTables:   commonEvent.ToTablesPB(pendingEvent.GetNeedAddedTables()),
-		UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(pendingEvent.GetUpdatedSchemas()), // only exists for rename table and rename tables
-		IsSyncPoint:       pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,         // sync point event must should block
-		Stage:             blockStage,
-	}
+	return nil
 }
 
 func (rd *RedoDispatcher) GetEventSizePerSecond() float32 {

@@ -553,6 +553,7 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 	defer flushResolvedTsTicker.Stop()
 
 	resolvedTsCacheMap := make(map[node.ID]*resolvedTsCache)
+	redoResolvedTsCacheMap := make(map[node.ID]*resolvedTsCache)
 	messageCh := c.messageCh[workerIndex]
 	batchM := make([]*wrapEvent, 0, defaultMaxBatchSize)
 	for {
@@ -577,7 +578,11 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 
 			for _, m := range batchM {
 				if m.msgType == pevent.TypeResolvedEvent {
-					c.handleResolvedTs(ctx, resolvedTsCacheMap, m, workerIndex)
+					cacheMap := resolvedTsCacheMap
+					if m.redo {
+						cacheMap = redoResolvedTsCacheMap
+					}
+					c.handleResolvedTs(ctx, cacheMap, m, workerIndex)
 					continue
 				}
 				// Check if the dispatcher is initialized, if so, ignore the handshake event.
@@ -600,15 +605,21 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 				)
 				// Note: we need to flush the resolvedTs cache before sending the message
 				// to keep the order of the resolvedTs and the message.
-				c.flushResolvedTs(ctx, resolvedTsCacheMap[m.serverID], m.serverID, workerIndex, m.redo)
+				cacheMap := resolvedTsCacheMap
+				if m.redo {
+					cacheMap = redoResolvedTsCacheMap
+				}
+				c.flushResolvedTs(ctx, cacheMap[m.serverID], m.serverID, workerIndex, m.redo)
 				c.sendMsg(ctx, tMsg, m.postSendFunc, m.redo)
 				m.reset()
 			}
 			batchM = batchM[:0]
 
 		case <-flushResolvedTsTicker.C:
+			for serverID, cache := range redoResolvedTsCacheMap {
+				c.flushResolvedTs(ctx, cache, serverID, workerIndex, true)
+			}
 			for serverID, cache := range resolvedTsCacheMap {
-				// c.flushResolvedTs(ctx, cache, serverID, workerIndex,true)
 				c.flushResolvedTs(ctx, cache, serverID, workerIndex, false)
 			}
 		}

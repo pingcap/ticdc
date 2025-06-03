@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -35,10 +36,11 @@ import (
 // Sink manages redo log writer, buffers un-persistent redo logs, calculates
 // redo log resolved ts. It implements Sink interface.
 type Sink struct {
-	ctx     context.Context
-	enabled bool
-	cfg     *writer.LogWriterConfig
-	writer  writer.RedoLogWriter
+	ctx       context.Context
+	enabled   bool
+	cfg       *writer.LogWriterConfig
+	ddlWriter writer.RedoLogWriter
+	dmlWriter writer.RedoLogWriter
 
 	rwlock sync.RWMutex
 	// TODO: remove logBuffer and use writer directly after file logWriter is deprecated.
@@ -93,7 +95,7 @@ func (m *Sink) Run(ctx context.Context) error {
 	}
 
 	start := time.Now()
-	w, err := factory.NewRedoLogWriter(m.ctx, m.cfg)
+	ddlWriter, err := factory.NewRedoLogWriter(m.ctx, m.cfg, redo.RedoDDLLogFileType)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
@@ -102,7 +104,17 @@ func (m *Sink) Run(ctx context.Context) error {
 			zap.Error(err))
 		return err
 	}
-	m.writer = w
+	dmlWriter, err := factory.NewRedoLogWriter(m.ctx, m.cfg, redo.RedoRowLogFileType)
+	if err != nil {
+		log.Error("redo: failed to create redo log writer",
+			zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+			zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(err))
+		return err
+	}
+	m.ddlWriter = ddlWriter
+	m.dmlWriter = dmlWriter
 	return m.bgUpdateLog()
 }
 
@@ -180,12 +192,22 @@ func (m *Sink) handleEvent(
 	}()
 
 	start := time.Now()
-	err := m.writer.WriteEvents(ctx, e)
-	if err != nil {
-		return errors.Trace(err)
+	switch e.GetType() {
+	case event.TypeDDLEvent:
+		err := m.ddlWriter.WriteEvents(ctx, e)
+		if err != nil {
+			return errors.Trace(err)
+		}
+	case event.TypeDMLEvent:
+		err := m.dmlWriter.WriteEvents(ctx, e)
+		if err != nil {
+			return errors.Trace(err)
+		}
+	default:
+		log.Panic("handle unsupported event type", zap.Int("type", e.GetType()))
 	}
 	writeLogElapse := time.Since(start)
-	log.Debug("redo sink writes rows",
+	log.Debug("redo sink writes events",
 		zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
 		zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
 		zap.Duration("writeLogElapse", writeLogElapse))
@@ -256,9 +278,17 @@ func (m *Sink) close() {
 	atomic.StoreInt32(&m.closed, 1)
 
 	close(m.logBuffer)
-	if m.writer != nil {
-		if err := m.writer.Close(); err != nil && errors.Cause(err) != context.Canceled {
-			log.Error("redo manager fails to close writer",
+	if m.ddlWriter != nil {
+		if err := m.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
+			log.Error("redo manager fails to close ddl writer",
+				zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
+				zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
+				zap.Error(err))
+		}
+	}
+	if m.dmlWriter != nil {
+		if err := m.dmlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
+			log.Error("redo manager fails to close dml writer",
 				zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
 				zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
 				zap.Error(err))

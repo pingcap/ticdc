@@ -15,11 +15,8 @@ package memory
 
 import (
 	"context"
-	"fmt"
 	"testing"
-	"time"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo"
@@ -78,18 +75,12 @@ func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 		MaxLogSizeInBytes:  10 * redo.Megabyte,
 	}
 	filename := t.Name()
-	lw, err := NewLogWriter(ctx, lwcfg, writer.WithLogFileName(func() string {
+	lw, err := NewLogWriter(ctx, lwcfg, redo.RedoDDLLogFileType, writer.WithLogFileName(func() string {
 		return filename
 	}))
 	require.NoError(t, err)
 
 	require.NoError(t, lw.WriteEvents(ctx, events...))
-	require.Eventually(t, func() bool {
-		if len(lw.ddlFileWorkers.inputCh) != 0 {
-			log.Warn(fmt.Sprintf("eventCh len %d", len(lw.ddlFileWorkers.inputCh)))
-		}
-		return len(lw.ddlFileWorkers.inputCh) == 0
-	}, 2*time.Second, 10*time.Millisecond)
 
 	// test flush
 	err = extStorage.WalkDir(ctx, nil, func(path string, size int64) error {

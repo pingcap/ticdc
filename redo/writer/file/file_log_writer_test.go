@@ -99,18 +99,13 @@ func TestLogWriterWriteLog(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		mockDDLWriter := &mockFileWriter{}
-		mockDDLWriter.On("Write", mock.Anything).Return(1, tt.writerErr)
-		mockDDLWriter.On("IsRunning").Return(tt.isRunning)
-		mockDDLWriter.On("AdvanceTs", mock.Anything)
-		mockDMLWriter := &mockFileWriter{}
-		mockDMLWriter.On("Write", mock.Anything).Return(1, tt.writerErr)
-		mockDMLWriter.On("IsRunning").Return(tt.isRunning)
-		mockDMLWriter.On("AdvanceTs", mock.Anything)
+		mockWriter := &mockFileWriter{}
+		mockWriter.On("Write", mock.Anything).Return(1, tt.writerErr)
+		mockWriter.On("IsRunning").Return(tt.isRunning)
+		mockWriter.On("AdvanceTs", mock.Anything)
 		w := logWriter{
-			cfg:       &writer.LogWriterConfig{},
-			ddlWriter: mockDDLWriter,
-			dmlWriter: mockDMLWriter,
+			cfg:           &writer.LogWriterConfig{},
+			backendWriter: mockWriter,
 		}
 		if tt.name == "context cancel" {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -202,18 +197,13 @@ func TestLogWriterWriteDDL(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		mockDDLWriter := &mockFileWriter{}
-		mockDDLWriter.On("Write", mock.Anything).Return(1, tt.writerErr)
-		mockDDLWriter.On("IsRunning").Return(tt.isRunning)
-		mockDDLWriter.On("AdvanceTs", mock.Anything)
-		mockDMLWriter := &mockFileWriter{}
-		mockDMLWriter.On("Write", mock.Anything).Return(1, tt.writerErr)
-		mockDMLWriter.On("IsRunning").Return(tt.isRunning)
-		mockDMLWriter.On("AdvanceTs", mock.Anything)
+		mockWriter := &mockFileWriter{}
+		mockWriter.On("Write", mock.Anything).Return(1, tt.writerErr)
+		mockWriter.On("IsRunning").Return(tt.isRunning)
+		mockWriter.On("AdvanceTs", mock.Anything)
 		w := logWriter{
-			cfg:       &writer.LogWriterConfig{},
-			ddlWriter: mockDDLWriter,
-			dmlWriter: mockDMLWriter,
+			cfg:           &writer.LogWriterConfig{},
+			backendWriter: mockWriter,
 		}
 
 		if tt.name == "context cancel" {
@@ -302,12 +292,9 @@ func TestLogWriterFlushLog(t *testing.T) {
 	dir := t.TempDir()
 
 	for _, tt := range tests {
-		mockDDLWriter := &mockFileWriter{}
-		mockDDLWriter.On("Flush", mock.Anything).Return(tt.flushErr)
-		mockDDLWriter.On("IsRunning").Return(tt.isRunning)
-		mockDMLWriter := &mockFileWriter{}
-		mockDMLWriter.On("Flush", mock.Anything).Return(tt.flushErr)
-		mockDMLWriter.On("IsRunning").Return(tt.isRunning)
+		mockWriter := &mockFileWriter{}
+		mockWriter.On("Flush", mock.Anything).Return(tt.flushErr)
+		mockWriter.On("IsRunning").Return(tt.isRunning)
 		cfg := &writer.LogWriterConfig{
 			Dir:                dir,
 			ChangeFeedID:       common.NewChangeFeedIDWithName("test-cf"),
@@ -316,18 +303,15 @@ func TestLogWriterFlushLog(t *testing.T) {
 			UseExternalStorage: true,
 		}
 		w := logWriter{
-			cfg:       cfg,
-			ddlWriter: mockDDLWriter,
-			dmlWriter: mockDMLWriter,
+			cfg:           cfg,
+			backendWriter: mockWriter,
 		}
-
 		if tt.name == "context cancel" {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
 			tt.args.ctx = ctx
 		}
-		var e writer.RedoEvent
-		err := w.WriteEvents(tt.args.ctx, e)
+		err := w.backendWriter.Flush()
 		if tt.wantErr != nil {
 			log.Info("log error",
 				zap.String("wantErr", tt.wantErr.Error()),
