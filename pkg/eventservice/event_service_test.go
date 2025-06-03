@@ -218,11 +218,11 @@ func newMockEventStore(resolvedTsUpdateInterval int) *mockEventStore {
 func (m *mockEventStore) AppendEvents(dispatcherID common.DispatcherID, resolvedTs uint64, events ...*common.RawKVEntry) error {
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if !ok {
-		return errors.New(fmt.Sprintf("dispatcher not found: %v", dispatcherID))
+		return fmt.Errorf("dispatcher not found: %v", dispatcherID)
 	}
 	spanStats, ok := m.spansMap.Load(span)
 	if !ok {
-		return errors.New(fmt.Sprintf("span not found: %v", span))
+		return fmt.Errorf("span not found: %v", span)
 	}
 	log.Info("append events", zap.Any("dispatcherID", dispatcherID), zap.Any("resolvedTs", resolvedTs), zap.Int("eventsNum", len(events)))
 	spanStats.(*mockSpanStats).update(resolvedTs, events...)
@@ -298,12 +298,12 @@ func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange
 	}
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("dispatcher not found: %v", dispatcherID))
+		return nil, fmt.Errorf("dispatcher not found: %v", dispatcherID)
 	}
 
 	v, ok := m.spansMap.Load(span)
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("span not found: %v, dispatcherID: %v", span, dispatcherID))
+		return nil, fmt.Errorf("span not found: %v, dispatcherID: %v", span, dispatcherID)
 	}
 
 	spanStats := v.(*mockSpanStats)
