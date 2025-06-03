@@ -87,7 +87,7 @@ func TestEventScanner(t *testing.T) {
 	// [DDL(x), DML(x+1), DML(x+2), DML(x+3), DML(x+4), Resolved(x+5)]
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
-	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
 		`insert into test.t(id,c) values (0, "c0")`,
 		`insert into test.t(id,c) values (1, "c1")`,
 		`insert into test.t(id,c) values (2, "c2")`,
@@ -259,7 +259,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	// Construct events: dml2 and dml3 share commitTs, fakeDDL shares commitTs with them
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
-	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
 		`insert into test.t(id,c) values (0, "c0")`,
 		`insert into test.t(id,c) values (1, "c1")`,
 		`insert into test.t(id,c) values (2, "c2")`,

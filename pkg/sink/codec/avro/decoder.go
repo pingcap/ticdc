@@ -289,6 +289,7 @@ func queryTableInfo(schemaName, tableName string, columns []*timodel.ColumnInfo,
 	}
 	tableInfo = newTableInfo(schemaName, tableName, columns, keyMap)
 	tableInfoAccessor.Add(schemaName, tableName, tableInfo)
+	tableInfoAccessor.AddBlockTableID(schemaName, tableName, tableInfo.TableName.TableID)
 	return tableInfo
 }
 
@@ -460,25 +461,18 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	d.value = nil
 
 	result := new(commonEvent.DDLEvent)
-	result.FinishedTs = baseDDLEvent.CommitTs
 	result.SchemaName = baseDDLEvent.Schema
 	result.TableName = baseDDLEvent.Table
 	result.Query = baseDDLEvent.Query
+	result.FinishedTs = baseDDLEvent.CommitTs
 	actionType := common.GetDDLActionType(result.Query)
 	result.Type = byte(actionType)
 
 	if d.idx == 0 {
-		var tableID int64
-		tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
-		if ok {
-			tableID = tableInfo.TableName.TableID
-			log.Info("found tableID for the blocked table in the table accessor",
-				zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
-				zap.Any("actionType", actionType.String()), zap.Int64("tableID", tableID))
-		}
-		result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
-		log.Info("set blocked table", zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
-			zap.Any("actionType", actionType.String()), zap.Any("tableID", tableID))
+		physicalTableIDs := tableInfoAccessor.GetBlockedTables(result.SchemaName, result.TableName)
+		result.BlockedTables = common.GetInfluenceTables(actionType, physicalTableIDs)
+		log.Debug("set blocked table", zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+			zap.Any("actionType", actionType.String()), zap.Any("tableID", physicalTableIDs))
 		tableInfoAccessor.Remove(result.SchemaName, result.TableName)
 	}
 	return result

@@ -415,8 +415,9 @@ func (w *Writer) generateBatchSQLInUnsafeMode(events []*commonEvent.DMLEvent) ([
 			if rowType == prevType {
 				sql, values := w.generateNormalSQLs(events)
 				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
-				log.Panic("invalid row changes", zap.Any("rowChanges", rowChanges),
-					zap.Any("prevType", prevType), zap.Any("currentType", rowType), zap.Any("i", i))
+				log.Panic("invalid row changes", zap.String("schemaName", tableInfo.GetSchemaName()),
+					zap.String("tableName", tableInfo.GetTableName()), zap.Any("rowChanges", rowChanges),
+					zap.Any("prevType", prevType), zap.Any("currentType", rowType))
 			}
 			prevType = rowType
 		}
@@ -564,22 +565,6 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 func (w *Writer) sequenceExecute(
 	dmls *preparedDMLs, tx *sql.Tx, writeTimeout time.Duration,
 ) error {
-	// Set session variables first and execution the txn.
-	// we try to set write source for each txn,
-	// so we can use it to trace the data source
-	setWriteSourceStart := time.Now()
-	if err := SetWriteSource(w.ctx, w.cfg, tx); err != nil {
-		log.Error("Failed to set write source", zap.Error(err))
-		if rbErr := tx.Rollback(); rbErr != nil {
-			if errors.Cause(rbErr) != context.Canceled {
-				log.Warn("failed to rollback txn", zap.Error(rbErr))
-			}
-		}
-		return err
-	}
-	setWriteSourceDuration := time.Since(setWriteSourceStart)
-	log.Debug("SetWriteSource timing", zap.Duration("duration", setWriteSourceDuration))
-
 	for i, query := range dmls.sqls {
 		args := dmls.values[i]
 		log.Debug("exec row", zap.String("sql", query), zap.Any("args", args))
@@ -622,19 +607,6 @@ func (w *Writer) sequenceExecute(
 	return nil
 }
 
-// SetWriteSource sets write source for the transaction.
-// When this variable is set to a value other than 0, data written in this session is considered to be written by TiCDC.
-// DDLs executed in a PRIMARY cluster can be replicated to a SECONDARY cluster by TiCDC.
-func setWriteSourceInSQL(cfg *Config, sql string) string {
-	if !cfg.IsWriteSourceExisted {
-		return sql
-	}
-
-	query := fmt.Sprintf("SET SESSION %s = %d;", "tidb_cdc_write_source", cfg.SourceID)
-	finalSql := query + sql
-	return finalSql
-}
-
 // execute SQLs in the multi statements way.
 func (w *Writer) multiStmtExecute(
 	dmls *preparedDMLs, writeTimeout time.Duration,
@@ -646,10 +618,6 @@ func (w *Writer) multiStmtExecute(
 	multiStmtSQL := strings.Join(dmls.sqls, ";")
 	// we use BEGIN and COMMIT to ensure the transaction is atomic.
 	multiStmtSQLWithTxn := "BEGIN;" + multiStmtSQL + ";COMMIT;"
-	// Set session variables first in the sql.
-	// we try to set write source for each txn,
-	// so we can use it to trace the data source
-	finalMultiStmtSQL := setWriteSourceInSQL(w.cfg, multiStmtSQLWithTxn)
 
 	ctx, cancel := context.WithTimeout(w.ctx, writeTimeout)
 	defer cancel()
@@ -664,10 +632,10 @@ func (w *Writer) multiStmtExecute(
 	// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
 	// when some error occurs, we just need to close the conn to avoid the session to be reuse unexpectedly.
 	// The txn can ensure the atomicity of the transaction.
-	_, err = conn.ExecContext(ctx, finalMultiStmtSQL, multiStmtArgs...)
+	_, err = conn.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs...)
 	if err != nil {
-		log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", finalMultiStmtSQL), zap.Any("multiStmtArgs", multiStmtArgs))
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", finalMultiStmtSQL, multiStmtArgs)))
+		log.Error("ExecContext", zap.Error(err), zap.Any("multiStmtSQL", multiStmtSQLWithTxn), zap.Any("multiStmtArgs", multiStmtArgs))
+		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, multiStmtArgs)))
 	}
 	return nil
 }

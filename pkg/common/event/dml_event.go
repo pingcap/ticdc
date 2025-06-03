@@ -554,3 +554,17 @@ const (
 	// RowTypeUpdate represents a update row.
 	RowTypeUpdate
 )
+
+func (r RowType) String() string {
+	switch r {
+	case RowTypeDelete:
+		return "delete"
+	case RowTypeInsert:
+		return "insert"
+	case RowTypeUpdate:
+		return "update"
+	default:
+	}
+	log.Panic("RowType: invalid row type", zap.Uint8("rowType", uint8(r)))
+	return ""
+}
