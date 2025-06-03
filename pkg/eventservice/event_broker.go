@@ -178,7 +178,7 @@ func newEventBroker(
 	return c
 }
 
-func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, e *pevent.BatchDMLEvent, d *dispatcherStat) {
+func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
 	// Set sequence number for the event
 	for _, dml := range e.DMLEvents {
 		dml.Seq = d.seq.Add(1)
@@ -187,13 +187,33 @@ func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, e *pevent.B
 			zap.Uint64("seq", dml.GetSeq()),
 			zap.Uint64("commitTs", dml.GetCommitTs()),
 		)
+
 		// Emit sync point event if needed
 		c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)
 	}
+	doSendDML := func(e *pevent.BatchDMLEvent) {
+		// Send the DML event
+		c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
+		metricEventServiceSendKvCount.Add(float64(e.Len()))
+	}
 
-	// Send the DML event
-	c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
-	metricEventServiceSendKvCount.Add(float64(e.Len()))
+	i := 0
+	for {
+		if i >= len(batchEvent.DMLEvents) {
+			break
+		}
+		dml := batchEvent.DMLEvents[i]
+		if c.hasSyncPointEventsBeforeTs(dml.GetCommitTs(), d) {
+			events := batchEvent.PopHeadDMLEvents(i)
+			if events != nil {
+				doSendDML(events)
+			}
+			i = 0
+			// Emit sync point event if needed
+			c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)
+		}
+	}
+	doSendDML(batchEvent)
 }
 
 func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.DDLEvent, d *dispatcherStat) {
@@ -423,6 +443,11 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 	c.getMessageCh(task.messageWorkerIndex) <- wrapE
 	metricEventServiceSendCommandCount.Inc()
 	return false
+}
+
+// hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
+func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) bool {
+	return d.enableSyncPoint && ts > d.nextSyncPoint
 }
 
 // emitSyncPointEventIfNeeded emits a sync point event if the current ts is greater than the next sync point, and updates the next sync point.

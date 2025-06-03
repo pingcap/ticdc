@@ -45,6 +45,26 @@ type BatchDMLEvent struct {
 	TableInfo *common.TableInfo `json:"table_info"`
 }
 
+func (b *BatchDMLEvent) PopHeadDMLEvents(count int) *BatchDMLEvent {
+	if count <= 0 || len(b.DMLEvents) == 0 {
+		return nil
+	}
+	if count > len(b.DMLEvents) {
+		count = len(b.DMLEvents)
+	}
+	newBatch := &BatchDMLEvent{
+		Version:   b.Version,
+		DMLEvents: make([]*DMLEvent, 0, count),
+		Rows:      b.Rows,
+		TableInfo: b.TableInfo,
+	}
+	for i := 0; i < count; i++ {
+		newBatch.DMLEvents = append(newBatch.DMLEvents, b.DMLEvents[i])
+	}
+	b.DMLEvents = b.DMLEvents[count:]
+	return newBatch
+}
+
 func (b *BatchDMLEvent) AppendDMLEvent(dispatcherID common.DispatcherID, tableID int64, startTs, commitTs uint64, tableInfo *common.TableInfo) {
 	dml := newDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo)
 	if b.TableInfo == nil {
