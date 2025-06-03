@@ -203,7 +203,7 @@ func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, batchEvent 
 			if events != nil {
 				doSendDML(events)
 			}
-			i = 0
+			i = 1
 			// Emit sync point event if needed
 			c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)
 		} else {
