@@ -444,10 +444,6 @@ func (e *eventStore) RegisterDispatcher(
 			if kv.CRTs > maxCommitTs {
 				maxCommitTs = kv.CRTs
 			}
-			log.Info("event store received kv",
-				zap.Uint64("commitTs", kv.CRTs),
-				zap.String("key", hex.EncodeToString(kv.Key)),
-				zap.Uint64("subID", uint64(subStat.subID)))
 			if kv.CRTs <= subStat.resolvedTs.Load() {
 				log.Warn("event store received kv with commitTs less than resolvedTs",
 					zap.Uint64("commitTs", kv.CRTs),
@@ -631,14 +627,6 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		needCheckSpan = false
 	}
 
-	log.Debug("get iterator",
-		zap.Stringer("dispatcherID", dispatcherID),
-		zap.Uint64("subID", uint64(subscriptionStat.subID)),
-		zap.Uint64("startTs", dataRange.StartTs),
-		zap.Uint64("endTs", dataRange.EndTs),
-		zap.Bool("needCheckSpan", needCheckSpan),
-		zap.String("subStatSpan", common.FormatTableSpan(stat.tableSpan)))
-
 	return &eventStoreIter{
 		tableSpan:     stat.tableSpan,
 		needCheckSpan: needCheckSpan,
@@ -819,7 +807,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 				bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
 				break
 			}
-			log.Warn("event store iter skip kv not in table span",
+			log.Debug("event store iter skip kv not in table span",
 				zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
 				zap.String("key", hex.EncodeToString(rawKV.Key)),
 				zap.Uint64("startTs", rawKV.StartTs),

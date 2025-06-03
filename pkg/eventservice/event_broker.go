@@ -460,12 +460,6 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 		if len(commitTsList) > 16 {
 			newCommitTsList = commitTsList[:16]
 		}
-		log.Info("emit sync point event",
-			zap.String("changefeed", d.info.GetChangefeedID().String()),
-			zap.String("dispatcher", d.id.String()),
-			zap.Uint64("ts", ts),
-			zap.Int("workerIndex", d.scanWorkerIndex),
-			zap.Uint64s("commitTsList", newCommitTsList))
 		syncPointEvent := newWrapSyncPointEvent(
 			remoteID,
 			&pevent.SyncPointEvent{

@@ -64,7 +64,7 @@ func (d *dispatcherStat) reset() {
 	d.waitHandshake.Store(true)
 }
 
-// TODO: add and check epoch to event
+// TODO: add epoch to event and use it to filter irrelevant events
 func (d *dispatcherStat) isEventFromCurrentEventService(event dispatcher.DispatcherEvent) bool {
 	d.eventServiceInfo.RLock()
 	defer d.eventServiceInfo.RUnlock()
@@ -73,10 +73,9 @@ func (d *dispatcherStat) isEventFromCurrentEventService(event dispatcher.Dispatc
 			zap.Stringer("dispatcher", d.target.GetId()))
 		return false
 	}
-	// TODO: maybe we can remove this when add epoch?
+	// TODO: maybe we can remove this after add epoch?
 	if d.waitHandshake.Load() {
 		log.Warn("Receive event before handshake event, ignore it",
-			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
 			zap.Stringer("dispatcher", d.target.GetId()))
 		return false
 	}
