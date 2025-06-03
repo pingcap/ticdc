@@ -193,11 +193,6 @@ func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, batchEvent 
 		dml := batchEvent.DMLEvents[i]
 		// Set sequence number for the event
 		dml.Seq = d.seq.Add(1)
-		log.Info("send dml event",
-			zap.Stringer("dispatcherID", dml.GetDispatcherID()),
-			zap.Uint64("seq", dml.GetSeq()),
-			zap.Uint64("commitTs", dml.GetCommitTs()),
-		)
 		if c.hasSyncPointEventsBeforeTs(dml.GetCommitTs(), d) {
 			events := batchEvent.PopHeadDMLEvents(i)
 			if events != nil {
