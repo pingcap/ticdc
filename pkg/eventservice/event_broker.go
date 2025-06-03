@@ -181,8 +181,10 @@ func newEventBroker(
 func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
 	doSendDML := func(e *pevent.BatchDMLEvent) {
 		// Send the DML event
-		c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
-		metricEventServiceSendKvCount.Add(float64(e.Len()))
+		if e != nil && len(e.DMLEvents) > 0 {
+			c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
+			metricEventServiceSendKvCount.Add(float64(e.Len()))
+		}
 	}
 
 	i := 0
@@ -193,16 +195,10 @@ func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, batchEvent 
 		dml := batchEvent.DMLEvents[i]
 		// Set sequence number for the event
 		dml.Seq = d.seq.Add(1)
-		log.Info("send dml event",
-			zap.Stringer("dispatcherID", dml.GetDispatcherID()),
-			zap.Uint64("seq", dml.GetSeq()),
-			zap.Uint64("commitTs", dml.GetCommitTs()),
-		)
 		if c.hasSyncPointEventsBeforeTs(dml.GetCommitTs(), d) {
 			events := batchEvent.PopHeadDMLEvents(i)
-			if events != nil {
-				doSendDML(events)
-			}
+			doSendDML(events)
+			// Reset the index to 1 to process the next event after `dml` in next loop
 			i = 1
 			// Emit sync point event if needed
 			c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)

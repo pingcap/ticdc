@@ -86,7 +86,7 @@ func TestEventServiceBasic(t *testing.T) {
 	// add events to eventStore
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
-	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
 		`insert into test.t(id,c) values (0, "c0")`,
 		`insert into test.t(id,c) values (1, "c1")`,
 		`insert into test.t(id,c) values (2, "c2")`,
@@ -607,11 +607,9 @@ func (m *mockDispatcherInfo) GetTimezone() *time.Location {
 	return m.tz
 }
 
-func genEvents(helper *commonEvent.EventTestHelper, t *testing.T, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
+func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
 	job := helper.DDL2Job(ddl)
-	schema := job.SchemaName
-	table := job.TableName
-	kvEvents := helper.DML2RawKv(schema, table, job.BinlogInfo.FinishedTS, dmls...)
+	kvEvents := helper.DML2RawKv(job.TableID, job.BinlogInfo.FinishedTS, dmls...)
 	return commonEvent.DDLEvent{
 		Version:    commonEvent.DDLEventVersion,
 		FinishedTs: job.BinlogInfo.FinishedTS,

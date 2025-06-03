@@ -1012,7 +1012,7 @@ func TestDDLSequence(t *testing.T) {
 	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
 	require.NoError(t, err)
 
-	decoder, err := NewDecoder(ctx, codecConfig, nil)
+	dec, err := NewDecoder(ctx, codecConfig, nil)
 	require.NoError(t, err)
 
 	createDB := helper.DDL2Event(`create database abc`)
@@ -1020,13 +1020,13 @@ func TestDDLSequence(t *testing.T) {
 	m, err := encoder.EncodeDDLEvent(createDB)
 	require.NoError(t, err)
 
-	decoder.AddKeyValue(m.Key, m.Value)
+	dec.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext := decoder.HasNext()
+	messageType, hasNext := dec.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
-	obtained := decoder.NextDDLEvent()
+	obtained := dec.NextDDLEvent()
 	require.Equal(t, createDB.Query, obtained.Query)
 	require.Equal(t, createDB.Type, obtained.Type)
 	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
@@ -1036,13 +1036,13 @@ func TestDDLSequence(t *testing.T) {
 	m, err = encoder.EncodeDDLEvent(dropDB)
 	require.NoError(t, err)
 
-	decoder.AddKeyValue(m.Key, m.Value)
+	dec.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext = decoder.HasNext()
+	messageType, hasNext = dec.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
-	obtained = decoder.NextDDLEvent()
+	obtained = dec.NextDDLEvent()
 	require.Equal(t, dropDB.Query, obtained.Query)
 	require.Equal(t, dropDB.Type, obtained.Type)
 	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeDB)
@@ -1054,13 +1054,13 @@ func TestDDLSequence(t *testing.T) {
 	m, err = encoder.EncodeDDLEvent(createTable)
 	require.NoError(t, err)
 
-	decoder.AddKeyValue(m.Key, m.Value)
+	dec.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext = decoder.HasNext()
+	messageType, hasNext = dec.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
-	obtained = decoder.NextDDLEvent()
+	obtained = dec.NextDDLEvent()
 	require.Equal(t, createTable.Query, obtained.Query)
 	require.Equal(t, createTable.Type, obtained.Type)
 	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
@@ -1084,12 +1084,12 @@ func TestDDLSequence(t *testing.T) {
 
 	m = encoder.Build()[0]
 
-	decoder.AddKeyValue(m.Key, m.Value)
-	messageType, hasNext = decoder.HasNext()
+	dec.AddKeyValue(m.Key, m.Value)
+	messageType, hasNext = dec.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeRow, messageType)
 
-	decodedInsert := decoder.NextDMLEvent()
+	decodedInsert := dec.NextDMLEvent()
 	require.NotZero(t, decodedInsert.GetTableID())
 
 	addColumn := helper.DDL2Event(`alter table t add column c int`)
@@ -1097,13 +1097,13 @@ func TestDDLSequence(t *testing.T) {
 	m, err = encoder.EncodeDDLEvent(addColumn)
 	require.NoError(t, err)
 
-	decoder.AddKeyValue(m.Key, m.Value)
+	dec.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext = decoder.HasNext()
+	messageType, hasNext = dec.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
-	obtained = decoder.NextDDLEvent()
+	obtained = dec.NextDDLEvent()
 	require.Equal(t, addColumn.Query, obtained.Query)
 	require.Equal(t, addColumn.Type, obtained.Type)
 	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
@@ -1114,13 +1114,13 @@ func TestDDLSequence(t *testing.T) {
 	m, err = encoder.EncodeDDLEvent(dropTable)
 	require.NoError(t, err)
 
-	decoder.AddKeyValue(m.Key, m.Value)
+	dec.AddKeyValue(m.Key, m.Value)
 
-	messageType, hasNext = decoder.HasNext()
+	messageType, hasNext = dec.HasNext()
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
-	obtained = decoder.NextDDLEvent()
+	obtained = dec.NextDDLEvent()
 	require.Equal(t, dropTable.Query, obtained.Query)
 	require.Equal(t, dropTable.Type, obtained.Type)
 	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)

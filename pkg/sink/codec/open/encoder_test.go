@@ -891,6 +891,85 @@ func TestDMLEventWithColumnSelector(t *testing.T) {
 	require.Equal(t, expected, obtained[0])
 }
 
+func TestE2EPartitionTable(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	createPartitionTableDDL := helper.DDL2Event(`create table test.t(a int primary key, b int) partition by range (a) (
+		partition p0 values less than (10),
+		partition p1 values less than (20),
+		partition p2 values less than MAXVALUE)`)
+
+	insertEvent := helper.DML2Event4PartitionTable("test", "t", "p0", `insert into test.t values (1, 1)`)
+	require.NotNil(t, insertEvent)
+
+	insertEvent1 := helper.DML2Event4PartitionTable("test", "t", "p1", `insert into test.t values (11, 11)`)
+	require.NotNil(t, insertEvent1)
+
+	insertEvent2 := helper.DML2Event4PartitionTable("test", "t", "p2", `insert into test.t values (21, 21)`)
+	require.NotNil(t, insertEvent2)
+
+	require.NotEqual(t, insertEvent.GetTableID(), insertEvent1.GetTableID())
+	require.NotEqual(t, insertEvent.GetTableID(), insertEvent2.GetTableID())
+	require.NotEqual(t, insertEvent1.GetTableID(), insertEvent2.GetTableID())
+
+	events := []*commonEvent.DMLEvent{
+		insertEvent,
+		insertEvent1,
+		insertEvent2,
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	enc, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	dec, err := NewDecoder(ctx, 0, codecConfig, nil)
+	require.NoError(t, err)
+
+	m, err := enc.EncodeDDLEvent(createPartitionTableDDL)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+	require.NoError(t, err)
+	tp, hasNext := dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, tp)
+
+	decodedDDL := dec.NextDDLEvent()
+	require.NoError(t, err)
+	require.NotNil(t, decodedDDL)
+
+	for _, e := range events {
+		row, ok := e.GetNextRow()
+		require.True(t, ok)
+
+		err = enc.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
+			TableInfo:       e.TableInfo,
+			PhysicalTableID: e.GetTableID(),
+			Event:           row,
+			CommitTs:        e.CommitTs,
+			ColumnSelector:  columnselector.NewDefaultColumnSelector(),
+		})
+		require.NoError(t, err)
+		m = enc.Build()[0]
+
+		dec.AddKeyValue(m.Key, m.Value)
+		tp, hasNext = dec.HasNext()
+		require.True(t, hasNext)
+		require.Equal(t, common.MessageTypeRow, tp)
+
+		decodedEvent := dec.NextDMLEvent()
+		// table id should be set to the partition table id, the PhysicalTableID
+		require.Equal(t, decodedEvent.GetTableID(), e.GetTableID())
+
+		require.Contains(t, tableInfoAccessor.GetBlockedTables("test", "t"), e.GetTableID())
+	}
+}
+
 // Including insert / update / delete
 func TestDMLEvent(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
@@ -1102,10 +1181,10 @@ func TestDDLSequence(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
-	obtained := decoder.NextDDLEvent()
-	require.Equal(t, createDB.Query, obtained.Query)
-	require.Equal(t, createDB.Type, obtained.Type)
-	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
+	decodedDDL := decoder.NextDDLEvent()
+	require.Equal(t, createDB.Query, decodedDDL.Query)
+	require.Equal(t, createDB.Type, decodedDDL.Type)
+	require.Equal(t, decodedDDL.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
 
 	dropDB := helper.DDL2Event(`drop database abc`)
 
@@ -1118,10 +1197,10 @@ func TestDDLSequence(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
-	obtained = decoder.NextDDLEvent()
-	require.Equal(t, dropDB.Query, obtained.Query)
-	require.Equal(t, dropDB.Type, obtained.Type)
-	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeDB)
+	decodedDDL = decoder.NextDDLEvent()
+	require.Equal(t, dropDB.Query, decodedDDL.Query)
+	require.Equal(t, dropDB.Type, decodedDDL.Type)
+	require.Equal(t, decodedDDL.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeDB)
 
 	helper.Tk().MustExec("use test")
 
@@ -1136,10 +1215,10 @@ func TestDDLSequence(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
-	obtained = decoder.NextDDLEvent()
-	require.Equal(t, createTable.Query, obtained.Query)
-	require.Equal(t, createTable.Type, obtained.Type)
-	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
+	decodedDDL = decoder.NextDDLEvent()
+	require.Equal(t, createTable.Query, decodedDDL.Query)
+	require.Equal(t, createTable.Type, decodedDDL.Type)
+	require.Equal(t, decodedDDL.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
 
 	insert := helper.DML2Event("test", "t", `insert into test.t(a,b) values (1,1)`)
 	require.NotNil(t, insert)
@@ -1167,6 +1246,7 @@ func TestDDLSequence(t *testing.T) {
 
 	decodedInsert := decoder.NextDMLEvent()
 	require.NotZero(t, decodedInsert.GetTableID())
+	require.Contains(t, tableInfoAccessor.GetBlockedTables("test", "t"), decodedInsert.GetTableID())
 
 	addColumn := helper.DDL2Event(`alter table t add column c int`)
 
@@ -1179,11 +1259,11 @@ func TestDDLSequence(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
-	obtained = decoder.NextDDLEvent()
-	require.Equal(t, addColumn.Query, obtained.Query)
-	require.Equal(t, addColumn.Type, obtained.Type)
-	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
-	require.Equal(t, decodedInsert.GetTableID(), obtained.GetBlockedTables().TableIDs[0])
+	decodedDDL = decoder.NextDDLEvent()
+	require.Equal(t, addColumn.Query, decodedDDL.Query)
+	require.Equal(t, addColumn.Type, decodedDDL.Type)
+	require.Equal(t, decodedDDL.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
+	require.Equal(t, decodedInsert.GetTableID(), decodedDDL.GetBlockedTables().TableIDs[0])
 
 	dropTable := helper.DDL2Event(`drop table t`)
 
@@ -1196,8 +1276,8 @@ func TestDDLSequence(t *testing.T) {
 	require.True(t, hasNext)
 	require.Equal(t, common.MessageTypeDDL, messageType)
 
-	obtained = decoder.NextDDLEvent()
-	require.Equal(t, dropTable.Query, obtained.Query)
-	require.Equal(t, dropTable.Type, obtained.Type)
-	require.Equal(t, obtained.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
+	decodedDDL = decoder.NextDDLEvent()
+	require.Equal(t, dropTable.Query, decodedDDL.Query)
+	require.Equal(t, dropTable.Type, decodedDDL.Type)
+	require.Equal(t, decodedDDL.GetBlockedTables().InfluenceType, commonEvent.InfluenceTypeNormal)
 }

@@ -107,9 +107,6 @@ type Config struct {
 	DMLMaxRetry uint64
 
 	IsTiDB bool // IsTiDB is true if the downstream is TiDB
-	// IsBDRModeSupported is true if the downstream is TiDB and write source is existed.
-	// write source exists when the downstream is TiDB and version is greater than or equal to v6.5.0.
-	IsWriteSourceExisted bool
 
 	// EnableDDLTs can be set in the sink URI to enable the DDL ts.
 	// it's default to true to make the mysql sink write DDL-ts
@@ -248,19 +245,12 @@ func NewMysqlConfigAndDB(
 		return nil, nil, err
 	}
 
-	dsnStr, err := GenerateDSN(cfg)
+	dsnStr, err := GenerateDSN(ctx, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	db, err := CreateMysqlDBConn(dsnStr)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	cfg.IsTiDB = CheckIsTiDB(ctx, db)
-
-	cfg.IsWriteSourceExisted, err = CheckIfBDRModeIsSupported(ctx, db)
 	if err != nil {
 		return nil, nil, err
 	}
