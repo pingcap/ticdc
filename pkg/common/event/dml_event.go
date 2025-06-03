@@ -74,7 +74,7 @@ func (b *BatchDMLEvent) AppendDMLEvent(dispatcherID common.DispatcherID, tableID
 	}
 	if len(b.DMLEvents) > 0 {
 		pre := b.DMLEvents[len(b.DMLEvents)-1]
-		dml.previousTotalOffset = pre.previousTotalOffset + len(pre.RowTypes)
+		dml.PreviousTotalOffset = pre.PreviousTotalOffset + len(pre.RowTypes)
 	}
 	dml.Rows = b.Rows
 	b.DMLEvents = append(b.DMLEvents, dml)
@@ -186,13 +186,9 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	b.Rows, _ = decoder.Decode(b.RawRows)
 	b.TableInfo = tableInfo
 	b.RawRows = nil
-	for i, dml := range b.DMLEvents {
+	for _, dml := range b.DMLEvents {
 		dml.Rows = b.Rows
 		dml.TableInfo = b.TableInfo
-		if i > 0 {
-			pre := b.DMLEvents[i-1]
-			dml.previousTotalOffset = pre.previousTotalOffset + len(pre.RowTypes)
-		}
 	}
 }
 
@@ -272,9 +268,9 @@ type DMLEvent struct {
 	// offset is the offset of the current row in the transaction.
 	// It is internal field, not exported. So it doesn't need to be marshalled.
 	offset int `json:"-"`
-	// previousTotalOffset accumulates the offsets of all previous DML events to facilitate sharing the same chunk when using batch DML events.
+	// PreviousTotalOffset accumulates the offsets of all previous DML events to facilitate sharing the same chunk when using batch DML events.
 	// It is used to determine the correct offset for the chunk in batch DML operations.
-	previousTotalOffset int `json:"-"`
+	PreviousTotalOffset int `json:"previous_total_offset"`
 
 	// Checksum for the event, only not nil if the upstream TiDB enable the row level checksum
 	// and TiCDC set the integrity check level to the correctness.
@@ -393,7 +389,7 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 	switch rowType {
 	case RowTypeInsert:
 		row := RowChange{
-			Row:      t.Rows.GetRow(t.previousTotalOffset + t.offset),
+			Row:      t.Rows.GetRow(t.PreviousTotalOffset + t.offset),
 			RowType:  rowType,
 			Checksum: checksum,
 		}
@@ -401,7 +397,7 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		return row, true
 	case RowTypeDelete:
 		row := RowChange{
-			PreRow:   t.Rows.GetRow(t.previousTotalOffset + t.offset),
+			PreRow:   t.Rows.GetRow(t.PreviousTotalOffset + t.offset),
 			RowType:  rowType,
 			Checksum: checksum,
 		}
@@ -409,8 +405,8 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		return row, true
 	case RowTypeUpdate:
 		row := RowChange{
-			PreRow:   t.Rows.GetRow(t.previousTotalOffset + t.offset),
-			Row:      t.Rows.GetRow(t.previousTotalOffset + t.offset + 1),
+			PreRow:   t.Rows.GetRow(t.PreviousTotalOffset + t.offset),
+			Row:      t.Rows.GetRow(t.PreviousTotalOffset + t.offset + 1),
 			RowType:  rowType,
 			Checksum: checksum,
 		}
