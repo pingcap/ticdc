@@ -179,18 +179,6 @@ func newEventBroker(
 }
 
 func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
-	// Set sequence number for the event
-	for _, dml := range e.DMLEvents {
-		dml.Seq = d.seq.Add(1)
-		log.Info("send dml event",
-			zap.Stringer("dispatcherID", dml.GetDispatcherID()),
-			zap.Uint64("seq", dml.GetSeq()),
-			zap.Uint64("commitTs", dml.GetCommitTs()),
-		)
-
-		// Emit sync point event if needed
-		c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)
-	}
 	doSendDML := func(e *pevent.BatchDMLEvent) {
 		// Send the DML event
 		c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
@@ -203,6 +191,13 @@ func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, batchEvent 
 			break
 		}
 		dml := batchEvent.DMLEvents[i]
+		// Set sequence number for the event
+		dml.Seq = d.seq.Add(1)
+		log.Info("send dml event",
+			zap.Stringer("dispatcherID", dml.GetDispatcherID()),
+			zap.Uint64("seq", dml.GetSeq()),
+			zap.Uint64("commitTs", dml.GetCommitTs()),
+		)
 		if c.hasSyncPointEventsBeforeTs(dml.GetCommitTs(), d) {
 			events := batchEvent.PopHeadDMLEvents(i)
 			if events != nil {
