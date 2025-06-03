@@ -466,7 +466,7 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		return nil, nil
 	}
 	// Calculate the total size needed for the encoded data
-	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*2 + t.State.GetSize() + int(t.Length)
+	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + int(t.Length)
 
 	// Allocate a buffer with the calculated size
 	buf := make([]byte, size)
@@ -503,6 +503,9 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	// ApproximateSize
 	binary.LittleEndian.PutUint64(buf[offset:], uint64(t.ApproximateSize))
 	offset += 8
+	// PreviousTotalOffset
+	binary.LittleEndian.PutUint32(buf[offset:], uint32(t.PreviousTotalOffset))
+	offset += 4
 	// RowTypes
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(t.RowTypes)))
 	offset += 4
@@ -523,7 +526,7 @@ func (t *DMLEvent) decode(data []byte) error {
 }
 
 func (t *DMLEvent) decodeV0(data []byte) error {
-	if len(data) < 1+16+8*5+4*2 {
+	if len(data) < 1+16+8*5+4*3 {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
 	if t.Version != 0 {
@@ -547,6 +550,8 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	offset += 4
 	t.ApproximateSize = int64(binary.LittleEndian.Uint64(data[offset:]))
 	offset += 8
+	t.PreviousTotalOffset = int(binary.LittleEndian.Uint32(data[offset:]))
+	offset += 4
 	length := int32(binary.LittleEndian.Uint32(data[offset:]))
 	offset += 4
 	t.RowTypes = make([]RowType, length)
