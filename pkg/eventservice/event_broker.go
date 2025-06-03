@@ -181,8 +181,10 @@ func newEventBroker(
 func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
 	doSendDML := func(e *pevent.BatchDMLEvent) {
 		// Send the DML event
-		c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
-		metricEventServiceSendKvCount.Add(float64(e.Len()))
+		if e != nil && len(e.DMLEvents) > 0 {
+			c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
+			metricEventServiceSendKvCount.Add(float64(e.Len()))
+		}
 	}
 
 	i := 0
@@ -195,19 +197,16 @@ func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, batchEvent 
 		dml.Seq = d.seq.Add(1)
 		if c.hasSyncPointEventsBeforeTs(dml.GetCommitTs(), d) {
 			events := batchEvent.PopHeadDMLEvents(i)
-			if events != nil {
-				doSendDML(events)
-			}
-			i = 0
+			doSendDML(events)
+			// Reset the index to 1 to process the next event after `dml` in next loop
+			i = 1
 			// Emit sync point event if needed
 			c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)
 		} else {
 			i++
 		}
 	}
-	if len(batchEvent.DMLEvents) > 0 {
-		doSendDML(batchEvent)
-	}
+	doSendDML(batchEvent)
 }
 
 func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.DDLEvent, d *dispatcherStat) {
