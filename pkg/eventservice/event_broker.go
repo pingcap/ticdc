@@ -206,6 +206,8 @@ func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, batchEvent 
 			i = 0
 			// Emit sync point event if needed
 			c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)
+		} else {
+			i++
 		}
 	}
 	doSendDML(batchEvent)
