@@ -162,7 +162,10 @@ func (b *BatchDMLEvent) encodeV0() ([]byte, error) {
 // AssembleRows assembles the Rows from the RawRows.
 // It also sets the TableInfo and clears the RawRows.
 func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
-	defer b.TableInfo.InitPrivateFields()
+	// Wrap it in a function because `b.TableInfo` may be changed later.
+	defer func() {
+		b.TableInfo.InitPrivateFields()
+	}()
 	// rows is already set, no need to assemble again
 	// When the event is passed from the same node, the Rows is already set.
 	if b.Rows != nil {
