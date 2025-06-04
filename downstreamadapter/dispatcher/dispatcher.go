@@ -278,7 +278,7 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			for i := 0; i < int(dml.Len()); i++ {
 				row := dml.Rows.GetRow(i)
 				cr := row.ToString(dml.TableInfo.GetFieldSlice())
-				log.Debug("fizz receive row", zap.String("table", dml.TableInfo.TableName.String()), zap.String("rowType", dml.RowTypes[i].String()), zap.String("currentVal", cr), zap.Uint64("startTs", dml.StartTs), zap.Uint64("commitTs", dml.CommitTs))
+				log.Debug("fizz receive row", zap.String("table", dml.TableInfo.TableName.String()), zap.Uint64("tableID", uint64(dml.TableInfo.TableName.TableID)), zap.String("rowType", dml.RowTypes[i].String()), zap.String("currentVal", cr), zap.Uint64("startTs", dml.StartTs), zap.Uint64("commitTs", dml.CommitTs), zap.Int("rowIdx", i))
 			}
 
 			block = true

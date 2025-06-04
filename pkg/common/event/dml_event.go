@@ -332,7 +332,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		preRow := t.Rows.GetRow(t.rawRowCount - 2)
 		pr = preRow.ToString(t.TableInfo.GetFieldSlice())
 	}
-	log.Debug("fizz decode row", zap.String("table", t.TableInfo.TableName.String()), zap.String("rowType", rowType.String()), zap.String("preVal", pr), zap.String("currentVal", cr), zap.Uint64("startTs", t.StartTs), zap.Uint64("commitTs", t.CommitTs))
+	log.Debug("fizz decode row", zap.String("table", t.TableInfo.TableName.String()), zap.Uint64("tableID", uint64(t.TableInfo.TableName.TableID)), zap.String("rowType", rowType.String()), zap.String("preVal", pr), zap.String("currentVal", cr), zap.Uint64("startTs", t.StartTs), zap.Uint64("commitTs", t.CommitTs))
 	return nil
 }
 
