@@ -314,6 +314,7 @@ func (c *server) validCheck(ctx context.Context) error {
 				}
 			}
 			if !oldArchCaptureRunning {
+				log.Info("new arch server is valid to start")
 				return nil
 			}
 			time.Sleep(100 * time.Millisecond)
@@ -376,6 +377,15 @@ func (c *server) Close(ctx context.Context) {
 				zap.Error(err))
 		}
 		log.Info("sub module closed", zap.String("module", subModule.Name()))
+	}
+
+	for _, subCommonModule := range c.subCommonModules {
+		if err := subCommonModule.Close(ctx); err != nil {
+			log.Warn("failed to close sub common module",
+				zap.String("module", subCommonModule.Name()),
+				zap.Error(err))
+		}
+		log.Info("sub common module closed", zap.String("module", subCommonModule.Name()))
 	}
 
 	// delete server info from etcd
