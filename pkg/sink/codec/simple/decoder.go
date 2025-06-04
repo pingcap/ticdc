@@ -655,10 +655,12 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 		data := formatAllColumnsValue(msg.Old, columns)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeDelete)
+		result.RowKeys = append(result.RowKeys, []byte{})
 	case DMLTypeInsert:
 		data := formatAllColumnsValue(msg.Data, columns)
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeInsert)
+		result.RowKeys = append(result.RowKeys, []byte{})
 	case DMLTypeUpdate:
 		previous := formatAllColumnsValue(msg.Old, columns)
 		data := formatAllColumnsValue(msg.Data, columns)
@@ -671,6 +673,8 @@ func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowCheck
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
 		result.RowTypes = append(result.RowTypes, commonEvent.RowTypeUpdate)
+		result.RowKeys = append(result.RowKeys, []byte{})
+		result.RowKeys = append(result.RowKeys, []byte{})
 	default:
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.Type))
 	}
