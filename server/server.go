@@ -53,8 +53,9 @@ import (
 )
 
 const (
-	closeServiceTimeout = 15 * time.Second
-	cleanMetaDuration   = 10 * time.Second
+	closeServiceTimeout  = 15 * time.Second
+	cleanMetaDuration    = 10 * time.Second
+	oldArchCheckInterval = 100 * time.Millisecond
 )
 
 type server struct {
@@ -88,13 +89,17 @@ type server struct {
 	// preServices is the preServices will be start before the server is running
 	// And will be closed when the server is closing
 	preServices []common.Closeable
-	// subCommonModules is the modules will be start after PreServices are started
-	// And will be closed when the server is closing
-	// subCommonModules is the common modules for all components,
-	// and they should be Run before subModules
+	// subCommonModules contains common modules that start after PreServices.
+	// These modules will be closed when the server shuts down.
+	// These are shared modules across all components that:
+	// 1. Can coexist with old architecture components
+	// 2. Can guide the old architecture components offline
+	// 3. Must start before subModules
 	subCommonModules []common.SubModule
-	// subModules is the modules will be start after PreServices are started
-	// And will be closed when the server is closing
+	// subModules contains modules that will be started after PreServices are started
+	// and will be closed when the server is closing.
+	// These modules must not start while old-architecture servers are still online
+	// to avoid compatibility issues and unexpected behavior.
 	subModules []common.SubModule
 
 	closed atomic.Bool
@@ -308,7 +313,7 @@ func (c *server) validCheck(ctx context.Context) error {
 			oldArchCaptureRunning := false
 			for _, captureInfo := range captureInfos {
 				if !captureInfo.IsNewArch {
-					log.Info("old-arch capture is running, server will not start", zap.String("captureID", string(captureInfo.ID)))
+					log.Info("old-arch capture is running, server will not start", zap.String("captureID", captureInfo.ID))
 					oldArchCaptureRunning = true
 					break
 				}
@@ -317,7 +322,7 @@ func (c *server) validCheck(ctx context.Context) error {
 				log.Info("new arch server is valid to start")
 				return nil
 			}
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(oldArchCheckInterval)
 		}
 	}
 }
