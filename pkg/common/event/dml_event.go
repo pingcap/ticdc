@@ -45,6 +45,27 @@ type BatchDMLEvent struct {
 	TableInfo *common.TableInfo `json:"table_info"`
 }
 
+// PopHeadDMLEvents pops the first `count` DMLEvents from the BatchDMLEvent and returns a new BatchDMLEvent.
+func (b *BatchDMLEvent) PopHeadDMLEvents(count int) *BatchDMLEvent {
+	if count <= 0 || len(b.DMLEvents) == 0 {
+		return nil
+	}
+	if count > len(b.DMLEvents) {
+		count = len(b.DMLEvents)
+	}
+	newBatch := &BatchDMLEvent{
+		Version:   b.Version,
+		DMLEvents: make([]*DMLEvent, 0, count),
+		Rows:      b.Rows,
+		TableInfo: b.TableInfo,
+	}
+	for i := 0; i < count; i++ {
+		newBatch.DMLEvents = append(newBatch.DMLEvents, b.DMLEvents[i])
+	}
+	b.DMLEvents = b.DMLEvents[count:]
+	return newBatch
+}
+
 func (b *BatchDMLEvent) AppendDMLEvent(dispatcherID common.DispatcherID, tableID int64, startTs, commitTs uint64, tableInfo *common.TableInfo) {
 	dml := newDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo)
 	if b.TableInfo == nil {
@@ -54,7 +75,7 @@ func (b *BatchDMLEvent) AppendDMLEvent(dispatcherID common.DispatcherID, tableID
 	}
 	if len(b.DMLEvents) > 0 {
 		pre := b.DMLEvents[len(b.DMLEvents)-1]
-		dml.previousTotalOffset = pre.previousTotalOffset + len(pre.RowTypes)
+		dml.PreviousTotalOffset = pre.PreviousTotalOffset + len(pre.RowTypes)
 	}
 	dml.Rows = b.Rows
 	b.DMLEvents = append(b.DMLEvents, dml)
@@ -141,7 +162,10 @@ func (b *BatchDMLEvent) encodeV0() ([]byte, error) {
 // AssembleRows assembles the Rows from the RawRows.
 // It also sets the TableInfo and clears the RawRows.
 func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
-	defer b.TableInfo.InitPrivateFields()
+	// Wrap it in a function because `b.TableInfo` may be changed later.
+	defer func() {
+		b.TableInfo.InitPrivateFields()
+	}()
 	// rows is already set, no need to assemble again
 	// When the event is passed from the same node, the Rows is already set.
 	if b.Rows != nil {
@@ -163,13 +187,9 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	b.Rows, _ = decoder.Decode(b.RawRows)
 	b.TableInfo = tableInfo
 	b.RawRows = nil
-	for i, dml := range b.DMLEvents {
+	for _, dml := range b.DMLEvents {
 		dml.Rows = b.Rows
 		dml.TableInfo = b.TableInfo
-		if i > 0 {
-			pre := b.DMLEvents[i-1]
-			dml.previousTotalOffset = pre.previousTotalOffset + len(pre.RowTypes)
-		}
 	}
 }
 
@@ -249,9 +269,9 @@ type DMLEvent struct {
 	// offset is the offset of the current row in the transaction.
 	// It is internal field, not exported. So it doesn't need to be marshalled.
 	offset int `json:"-"`
-	// previousTotalOffset accumulates the offsets of all previous DML events to facilitate sharing the same chunk when using batch DML events.
+	// PreviousTotalOffset accumulates the offsets of all previous DML events to facilitate sharing the same chunk when using batch DML events.
 	// It is used to determine the correct offset for the chunk in batch DML operations.
-	previousTotalOffset int `json:"-"`
+	PreviousTotalOffset int `json:"previous_total_offset"`
 
 	// Checksum for the event, only not nil if the upstream TiDB enable the row level checksum
 	// and TiCDC set the integrity check level to the correctness.
@@ -370,7 +390,7 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 	switch rowType {
 	case RowTypeInsert:
 		row := RowChange{
-			Row:      t.Rows.GetRow(t.previousTotalOffset + t.offset),
+			Row:      t.Rows.GetRow(t.PreviousTotalOffset + t.offset),
 			RowType:  rowType,
 			Checksum: checksum,
 		}
@@ -378,7 +398,7 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		return row, true
 	case RowTypeDelete:
 		row := RowChange{
-			PreRow:   t.Rows.GetRow(t.previousTotalOffset + t.offset),
+			PreRow:   t.Rows.GetRow(t.PreviousTotalOffset + t.offset),
 			RowType:  rowType,
 			Checksum: checksum,
 		}
@@ -386,8 +406,8 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		return row, true
 	case RowTypeUpdate:
 		row := RowChange{
-			PreRow:   t.Rows.GetRow(t.previousTotalOffset + t.offset),
-			Row:      t.Rows.GetRow(t.previousTotalOffset + t.offset + 1),
+			PreRow:   t.Rows.GetRow(t.PreviousTotalOffset + t.offset),
+			Row:      t.Rows.GetRow(t.PreviousTotalOffset + t.offset + 1),
 			RowType:  rowType,
 			Checksum: checksum,
 		}
@@ -446,7 +466,7 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		return nil, nil
 	}
 	// Calculate the total size needed for the encoded data
-	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*2 + t.State.GetSize() + int(t.Length)
+	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + int(t.Length)
 
 	// Allocate a buffer with the calculated size
 	buf := make([]byte, size)
@@ -483,6 +503,9 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	// ApproximateSize
 	binary.LittleEndian.PutUint64(buf[offset:], uint64(t.ApproximateSize))
 	offset += 8
+	// PreviousTotalOffset
+	binary.LittleEndian.PutUint32(buf[offset:], uint32(t.PreviousTotalOffset))
+	offset += 4
 	// RowTypes
 	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(t.RowTypes)))
 	offset += 4
@@ -503,7 +526,7 @@ func (t *DMLEvent) decode(data []byte) error {
 }
 
 func (t *DMLEvent) decodeV0(data []byte) error {
-	if len(data) < 1+16+8*5+4*2 {
+	if len(data) < 1+16+8*5+4*3 {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
 	if t.Version != 0 {
@@ -527,6 +550,8 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	offset += 4
 	t.ApproximateSize = int64(binary.LittleEndian.Uint64(data[offset:]))
 	offset += 8
+	t.PreviousTotalOffset = int(binary.LittleEndian.Uint32(data[offset:]))
+	offset += 4
 	length := int32(binary.LittleEndian.Uint32(data[offset:]))
 	offset += 4
 	t.RowTypes = make([]RowType, length)
