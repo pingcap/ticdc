@@ -378,10 +378,6 @@ func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
 	// fast path
 	if !s.paused.Load() {
-		log.Info("subscription client push region event",
-			zap.Uint64("subscriptionID", uint64(subID)),
-			zap.Uint64("regionID", event.state.region.verID.GetID()),
-			zap.Uint64("resolvedTs", event.resolvedTs))
 		if event.entries != nil {
 			for _, e := range event.entries.Entries.GetEntries() {
 				log.Info("subscription client push region event entry",
