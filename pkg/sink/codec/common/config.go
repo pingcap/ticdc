@@ -53,6 +53,8 @@ type Config struct {
 	EnableTiDBExtension bool
 	EnableRowChecksum   bool
 
+	OutputRowKey bool
+
 	// avro only
 	AvroConfluentSchemaRegistry    string
 	AvroDecimalHandlingMode        string
@@ -115,6 +117,8 @@ func NewConfig(protocol config.Protocol) *Config {
 		EnableTiDBExtension: false,
 		EnableRowChecksum:   false,
 
+		OutputRowKey: false,
+
 		AvroConfluentSchemaRegistry:    "",
 		AvroDecimalHandlingMode:        "precise",
 		AvroBigintUnsignedHandlingMode: "long",
@@ -174,6 +178,8 @@ type urlConfig struct {
 	// EncodingFormatType is only works for the simple protocol,
 	// can be `json` and `avro`, default to `json`.
 	EncodingFormatType *string `form:"encoding-format"`
+
+	OutputRowKey *bool `form:"output-row-key"`
 }
 
 // Apply fill the Config
@@ -190,6 +196,10 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 
 	if urlParameter.EnableTiDBExtension != nil {
 		c.EnableTiDBExtension = *urlParameter.EnableTiDBExtension
+	}
+
+	if urlParameter.OutputRowKey != nil {
+		c.OutputRowKey = *urlParameter.OutputRowKey
 	}
 
 	if urlParameter.MaxBatchSize != nil {

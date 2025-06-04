@@ -252,6 +252,9 @@ type DMLEvent struct {
 	ApproximateSize int64 `json:"approximate_size"`
 	// RowTypes is the types of every row in the transaction.
 	RowTypes []RowType `json:"row_types"`
+
+	RowKeys [][]byte `json:"row_keys"`
+
 	// Rows shares BatchDMLEvent rows
 	Rows *chunk.Chunk `json:"-"`
 
@@ -315,6 +318,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	}
 	for range count {
 		t.RowTypes = append(t.RowTypes, rowType)
+		t.RowKeys = append(t.RowKeys, raw.Key)
 	}
 	t.Length += 1
 	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
@@ -387,12 +391,14 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 		t.checksumOffset++
 	}
 	rowType := t.RowTypes[t.offset]
+	rowKey := t.RowKeys[t.offset]
 	switch rowType {
 	case RowTypeInsert:
 		row := RowChange{
 			Row:      t.Rows.GetRow(t.PreviousTotalOffset + t.offset),
 			RowType:  rowType,
 			Checksum: checksum,
+			RowKey:   rowKey,
 		}
 		t.offset++
 		return row, true
@@ -401,6 +407,7 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 			PreRow:   t.Rows.GetRow(t.PreviousTotalOffset + t.offset),
 			RowType:  rowType,
 			Checksum: checksum,
+			RowKey:   rowKey,
 		}
 		t.offset++
 		return row, true
@@ -410,6 +417,7 @@ func (t *DMLEvent) GetNextRow() (RowChange, bool) {
 			Row:      t.Rows.GetRow(t.PreviousTotalOffset + t.offset + 1),
 			RowType:  rowType,
 			Checksum: checksum,
+			RowKey:   rowKey,
 		}
 		t.offset += 2
 		return row, true
@@ -567,6 +575,7 @@ type RowChange struct {
 	Row      chunk.Row
 	RowType  RowType
 	Checksum *integrity.Checksum
+	RowKey   []byte
 }
 
 type RowType byte
