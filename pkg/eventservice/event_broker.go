@@ -128,21 +128,18 @@ func newEventBroker(
 		cancel:                  cancel,
 		g:                       g,
 	}
-
 	// Initialize metrics collector
 	c.metricsCollector = newMetricsCollector(c)
-
-	for i := 0; i < scanWorkerCount; i++ {
-		c.taskChan[i] = make(chan scanTask, conf.ScanTaskQueueSize/scanWorkerCount)
-	}
 
 	for i := 0; i < c.sendMessageWorkerCount; i++ {
 		c.messageCh[i] = make(chan *wrapEvent, basicChannelSize*4)
 	}
 
-	for i := 0; i < c.scanWorkerCount; i++ {
+	for i := 0; i < scanWorkerCount; i++ {
+		taskChan := make(chan scanTask, conf.ScanTaskQueueSize/scanWorkerCount)
+		c.taskChan[i] = taskChan
 		g.Go(func() error {
-			c.runScanWorker(ctx, c.taskChan[i])
+			c.runScanWorker(ctx, taskChan)
 			return nil
 		})
 	}
@@ -167,9 +164,8 @@ func newEventBroker(
 	})
 
 	for i := 0; i < c.sendMessageWorkerCount; i++ {
-		idx := i
 		g.Go(func() error {
-			c.runSendMessageWorker(ctx, idx)
+			c.runSendMessageWorker(ctx, i)
 			return nil
 		})
 	}
