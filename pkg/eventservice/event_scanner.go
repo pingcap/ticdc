@@ -184,6 +184,7 @@ func (s *eventScanner) Scan(
 
 		// If the dispatcher is not running, we don't scan any events.
 		if !dispatcherStat.isRunning.Load() {
+			log.Debug("scan exits since dispatcher is not running", zap.Stringer("dispatcherID", dispatcherID), zap.Uint64("lastCommitTs", lastCommitTs))
 			return nil, false, nil
 		}
 
@@ -206,6 +207,7 @@ func (s *eventScanner) Scan(
 			if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs && dmlCount > 0 {
 				appendDML(batchDML)
 				appendDDLs(lastCommitTs)
+				log.Debug("scan interrupted since totalBytes or elapsed is greater than limit", zap.Int64("totalBytes", totalBytes), zap.Duration("elapsed", elapsed), zap.Uint64("lastCommitTs", lastCommitTs), zap.Int("dmlCount", dmlCount), zap.String("table", dispatcherStat.startTableInfo.Load().TableName.String()))
 				return events, true, nil
 			}
 			tableInfo, err := s.schemaStore.GetTableInfo(tableID, e.CRTs-1)

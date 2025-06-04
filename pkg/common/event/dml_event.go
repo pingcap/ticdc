@@ -277,6 +277,8 @@ type DMLEvent struct {
 	// and TiCDC set the integrity check level to the correctness.
 	Checksum       []*integrity.Checksum `json:"-"`
 	checksumOffset int                   `json:"-"`
+
+	rawRowCount int `json:"-"`
 }
 
 func newDMLEvent(
@@ -321,6 +323,16 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	if checksum != nil {
 		t.Checksum = append(t.Checksum, checksum)
 	}
+
+	t.rawRowCount += count
+	row := t.Rows.GetRow(t.rawRowCount - 1)
+	cr := row.ToString(t.TableInfo.GetFieldSlice())
+	pr := ""
+	if t.rawRowCount-2 >= 0 {
+		preRow := t.Rows.GetRow(t.rawRowCount - 2)
+		pr = preRow.ToString(t.TableInfo.GetFieldSlice())
+	}
+	log.Debug("fizz decode row", zap.String("table", t.TableInfo.TableName.String()), zap.String("rowType", rowType.String()), zap.String("preVal", pr), zap.String("currentVal", cr), zap.Uint64("startTs", t.StartTs), zap.Uint64("commitTs", t.CommitTs))
 	return nil
 }
 

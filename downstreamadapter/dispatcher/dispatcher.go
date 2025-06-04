@@ -274,6 +274,13 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			if dml.Len() == 0 {
 				return block
 			}
+
+			for i := 0; i < int(dml.Len()); i++ {
+				row := dml.Rows.GetRow(i)
+				cr := row.ToString(dml.TableInfo.GetFieldSlice())
+				log.Debug("fizz receive row", zap.String("table", dml.TableInfo.TableName.String()), zap.String("rowType", dml.RowTypes[i].String()), zap.String("currentVal", cr), zap.Uint64("startTs", dml.StartTs), zap.Uint64("commitTs", dml.CommitTs))
+			}
+
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
 			dml.AddPostFlushFunc(func() {
