@@ -141,9 +141,8 @@ func newEventBroker(
 	}
 
 	for i := 0; i < c.scanWorkerCount; i++ {
-		idx := i
 		g.Go(func() error {
-			c.runScanWorker(ctx, idx)
+			c.runScanWorker(ctx, c.taskChan[i])
 			return nil
 		})
 	}
@@ -272,13 +271,13 @@ func (c *eventBroker) getMessageCh(workerIndex int) chan *wrapEvent {
 	return c.messageCh[workerIndex]
 }
 
-func (c *eventBroker) runScanWorker(ctx context.Context, idx int) {
+func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case task := <-c.taskChan[idx]:
-			c.doScan(ctx, task, idx)
+		case task := <-taskChan:
+			c.doScan(ctx, task)
 		}
 	}
 }
@@ -477,7 +476,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 	}
 }
 
-func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
+func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	remoteID := node.ID(task.info.GetServerID())
 
 	isBroken := false
@@ -495,9 +494,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		log.Info("The remote target is not ready, skip scan",
 			zap.String("changefeed", task.info.GetChangefeedID().String()),
 			zap.String("dispatcher", task.id.String()),
-			zap.String("remote", remoteID.String()),
-			zap.Int("workerIndex", idx),
-		)
+			zap.String("remote", remoteID.String()))
 		return
 	}
 
