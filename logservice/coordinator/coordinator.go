@@ -161,16 +161,12 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 	c.eventStoreStates.Lock()
 	defer c.eventStoreStates.Unlock()
 
-	// FIXME: remove this check
-	if !common.IsCompleteSpan(span) {
-		return nil
+	type candidateSubscription struct {
+		nodeID         node.ID
+		subscriptionID uint64
+		resolvedTs     uint64
 	}
-
-	type candidateNode struct {
-		nodeID     node.ID
-		resolvedTs uint64
-	}
-	var candidates []candidateNode
+	var candidateSubs []candidateSubscription
 	for nodeID, eventStoreState := range c.eventStoreStates.m {
 		if nodeID == requestNodeID {
 			continue
@@ -180,7 +176,7 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 			continue
 		}
 		// Find the maximum resolvedTs for the current nodeID
-		var maxResolvedTs uint64
+		var maxResolvedTs, subID uint64
 		found := false
 		for _, subsState := range subStates.GetSubscriptions() {
 			if bytes.Compare(subsState.Span.StartKey, span.StartKey) <= 0 &&
@@ -188,6 +184,7 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 				subsState.CheckpointTs <= startTs {
 				if !found || subsState.ResolvedTs > maxResolvedTs {
 					maxResolvedTs = subsState.ResolvedTs
+					subID = subsState.SubID
 					found = true
 				}
 			}
@@ -202,21 +199,30 @@ func (c *logCoordinator) getCandidateNodes(requestNodeID node.ID, span *heartbea
 
 		// If a valid subscription with checkpointTs <= startTs was found, add to candidates
 		if found {
-			candidates = append(candidates, candidateNode{
-				nodeID:     nodeID,
-				resolvedTs: maxResolvedTs,
+			candidateSubs = append(candidateSubs, candidateSubscription{
+				nodeID:         nodeID,
+				subscriptionID: subID,
+				resolvedTs:     maxResolvedTs,
 			})
 		}
 	}
 
 	// return candidate nodes sorted by resolvedTs in descending order
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].resolvedTs > candidates[j].resolvedTs
+	sort.Slice(candidateSubs, func(i, j int) bool {
+		return candidateSubs[i].resolvedTs > candidateSubs[j].resolvedTs
 	})
+	var subIDs []uint64
 	var candidateNodes []string
-	for _, candidate := range candidates {
+	for _, candidate := range candidateSubs {
+		subIDs = append(subIDs, candidate.subscriptionID)
 		candidateNodes = append(candidateNodes, string(candidate.nodeID))
 	}
+	log.Info("log coordinator get candidate nodes",
+		zap.String("requestNodeID", requestNodeID.String()),
+		zap.String("span", common.FormatTableSpan(span)),
+		zap.Uint64("startTs", startTs),
+		zap.Strings("candidateNodes", candidateNodes),
+		zap.Any("subscriptionIDs", subIDs))
 
 	return candidateNodes
 }

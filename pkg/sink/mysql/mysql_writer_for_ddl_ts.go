@@ -14,7 +14,6 @@
 package mysql
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -509,16 +508,6 @@ func (w *Writer) createTable(dbName string, tableName string, createTableQuery s
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
 		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: begin Tx fail;", tableName)))
-	}
-
-	// we try to set cdc write source for the ddl
-	if err = SetWriteSource(w.ctx, w.cfg, tx); err != nil {
-		if rbErr := tx.Rollback(); rbErr != nil {
-			if errors.Cause(rbErr) != context.Canceled {
-				log.Error("Failed to rollback", zap.Error(err))
-			}
-		}
-		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("create %s table: set write source fail;", tableName)))
 	}
 
 	_, err = tx.Exec("CREATE DATABASE IF NOT EXISTS " + dbName)

@@ -107,7 +107,7 @@ func createBatchDMLEvent(b *testing.B, dmlNum, rowNum int) {
 	tableInfo := helper.GetTableInfo(ddlJob)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
-	rawKvs := helper.DML2RawKv("test", "t", ts, dml)
+	rawKvs := helper.DML2RawKv(tableInfo.TableName.TableID, ts, dml)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for k := 0; k < b.N; k++ {
@@ -133,7 +133,7 @@ func createDMLEvents(b *testing.B, dmlNum, rowNum int) {
 	tableInfo := helper.GetTableInfo(ddlJob)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
-	rawKvs := helper.DML2RawKv("test", "t", ts, dml)
+	rawKvs := helper.DML2RawKv(tableInfo.TableName.TableID, ts, dml)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for k := 0; k < b.N; k++ {

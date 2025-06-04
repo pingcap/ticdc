@@ -33,9 +33,9 @@ type mockFactory struct {
 // NewMockFactory constructs a Factory with mock implementation.
 func NewMockFactory(
 	_ context.Context,
-	o *Options, changefeedID commonType.ChangeFeedID,
+	o *options, changefeedID commonType.ChangeFeedID,
 ) (Factory, error) {
-	config, err := NewSaramaConfig(context.Background(), o)
+	config, err := newSaramaConfig(context.Background(), o)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

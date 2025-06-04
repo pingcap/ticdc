@@ -178,19 +178,13 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.FinishedTs = b.nextKey.Ts
 	result.SchemaName = b.nextKey.Schema
 	result.TableName = b.nextKey.Table
-	actionType := common.GetDDLActionType(result.Query)
-	result.Type = byte(actionType)
 
 	// only the DDL comes from the first partition will be processed.
 	// since tableInfoAccessor is global, we need to make sure the table info
 	// is not removed by other partitions' decoder.
 	if b.idx == 0 {
-		var tableID int64
-		tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
-		if ok {
-			tableID = tableInfo.TableName.TableID
-		}
-		result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
+		physicalTableIDs := tableInfoAccessor.GetBlockedTables(result.SchemaName, result.TableName)
+		result.BlockedTables = common.GetInfluenceTables(m.Type, physicalTableIDs)
 		log.Debug("set blocked tables for the DDL event",
 			zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
 			zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
@@ -231,9 +225,7 @@ func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 		return b.assembleHandleKeyOnlyDMLEvent(ctx, nextRow)
 	}
 
-	result := b.assembleDMLEvent(nextRow)
-	b.nextKey = nil
-	return result
+	return b.assembleDMLEvent(nextRow)
 }
 
 func buildColumns(
@@ -344,12 +336,20 @@ func (b *decoder) queryTableInfo(key *messageKey, value *messageRow) *commonType
 		tableInfo = b.newTableInfo(key, value)
 		tableInfoAccessor.Add(key.Schema, key.Table, tableInfo)
 	}
+	if key.Partition != nil {
+		tableInfo.TableName.TableID = *key.Partition
+	}
+	tableInfoAccessor.AddBlockTableID(key.Schema, key.Table, tableInfo.TableName.TableID)
 	return tableInfo
 }
 
 func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.TableInfo {
+	if key.Partition == nil {
+		physicalTableID := tableIDAllocator.AllocateTableID(key.Schema, key.Table)
+		key.Partition = &physicalTableID
+	}
 	tableInfo := new(timodel.TableInfo)
-	tableInfo.ID = tableIDAllocator.AllocateTableID(key.Schema, key.Table)
+	tableInfo.ID = *key.Partition
 	tableInfo.Name = pmodel.NewCIStr(key.Table)
 
 	var rawColumns map[string]column
@@ -450,10 +450,6 @@ func (b *decoder) assembleDMLEvent(value *messageRow) *commonEvent.DMLEvent {
 	result.StartTs = key.Ts
 	result.CommitTs = key.Ts
 	result.Length++
-	if key.Partition != nil {
-		result.PhysicalTableID = *key.Partition
-		result.TableInfo.TableName.IsPartition = true
-	}
 
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	columns := tableInfo.GetColumns()

@@ -76,16 +76,6 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		}
 	}
 
-	// we try to set cdc write source for the ddl
-	if err = SetWriteSource(ctx, w.cfg, tx); err != nil {
-		if rbErr := tx.Rollback(); rbErr != nil {
-			if errors.Cause(rbErr) != context.Canceled {
-				log.Error("Failed to rollback", zap.Error(err))
-			}
-		}
-		return err
-	}
-
 	query := event.GetDDLQuery()
 	_, err = tx.ExecContext(ctx, query)
 	if err != nil {

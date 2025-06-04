@@ -303,7 +303,7 @@ func (b *decoder) canalJSONMessage2DMLEvent() *commonEvent.DMLEvent {
 	result.TableInfo = tableInfo
 	result.StartTs = msg.getCommitTs()
 	result.CommitTs = msg.getCommitTs()
-	result.PhysicalTableID = result.TableInfo.TableName.TableID
+	result.PhysicalTableID = tableInfo.TableName.TableID
 	result.Rows = chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
 	result.Length++
 
@@ -343,7 +343,21 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 			zap.Any("messageType", b.msg.messageType()), zap.Any("msg", b.msg))
 	}
 
-	result := b.canalJSONMessage2DDLEvent()
+	result := new(commonEvent.DDLEvent)
+	result.FinishedTs = b.msg.getCommitTs()
+	result.SchemaName = *b.msg.getSchema()
+	result.TableName = *b.msg.getTable()
+	result.Query = b.msg.getQuery()
+	actionType := common.GetDDLActionType(result.Query)
+	result.Type = byte(actionType)
+
+	physicalTableID := tableInfoAccessor.GetBlockedTables(result.SchemaName, result.TableName)
+	result.BlockedTables = common.GetInfluenceTables(actionType, physicalTableID)
+	log.Debug("set blocked tables for the DDL event",
+		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
+		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
+
+	tableInfoAccessor.Remove(result.SchemaName, result.TableName)
 	return result
 }
 
@@ -360,29 +374,6 @@ func (b *decoder) NextResolvedEvent() uint64 {
 			zap.Any("msg", b.msg))
 	}
 	return withExtensionEvent.Extensions.WatermarkTs
-}
-
-func (b *decoder) canalJSONMessage2DDLEvent() *commonEvent.DDLEvent {
-	result := new(commonEvent.DDLEvent)
-	result.FinishedTs = b.msg.getCommitTs()
-	result.SchemaName = *b.msg.getSchema()
-	result.TableName = *b.msg.getTable()
-	result.Query = b.msg.getQuery()
-	actionType := common.GetDDLActionType(result.Query)
-	result.Type = byte(actionType)
-
-	var tableID int64
-	tableInfo, ok := tableInfoAccessor.Get(result.SchemaName, result.TableName)
-	if ok {
-		tableID = tableInfo.TableName.TableID
-	}
-	result.BlockedTables = common.GetInfluenceTables(actionType, tableID)
-	log.Debug("set blocked tables for the DDL event",
-		zap.String("schema", result.SchemaName), zap.String("table", result.TableName),
-		zap.String("query", result.Query), zap.Any("blocked", result.BlockedTables))
-
-	tableInfoAccessor.Remove(result.GetSchemaName(), result.GetTableName())
-	return result
 }
 
 func formatAllColumnsValue(data map[string]any, columns []*timodel.ColumnInfo) map[string]any {
@@ -529,6 +520,7 @@ func queryTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 
 	tableInfo = newTableInfo(msg)
 	tableInfoAccessor.Add(schema, table, tableInfo)
+	tableInfoAccessor.AddBlockTableID(schema, table, tableInfo.TableName.TableID)
 	return tableInfo
 }
 

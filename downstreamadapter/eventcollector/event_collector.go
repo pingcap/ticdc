@@ -112,7 +112,7 @@ type EventCollector struct {
 	ds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
 
 	coordinatorInfo struct {
-		sync.RWMutex
+		sync.Mutex
 		id node.ID
 	}
 
@@ -207,13 +207,32 @@ func (c *EventCollector) Close() {
 }
 
 func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64) {
+	c.PrepareAddDispatcher(target, memoryQuota, nil)
+
+	if target.GetTableSpan().TableID != 0 {
+		c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
+			ID:      target.GetId().ToPB(),
+			Span:    target.GetTableSpan(),
+			StartTs: target.GetStartTs(),
+		}
+	}
+}
+
+// PrepareAddDispatcher is used to prepare the dispatcher to be added to the event collector.
+// It will send a register request to local event service and call `readyCallback` when local event service is ready.
+func (c *EventCollector) PrepareAddDispatcher(
+	target dispatcher.EventDispatcher,
+	memoryQuota uint64,
+	readyCallback func(),
+) {
 	log.Info("add dispatcher", zap.Stringer("dispatcher", target.GetId()))
 	defer func() {
 		log.Info("add dispatcher done", zap.Stringer("dispatcher", target.GetId()))
 	}()
 	stat := &dispatcherStat{
-		dispatcherID: target.GetId(),
-		target:       target,
+		dispatcherID:  target.GetId(),
+		target:        target,
+		readyCallback: readyCallback,
 	}
 	stat.reset()
 	stat.sentCommitTs.Store(target.GetStartTs())
@@ -227,33 +246,29 @@ func (c *EventCollector) AddDispatcher(target dispatcher.EventDispatcher, memory
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
 
-	// TODO: handle the return error(now even it return error, it will be retried later, we can just ignore it now)
-	c.mustSendDispatcherRequest(c.serverId, eventServiceTopic, DispatcherRequest{
+	err = c.mustSendDispatcherRequest(c.serverId, eventServiceTopic, DispatcherRequest{
 		Dispatcher: target,
 		StartTs:    target.GetStartTs(),
 		ActionType: eventpb.ActionType_ACTION_TYPE_REGISTER,
 		BDRMode:    target.GetBDRMode(),
 	})
-
-	c.logCoordinatorRequestChan.In() <- &logservicepb.ReusableEventServiceRequest{
-		ID:      target.GetId().ToPB(),
-		Span:    target.GetTableSpan(),
-		StartTs: target.GetStartTs(),
+	if err != nil {
+		// TODO: handle the return error(now even it return error, it will be retried later, we can just ignore it now)
+		log.Warn("add dispatcher to dynamic stream failed, try again later", zap.Error(err))
 	}
 }
 
-func (c *EventCollector) MergeDispatcher(target dispatcher.EventDispatcher, memoryQuota uint64) {
-	log.Info("merge dispatcher", zap.Stringer("dispatcher", target.GetId()))
-	defer func() {
-		log.Info("merge dispatcher done", zap.Stringer("dispatcher", target.GetId()))
-	}()
-
-	// TODO: Communicate with event service to merge the dispatcher.
-
-}
-
-func (c *EventCollector) UpdateMergedDispatcherStartTs(dispatcherID common.DispatcherID, startTs uint64) {
-	// TODO
+// CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
+func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, startTs uint64) {
+	c.addDispatcherRequestToSendingQueue(
+		c.serverId,
+		eventServiceTopic,
+		DispatcherRequest{
+			Dispatcher: target,
+			StartTs:    startTs,
+			ActionType: eventpb.ActionType_ACTION_TYPE_RESET,
+		},
+	)
 }
 
 func (c *EventCollector) RemoveDispatcher(target *dispatcher.Dispatcher) {
@@ -382,15 +397,32 @@ func (c *EventCollector) processDispatcherRequests(ctx context.Context) {
 	}
 }
 
+func (c *EventCollector) setCoordinatorInfo(id node.ID) {
+	c.coordinatorInfo.Lock()
+	defer c.coordinatorInfo.Unlock()
+	c.coordinatorInfo.id = id
+}
+
+func (c *EventCollector) getCoordinatorInfo() node.ID {
+	c.coordinatorInfo.Lock()
+	defer c.coordinatorInfo.Unlock()
+	return c.coordinatorInfo.id
+}
+
 func (c *EventCollector) processLogCoordinatorRequest(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case req := <-c.logCoordinatorRequestChan.Out():
-			c.coordinatorInfo.RLock()
-			targetMessage := messaging.NewSingleTargetMessage(c.coordinatorInfo.id, logCoordinatorTopic, req)
-			c.coordinatorInfo.RUnlock()
+			coordinatorID := c.getCoordinatorInfo()
+			if coordinatorID == "" {
+				log.Info("coordinator info is empty, try send request later")
+				c.logCoordinatorRequestChan.In() <- req
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+			targetMessage := messaging.NewSingleTargetMessage(coordinatorID, logCoordinatorTopic, req)
 			err := c.mc.SendCommand(targetMessage)
 			if err != nil {
 				log.Info("fail to send dispatcher request message to log coordinator, try again later", zap.Error(err))
@@ -508,12 +540,12 @@ func (c *EventCollector) RecvEventsMessage(_ context.Context, targetMessage *mes
 	for _, msg := range targetMessage.Message {
 		switch msg.(type) {
 		case *common.LogCoordinatorBroadcastRequest:
-			c.coordinatorInfo.Lock()
-			c.coordinatorInfo.id = targetMessage.From
-			c.coordinatorInfo.Unlock()
+			c.setCoordinatorInfo(targetMessage.From)
 		case *logservicepb.ReusableEventServiceResponse:
 			// TODO: can we handle it here?
-			value, ok := c.dispatcherMap.Load(msg.(*logservicepb.ReusableEventServiceResponse).ID)
+			resp := msg.(*logservicepb.ReusableEventServiceResponse)
+			dispatcherID := common.NewDispatcherIDFromPB(resp.ID)
+			value, ok := c.dispatcherMap.Load(dispatcherID)
 			if !ok {
 				continue
 			}
@@ -573,6 +605,9 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						if !ok {
 							continue
 						}
+						log.Info("get handshake event",
+							zap.Stringer("dispatcherID", e.GetDispatcherID()),
+							zap.String("serverID", targetMessage.From.String()))
 						stat.(*dispatcherStat).setTableInfo(e.(*event.HandshakeEvent).TableInfo)
 						c.metricDispatcherReceivedKVEventCount.Add(float64(e.Len()))
 						c.ds.Push(e.GetDispatcherID(), dispatcher.NewDispatcherEvent(&targetMessage.From, e))
