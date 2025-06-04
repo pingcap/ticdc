@@ -447,7 +447,7 @@ func TestDMLProcessorProcessNewTransaction(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
-	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
 		`insert into test.t(id,c) values (0, "c0")`,
 		`insert into test.t(id,c) values (1, "c1")`,
 	}...)
@@ -631,7 +631,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
-	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, a char(50), b char(50), unique key uk_a(a))`, []string{
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, a char(50), b char(50), unique key uk_a(a))`, []string{
 		`insert into test.t(id,a,b) values (0, "a0", "b0")`,
 		`insert into test.t(id,a,b) values (1, "a1", "b1")`,
 		`insert into test.t(id,a,b) values (2, "a2", "b2")`,
@@ -980,7 +980,7 @@ func TestEventMerger(t *testing.T) {
 
 		helper := commonEvent.NewEventTestHelper(t)
 		defer helper.Close()
-		ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
+		ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
 			`insert into test.t(id,c) values (0, "c0")`,
 		}...)
 
@@ -1010,7 +1010,7 @@ func TestEventMerger(t *testing.T) {
 		helper := commonEvent.NewEventTestHelper(t)
 		defer helper.Close()
 
-		ddlEvent1, kvEvents1 := genEvents(helper, t, `create table test.t1(id int primary key, c char(50))`, []string{
+		ddlEvent1, kvEvents1 := genEvents(helper, `create table test.t1(id int primary key, c char(50))`, []string{
 			`insert into test.t1(id,c) values (1, "c1")`,
 		}...)
 		ddlEvent2 := event.DDLEvent{
@@ -1072,7 +1072,7 @@ func TestEventMerger(t *testing.T) {
 		helper := commonEvent.NewEventTestHelper(t)
 		defer helper.Close()
 
-		ddlEvent1, _ := genEvents(helper, t, `create table test.t1(id int primary key, c char(50))`, []string{
+		ddlEvent1, _ := genEvents(helper, `create table test.t1(id int primary key, c char(50))`, []string{
 			`insert into test.t1(id,c) values (1, "c1")`,
 		}...)
 		ddlEvent2 := event.DDLEvent{
