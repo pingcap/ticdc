@@ -194,7 +194,7 @@ check_failpoint_ctl: tools/bin/failpoint-ctl
 
 integration_test: integration_test_mysql
 
-integration_test_mysql: check_third_party_binary
+integration_test_mysql: #check_third_party_binary
 	tests/integration_tests/run.sh mysql "$(CASE)" "$(START_AT)"
 
 integration_test_kafka: check_third_party_binary
