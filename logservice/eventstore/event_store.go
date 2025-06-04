@@ -444,7 +444,7 @@ func (e *eventStore) RegisterDispatcher(
 			if kv.CRTs > maxCommitTs {
 				maxCommitTs = kv.CRTs
 			}
-			if kv.CRTs <= subStat.resolvedTs.Load() {
+			if kv.CRTs < subStat.resolvedTs.Load() {
 				log.Warn("event store received kv with commitTs less than resolvedTs",
 					zap.Uint64("commitTs", kv.CRTs),
 					zap.Uint64("resolvedTs", subStat.resolvedTs.Load()),
