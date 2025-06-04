@@ -30,6 +30,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -75,6 +78,9 @@ func (p *partitionProgress) updateWatermark(newWatermark uint64, offset kafka.Of
 type writer struct {
 	progresses []*partitionProgress
 
+	// this should only be used by the canal-json protocol
+	partitionTableAccessor *partitionTableAccessor
+
 	eventRouter     *eventrouter.EventRouter
 	protocol        config.Protocol
 	maxMessageBytes int
@@ -84,10 +90,11 @@ type writer struct {
 
 func newWriter(ctx context.Context, o *option) *writer {
 	w := &writer{
-		protocol:        o.protocol,
-		maxMessageBytes: o.maxMessageBytes,
-		maxBatchSize:    o.maxBatchSize,
-		progresses:      make([]*partitionProgress, o.partitionNum),
+		protocol:               o.protocol,
+		maxMessageBytes:        o.maxMessageBytes,
+		maxBatchSize:           o.maxBatchSize,
+		progresses:             make([]*partitionProgress, o.partitionNum),
+		partitionTableAccessor: newPartitionTableAccessor(),
 	}
 	var (
 		db  *sql.DB
@@ -189,8 +196,6 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	}
 
 	if total == 0 {
-		log.Info("no DML events found before DDL",
-			zap.Uint64("DDLCommitTs", commitTs), zap.Any("tables", tableIDs))
 		return w.mysqlSink.WriteBlockEvent(ddl)
 	}
 
@@ -327,6 +332,8 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			}
 		}
 
+		w.onDDL(ddl)
+
 		// DDL is broadcast to all partitions, but only handle the DDL from partition-0.
 		if partition != 0 {
 			return false
@@ -382,6 +389,53 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 	return false
 }
 
+type tableKey struct {
+	schema string
+	table  string
+}
+
+type partitionTableAccessor struct {
+	memo map[tableKey]struct{}
+}
+
+func newPartitionTableAccessor() *partitionTableAccessor {
+	return &partitionTableAccessor{
+		memo: make(map[tableKey]struct{}),
+	}
+}
+
+func (m *partitionTableAccessor) add(schema, table string) {
+	key := tableKey{schema: schema, table: table}
+	_, ok := m.memo[key]
+	if ok {
+		return
+	}
+	m.memo[key] = struct{}{}
+	log.Info("add partition table to the accessor", zap.String("schema", schema), zap.String("table", table))
+}
+
+func (m *partitionTableAccessor) isPartitionTable(schema, table string) bool {
+	key := tableKey{schema: schema, table: table}
+	_, ok := m.memo[key]
+	return ok
+}
+
+func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
+	if w.protocol != config.ProtocolCanalJSON {
+		return
+	}
+	if ddl.Type != byte(timodel.ActionCreateTable) {
+		return
+	}
+	stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
+	if err != nil {
+		log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
+	}
+	if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
+		w.partitionTableAccessor.add(ddl.GetSchemaName(), ddl.GetTableName())
+	}
+}
+
 func (w *writer) checkPartition(row *commonEvent.DMLEvent, partition int32, offset kafka.Offset) {
 	var (
 		partitioner  = w.eventRouter.GetPartitionGenerator(row.TableInfo.GetSchemaName(), row.TableInfo.GetTableName())
@@ -413,63 +467,66 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 	w.checkPartition(dml, progress.partition, offset)
 	// if the kafka cluster is normal, this should not hit.
 	// else if the cluster is abnormal, the consumer may consume old message, then cause the watermark fallback.
-	tableID := dml.GetTableID()
+	var (
+		tableID  = dml.GetTableID()
+		schema   = dml.TableInfo.GetSchemaName()
+		table    = dml.TableInfo.GetTableName()
+		commitTs = dml.GetCommitTs()
+	)
 	group := progress.eventGroups[tableID]
 	if group == nil {
 		group = NewEventsGroup(progress.partition, tableID)
 		progress.eventGroups[tableID] = group
 	}
-	commitTs := dml.GetCommitTs()
-	if commitTs < progress.watermark {
-		log.Warn("DML Event fallback row, since less than the partition watermark, ignore it",
-			zap.Int64("tableID", tableID), zap.Int32("partition", progress.partition),
-			zap.Uint64("commitTs", commitTs), zap.Any("offset", offset),
-			zap.Uint64("watermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
-			zap.String("schema", dml.TableInfo.GetSchemaName()), zap.String("table", dml.TableInfo.GetTableName()),
-			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
-			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
-		return
-	}
 	if commitTs >= group.highWatermark {
 		group.Append(dml)
 		log.Info("DML event append to the group",
-			zap.Int32("partition", group.partition),
-			zap.Any("offset", offset),
-			zap.Uint64("commitTs", dml.GetCommitTs()),
-			zap.Uint64("highWatermark", group.highWatermark),
-			zap.Int64("tableID", dml.GetTableID()),
-			zap.String("schema", dml.TableInfo.GetSchemaName()),
-			zap.String("table", dml.TableInfo.GetTableName()))
+			zap.Int32("partition", group.partition), zap.Any("offset", offset),
+			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Stringer("eventType", dml.RowTypes[0]))
 		// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns))
 		return
 	}
 	switch w.protocol {
-	case config.ProtocolSimple, config.ProtocolOpen, config.ProtocolCanalJSON, config.ProtocolDebezium:
+	case config.ProtocolSimple, config.ProtocolOpen, config.ProtocolDebezium:
 		// simple protocol set the table id for all row message, it can be known which table the row message belongs to,
 		// also consider the table partition.
 		// open protocol set the partition table id if the table is partitioned.
 		// for normal table, the table id is generated by the fake table id generator by using schema and table name.
 		// so one event group for one normal table or one table partition, replayed messages can be ignored.
 		log.Warn("DML event fallback row, since less than the group high watermark, ignore it",
-			zap.Int64("tableID", tableID), zap.Int32("partition", progress.partition),
-			zap.Uint64("commitTs", commitTs), zap.Any("offset", offset),
-			zap.Uint64("highWatermark", group.highWatermark),
+			zap.Int32("partition", progress.partition), zap.Any("offset", offset),
+			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
 			zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
-			zap.String("schema", dml.TableInfo.GetSchemaName()), zap.String("table", dml.TableInfo.GetTableName()),
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Stringer("eventType", dml.RowTypes[0]),
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
 		return
+	case config.ProtocolCanalJSON:
+		// for partition table, the canal-json message cannot assign physical table id to each dml message,
+		// we cannot distinguish whether it's a real fallback event or not, still append it.
+		if w.partitionTableAccessor.isPartitionTable(schema, table) {
+			log.Warn("DML events fallback, but it's canal-json and partition table, still append it",
+				zap.Int32("partition", group.partition), zap.Any("offset", offset),
+				zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
+				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+				zap.Stringer("eventType", dml.RowTypes[0]))
+			group.Append(dml)
+			return
+		}
+		log.Warn("DML event fallback row, since less than the group high watermark, ignore it",
+			zap.Int32("partition", progress.partition), zap.Any("offset", offset),
+			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
+			zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Stringer("eventType", dml.RowTypes[0]),
+			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
+			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
 	default:
+		log.Panic("unknown protocol", zap.Any("protocol", w.protocol))
 	}
-	group.Append(dml)
-	log.Warn("DML event fallback, still append to the group, since less than the group high watermark, do not ignore it",
-		zap.Int64("tableID", tableID), zap.Int32("partition", progress.partition),
-		zap.Uint64("commitTs", commitTs), zap.Any("offset", offset),
-		zap.Uint64("highWatermark", group.highWatermark),
-		zap.Any("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
-		zap.String("schema", dml.TableInfo.GetSchemaName()), zap.String("table", dml.TableInfo.GetTableName()),
-		// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
-		zap.Any("protocol", w.protocol))
 }
 
 func openDB(ctx context.Context, dsn string) (*sql.DB, error) {

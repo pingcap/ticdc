@@ -14,8 +14,6 @@ create table tp_int
         primary key (id)
 );
 
-
--- unsigned int
 create table tp_unsigned_int (
     id          int auto_increment,
     c_unsigned_tinyint   tinyint   unsigned null,
@@ -27,8 +25,6 @@ create table tp_unsigned_int (
         primary key (id)
 );
 
-
--- real
 create table tp_real
 (
     id        int auto_increment,
@@ -40,9 +36,6 @@ create table tp_real
         primary key (id)
 );
 
-
-
--- unsigned real
 create table tp_unsigned_real (
     id                   int auto_increment,
     c_unsigned_float     float unsigned   null,

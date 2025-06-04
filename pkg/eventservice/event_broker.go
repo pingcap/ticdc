@@ -178,17 +178,35 @@ func newEventBroker(
 	return c
 }
 
-func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, e *pevent.BatchDMLEvent, d *dispatcherStat) {
-	// Set sequence number for the event
-	for _, dml := range e.DMLEvents {
-		dml.Seq = d.seq.Add(1)
-		// Emit sync point event if needed
-		c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)
+func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
+	doSendDML := func(e *pevent.BatchDMLEvent) {
+		// Send the DML event
+		if e != nil && len(e.DMLEvents) > 0 {
+			c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
+			metricEventServiceSendKvCount.Add(float64(e.Len()))
+		}
 	}
 
-	// Send the DML event
-	c.getMessageCh(d.messageWorkerIndex) <- newWrapBatchDMLEvent(remoteID, e, d.getEventSenderState())
-	metricEventServiceSendKvCount.Add(float64(e.Len()))
+	i := 0
+	for {
+		if i >= len(batchEvent.DMLEvents) {
+			break
+		}
+		dml := batchEvent.DMLEvents[i]
+		// Set sequence number for the event
+		dml.Seq = d.seq.Add(1)
+		if c.hasSyncPointEventsBeforeTs(dml.GetCommitTs(), d) {
+			events := batchEvent.PopHeadDMLEvents(i)
+			doSendDML(events)
+			// Reset the index to 1 to process the next event after `dml` in next loop
+			i = 1
+			// Emit sync point event if needed
+			c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)
+		} else {
+			i++
+		}
+	}
+	doSendDML(batchEvent)
 }
 
 func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *pevent.DDLEvent, d *dispatcherStat) {
@@ -426,6 +444,11 @@ func (c *eventBroker) checkAndSendHandshake(task scanTask) bool {
 	return false
 }
 
+// hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
+func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) bool {
+	return d.enableSyncPoint && ts > d.nextSyncPoint
+}
+
 // emitSyncPointEventIfNeeded emits a sync point event if the current ts is greater than the next sync point, and updates the next sync point.
 // We need call this function every time we send a event(whether dml/ddl/resolvedTs),
 // thus to ensure the sync point event is in correct order for each dispatcher.
@@ -525,6 +548,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 				log.Error("expect a DMLEvent, but got", zap.Any("event", e))
 				continue
 			}
+
 			c.sendDML(ctx, remoteID, dmls, task)
 		case pevent.TypeDDLEvent:
 			ddl, ok := e.(*pevent.DDLEvent)

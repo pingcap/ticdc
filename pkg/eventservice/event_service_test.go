@@ -86,7 +86,7 @@ func TestEventServiceBasic(t *testing.T) {
 	// add events to eventStore
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
-	ddlEvent, kvEvents := genEvents(helper, t, `create table test.t(id int primary key, c char(50))`, []string{
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
 		`insert into test.t(id,c) values (0, "c0")`,
 		`insert into test.t(id,c) values (1, "c1")`,
 		`insert into test.t(id,c) values (2, "c2")`,
@@ -218,11 +218,11 @@ func newMockEventStore(resolvedTsUpdateInterval int) *mockEventStore {
 func (m *mockEventStore) AppendEvents(dispatcherID common.DispatcherID, resolvedTs uint64, events ...*common.RawKVEntry) error {
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if !ok {
-		return errors.New(fmt.Sprintf("dispatcher not found: %v", dispatcherID))
+		return fmt.Errorf("dispatcher not found: %v", dispatcherID)
 	}
 	spanStats, ok := m.spansMap.Load(span)
 	if !ok {
-		return errors.New(fmt.Sprintf("span not found: %v", span))
+		return fmt.Errorf("span not found: %v", span)
 	}
 	log.Info("append events", zap.Any("dispatcherID", dispatcherID), zap.Any("resolvedTs", resolvedTs), zap.Int("eventsNum", len(events)))
 	spanStats.(*mockSpanStats).update(resolvedTs, events...)
@@ -298,12 +298,12 @@ func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange
 	}
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("dispatcher not found: %v", dispatcherID))
+		return nil, fmt.Errorf("dispatcher not found: %v", dispatcherID)
 	}
 
 	v, ok := m.spansMap.Load(span)
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("span not found: %v, dispatcherID: %v", span, dispatcherID))
+		return nil, fmt.Errorf("span not found: %v, dispatcherID: %v", span, dispatcherID)
 	}
 
 	spanStats := v.(*mockSpanStats)
@@ -607,11 +607,9 @@ func (m *mockDispatcherInfo) GetTimezone() *time.Location {
 	return m.tz
 }
 
-func genEvents(helper *commonEvent.EventTestHelper, t *testing.T, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
+func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
 	job := helper.DDL2Job(ddl)
-	schema := job.SchemaName
-	table := job.TableName
-	kvEvents := helper.DML2RawKv(schema, table, job.BinlogInfo.FinishedTS, dmls...)
+	kvEvents := helper.DML2RawKv(job.TableID, job.BinlogInfo.FinishedTS, dmls...)
 	return commonEvent.DDLEvent{
 		Version:    commonEvent.DDLEventVersion,
 		FinishedTs: job.BinlogInfo.FinishedTS,

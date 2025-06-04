@@ -77,6 +77,7 @@ func NewMergeSplitDispatcherOperator(
 	}
 	if op.isPrimary() {
 		op.onFinished = func() {
+			log.Info("operator finished", zap.String("operator", op.String()))
 			op.totalRemoved.Add(1)
 		}
 	}

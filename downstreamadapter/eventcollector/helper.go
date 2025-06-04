@@ -72,22 +72,60 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 	if len(events) == 0 {
 		return false
 	}
-
 	// Only check the first event type, because all event types should be same
 	switch events[0].GetType() {
 	// note: TypeDMLEvent and TypeResolvedEvent can be in the same batch, so we should handle them together.
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeResolvedEvent:
-		validEventStart := 0
+		hasInvalidEvent := false
+		hasValidEvent := false
 		for _, event := range events {
-			if stat.shouldIgnoreDataEvent(event, h.eventCollector) {
-				continue
+			if stat.isEventFromCurrentEventService(event) {
+				hasValidEvent = true
+				if !stat.isEventSeqValid(event) {
+					// if event seq is invalid, there must be some events dropped
+					// we need drop all events in this batch and reset the dispatcher
+					h.eventCollector.resetDispatcher(stat)
+					return false
+				}
+			} else {
+				hasInvalidEvent = true
 			}
 		}
-		return stat.target.HandleEvents(events[validEventStart:], func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
+		if !hasValidEvent {
+			return false
+		}
+		var validEvents []dispatcher.DispatcherEvent
+		if hasInvalidEvent {
+			for _, event := range events {
+				if stat.isEventFromCurrentEventService(event) && stat.isEventCommitTsValid(event) {
+					validEvents = append(validEvents, event)
+				}
+			}
+		} else {
+			// event is sort by commitTs, so we can find the first valid event
+			validEventStartIndex := 0
+			for _, event := range events {
+				if stat.isEventCommitTsValid(event) {
+					break
+				} else {
+					validEventStartIndex++
+				}
+			}
+			validEvents = events[validEventStartIndex:]
+		}
+		return stat.target.HandleEvents(validEvents, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })
 	case commonEvent.TypeDDLEvent,
 		commonEvent.TypeSyncPointEvent:
-		if stat.shouldIgnoreDataEvent(events[0], h.eventCollector) {
+		// TypeDDLEvent and TypeSyncPointEvent is handled one by one
+		if !stat.isEventFromCurrentEventService(events[0]) {
+			return false
+		}
+		if !stat.isEventSeqValid(events[0]) {
+			h.eventCollector.resetDispatcher(stat)
+			return false
+		}
+		if !stat.isEventCommitTsValid(events[0]) {
 			return false
 		}
 		return stat.target.HandleEvents(events, func() { h.eventCollector.WakeDispatcher(stat.dispatcherID) })

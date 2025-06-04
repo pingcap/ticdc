@@ -122,11 +122,9 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, table_name_in_ddl_job, db_name_in_ddl_job, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, '', '', 1, 0), ('default', 'test/test', '1', 1, '', '', 1, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), table_name_in_ddl_job=VALUES(table_name_in_ddl_job), db_name_in_ddl_job=VALUES(db_name_in_ddl_job), ddl_ts=VALUES(ddl_ts), created_at=NOW(), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)").
+	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
 
 	err := sink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
@@ -162,11 +160,9 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 	}
 	dmlEvent.CommitTs = 2
 
-	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)").
+	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
 		WithArgs(1, "test", 2, "test2").
 		WillReturnError(errors.New("connect: connection refused"))
-	mock.ExpectRollback()
 
 	sink.AddDMLEvent(dmlEvent)
 

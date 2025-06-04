@@ -16,6 +16,7 @@ package eventstore
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
@@ -86,6 +87,7 @@ type DMLEventState struct {
 }
 
 type EventIterator interface {
+	// Next returns the next event in the iterator and whether this event is from a new txn.
 	Next() (*common.RawKVEntry, bool, error)
 
 	// Close closes the iterator.
@@ -369,8 +371,8 @@ func (e *eventStore) RegisterDispatcher(
 	if subStats, ok := e.dispatcherMeta.tableStats[dispatcherSpan.TableID]; ok {
 		for _, subStat := range subStats {
 			// dispatcher span is not contained in subscription span, skip it
-			if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) > 0 &&
-				bytes.Compare(dispatcherSpan.EndKey, subStat.tableSpan.EndKey) > 0 {
+			if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) > 0 ||
+				bytes.Compare(subStat.tableSpan.EndKey, dispatcherSpan.EndKey) < 0 {
 				continue
 			}
 			// when `onlyReuse` is false, must find a subscription with the same span, otherwise we create a new one
@@ -442,6 +444,13 @@ func (e *eventStore) RegisterDispatcher(
 			if kv.CRTs > maxCommitTs {
 				maxCommitTs = kv.CRTs
 			}
+			if kv.CRTs <= subStat.resolvedTs.Load() {
+				log.Warn("event store received kv with commitTs less than resolvedTs",
+					zap.Uint64("commitTs", kv.CRTs),
+					zap.Uint64("resolvedTs", subStat.resolvedTs.Load()),
+					zap.Uint64("subID", uint64(subStat.subID)),
+					zap.Int64("tableID", subStat.tableSpan.TableID))
+			}
 		}
 		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
 		subStat.eventCh.Push(eventWithCallback{
@@ -473,6 +482,9 @@ func (e *eventStore) RegisterDispatcher(
 	resolvedTsAdvanceInterval := int64(serverConfig.KVClient.AdvanceIntervalInMs)
 	// Note: don't hold any lock when call Subscribe
 	e.subClient.Subscribe(stat.subStat.subID, *dispatcherSpan, startTs, consumeKVEvents, advanceResolvedTs, resolvedTsAdvanceInterval, bdrMode)
+	log.Info("new subscription created",
+		zap.Uint64("subID", uint64(stat.subStat.subID)),
+		zap.String("subSpan", common.FormatTableSpan(stat.subStat.tableSpan)))
 	e.subscriptionChangeCh.In() <- SubscriptionChange{
 		ChangeType:   SubscriptionChangeTypeAdd,
 		SubID:        uint64(stat.subStat.subID),
@@ -795,6 +807,11 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool, error) {
 				bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
 				break
 			}
+			log.Debug("event store iter skip kv not in table span",
+				zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
+				zap.String("key", hex.EncodeToString(rawKV.Key)),
+				zap.Uint64("startTs", rawKV.StartTs),
+				zap.Uint64("commitTs", rawKV.CRTs))
 		} else {
 			break
 		}

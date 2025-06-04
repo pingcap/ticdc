@@ -27,11 +27,12 @@ import (
 	tiddl "github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/domain"
 	"github.com/pingcap/tidb/pkg/kv"
-	timeta "github.com/pingcap/tidb/pkg/meta"
+	"github.com/pingcap/tidb/pkg/meta"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	pmodel "github.com/pingcap/tidb/pkg/parser/model"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -57,6 +58,8 @@ type EventTestHelper struct {
 	mounter Mounter
 
 	tableInfos map[string]*common.TableInfo
+	// each partition table's partition ID, Name -> ID.
+	partitionIDs map[string]map[string]int64
 }
 
 // NewEventTestHelperWithTimeZone creates a SchemaTestHelper with time zone
@@ -72,18 +75,14 @@ func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestH
 	require.NoError(t, err)
 	domain.SetStatsUpdating(true)
 	tk := testkit.NewTestKit(t, store)
-
-	require.NoError(t, err)
-
-	mounter := NewMounter(tz, config.GetDefaultReplicaConfig().Integrity)
-
 	return &EventTestHelper{
-		t:          t,
-		tk:         tk,
-		storage:    store,
-		domain:     domain,
-		mounter:    mounter,
-		tableInfos: make(map[string]*common.TableInfo),
+		t:            t,
+		tk:           tk,
+		storage:      store,
+		domain:       domain,
+		mounter:      NewMounter(tz, config.GetDefaultReplicaConfig().Integrity),
+		tableInfos:   make(map[string]*common.TableInfo),
+		partitionIDs: make(map[string]map[string]int64),
 	}
 }
 
@@ -104,9 +103,18 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 			Version: uint16(job.BinlogInfo.FinishedTS),
 		}
 	}
+
 	info := common.WrapTableInfo(job.SchemaName, tableInfo)
 	info.InitPrivateFields()
 	key := toTableInfosKey(info.GetSchemaName(), info.GetTableName())
+	if tableInfo.Partition != nil {
+		if _, ok := s.partitionIDs[key]; !ok {
+			s.partitionIDs[key] = make(map[string]int64)
+		}
+		for _, partition := range tableInfo.Partition.Definitions {
+			s.partitionIDs[key][partition.Name.O] = partition.ID
+		}
+	}
 	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
 	s.tableInfos[key] = info
 }
@@ -171,25 +179,6 @@ func (s *EventTestHelper) DDL2Job(ddl string) *timodel.Job {
 	return res
 }
 
-// DDL2Jobs executes the DDL statement and return the corresponding DDL jobs.
-// It is mainly used for "DROP TABLE" and "DROP VIEW" statement because
-// multiple jobs will be generated after executing these two types of
-// DDL statements.
-func (s *EventTestHelper) DDL2Jobs(ddl string, jobCnt int) []*timodel.Job {
-	s.tk.MustExec(ddl)
-	jobs, err := tiddl.GetLastNHistoryDDLJobs(s.GetCurrentMeta(), jobCnt)
-	require.Nil(s.t, err)
-	require.Len(s.t, jobs, jobCnt)
-	// Set State from Synced to Done.
-	// Because jobs are put to history queue after TiDB alter its state from
-	// Done to Synced.
-	for i, job := range jobs {
-		jobs[i].State = timodel.JobStateDone
-		s.ApplyJob(job)
-	}
-	return jobs
-}
-
 func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 	job := s.DDL2Job(ddl)
 	info := s.GetTableInfo(job)
@@ -213,16 +202,35 @@ func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *
 	batchDMLEvent := NewBatchDMLEvent()
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
+	physicalTableID := tableInfo.TableName.TableID
 	for _, dml := range dmls {
-		dmlEvent := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+		dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
 		batchDMLEvent.AppendDMLEvent(dmlEvent)
-		rawKvs := s.DML2RawKv(schema, table, ts, dml)
+		rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
 		for _, rawKV := range rawKvs {
 			err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
 			require.NoError(s.t, err)
 		}
 	}
 	return batchDMLEvent
+}
+
+func (s *EventTestHelper) DML2Event4PartitionTable(schema, table, partition, dml string) *DMLEvent {
+	key := toTableInfosKey(schema, table)
+	tableInfo, ok := s.tableInfos[key]
+	require.True(s.t, ok)
+
+	did := common.NewDispatcherID()
+	ts := tableInfo.UpdateTS()
+	physicalTableID := s.partitionIDs[key][partition]
+	dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
+	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
+	rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
+	for _, rawKV := range rawKvs {
+		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
+		require.NoError(s.t, err)
+	}
+	return dmlEvent
 }
 
 // DML2Event execute the dml(s) and return the corresponding DMLEvent.
@@ -238,11 +246,11 @@ func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEv
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
-
-	dmlEvent := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+	physicalTableID := tableInfo.TableName.TableID
+	dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
 	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
 
-	rawKvs := s.DML2RawKv(schema, table, ts, dmls...)
+	rawKvs := s.DML2RawKv(physicalTableID, ts, dmls...)
 	for _, rawKV := range rawKvs {
 		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
 		require.NoError(s.t, err)
@@ -267,10 +275,11 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) (
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
-	dmlEvent := NewDMLEvent(did, tableInfo.TableName.TableID, ts-1, ts+1, tableInfo)
+	physicalTableID := tableInfo.TableName.TableID
+	dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
 	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
 
-	rawKvs := s.DML2RawKv(schema, table, ts, dml...)
+	rawKvs := s.DML2RawKv(physicalTableID, ts, dml...)
 
 	raw := &common.RawKVEntry{
 		OpType:   common.OpTypePut,
@@ -286,13 +295,11 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) (
 	return dmlEvent, raw
 }
 
-func (s *EventTestHelper) DML2RawKv(schema, table string, ddlFinishedTs uint64, dml ...string) []*common.RawKVEntry {
-	tableInfo, ok := s.tableInfos[toTableInfosKey(schema, table)]
-	require.True(s.t, ok)
+func (s *EventTestHelper) DML2RawKv(physicalTableID int64, ddlFinishedTs uint64, dmls ...string) []*common.RawKVEntry {
 	var rawKVs []*common.RawKVEntry
-	for i, dml := range dml {
+	for i, dml := range dmls {
 		s.tk.MustExec(dml)
-		key, value := s.getLastKeyValue(tableInfo.TableName.TableID)
+		key, value := s.getLastKeyValue(physicalTableID)
 		rawKV := &common.RawKVEntry{
 			OpType:   common.OpTypePut,
 			Key:      key,
@@ -335,10 +342,10 @@ func (s *EventTestHelper) Tk() *testkit.TestKit {
 }
 
 // GetCurrentMeta return the current meta snapshot
-func (s *EventTestHelper) GetCurrentMeta() timeta.Reader {
+func (s *EventTestHelper) GetCurrentMeta() meta.Reader {
 	ver, err := s.storage.CurrentVersion(oracle.GlobalTxnScope)
 	require.Nil(s.t, err)
-	return timeta.NewReader(s.storage.GetSnapshot(ver))
+	return meta.NewReader(s.storage.GetSnapshot(ver))
 }
 
 // Close closes the helper

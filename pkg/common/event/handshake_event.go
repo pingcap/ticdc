@@ -139,7 +139,6 @@ func (e *HandshakeEvent) decodeV0(data []byte) error {
 	e.State.decode(data[offset:])
 	offset += e.State.GetSize()
 	dispatcherIDData := data[offset:]
-
 	var err error
 	err = e.DispatcherID.Unmarshal(dispatcherIDData)
 	if err != nil {

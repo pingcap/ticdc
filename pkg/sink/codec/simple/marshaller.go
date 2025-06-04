@@ -55,25 +55,25 @@ func newMarshaller(config *common.Config) (marshaller, error) {
 	return result, errors.Trace(err)
 }
 
-type JSONMarshaller struct {
+type jsonMarshaller struct {
 	config *common.Config
 }
 
-func newJSONMarshaller(config *common.Config) *JSONMarshaller {
-	return &JSONMarshaller{
+func newJSONMarshaller(config *common.Config) *jsonMarshaller {
+	return &jsonMarshaller{
 		config: config,
 	}
 }
 
 // MarshalCheckpoint implement the marshaller interface
-func (m *JSONMarshaller) MarshalCheckpoint(ts uint64) ([]byte, error) {
+func (m *jsonMarshaller) MarshalCheckpoint(ts uint64) ([]byte, error) {
 	msg := newResolvedMessage(ts)
 	result, err := json.Marshal(msg)
 	return result, errors.WrapError(errors.ErrEncodeFailed, err)
 }
 
 // MarshalDDLEvent implement the marshaller interface
-func (m *JSONMarshaller) MarshalDDLEvent(event *commonEvent.DDLEvent) ([]byte, error) {
+func (m *jsonMarshaller) MarshalDDLEvent(event *commonEvent.DDLEvent) ([]byte, error) {
 	var msg *message
 	if event.IsBootstrap {
 		msg = newBootstrapMessage(event.TableInfo)
@@ -85,7 +85,7 @@ func (m *JSONMarshaller) MarshalDDLEvent(event *commonEvent.DDLEvent) ([]byte, e
 }
 
 // MarshalRowChangedEvent implement the marshaller interface
-func (m *JSONMarshaller) MarshalRowChangedEvent(
+func (m *jsonMarshaller) MarshalRowChangedEvent(
 	event *commonEvent.RowEvent,
 	handleKeyOnly bool, claimCheckFileName string,
 ) ([]byte, error) {
@@ -95,7 +95,7 @@ func (m *JSONMarshaller) MarshalRowChangedEvent(
 }
 
 // Unmarshal implement the marshaller interface
-func (m *JSONMarshaller) Unmarshal(data []byte, v any) error {
+func (m *jsonMarshaller) Unmarshal(data []byte, v any) error {
 	return json.Unmarshal(data, v)
 }
 
