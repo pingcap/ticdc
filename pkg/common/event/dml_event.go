@@ -325,11 +325,11 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	}
 
 	t.rawRowCount += count
-	row := t.Rows.GetRow(t.rawRowCount - 1)
+	row := t.Rows.GetRow(t.rawRowCount - 1 + t.PreviousTotalOffset)
 	cr := row.ToString(t.TableInfo.GetFieldSlice())
 	pr := ""
-	if t.rawRowCount-2 >= 0 {
-		preRow := t.Rows.GetRow(t.rawRowCount - 2)
+	if rowType == RowTypeUpdate && t.rawRowCount-2 >= 0 {
+		preRow := t.Rows.GetRow(t.rawRowCount - 2 + t.PreviousTotalOffset)
 		pr = preRow.ToString(t.TableInfo.GetFieldSlice())
 	}
 	log.Debug("fizz decode row", zap.String("table", t.TableInfo.TableName.String()), zap.Uint64("tableID", uint64(t.TableInfo.TableName.TableID)), zap.String("rowType", rowType.String()), zap.String("preVal", pr), zap.String("currentVal", cr), zap.Uint64("startTs", t.StartTs), zap.Uint64("commitTs", t.CommitTs))
