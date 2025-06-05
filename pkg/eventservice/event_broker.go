@@ -174,7 +174,7 @@ func newEventBroker(
 	return c
 }
 
-func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
+func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
 	doSendDML := func(e *pevent.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
@@ -517,7 +517,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	start := time.Now()
-
 	for _, e := range events {
 		if task.isRemoved.Load() {
 			return
@@ -533,25 +532,23 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		case pevent.TypeBatchDMLEvent:
 			dmls, ok := e.(*pevent.BatchDMLEvent)
 			if !ok {
-				log.Error("expect a DMLEvent, but got", zap.Any("event", e))
-				continue
+				log.Panic("expect a DMLEvent, but got", zap.Any("event", e))
 			}
-
-			c.sendDML(ctx, remoteID, dmls, task)
+			c.sendDML(remoteID, dmls, task)
 		case pevent.TypeDDLEvent:
 			ddl, ok := e.(*pevent.DDLEvent)
 			if !ok {
-				log.Error("expect a DDLEvent, but got", zap.Any("event", e))
-				continue
+				log.Panic("expect a DDLEvent, but got", zap.Any("event", e))
 			}
 			c.sendDDL(ctx, remoteID, ddl, task)
 		case pevent.TypeResolvedEvent:
 			re, ok := e.(pevent.ResolvedEvent)
 			if !ok {
-				log.Error("expect a ResolvedEvent, but got", zap.Any("event", e))
-				continue
+				log.Panic("expect a ResolvedEvent, but got", zap.Any("event", e))
 			}
 			c.sendResolvedTs(remoteID, task, re.ResolvedTs)
+		default:
+			log.Panic("unknown event type", zap.Any("event", e))
 		}
 	}
 	// Update metrics
