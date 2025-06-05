@@ -107,6 +107,9 @@ func (d *DDLEvent) GetStartTs() common.Ts {
 }
 
 func (d *DDLEvent) GetError() error {
+	if len(d.Err) == 0 {
+		return nil
+	}
 	return errors.New(d.Err)
 }
 
