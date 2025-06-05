@@ -591,7 +591,7 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 				}
 			}
 
-			for _, m := range batchM {
+			for _, m = range batchM {
 				if m.msgType == pevent.TypeResolvedEvent {
 					c.handleResolvedTs(ctx, resolvedTsCacheMap, m, workerIndex)
 					continue
@@ -603,7 +603,8 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 					if !ok {
 						log.Warn("Get dispatcher failed", zap.Any("dispatcherID", m.getDispatcherID()))
 						continue
-					} else if d.isHandshaked.Load() {
+					}
+					if d.isHandshaked.Load() {
 						log.Info("Ignore handshake event since the dispatcher already handshaked", zap.Any("dispatcherID", m.getDispatcherID()))
 						continue
 					}
@@ -647,8 +648,7 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 	if cache == nil || cache.len == 0 {
 		return
 	}
-	msg := &pevent.BatchResolvedEvent{}
-	msg.Events = append(msg.Events, cache.getAll()...)
+	msg := &pevent.BatchResolvedEvent{Events: cache.getAll()}
 	tMsg := messaging.NewSingleTargetMessage(
 		serverID,
 		messaging.EventCollectorTopic,
