@@ -478,6 +478,10 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	}
 	// Calculate the total size needed for the encoded data
 	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4*3 + t.State.GetSize() + int(t.Length)
+	size += 4 // len(t.RowKeys)
+	for i := 0; i < len(t.RowKeys); i++ {
+		size += 4 + len(t.RowKeys[i]) // size + contents of t.RowKeys[i]
+	}
 
 	// Allocate a buffer with the calculated size
 	buf := make([]byte, size)
@@ -524,6 +528,15 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 		buf[offset] = byte(rowType)
 		offset++
 	}
+	// RowKeys
+	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(t.RowKeys)))
+	offset += 4
+	for _, rowKey := range t.RowKeys {
+		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(rowKey)))
+		offset += 4
+		copy(buf[offset:], rowKey)
+		offset += len(rowKey)
+	}
 	return buf, nil
 }
 
@@ -569,6 +582,16 @@ func (t *DMLEvent) decodeV0(data []byte) error {
 	for i := 0; i < int(length); i++ {
 		t.RowTypes[i] = RowType(data[offset])
 		offset++
+	}
+	rowKeysLen := int32(binary.LittleEndian.Uint32(data[offset:]))
+	offset += 4
+	t.RowKeys = make([][]byte, rowKeysLen)
+	for i := 0; i < int(rowKeysLen); i++ {
+		len := int32(binary.LittleEndian.Uint32(data[offset:]))
+		offset += 4
+		t.RowKeys[i] = make([]byte, len)
+		copy(t.RowKeys[i], data[offset:offset+int(len)])
+		offset += int(len)
 	}
 	return nil
 }
