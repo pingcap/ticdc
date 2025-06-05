@@ -193,6 +193,11 @@ type subscriptionClient struct {
 	pdClock      pdutil.Clock
 	lockResolver txnutil.LockResolver
 
+	debugInfo struct {
+		// sync.Mutex
+		resolvedTsMap map[SubscriptionID]map[uint64]uint64
+	}
+
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
 	// the following three fields are used to manage feedback from ds and notify other goroutines
 	mu     sync.Mutex
@@ -244,6 +249,7 @@ func NewSubscriptionClient(
 		resolveLockTaskCh: make(chan resolveLockTask, 1024),
 		errCache:          newErrCache(),
 	}
+	subClient.debugInfo.resolvedTsMap = make(map[SubscriptionID]map[uint64]uint64)
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
 	option := dynstream.NewOption()
@@ -378,12 +384,36 @@ func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
 	// fast path
 	if !s.paused.Load() {
-		if event.entries != nil {
-			for _, e := range event.entries.Entries.GetEntries() {
-				log.Info("subscription client push region event entry",
+		regionID := event.state.region.verID.GetID()
+		if event.resolvedTs != 0 {
+			regionsResolvedTs, ok := s.debugInfo.resolvedTsMap[subID]
+			if !ok {
+				regionsResolvedTs = make(map[uint64]uint64)
+				s.debugInfo.resolvedTsMap[subID] = regionsResolvedTs
+			}
+			oldResolvedTs := regionsResolvedTs[regionID]
+			if event.resolvedTs < oldResolvedTs {
+				log.Warn("subscription client push region event with old resolvedTs",
 					zap.Uint64("subscriptionID", uint64(subID)),
-					zap.Uint64("regionID", event.state.region.verID.GetID()),
-					zap.Uint64("commitTs", e.CommitTs))
+					zap.Uint64("regionID", regionID),
+					zap.Uint64("oldResolvedTs", oldResolvedTs),
+					zap.Uint64("newResolvedTs", event.resolvedTs))
+			}
+			regionsResolvedTs[regionID] = event.resolvedTs
+		}
+		if event.entries != nil {
+			regionsResolvedTs, ok := s.debugInfo.resolvedTsMap[subID]
+			if ok {
+				regionResolvedTs := regionsResolvedTs[regionID]
+				for _, e := range event.entries.Entries.GetEntries() {
+					if e.CommitTs <= regionResolvedTs {
+						log.Info("subscription client push region event entry less than region resolvedTs",
+							zap.Uint64("subscriptionID", uint64(subID)),
+							zap.Uint64("regionID", regionID),
+							zap.Uint64("commitTs", e.CommitTs),
+							zap.Uint64("regionResolvedTs", regionResolvedTs))
+					}
+				}
 			}
 		}
 		s.ds.Push(subID, event)
