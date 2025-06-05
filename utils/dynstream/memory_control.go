@@ -90,6 +90,11 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		}
 	}
 
+	// Drop the event if the memory usage ratio is greater than 1.
+	if as.memoryUsageRatio() > 1 {
+		return false
+	}
+
 	// Add the event to the pending queue.
 	path.pendingQueue.PushBack(event)
 	// Update the pending size.
@@ -244,6 +249,10 @@ func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, 
 	}
 	as.updatePathPauseState(path)
 	as.updateAreaPauseState(path)
+}
+
+func (as *areaMemStat[A, P, T, D, H]) memoryUsageRatio() float64 {
+	return float64(as.totalPendingSize.Load()) / float64(as.settings.Load().maxPendingSize)
 }
 
 // A memControl is used to control the memory usage of the dynamic stream.
