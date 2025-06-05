@@ -91,9 +91,9 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	}
 
 	// Drop the event if the memory usage ratio is greater than 1.
-	if as.memoryUsageRatio() > 1 {
-		return false
-	}
+	// if as.memoryUsageRatio() > 1 {
+	// 	return false
+	// }
 
 	// Add the event to the pending queue.
 	path.pendingQueue.PushBack(event)
