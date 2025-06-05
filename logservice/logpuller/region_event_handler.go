@@ -279,7 +279,6 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("regionID", regionID))
 				return
 			}
-			// kvEvents = append(kvEvents, assembleRowEvent(regionID, entry))
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_ROLLBACK:
 			if !state.isInitialized() {
