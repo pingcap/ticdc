@@ -39,7 +39,7 @@ import (
 
 const (
 	resolvedTsCacheSize = 512
-	basicChannelSize    = 2048
+	basicChannelSize    = 128
 
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
@@ -100,10 +100,10 @@ func newEventBroker(
 	// 2. When the number of send message workers is too large, the lag of the resolvedTs has spikes.
 	// And when the number of send message workers is x, the lag of the resolvedTs is stable.
 	sendMessageWorkerCount := config.DefaultBasicEventHandlerConcurrency
-	scanWorkerCount := sendMessageWorkerCount
+	scanWorkerCount := sendMessageWorkerCount * 4
 
 	scanTaskQueueSize := config.GetGlobalServerConfig().Debug.EventService.ScanTaskQueueSize / scanWorkerCount
-	sendMessageQueueSize := basicChannelSize * 4
+	//sendMessageQueueSize := basicChannelSize * 4
 
 	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
@@ -133,7 +133,7 @@ func newEventBroker(
 	c.metricsCollector = newMetricsCollector(c)
 
 	for i := 0; i < c.sendMessageWorkerCount; i++ {
-		c.messageCh[i] = make(chan *wrapEvent, sendMessageQueueSize)
+		c.messageCh[i] = make(chan *wrapEvent, basicChannelSize)
 	}
 
 	for i := 0; i < scanWorkerCount; i++ {

@@ -90,6 +90,6 @@ type EventServiceConfig struct {
 // NewDefaultEventServiceConfig return the default event service configuration
 func NewDefaultEventServiceConfig() *EventServiceConfig {
 	return &EventServiceConfig{
-		ScanTaskQueueSize: 1024 * 2,
+		ScanTaskQueueSize: 1024 * 8,
 	}
 }

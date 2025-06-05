@@ -85,7 +85,7 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "event_service",
 			Name:      "scan_task_count",
-			Help:      "The number of scan tasks that have been done",
+			Help:      "The number of scan tasks that have finished",
 		})
 	EventServicePendingScanTaskCount = prometheus.NewGauge(
 		prometheus.GaugeOpts{
