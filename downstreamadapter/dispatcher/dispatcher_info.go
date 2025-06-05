@@ -16,11 +16,9 @@ package dispatcher
 import (
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	"go.uber.org/zap"
 )
 
 /*
@@ -96,16 +94,4 @@ func (d *Dispatcher) GetStartTs() uint64 {
 
 func (d *Dispatcher) GetType() int {
 	return TypeDispatcherCommon
-}
-
-// addToDynamicStream add self to dynamic stream
-func (d *Dispatcher) addToStatusDynamicStream() {
-	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
-	err := dispatcherStatusDS.AddPath(d.id, d)
-	if err != nil {
-		log.Error("add dispatcher to dynamic stream failed",
-			zap.Stringer("changefeedID", d.changefeedID),
-			zap.Stringer("dispatcher", d.id),
-			zap.Error(err))
-	}
 }

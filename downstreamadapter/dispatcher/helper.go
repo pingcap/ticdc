@@ -430,3 +430,15 @@ func newCacheEvents(events []DispatcherEvent, wakeCallback func()) cacheEvents {
 	}
 	return cacheEvents
 }
+
+// addToDynamicStream add self to dynamic stream
+func addToStatusDynamicStream(d EventDispatcher) {
+	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
+	err := dispatcherStatusDS.AddPath(d.GetId(), d)
+	if err != nil {
+		log.Error("add dispatcher to dynamic stream failed",
+			zap.Stringer("changefeedID", d.GetChangefeedID()),
+			zap.Stringer("dispatcher", d.GetId()),
+			zap.Error(err))
+	}
+}

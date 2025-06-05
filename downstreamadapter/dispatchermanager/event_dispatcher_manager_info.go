@@ -55,6 +55,10 @@ func (e *EventDispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.Di
 	return e.tableTriggerEventDispatcher
 }
 
+func (e *EventDispatcherManager) GetRedoTableTriggerEventDispatcher() *dispatcher.RedoDispatcher {
+	return e.redoTableTriggerEventDispatcher
+}
+
 func (e *EventDispatcherManager) SetHeartbeatRequestQueue(heartbeatRequestQueue *HeartbeatRequestQueue) {
 	e.heartbeatRequestQueue = heartbeatRequestQueue
 }

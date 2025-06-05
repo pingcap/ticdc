@@ -35,7 +35,8 @@ type ReplicationDB struct {
 	changefeedID common.ChangeFeedID
 	// ddlSpan is a special span that handles DDL operations, it is always on the same node as the maintainer
 	// so no need to schedule it
-	ddlSpan *SpanReplication
+	ddlSpan     *SpanReplication
+	redoDDLSpan *SpanReplication
 
 	// mu protects concurrent access to [replica.ReplicationDB, ddlSpan, allTasks, schemaTasks, tableTasks]
 	mu sync.RWMutex
@@ -54,15 +55,19 @@ type ReplicationDB struct {
 
 // NewReplicaSetDB creates a new ReplicationDB and initializes the maps
 func NewReplicaSetDB(
-	changefeedID common.ChangeFeedID, ddlSpan *SpanReplication, enableTableAcrossNodes bool,
+	changefeedID common.ChangeFeedID, ddlSpan, redoDDLSpan *SpanReplication, enableTableAcrossNodes bool,
 ) *ReplicationDB {
 	db := &ReplicationDB{
 		changefeedID:    changefeedID,
 		ddlSpan:         ddlSpan,
+		redoDDLSpan:     redoDDLSpan,
 		newGroupChecker: getNewGroupChecker(changefeedID, enableTableAcrossNodes),
 	}
 
 	db.reset(db.ddlSpan)
+	if db.redoDDLSpan != nil {
+		db.initializeDDLSpan(db.redoDDLSpan)
+	}
 	return db
 }
 
@@ -224,7 +229,7 @@ func (db *ReplicationDB) ReplaceReplicaSet(
 			old.ChangefeedID,
 			common.NewDispatcherID(),
 			old.GetSchemaID(),
-			span, checkpointTs)
+			span, checkpointTs, old.redo)
 		news = append(news, new)
 	}
 

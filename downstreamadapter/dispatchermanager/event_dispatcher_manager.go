@@ -145,7 +145,7 @@ type EventDispatcherManager struct {
 func NewEventDispatcherManager(
 	changefeedID common.ChangeFeedID,
 	cfConfig *config.ChangefeedConfig,
-	tableTriggerEventDispatcherID *heartbeatpb.DispatcherID,
+	tableTriggerEventDispatcherID, redoTableTriggerEventDispatcherID *heartbeatpb.DispatcherID,
 	startTs uint64,
 	maintainerID node.ID,
 	newChangefeed bool,
@@ -220,7 +220,13 @@ func NewEventDispatcherManager(
 	var tableTriggerStartTs uint64 = 0
 	// init table trigger event dispatcher when tableTriggerEventDispatcherID is not nil
 	if tableTriggerEventDispatcherID != nil {
-		tableTriggerStartTs, err = manager.NewTableTriggerEventDispatcher(tableTriggerEventDispatcherID, startTs, newChangefeed)
+		tableTriggerStartTs, err = manager.NewTableTriggerEventDispatcher(tableTriggerEventDispatcherID, startTs, newChangefeed, false)
+		if err != nil {
+			return nil, 0, errors.Trace(err)
+		}
+	}
+	if redoTableTriggerEventDispatcherID != nil && manager.redoSink.Enabled() {
+		_, err = manager.NewTableTriggerEventDispatcher(redoTableTriggerEventDispatcherID, startTs, newChangefeed, true)
 		if err != nil {
 			return nil, 0, errors.Trace(err)
 		}
@@ -334,24 +340,42 @@ func NewEventDispatcherManager(
 	return manager, tableTriggerStartTs, nil
 }
 
-func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) (uint64, error) {
-	err := e.newDispatchers([]dispatcherCreateInfo{
-		{
-			Id:        common.NewDispatcherIDFromPB(id),
-			TableSpan: common.DDLSpan,
-			StartTs:   startTs,
-			SchemaID:  0,
-		},
-	}, newChangefeed)
+func (e *EventDispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool, redo bool) (uint64, error) {
+	var (
+		err                         error
+		tableTriggerEventDispatcher dispatcher.EventDispatcher
+	)
+	if redo {
+		err = e.newRedoDispatchers([]dispatcherCreateInfo{
+			{
+				Id:        common.NewDispatcherIDFromPB(id),
+				TableSpan: common.DDLSpan,
+				StartTs:   startTs,
+				SchemaID:  0,
+			},
+		}, newChangefeed)
+		tableTriggerEventDispatcher = e.redoTableTriggerEventDispatcher
+	} else {
+		err = e.newDispatchers([]dispatcherCreateInfo{
+			{
+				Id:        common.NewDispatcherIDFromPB(id),
+				TableSpan: common.DDLSpan,
+				StartTs:   startTs,
+				SchemaID:  0,
+			},
+		}, newChangefeed)
+		tableTriggerEventDispatcher = e.tableTriggerEventDispatcher
+	}
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
 	log.Info("table trigger event dispatcher created",
+		zap.Bool("redo", redo),
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", e.tableTriggerEventDispatcher.GetId()),
-		zap.Uint64("startTs", e.tableTriggerEventDispatcher.GetStartTs()),
+		zap.Uint64("startTs", tableTriggerEventDispatcher.GetStartTs()),
 	)
-	return e.tableTriggerEventDispatcher.GetStartTs(), nil
+	return tableTriggerEventDispatcher.GetStartTs(), nil
 }
 
 func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
@@ -368,18 +392,16 @@ func (e *EventDispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo
 		return nil
 	}
 	// before bootstrap finished, cannot send any event.
-	// TODO: redoTableTriggerEventDispatcher need this?
 	success := e.tableTriggerEventDispatcher.EmitBootstrap()
 	if !success {
 		return errors.ErrDispatcherFailed.GenWithStackByArgs()
 	}
 
 	// redo
-	if e.redoSink.Enabled() {
-		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.redoTableTriggerEventDispatcher, e.redoQuota)
-		appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterRedoTsMessageDs(e)
-
-	}
+	// if e.redoSink.Enabled() {
+	// 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.redoTableTriggerEventDispatcher, e.redoQuota)
+	// 	appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).event_collector(e)
+	// }
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.sinkQuota)
 
@@ -478,23 +500,6 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			e.config.BDRMode,
 			&e.redoGlobalTs,
 		)
-		var rd *dispatcher.RedoDispatcher
-		if e.redoSink.Enabled() {
-			rd = dispatcher.NewRedoDispatcher(
-				e.changefeedID,
-				common.NewDispatcherID(), tableSpans[idx], e.redoSink,
-				uint64(newStartTsList[idx]),
-				e.statusesChan,
-				e.blockStatusesChan,
-				schemaIds[idx],
-				e.syncPointConfig,
-				startTsIsSyncpointList[idx],
-				e.filterConfig,
-				currentPdTs,
-				e.errCh,
-				e.config.BDRMode)
-			e.redoMap[id] = rd.GetId()
-		}
 		if e.heartBeatTask == nil {
 			e.heartBeatTask = newHeartBeatTask(e)
 		}
@@ -504,22 +509,14 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 				d.BootstrapState = dispatcher.BootstrapNotStarted
 			}
 			e.tableTriggerEventDispatcher = d
-			e.redoTableTriggerEventDispatcher = rd
 		} else {
 			e.schemaIDToDispatchers.Set(schemaIds[idx], id)
 			// we don't register table trigger event dispatcher in event collector, when created.
 			// Table trigger event dispatcher is a special dispatcher,
 			// it need to wait get the initial table schema store from the maintainer, then will register to event collector to receive events.
-			if e.redoSink.Enabled() {
-				appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(rd, e.redoQuota)
-			}
 			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(d, e.sinkQuota)
 		}
 
-		if e.redoSink.Enabled() {
-			redoSeq := e.redoDispatcherMap.Set(rd.GetId(), rd)
-			rd.SetSeq(redoSeq)
-		}
 		seq := e.dispatcherMap.Set(id, d)
 		d.SetSeq(seq)
 
@@ -534,10 +531,94 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 			zap.Stringer("dispatcherID", id),
 			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
 			zap.Int64("startTs", newStartTsList[idx]))
-
 	}
 	e.metricCreateDispatcherDuration.Observe(time.Since(start).Seconds() / float64(len(dispatcherIds)))
 	log.Info("batch create new dispatchers",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Int("count", len(dispatcherIds)),
+		zap.Duration("duration", time.Since(start)),
+	)
+	return nil
+}
+
+func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo, removeDDLTs bool) error {
+	start := time.Now()
+	currentPdTs := e.pdClock.CurrentTS()
+
+	dispatcherIds := make([]common.DispatcherID, 0, len(infos))
+	tableIds := make([]int64, 0, len(infos))
+	startTsList := make([]int64, 0, len(infos))
+	tableSpans := make([]*heartbeatpb.TableSpan, 0, len(infos))
+	schemaIds := make([]int64, 0, len(infos))
+	for _, info := range infos {
+		id := info.Id
+		if _, ok := e.redoDispatcherMap.Get(id); ok {
+			continue
+		}
+		dispatcherIds = append(dispatcherIds, id)
+		tableIds = append(tableIds, info.TableSpan.TableID)
+		startTsList = append(startTsList, int64(info.StartTs))
+		tableSpans = append(tableSpans, info.TableSpan)
+		schemaIds = append(schemaIds, info.SchemaID)
+	}
+
+	if len(dispatcherIds) == 0 {
+		return nil
+	}
+
+	newStartTsList := startTsList
+	if e.latestWatermark.Get().CheckpointTs == 0 {
+		// If the checkpointTs is 0, means there is no dispatchers before. So we need to init it with the smallest startTs of these dispatchers
+		smallestStartTs := int64(math.MaxInt64)
+		for _, startTs := range newStartTsList {
+			if startTs < smallestStartTs {
+				smallestStartTs = startTs
+			}
+		}
+		e.latestWatermark = NewWatermark(uint64(smallestStartTs))
+	}
+
+	for idx, id := range dispatcherIds {
+		rd := dispatcher.NewRedoDispatcher(
+			e.changefeedID,
+			id, tableSpans[idx], e.redoSink,
+			uint64(newStartTsList[idx]),
+			e.statusesChan,
+			e.blockStatusesChan,
+			schemaIds[idx],
+			e.schemaIDToDispatchers,
+			e.filterConfig,
+			currentPdTs,
+			e.errCh,
+			e.config.BDRMode)
+		if e.heartBeatTask == nil {
+			e.heartBeatTask = newHeartBeatTask(e)
+		}
+
+		if rd.IsTableTriggerEventDispatcher() {
+			e.redoTableTriggerEventDispatcher = rd
+		} else {
+			// e.schemaIDToDispatchers.Set(schemaIds[idx], id)
+			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(rd, e.redoQuota)
+		}
+
+		redoSeq := e.redoDispatcherMap.Set(rd.GetId(), rd)
+		rd.SetSeq(redoSeq)
+
+		// if rd.IsTableTriggerEventDispatcher() {
+		// 	e.metricTableTriggerEventDispatcherCount.Inc()
+		// } else {
+		// 	e.metricEventDispatcherCount.Inc()
+		// }
+
+		log.Info("new redo dispatcher created",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Stringer("dispatcherID", id),
+			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
+			zap.Int64("startTs", newStartTsList[idx]))
+	}
+	// e.metricCreateDispatcherDuration.Observe(time.Since(start).Seconds() / float64(len(dispatcherIds)))
+	log.Info("batch create new redo dispatchers",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Int("count", len(dispatcherIds)),
 		zap.Duration("duration", time.Since(start)),
@@ -938,25 +1019,6 @@ func (e *EventDispatcherManager) removeDispatcher(id common.DispatcherID) {
 		}
 		dispatcherItem.Remove()
 
-		if e.redoSink.Enabled() {
-			id := e.redoMap[id]
-			redoDispatcherItem, ok := e.redoDispatcherMap.Get(id)
-			if !ok {
-				log.Panic("redo dispatcher missing", zap.Any("changefeedID", e.changefeedID), zap.String("id", id.String()))
-			}
-			if redoDispatcherItem.GetRemovingStatus() {
-				return
-			}
-			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(redoDispatcherItem)
-			if redoDispatcherItem.IsTableTriggerEventDispatcher() {
-				err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveRedoTsMessage(e.changefeedID)
-				if err != nil {
-					log.Error("remove redoTs message ds failed", zap.Error(err))
-				}
-			}
-			redoDispatcherItem.Remove()
-		}
-
 		count := 0
 		ok := false
 		// We don't want to block the ds handle function, so we just try 10 times.
@@ -1011,13 +1073,13 @@ func (e *EventDispatcherManager) cleanDispatcher(id common.DispatcherID, schemaI
 }
 
 func (e *EventDispatcherManager) SetGlobalRedoTs(checkpointTs uint64) bool {
-	log.Debug("SetGlobalRedoTs", zap.Any("checkpointTs", checkpointTs))
 	var resolvedTs uint64 = math.MaxUint64
 	e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
 		resolvedTs = min(resolvedTs, dispatcher.GetResolvedTs())
 	})
 	// only update meta on the one node
 	if e.tableTriggerEventDispatcher != nil {
+		log.Info("Update redo meta", zap.Any("resolvedTs", resolvedTs), zap.Any("checkpointTs", checkpointTs))
 		e.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
 	}
 	return atomic.CompareAndSwapUint64(&e.redoGlobalTs, e.redoGlobalTs, checkpointTs)

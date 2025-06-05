@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/redo"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -59,6 +60,7 @@ type Controller struct {
 	enableTableAcrossNodes bool
 	startCheckpointTs      uint64
 	ddlDispatcherID        common.DispatcherID
+	redoDDLDispatcherID    common.DispatcherID
 
 	cfConfig     *config.ReplicaConfig
 	changefeedID common.ChangeFeedID
@@ -75,7 +77,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	regionCache split.RegionCache,
 	taskPool threadpool.ThreadPool,
 	cfConfig *config.ReplicaConfig,
-	ddlSpan *replica.SpanReplication,
+	ddlSpan, redoDDLSpan *replica.SpanReplication,
 	batchSize int, balanceInterval time.Duration,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
@@ -87,7 +89,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		splitter = split.NewSplitter(changefeedID, pdAPIClient, regionCache, cfConfig.Scheduler)
 	}
 
-	replicaSetDB := replica.NewReplicaSetDB(changefeedID, ddlSpan, enableTableAcrossNodes)
+	replicaSetDB := replica.NewReplicaSetDB(changefeedID, ddlSpan, redoDDLSpan, enableTableAcrossNodes)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	oc := operator.NewOperatorController(changefeedID, mc, replicaSetDB, nodeManager, batchSize)
@@ -105,6 +107,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		changefeedID:           changefeedID,
 		bootstrapped:           false,
 		ddlDispatcherID:        ddlSpan.ID,
+		redoDDLDispatcherID:    redoDDLSpan.ID,
 		schedulerController:    sc,
 		operatorController:     oc,
 		messageCenter:          mc,
@@ -331,6 +334,7 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 		spanInfo.Span,
 		status,
 		node,
+		false,
 	)
 }
 
@@ -515,8 +519,13 @@ func (c *Controller) addWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 func (c *Controller) addNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, false)
 		c.replicationDB.AddAbsentReplicaSet(replicaSet)
+		if redo.IsConsistentEnabled(c.cfConfig.Consistent.Level) {
+			dispatcherID := common.NewDispatcherID()
+			replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, true)
+			c.replicationDB.AddAbsentReplicaSet(replicaSet)
+		}
 	}
 }
 

@@ -95,6 +95,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				cfId,
 				cfConfig,
 				req.TableTriggerEventDispatcherId,
+				req.RedoTableTriggerEventDispatcherId,
 				req.StartTs,
 				from,
 				req.IsNewChangefeed,
@@ -126,12 +127,31 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		// This is necessary during maintainer node migration, as the existing
 		// dispatcher manager on the new node may not have a table trigger
 		// event dispatcher configured yet.
+		if req.RedoTableTriggerEventDispatcherId != nil {
+			redoTableTriggerDispatcher := manager.GetRedoTableTriggerEventDispatcher()
+			if redoTableTriggerDispatcher == nil {
+				startTs, err = manager.NewTableTriggerEventDispatcher(
+					req.RedoTableTriggerEventDispatcherId,
+					req.StartTs,
+					false,
+					true,
+				)
+				if err != nil {
+					log.Error("failed to create new redo table trigger event dispatcher",
+						zap.Stringer("changefeedID", cfId), zap.Error(err))
+					return m.handleDispatcherError(from, req.ChangefeedID, err)
+				}
+			} else {
+				startTs = redoTableTriggerDispatcher.GetStartTs()
+			}
+		}
 		if req.TableTriggerEventDispatcherId != nil {
 			tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
 			if tableTriggerDispatcher == nil {
 				startTs, err = manager.NewTableTriggerEventDispatcher(
 					req.TableTriggerEventDispatcherId,
 					req.StartTs,
+					false,
 					false,
 				)
 				if err != nil {

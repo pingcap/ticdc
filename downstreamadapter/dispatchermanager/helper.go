@@ -240,6 +240,7 @@ func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest Sched
 func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *EventDispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
 	// If req is about remove dispatcher, then there will only be one request in reqs.
 	infos := make([]dispatcherCreateInfo, 0, len(reqs))
+	redoInfos := make([]dispatcherCreateInfo, 0, len(reqs))
 	for _, req := range reqs {
 		if req.ScheduleDispatcherRequest == nil {
 			log.Warn("scheduleDispatcherRequest is nil, skip")
@@ -249,17 +250,34 @@ func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *Event
 		dispatcherID := common.NewDispatcherIDFromPB(config.DispatcherID)
 		switch req.ScheduleAction {
 		case heartbeatpb.ScheduleAction_Create:
-			infos = append(infos, dispatcherCreateInfo{
+			info := dispatcherCreateInfo{
 				Id:        dispatcherID,
 				TableSpan: config.Span,
 				StartTs:   config.StartTs,
 				SchemaID:  config.SchemaID,
-			})
+			}
+			if config.Redo {
+				redoInfos = append(redoInfos, info)
+			} else {
+				infos = append(infos, info)
+			}
 		case heartbeatpb.ScheduleAction_Remove:
 			if len(reqs) != 1 {
 				log.Error("invalid remove dispatcher request count in one batch", zap.Int("count", len(reqs)))
 			}
 			eventDispatcherManager.removeDispatcher(dispatcherID)
+		}
+	}
+	if len(redoInfos) > 0 {
+		err := eventDispatcherManager.newRedoDispatchers(redoInfos, false)
+		if err != nil {
+			select {
+			case eventDispatcherManager.errCh <- err:
+			default:
+				log.Error("error channel is full, discard error",
+					zap.Any("ChangefeedID", eventDispatcherManager.changefeedID.String()),
+					zap.Error(err))
+			}
 		}
 	}
 	if len(infos) > 0 {
@@ -473,6 +491,7 @@ func (h *RedoTsMessageHandler) Handle(eventDispatcherManager *EventDispatcherMan
 		panic("invalid message count")
 	}
 	ts := messages[0].CheckpointTs
+	//
 	eventDispatcherManager.SetGlobalRedoTs(ts)
 	eventDispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
 		dispatcher.HandleCacheEvents()

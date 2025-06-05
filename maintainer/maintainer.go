@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -94,7 +95,8 @@ type Maintainer struct {
 	// checkpointTs.
 	startCheckpointTs uint64
 	// redoTs is global redo checkpointTs
-	redoTs uint64
+	redoTs      uint64
+	redoDDLSpan *replica.SpanReplication
 
 	// ddlSpan represents the table trigger event dispatcher that handles DDL events.
 	// This dispatcher is always created on the same node as the maintainer and has a
@@ -171,8 +173,18 @@ func NewMaintainer(cfID common.ChangeFeedID,
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
-		}, selfNode.ID)
-
+		}, selfNode.ID, false)
+	// redo ddl span
+	var redoDDLSpan *replica.SpanReplication
+	if redo.IsConsistentEnabled(cfg.Config.Consistent.Level) {
+		redoDDLSpan = replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+			common.DDLSpanSchemaID,
+			common.DDLSpan, &heartbeatpb.TableSpanStatus{
+				ID:              tableTriggerEventDispatcherID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Working,
+				CheckpointTs:    checkpointTs,
+			}, selfNode.ID, true)
+	}
 	m := &Maintainer{
 		id:                cfID,
 		selfNode:          selfNode,
@@ -180,7 +192,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		startCheckpointTs: checkpointTs,
 		redoTs:            checkpointTs,
 		controller: NewController(cfID, checkpointTs, pdAPI, regionCache, taskScheduler,
-			cfg.Config, ddlSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
+			cfg.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval)),
 		mc:              mc,
 		removed:         atomic.NewBool(false),
 		nodeManager:     nodeManager,
@@ -191,6 +203,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		pdClock:         appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 
 		ddlSpan:               ddlSpan,
+		redoDDLSpan:           redoDDLSpan,
 		checkpointTsByCapture: make(map[node.ID]heartbeatpb.Watermark),
 		newChangefeed:         newChangefeed,
 
@@ -830,11 +843,12 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessa
 	}
 	return func(id node.ID) *messaging.TargetMessage {
 		msg := &heartbeatpb.MaintainerBootstrapRequest{
-			ChangefeedID:                  m.id.ToPB(),
-			Config:                        cfgBytes,
-			StartTs:                       m.startCheckpointTs,
-			TableTriggerEventDispatcherId: nil,
-			IsNewChangefeed:               false,
+			ChangefeedID:                      m.id.ToPB(),
+			Config:                            cfgBytes,
+			StartTs:                           m.startCheckpointTs,
+			TableTriggerEventDispatcherId:     nil,
+			RedoTableTriggerEventDispatcherId: nil,
+			IsNewChangefeed:                   false,
 		}
 
 		// only send dispatcher id to dispatcher manager on the same node
@@ -843,9 +857,11 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessa
 				zap.String("changefeed", m.id.String()),
 				zap.String("server", id.String()),
 				zap.String("dispatcherID", m.ddlSpan.ID.String()),
+				zap.String("redoDispatcherID", m.redoDDLSpan.ID.String()),
 				zap.Uint64("startTs", m.startCheckpointTs),
 			)
 			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
+			msg.RedoTableTriggerEventDispatcherId = m.redoDDLSpan.ID.ToPB()
 			msg.IsNewChangefeed = m.newChangefeed
 		}
 

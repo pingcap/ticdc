@@ -211,8 +211,7 @@ func NewDispatcher(
 		cacheEvents:  make(chan cacheEvents, 1),
 	}
 
-	dispatcher.addToStatusDynamicStream()
-
+	addToStatusDynamicStream(dispatcher)
 	return dispatcher
 }
 
