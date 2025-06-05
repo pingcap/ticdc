@@ -130,7 +130,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		if req.RedoTableTriggerEventDispatcherId != nil {
 			redoTableTriggerDispatcher := manager.GetRedoTableTriggerEventDispatcher()
 			if redoTableTriggerDispatcher == nil {
-				startTs, err = manager.NewTableTriggerEventDispatcher(
+				_, err = manager.NewTableTriggerEventDispatcher(
 					req.RedoTableTriggerEventDispatcherId,
 					req.StartTs,
 					false,
@@ -141,8 +141,6 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 						zap.Stringer("changefeedID", cfId), zap.Error(err))
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
 				}
-			} else {
-				startTs = redoTableTriggerDispatcher.GetStartTs()
 			}
 		}
 		if req.TableTriggerEventDispatcherId != nil {

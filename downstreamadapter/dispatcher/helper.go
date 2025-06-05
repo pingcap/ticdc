@@ -439,6 +439,7 @@ func addToStatusDynamicStream(d EventDispatcher) {
 		log.Error("add dispatcher to dynamic stream failed",
 			zap.Stringer("changefeedID", d.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.GetId()),
+			zap.Int("type", d.GetType()),
 			zap.Error(err))
 	}
 }

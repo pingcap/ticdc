@@ -177,6 +177,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	// redo ddl span
 	var redoDDLSpan *replica.SpanReplication
 	if redo.IsConsistentEnabled(cfg.Config.Consistent.Level) {
+		tableTriggerEventDispatcherID := common.NewDispatcherID()
 		redoDDLSpan = replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 			common.DDLSpanSchemaID,
 			common.DDLSpan, &heartbeatpb.TableSpanStatus{
@@ -240,7 +241,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	log.Info("changefeed maintainer is created", zap.String("id", cfID.String()),
 		zap.String("state", string(cfg.State)),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
+		zap.String("ddlDispatcherID", m.ddlSpan.ID.String()),
 		zap.Bool("newChangefeed", newChangefeed),
 	)
 
