@@ -235,12 +235,13 @@ func (a *dispatcherStat) IsRunning() bool {
 func (a *dispatcherStat) getCurrentScanLimitInBytes() int64 {
 	res := a.currentScanLimitInBytes.Load()
 	if time.Since(a.lastUpdateScanLimitTime.Load()) > updateScanLimitInterval {
-		if res >= a.maxScanLimitInBytes.Load() {
-			return res
+		maxScanLimit := a.maxScanLimitInBytes.Load()
+		if res > maxScanLimit {
+			return maxScanLimit
 		}
 		newLimit := res * 2
-		if newLimit > a.maxScanLimitInBytes.Load() {
-			newLimit = a.maxScanLimitInBytes.Load()
+		if newLimit > maxScanLimit {
+			newLimit = maxScanLimit
 		}
 		a.currentScanLimitInBytes.Store(newLimit)
 		a.lastUpdateScanLimitTime.Store(time.Now())

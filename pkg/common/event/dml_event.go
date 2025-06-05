@@ -26,7 +26,7 @@ import (
 
 const (
 	// defaultRowCount is the start row count of a transaction.
-	defaultRowCount = 1
+	defaultRowCount = 1024
 	// DMLEventVersion is the version of the DMLEvent struct.
 	DMLEventVersion = 0
 )

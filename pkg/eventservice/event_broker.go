@@ -496,7 +496,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	needScan, dataRange := c.checkNeedScan(task, true)
-
 	if !needScan {
 		return
 	}
