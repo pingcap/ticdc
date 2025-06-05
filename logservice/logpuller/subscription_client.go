@@ -194,7 +194,7 @@ type subscriptionClient struct {
 	lockResolver txnutil.LockResolver
 
 	debugInfo struct {
-		// sync.Mutex
+		sync.Mutex
 		resolvedTsMap map[SubscriptionID]map[uint64]uint64
 	}
 
@@ -384,6 +384,7 @@ func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
 	// fast path
 	if !s.paused.Load() {
+		s.debugInfo.Lock()
 		regionID := event.state.region.verID.GetID()
 		if event.resolvedTs != 0 {
 			regionsResolvedTs, ok := s.debugInfo.resolvedTsMap[subID]
@@ -406,7 +407,7 @@ func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event reg
 			if ok {
 				regionResolvedTs := regionsResolvedTs[regionID]
 				for _, e := range event.entries.Entries.GetEntries() {
-					if e.CommitTs <= regionResolvedTs {
+					if e.CommitTs != 0 && e.CommitTs <= regionResolvedTs {
 						log.Info("subscription client push region event entry less than region resolvedTs",
 							zap.Uint64("subscriptionID", uint64(subID)),
 							zap.Uint64("regionID", regionID),
@@ -416,6 +417,7 @@ func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event reg
 				}
 			}
 		}
+		s.debugInfo.Unlock()
 		s.ds.Push(subID, event)
 		return
 	}
