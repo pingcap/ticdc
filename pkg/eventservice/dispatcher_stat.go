@@ -233,20 +233,21 @@ func (a *dispatcherStat) IsRunning() bool {
 // It will double the current scan limit in bytes every 10 seconds,
 // and cap the scan limit in bytes to the max scan limit in bytes.
 func (a *dispatcherStat) getCurrentScanLimitInBytes() int64 {
-	res := a.currentScanLimitInBytes.Load()
-	if time.Since(a.lastUpdateScanLimitTime.Load()) > updateScanLimitInterval {
-		maxScanLimit := a.maxScanLimitInBytes.Load()
-		if res > maxScanLimit {
-			return maxScanLimit
-		}
-		newLimit := res * 2
-		if newLimit > maxScanLimit {
-			newLimit = maxScanLimit
-		}
-		a.currentScanLimitInBytes.Store(newLimit)
-		a.lastUpdateScanLimitTime.Store(time.Now())
-	}
-	return res
+	return minScanLimitInBytes
+	//res := a.currentScanLimitInBytes.Load()
+	//if time.Since(a.lastUpdateScanLimitTime.Load()) > updateScanLimitInterval {
+	//	maxScanLimit := a.maxScanLimitInBytes.Load()
+	//	if res > maxScanLimit {
+	//		return maxScanLimit
+	//	}
+	//	newLimit := res * 2
+	//	if newLimit > maxScanLimit {
+	//		newLimit = maxScanLimit
+	//	}
+	//	a.currentScanLimitInBytes.Store(newLimit)
+	//	a.lastUpdateScanLimitTime.Store(time.Now())
+	//}
+	//return res
 }
 
 func (a *dispatcherStat) resetScanLimit() {
@@ -302,7 +303,7 @@ func (w *wrapEvent) reset() {
 	wrapEventPool.Put(w)
 }
 
-func (w wrapEvent) getDispatcherID() common.DispatcherID {
+func (w *wrapEvent) getDispatcherID() common.DispatcherID {
 	e, ok := w.e.(pevent.Event)
 	if !ok {
 		log.Panic("cast event failed", zap.Any("event", w.e))

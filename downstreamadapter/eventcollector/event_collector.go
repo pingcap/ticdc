@@ -125,22 +125,26 @@ type EventCollector struct {
 }
 
 func New(serverId node.ID) *EventCollector {
-	eventCollector := EventCollector{
+	receiveChannels := make([]chan *messaging.TargetMessage, config.DefaultBasicEventHandlerConcurrency)
+	for i := 0; i < config.DefaultBasicEventHandlerConcurrency; i++ {
+		receiveChannels[i] = make(chan *messaging.TargetMessage, receiveChanSize)
+	}
+	eventCollector := &EventCollector{
 		serverId:                             serverId,
 		dispatcherMap:                        sync.Map{},
 		dispatcherRequestChan:                chann.NewAutoDrainChann[DispatcherRequestWithTarget](),
 		logCoordinatorRequestChan:            chann.NewAutoDrainChann[*logservicepb.ReusableEventServiceRequest](),
 		mc:                                   appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		dispatcherHeartbeatChan:              chann.NewAutoDrainChann[*DispatcherHeartbeatWithTarget](),
-		receiveChannels:                      make([]chan *messaging.TargetMessage, config.DefaultBasicEventHandlerConcurrency),
+		receiveChannels:                      receiveChannels,
 		metricDispatcherReceivedKVEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("KVEvent"),
 		metricDispatcherReceivedResolvedTsEventCount: metrics.DispatcherReceivedEventCount.WithLabelValues("ResolvedTs"),
 		metricReceiveEventLagDuration:                metrics.EventCollectorReceivedEventLagDuration.WithLabelValues("Msg"),
 	}
-	eventCollector.ds = NewEventDynamicStream(&eventCollector)
+	eventCollector.ds = NewEventDynamicStream(eventCollector)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.RecvEventsMessage)
 
-	return &eventCollector
+	return eventCollector
 }
 
 func (c *EventCollector) Run(ctx context.Context) {
@@ -148,12 +152,10 @@ func (c *EventCollector) Run(ctx context.Context) {
 	c.cancel = cancel
 
 	for i := 0; i < config.DefaultBasicEventHandlerConcurrency; i++ {
-		ch := make(chan *messaging.TargetMessage, receiveChanSize)
-		c.receiveChannels[i] = ch
 		c.wg.Add(1)
 		go func() {
 			defer c.wg.Done()
-			c.runProcessMessage(ctx, ch)
+			c.runProcessMessage(ctx, c.receiveChannels[i])
 		}()
 	}
 
@@ -497,7 +499,7 @@ func (c *EventCollector) sendDispatcherHeartbeat(heartbeat *DispatcherHeartbeatW
 	return nil
 }
 
-func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messaging.TargetMessage) error {
+func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messaging.TargetMessage) {
 	if len(targetMessage.Message) != 1 {
 		log.Panic("invalid dispatcher heartbeat response message", zap.Any("msg", targetMessage))
 	}
@@ -518,7 +520,6 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 			}
 		}
 	}
-	return nil
 }
 
 // RecvEventsMessage is the handler for the events message from EventService.
