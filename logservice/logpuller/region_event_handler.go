@@ -112,6 +112,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 				zap.Uint64("maxCommitTs", maxCommitTs),
 				zap.Uint64("resolvedTs", newResolvedTs),
 				zap.Uint64("subID", uint64(span.subID)))
+		}
 		metricsEventCount.Add(float64(len(span.kvEventsCache)))
 		await := span.consumeKVEvents(span.kvEventsCache, func() {
 			span.clearKVEventsCache()
