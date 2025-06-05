@@ -99,10 +99,13 @@ func (s *eventScanner) Scan(
 	var (
 		events       []event.Event
 		totalBytes   int64
+		entryCount   int
 		lastCommitTs uint64
 	)
 	defer func() {
 		metrics.EventServiceScanDuration.Observe(time.Since(startTime).Seconds())
+		metrics.EventServiceScannedCount.Observe(float64(entryCount))
+		metrics.EventServiceScannedBytes.Observe(float64(totalBytes))
 	}()
 	dispatcherID := dispatcherStat.id
 	ddlEvents, err := s.schemaStore.FetchTableDDLEvents(
@@ -201,6 +204,7 @@ func (s *eventScanner) Scan(
 		}
 
 		totalBytes += rawEntry.ApproximateDataSize()
+		entryCount++
 		elapsed := time.Since(startTime)
 		if isNewTxn {
 			if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && rawEntry.CRTs > lastCommitTs && dmlCount > 0 {
