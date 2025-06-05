@@ -318,7 +318,10 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	}
 	for range count {
 		t.RowTypes = append(t.RowTypes, rowType)
-		t.RowKeys = append(t.RowKeys, raw.Key)
+
+		keyCopy := make([]byte, len(raw.Key))
+		copy(keyCopy, raw.Key)
+		t.RowKeys = append(t.RowKeys, keyCopy)
 	}
 	t.Length += 1
 	t.ApproximateSize += int64(len(raw.Key) + len(raw.Value) + len(raw.OldValue))
