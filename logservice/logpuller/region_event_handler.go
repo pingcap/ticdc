@@ -202,6 +202,13 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		default:
 			log.Panic("meet unknown op type", zap.Any("entry", entry))
 		}
+		if entry.CommitTs <= state.getLastResolvedTs() {
+			log.Warn("The CommitTs must be greater than the resolvedTs",
+				zap.String("EventType", "COMMITTED"),
+				zap.Uint64("CommitTs", entry.CommitTs),
+				zap.Uint64("resolvedTs", state.getLastResolvedTs()),
+				zap.Uint64("regionID", regionID))
+		}
 		return common.RawKVEntry{
 			OpType:   opType,
 			Key:      entry.Key,
