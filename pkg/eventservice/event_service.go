@@ -67,6 +67,8 @@ type eventService struct {
 	eventStore  eventstore.EventStore
 	schemaStore schemastore.SchemaStore
 	// clusterID -> eventBroker
+	// todo: is this to support multiple upstream clusters?
+	// can we just use one broker? since all data store in the same store.
 	brokers map[uint64]*eventBroker
 
 	// TODO: use a better way to cache the acceptorInfos

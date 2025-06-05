@@ -100,9 +100,10 @@ func newEventBroker(
 	// 2. When the number of send message workers is too large, the lag of the resolvedTs has spikes.
 	// And when the number of send message workers is x, the lag of the resolvedTs is stable.
 	sendMessageWorkerCount := config.DefaultBasicEventHandlerConcurrency
-	scanWorkerCount := config.DefaultBasicEventHandlerConcurrency * 4
+	scanWorkerCount := sendMessageWorkerCount * 4
 
-	conf := config.GetGlobalServerConfig().Debug.EventService
+	scanTaskQueueSize := config.GetGlobalServerConfig().Debug.EventService.ScanTaskQueueSize / scanWorkerCount
+	sendMessageQueueSize := basicChannelSize * 4
 
 	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
@@ -121,10 +122,10 @@ func newEventBroker(
 		dispatchers:             sync.Map{},
 		tableTriggerDispatchers: sync.Map{},
 		msgSender:               mc,
+		scanWorkerCount:         scanWorkerCount,
 		taskChan:                make([]chan scanTask, scanWorkerCount),
 		sendMessageWorkerCount:  sendMessageWorkerCount,
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
-		scanWorkerCount:         scanWorkerCount,
 		cancel:                  cancel,
 		g:                       g,
 	}
@@ -132,11 +133,11 @@ func newEventBroker(
 	c.metricsCollector = newMetricsCollector(c)
 
 	for i := 0; i < c.sendMessageWorkerCount; i++ {
-		c.messageCh[i] = make(chan *wrapEvent, basicChannelSize*4)
+		c.messageCh[i] = make(chan *wrapEvent, sendMessageQueueSize)
 	}
 
 	for i := 0; i < scanWorkerCount; i++ {
-		taskChan := make(chan scanTask, conf.ScanTaskQueueSize/scanWorkerCount)
+		taskChan := make(chan scanTask, scanTaskQueueSize)
 		c.taskChan[i] = taskChan
 		g.Go(func() error {
 			c.runScanWorker(ctx, taskChan)
@@ -782,11 +783,10 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 	span := info.GetTableSpan()
 	startTs := info.GetStartTs()
 	changefeedID := info.GetChangefeedID()
-	changefeedStatus := c.getOrSetChangefeedStatus(changefeedID)
-	workerIndex := int((common.GID)(id).Hash(uint64(c.sendMessageWorkerCount)))
-	scanWorkerIndex := int((common.GID)(id).Hash(uint64(c.scanWorkerCount)))
+	workerIndex := (common.GID)(id).Hash(uint64(c.sendMessageWorkerCount))
+	scanWorkerIndex := (common.GID)(id).Hash(uint64(c.scanWorkerCount))
 
-	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, changefeedStatus)
+	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, c.getOrSetChangefeedStatus(changefeedID))
 	if span.Equal(common.DDLSpan) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
 		log.Info("table trigger dispatcher register dispatcher",
