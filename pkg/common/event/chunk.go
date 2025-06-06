@@ -91,7 +91,6 @@ func (m *mounter) rawKVToChunkV1(value []byte, tableInfo *common.TableInfo, chk 
 			colID2CutPos[col.ID] = len(colID2CutPos)
 		}
 	}
-	// TODO: handle old value
 	cutVals, err := tablecodec.CutRowNew(value, colID2CutPos)
 	if err != nil {
 		return err

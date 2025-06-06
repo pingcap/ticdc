@@ -68,6 +68,32 @@ func (v *RawKVEntry) IsUpdate() bool {
 	return v.OpType == OpTypePut && v.OldValue != nil && v.Value != nil
 }
 
+func (v *RawKVEntry) SplitUpdate() (deleteRow, insertRow *RawKVEntry, err error) {
+	if !v.IsUpdate() {
+		return nil, nil, nil
+	}
+
+	deleteRow = &RawKVEntry{
+		OpType:   OpTypeDelete,
+		CRTs:     v.CRTs,
+		StartTs:  v.StartTs,
+		RegionID: v.RegionID,
+		Key:      v.Key,
+		Value:    v.OldValue,
+	}
+
+	insertRow = &RawKVEntry{
+		OpType:   OpTypePut,
+		CRTs:     v.CRTs,
+		StartTs:  v.StartTs,
+		RegionID: v.RegionID,
+		Key:      v.Key,
+		Value:    v.Value,
+	}
+
+	return deleteRow, insertRow, nil
+}
+
 func (v *RawKVEntry) String() string {
 	// TODO: redact values.
 	return fmt.Sprintf(

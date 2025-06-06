@@ -267,9 +267,11 @@ func (h *SchedulerDispatcherRequestHandler) Handle(eventDispatcherManager *Event
 		if err != nil {
 			select {
 			case eventDispatcherManager.errCh <- err:
+				log.Error("new dispatcher meet error", zap.String("ChangefeedID", eventDispatcherManager.changefeedID.String()),
+					zap.Error(err))
 			default:
 				log.Error("error channel is full, discard error",
-					zap.Any("ChangefeedID", eventDispatcherManager.changefeedID.String()),
+					zap.String("ChangefeedID", eventDispatcherManager.changefeedID.String()),
 					zap.Error(err))
 			}
 		}

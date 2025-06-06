@@ -572,10 +572,12 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 					case event.TypeBatchResolvedEvent:
 						events := e.(*event.BatchResolvedEvent).Events
 						from := &targetMessage.From
+						resolvedTsCount := int32(0)
 						for _, resolvedEvent := range events {
 							c.ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
+							resolvedTsCount += resolvedEvent.Len()
 						}
-						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(e.Len()))
+						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(resolvedTsCount))
 					case event.TypeBatchDMLEvent:
 						stat, ok := c.dispatcherMap.Load(e.GetDispatcherID())
 						if !ok {

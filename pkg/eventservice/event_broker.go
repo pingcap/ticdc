@@ -306,7 +306,8 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) {
 				// TODO: maybe limit 1 is enough.
 				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(dispatcherStat.filter, startTs, 100)
 				if err != nil {
-					log.Panic("get table trigger events failed", zap.Error(err))
+					log.Error("table trigger ddl events fetch failed", zap.Stringer("dispatcher", dispatcherStat.id), zap.Error(err))
+					return true
 				}
 				for _, e := range ddlEvents {
 					ep := &e
@@ -377,18 +378,23 @@ func (c *eventBroker) checkNeedScan(task scanTask, mustCheck bool) (bool, common
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
+		metricEventServiceSkipResolvedTsCount.Inc()
 		return false, common.DataRange{}
 	}
 
 	// 2. Constrain the data range by the ddl state of the table.
 	ddlState := c.schemaStore.GetTableDDLEventState(task.info.GetTableSpan().TableID)
-	if ddlState.ResolvedTs < dataRange.EndTs {
-		dataRange.EndTs = ddlState.ResolvedTs
+	dataRange.EndTs = min(dataRange.EndTs, ddlState.ResolvedTs)
+
+	if ddlState.ResolvedTs <= dataRange.StartTs {
+		metricEventServiceSkipResolvedTsCount.Inc()
+		return false, common.DataRange{}
 	}
 
 	// Note: Maybe we should still send a resolvedTs to downstream to tell that
 	// the dispatcher is alive?
 	if dataRange.EndTs <= dataRange.StartTs {
+		metricEventServiceSkipResolvedTsCount.Inc()
 		return false, common.DataRange{}
 	}
 
@@ -509,21 +515,20 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter)
 	sl := scanLimit{
-		MaxBytes: task.getCurrentScanLimitInBytes(),
-		Timeout:  time.Millisecond * 1000, // 1 Second
+		maxBytes: task.getCurrentScanLimitInBytes(),
+		timeout:  time.Millisecond * 1000, // 1 Second
 	}
 
-	events, isBroken, err := scanner.Scan(ctx, task, dataRange, sl)
+	events, isBroken, err := scanner.scan(ctx, task, dataRange, sl)
 	if err != nil {
-		log.Panic("scan events failed", zap.Error(err))
+		log.Error("scan events failed", zap.Stringer("dispatcher", task.id), zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
+		return
 	}
 
 	// If the task is not running, we don't send the events to the dispatcher.
 	if !task.isRunning.Load() {
 		return
 	}
-
-	start := time.Now()
 
 	for _, e := range events {
 		if task.isRemoved.Load() {
@@ -562,11 +567,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 	// Update metrics
 	metricEventBrokerScanTaskCount.Inc()
-	cost := time.Since(start)
-
-	if cost > 100*time.Millisecond {
-		log.Info("fizz send events cost too long", zap.Duration("cost", cost), zap.String("changefeed", task.info.GetChangefeedID().String()), zap.String("dispatcher", task.id.String()), zap.Int("workerIndex", task.scanWorkerIndex), zap.Int("eventCount", len(events)), zap.Uint64("receivedResolvedTs", task.eventStoreResolvedTs.Load()), zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()))
-	}
 }
 
 func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int) {
@@ -779,7 +779,7 @@ func (c *eventBroker) getDispatcher(id common.DispatcherID) (*dispatcherStat, bo
 	return stat.(*dispatcherStat), true
 }
 
-func (c *eventBroker) addDispatcher(info DispatcherInfo) {
+func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	defer c.metricsCollector.metricDispatcherCount.Inc()
 	filter := info.GetFilter()
 
@@ -803,12 +803,13 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 			zap.Uint64("startTs", startTs),
 			zap.Duration("brokerRegisterDuration", time.Since(start)),
 		)
-		return
+		return nil
 	}
 
 	brokerRegisterDuration := time.Since(start)
 
 	start = time.Now()
+
 	success, err := c.eventStore.RegisterDispatcher(
 		id,
 		span,
@@ -818,36 +819,47 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 		info.GetBdrMode(),
 	)
 	if err != nil {
-		log.Panic("register dispatcher to eventStore failed",
+		log.Error("register dispatcher to eventStore failed",
+			zap.Stringer("dispatcherID", id),
+			zap.String("span", common.FormatTableSpan(span)),
+			zap.Uint64("startTs", info.GetStartTs()),
 			zap.Error(err),
-			zap.Any("dispatcherInfo", info),
 		)
+		return err
 	}
+
 	if !success {
 		if !info.IsOnlyReuse() {
-			log.Panic("register dispatcher to eventStore failed",
+			log.Error("register dispatcher to eventStore failed",
+				zap.Stringer("dispatcherID", id),
+				zap.String("span", common.FormatTableSpan(span)),
+				zap.Uint64("startTs", info.GetStartTs()),
 				zap.Error(err),
-				zap.Any("dispatcherInfo", info))
+			)
 		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
-		return
+		return nil
 	}
 
 	err = c.schemaStore.RegisterTable(span.GetTableID(), info.GetStartTs())
 	if err != nil {
-		log.Panic("register table to schemaStore failed",
-			zap.Error(err),
+		log.Error("register table to schemaStore failed",
+			zap.Stringer("dispatcherID", id),
 			zap.String("span", common.FormatTableSpan(span)),
 			zap.Uint64("startTs", info.GetStartTs()),
+			zap.Error(err),
 		)
+		return err
 	}
 	tableInfo, err := c.schemaStore.GetTableInfo(span.GetTableID(), info.GetStartTs())
 	if err != nil {
-		log.Panic("get table info from schemaStore failed",
-			zap.Error(err),
-			zap.Int64("tableID", span.TableID),
+		log.Error("get table info from schemaStore failed",
+			zap.Stringer("dispatcherID", id),
+			zap.String("span", common.FormatTableSpan(span)),
 			zap.Uint64("startTs", info.GetStartTs()),
+			zap.Error(err),
 		)
+		return err
 	}
 	dispatcher.updateTableInfo(tableInfo)
 	eventStoreRegisterDuration := time.Since(start)
@@ -862,6 +874,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 		zap.Duration("brokerRegisterDuration", brokerRegisterDuration),
 		zap.Duration("eventStoreRegisterDuration", eventStoreRegisterDuration),
 	)
+	return nil
 }
 
 func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
@@ -934,7 +947,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) {
 	stat, ok := c.getDispatcher(dispatcherInfo.GetID())
 	if !ok {
 		// The dispatcher is not registered, register it.
-		c.addDispatcher(dispatcherInfo)
+		// FIXME: Handle the error.
+		_ = c.addDispatcher(dispatcherInfo)
 		return
 	}
 

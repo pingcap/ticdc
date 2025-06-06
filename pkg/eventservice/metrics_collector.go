@@ -37,6 +37,7 @@ var (
 	metricEventServiceSendResolvedTsCount = metrics.EventServiceSendEventCount.WithLabelValues("resolved_ts")
 	metricEventServiceSendDDLCount        = metrics.EventServiceSendEventCount.WithLabelValues("ddl")
 	metricEventServiceSendCommandCount    = metrics.EventServiceSendEventCount.WithLabelValues("command")
+	metricEventServiceSkipResolvedTsCount = metrics.EventServiceSkipResolvedTsCount
 )
 
 // metricsSnapshot holds all metrics data collected at a point in time
