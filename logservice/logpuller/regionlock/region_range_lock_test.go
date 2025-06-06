@@ -328,7 +328,6 @@ func TestRangeLockGetHeapMinTs(t *testing.T) {
 	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
 
 	// Update the resolvedTs of the first range
-	res.LockedRangeState.ResolvedTs.Store(50)
 	updateLockedRangeResolvedTs(l, res.LockedRangeState, 50)
 	require.Equal(t, uint64(50), l.GetHeapMinTs())
 	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
