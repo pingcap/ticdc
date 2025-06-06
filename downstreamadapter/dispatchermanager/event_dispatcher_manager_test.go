@@ -331,7 +331,7 @@ func TestDoMerge(t *testing.T) {
 	require.Equal(t, uint64(200), mergedDispatcherAfter.GetStartTs())
 
 	// Verify original dispatchers are removed
-	manager.aggregateDispatcherHeartbeats(false) //use heartbeat collector to remove merged dispatchers
+	manager.aggregateDispatcherHeartbeats(false) // use heartbeat collector to remove merged dispatchers
 	_, exists = manager.dispatcherMap.Get(dispatcher1.GetId())
 	require.False(t, exists)
 	_, exists = manager.dispatcherMap.Get(dispatcher2.GetId())
@@ -397,7 +397,7 @@ func TestDoMergeWithThreeDispatchers(t *testing.T) {
 	require.Equal(t, uint64(100), mergedDispatcherAfter.GetStartTs())
 
 	// Verify original dispatchers are removed
-	manager.aggregateDispatcherHeartbeats(false) //use heartbeat collector to remove merged dispatchers
+	manager.aggregateDispatcherHeartbeats(false) // use heartbeat collector to remove merged dispatchers
 	_, exists = manager.dispatcherMap.Get(dispatcher1.GetId())
 	require.False(t, exists)
 	_, exists = manager.dispatcherMap.Get(dispatcher2.GetId())
