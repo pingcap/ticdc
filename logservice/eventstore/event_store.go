@@ -442,7 +442,6 @@ func (e *eventStore) RegisterDispatcher(
 	consumeKVEvents := func(kvs []common.RawKVEntry, finishCallback func()) bool {
 		maxCommitTs := uint64(0)
 		// Must find the max commit ts in the kvs, since the kvs is not sorted yet.
-		resolvedTs := subStat.resolvedTs.Load()
 		for _, kv := range kvs {
 			if kv.CRTs > maxCommitTs {
 				maxCommitTs = kv.CRTs
@@ -453,7 +452,7 @@ func (e *eventStore) RegisterDispatcher(
 			subID:             subStat.subID,
 			tableID:           subStat.tableSpan.TableID,
 			kvs:               kvs,
-			currentResolvedTs: resolvedTs,
+			currentResolvedTs: subStat.resolvedTs.Load(),
 			callback:          finishCallback,
 		})
 		return true
