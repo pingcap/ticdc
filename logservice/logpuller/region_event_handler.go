@@ -101,15 +101,16 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		}
 	}
 	if len(span.kvEventsCache) > 0 {
-		maxCommitTs := uint64(0)
+		// TODO: use min ts
+		minCommitTs := uint64(0)
 		for _, kvEvent := range span.kvEventsCache {
-			if kvEvent.CRTs > maxCommitTs {
-				maxCommitTs = kvEvent.CRTs
+			if kvEvent.CRTs < minCommitTs {
+				minCommitTs = kvEvent.CRTs
 			}
 		}
-		if maxCommitTs > newResolvedTs {
-			log.Warn("max commit ts is greater than resolved ts",
-				zap.Uint64("maxCommitTs", maxCommitTs),
+		if minCommitTs < newResolvedTs {
+			log.Warn("min commit ts is smaller than resolved ts",
+				zap.Uint64("minCommitTs", minCommitTs),
 				zap.Uint64("resolvedTs", newResolvedTs),
 				zap.Uint64("subID", uint64(span.subID)))
 		}
