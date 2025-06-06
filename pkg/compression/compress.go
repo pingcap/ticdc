@@ -19,7 +19,7 @@ import (
 
 	"github.com/klauspost/compress/snappy"
 	"github.com/pierrec/lz4/v4"
-	cerror "github.com/pingcap/tiflow/pkg/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
 const (

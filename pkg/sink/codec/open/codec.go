@@ -254,6 +254,13 @@ func writeColumnFieldValue(
 		} else {
 			writer.WriteStringField("v", value.String())
 		}
+	case mysql.TypeTiDBVectorFloat32:
+		value := row.GetVectorFloat32(idx).String()
+		if len(value) == 0 {
+			writer.WriteNullField("v")
+		} else {
+			writer.WriteStringField("v", value)
+		}
 	default:
 		d := row.GetDatum(idx, &fieldType)
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail

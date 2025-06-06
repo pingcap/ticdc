@@ -138,6 +138,9 @@ func GetDDLActionType(query string) timodel.ActionType {
 	if strings.Contains(query, "invisible") {
 		return timodel.ActionAlterIndexVisibility
 	}
+	if strings.Contains(query, "create view") {
+		return timodel.ActionCreateView
+	}
 
 	log.Panic("how to set action for the DDL ?", zap.String("query", query))
 	return timodel.ActionNone
@@ -155,7 +158,11 @@ func GetInfluenceTables(action timodel.ActionType, physicalTableID []int64) *com
 		return &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeDB,
 		}
-	case timodel.ActionTruncateTable, timodel.ActionRenameTable, timodel.ActionDropTable,
+	case timodel.ActionCreateView:
+		return &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeAll,
+		}
+	case timodel.ActionTruncateTable, timodel.ActionRenameTable, timodel.ActionDropTable, timodel.ActionRecoverTable,
 		timodel.ActionAddColumn, timodel.ActionDropColumn,
 		timodel.ActionModifyColumn, timodel.ActionSetDefaultValue,
 		timodel.ActionAddIndex, timodel.ActionDropIndex, timodel.ActionRenameIndex,
