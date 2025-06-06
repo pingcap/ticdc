@@ -529,9 +529,8 @@ func (d *Dispatcher) updateComponentStatusToWorking() {
 		TableSpanStatus: &heartbeatpb.TableSpanStatus{
 			ID:              d.id.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    d.GetCheckpointTs(),
 		},
-		CheckpointTs: d.GetCheckpointTs(),
-		ResolvedTs:   d.GetResolvedTs(),
-		Seq:          d.seq,
+		Seq: d.seq,
 	}
 }

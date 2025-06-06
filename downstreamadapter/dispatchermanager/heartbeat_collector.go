@@ -71,6 +71,7 @@ func NewHeartBeatCollector(serverId node.ID) *HeartBeatCollector {
 		heartBeatResponseDynamicStream:          newHeartBeatResponseDynamicStream(dStatusDS),
 		schedulerDispatcherRequestDynamicStream: newSchedulerDispatcherRequestDynamicStream(),
 		checkpointTsMessageDynamicStream:        newCheckpointTsMessageDynamicStream(),
+		mergeDispatcherRequestDynamicStream:     newMergeDispatcherRequestDynamicStream(),
 		mc:                                      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 	}
 	heartBeatCollector.mc.RegisterHandler(messaging.HeartbeatCollectorTopic, heartBeatCollector.RecvMessages)
@@ -113,6 +114,10 @@ func (c *HeartBeatCollector) RegisterEventDispatcherManager(m *EventDispatcherMa
 	if err != nil {
 		return errors.Trace(err)
 	}
+	err = c.mergeDispatcherRequestDynamicStream.AddPath(m.changefeedID.Id, m)
+	if err != nil {
+		return errors.Trace(err)
+	}
 	return nil
 }
 
@@ -127,6 +132,10 @@ func (c *HeartBeatCollector) RemoveEventDispatcherManager(m *EventDispatcherMana
 		return errors.Trace(err)
 	}
 	err = c.schedulerDispatcherRequestDynamicStream.RemovePath(m.changefeedID.Id)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	err = c.mergeDispatcherRequestDynamicStream.RemovePath(m.changefeedID.Id)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -207,12 +216,12 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 	case messaging.TypeCheckpointTsMessage:
 		checkpointTsMessage := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		c.checkpointTsMessageDynamicStream.Push(
-			common.NewChangefeedIDFromPB(checkpointTsMessage.ChangefeedID).Id,
+			common.NewChangefeedGIDFromPB(checkpointTsMessage.ChangefeedID),
 			NewCheckpointTsMessage(checkpointTsMessage))
 	case messaging.TypeMergeDispatcherRequest:
 		mergeDispatcherRequest := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
 		c.mergeDispatcherRequestDynamicStream.Push(
-			common.NewChangefeedIDFromPB(mergeDispatcherRequest.ChangefeedID).Id,
+			common.NewChangefeedGIDFromPB(mergeDispatcherRequest.ChangefeedID),
 			NewMergeDispatcherRequest(mergeDispatcherRequest))
 	default:
 		log.Panic("unknown message type", zap.Any("message", msg.Message))

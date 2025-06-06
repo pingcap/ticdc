@@ -666,6 +666,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	pdTime := e.pdClock.CurrentTime()
 	e.metricCheckpointTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyCheckpointTs) / 1e3)
 	e.metricResolvedTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3)
+
 	return &message
 }
 
@@ -703,6 +704,7 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 	var startKey []byte
 	var endKey []byte
 	var schemaID int64
+	var fakeStartTs uint64 = math.MaxUint64 // we calculate the fake startTs as the min-checkpointTs of these dispatchers
 	for idx, id := range dispatcherIDs {
 		dispatcher, ok := e.dispatcherMap.Get(id)
 		if !ok {
@@ -717,6 +719,9 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 				zap.Any("dispatcherID", id),
 				zap.Any("componentStatus", dispatcher.GetComponentStatus()))
 			return nil
+		}
+		if dispatcher.GetCheckpointTs() < fakeStartTs {
+			fakeStartTs = dispatcher.GetCheckpointTs()
 		}
 		if idx == 0 {
 			prevTableSpan = dispatcher.GetTableSpan()
@@ -746,12 +751,13 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 		StartKey: startKey,
 		EndKey:   endKey,
 	}
+
 	mergedDispatcher := dispatcher.NewDispatcher(
 		e.changefeedID,
 		mergedDispatcherID,
 		mergedSpan,
 		e.sink,
-		0, // startTs will be calculated later.
+		fakeStartTs, // real startTs will be calculated later.
 		e.statusesChan,
 		e.blockStatusesChan,
 		schemaID,
@@ -763,6 +769,7 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 		e.errCh,
 		e.config.BDRMode,
 	)
+
 	mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Preparing)
 	seq := e.dispatcherMap.Set(mergedDispatcherID, mergedDispatcher)
 	mergedDispatcher.SetSeq(seq)
@@ -780,7 +787,9 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).PrepareAddDispatcher(
 		mergedDispatcher,
 		e.config.MemoryQuota,
-		func() { mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_MergeReady) })
+		func() {
+			mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_MergeReady)
+		})
 	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
 }
 

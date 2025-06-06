@@ -106,8 +106,10 @@ func (d *Dispatcher) addToStatusDynamicStream() {
 	}
 }
 
+// SetStartTs only be called after the dispatcher is created
 func (d *Dispatcher) SetStartTs(startTs uint64) {
 	d.startTs = startTs
+	d.resolvedTs = startTs
 }
 
 func (d *Dispatcher) SetCurrentPDTs(currentPDTs uint64) {

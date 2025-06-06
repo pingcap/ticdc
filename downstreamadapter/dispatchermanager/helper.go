@@ -386,6 +386,14 @@ func (h *CheckpointTsMessageHandler) GetType(event CheckpointTsMessage) dynstrea
 }
 func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) {}
 
+func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *EventDispatcherManager, *MergeDispatcherRequestHandler] {
+	ds := dynstream.NewParallelDynamicStream(
+		func(id common.GID) uint64 { return id.FastHash() },
+		&MergeDispatcherRequestHandler{})
+	ds.Start()
+	return ds
+}
+
 type MergeDispatcherRequest struct {
 	*heartbeatpb.MergeDispatcherRequest
 }

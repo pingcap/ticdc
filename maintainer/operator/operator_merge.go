@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -30,44 +31,53 @@ import (
 // MergeDispatcherOperator is an operator to remove multiple spans belonging to the same table with adjacent ranges in a same node
 // and create a new span to the replication db to the same node.
 type MergeDispatcherOperator struct {
-	db               *replica.ReplicationDB
-	node             node.ID
-	id               common.DispatcherID
-	dispatcherIDs    []*heartbeatpb.DispatcherID
-	originReplicaSet *replica.SpanReplication
+	db            *replica.ReplicationDB
+	node          node.ID
+	id            common.DispatcherID
+	dispatcherIDs []*heartbeatpb.DispatcherID
 
 	removed  atomic.Bool
 	finished atomic.Bool
 
 	toMergedReplicaSets []*replica.SpanReplication
-	toMergedSpans       []*heartbeatpb.TableSpan
+	newReplicaSet       *replica.SpanReplication
 	mergedSpanInfo      string
 	checkpointTs        uint64
+
+	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 }
 
 func NewMergeDispatcherOperator(
 	db *replica.ReplicationDB,
 	toMergedReplicaSets []*replica.SpanReplication,
-	toMergedSpans []*heartbeatpb.TableSpan,
+	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
 ) *MergeDispatcherOperator {
 	// Step1: ensure toMergedSpans and affectedReplicaSets belong to the same table with adjacent ranges in a same node
-	if len(toMergedSpans) < 2 || len(toMergedReplicaSets) != len(toMergedSpans) {
-		log.Info("toMergedSpans is less than 2 or toMergedReplicaSets is not equal to toMergedSpans, skip merge",
-			zap.Any("toMergedSpans", toMergedSpans),
+	if len(toMergedReplicaSets) < 2 {
+		log.Info("toMergedReplicaSets is less than 2, skip merge",
 			zap.Any("toMergedReplicaSets", toMergedReplicaSets))
+		setOccupyOperatorsFinished(occupyOperators)
 		return nil
 	}
+
+	toMergedSpans := make([]*heartbeatpb.TableSpan, 0, len(toMergedReplicaSets))
+	for _, replicaSet := range toMergedReplicaSets {
+		toMergedSpans = append(toMergedSpans, replicaSet.Span)
+	}
+
 	prevTableSpan := toMergedSpans[0]
 	nodeID := toMergedReplicaSets[0].GetNodeID()
 	for idx := 1; idx < len(toMergedSpans); idx++ {
 		currentTableSpan := toMergedSpans[idx]
 		if !common.IsTableSpanAdjacent(prevTableSpan, currentTableSpan) {
-			log.Info("toMergedSpans is not adjacent, skip merge", zap.Any("toMergedSpans", toMergedSpans))
+			log.Info("toMergedSpans is not adjacent, skip merge", zap.String("prevTableSpan", common.FormatTableSpan(prevTableSpan)), zap.String("currentTableSpan", common.FormatTableSpan(currentTableSpan)))
+			setOccupyOperatorsFinished(occupyOperators)
 			return nil
 		}
 		prevTableSpan = currentTableSpan
 		if toMergedReplicaSets[idx].GetNodeID() != nodeID {
 			log.Info("toMergedSpans is not in the same node, skip merge", zap.Any("toMergedReplicaSets", toMergedReplicaSets))
+			setOccupyOperatorsFinished(occupyOperators)
 			return nil
 		}
 	}
@@ -86,17 +96,40 @@ func NewMergeDispatcherOperator(
 			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey))
 	}
 
+	// bind the new replica set to the node.
+	mergeTableSpan := &heartbeatpb.TableSpan{
+		TableID:  toMergedSpans[0].TableID,
+		StartKey: toMergedSpans[0].StartKey,
+		EndKey:   toMergedSpans[len(toMergedSpans)-1].EndKey,
+	}
+
+	newReplicaSet := replica.NewSpanReplication(
+		toMergedReplicaSets[0].ChangefeedID,
+		newDispatcherID,
+		toMergedReplicaSets[0].GetSchemaID(),
+		mergeTableSpan,
+		1) // use a fake checkpointTs here.
+
+	db.AddAbsentReplicaSet(newReplicaSet)
+
 	op := &MergeDispatcherOperator{
 		db:                  db,
 		node:                nodeID,
 		id:                  newDispatcherID,
 		dispatcherIDs:       dispatcherIDs,
 		toMergedReplicaSets: toMergedReplicaSets,
-		toMergedSpans:       toMergedSpans,
 		checkpointTs:        0,
 		mergedSpanInfo:      spansInfo,
+		occupyOperators:     occupyOperators,
+		newReplicaSet:       newReplicaSet,
 	}
 	return op
+}
+
+func setOccupyOperatorsFinished(occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
+	for _, occupyOperator := range occupyOperators {
+		occupyOperator.(*OccupyDispatcherOperator).SetFinished()
+	}
 }
 
 func (m *MergeDispatcherOperator) Start() {
@@ -110,8 +143,7 @@ func (m *MergeDispatcherOperator) OnNodeRemove(n node.ID) {
 		log.Info("origin node is removed",
 			zap.Any("toMergedReplicaSets", m.toMergedReplicaSets))
 
-		m.finished.Store(true)
-		m.removed.Store(true)
+		m.OnTaskRemoved()
 	}
 }
 
@@ -152,38 +184,30 @@ func (m *MergeDispatcherOperator) Schedule() *messaging.TargetMessage {
 
 // OnTaskRemoved is called when the task is removed by ddl
 func (m *MergeDispatcherOperator) OnTaskRemoved() {
-	log.Info("task removed", zap.String("replicaSet", m.originReplicaSet.ID.String()))
+	log.Info("task removed", zap.String("replicaSet", m.newReplicaSet.ID.String()))
 	m.removed.Store(true)
 	m.finished.Store(true)
 }
 
 func (m *MergeDispatcherOperator) PostFinish() {
+	setOccupyOperatorsFinished(m.occupyOperators)
 	if m.removed.Load() {
 		// if removed, we set the toMergedReplicaSet to be absent, to ignore the merge operation
 		for _, replicaSet := range m.toMergedReplicaSets {
 			m.db.MarkAbsentWithoutLock(replicaSet)
 		}
+		m.db.RemoveReplicatingSpan(m.newReplicaSet)
 		log.Info("merge dispatcher operator finished due to removed", zap.String("id", m.id.String()))
 		return
 	}
 
+	nodeID := m.toMergedReplicaSets[0].GetNodeID()
 	for _, replicaSet := range m.toMergedReplicaSets {
-		m.db.MarkAbsentWithoutLock(replicaSet)
-	}
-	mergeTableSpan := &heartbeatpb.TableSpan{
-		TableID:  m.toMergedSpans[0].TableID,
-		StartKey: m.toMergedSpans[0].StartKey,
-		EndKey:   m.toMergedSpans[len(m.toMergedSpans)-1].EndKey,
+		m.db.RemoveReplicatingSpan(replicaSet)
 	}
 
-	newReplicaSet := replica.NewSpanReplication(
-		m.toMergedReplicaSets[0].ChangefeedID,
-		m.id,
-		m.toMergedReplicaSets[0].GetSchemaID(),
-		mergeTableSpan,
-		m.checkpointTs)
-
-	m.db.MarkReplicatingWithoutLock(newReplicaSet)
+	m.db.BindReplicaToNodeWithoutLock("", nodeID, m.newReplicaSet)
+	m.db.MarkReplicatingWithoutLock(m.newReplicaSet)
 
 	log.Info("merge dispatcher operator finished", zap.String("id", m.id.String()))
 }

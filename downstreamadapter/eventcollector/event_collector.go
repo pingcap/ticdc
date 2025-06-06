@@ -260,6 +260,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
 func (c *EventCollector) CommitAddDispatcher(target dispatcher.EventDispatcher, startTs uint64) {
+	log.Info("commit add dispatcher", zap.Stringer("dispatcher", target.GetId()), zap.Uint64("startTs", startTs))
 	c.addDispatcherRequestToSendingQueue(
 		c.serverId,
 		eventServiceTopic,
