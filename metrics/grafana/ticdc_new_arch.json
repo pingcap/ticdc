@@ -1,8 +1,8 @@
 {
   "__inputs": [
     {
-      "name": "DS_TIDB-CLUSTER",
-      "label": "tidb-cluster",
+      "name": "DS_TEST-CLUSTER",
+      "label": "${DS_TEST-CLUSTER}",
       "description": "",
       "type": "datasource",
       "pluginId": "prometheus",
@@ -66,7 +66,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_TIDB-CLUSTER}"
+          "uid": "${DS_TEST-CLUSTER}"
         },
         "enable": true,
         "expr": "max(ticdc_owner_checkpoint_ts_lag) by (changefeed, instance) > BOOL $spike_threshold",
@@ -84,7 +84,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_TIDB-CLUSTER}"
+          "uid": "${DS_TEST-CLUSTER}"
         },
         "enable": false,
         "expr": "delta(up{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\"tikv|ticdc|tidb|pd\"}[30s]) < BOOL 0",
@@ -103,7 +103,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_TIDB-CLUSTER}"
+          "uid": "${DS_TEST-CLUSTER}"
         },
         "enable": false,
         "expr": "sum(ALERTS{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", alertstate=\"firing\", alertname=~\"ticdc.*\"}) by (alertname) > BOOL 0",
@@ -120,7 +120,7 @@
       {
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_TIDB-CLUSTER}"
+          "uid": "${DS_TEST-CLUSTER}"
         },
         "enable": false,
         "expr": "delta(tikv_cdc_region_resolve_status{status=\"resolved\"}[30s]) < BOOL -800",
@@ -166,7 +166,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Represents the total amount of data written by the upstream cluster of TiCDC, not the total amount of data that CDC needs to pull.",
           "fill": 1,
@@ -214,7 +214,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               },
               "exemplar": true,
               "expr": "sum(rate(tidb_tikvclient_txn_write_size_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",scope=~\"general\"}[30s]))",
@@ -264,7 +264,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of bytes written into the event store pebble storage",
           "fill": 1,
@@ -307,7 +307,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               },
               "exemplar": true,
               "expr": "sum(rate(ticdc_event_store_write_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
@@ -357,7 +357,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of dml events that sink flushes to downstream per second.",
           "fieldConfig": {
@@ -416,7 +416,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -460,7 +460,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fill": 1,
           "fillGradient": 0,
@@ -508,7 +508,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -520,7 +520,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -562,7 +562,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "",
@@ -620,7 +620,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -663,7 +663,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Changefeed memory quota",
           "fill": 1,
@@ -705,7 +705,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               },
               "exemplar": true,
               "expr": "ticdc_dynamic_stream_memory_usage{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", component!=\"\", instance=~\"$ticdc_instance\"}",
@@ -772,7 +772,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
@@ -830,7 +830,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -872,7 +872,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
@@ -930,7 +930,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -981,7 +981,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "gridPos": {
@@ -1023,7 +1023,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -1052,7 +1052,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "fieldConfig": {
@@ -1109,7 +1109,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -1123,7 +1123,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -1165,7 +1165,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "fieldConfig": {
@@ -1224,7 +1224,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -1266,7 +1266,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "fieldConfig": {
@@ -1325,7 +1325,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -1376,7 +1376,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "gridPos": {
@@ -1418,7 +1418,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -1465,7 +1465,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of events that puller outputs to sorter \n per second",
           "fieldConfig": {
@@ -1523,7 +1523,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -1566,7 +1566,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The total number of events that puller outputs",
           "fieldConfig": {
@@ -1625,7 +1625,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -1667,7 +1667,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The total number of events that EventService outputs",
           "fieldConfig": {
@@ -1725,7 +1725,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -1769,7 +1769,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The total number of events that puller outputs",
           "fieldConfig": {
@@ -1829,7 +1829,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -1871,7 +1871,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of rows that event collector received per second.",
           "fieldConfig": {
@@ -1930,7 +1930,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -1974,7 +1974,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The total number of events that Event Collector received",
           "fieldConfig": {
@@ -2032,7 +2032,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -2074,7 +2074,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of rows that sink flushes to downstream per second.",
           "fieldConfig": {
@@ -2133,7 +2133,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -2177,7 +2177,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of rows(events) that are flushed by sink.",
           "fieldConfig": {
@@ -2236,7 +2236,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -2296,7 +2296,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Uptime of TiCDC and TiKV",
           "fieldConfig": {
@@ -2352,7 +2352,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -2363,7 +2363,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -2374,7 +2374,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -2415,7 +2415,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Goroutine count of TiCDC",
           "fieldConfig": {
@@ -2471,7 +2471,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -2483,7 +2483,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -2524,7 +2524,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The count of open FD count of TiCDC",
           "fieldConfig": {
@@ -2580,7 +2580,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -2621,7 +2621,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "CPU usage of TiCDC",
           "fieldConfig": {
@@ -2685,7 +2685,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -2696,7 +2696,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -2737,7 +2737,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Memory usage of TiCDC",
           "fieldConfig": {
@@ -2794,7 +2794,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -2805,7 +2805,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -2846,7 +2846,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The history of TiCDC cluster ownership, owner node has a value that is great than 0",
           "fill": 1,
@@ -2897,7 +2897,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -2941,7 +2941,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The history of PD cluster leadership, leader node has a value that is great than 0",
           "fill": 1,
@@ -2992,7 +2992,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -3054,7 +3054,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 0,
           "description": "The table count of each ticdc instance",
@@ -3112,7 +3112,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -3157,7 +3157,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 0,
           "description": "The table count of each changefeed",
@@ -3215,7 +3215,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -3260,7 +3260,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {
@@ -3312,7 +3312,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -3324,7 +3324,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -3365,7 +3365,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The checkpoint ts of changefeeds.",
           "fieldConfig": {
@@ -3427,7 +3427,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -3441,7 +3441,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -3453,7 +3453,7 @@
               "refId": "D",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -3494,7 +3494,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The resolved ts of changefeeds.",
           "fill": 0,
@@ -3550,7 +3550,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -3564,7 +3564,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -3576,7 +3576,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -3617,7 +3617,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
@@ -3675,7 +3675,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -3717,7 +3717,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
@@ -3775,7 +3775,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -3787,7 +3787,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -3829,7 +3829,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 0,
           "description": "The status of each changefeed.\n\n0: Normal\n\n1 and 6: Warning\n\n2: Failed\n\n3: Stopped\n\n4: Finished\n\n-1: Unknown",
@@ -3879,7 +3879,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               },
               "exemplar": true,
               "expr": "max(ticdc_owner_status{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace,changefeed)",
@@ -3932,7 +3932,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of errors that interrupt changefeed per minute ",
           "fill": 1,
@@ -3982,7 +3982,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -4044,7 +4044,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
@@ -4102,7 +4102,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -4144,7 +4144,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
@@ -4202,7 +4202,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -4244,7 +4244,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of errors that interrupt Eventfeed RPC",
           "fieldConfig": {
@@ -4304,7 +4304,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -4346,7 +4346,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of PD scheduling operator.",
           "fieldConfig": {
@@ -4406,7 +4406,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -4448,7 +4448,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "99.9% of TiDB query durations.",
           "fill": 1,
@@ -4499,7 +4499,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -4541,7 +4541,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The min resolved ts lag of each TiKV",
@@ -4611,7 +4611,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -4624,7 +4624,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -4667,7 +4667,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of changed rows that are written to downstream per second",
           "fieldConfig": {
@@ -4718,7 +4718,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               },
               "exemplar": true,
               "expr": "sum(rate(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace,changefeed, instance)",
@@ -4767,7 +4767,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "99.9% of TiCDC sink write durations.",
           "fill": 1,
@@ -4813,7 +4813,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               },
               "editorMode": "code",
               "exemplar": true,
@@ -4864,7 +4864,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The number of incremental scan tasks per minute",
@@ -4920,7 +4920,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -4962,7 +4962,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The total time of incremental scan region takes per minute",
@@ -5018,7 +5018,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -5061,7 +5061,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The number of leaders on each TiKV instance",
@@ -5120,7 +5120,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -5163,7 +5163,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The number of the processed TiKV admin command",
@@ -5219,7 +5219,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -5262,7 +5262,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The rate of TiKV advancing resolved ts.",
@@ -5318,7 +5318,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -5360,7 +5360,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The number of unresolved region per TiKV",
@@ -5416,7 +5416,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -5459,7 +5459,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "99.99% of the number of regions that TiKV checks. ",
@@ -5514,7 +5514,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -5556,7 +5556,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The number of failed count of advancing resolved ts.",
@@ -5612,7 +5612,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -5654,7 +5654,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "99.99% of the duration that TiKV check leader takes. ",
@@ -5709,7 +5709,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -5720,7 +5720,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -5762,7 +5762,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The number of regions that take a long time(more than 60s) to scan",
@@ -5820,7 +5820,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -5881,7 +5881,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
@@ -5939,7 +5939,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -5981,7 +5981,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
@@ -6039,7 +6039,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -6081,7 +6081,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "",
@@ -6145,7 +6145,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -6189,7 +6189,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fill": 1,
           "fillGradient": 0,
@@ -6237,7 +6237,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -6298,7 +6298,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of KV client dispatched event per second",
           "fieldConfig": {
@@ -6364,7 +6364,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -6415,7 +6415,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The size of batch resolved regions count",
           "fieldConfig": {
@@ -6459,7 +6459,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -6488,7 +6488,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Sink worker busy ratio",
           "fieldConfig": {
@@ -6543,7 +6543,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -6609,7 +6609,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "gridPos": {
@@ -6639,7 +6639,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -6667,7 +6667,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fill": 1,
           "fillGradient": 0,
@@ -6715,7 +6715,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -6757,7 +6757,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of events received by event store.",
           "fill": 1,
@@ -6806,7 +6806,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -6848,7 +6848,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fill": 1,
           "fillGradient": 0,
@@ -6896,7 +6896,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -6908,7 +6908,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -6950,7 +6950,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The amount of pending data stored on-disk for event store",
           "fill": 1,
@@ -6997,7 +6997,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -7038,7 +7038,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The amount of pending data stored in-memory for event store",
           "fill": 1,
@@ -7085,7 +7085,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -7126,7 +7126,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of subscriptions created by event store.",
           "fill": 1,
@@ -7176,7 +7176,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -7218,7 +7218,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of scan requests received by event store",
           "fill": 1,
@@ -7268,7 +7268,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -7310,7 +7310,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of bytes written by event store.",
           "fill": 1,
@@ -7359,7 +7359,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -7401,7 +7401,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of bytes scanned by event store.",
           "fill": 1,
@@ -7450,7 +7450,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -7501,7 +7501,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The time of sorter write",
           "gridPos": {
@@ -7543,7 +7543,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -7577,7 +7577,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "gridPos": {
             "h": 8,
@@ -7605,7 +7605,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -7642,7 +7642,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The time of sorter write",
           "gridPos": {
@@ -7684,7 +7684,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -7713,7 +7713,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of write requests received by event store",
           "fill": 1,
@@ -7762,7 +7762,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -7809,7 +7809,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "gridPos": {
             "h": 8,
@@ -7838,7 +7838,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -7875,7 +7875,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The time of sorter write",
           "gridPos": {
@@ -7917,7 +7917,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -7955,7 +7955,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The time of event store iterator first read duration",
           "gridPos": {
@@ -7997,7 +7997,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -8035,7 +8035,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "gridPos": {
@@ -8078,7 +8078,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -8125,7 +8125,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -8178,7 +8178,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -8220,7 +8220,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -8272,7 +8272,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -8314,7 +8314,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -8365,7 +8365,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -8413,7 +8413,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -8447,7 +8447,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -8475,7 +8475,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -8527,7 +8527,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -8597,7 +8597,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "gridPos": {
@@ -8639,7 +8639,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -8668,7 +8668,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "fieldConfig": {
@@ -8727,7 +8727,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -8769,7 +8769,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fill": 1,
           "fillGradient": 0,
@@ -8811,7 +8811,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               },
               "editorMode": "code",
               "exemplar": true,
@@ -8865,7 +8865,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fill": 1,
           "fillGradient": 0,
@@ -8913,7 +8913,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -8957,7 +8957,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The scanned entry ount per second and the average scanned count per scan",
           "fill": 1,
@@ -8999,7 +8999,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               },
               "editorMode": "code",
               "expr": "sum(rate(ticdc_event_service_scanned_count_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", instance=~\"$ticdc_instance\"}[1m])) by (namespace, instance)",
@@ -9010,7 +9010,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               },
               "editorMode": "code",
               "expr": "sum(rate(ticdc_event_service_scanned_count_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", instance=~\"$ticdc_instance\"}[1m])) by (namespace, instance)\n/ \nsum(rate(ticdc_event_service_scanned_count_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", instance=~\"$ticdc_instance\"}[1m])) by (namespace, instance)",
@@ -9060,7 +9060,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The scanned bytes per second and the average scanned bytes per scan",
           "fill": 1,
@@ -9102,7 +9102,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               },
               "editorMode": "code",
               "expr": "sum(rate(ticdc_event_service_scanned_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", instance=~\"$ticdc_instance\"}[1m])) by (namespace, instance)",
@@ -9114,7 +9114,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               },
               "editorMode": "code",
               "expr": "sum(rate(ticdc_event_service_scanned_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", instance=~\"$ticdc_instance\"}[1m])) by (namespace, instance)\n/\nsum(rate(ticdc_event_service_scanned_bytes_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", instance=~\"$ticdc_instance\"}[1m])) by (namespace, instance)",
@@ -9163,7 +9163,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fill": 1,
           "fillGradient": 0,
@@ -9203,7 +9203,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               },
               "editorMode": "code",
               "expr": "ticdc_event_service_dispatcher_status_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", instance=~\"$ticdc_instance\"}",
@@ -9271,7 +9271,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fill": 1,
           "fillGradient": 0,
@@ -9319,7 +9319,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -9331,7 +9331,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -9343,7 +9343,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -9403,7 +9403,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "",
@@ -9467,7 +9467,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -9511,7 +9511,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "",
@@ -9569,7 +9569,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -9612,7 +9612,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "",
@@ -9676,7 +9676,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -9720,7 +9720,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Duration of dispatcher creation",
           "fill": 1,
@@ -9769,7 +9769,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -9782,7 +9782,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -9795,7 +9795,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -9837,7 +9837,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fill": 1,
           "fillGradient": 0,
@@ -9885,7 +9885,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -9927,7 +9927,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "the number of registered dispatchers in event collector",
@@ -9985,7 +9985,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -10028,7 +10028,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of rows that event collector received per second.",
           "fieldConfig": {
@@ -10087,7 +10087,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -10138,7 +10138,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "gridPos": {
@@ -10180,7 +10180,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -10218,7 +10218,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "gridPos": {
@@ -10260,7 +10260,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -10307,7 +10307,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "fieldConfig": {
@@ -10359,7 +10359,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -10402,7 +10402,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -10453,7 +10453,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -10513,7 +10513,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Row count for batch to the downstream sink.",
           "fill": 1,
@@ -10562,7 +10562,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -10574,7 +10574,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -10616,7 +10616,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "DDL count and executing duration",
           "fill": 1,
@@ -10670,7 +10670,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -10682,7 +10682,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -10724,7 +10724,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Ratio of redo event cache hit",
           "fill": 1,
@@ -10772,7 +10772,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -10814,7 +10814,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Count of errors in the last minute.",
           "fill": 1,
@@ -10863,7 +10863,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -10905,7 +10905,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Row count for total output rows.",
           "fill": 1,
@@ -10954,7 +10954,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -11014,7 +11014,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Duration of event staying in conflict detector",
           "fieldConfig": {
@@ -11067,7 +11067,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -11079,7 +11079,7 @@
               "refId": "D",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -11091,7 +11091,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -11103,7 +11103,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -11144,7 +11144,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Full flush (backend flush + callback + conflict detector notify) duration",
           "fieldConfig": {
@@ -11197,7 +11197,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -11209,7 +11209,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -11250,7 +11250,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Sink worker busy ratio",
           "fieldConfig": {
@@ -11303,7 +11303,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -11345,7 +11345,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "fieldConfig": {
@@ -11397,7 +11397,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -11439,7 +11439,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Distribution of flush transaction duration to backend",
           "fieldConfig": {
@@ -11491,7 +11491,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -11503,7 +11503,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -11563,7 +11563,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "MQ worker send messages to Kafka, this metric record the time cost on send every message.",
           "fill": 1,
@@ -11612,7 +11612,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -11624,7 +11624,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -11666,7 +11666,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Bytes / second written off all brokers.\nvalue = one-minute moving average rate of Bytes per second",
           "fieldConfig": {
@@ -11717,7 +11717,7 @@
             {
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               },
               "exemplar": true,
               "expr": "sum(ticdc_sink_kafka_producer_outgoing_byte_rate{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namesapce=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed, instance, broker)",
@@ -11768,7 +11768,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The current number of in-flight requests awaiting a response for all brokers.",
           "fieldConfig": {
@@ -11826,7 +11826,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -11868,7 +11868,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The request latency in ms for all brokers.\n\nvalue = request latency histogram's mean",
           "fieldConfig": {
@@ -11926,7 +11926,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -11968,7 +11968,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Requests / second sent to all brokers.\nvalue = one-minute moving average rate of events per second",
           "fieldConfig": {
@@ -12026,7 +12026,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -12068,7 +12068,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Records count per request send to the kafka\nvalue = one-minute moving average of response receive rate",
           "fieldConfig": {
@@ -12126,7 +12126,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -12168,7 +12168,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The compression ratio times 100 of record batches for all topics. Compression ratio = Size of original data / Size of compressed data * 100",
           "fill": 1,
@@ -12220,7 +12220,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -12262,7 +12262,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "fill": 1,
@@ -12311,7 +12311,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -12353,7 +12353,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "fill": 1,
@@ -12402,7 +12402,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -12444,7 +12444,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "MQ worker batch multiple messages into one when using batched encode protocol, this metric record the time cost on batch messages.",
           "fill": 1,
@@ -12493,7 +12493,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -12505,7 +12505,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -12547,7 +12547,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "MQ worker batch multiple messages into one when using batched encode protocol, this metrics track each batch's size",
           "fill": 1,
@@ -12597,7 +12597,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -12609,7 +12609,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -12651,7 +12651,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "MQ worker send large message to the external storage, this metrics record the message count",
           "fill": 1,
@@ -12700,7 +12700,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -12742,7 +12742,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "MQ worker send large message to the external storage, this metric record the time cost on send every message.",
           "fill": 1,
@@ -12791,7 +12791,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -12803,7 +12803,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -12845,7 +12845,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "the number of message count of checkpointTs message",
           "fill": 1,
@@ -12894,7 +12894,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -12936,7 +12936,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "this metric record the time cost of the MQ worker encode and send  checkpointTs messages to downstream ",
           "fill": 1,
@@ -12985,7 +12985,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -12997,7 +12997,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -13057,7 +13057,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
@@ -13115,7 +13115,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -13157,7 +13157,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
           "fieldConfig": {
@@ -13215,7 +13215,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -13257,7 +13257,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The total number of tables in different replication states.\n\n0: ReplicationSetStateUnknown means the replication state is unknown, it should not happen.\n\n1: ReplicationSetStateAbsent means there is no one replicates or prepares it.\n\n2: ReplicationSetStatePrepare means it needs to add a secondary.\n\n3: ReplicationSetStateCommit means it needs to promote secondary to primary.\n\n4: ReplicationSetStateReplicating means there is exactly one capture that is replicating the table.\n\n5: ReplicationSetStateRemoving means all captures need to stop replication eventually.\n\n",
@@ -13319,7 +13319,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -13362,7 +13362,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The total number of accepted schedule tasks.",
@@ -13426,7 +13426,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -13470,7 +13470,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The total number of different schedule tasks.",
@@ -13534,7 +13534,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -13577,7 +13577,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The total number of running schedule tasks.",
@@ -13641,7 +13641,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -13685,7 +13685,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The total number of tables",
           "fieldConfig": {
@@ -13743,7 +13743,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -13784,7 +13784,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The number of tables in different capture.",
@@ -13849,7 +13849,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -13892,7 +13892,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The ID of the slowest table",
@@ -13954,7 +13954,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -13998,7 +13998,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The state of the slowest table.\n\n0: ReplicationSetStateUnknown means the replication state is unknown, it should not happen.\n\n1: ReplicationSetStateAbsent means there is no one replicates or prepares it.\n\n2: ReplicationSetStatePrepare means it needs to add a secondary.\n\n3: ReplicationSetStateCommit means it needs to promote secondary to primary.\n\n4: ReplicationSetStateReplicating means there is exactly one capture that is replicating the table.\n\n5: ReplicationSetStateRemoving means all captures need to stop replication eventually.\n\n",
@@ -14062,7 +14062,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -14106,7 +14106,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The checkpoint ts of the slowest table.",
           "fieldConfig": {
@@ -14169,7 +14169,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -14183,7 +14183,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -14224,7 +14224,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The resolved ts of the slowest table.",
           "fieldConfig": {
@@ -14285,7 +14285,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -14299,7 +14299,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -14340,7 +14340,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The number of incremental scan tasks per minute",
@@ -14402,7 +14402,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -14462,7 +14462,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of established Eventfeed RPC between TiCDC and TiKV",
           "fieldConfig": {
@@ -14525,7 +14525,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -14538,7 +14538,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -14550,7 +14550,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -14562,7 +14562,7 @@
               "refId": "D",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -14603,7 +14603,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of KV client received events from TiKV per seconds",
           "fieldConfig": {
@@ -14663,7 +14663,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -14704,7 +14704,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of errors that interrupt Eventfeed RPC",
           "fieldConfig": {
@@ -14764,7 +14764,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -14777,7 +14777,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -14789,7 +14789,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -14830,7 +14830,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of KV client dispatched event per second",
           "fieldConfig": {
@@ -14896,7 +14896,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -14910,7 +14910,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -14951,7 +14951,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Active stream count of each gRPC connection",
           "fieldConfig": {
@@ -15009,7 +15009,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -15050,7 +15050,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Percentiles of Eventfeed message size",
           "fieldConfig": {
@@ -15106,7 +15106,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -15117,7 +15117,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -15158,7 +15158,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of regions that are being scanned",
           "fieldConfig": {
@@ -15218,7 +15218,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -15259,7 +15259,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The count of regoin cache operation initiated by TiCDC",
@@ -15319,7 +15319,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -15369,7 +15369,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The size of batch resolved regions count",
           "fieldConfig": {
@@ -15413,7 +15413,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -15442,7 +15442,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of regions that have not connected to TiKV",
           "fieldConfig": {
@@ -15502,7 +15502,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -15543,7 +15543,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The count of resolve lock RPC initiated by TiCDC",
@@ -15603,7 +15603,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -15644,7 +15644,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "",
@@ -15706,7 +15706,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -15747,7 +15747,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The number of events that puller outputs to sorter \n per second",
           "fieldConfig": {
@@ -15805,7 +15805,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -15846,7 +15846,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Estimate the remaining time for a changefeed initialization (on a specific capture)",
           "fieldConfig": {
@@ -15906,7 +15906,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -15957,7 +15957,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Duration of sorting DDL events",
           "fieldConfig": {
@@ -16001,7 +16001,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -16039,7 +16039,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Duration of merging sorted events",
           "fieldConfig": {
@@ -16081,7 +16081,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -16110,7 +16110,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Percentiles of sorting events duration",
           "fieldConfig": {
@@ -16169,7 +16169,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -16183,7 +16183,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -16224,7 +16224,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Percentiles of merging sorted events duration",
           "fieldConfig": {
@@ -16283,7 +16283,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -16297,7 +16297,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -16338,7 +16338,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "batch read events from the sorter, record each batch size ",
           "fieldConfig": {
@@ -16391,7 +16391,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -16432,7 +16432,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "batch read events from the sorter, record each batch read duration ",
           "fieldConfig": {
@@ -16485,7 +16485,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -16526,7 +16526,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "fieldConfig": {
@@ -16579,7 +16579,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -16620,7 +16620,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The count of regions that initialize slow. You can search the log [event feed initializes a region too slow] to get slow region id",
           "fieldConfig": {
@@ -16673,7 +16673,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -16732,7 +16732,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "CPU usage of TiKV CDC component",
@@ -16802,7 +16802,7 @@
               "step": 4,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -16814,7 +16814,7 @@
               "step": 4,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -16827,7 +16827,7 @@
               "step": 4,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -16868,7 +16868,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "Outbound network traffic of TiKV CDC component",
@@ -16942,7 +16942,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -16985,7 +16985,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The count of different kinds of gRPC message",
@@ -17045,7 +17045,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -17086,7 +17086,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The memory usage per TiKV instance",
@@ -17159,7 +17159,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -17172,7 +17172,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -17185,7 +17185,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -17198,7 +17198,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -17211,7 +17211,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -17224,7 +17224,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -17237,7 +17237,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -17280,7 +17280,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The min resolved ts of each TiKV",
@@ -17354,7 +17354,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -17367,7 +17367,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -17380,7 +17380,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -17423,7 +17423,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The ID of the min resolved region of each TiKV",
@@ -17485,7 +17485,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -17528,7 +17528,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "",
@@ -17585,7 +17585,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -17635,7 +17635,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The time consumed to CDC incremental scan",
           "fieldConfig": {
@@ -17679,7 +17679,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -17708,7 +17708,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "",
@@ -17767,7 +17767,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -17808,7 +17808,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The number of incremental scan task in different status.",
@@ -17873,7 +17873,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -17885,7 +17885,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -17926,7 +17926,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The memory usage per TiKV instance",
@@ -17986,7 +17986,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -17999,7 +17999,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -18042,7 +18042,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The speed of TiKV CDC incremental scan",
@@ -18106,7 +18106,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -18149,7 +18149,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The total bytes of TiKV CDC incremental scan",
@@ -18213,7 +18213,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -18255,7 +18255,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "",
@@ -18322,7 +18322,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -18334,7 +18334,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -18346,7 +18346,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -18358,7 +18358,7 @@
               "refId": "D",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -18401,7 +18401,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "The total number of cache entries in the old value cache.",
@@ -18466,7 +18466,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -18478,7 +18478,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -18490,7 +18490,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -18533,7 +18533,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "",
@@ -18597,7 +18597,7 @@
               "step": 10,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -18649,7 +18649,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The time consumed to get an old value (both from cache and from disk)",
           "fieldConfig": {
@@ -18693,7 +18693,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -18722,7 +18722,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "decimals": 1,
           "description": "",
@@ -18781,7 +18781,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -18792,7 +18792,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -18803,7 +18803,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -18871,7 +18871,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The latency distributions of fsync called by redo writer",
           "fieldConfig": {
@@ -18905,7 +18905,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -18943,7 +18943,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The latency distributions of flushall called by redo writer",
           "fieldConfig": {
@@ -18977,7 +18977,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -19015,7 +19015,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The latency distributions of writeLog called by redoManager",
           "fieldConfig": {
@@ -19049,7 +19049,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -19087,7 +19087,7 @@
           "dataFormat": "tsbuckets",
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The latency distributions of flushLog called by redoManager",
           "fieldConfig": {
@@ -19121,7 +19121,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -19150,7 +19150,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The total count of rows that are processed by redo writer",
           "fieldConfig": {
@@ -19205,7 +19205,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -19219,7 +19219,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -19260,7 +19260,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Total number of bytes redo log written",
           "fieldConfig": {
@@ -19311,7 +19311,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -19352,7 +19352,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Redo bgUpdateLog worker busy ratio",
           "fieldConfig": {
@@ -19405,7 +19405,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -19464,7 +19464,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "TiCDC process rss memory usage. TiCDC heap memory size in use ",
           "editable": true,
@@ -19550,7 +19550,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -19562,7 +19562,7 @@
               "refId": "H",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -19574,7 +19574,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -19586,7 +19586,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -19598,7 +19598,7 @@
               "refId": "D",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -19610,7 +19610,7 @@
               "refId": "E",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -19622,7 +19622,7 @@
               "refId": "F",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -19667,7 +19667,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "Count of live objects.",
           "editable": true,
@@ -19728,7 +19728,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -19773,7 +19773,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "TiCDC process Go garbage collection STW pause duration",
           "editable": true,
@@ -19834,7 +19834,7 @@
               "step": 40,
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -19846,7 +19846,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -19858,7 +19858,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -19901,7 +19901,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "The throughput of Go's memory allocator.",
           "fieldConfig": {
@@ -19968,7 +19968,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -19979,7 +19979,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -19990,7 +19990,7 @@
               "refId": "C",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -20001,7 +20001,7 @@
               "refId": "D",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -20061,7 +20061,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -20112,7 +20112,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -20125,7 +20125,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -20166,7 +20166,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -20217,7 +20217,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -20230,7 +20230,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -20271,7 +20271,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -20322,7 +20322,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -20335,7 +20335,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -20376,7 +20376,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -20427,7 +20427,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -20468,7 +20468,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -20519,7 +20519,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -20560,7 +20560,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -20611,7 +20611,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -20652,7 +20652,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -20704,7 +20704,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -20745,7 +20745,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -20799,7 +20799,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -20840,7 +20840,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {},
@@ -20894,7 +20894,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -20931,7 +20931,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {
@@ -21008,7 +21008,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             },
             {
@@ -21020,7 +21020,7 @@
               "refId": "B",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -21034,7 +21034,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "fieldConfig": {
             "defaults": {
@@ -21089,7 +21089,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -21130,7 +21130,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "fieldConfig": {
@@ -21186,7 +21186,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -21227,7 +21227,7 @@
           "dashes": false,
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_TIDB-CLUSTER}"
+            "uid": "${DS_TEST-CLUSTER}"
           },
           "description": "",
           "fieldConfig": {
@@ -21283,7 +21283,7 @@
               "refId": "A",
               "datasource": {
                 "type": "prometheus",
-                "uid": "${DS_TIDB-CLUSTER}"
+                "uid": "${DS_TEST-CLUSTER}"
               }
             }
           ],
@@ -21332,7 +21332,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_TIDB-CLUSTER}"
+          "uid": "${DS_TEST-CLUSTER}"
         },
         "definition": "",
         "hide": 0,
@@ -21358,7 +21358,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_TIDB-CLUSTER}"
+          "uid": "${DS_TEST-CLUSTER}"
         },
         "definition": "",
         "hide": 0,
@@ -21385,7 +21385,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_TIDB-CLUSTER}"
+          "uid": "${DS_TEST-CLUSTER}"
         },
         "definition": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, namespace)",
         "hide": 0,
@@ -21412,7 +21412,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_TIDB-CLUSTER}"
+          "uid": "${DS_TEST-CLUSTER}"
         },
         "definition": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, changefeed)",
         "hide": 0,
@@ -21439,7 +21439,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_TIDB-CLUSTER}"
+          "uid": "${DS_TEST-CLUSTER}"
         },
         "definition": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}, instance)",
         "hide": 0,
@@ -21466,7 +21466,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_TIDB-CLUSTER}"
+          "uid": "${DS_TEST-CLUSTER}"
         },
         "definition": "label_values(tikv_engine_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, instance)",
         "hide": 0,
@@ -21547,7 +21547,7 @@
         "current": {},
         "datasource": {
           "type": "prometheus",
-          "uid": "${DS_TIDB-CLUSTER}"
+          "uid": "${DS_TEST-CLUSTER}"
         },
         "definition": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}, instance)",
         "hide": 0,
@@ -21572,7 +21572,7 @@
     ]
   },
   "time": {
-    "from": "now-30m",
+    "from": "now-1h",
     "to": "now"
   },
   "timepicker": {
@@ -21603,6 +21603,5 @@
   "timezone": "browser",
   "title": "Test-Cluster-TiCDC-New-Arch",
   "uid": "YiGL8hBZ0aac",
-  "version": 4,
-  "weekStart": ""
+  "version": 5,
 }
