@@ -437,9 +437,16 @@ func (l *RangeLock) GetHeapMinTs() uint64 {
 
 	minTs := uint64(math.MaxUint64)
 
-	if l.rangeLockEntryHeap.Len() > 0 {
-		minTs = (*l.rangeLockEntryHeap)[0].lockedRangeState.ResolvedTs.Load()
-	}
+	// if l.rangeLockEntryHeap.Len() > 0 {
+	// 	minTs = (*l.rangeLockEntryHeap)[0].lockedRangeState.ResolvedTs.Load()
+	// }
+	l.lockedRanges.Ascend(func(item *rangeLockEntry) bool {
+		ts := item.lockedRangeState.ResolvedTs.Load()
+		if ts < minTs {
+			minTs = ts
+		}
+		return true
+	})
 
 	unlockedMinTs := l.unlockedRanges.getMinTs()
 
