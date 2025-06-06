@@ -44,7 +44,7 @@ mysql_groups=(
 	# G06
 	'cdc ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	'resolve_lock'
+	'resolve_lock merge_table'
 	# G08
 	'bank'
 	# G09
