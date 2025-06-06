@@ -92,6 +92,14 @@ var (
 			Help:      "The lag difference between received and sent resolved ts of dispatchers",
 			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 		})
+	EventServiceScanSize = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_size",
+			Help:      "The size of events scanned by the event service",
+			Buckets:   prometheus.ExponentialBuckets(1, 2.0, 28), // 1B to 1GB
+		})
 )
 
 // InitEventServiceMetrics registers all metrics in this file.
@@ -106,4 +114,5 @@ func InitEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceDispatcherStatusCount)
 	registry.MustRegister(EventServicePendingScanTaskCount)
 	registry.MustRegister(EventServiceDispatcherUpdateResolvedTsDiff)
+	registry.MustRegister(EventServiceScanSize)
 }

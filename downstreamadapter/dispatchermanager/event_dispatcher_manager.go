@@ -628,7 +628,6 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 				CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
 				EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
 			})
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, heartBeatInfo.Watermark.CheckpointTs))
 		}
 	})
 	message.Watermark.Seq = seq
@@ -647,9 +646,15 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 			// add tableTriggerEventDispatcher heartbeat
 			heartBeatInfo := &dispatcher.HeartBeatInfo{}
 			e.tableTriggerEventDispatcher.GetHeartBeatInfo(heartBeatInfo)
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(e.tableTriggerEventDispatcher.GetId(), heartBeatInfo.Watermark.CheckpointTs))
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(e.tableTriggerEventDispatcher.GetId(), e.latestWatermark.CheckpointTs))
 		}
+
+		e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.Dispatcher) {
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
+		})
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
+
+		log.Info("fizz checkpointTs", zap.Uint64("checkpointTs", message.Watermark.CheckpointTs))
 	}
 
 	e.metricCheckpointTs.Set(float64(message.Watermark.CheckpointTs))

@@ -101,8 +101,10 @@ func (s *eventScanner) Scan(
 	var lastCommitTs uint64
 
 	defer func() {
+		metrics.EventServiceScanSize.Observe(float64(totalBytes))
 		metrics.EventServiceScanDuration.Observe(time.Since(startTime).Seconds())
 	}()
+
 	dispatcherID := dispatcherStat.id
 
 	ddlEvents, err := s.schemaStore.FetchTableDDLEvents(
