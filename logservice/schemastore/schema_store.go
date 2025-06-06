@@ -42,7 +42,7 @@ type SchemaStore interface {
 
 	UnregisterTable(tableID int64) error
 
-	// return table info with largest version <= ts
+	// GetTableInfo return table info with the largest version <= ts
 	GetTableInfo(tableID int64, ts uint64) (*common.TableInfo, error)
 
 	// TODO: how to respect tableFilter

@@ -102,7 +102,8 @@ func newEventBroker(
 	sendMessageWorkerCount := config.DefaultBasicEventHandlerConcurrency
 	scanWorkerCount := config.DefaultBasicEventHandlerConcurrency * 4
 
-	conf := config.GetGlobalServerConfig().Debug.EventService
+	scanTaskQueueSize := config.GetGlobalServerConfig().Debug.EventService.ScanTaskQueueSize / scanWorkerCount
+	sendMessageQueueSize := basicChannelSize * 4
 
 	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
@@ -121,29 +122,25 @@ func newEventBroker(
 		dispatchers:             sync.Map{},
 		tableTriggerDispatchers: sync.Map{},
 		msgSender:               mc,
+		scanWorkerCount:         scanWorkerCount,
 		taskChan:                make([]chan scanTask, scanWorkerCount),
 		sendMessageWorkerCount:  sendMessageWorkerCount,
 		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
-		scanWorkerCount:         scanWorkerCount,
 		cancel:                  cancel,
 		g:                       g,
 	}
-
 	// Initialize metrics collector
 	c.metricsCollector = newMetricsCollector(c)
 
-	for i := 0; i < scanWorkerCount; i++ {
-		c.taskChan[i] = make(chan scanTask, conf.ScanTaskQueueSize/scanWorkerCount)
-	}
-
 	for i := 0; i < c.sendMessageWorkerCount; i++ {
-		c.messageCh[i] = make(chan *wrapEvent, basicChannelSize*4)
+		c.messageCh[i] = make(chan *wrapEvent, sendMessageQueueSize)
 	}
 
-	for i := 0; i < c.scanWorkerCount; i++ {
-		idx := i
+	for i := 0; i < scanWorkerCount; i++ {
+		taskChan := make(chan scanTask, scanTaskQueueSize)
+		c.taskChan[i] = taskChan
 		g.Go(func() error {
-			c.runScanWorker(ctx, idx)
+			c.runScanWorker(ctx, taskChan)
 			return nil
 		})
 	}
@@ -168,9 +165,8 @@ func newEventBroker(
 	})
 
 	for i := 0; i < c.sendMessageWorkerCount; i++ {
-		idx := i
 		g.Go(func() error {
-			c.runSendMessageWorker(ctx, idx)
+			c.runSendMessageWorker(ctx, i)
 			return nil
 		})
 	}
@@ -178,7 +174,7 @@ func newEventBroker(
 	return c
 }
 
-func (c *eventBroker) sendDML(ctx context.Context, remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
+func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *pevent.BatchDMLEvent, d *dispatcherStat) {
 	doSendDML := func(e *pevent.BatchDMLEvent) {
 		// Send the DML event
 		if e != nil && len(e.DMLEvents) > 0 {
@@ -272,13 +268,13 @@ func (c *eventBroker) getMessageCh(workerIndex int) chan *wrapEvent {
 	return c.messageCh[workerIndex]
 }
 
-func (c *eventBroker) runScanWorker(ctx context.Context, idx int) {
+func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case task := <-c.taskChan[idx]:
-			c.doScan(ctx, task, idx)
+		case task := <-taskChan:
+			c.doScan(ctx, task)
 		}
 	}
 }
@@ -477,7 +473,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 	}
 }
 
-func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
+func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	remoteID := node.ID(task.info.GetServerID())
 
 	isBroken := false
@@ -495,14 +491,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		log.Info("The remote target is not ready, skip scan",
 			zap.String("changefeed", task.info.GetChangefeedID().String()),
 			zap.String("dispatcher", task.id.String()),
-			zap.String("remote", remoteID.String()),
-			zap.Int("workerIndex", idx),
-		)
+			zap.String("remote", remoteID.String()))
 		return
 	}
 
 	needScan, dataRange := c.checkNeedScan(task, true)
-
 	if !needScan {
 		return
 	}
@@ -524,7 +517,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 	}
 
 	start := time.Now()
-
 	for _, e := range events {
 		if task.isRemoved.Load() {
 			return
@@ -540,24 +532,23 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask, idx int) {
 		case pevent.TypeBatchDMLEvent:
 			dmls, ok := e.(*pevent.BatchDMLEvent)
 			if !ok {
-				log.Error("expect a DMLEvent, but got", zap.Any("event", e))
-				continue
+				log.Panic("expect a DMLEvent, but got", zap.Any("event", e))
 			}
-			c.sendDML(ctx, remoteID, dmls, task)
+			c.sendDML(remoteID, dmls, task)
 		case pevent.TypeDDLEvent:
 			ddl, ok := e.(*pevent.DDLEvent)
 			if !ok {
-				log.Error("expect a DDLEvent, but got", zap.Any("event", e))
-				continue
+				log.Panic("expect a DDLEvent, but got", zap.Any("event", e))
 			}
 			c.sendDDL(ctx, remoteID, ddl, task)
 		case pevent.TypeResolvedEvent:
 			re, ok := e.(pevent.ResolvedEvent)
 			if !ok {
-				log.Error("expect a ResolvedEvent, but got", zap.Any("event", e))
-				continue
+				log.Panic("expect a ResolvedEvent, but got", zap.Any("event", e))
 			}
 			c.sendResolvedTs(remoteID, task, re.ResolvedTs)
+		default:
+			log.Panic("unknown event type", zap.Any("event", e))
 		}
 	}
 	// Update metrics
@@ -596,7 +587,7 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 				}
 			}
 
-			for _, m := range batchM {
+			for _, m = range batchM {
 				if m.msgType == pevent.TypeResolvedEvent {
 					c.handleResolvedTs(ctx, resolvedTsCacheMap, m, workerIndex)
 					continue
@@ -608,7 +599,8 @@ func (c *eventBroker) runSendMessageWorker(ctx context.Context, workerIndex int)
 					if !ok {
 						log.Warn("Get dispatcher failed", zap.Any("dispatcherID", m.getDispatcherID()))
 						continue
-					} else if d.isHandshaked.Load() {
+					}
+					if d.isHandshaked.Load() {
 						log.Info("Ignore handshake event since the dispatcher already handshaked", zap.Any("dispatcherID", m.getDispatcherID()))
 						continue
 					}
@@ -788,11 +780,10 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 	span := info.GetTableSpan()
 	startTs := info.GetStartTs()
 	changefeedID := info.GetChangefeedID()
-	changefeedStatus := c.getOrSetChangefeedStatus(changefeedID)
-	workerIndex := int((common.GID)(id).Hash(uint64(c.sendMessageWorkerCount)))
-	scanWorkerIndex := int((common.GID)(id).Hash(uint64(c.scanWorkerCount)))
+	workerIndex := (common.GID)(id).Hash(uint64(c.sendMessageWorkerCount))
+	scanWorkerIndex := (common.GID)(id).Hash(uint64(c.scanWorkerCount))
 
-	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, changefeedStatus)
+	dispatcher := newDispatcherStat(startTs, info, filter, scanWorkerIndex, workerIndex, c.getOrSetChangefeedStatus(changefeedID))
 	if span.Equal(common.DDLSpan) {
 		c.tableTriggerDispatchers.Store(id, dispatcher)
 		log.Info("table trigger dispatcher register dispatcher",

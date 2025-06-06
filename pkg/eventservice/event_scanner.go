@@ -96,15 +96,18 @@ func (s *eventScanner) Scan(
 	limit scanLimit,
 ) ([]event.Event, bool, error) {
 	startTime := time.Now()
-	var events []event.Event
-	var totalBytes int64
-	var lastCommitTs uint64
-
+	var (
+		events       []event.Event
+		totalBytes   int64
+		entryCount   int
+		lastCommitTs uint64
+	)
 	defer func() {
 		metrics.EventServiceScanDuration.Observe(time.Since(startTime).Seconds())
+		metrics.EventServiceScannedCount.Observe(float64(entryCount))
+		metrics.EventServiceScannedBytes.Observe(float64(totalBytes))
 	}()
 	dispatcherID := dispatcherStat.id
-
 	ddlEvents, err := s.schemaStore.FetchTableDDLEvents(
 		dataRange.Span.TableID,
 		dispatcherStat.filter,
@@ -170,15 +173,17 @@ func (s *eventScanner) Scan(
 		}
 	}()
 
-	var batchDML *pevent.BatchDMLEvent
-	var lastTableInfoUpdateTs uint64
-	dmlCount := 0
+	var (
+		batchDML              *pevent.BatchDMLEvent
+		lastTableInfoUpdateTs uint64
+		dmlCount              int
+	)
 	tableID := dataRange.Span.TableID
 	for {
 		select {
 		case <-ctx.Done():
-			log.Warn("scan exits since context done", zap.Error(ctx.Err()), zap.Stringer("dispatcherID", dispatcherID))
-			return events, false, ctx.Err()
+			log.Warn("scan exits since context done", zap.Stringer("dispatcherID", dispatcherID), zap.Error(context.Cause(ctx)))
+			return events, false, context.Cause(ctx)
 		default:
 		}
 
@@ -187,31 +192,30 @@ func (s *eventScanner) Scan(
 			return nil, false, nil
 		}
 
-		e, isNewTxn, err := iter.Next()
+		rawEntry, isNewTxn, err := iter.Next()
 		if err != nil {
-			log.Panic("read events failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
+			log.Panic("read events failed", zap.Stringer("dispatcherID", dispatcherID), zap.Error(err))
 		}
 
-		if e == nil {
+		if rawEntry == nil {
 			appendDML(batchDML)
 			appendDDLs(dataRange.EndTs)
 			return events, false, nil
 		}
 
-		eSize := len(e.Key) + len(e.Value) + len(e.OldValue)
-		totalBytes += int64(eSize)
+		totalBytes += rawEntry.ApproximateDataSize()
+		entryCount++
 		elapsed := time.Since(startTime)
-
 		if isNewTxn {
-			if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && e.CRTs > lastCommitTs && dmlCount > 0 {
+			if (totalBytes > limit.MaxBytes || elapsed > limit.Timeout) && rawEntry.CRTs > lastCommitTs && dmlCount > 0 {
 				appendDML(batchDML)
 				appendDDLs(lastCommitTs)
 				return events, true, nil
 			}
-			tableInfo, err := s.schemaStore.GetTableInfo(tableID, e.CRTs-1)
+			tableInfo, err := s.schemaStore.GetTableInfo(tableID, rawEntry.CRTs-1)
 			if err != nil {
 				if dispatcherStat.isRemoved.Load() {
-					log.Warn("get table info failed, since the dispatcher is removed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
+					log.Warn("get table info failed, since the dispatcher is removed", zap.Stringer("dispatcherID", dispatcherID), zap.Error(err))
 					return events, false, nil
 				}
 
@@ -220,26 +224,26 @@ func (s *eventScanner) Scan(
 					// TODO: tables may be deleted in many ways, we need to check if it is safe to ignore later dmls in all cases.
 					// We must send the remaining ddl events to the dispatcher in this case.
 					appendDDLs(dataRange.EndTs)
-					log.Warn("get table info failed, since the table is deleted", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
+					log.Warn("get table info failed, since the table is deleted", zap.Stringer("dispatcherID", dispatcherID), zap.Error(err))
 					return events, false, nil
 				}
-				log.Panic("get table info failed, unknown reason", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
+				log.Panic("get table info failed, unknown reason", zap.Stringer("dispatcherID", dispatcherID), zap.Error(err))
 			}
-			hasDDL := batchDML != nil && len(ddlEvents) > 0 && e.CRTs > ddlEvents[0].FinishedTs
+			hasDDL := batchDML != nil && len(ddlEvents) > 0 && rawEntry.CRTs > ddlEvents[0].FinishedTs
 			// updateTs may be less than the previous updateTs
 			if tableInfo.UpdateTS() != lastTableInfoUpdateTs || hasDDL {
 				appendDML(batchDML)
 				lastTableInfoUpdateTs = tableInfo.UpdateTS()
 				batchDML = new(pevent.BatchDMLEvent)
 			}
-			batchDML.AppendDMLEvent(dispatcherID, tableID, e.StartTs, e.CRTs, tableInfo)
+			batchDML.AppendDMLEvent(dispatcherID, tableID, rawEntry.StartTs, rawEntry.CRTs, tableInfo)
 
 			lastCommitTs = batchDML.GetCommitTs()
 			dmlCount++
 		}
 
-		if err = batchDML.AppendRow(e, s.mounter.DecodeToChunk); err != nil {
-			log.Panic("append row failed", zap.Error(err), zap.Stringer("dispatcherID", dispatcherID))
+		if err = batchDML.AppendRow(rawEntry, s.mounter.DecodeToChunk); err != nil {
+			log.Panic("append row failed", zap.Stringer("dispatcherID", dispatcherID), zap.Error(err))
 		}
 	}
 }
