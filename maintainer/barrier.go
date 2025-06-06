@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/range_checker"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -36,9 +37,10 @@ import (
 // 6. maintainer wait for all dispatchers reporting event(pass) done message
 // 7. maintainer clear the event, and schedule block event? todo: what if we schedule first then wait for all dispatchers?
 type Barrier struct {
-	blockedEvents     *BlockedEventMap
-	controller        *Controller
-	splitTableEnabled bool
+	blockedEvents      *BlockedEventMap
+	operatorController *operator.Controller
+	controller         *Controller
+	splitTableEnabled  bool
 }
 
 type BlockedEventMap struct {
@@ -97,11 +99,12 @@ type eventKey struct {
 }
 
 // NewBarrier create a new barrier for the changefeed
-func NewBarrier(controller *Controller, splitTableEnabled bool) *Barrier {
+func NewBarrier(operatorController *operator.Controller, controller *Controller, splitTableEnabled bool) *Barrier {
 	return &Barrier{
-		blockedEvents:     NewBlockEventMap(),
-		controller:        controller,
-		splitTableEnabled: splitTableEnabled,
+		blockedEvents:      NewBlockEventMap(),
+		operatorController: operatorController,
+		controller:         controller,
+		splitTableEnabled:  splitTableEnabled,
 	}
 }
 
@@ -137,6 +140,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 				zap.String("detail", status.String()))
 			continue
 		}
+		log.Error("HandleStatus", zap.Any("status", status), zap.Any("action", action))
 		eventDispatcherIDsMap[event] = append(eventDispatcherIDsMap[event], status.ID)
 		if action != nil {
 			actions = append(actions, action)
@@ -151,9 +155,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 			Ack: ackEvent(event.commitTs, event.isSyncPoint),
 		})
 	}
-	for action := range actions {
-		dispatcherStatus = append(dispatcherStatus, actions[action])
-	}
+	dispatcherStatus = append(dispatcherStatus, actions...)
 
 	if len(dispatcherStatus) <= 0 {
 		log.Warn("no dispatcher status to send",
@@ -183,7 +185,7 @@ func (b *Barrier) HandleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 			event, ok := b.blockedEvents.Get(key)
 			if !ok {
-				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.controller, blockState, b.splitTableEnabled)
+				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.operatorController, b.controller, blockState, b.splitTableEnabled)
 				b.blockedEvents.Set(key, event)
 			}
 			switch blockState.Stage {
@@ -292,7 +294,7 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
 		// no block event found
-		be := NewBlockEvent(changefeedID, dispatcherID, b.controller, status.State, b.splitTableEnabled)
+		be := NewBlockEvent(changefeedID, dispatcherID, b.operatorController, b.controller, status.State, b.splitTableEnabled)
 		// the event is a fake event, the dispatcher will not send the block event
 		be.rangeChecker = range_checker.NewBoolRangeChecker(false)
 		return be
@@ -363,7 +365,7 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 ) *BarrierEvent {
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
-		event = NewBlockEvent(changefeedID, dispatcherID, b.controller, blockState, b.splitTableEnabled)
+		event = NewBlockEvent(changefeedID, dispatcherID, b.operatorController, b.controller, blockState, b.splitTableEnabled)
 		b.blockedEvents.Set(key, event)
 	}
 	return event

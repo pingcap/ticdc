@@ -36,6 +36,7 @@ type balanceScheduler struct {
 
 	operatorController *operator.Controller
 	replicationDB      *replica.ReplicationDB
+	redoReplicationDB  *replica.ReplicationDB
 	nodeManager        *watcher.NodeManager
 
 	random               *rand.Rand
@@ -52,7 +53,7 @@ type balanceScheduler struct {
 
 func NewBalanceScheduler(
 	changefeedID common.ChangeFeedID, batchSize int,
-	oc *operator.Controller, replicationDB *replica.ReplicationDB,
+	oc *operator.Controller, replicationDB, redoReplicationDB *replica.ReplicationDB,
 	nodeManager *watcher.NodeManager, balanceInterval time.Duration,
 ) *balanceScheduler {
 	return &balanceScheduler{
@@ -61,6 +62,7 @@ func NewBalanceScheduler(
 		random:               rand.New(rand.NewSource(time.Now().UnixNano())),
 		operatorController:   oc,
 		replicationDB:        replicationDB,
+		redoReplicationDB:    redoReplicationDB,
 		nodeManager:          nodeManager,
 		checkBalanceInterval: balanceInterval,
 		lastRebalanceTime:    time.Now(),
@@ -126,6 +128,7 @@ func (s *balanceScheduler) schedulerGlobal(nodes map[node.ID]*node.Info) int {
 		// no need to do the balance, skip
 		return 0
 	}
+
 	groupNodetasks, valid := s.replicationDB.GetImbalanceGroupNodeTask(nodes)
 	if !valid {
 		// no need to do the balance, skip
@@ -184,6 +187,6 @@ func (s *balanceScheduler) schedulerGlobal(nodes map[node.ID]*node.Info) int {
 }
 
 func (s *balanceScheduler) doMove(replication *replica.SpanReplication, id node.ID) bool {
-	op := operator.NewMoveDispatcherOperator(s.replicationDB, replication, replication.GetNodeID(), id)
+	op := operator.NewMoveDispatcherOperator(s.replicationDB, replication, replication.GetNodeID(), id, false)
 	return s.operatorController.AddOperator(op)
 }

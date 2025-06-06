@@ -849,6 +849,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) {
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", id),
+		zap.Bool("redo", info.GetRedo()),
 		zap.String("span", common.FormatTableSpan(span)),
 		zap.Uint64("startTs", startTs),
 		zap.Duration("brokerRegisterDuration", brokerRegisterDuration),
@@ -975,7 +976,6 @@ func (c *eventBroker) handleDispatcherHeartbeat(ctx context.Context, heartbeat *
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
 	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
 		dispatcher, ok := c.getDispatcher(dp.DispatcherID)
-		// dispatcher.info.GetRedo()
 		// Can't find the dispatcher, it means the dispatcher is removed.
 		if !ok {
 			response, ok := responseMap[heartbeat.serverID]

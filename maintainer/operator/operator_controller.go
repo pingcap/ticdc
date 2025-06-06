@@ -54,24 +54,27 @@ type Controller struct {
 	mu           sync.RWMutex // protect the following fields
 	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 	runningQueue operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
+
+	redoReplicationDB *replica.ReplicationDB // only for redo
 }
 
 func NewOperatorController(
 	changefeedID common.ChangeFeedID,
 	mc messaging.MessageCenter,
-	db *replica.ReplicationDB,
+	db, redoDB *replica.ReplicationDB,
 	nodeManager *watcher.NodeManager,
 	batchSize int,
 ) *Controller {
 	oc := &Controller{
-		role:          "maintainer",
-		changefeedID:  changefeedID,
-		operators:     make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
-		runningQueue:  make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
-		messageCenter: mc,
-		batchSize:     batchSize,
-		replicationDB: db,
-		nodeManager:   nodeManager,
+		role:              "maintainer",
+		changefeedID:      changefeedID,
+		operators:         make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
+		runningQueue:      make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
+		messageCenter:     mc,
+		batchSize:         batchSize,
+		replicationDB:     db,
+		nodeManager:       nodeManager,
+		redoReplicationDB: redoDB,
 	}
 	return oc
 }

@@ -38,13 +38,14 @@ type basicScheduler struct {
 
 	operatorController *operator.Controller
 	replicationDB      *replica.ReplicationDB
+	redoReplicationDB  *replica.ReplicationDB
 	nodeManager        *watcher.NodeManager
 }
 
 func NewBasicScheduler(
 	id string, batchSize int,
 	oc *operator.Controller,
-	replicationDB *replica.ReplicationDB,
+	replicationDB, redoReplicationDB *replica.ReplicationDB,
 	nodeManager *watcher.NodeManager,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
 ) *basicScheduler {
@@ -53,6 +54,7 @@ func NewBasicScheduler(
 		batchSize:                  batchSize,
 		operatorController:         oc,
 		replicationDB:              replicationDB,
+		redoReplicationDB:          redoReplicationDB,
 		nodeManager:                nodeManager,
 		schedulingTaskCountPerNode: 1,
 	}
@@ -119,8 +121,15 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 	absentReplications := s.replicationDB.GetAbsentByGroup(groupID, availableSize)
 
 	pkgScheduler.BasicSchedule(availableSize, absentReplications, scheduleNodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
-		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.replicationDB, replication, id))
+		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.replicationDB, replication, id, false))
 	})
+
+	// redo
+	// absentReplications = s.redoReplicationDB.GetAbsentByGroup(groupID, availableSize)
+	// pkgScheduler.BasicSchedule(availableSize, absentReplications, scheduleNodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
+	// 	return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.redoReplicationDB, replication, id, true))
+	// })
+
 	scheduled = len(absentReplications)
 	return
 }

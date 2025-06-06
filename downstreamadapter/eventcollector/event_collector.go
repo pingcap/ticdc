@@ -547,6 +547,7 @@ func (c *EventCollector) runProcessMessage(ctx context.Context, inCh <-chan *mes
 						events := e.(*event.BatchResolvedEvent).Events
 						from := &targetMessage.From
 						for _, resolvedEvent := range events {
+							log.Error("push resolvedEvent runProcessMessage", zap.Any("redo", targetMessage.Redo), zap.Any("id", resolvedEvent.DispatcherID), zap.Any("ResolvedTs", resolvedEvent.ResolvedTs))
 							ds.Push(resolvedEvent.DispatcherID, dispatcher.NewDispatcherEvent(from, resolvedEvent))
 						}
 						c.metricDispatcherReceivedResolvedTsEventCount.Add(float64(e.Len()))

@@ -219,6 +219,7 @@ func (rd *RedoDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				IsSyncPoint: dispatcherStatus.GetAction().IsSyncPoint,
 				Stage:       heartbeatpb.BlockStage_DONE,
 			},
+			Redo: true,
 		}
 	}
 }
@@ -268,6 +269,12 @@ func (rd *RedoDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				zap.Int("eventType", event.GetType()),
 				zap.Stringer("dispatcher", rd.id))
 			continue
+		}
+
+		// only when we receive the first event, we can regard the dispatcher begin syncing data
+		// then turning into working status.
+		if rd.isFirstEvent(event) {
+			rd.updateComponentStatus()
 		}
 
 		switch event.GetType() {
@@ -396,6 +403,7 @@ func (rd *RedoDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 					IsSyncPoint:       false, // sync point event must should block
 					Stage:             heartbeatpb.BlockStage_NONE,
 				},
+				Redo: true,
 			}
 			identifier := BlockEventIdentifier{
 				CommitTs:    event.GetCommitTs(),
@@ -439,6 +447,7 @@ func (rd *RedoDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 				IsSyncPoint:       false,
 				Stage:             heartbeatpb.BlockStage_WAITING,
 			},
+			Redo: true,
 		}
 		identifier := BlockEventIdentifier{
 			CommitTs:    event.GetCommitTs(),
@@ -457,24 +466,24 @@ func (rd *RedoDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
 	// So there won't be a related db-level ddl event is in dealing when we get update schema id events.
 	// Thus, whether to update schema id before or after current ddl event is not important.
 	// To make it easier, we choose to directly update schema id here.
-	if event.GetUpdatedSchemas() != nil && rd.tableSpan != common.DDLSpan {
-		for _, schemaIDChange := range event.GetUpdatedSchemas() {
-			if schemaIDChange.TableID == rd.tableSpan.TableID {
-				if schemaIDChange.OldSchemaID != rd.schemaID {
-					log.Error("Wrong Schema ID",
-						zap.Stringer("dispatcherID", rd.id),
-						zap.Int64("exceptSchemaID", schemaIDChange.OldSchemaID),
-						zap.Int64("actualSchemaID", rd.schemaID),
-						zap.String("tableSpan", common.FormatTableSpan(rd.tableSpan)))
-					return
-				} else {
-					rd.schemaID = schemaIDChange.NewSchemaID
-					rd.schemaIDToDispatchers.Update(schemaIDChange.OldSchemaID, schemaIDChange.NewSchemaID)
-					return
-				}
-			}
-		}
-	}
+	// if event.GetUpdatedSchemas() != nil && rd.tableSpan != common.DDLSpan {
+	// 	for _, schemaIDChange := range event.GetUpdatedSchemas() {
+	// 		if schemaIDChange.TableID == rd.tableSpan.TableID {
+	// 			if schemaIDChange.OldSchemaID != rd.schemaID {
+	// 				log.Error("Wrong Schema ID",
+	// 					zap.Stringer("dispatcherID", rd.id),
+	// 					zap.Int64("exceptSchemaID", schemaIDChange.OldSchemaID),
+	// 					zap.Int64("actualSchemaID", rd.schemaID),
+	// 					zap.String("tableSpan", common.FormatTableSpan(rd.tableSpan)))
+	// 				return
+	// 			} else {
+	// 				rd.schemaID = schemaIDChange.NewSchemaID
+	// 				rd.schemaIDToDispatchers.Update(schemaIDChange.OldSchemaID, schemaIDChange.NewSchemaID)
+	// 				return
+	// 			}
+	// 		}
+	// 	}
+	// }
 }
 
 func (rd *RedoDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
@@ -485,6 +494,32 @@ func (rd *RedoDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 
 	task.Cancel()
 	rd.resendTaskMap.Delete(identifier)
+}
+
+func (rd *RedoDispatcher) isFirstEvent(event commonEvent.Event) bool {
+	if rd.componentStatus.Get() == heartbeatpb.ComponentState_Initializing {
+		switch event.GetType() {
+		case commonEvent.TypeResolvedEvent, commonEvent.TypeDMLEvent, commonEvent.TypeDDLEvent, commonEvent.TypeSyncPointEvent:
+			if event.GetCommitTs() > rd.startTs {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (rd *RedoDispatcher) updateComponentStatus() {
+	rd.componentStatus.Set(heartbeatpb.ComponentState_Working)
+	rd.statusesChan <- TableSpanStatusWithSeq{
+		TableSpanStatus: &heartbeatpb.TableSpanStatus{
+			ID:              rd.id.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			Redo:            true,
+		},
+		CheckpointTs: rd.GetCheckpointTs(),
+		ResolvedTs:   rd.GetResolvedTs(),
+		Seq:          rd.seq,
+	}
 }
 
 func (rd *RedoDispatcher) AddDMLEventToSink(event *commonEvent.DMLEvent) {

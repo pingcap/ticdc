@@ -256,6 +256,7 @@ func (d *Dispatcher) HandleCacheEvents() {
 // When we handle events, we don't have any previous events still in sink.
 func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	// redo check
+	// TODO: optimize it
 	if len(dispatcherEvents) > 0 && atomic.LoadUint64(d.redoGlobalTs) < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
 		// cache here
 		cacheEvents := newCacheEvents(dispatcherEvents, wakeCallback)
@@ -268,6 +269,10 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 		)
 		return true
 	}
+	return d.handleEvents(dispatcherEvents, wakeCallback)
+}
+
+func (d *Dispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) (block bool) {
 	// Only return false when all events are resolvedTs Event.
 	block = false
 	dmlWakeOnce := &sync.Once{}
@@ -385,7 +390,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 	}
 	return block
 }
-
 func (d *Dispatcher) AddDMLEventToSink(event *commonEvent.DMLEvent) {
 	d.tableProgress.Add(event)
 	d.sink.AddDMLEvent(event)

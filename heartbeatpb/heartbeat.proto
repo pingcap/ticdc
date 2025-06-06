@@ -237,6 +237,7 @@ message State {
 message TableSpanBlockStatus {
     DispatcherID ID = 1; // for which dispatcher
     State state = 2;
+    bool redo = 3;
 }
 
 message TableSpanStatus {
@@ -244,6 +245,7 @@ message TableSpanStatus {
     ComponentState component_status = 2;
     uint64 checkpoint_ts = 3;
     float event_size_per_second = 4;
+    bool redo = 5;
 }
 
 message BlockStatusRequest {

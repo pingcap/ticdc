@@ -541,12 +541,11 @@ func (e *EventDispatcherManager) newDispatchers(infos []dispatcherCreateInfo, re
 	return nil
 }
 
-func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo, removeDDLTs bool) error {
+func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo, _ bool) error {
 	start := time.Now()
 	currentPdTs := e.pdClock.CurrentTS()
 
 	dispatcherIds := make([]common.DispatcherID, 0, len(infos))
-	tableIds := make([]int64, 0, len(infos))
 	startTsList := make([]int64, 0, len(infos))
 	tableSpans := make([]*heartbeatpb.TableSpan, 0, len(infos))
 	schemaIds := make([]int64, 0, len(infos))
@@ -556,7 +555,6 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 			continue
 		}
 		dispatcherIds = append(dispatcherIds, id)
-		tableIds = append(tableIds, info.TableSpan.TableID)
 		startTsList = append(startTsList, int64(info.StartTs))
 		tableSpans = append(tableSpans, info.TableSpan)
 		schemaIds = append(schemaIds, info.SchemaID)
@@ -605,19 +603,12 @@ func (e *EventDispatcherManager) newRedoDispatchers(infos []dispatcherCreateInfo
 		redoSeq := e.redoDispatcherMap.Set(rd.GetId(), rd)
 		rd.SetSeq(redoSeq)
 
-		// if rd.IsTableTriggerEventDispatcher() {
-		// 	e.metricTableTriggerEventDispatcherCount.Inc()
-		// } else {
-		// 	e.metricEventDispatcherCount.Inc()
-		// }
-
 		log.Info("new redo dispatcher created",
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Stringer("dispatcherID", id),
 			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
 			zap.Int64("startTs", newStartTsList[idx]))
 	}
-	// e.metricCreateDispatcherDuration.Observe(time.Since(start).Seconds() / float64(len(dispatcherIds)))
 	log.Info("batch create new redo dispatchers",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Int("count", len(dispatcherIds)),
@@ -669,6 +660,8 @@ func (e *EventDispatcherManager) collectErrors(ctx context.Context) {
 
 // collectBlockStatusRequest collect the block status from the block status channel and report to the maintainer.
 func (e *EventDispatcherManager) collectBlockStatusRequest(ctx context.Context) {
+	delay := time.NewTimer(0)
+	defer delay.Stop()
 	for {
 		blockStatusMessage := make([]*heartbeatpb.TableSpanBlockStatus, 0)
 		select {
@@ -676,8 +669,7 @@ func (e *EventDispatcherManager) collectBlockStatusRequest(ctx context.Context) 
 			return
 		case blockStatus := <-e.blockStatusesChan:
 			blockStatusMessage = append(blockStatusMessage, blockStatus)
-
-			delay := time.NewTimer(10 * time.Millisecond)
+			delay.Reset(10 * time.Millisecond)
 		loop:
 			for {
 				select {
@@ -685,14 +677,6 @@ func (e *EventDispatcherManager) collectBlockStatusRequest(ctx context.Context) 
 					blockStatusMessage = append(blockStatusMessage, blockStatus)
 				case <-delay.C:
 					break loop
-				}
-			}
-
-			// Release resources promptly
-			if !delay.Stop() {
-				select {
-				case <-delay.C:
-				default:
 				}
 			}
 
@@ -722,12 +706,14 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 			return
 		case tableSpanStatus := <-e.statusesChan:
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-			newWatermark.Seq = tableSpanStatus.Seq
-			if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
-				newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
-			}
-			if tableSpanStatus.ResolvedTs != 0 && tableSpanStatus.ResolvedTs < newWatermark.ResolvedTs {
-				newWatermark.ResolvedTs = tableSpanStatus.ResolvedTs
+			if !tableSpanStatus.Redo {
+				newWatermark.Seq = tableSpanStatus.Seq
+				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
+					newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
+				}
+				if tableSpanStatus.ResolvedTs != 0 && tableSpanStatus.ResolvedTs < newWatermark.ResolvedTs {
+					newWatermark.ResolvedTs = tableSpanStatus.ResolvedTs
+				}
 			}
 			delay := time.NewTimer(10 * time.Millisecond)
 		loop:
@@ -735,14 +721,16 @@ func (e *EventDispatcherManager) collectComponentStatusWhenChanged(ctx context.C
 				select {
 				case tableSpanStatus := <-e.statusesChan:
 					statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
-					if newWatermark.Seq < tableSpanStatus.Seq {
-						newWatermark.Seq = tableSpanStatus.Seq
-					}
-					if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
-						newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
-					}
-					if tableSpanStatus.ResolvedTs != 0 && tableSpanStatus.ResolvedTs < newWatermark.ResolvedTs {
-						newWatermark.ResolvedTs = tableSpanStatus.ResolvedTs
+					if !tableSpanStatus.Redo {
+						if newWatermark.Seq < tableSpanStatus.Seq {
+							newWatermark.Seq = tableSpanStatus.Seq
+						}
+						if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
+							newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
+						}
+						if tableSpanStatus.ResolvedTs != 0 && tableSpanStatus.ResolvedTs < newWatermark.ResolvedTs {
+							newWatermark.ResolvedTs = tableSpanStatus.ResolvedTs
+						}
 					}
 				case <-delay.C:
 					break loop
@@ -776,12 +764,14 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) {
 		case <-ticker.C:
 			var ts uint64 = math.MaxUint64
 			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
+				log.Error("redoDispatcherMap", zap.Any("id", id), zap.Any("GetCheckpointTs", dispatcher.GetCheckpointTs()), zap.Any("trigger", dispatcher.IsTableTriggerEventDispatcher()))
 				ts = min(ts, dispatcher.GetCheckpointTs())
 			})
 			if previousTs >= ts {
-				log.Debug("previous ts is bigger or equal than current ts, ignore it", zap.Uint64("previousTs", previousTs), zap.Uint64("ts", ts))
+				log.Error("not update redo ts", zap.Uint64("previousTs", previousTs), zap.Uint64("ts", ts))
 				continue
 			}
+			log.Info("update redo ts", zap.Uint64("previousTs", previousTs), zap.Uint64("ts", ts))
 			previousTs = ts
 			message := new(heartbeatpb.RedoTsMessage)
 			message.ChangefeedID = e.changefeedID.ToPB()
@@ -810,6 +800,7 @@ func (e *EventDispatcherManager) collectRedoTs(ctx context.Context) {
 //     When false, only includes minimal information and watermarks to reduce message size.
 //
 // Returns a HeartBeatRequest containing the aggregated information.
+// redo
 func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus bool) *heartbeatpb.HeartBeatRequest {
 	message := heartbeatpb.HeartBeatRequest{
 		ChangefeedID:    e.changefeedID.ToPB(),
@@ -871,12 +862,9 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 
 	// If needCompleteStatus is true, we need to send the dispatcher heartbeat to the event service.
 	if needCompleteStatus {
-		if e.tableTriggerEventDispatcher != nil {
-			// add tableTriggerEventDispatcher heartbeat
-			heartBeatInfo := &dispatcher.HeartBeatInfo{}
-			e.tableTriggerEventDispatcher.GetHeartBeatInfo(heartBeatInfo)
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(e.tableTriggerEventDispatcher.GetId(), heartBeatInfo.Watermark.CheckpointTs))
-		}
+		e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, dispatcher.GetCheckpointTs()))
+		})
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
 

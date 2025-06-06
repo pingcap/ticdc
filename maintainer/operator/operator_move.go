@@ -39,15 +39,17 @@ type MoveDispatcherOperator struct {
 
 	noPostFinishNeed bool
 
-	lck sync.Mutex
+	lck  sync.Mutex
+	redo bool
 }
 
-func NewMoveDispatcherOperator(db *replica.ReplicationDB, replicaSet *replica.SpanReplication, origin, dest node.ID) *MoveDispatcherOperator {
+func NewMoveDispatcherOperator(db *replica.ReplicationDB, replicaSet *replica.SpanReplication, origin, dest node.ID, redo bool) *MoveDispatcherOperator {
 	return &MoveDispatcherOperator{
 		replicaSet: replicaSet,
 		origin:     origin,
 		dest:       dest,
 		db:         db,
+		redo:       redo,
 	}
 }
 
@@ -87,7 +89,7 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 			m.db.BindSpanToNode(m.origin, m.dest, m.replicaSet)
 			m.bind = true
 		}
-		msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest)
+		msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest, m.redo)
 		if err != nil {
 			log.Warn("generate dispatcher message failed, retry later", zap.String("operator", m.String()), zap.Error(err))
 			return nil
@@ -193,8 +195,8 @@ func (m *MoveDispatcherOperator) String() string {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	return fmt.Sprintf("move dispatcher operator: %s, origin:%s, dest:%s",
-		m.replicaSet.ID, m.origin, m.dest)
+	return fmt.Sprintf("move dispatcher operator: %s, origin:%s, dest:%s, redo:%v",
+		m.replicaSet.ID, m.origin, m.dest, m.redo)
 }
 
 func (m *MoveDispatcherOperator) Type() string {

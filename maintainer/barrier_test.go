@@ -896,7 +896,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[1].Action.Action, heartbeatpb.Action_Write)
 	require.False(t, resp.DispatcherStatuses[1].Action.IsSyncPoint)
 	// the checkpoint ts is updated
-	msg, err := ddlSpan.NewAddDispatcherMessage("node1")
+	msg, err := ddlSpan.NewAddDispatcherMessage("node1", false)
 	require.Nil(t, err)
 	require.Equal(t, uint64(9), msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).Config.StartTs)
 	require.NotEqual(t, uint64(0), msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).Config.StartTs)

@@ -43,9 +43,6 @@ type SpanReplication struct {
 	groupID     replica.GroupID
 	status      *atomic.Pointer[heartbeatpb.TableSpanStatus]
 	blockState  *atomic.Pointer[heartbeatpb.State]
-
-	// for redo log
-	redo bool
 }
 
 func NewSpanReplication(cfID common.ChangeFeedID,
@@ -53,9 +50,8 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 	SchemaID int64,
 	span *heartbeatpb.TableSpan,
 	checkpointTs uint64,
-	redo bool,
 ) *SpanReplication {
-	r := newSpanReplication(cfID, id, SchemaID, span, redo)
+	r := newSpanReplication(cfID, id, SchemaID, span)
 	r.initStatus(&heartbeatpb.TableSpanStatus{
 		ID:           id.ToPB(),
 		CheckpointTs: checkpointTs,
@@ -65,7 +61,6 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 		zap.String("id", id.String()),
 		zap.Int64("schemaID", SchemaID),
 		zap.Int64("tableID", span.TableID),
-		zap.Bool("redo", redo),
 		zap.String("groupID", replica.GetGroupName(r.groupID)),
 		zap.Uint64("checkpointTs", checkpointTs),
 		zap.String("start", hex.EncodeToString(span.StartKey)),
@@ -80,9 +75,8 @@ func NewWorkingSpanReplication(
 	span *heartbeatpb.TableSpan,
 	status *heartbeatpb.TableSpanStatus,
 	nodeID node.ID,
-	redo bool,
 ) *SpanReplication {
-	r := newSpanReplication(cfID, id, SchemaID, span, redo)
+	r := newSpanReplication(cfID, id, SchemaID, span)
 	// Must set Node ID when creating a working span replication
 	r.SetNodeID(nodeID)
 	r.initStatus(status)
@@ -94,14 +88,13 @@ func NewWorkingSpanReplication(
 		zap.String("componentStatus", status.ComponentStatus.String()),
 		zap.Int64("schemaID", SchemaID),
 		zap.Int64("tableID", span.TableID),
-		zap.Bool("redo", redo),
 		zap.String("groupID", replica.GetGroupName(r.groupID)),
 		zap.String("start", hex.EncodeToString(span.StartKey)),
 		zap.String("end", hex.EncodeToString(span.EndKey)))
 	return r
 }
 
-func newSpanReplication(cfID common.ChangeFeedID, id common.DispatcherID, SchemaID int64, span *heartbeatpb.TableSpan, redo bool) *SpanReplication {
+func newSpanReplication(cfID common.ChangeFeedID, id common.DispatcherID, SchemaID int64, span *heartbeatpb.TableSpan) *SpanReplication {
 	r := &SpanReplication{
 		ID:           id,
 		schemaID:     SchemaID,
@@ -109,7 +102,6 @@ func newSpanReplication(cfID common.ChangeFeedID, id common.DispatcherID, Schema
 		ChangefeedID: cfID,
 		status:       atomic.NewPointer[heartbeatpb.TableSpanStatus](nil),
 		blockState:   atomic.NewPointer[heartbeatpb.State](nil),
-		redo:         redo,
 	}
 	r.initGroupID()
 	return r
@@ -215,11 +207,7 @@ func (r *SpanReplication) GetGroupID() replica.GroupID {
 	return r.groupID
 }
 
-func (r *SpanReplication) GetRedo() bool {
-	return r.redo
-}
-
-func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.TargetMessage, error) {
+func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, redo bool) (*messaging.TargetMessage, error) {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
@@ -229,7 +217,7 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.Ta
 				SchemaID:     r.schemaID,
 				Span:         r.Span,
 				StartTs:      r.status.Load().CheckpointTs,
-				Redo:         r.redo,
+				Redo:         redo,
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
 		}), nil
