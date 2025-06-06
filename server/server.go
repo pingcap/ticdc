@@ -53,8 +53,9 @@ import (
 )
 
 const (
-	closeServiceTimeout = 15 * time.Second
-	cleanMetaDuration   = 10 * time.Second
+	closeServiceTimeout  = 15 * time.Second
+	cleanMetaDuration    = 10 * time.Second
+	oldArchCheckInterval = 100 * time.Millisecond
 )
 
 type server struct {
@@ -88,8 +89,17 @@ type server struct {
 	// preServices is the preServices will be start before the server is running
 	// And will be closed when the server is closing
 	preServices []common.Closeable
-	// subModules is the modules will be start after PreServices are started
-	// And will be closed when the server is closing
+	// subCommonModules contains common modules that start after PreServices.
+	// These modules will be closed when the server shuts down.
+	// These are shared modules across all components that:
+	// 1. Can coexist with old architecture components
+	// 2. Can guide the old architecture components offline
+	// 3. Must start before subModules
+	subCommonModules []common.SubModule
+	// subModules contains modules that will be started after PreServices are started
+	// and will be closed when the server is closing.
+	// These modules must not start while old-architecture servers are still online
+	// to avoid compatibility issues and unexpected behavior.
 	subModules []common.SubModule
 
 	closed atomic.Bool
@@ -161,18 +171,24 @@ func (c *server) initialize(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 
-	c.subModules = []common.SubModule{
+	c.subCommonModules = []common.SubModule{
 		nodeManager,
-		subscriptionClient,
-		schemaStore,
 		NewElector(c),
 		NewHttpServer(c, c.tcpServer.HTTP1Listener()),
 		NewGrpcServer(c.tcpServer.GrpcListener()),
+	}
+
+	c.subModules = []common.SubModule{
+		subscriptionClient,
+		schemaStore,
 		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler, c.pdAPIClient, c.RegionCache),
 		eventStore,
 		eventService,
 	}
 	// register it into global var
+	for _, subCommonModule := range c.subCommonModules {
+		appctx.SetService(subCommonModule.Name(), subCommonModule)
+	}
 	for _, subModule := range c.subModules {
 		appctx.SetService(subModule.Name(), subModule)
 	}
@@ -245,6 +261,23 @@ func (c *server) Run(ctx context.Context) error {
 
 	log.Info("server initialized", zap.Any("server", c.info))
 	// start all submodules
+	for _, sub := range c.subCommonModules {
+		func(m common.SubModule) {
+			g.Go(func() error {
+				log.Info("starting sub common module", zap.String("module", m.Name()))
+				defer log.Info("sub common module exited", zap.String("module", m.Name()))
+				return m.Run(ctx)
+			})
+		}(sub)
+	}
+
+	// check the environment is valid to start the server
+	err = c.validCheck(ctx)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	// start all submodules
 	for _, sub := range c.subModules {
 		func(m common.SubModule) {
 			g.Go(func() error {
@@ -260,6 +293,38 @@ func (c *server) Run(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 	return g.Wait()
+}
+
+// validCheck checks whether the environment is valid to start the server
+// return only when all the old-arch cdc capture is not running
+// old-arch cdc capture will return when receive the unknown etcd key
+// such as the election key for logCoordinator in func `LogCoordinatorKey()`
+func (c *server) validCheck(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		default:
+			// check whether the old-arch capture is running
+			_, captureInfos, err := c.EtcdClient.GetCaptures(ctx)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			oldArchCaptureRunning := false
+			for _, captureInfo := range captureInfos {
+				if !captureInfo.IsNewArch {
+					log.Info("old-arch capture is running, server will not start", zap.String("captureID", captureInfo.ID))
+					oldArchCaptureRunning = true
+					break
+				}
+			}
+			if !oldArchCaptureRunning {
+				log.Info("new arch server is valid to start")
+				return nil
+			}
+			time.Sleep(oldArchCheckInterval)
+		}
+	}
 }
 
 // SelfInfo gets the server info
@@ -317,6 +382,15 @@ func (c *server) Close(ctx context.Context) {
 				zap.Error(err))
 		}
 		log.Info("sub module closed", zap.String("module", subModule.Name()))
+	}
+
+	for _, subCommonModule := range c.subCommonModules {
+		if err := subCommonModule.Close(ctx); err != nil {
+			log.Warn("failed to close sub common module",
+				zap.String("module", subCommonModule.Name()),
+				zap.Error(err))
+		}
+		log.Info("sub common module closed", zap.String("module", subCommonModule.Name()))
 	}
 
 	// delete server info from etcd

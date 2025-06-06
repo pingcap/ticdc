@@ -205,6 +205,7 @@ func (c *server) registerNodeToEtcd(ctx context.Context) error {
 		GitHash:        c.info.GitHash,
 		DeployPath:     c.info.DeployPath,
 		StartTimestamp: c.info.StartTimestamp,
+		IsNewArch:      true,
 	}
 	err := c.EtcdClient.PutCaptureInfo(ctx, cInfo, c.session.Lease())
 	if err != nil {
