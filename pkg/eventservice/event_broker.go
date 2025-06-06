@@ -644,7 +644,8 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 	if cache == nil || cache.len == 0 {
 		return
 	}
-	msg := &pevent.BatchResolvedEvent{Events: cache.getAll()}
+	msg := &pevent.BatchResolvedEvent{}
+	msg.Events = append(msg.Events, cache.getAll()...)
 	tMsg := messaging.NewSingleTargetMessage(
 		serverID,
 		messaging.EventCollectorTopic,
