@@ -33,7 +33,7 @@ const (
 	// we consider it is in-active and remove it.
 	heartbeatTimeout = time.Second * 180
 
-	minScanLimitInBytes     = 1024 * 1024 * 1  // 2MB
+	minScanLimitInBytes     = 1024 * 1024 * 2  // 2MB
 	maxScanLimitInBytes     = 1024 * 1024 * 10 // 10MB
 	updateScanLimitInterval = time.Second * 10
 )
@@ -233,21 +233,20 @@ func (a *dispatcherStat) IsRunning() bool {
 // It will double the current scan limit in bytes every 10 seconds,
 // and cap the scan limit in bytes to the max scan limit in bytes.
 func (a *dispatcherStat) getCurrentScanLimitInBytes() int64 {
-	return minScanLimitInBytes
-	//res := a.currentScanLimitInBytes.Load()
-	//if time.Since(a.lastUpdateScanLimitTime.Load()) > updateScanLimitInterval {
-	//	maxScanLimit := a.maxScanLimitInBytes.Load()
-	//	if res > maxScanLimit {
-	//		return maxScanLimit
-	//	}
-	//	newLimit := res * 2
-	//	if newLimit > maxScanLimit {
-	//		newLimit = maxScanLimit
-	//	}
-	//	a.currentScanLimitInBytes.Store(newLimit)
-	//	a.lastUpdateScanLimitTime.Store(time.Now())
-	//}
-	//return res
+	res := a.currentScanLimitInBytes.Load()
+	if time.Since(a.lastUpdateScanLimitTime.Load()) > updateScanLimitInterval {
+		maxScanLimit := a.maxScanLimitInBytes.Load()
+		if res > maxScanLimit {
+			return maxScanLimit
+		}
+		newLimit := res * 2
+		if newLimit > maxScanLimit {
+			newLimit = maxScanLimit
+		}
+		a.currentScanLimitInBytes.Store(newLimit)
+		a.lastUpdateScanLimitTime.Store(time.Now())
+	}
+	return res
 }
 
 func (a *dispatcherStat) resetScanLimit() {
