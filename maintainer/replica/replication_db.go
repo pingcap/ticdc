@@ -346,6 +346,12 @@ func (db *ReplicationDB) addAbsentReplicaSetWithoutLock(spans ...*SpanReplicatio
 	}
 }
 
+func (db *ReplicationDB) RemoveReplicatingSpan(span *SpanReplication) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.removeSpanWithoutLock(span)
+}
+
 // removeSpanWithoutLock removes the spans from the db without lock
 func (db *ReplicationDB) removeSpanWithoutLock(spans ...*SpanReplication) {
 	for _, span := range spans {

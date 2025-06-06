@@ -62,6 +62,10 @@ func (d *Dispatcher) GetComponentStatus() heartbeatpb.ComponentState {
 	return d.componentStatus.Get()
 }
 
+func (d *Dispatcher) SetComponentStatus(status heartbeatpb.ComponentState) {
+	d.componentStatus.Set(status)
+}
+
 func (d *Dispatcher) GetRemovingStatus() bool {
 	return d.isRemoving.Load()
 }
@@ -100,4 +104,14 @@ func (d *Dispatcher) addToStatusDynamicStream() {
 			zap.Stringer("dispatcher", d.id),
 			zap.Error(err))
 	}
+}
+
+// SetStartTs only be called after the dispatcher is created
+func (d *Dispatcher) SetStartTs(startTs uint64) {
+	d.startTs = startTs
+	d.resolvedTs = startTs
+}
+
+func (d *Dispatcher) SetCurrentPDTs(currentPDTs uint64) {
+	d.creationPDTs = currentPDTs
 }

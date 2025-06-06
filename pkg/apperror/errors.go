@@ -60,6 +60,11 @@ var (
 		"node is not found",
 		errors.RFCCodeText("CDC:ErrNodeIsNotFound"),
 	)
+
+	ErrOperatorIsNil = errors.Normalize(
+		"operator created failed",
+		errors.RFCCodeText("CDC:ErrOperatorIsNil"),
+	)
 )
 
 type ErrorType int
