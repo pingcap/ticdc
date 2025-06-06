@@ -15,7 +15,6 @@ package regionlock
 
 import (
 	"bytes"
-	"container/heap"
 	"context"
 	"encoding/hex"
 	"fmt"
@@ -28,6 +27,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/utils/heap"
 	"go.uber.org/zap"
 )
 
@@ -75,11 +75,21 @@ type rangeLockEntry struct {
 	endKey        []byte
 	regionID      uint64
 	regionVersion uint64
+	// heapIndex is used to maintain a min heap of rangeLockEntry based on ResolvedTs.
+	heapIndex int
 	// lockedRangeState is used to record the real-time state changes of this locked range.
 	lockedRangeState LockedRangeState
 	// waiterSignalChs is a list of channels that are used to
 	// notify the waiter of this lock entry that the lock is released.
 	waiterSignalChs []chan<- interface{}
+}
+
+func (m *rangeLockEntry) SetHeapIndex(index int) { m.heapIndex = index }
+
+func (m *rangeLockEntry) GetHeapIndex() int { return m.heapIndex }
+
+func (m *rangeLockEntry) LessThan(other *rangeLockEntry) bool {
+	return m.lockedRangeState.ResolvedTs.Load() < other.lockedRangeState.ResolvedTs.Load()
 }
 
 func rangeLockEntryWithKey(key []byte) *rangeLockEntry {
@@ -101,27 +111,6 @@ func (e *rangeLockEntry) String() string {
 		len(e.waiterSignalChs))
 }
 
-// rangeLockEntryHeap is a min heap of rangeLockEntry based on ResolvedTs
-type rangeLockEntryHeap []*rangeLockEntry
-
-func (h rangeLockEntryHeap) Len() int { return len(h) }
-func (h rangeLockEntryHeap) Less(i, j int) bool {
-	return h[i].lockedRangeState.ResolvedTs.Load() < h[j].lockedRangeState.ResolvedTs.Load()
-}
-func (h rangeLockEntryHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
-
-func (h *rangeLockEntryHeap) Push(x interface{}) {
-	*h = append(*h, x.(*rangeLockEntry))
-}
-
-func (h *rangeLockEntryHeap) Pop() interface{} {
-	old := *h
-	n := len(old)
-	x := old[n-1]
-	*h = old[0 : n-1]
-	return x
-}
-
 // RangeLock is used to ensure that a table's same range is only requested once at a time.
 // Before sending a region request to TiKV, the client should lock the region's range to avoid sending another
 // request to the same region. After stopping the table or removing the region, the client should unlock the range.
@@ -141,7 +130,7 @@ type RangeLock struct {
 	// regionIDToLockedRanges is used to quickly locate the lock entry by regionID.
 	regionIDToLockedRanges map[uint64]*rangeLockEntry
 	// rangeLockEntryHeap is a min heap of all rangeLockEntry based on ResolvedTs
-	rangeLockEntryHeap *rangeLockEntryHeap
+	rangeLockEntryHeap *heap.Heap[*rangeLockEntry]
 	stopped            bool
 }
 
@@ -150,8 +139,7 @@ func NewRangeLock(
 	id uint64,
 	startKey, endKey []byte, startTs uint64,
 ) *RangeLock {
-	h := &rangeLockEntryHeap{}
-	heap.Init(h)
+	h := heap.NewHeap[*rangeLockEntry]()
 	return &RangeLock{
 		id:                     id,
 		totalSpan:              heartbeatpb.TableSpan{StartKey: startKey, EndKey: endKey},
@@ -244,11 +232,8 @@ func (l *RangeLock) UnlockRange(
 	}
 
 	// Remove the entry from the heap
-	for i, r := range *l.rangeLockEntryHeap {
-		if r == entry {
-			heap.Remove(l.rangeLockEntryHeap, i)
-			break
-		}
+	if ok = l.rangeLockEntryHeap.Remove(entry); !ok {
+		panic("unreachable")
 	}
 
 	var newResolvedTs uint64
@@ -433,11 +418,12 @@ func (l *RangeLock) GetHeapMinTs() uint64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	heap.Fix(l.rangeLockEntryHeap, 0)
-
-	minTs := uint64(math.MaxUint64)
-	if l.rangeLockEntryHeap.Len() > 0 {
-		minTs = (*l.rangeLockEntryHeap)[0].lockedRangeState.ResolvedTs.Load()
+	var minTs uint64
+	minEntry, ok := l.rangeLockEntryHeap.PeekTop()
+	if !ok {
+		minTs = uint64(math.MaxUint64)
+	} else {
+		minTs = minEntry.lockedRangeState.ResolvedTs.Load()
 	}
 
 	minTs2 := uint64(math.MaxUint64)
@@ -491,7 +477,7 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		newEntry.lockedRangeState.Created = time.Now()
 		l.lockedRanges.ReplaceOrInsert(newEntry)
 		l.regionIDToLockedRanges[regionID] = newEntry
-		heap.Push(l.rangeLockEntryHeap, newEntry)
+		l.rangeLockEntryHeap.AddOrUpdate(newEntry)
 
 		l.unlockedRanges.unset(startKey, endKey)
 		log.Debug("range locked",
