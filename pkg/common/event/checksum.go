@@ -32,7 +32,7 @@ import (
 func (m *mounter) verifyChecksum(
 	tableInfo *common.TableInfo, row chunk.Row, key kv.Key, handle kv.Handle, decoder *rowcodec.ChunkDecoder,
 ) (uint32, bool, error) {
-	if !m.integrity.Enabled() {
+	if !m.integrity.Enabled() || decoder == nil {
 		return 0, true, nil
 	}
 	columnInfos := tableInfo.GetColumns()
