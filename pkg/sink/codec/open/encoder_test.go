@@ -430,6 +430,53 @@ func TestTextTypes(t *testing.T) {
 	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, event.TableInfo)
 }
 
+func TestVectorType(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	ddlEvent := helper.DDL2Event(`CREATE TABLE test.t(id int primary key, data VECTOR(5));`)
+	insertEvent := helper.DML2Event("test", "t", `INSERT INTO test.t(id, data) VALUES (1, '[1,2,3,4,5]')`)
+
+	row, ok := insertEvent.GetNextRow()
+	require.True(t, ok)
+
+	insertRowEvent := &commonEvent.RowEvent{
+		TableInfo:      ddlEvent.TableInfo,
+		CommitTs:       insertEvent.GetCommitTs(),
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", insertRowEvent)
+	require.NoError(t, err)
+
+	m := encoder.Build()[0]
+
+	dec, err := NewDecoder(ctx, 0, codecConfig, nil)
+	require.NoError(t, err)
+
+	dec.AddKeyValue(m.Key, m.Value)
+
+	messageType, hasNext := dec.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	event := dec.NextDMLEvent()
+	change, ok := event.GetNextRow()
+	require.True(t, ok)
+
+	common.CompareRow(t, insertRowEvent.Event, insertRowEvent.TableInfo, change, event.TableInfo)
+}
+
 func TestOtherTypes(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
