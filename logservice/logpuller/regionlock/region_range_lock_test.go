@@ -315,15 +315,18 @@ func TestRangeLockGetHeapMinTs(t *testing.T) {
 	l = NewRangeLock(1, []byte("a"), []byte("z"), 100)
 	res = l.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
 	res.LockedRangeState.ResolvedTs.Store(101)
+	l.UpdateLockedRangeStateHeap(res.LockedRangeState)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
 	res = l.LockRange(context.Background(), []byte("m"), []byte("z"), 2, 1)
 	res.LockedRangeState.ResolvedTs.Store(102)
+	l.UpdateLockedRangeStateHeap(res.LockedRangeState)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
 	require.Equal(t, uint64(101), l.GetHeapMinTs())
 	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
 
 	// Update the resolvedTs of the first range
 	res.LockedRangeState.ResolvedTs.Store(50)
+	l.UpdateLockedRangeStateHeap(res.LockedRangeState)
 	require.Equal(t, uint64(50), l.GetHeapMinTs())
 	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
 }

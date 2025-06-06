@@ -67,6 +67,16 @@ type LockedRangeState struct {
 	ResolvedTs  atomic.Uint64
 	Initialized atomic.Bool
 	Created     time.Time
+	// heapIndex is used to maintain a min heap of LockedRangeState based on ResolvedTs.
+	heapIndex int
+}
+
+func (m *LockedRangeState) SetHeapIndex(index int) { m.heapIndex = index }
+
+func (m *LockedRangeState) GetHeapIndex() int { return m.heapIndex }
+
+func (m *LockedRangeState) LessThan(other *LockedRangeState) bool {
+	return m.ResolvedTs.Load() < other.ResolvedTs.Load()
 }
 
 // rangeLockEntry represents a locked range that defined by [startKey, endKey).
@@ -75,21 +85,11 @@ type rangeLockEntry struct {
 	endKey        []byte
 	regionID      uint64
 	regionVersion uint64
-	// heapIndex is used to maintain a min heap of rangeLockEntry based on ResolvedTs.
-	heapIndex int
 	// lockedRangeState is used to record the real-time state changes of this locked range.
 	lockedRangeState LockedRangeState
 	// waiterSignalChs is a list of channels that are used to
 	// notify the waiter of this lock entry that the lock is released.
 	waiterSignalChs []chan<- interface{}
-}
-
-func (m *rangeLockEntry) SetHeapIndex(index int) { m.heapIndex = index }
-
-func (m *rangeLockEntry) GetHeapIndex() int { return m.heapIndex }
-
-func (m *rangeLockEntry) LessThan(other *rangeLockEntry) bool {
-	return m.lockedRangeState.ResolvedTs.Load() < other.lockedRangeState.ResolvedTs.Load()
 }
 
 func rangeLockEntryWithKey(key []byte) *rangeLockEntry {
@@ -129,9 +129,9 @@ type RangeLock struct {
 	lockedRanges *btree.BTreeG[*rangeLockEntry]
 	// regionIDToLockedRanges is used to quickly locate the lock entry by regionID.
 	regionIDToLockedRanges map[uint64]*rangeLockEntry
-	// rangeLockEntryHeap is a min heap of all rangeLockEntry based on ResolvedTs
-	rangeLockEntryHeap *heap.Heap[*rangeLockEntry]
-	stopped            bool
+	// lockedRangeStateHeap is a min heap of all LockedRangeState based on ResolvedTs
+	lockedRangeStateHeap *heap.Heap[*LockedRangeState]
+	stopped              bool
 }
 
 // NewRangeLock creates a new RangeLock.
@@ -139,14 +139,14 @@ func NewRangeLock(
 	id uint64,
 	startKey, endKey []byte, startTs uint64,
 ) *RangeLock {
-	h := heap.NewHeap[*rangeLockEntry]()
+	h := heap.NewHeap[*LockedRangeState]()
 	return &RangeLock{
 		id:                     id,
 		totalSpan:              heartbeatpb.TableSpan{StartKey: startKey, EndKey: endKey},
 		unlockedRanges:         newRangeTsMap(startKey, endKey, startTs),
 		lockedRanges:           btree.NewG(16, rangeLockEntryLess),
 		regionIDToLockedRanges: make(map[uint64]*rangeLockEntry),
-		rangeLockEntryHeap:     h,
+		lockedRangeStateHeap:   h,
 	}
 }
 
@@ -232,7 +232,7 @@ func (l *RangeLock) UnlockRange(
 	}
 
 	// Remove the entry from the heap
-	if ok = l.rangeLockEntryHeap.Remove(entry); !ok {
+	if ok = l.lockedRangeStateHeap.Remove(&entry.lockedRangeState); !ok {
 		panic("unreachable")
 	}
 
@@ -413,35 +413,24 @@ func (l *RangeLock) getOverlappedLockEntries(startKey, endKey []byte, regionID u
 	return overlappedLocks
 }
 
+// UpdateLockedRangeStateHeap should be called when the resolvedTs of a locked range is updated.
+func (l *RangeLock) UpdateLockedRangeStateHeap(lockedRangeState *LockedRangeState) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	l.lockedRangeStateHeap.AddOrUpdate(lockedRangeState)
+}
+
 // GetHeapMinTs returns the minimum ResolvedTs from the heap.
 func (l *RangeLock) GetHeapMinTs() uint64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	var minTs uint64
-	minEntry, ok := l.rangeLockEntryHeap.PeekTop()
-	if !ok {
-		minTs = uint64(math.MaxUint64)
-	} else {
-		minTs = minEntry.lockedRangeState.ResolvedTs.Load()
-	}
-
-	minTs2 := uint64(math.MaxUint64)
-	l.lockedRanges.Ascend(func(item *rangeLockEntry) bool {
-		ts := item.lockedRangeState.ResolvedTs.Load()
-		if ts < minTs2 {
-			minTs2 = ts
-		}
-		return true
-	})
-	if minTs != minTs2 {
-		log.Info("GetHeapMinTs mismatch",
-			zap.Uint64("minTsFromHeap", minTs),
-			zap.Uint64("minTsFromBtree", minTs2))
+	minTs := uint64(math.MaxUint64)
+	if minEntry, ok := l.lockedRangeStateHeap.PeekTop(); ok {
+		minTs = minEntry.ResolvedTs.Load()
 	}
 
 	unlockedMinTs := l.unlockedRanges.getMinTs()
-
 	if unlockedMinTs < minTs {
 		minTs = unlockedMinTs
 	}
@@ -477,7 +466,7 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		newEntry.lockedRangeState.Created = time.Now()
 		l.lockedRanges.ReplaceOrInsert(newEntry)
 		l.regionIDToLockedRanges[regionID] = newEntry
-		l.rangeLockEntryHeap.AddOrUpdate(newEntry)
+		l.lockedRangeStateHeap.AddOrUpdate(&newEntry.lockedRangeState)
 
 		l.unlockedRanges.unset(startKey, endKey)
 		log.Debug("range locked",

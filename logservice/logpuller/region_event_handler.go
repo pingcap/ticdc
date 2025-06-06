@@ -319,6 +319,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		return 0
 	}
 	state.updateResolvedTs(resolvedTs)
+	span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
 
 	now := time.Now().UnixMilli()
 	lastAdvance := span.lastAdvanceTime.Load()
