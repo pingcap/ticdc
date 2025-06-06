@@ -15,7 +15,6 @@ package logpuller
 
 import (
 	"encoding/hex"
-	"math"
 	"time"
 	"unsafe"
 
@@ -102,18 +101,6 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		}
 	}
 	if len(span.kvEventsCache) > 0 {
-		var minCommitTs uint64 = math.MaxUint64
-		for _, kvEvent := range span.kvEventsCache {
-			if kvEvent.CRTs < minCommitTs {
-				minCommitTs = kvEvent.CRTs
-			}
-		}
-		if minCommitTs < newResolvedTs {
-			log.Warn("min commit ts is smaller than resolved ts",
-				zap.Uint64("minCommitTs", minCommitTs),
-				zap.Uint64("resolvedTs", newResolvedTs),
-				zap.Uint64("subID", uint64(span.subID)))
-		}
 		metricsEventCount.Add(float64(len(span.kvEventsCache)))
 		await := span.consumeKVEvents(span.kvEventsCache, func() {
 			span.clearKVEventsCache()
@@ -214,13 +201,6 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			opType = common.OpTypePut
 		default:
 			log.Panic("meet unknown op type", zap.Any("entry", entry))
-		}
-		if entry.CommitTs <= state.getLastResolvedTs() {
-			log.Warn("The CommitTs must be greater than the resolvedTs",
-				zap.String("EventType", "COMMITTED"),
-				zap.Uint64("CommitTs", entry.CommitTs),
-				zap.Uint64("resolvedTs", state.getLastResolvedTs()),
-				zap.Uint64("regionID", regionID))
 		}
 		return common.RawKVEntry{
 			OpType:   opType,

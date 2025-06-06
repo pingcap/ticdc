@@ -136,11 +136,9 @@ type eventWithCallback struct {
 	subID   logpuller.SubscriptionID
 	tableID int64
 	kvs     []common.RawKVEntry
-	// kv with commitTs < filterTs will be filtered out
-	// filterTs is actually the resolvedTs of the subscription
-	// TODO: not sure whether commitTs == filterTs should be filtered out
-	filterTs uint64
-	callback func()
+	// kv with commitTs <= currentResolvedTs will be filtered out
+	currentResolvedTs uint64
+	callback          func()
 }
 
 func eventWithCallbackSizer(e eventWithCallback) int {
@@ -452,11 +450,11 @@ func (e *eventStore) RegisterDispatcher(
 		}
 		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
 		subStat.eventCh.Push(eventWithCallback{
-			subID:    subStat.subID,
-			tableID:  subStat.tableSpan.TableID,
-			kvs:      kvs,
-			filterTs: resolvedTs,
-			callback: finishCallback,
+			subID:             subStat.subID,
+			tableID:           subStat.tableSpan.TableID,
+			kvs:               kvs,
+			currentResolvedTs: resolvedTs,
+			callback:          finishCallback,
 		})
 		return true
 	}
@@ -744,10 +742,10 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 	for _, event := range events {
 		kvCount += len(event.kvs)
 		for _, kv := range event.kvs {
-			if kv.CRTs < event.filterTs {
+			if kv.CRTs <= event.currentResolvedTs {
 				log.Warn("event store received kv with commitTs less than resolvedTs",
 					zap.Uint64("commitTs", kv.CRTs),
-					zap.Uint64("resolvedTs", event.filterTs),
+					zap.Uint64("resolvedTs", event.currentResolvedTs),
 					zap.Uint64("subID", uint64(event.subID)),
 					zap.Int64("tableID", event.tableID))
 				continue

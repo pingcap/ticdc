@@ -19,7 +19,6 @@ import (
 
 	"github.com/google/btree"
 	"github.com/pingcap/log"
-	"go.uber.org/zap"
 )
 
 // rangeTsMap represents a map from key range to a timestamp. It supports
@@ -205,7 +204,6 @@ func (m *rangeTsMap) getMinTs() uint64 {
 
 	m.m.Ascend(func(i rangeTsEntry) bool {
 		if i.isSet && ts > i.ts {
-			log.Info("getMinTs with unlocked range", zap.Uint64("ts", i.ts))
 			ts = i.ts
 		}
 		return true
