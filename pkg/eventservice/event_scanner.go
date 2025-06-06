@@ -462,10 +462,7 @@ func (m *eventMerger) appendRemainingDDLs(endTs uint64) []event.Event {
 		m.ddlIndex++
 	}
 
-	events = append(events, pevent.ResolvedEvent{
-		DispatcherID: m.dispatcherID,
-		ResolvedTs:   endTs,
-	})
+	events = append(events, pevent.NewResolvedEvent(endTs, m.dispatcherID))
 
 	return events
 }
@@ -580,6 +577,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		return err
 	}
 	if shouldSplit {
+		log.Debug("fizz, split update", zap.Any("event", rawEvent))
 		deleteRow, insertRow, err := rawEvent.SplitUpdate()
 		if err != nil {
 			return err

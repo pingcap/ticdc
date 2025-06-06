@@ -253,18 +253,6 @@ func (a *dispatcherStat) resetScanLimit() {
 	a.lastUpdateScanLimitTime.Store(time.Now())
 }
 
-func (a *dispatcherStat) shouldSpiltUpdate(rawKV *common.RawKVEntry, schemaGetter schemaGetter) (bool, error) {
-	if !rawKV.IsUpdate() {
-		return false, nil
-	}
-
-	tableInfo, err := schemaGetter.GetTableInfo(a.info.GetTableSpan().TableID, rawKV.CRTs-1)
-	if err != nil {
-		return false, err
-	}
-	return pevent.IsUKChanged(rawKV, tableInfo)
-}
-
 type scanTask = *dispatcherStat
 
 func (t scanTask) GetKey() common.DispatcherID {
