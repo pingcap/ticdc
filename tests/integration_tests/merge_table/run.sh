@@ -29,7 +29,7 @@ function prepare() {
 	sleep 10
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
-    TOPIC_NAME="ticdc-merge-table-test-$RANDOM"
+	TOPIC_NAME="ticdc-merge-table-test-$RANDOM"
 	case $SINK_TYPE in
 	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
 	storage) SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true" ;;
@@ -56,12 +56,12 @@ main() {
 	sleep 10
 
 	## merge dispatcher and write ddl and dml, loop 10 times
-    for i in {1..10}; do
-        merge_table_with_retry $table_id "test" 10 || true
-        sleep 10
-        run_sql "ALTER TABLE test.table_1 ADD COLUMN new_col_${i} INT;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-        run_sql_ignore_error "INSERT INTO test.table_1 (data) VALUES ('$(date +%s)');" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
-    done
+	for i in {1..10}; do
+		merge_table_with_retry $table_id "test" 10 || true
+		sleep 10
+		run_sql "ALTER TABLE test.table_1 ADD COLUMN new_col_${i} INT;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+		run_sql_ignore_error "INSERT INTO test.table_1 (data) VALUES ('$(date +%s)');" ${UP_TIDB_HOST} ${UP_TIDB_PORT} || true
+	done
 
 	sleep 10
 
