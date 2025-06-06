@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"encoding/hex"
+	"math"
 	"time"
 	"unsafe"
 
@@ -101,8 +102,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		}
 	}
 	if len(span.kvEventsCache) > 0 {
-		// TODO: use min ts
-		minCommitTs := uint64(0)
+		var minCommitTs uint64 = math.MaxUint64
 		for _, kvEvent := range span.kvEventsCache {
 			if kvEvent.CRTs < minCommitTs {
 				minCommitTs = kvEvent.CRTs
