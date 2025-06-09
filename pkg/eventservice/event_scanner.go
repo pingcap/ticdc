@@ -577,7 +577,6 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		return err
 	}
 	if shouldSplit {
-		log.Debug("fizz, split update", zap.Any("event", rawEvent))
 		deleteRow, insertRow, err := rawEvent.SplitUpdate()
 		if err != nil {
 			return err
