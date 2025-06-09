@@ -602,7 +602,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.Dispatcher) {
 		// the merged dispatcher in preparing state, don't need to join the calculation of the heartbeat
 		// the dispatcher still not know the startTs of it, and the dispatchers to be merged are still in the calculation of the checkpointTs
-		if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_Preparing {
+		if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_Preparing || dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_MergeReady {
 			return
 		}
 		dispatcherItem.GetHeartBeatInfo(heartBeatInfo)
@@ -770,6 +770,11 @@ func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.Dispatch
 		e.config.BDRMode,
 	)
 
+	log.Info("new dispatcher created(merge dispatcher)",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", mergedDispatcherID),
+		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
+
 	mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Preparing)
 	seq := e.dispatcherMap.Set(mergedDispatcherID, mergedDispatcher)
 	mergedDispatcher.SetSeq(seq)
@@ -819,6 +824,8 @@ func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
 				}
 				closedList[idx] = true
 				closedCount++
+			} else {
+				log.Info("/", zap.Stringer("dispatcherID", id))
 			}
 		}
 		time.Sleep(10 * time.Millisecond)

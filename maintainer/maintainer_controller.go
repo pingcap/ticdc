@@ -119,7 +119,6 @@ func NewController(changefeedID common.ChangeFeedID,
 
 // HandleStatus handle the status report from the node
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
-	log.Info("controller handle status", zap.Stringer("changefeed", c.changefeedID), zap.Stringer("from", from), zap.Any("statusList", statusList))
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 		c.operatorController.UpdateOperatorStatus(dispatcherID, from, status)
@@ -788,25 +787,11 @@ func (c *Controller) mergeTable(tableID int64) error {
 		}
 	}
 
-	// // choose the first two replication to merge a new replication
-	// newSpan := &heartbeatpb.TableSpan{
-	// 	TableID:  replications[0].Span.TableID,
-	// 	StartKey: replications[0].Span.StartKey,
-	// 	EndKey:   replications[1].Span.EndKey,
-	// }
-
-	// mergeReplication := replications[:2]
 	operator := c.operatorController.AddMergeOperator(replications[idx : idx+2])
 	if operator == nil {
 		return apperror.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create merge operator")
 	}
 	c.operatorController.AddOperator(operator)
-
-	// primaryID := replications[0].ID
-	// primaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[0], mergeReplication, []*heartbeatpb.TableSpan{newSpan}, nil)
-	// secondaryOp := operator.NewMergeSplitDispatcherOperator(c.replicationDB, primaryID, replications[1], nil, nil, primaryOp.GetOnFinished())
-	// c.operatorController.AddOperator(primaryOp)
-	// c.operatorController.AddOperator(secondaryOp)
 
 	count := 0
 	maxTry := 30
