@@ -133,10 +133,12 @@ type subscriptionStat struct {
 type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
 
 type eventWithCallback struct {
-	subID    logpuller.SubscriptionID
-	tableID  int64
-	kvs      []common.RawKVEntry
-	callback func()
+	subID   logpuller.SubscriptionID
+	tableID int64
+	kvs     []common.RawKVEntry
+	// kv with commitTs <= currentResolvedTs will be filtered out
+	currentResolvedTs uint64
+	callback          func()
 }
 
 func eventWithCallbackSizer(e eventWithCallback) int {
@@ -444,20 +446,14 @@ func (e *eventStore) RegisterDispatcher(
 			if kv.CRTs > maxCommitTs {
 				maxCommitTs = kv.CRTs
 			}
-			if kv.CRTs <= subStat.resolvedTs.Load() {
-				log.Warn("event store received kv with commitTs less than resolvedTs",
-					zap.Uint64("commitTs", kv.CRTs),
-					zap.Uint64("resolvedTs", subStat.resolvedTs.Load()),
-					zap.Uint64("subID", uint64(subStat.subID)),
-					zap.Int64("tableID", subStat.tableSpan.TableID))
-			}
 		}
 		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
 		subStat.eventCh.Push(eventWithCallback{
-			subID:    subStat.subID,
-			tableID:  subStat.tableSpan.TableID,
-			kvs:      kvs,
-			callback: finishCallback,
+			subID:             subStat.subID,
+			tableID:           subStat.tableSpan.TableID,
+			kvs:               kvs,
+			currentResolvedTs: subStat.resolvedTs.Load(),
+			callback:          finishCallback,
 		})
 		return true
 	}
@@ -745,6 +741,14 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback) erro
 	for _, event := range events {
 		kvCount += len(event.kvs)
 		for _, kv := range event.kvs {
+			if kv.CRTs <= event.currentResolvedTs {
+				log.Warn("event store received kv with commitTs less than resolvedTs",
+					zap.Uint64("commitTs", kv.CRTs),
+					zap.Uint64("resolvedTs", event.currentResolvedTs),
+					zap.Uint64("subID", uint64(event.subID)),
+					zap.Int64("tableID", event.tableID))
+				continue
+			}
 			key := EncodeKey(uint64(event.subID), event.tableID, &kv)
 			value := kv.Encode()
 			if err := batch.Set(key, value, pebble.NoSync); err != nil {
