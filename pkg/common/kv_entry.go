@@ -65,7 +65,7 @@ func (v *RawKVEntry) IsResolved() bool {
 
 // IsUpdate checks if the event is an update event.
 func (v *RawKVEntry) IsUpdate() bool {
-	return v.OpType == OpTypePut && v.OldValue != nil && v.Value != nil
+	return v.OpType == OpTypePut && len(v.OldValue) > 0 && len(v.Value) > 0
 }
 
 func (v *RawKVEntry) SplitUpdate() (deleteRow, insertRow *RawKVEntry, err error) {
