@@ -600,6 +600,11 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	}
 
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.Dispatcher) {
+		// the merged dispatcher in preparing state, don't need to join the calculation of the heartbeat
+		// the dispatcher still not know the startTs of it, and the dispatchers to be merged are still in the calculation of the checkpointTs
+		if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_Preparing || dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_MergeReady {
+			return
+		}
 		dispatcherItem.GetHeartBeatInfo(heartBeatInfo)
 		// If the dispatcher is in removing state, we need to check if it's closed successfully.
 		// If it's closed successfully, we could clean it up.
@@ -661,7 +666,201 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 	pdTime := e.pdClock.CurrentTime()
 	e.metricCheckpointTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyCheckpointTs) / 1e3)
 	e.metricResolvedTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3)
+
 	return &message
+}
+
+// MergeDispatcher merges the mulitple dispatchers belonging to the same table with consecutive ranges.
+func (e *EventDispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID) *MergeCheckTask {
+	// Step 1: check the dispatcherIDs and mergedDispatcherID are valid:
+	//         1. whether the mergedDispatcherID is not exist in the dispatcherMap
+	//         2. whether the dispatcherIDs exist in the dispatcherMap
+	//         3. whether the dispatcherIDs belong to the same table
+	//         4. whether the dispatcherIDs have consecutive ranges
+	//         5. whether the dispatcher in working status.
+
+	if len(dispatcherIDs) < 2 {
+		log.Error("merge dispatcher failed, invalid dispatcherIDs",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Any("dispatcherIDs", dispatcherIDs))
+		return nil
+	}
+	if dispatcherItem, ok := e.dispatcherMap.Get(mergedDispatcherID); ok {
+		// if the status is working, means the mergeDispatcher is outdated, return the latest status info
+		if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_Working {
+			e.statusesChan <- dispatcher.TableSpanStatusWithSeq{
+				TableSpanStatus: &heartbeatpb.TableSpanStatus{
+					ID:              mergedDispatcherID.ToPB(),
+					CheckpointTs:    dispatcherItem.GetCheckpointTs(),
+					ComponentStatus: heartbeatpb.ComponentState_Working,
+				},
+				Seq: e.dispatcherMap.GetSeq(),
+			}
+		}
+		// otherwise, merge is in process, just return.
+		return nil
+	}
+	var prevTableSpan *heartbeatpb.TableSpan
+	var startKey []byte
+	var endKey []byte
+	var schemaID int64
+	var fakeStartTs uint64 = math.MaxUint64 // we calculate the fake startTs as the min-checkpointTs of these dispatchers
+	for idx, id := range dispatcherIDs {
+		dispatcher, ok := e.dispatcherMap.Get(id)
+		if !ok {
+			log.Error("merge dispatcher failed, the dispatcher is not found",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Any("dispatcherID", id))
+			return nil
+		}
+		if dispatcher.GetComponentStatus() != heartbeatpb.ComponentState_Working {
+			log.Error("merge dispatcher failed, the dispatcher is not working",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Any("dispatcherID", id),
+				zap.Any("componentStatus", dispatcher.GetComponentStatus()))
+			return nil
+		}
+		if dispatcher.GetCheckpointTs() < fakeStartTs {
+			fakeStartTs = dispatcher.GetCheckpointTs()
+		}
+		if idx == 0 {
+			prevTableSpan = dispatcher.GetTableSpan()
+			startKey = prevTableSpan.StartKey
+			schemaID = dispatcher.GetSchemaID()
+		} else {
+			currentTableSpan := dispatcher.GetTableSpan()
+			if !common.IsTableSpanConsecutive(prevTableSpan, currentTableSpan) {
+				log.Error("merge dispatcher failed, the dispatcherIDs are not consecutive",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Any("dispatcherIDs", dispatcherIDs),
+					zap.Any("prevTableSpan", prevTableSpan),
+					zap.Any("currentTableSpan", currentTableSpan),
+				)
+				return nil
+			}
+			prevTableSpan = currentTableSpan
+			endKey = currentTableSpan.EndKey
+		}
+	}
+
+	// Step 2: create a new dispatcher with the merged ranges, and set it to preparing state;
+	//         set the old dispatchers to waiting merge state.
+	//         now, we just create a non-working dispatcher, we will make the dispatcher into work when DoMerge() called
+	mergedSpan := &heartbeatpb.TableSpan{
+		TableID:  prevTableSpan.TableID,
+		StartKey: startKey,
+		EndKey:   endKey,
+	}
+
+	mergedDispatcher := dispatcher.NewDispatcher(
+		e.changefeedID,
+		mergedDispatcherID,
+		mergedSpan,
+		e.sink,
+		fakeStartTs, // real startTs will be calculated later.
+		e.statusesChan,
+		e.blockStatusesChan,
+		schemaID,
+		e.schemaIDToDispatchers,
+		e.syncPointConfig,
+		false,
+		e.filterConfig,
+		0, // currentPDTs will be calculated later.
+		e.errCh,
+		e.config.BDRMode,
+	)
+
+	log.Info("new dispatcher created(merge dispatcher)",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", mergedDispatcherID),
+		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
+
+	mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Preparing)
+	seq := e.dispatcherMap.Set(mergedDispatcherID, mergedDispatcher)
+	mergedDispatcher.SetSeq(seq)
+	e.schemaIDToDispatchers.Set(mergedDispatcher.GetSchemaID(), mergedDispatcherID)
+	e.metricEventDispatcherCount.Inc()
+
+	for _, id := range dispatcherIDs {
+		dispatcher, ok := e.dispatcherMap.Get(id)
+		if ok {
+			dispatcher.SetComponentStatus(heartbeatpb.ComponentState_WaitingMerge)
+		}
+	}
+
+	// Step 3: register mergeDispatcher into event collector, and generate a task to check the merged dispatcher status
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).PrepareAddDispatcher(
+		mergedDispatcher,
+		e.config.MemoryQuota,
+		func() {
+			mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_MergeReady)
+		})
+	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
+}
+
+func (e *EventDispatcherManager) DoMerge(t *MergeCheckTask) {
+	// Step1: close all dispatchers to be merged, calculate the min checkpointTs of the merged dispatcher
+	minCheckpointTs := uint64(math.MaxUint64)
+	closedList := make([]bool, len(t.dispatcherIDs)) // record whether the dispatcher is closed successfully
+	closedCount := 0
+	count := 0
+	for closedCount < len(t.dispatcherIDs) {
+		for idx, id := range t.dispatcherIDs {
+			if closedList[idx] {
+				continue
+			}
+			dispatcher, ok := e.dispatcherMap.Get(id)
+			if !ok {
+				log.Panic("dispatcher not found when do merge", zap.Stringer("dispatcherID", id))
+			}
+			if count == 0 {
+				appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
+			}
+
+			watermark, ok := dispatcher.TryClose()
+			if ok {
+				if watermark.CheckpointTs < minCheckpointTs {
+					minCheckpointTs = watermark.CheckpointTs
+				}
+				closedList[idx] = true
+				closedCount++
+			} else {
+				log.Info("dispatcher is still not closed", zap.Stringer("dispatcherID", id))
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+		count += 1
+		log.Info("event dispatcher manager is doing merge, waiting for dispatchers to be closed",
+			zap.Int("closedCount", closedCount),
+			zap.Int("total", len(t.dispatcherIDs)),
+			zap.Int("count", count),
+		)
+	}
+
+	// Step2: set the minCheckpointTs as the startTs of the merged dispatcher,
+	//        set the pd clock currentTs as the currentPDTs of the merged dispatcher,
+	//        change the component status of the merged dispatcher to Initializing
+	//        set dispatcher into dispatcherMap and related field
+	//        notify eventCollector to update the merged dispatcher startTs
+	t.mergedDispatcher.SetStartTs(minCheckpointTs)
+	t.mergedDispatcher.SetCurrentPDTs(e.pdClock.CurrentTS())
+	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, minCheckpointTs)
+
+	// Step3: cancel the merge task
+	t.Cancel()
+
+	// Step4: remove all the dispatchers to be merged
+	// we set dispatcher removing status to true after we set the merged dispatcher into dispatcherMap and change its status to Initializing.
+	// so that we can ensure the calculate of checkpointTs of the event dispatcher manager will include the merged dispatcher of the dispatchers to be merged
+	// to avoid the fallback of the checkpointTs
+	for _, id := range t.dispatcherIDs {
+		dispatcher, ok := e.dispatcherMap.Get(id)
+		if !ok {
+			log.Panic("dispatcher not found when do merge", zap.Stringer("dispatcherID", id))
+		}
+		dispatcher.Remove()
+	}
 }
 
 // ==== remove and clean related functions ====

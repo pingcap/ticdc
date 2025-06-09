@@ -49,6 +49,7 @@ type CaptureInfo struct {
 	GitHash        string `json:"git-hash"`
 	DeployPath     string `json:"deploy-path"`
 	StartTimestamp int64  `json:"start-timestamp"`
+	IsNewArch      bool   `json:"is-new-arch"`
 }
 
 // Marshal using json.Marshal.

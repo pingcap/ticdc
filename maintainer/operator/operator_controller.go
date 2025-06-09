@@ -323,6 +323,40 @@ func (oc *Controller) NewSplitOperator(
 	return NewSplitDispatcherOperator(oc.replicationDB, replicaSet, originNode, splitSpans)
 }
 
+// AddMergeOperator creates a merge operator, which merge consecutive replica sets.
+// We need create a mergeOperator for the new replicaset, and create len(affectedReplicaSets) empty operator
+// to occupy these replica set not evolve other scheduling among merging.
+func (oc *Controller) AddMergeOperator(
+	affectedReplicaSets []*replica.SpanReplication,
+) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+
+	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(affectedReplicaSets))
+	for _, replicaSet := range affectedReplicaSets {
+		operator := NewOccupyDispatcherOperator(oc.replicationDB, replicaSet)
+		operators = append(operators, operator)
+		oc.pushOperator(operator)
+	}
+
+	mergeOperator := NewMergeDispatcherOperator(oc.replicationDB, affectedReplicaSets, operators)
+	if mergeOperator == nil {
+		log.Error("failed to create merge operator",
+			zap.String("changefeed", oc.changefeedID.Name()),
+			zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
+		)
+		return nil
+	}
+	oc.pushOperator(mergeOperator)
+
+	log.Info("add merge operator",
+		zap.String("role", oc.role),
+		zap.String("changefeed", oc.changefeedID.Name()),
+		zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
+	)
+	return mergeOperator
+}
+
 // AddMergeSplitOperator adds a merge split operator to the controller.
 //  1. Merge Operator: len(affectedReplicaSets) > 1, len(splitSpans) == 1
 //  2. Split Operator: len(affectedReplicaSets) == 1, len(splitSpans) > 1

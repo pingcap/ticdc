@@ -38,6 +38,7 @@ import (
 	"github.com/pingcap/tidb/pkg/session"
 	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/pingcap/tidb/pkg/testkit"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -197,19 +198,20 @@ func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *
 	log.Info("dml2batchEvent", zap.String("key", key))
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
-	dmlEvent := new(BatchDMLEvent)
+	batchDMLEvent := NewBatchDMLEvent()
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
 	physicalTableID := tableInfo.TableName.TableID
 	for _, dml := range dmls {
-		dmlEvent.AppendDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
+		dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
+		batchDMLEvent.AppendDMLEvent(dmlEvent)
 		rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
 		for _, rawKV := range rawKvs {
 			err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
 			require.NoError(s.t, err)
 		}
 	}
-	return dmlEvent
+	return batchDMLEvent
 }
 
 func (s *EventTestHelper) DML2Event4PartitionTable(schema, table, partition, dml string) *DMLEvent {
@@ -220,16 +222,14 @@ func (s *EventTestHelper) DML2Event4PartitionTable(schema, table, partition, dml
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
 	physicalTableID := s.partitionIDs[key][partition]
-
-	dmlEvent := new(BatchDMLEvent)
-	dmlEvent.AppendDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
-
+	dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
+	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
 	rawKvs := s.DML2RawKv(physicalTableID, ts, dml)
 	for _, rawKV := range rawKvs {
 		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
 		require.NoError(s.t, err)
 	}
-	return dmlEvent.DMLEvents[0]
+	return dmlEvent
 }
 
 // DML2Event execute the dml(s) and return the corresponding DMLEvent.
@@ -243,23 +243,21 @@ func (s *EventTestHelper) DML2Event(schema, table string, dmls ...string) *DMLEv
 	log.Info("dml2event", zap.String("key", key))
 	tableInfo, ok := s.tableInfos[key]
 	require.True(s.t, ok)
-
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
 	physicalTableID := tableInfo.TableName.TableID
-
-	dmlEvent := new(BatchDMLEvent)
-	dmlEvent.AppendDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
+	dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
+	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
 
 	rawKvs := s.DML2RawKv(physicalTableID, ts, dmls...)
 	for _, rawKV := range rawKvs {
 		err := dmlEvent.AppendRow(rawKV, s.mounter.DecodeToChunk)
 		require.NoError(s.t, err)
 	}
-	return dmlEvent.DMLEvents[0]
+	return dmlEvent
 }
 
-func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) *DMLEvent {
+func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) (*DMLEvent, *common.RawKVEntry) {
 	if len(dml) != 2 {
 		log.Fatal("DML2UpdateEvent must have 2 dml statements, the first one is insert, the second one is update", zap.Any("dml", dml))
 	}
@@ -276,21 +274,24 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) *
 	require.True(s.t, ok)
 	did := common.NewDispatcherID()
 	ts := tableInfo.UpdateTS()
-
 	physicalTableID := tableInfo.TableName.TableID
-	dmlEvent := newDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
+	dmlEvent := NewDMLEvent(did, physicalTableID, ts-1, ts+1, tableInfo)
+	dmlEvent.SetRows(chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1))
+
 	rawKvs := s.DML2RawKv(physicalTableID, ts, dml...)
 
 	raw := &common.RawKVEntry{
 		OpType:   common.OpTypePut,
-		Key:      rawKvs[0].Key,
-		Value:    rawKvs[0].Value,
-		OldValue: rawKvs[1].Value,
+		Key:      rawKvs[1].Key,
+		Value:    rawKvs[1].Value,
+		OldValue: rawKvs[0].Value,
 		StartTs:  rawKvs[0].StartTs,
 		CRTs:     rawKvs[1].CRTs,
 	}
+
 	dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk)
-	return dmlEvent
+
+	return dmlEvent, raw
 }
 
 func (s *EventTestHelper) DML2RawKv(physicalTableID int64, ddlFinishedTs uint64, dmls ...string) []*common.RawKVEntry {

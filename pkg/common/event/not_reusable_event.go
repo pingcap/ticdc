@@ -23,6 +23,8 @@ const (
 	NotReusableEventVersion = 0
 )
 
+var _ Event = &NotReusableEvent{}
+
 type NotReusableEvent struct {
 	Version      byte
 	DispatcherID common.DispatcherID
@@ -71,6 +73,10 @@ func (e *NotReusableEvent) GetSize() int64 {
 func (e *NotReusableEvent) IsPaused() bool {
 	// TODO: is this ok?
 	return false
+}
+
+func (e *NotReusableEvent) Len() int32 {
+	return 0
 }
 
 func (e NotReusableEvent) Marshal() ([]byte, error) {

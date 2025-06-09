@@ -166,7 +166,12 @@ func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherIn
 		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, info.GetTimezone(), info.GetIntegrity())
 		s.brokers[clusterID] = c
 	}
-	c.addDispatcher(info)
+
+	// FIXME: Send message to the dispatcherManager to handle the error.
+	err := c.addDispatcher(info)
+	if err != nil {
+		log.Error("add dispatcher to eventBroker failed", zap.Stringer("dispatcherID", info.GetID()), zap.Error(err))
+	}
 }
 
 func (s *eventService) deregisterDispatcher(dispatcherInfo DispatcherInfo) {
