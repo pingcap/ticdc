@@ -215,3 +215,45 @@ func unflatten(datum types.Datum, ft *types.FieldType, loc *time.Location) (type
 	}
 	return datum, nil
 }
+
+func IsUKChanged(rawKV *common.RawKVEntry, tableInfo *common.TableInfo) (bool, error) {
+	recordID, err := tablecodec.DecodeRowKey(rawKV.Key)
+	if err != nil {
+		return false, errors.Trace(err)
+	}
+
+	oldDatum, err := decodeRow(rawKV.OldValue, recordID, tableInfo, time.UTC)
+	if err != nil {
+		return false, errors.Trace(err)
+	}
+
+	newDatum, err := decodeRow(rawKV.Value, recordID, tableInfo, time.UTC)
+	if err != nil {
+		return false, errors.Trace(err)
+	}
+
+	for _, colIDs := range tableInfo.GetIndexColumns() {
+		for _, colID := range colIDs {
+			d1 := oldDatum[colID]
+			d2 := newDatum[colID]
+			if !d1.Equals(d2) {
+				return true, nil
+			}
+		}
+	}
+
+	for _, colInfo := range tableInfo.GetColumns() {
+		colID := colInfo.ID
+		if colInfo.GetFlag()&mysql.UniqueKeyFlag == 0 {
+			continue
+		}
+		d1 := oldDatum[colID]
+		d2 := newDatum[colID]
+
+		if !d1.Equals(d2) {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}

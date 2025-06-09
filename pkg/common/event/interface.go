@@ -73,6 +73,31 @@ const (
 	TypeNotReusableEvent
 )
 
+func TypeToString(t int) string {
+	switch t {
+	case TypeDMLEvent:
+		return "DMLEvent"
+	case TypeBatchDMLEvent:
+		return "BatchDMLEvent"
+	case TypeDDLEvent:
+		return "DDLEvent"
+	case TypeResolvedEvent:
+		return "ResolvedEvent"
+	case TypeBatchResolvedEvent:
+		return "BatchResolvedEvent"
+	case TypeSyncPointEvent:
+		return "SyncPointEvent"
+	case TypeHandshakeEvent:
+		return "HandshakeEvent"
+	case TypeReadyEvent:
+		return "ReadyEvent"
+	case TypeNotReusableEvent:
+		return "NotReusableEvent"
+	default:
+		return "unknown"
+	}
+}
+
 // fakeDispatcherID is a fake dispatcherID for batch resolvedTs.
 var fakeDispatcherID = common.DispatcherID(common.NewGIDWithValue(0, 0))
 

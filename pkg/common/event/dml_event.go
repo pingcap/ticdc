@@ -31,6 +31,8 @@ const (
 	DMLEventVersion = 0
 )
 
+var _ Event = &BatchDMLEvent{}
+
 type BatchDMLEvent struct {
 	// Version is the version of the BatchDMLEvent struct.
 	Version   byte        `json:"version"`
@@ -43,6 +45,14 @@ type BatchDMLEvent struct {
 	// The receiver needs to call DecodeRawRows function to decode the RawRows into Rows.
 	RawRows   []byte            `json:"raw_rows"`
 	TableInfo *common.TableInfo `json:"table_info"`
+}
+
+// NewBatchDMLEvent creates a new BatchDMLEvent with proper initialization
+func NewBatchDMLEvent() *BatchDMLEvent {
+	return &BatchDMLEvent{
+		Version:   0,
+		DMLEvents: make([]*DMLEvent, 0),
+	}
 }
 
 // PopHeadDMLEvents pops the first `count` DMLEvents from the BatchDMLEvent and returns a new BatchDMLEvent.
@@ -66,30 +76,26 @@ func (b *BatchDMLEvent) PopHeadDMLEvents(count int) *BatchDMLEvent {
 	return newBatch
 }
 
-func (b *BatchDMLEvent) AppendDMLEvent(dispatcherID common.DispatcherID, tableID int64, startTs, commitTs uint64, tableInfo *common.TableInfo) {
-	dml := newDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo)
-	if b.TableInfo == nil {
-		b.TableInfo = dml.TableInfo
-		// FIXME: check if chk isFull in the future
-		b.Rows = chunk.NewChunkWithCapacity(dml.TableInfo.GetFieldSlice(), defaultRowCount)
+// AddDMLEvent adds a completed DMLEvent to the BatchDMLEvent
+// The DMLEvent should already have all its rows populated
+func (b *BatchDMLEvent) AppendDMLEvent(dmlEvent *DMLEvent) {
+	if dmlEvent == nil {
+		return
 	}
+
+	if b.TableInfo == nil {
+		b.TableInfo = dmlEvent.TableInfo
+		b.Rows = chunk.NewChunkWithCapacity(dmlEvent.TableInfo.GetFieldSlice(), defaultRowCount)
+	}
+	dmlEvent.SetRows(b.Rows)
+
 	if len(b.DMLEvents) > 0 {
 		pre := b.DMLEvents[len(b.DMLEvents)-1]
-		dml.PreviousTotalOffset = pre.PreviousTotalOffset + len(pre.RowTypes)
+		dmlEvent.PreviousTotalOffset = pre.PreviousTotalOffset + len(pre.RowTypes)
 	}
-	dml.Rows = b.Rows
-	b.DMLEvents = append(b.DMLEvents, dml)
-}
-
-func (b *BatchDMLEvent) AppendRow(raw *common.RawKVEntry,
-	decode func(
-		rawKv *common.RawKVEntry,
-		tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error),
-) error {
-	if len(b.DMLEvents) == 0 {
-		return errors.New("DMLEvents length is 0")
-	}
-	return b.DMLEvents[len(b.DMLEvents)-1].AppendRow(raw, decode)
+	// Set the shared Rows chunk
+	dmlEvent.Rows = b.Rows
+	b.DMLEvents = append(b.DMLEvents, dmlEvent)
 }
 
 func (b *BatchDMLEvent) Unmarshal(data []byte) error {
@@ -162,7 +168,6 @@ func (b *BatchDMLEvent) encodeV0() ([]byte, error) {
 // AssembleRows assembles the Rows from the RawRows.
 // It also sets the TableInfo and clears the RawRows.
 func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
-	// Wrap it in a function because `b.TableInfo` may be changed later.
 	defer func() {
 		b.TableInfo.InitPrivateFields()
 	}()
@@ -175,10 +180,12 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 		log.Panic("DMLEvent: TableInfo is nil")
 		return
 	}
+
 	if len(b.RawRows) == 0 {
 		log.Panic("DMLEvent: RawRows is empty")
 		return
 	}
+
 	if b.TableInfo != nil && b.TableInfo.UpdateTS() != tableInfo.UpdateTS() {
 		log.Panic("DMLEvent: TableInfoVersion mismatch", zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.UpdateTS()), zap.Uint64("tableInfoVersion", tableInfo.UpdateTS()))
 		return
@@ -225,7 +232,7 @@ func (b *BatchDMLEvent) IsPaused() bool {
 	return b.DMLEvents[len(b.DMLEvents)-1].IsPaused()
 }
 
-// Len returns the number of row change events all transaction.
+// Len returns the number of DML events in the batch.
 func (b *BatchDMLEvent) Len() int32 {
 	var length int32
 	for _, dml := range b.DMLEvents {
@@ -279,7 +286,8 @@ type DMLEvent struct {
 	checksumOffset int                   `json:"-"`
 }
 
-func newDMLEvent(
+// NewDMLEvent creates a new DMLEvent with the given parameters
+func NewDMLEvent(
 	dispatcherID common.DispatcherID,
 	tableID int64,
 	startTs,
@@ -295,6 +303,11 @@ func newDMLEvent(
 		TableInfo:       tableInfo,
 		RowTypes:        make([]RowType, 0),
 	}
+}
+
+// SetRows sets the Rows chunk for this DMLEvent
+func (t *DMLEvent) SetRows(rows *chunk.Chunk) {
+	t.Rows = rows
 }
 
 func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,

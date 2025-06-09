@@ -84,17 +84,18 @@ func (d *dispatcherStat) isEventFromCurrentEventService(event dispatcher.Dispatc
 
 // isEventSeqValid check whether there are any events being dropped
 func (d *dispatcherStat) isEventSeqValid(event dispatcher.DispatcherEvent) bool {
-	log.Debug("check event sequence",
-		zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
-		zap.Stringer("dispatcher", d.target.GetId()),
-		zap.Int("eventType", event.GetType()),
-		zap.Uint64("receivedSeq", event.GetSeq()),
-		zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
-		zap.Uint64("commitTs", event.GetCommitTs()))
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeHandshakeEvent:
+		log.Debug("check event sequence",
+			zap.String("changefeedID", d.target.GetChangefeedID().ID().String()),
+			zap.Stringer("dispatcher", d.target.GetId()),
+			zap.Int("eventType", event.GetType()),
+			zap.Uint64("receivedSeq", event.GetSeq()),
+			zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
+			zap.Uint64("commitTs", event.GetCommitTs()))
+
 		expectedSeq := d.lastEventSeq.Add(1)
 		if event.GetSeq() != expectedSeq {
 			log.Warn("Received an out-of-order event, reset the dispatcher",
