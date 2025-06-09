@@ -38,9 +38,12 @@ type RedoEvent interface {
 
 // RedoLogWriter defines the interfaces used to write redo log, all operations are thread-safe.
 type RedoLogWriter interface {
-	// WriteEvents writes DDL or DML events to the redo log.
+	// AsyncWriteEvents writes DML events to the redo log.
+	AsyncWriteEvents(ctx context.Context, events ...RedoEvent)
+	// WriteEvents writes DDL events to the redo log.
 	WriteEvents(ctx context.Context, events ...RedoEvent) error
 
+	Run(ctx context.Context) error
 	// Close is used to close the writer.
 	Close() error
 }

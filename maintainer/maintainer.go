@@ -611,14 +611,12 @@ func (m *Maintainer) onHeartBeatRequest(msg *messaging.TargetMessage) {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
-	// here redo?
 	if req.Watermark != nil {
 		old, ok := m.checkpointTsByCapture[msg.From]
 		if !ok || req.Watermark.Seq >= old.Seq {
 			m.checkpointTsByCapture[msg.From] = *req.Watermark
 		}
 	}
-	// need redo? yes
 	m.controllerManager.HandleStatus(msg.From, req.Statuses)
 	if req.Err != nil {
 		log.Warn("dispatcher report an error",

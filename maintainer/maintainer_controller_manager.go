@@ -165,9 +165,6 @@ func (cm *ControllerManager) HandleStatus(from node.ID, statusList []*heartbeatp
 			continue
 		}
 		if status.Redo {
-			if cm.redoController == nil {
-				log.Panic("redo controller is nil", zap.Any("status", status))
-			}
 			cm.redoController.replicationDB.UpdateStatus(stm, status)
 		} else {
 			cm.controller.replicationDB.UpdateStatus(stm, status)

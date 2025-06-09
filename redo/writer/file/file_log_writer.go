@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/redo/codec"
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/tiflow/pkg/config"
 	"github.com/pingcap/tiflow/pkg/errors"
@@ -30,13 +29,13 @@ var _ writer.RedoLogWriter = &logWriter{}
 // logWriter implement the RedoLogWriter interface
 type logWriter struct {
 	cfg           *writer.LogWriterConfig
-	backendWriter fileWriter
+	backendWriter *fileWriter
 }
 
 // NewLogWriter create a new logWriter.
 func NewLogWriter(
 	ctx context.Context, cfg *writer.LogWriterConfig, fileType string, opts ...writer.Option,
-) (lw *logWriter, err error) {
+) (l *logWriter, err error) {
 	if cfg == nil {
 		err := errors.New("LogWriterConfig can not be nil")
 		return nil, errors.WrapError(errors.ErrRedoConfigInvalid, err)
@@ -54,11 +53,15 @@ func NewLogWriter(
 		cfg.Dir = cfg.URI.Path
 	}
 
-	lw = &logWriter{cfg: cfg}
-	if lw.backendWriter, err = NewFileWriter(ctx, cfg, fileType, opts...); err != nil {
+	l = &logWriter{cfg: cfg}
+	if l.backendWriter, err = NewFileWriter(ctx, cfg, fileType, opts...); err != nil {
 		return nil, err
 	}
 	return
+}
+
+func (l *logWriter) Run(ctx context.Context) error {
+	return l.backendWriter.Run(ctx)
 }
 
 func (l *logWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
@@ -71,36 +74,22 @@ func (l *logWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent)
 	if l.isStopped() {
 		return errors.ErrRedoWriterStopped.GenWithStackByArgs()
 	}
-	if len(events) == 0 {
-		return nil
-	}
-
 	for _, event := range events {
-		if event == nil {
-			log.Warn("writing nil event to redo log, ignore this",
-				zap.String("capture", l.cfg.CaptureID))
-			continue
+		if err := l.backendWriter.syncWrite(event); err != nil {
+			return errors.Trace(err)
 		}
-
-		rl := event.ToRedoLog()
-		data, err := codec.MarshalRedoLog(rl, nil)
-		if err != nil {
-			return errors.WrapError(errors.ErrMarshalFailed, err)
-		}
-		l.backendWriter.AdvanceTs(rl.GetCommitTs())
-		_, err = l.backendWriter.Write(data)
-		if err != nil {
-			return err
-		}
-	}
-	err := l.backendWriter.Flush()
-	if err != nil {
-		return errors.Trace(err)
-	}
-	for _, event := range events {
-		event.PostFlush()
 	}
 	return nil
+}
+
+func (l *logWriter) AsyncWriteEvents(ctx context.Context, events ...writer.RedoEvent) {
+	for _, event := range events {
+		select {
+		case <-ctx.Done():
+			log.Error("write dml event failed", zap.Error(ctx.Err()), zap.Any("event", event))
+		case l.backendWriter.inputCh <- event:
+		}
+	}
 }
 
 // Close implements RedoLogWriter.Close.

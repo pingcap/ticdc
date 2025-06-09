@@ -537,6 +537,14 @@ func (rd *RedoDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 	event.PostFlush()
 }
 
+func (rd *RedoDispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
+	h.Watermark.CheckpointTs = rd.GetCheckpointTs()
+	h.Watermark.ResolvedTs = rd.GetResolvedTs()
+	h.Id = rd.GetId()
+	h.ComponentStatus = rd.GetComponentStatus()
+	h.IsRemoving = rd.GetRemovingStatus()
+}
+
 func (rd *RedoDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return rd.tableSpan
 }

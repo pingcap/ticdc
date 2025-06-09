@@ -265,7 +265,6 @@ func (d *Dispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallba
 			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 			zap.Stringer("dispatcher", d.id),
 			zap.Uint64("redoGlobalTs", *d.redoGlobalTs),
-			zap.Any("dispatcherEvents", cacheEvents.events),
 		)
 		return true
 	}

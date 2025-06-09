@@ -239,20 +239,27 @@ func (f *fileWorkerGroup) bgWriteLogs(
 				log.Error("inputCh of redo file worker is closed unexpectedly")
 				return errors.ErrUnexpected.FastGenByArgs("inputCh of redo file worker is closed unexpectedly")
 			}
-
-			// TODO: cache event
-			err = f.writeToCache(egCtx, event)
+			err := f.syncWrite(egCtx, event)
 			if err != nil {
 				return errors.Trace(err)
 			}
-			err = f.flushAll(egCtx)
-			if err != nil {
-				return errors.Trace(err)
-			}
-			// flush
-			event.PostFlush()
 		}
 	}
+}
+
+func (f *fileWorkerGroup) syncWrite(egCtx context.Context, event writer.RedoEvent) error {
+	// TODO: cache event
+	err := f.writeToCache(egCtx, event)
+	if err != nil {
+		return err
+	}
+	err = f.flushAll(egCtx)
+	if err != nil {
+		return err
+	}
+	// flush
+	event.PostFlush()
+	return nil
 }
 
 // newFileCache write event to a new file cache.

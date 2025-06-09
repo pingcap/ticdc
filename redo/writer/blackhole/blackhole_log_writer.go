@@ -37,6 +37,10 @@ func NewLogWriter(invalid bool) *blackHoleWriter {
 	}
 }
 
+func (bs *blackHoleWriter) Run(_ context.Context) error {
+	return nil
+}
+
 func (bs *blackHoleWriter) WriteEvents(_ context.Context, events ...writer.RedoEvent) (err error) {
 	if bs.invalid {
 		return errors.New("[WriteLog] invalid black hole writer")
@@ -53,6 +57,10 @@ func (bs *blackHoleWriter) WriteEvents(_ context.Context, events ...writer.RedoE
 		rl.PostFlush()
 	}
 	return
+}
+
+func (bs *blackHoleWriter) AsyncWriteEvents(_ context.Context, events ...writer.RedoEvent) {
+	bs.WriteEvents(nil, events...)
 }
 
 func (bs *blackHoleWriter) Close() error {

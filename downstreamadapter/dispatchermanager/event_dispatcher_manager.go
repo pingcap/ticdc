@@ -818,6 +818,39 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 		DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
 	}
 
+	e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
+		dispatcherItem.GetHeartBeatInfo(heartBeatInfo)
+		// If the dispatcher is in removing state, we need to check if it's closed successfully.
+		// If it's closed successfully, we could clean it up.
+		// TODO: we need to consider how to deal with the checkpointTs of the removed dispatcher if the message will be discarded.
+		if heartBeatInfo.IsRemoving {
+			watermark, ok := dispatcherItem.TryClose()
+			if ok {
+				// it's ok to clean the dispatcher
+				// message.Watermark.UpdateMin(watermark)
+				// If the dispatcher is removed successfully, we need to add the tableSpan into message whether needCompleteStatus is true or not.
+				message.Statuses = append(message.Statuses, &heartbeatpb.TableSpanStatus{
+					ID:              id.ToPB(),
+					ComponentStatus: heartbeatpb.ComponentState_Stopped,
+					CheckpointTs:    watermark.CheckpointTs,
+					Redo:            true,
+				})
+				toCleanDispatcherIDs = append(toCleanDispatcherIDs, id)
+				cleanDispatcherSchemaIDs = append(cleanDispatcherSchemaIDs, dispatcherItem.GetSchemaID())
+			}
+		}
+
+		if needCompleteStatus {
+			message.Statuses = append(message.Statuses, &heartbeatpb.TableSpanStatus{
+				ID:                 id.ToPB(),
+				ComponentStatus:    heartBeatInfo.ComponentStatus,
+				CheckpointTs:       heartBeatInfo.Watermark.CheckpointTs,
+				EventSizePerSecond: dispatcherItem.GetEventSizePerSecond(),
+				Redo:               true,
+			})
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, heartBeatInfo.Watermark.CheckpointTs))
+		}
+	})
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.Dispatcher) {
 		dispatcherItem.GetHeartBeatInfo(heartBeatInfo)
 		// If the dispatcher is in removing state, we need to check if it's closed successfully.
@@ -837,6 +870,7 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 				toCleanDispatcherIDs = append(toCleanDispatcherIDs, id)
 				cleanDispatcherSchemaIDs = append(cleanDispatcherSchemaIDs, dispatcherItem.GetSchemaID())
 			}
+			return
 		}
 
 		message.Watermark.UpdateMin(heartBeatInfo.Watermark)
@@ -862,9 +896,6 @@ func (e *EventDispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatu
 
 	// If needCompleteStatus is true, we need to send the dispatcher heartbeat to the event service.
 	if needCompleteStatus {
-		e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, dispatcher.GetCheckpointTs()))
-		})
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
 

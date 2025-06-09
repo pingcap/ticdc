@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/tiflow/pkg/errors"
 	"github.com/pingcap/tiflow/pkg/redo"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 var _ writer.RedoLogWriter = (*memoryLogWriter)(nil)
@@ -30,7 +29,6 @@ type memoryLogWriter struct {
 	cfg         *writer.LogWriterConfig
 	fileWorkers *fileWorkerGroup
 
-	eg     *errgroup.Group
 	cancel context.CancelFunc
 }
 
@@ -54,44 +52,57 @@ func NewLogWriter(
 		return nil, err
 	}
 
-	eg, ctx := errgroup.WithContext(ctx)
-	lwCtx, lwCancel := context.WithCancel(ctx)
 	lw := &memoryLogWriter{
-		cfg:    cfg,
-		eg:     eg,
-		cancel: lwCancel,
+		cfg: cfg,
 	}
 	lw.fileWorkers = newFileWorkerGroup(cfg, cfg.FlushWorkerNum, fileType, extStorage, opts...)
 
-	eg.Go(func() error {
-		return lw.fileWorkers.Run(lwCtx)
-	})
 	return lw, nil
 }
 
-// WriteEvents implements RedoLogWriter.WriteEvents
+func (l *memoryLogWriter) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	l.cancel = cancel
+	return l.fileWorkers.Run(ctx)
+}
+
 func (l *memoryLogWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
-	for _, event := range events {
-		if event == nil {
+	for _, e := range events {
+		if e == nil {
 			log.Warn("writing nil event to redo log, ignore this",
 				zap.String("namespace", l.cfg.ChangeFeedID.Namespace()),
 				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
 				zap.String("capture", l.cfg.CaptureID))
 			continue
 		}
-		if err := l.fileWorkers.input(ctx, event); err != nil {
+		if err := l.fileWorkers.syncWrite(ctx, e); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// Close implements RedoLogWriter.Close
+func (l *memoryLogWriter) AsyncWriteEvents(ctx context.Context, events ...writer.RedoEvent) {
+	for _, e := range events {
+		if e == nil {
+			log.Warn("writing nil event to redo log, ignore this",
+				zap.String("namespace", l.cfg.ChangeFeedID.Namespace()),
+				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
+				zap.String("capture", l.cfg.CaptureID))
+			continue
+		}
+		if err := l.fileWorkers.input(ctx, e); err != nil {
+			log.Error("write dml event failed", zap.Error(err), zap.Any("event", e))
+			return
+		}
+	}
+}
+
 func (l *memoryLogWriter) Close() error {
 	if l.cancel != nil {
 		l.cancel()
 	} else {
 		log.Panic("redo writer close without init")
 	}
-	return l.eg.Wait()
+	return nil
 }

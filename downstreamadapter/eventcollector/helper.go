@@ -79,7 +79,6 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeResolvedEvent:
 		validEventStart := 0
-		log.Error("push resolvedEvent", zap.Any("redo", stat.isRedo), zap.Any("id", stat.target.GetId()), zap.Any("tp", events[0].GetType()), zap.Any("ResolvedTs", events[0].GetCommitTs()))
 		for _, event := range events {
 			if stat.shouldIgnoreDataEvent(event, h.eventCollector) {
 				continue

@@ -19,10 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -31,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/redo/writer"
 	"github.com/pingcap/ticdc/redo/writer/factory"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 // Sink manages redo log writer, buffers un-persistent redo logs, calculates
@@ -63,7 +62,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 		return &Sink{enabled: false}
 	}
 
-	r := &Sink{
+	s := &Sink{
 		ctx:     ctx,
 		enabled: true,
 		cfg: &writer.LogWriterConfig{
@@ -82,219 +81,89 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 		// metricRedoWorkerBusyRatio: misc.RedoWorkerBusyRatio.
 		// 	WithLabelValues(changefeedID.Namespace(), changefeedID.Name(), "event"),
 	}
-	return r
-}
-
-// Run implements pkg/util.Runnable.
-func (m *Sink) Run(ctx context.Context) error {
-	failpoint.Inject("ChangefeedNewRedoManagerError", func() {
-		failpoint.Return(errors.New("changefeed new redo manager injected error"))
-	})
-	if !m.Enabled() {
+	start := time.Now()
+	ddlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoDDLLogFileType)
+	if err != nil {
+		log.Error("redo: failed to create redo log writer",
+			zap.String("namespace", s.cfg.ChangeFeedID.Namespace()),
+			zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
+			zap.Duration("duration", time.Since(start)),
+			zap.Error(err))
 		return nil
 	}
-
-	start := time.Now()
-	ddlWriter, err := factory.NewRedoLogWriter(m.ctx, m.cfg, redo.RedoDDLLogFileType)
+	dmlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoRowLogFileType)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
-			zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
-			zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
+			zap.String("namespace", s.cfg.ChangeFeedID.Namespace()),
+			zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
-		return err
+		return nil
 	}
-	dmlWriter, err := factory.NewRedoLogWriter(m.ctx, m.cfg, redo.RedoRowLogFileType)
-	if err != nil {
-		log.Error("redo: failed to create redo log writer",
-			zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
-			zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
-			zap.Duration("duration", time.Since(start)),
-			zap.Error(err))
-		return err
-	}
-	m.ddlWriter = ddlWriter
-	m.dmlWriter = dmlWriter
-	return m.bgUpdateLog()
+	s.ddlWriter = ddlWriter
+	s.dmlWriter = dmlWriter
+	return s
 }
 
-func (m *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
+func (s *Sink) Run(ctx context.Context) error {
+	eg, ctx := errgroup.WithContext(ctx)
+	eg.Go(func() error {
+		return s.ddlWriter.Run(ctx)
+	})
+	eg.Go(func() error {
+		return s.dmlWriter.Run(ctx)
+	})
+	return eg.Wait()
+}
+
+func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
-		return m.emitRedoEvents(e)
+		return s.ddlWriter.WriteEvents(s.ctx, e)
 	}
 	return nil
 }
 
-func (m *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	m.emitRedoEvents(event)
+func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	s.dmlWriter.AsyncWriteEvents(s.ctx, event)
 }
 
-func (m *Sink) Close(_ bool) {
-	m.close()
-}
-
-func (m *Sink) IsNormal() bool {
+func (s *Sink) IsNormal() bool {
 	return true
 }
 
-func (m *Sink) SinkType() common.SinkType {
+func (s *Sink) SinkType() common.SinkType {
 	return common.RedoSinkType
 }
 
-func (m *Sink) Enabled() bool {
-	return m.enabled
+func (s *Sink) Enabled() bool {
+	return s.enabled
 }
 
 func (s *Sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 }
 
-func (m *Sink) getFlushDuration() time.Duration {
-	flushIntervalInMs := m.cfg.FlushIntervalInMs
-	defaultFlushIntervalInMs := redo.DefaultFlushIntervalInMs
-	// if m.cfg.LogType == redo.RedoMetaFileType {
-	// 	flushIntervalInMs = m.cfg.MetaFlushIntervalInMs
-	// 	defaultFlushIntervalInMs = redo.DefaultMetaFlushIntervalInMs
-	// }
-	if flushIntervalInMs < redo.MinFlushIntervalInMs {
-		log.Warn("redo flush interval is too small, use default value",
-			zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
-			zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
-			zap.Int("default", defaultFlushIntervalInMs),
-			zap.Int64("interval", flushIntervalInMs))
-		flushIntervalInMs = int64(defaultFlushIntervalInMs)
-	}
-	return time.Duration(flushIntervalInMs) * time.Millisecond
-}
+func (s *Sink) Close(_ bool) {
+	atomic.StoreInt32(&s.closed, 1)
 
-// emitRedoEvents sends row changed events to a log buffer, the log buffer
-// will be consumed by a background goroutine, which converts row changed events
-// to redo logs and sends to log writer.
-func (m *Sink) emitRedoEvents(
-	event writer.RedoEvent,
-) error {
-	return m.withLock(func(m *Sink) error {
-		select {
-		case <-m.ctx.Done():
-			return errors.Trace(m.ctx.Err())
-		case m.logBuffer <- event:
-		}
-		return nil
-	})
-}
-
-func (m *Sink) handleEvent(
-	ctx context.Context, e writer.RedoEvent, workTimeSlice *time.Duration,
-) error {
-	startHandleEvent := time.Now()
-	defer func() {
-		*workTimeSlice += time.Since(startHandleEvent)
-	}()
-
-	start := time.Now()
-	switch e.GetType() {
-	case event.TypeDDLEvent:
-		err := m.ddlWriter.WriteEvents(ctx, e)
-		if err != nil {
-			return errors.Trace(err)
-		}
-	case event.TypeDMLEvent:
-		err := m.dmlWriter.WriteEvents(ctx, e)
-		if err != nil {
-			return errors.Trace(err)
-		}
-	default:
-		log.Panic("handle unsupported event type", zap.Int("type", e.GetType()))
-	}
-	writeLogElapse := time.Since(start)
-	log.Debug("redo sink writes events",
-		zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
-		zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
-		zap.Duration("writeLogElapse", writeLogElapse))
-	// m.metricTotalRowsCount.Add(float64(len(e.events)))
-	// m.metricWriteLogDuration.Observe(writeLogElapse.Seconds())
-	return nil
-}
-
-func (m *Sink) bgUpdateLog() error {
-	flushDuration := m.getFlushDuration()
-	ticker := time.NewTicker(flushDuration)
-	defer ticker.Stop()
-	log.Info("redo manager bgUpdateLog is running",
-		zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
-		zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
-		zap.Duration("flushIntervalInMs", flushDuration),
-		zap.Int64("maxLogSize", m.cfg.MaxLogSize),
-		zap.Int("encoderWorkerNum", m.cfg.EncodingWorkerNum),
-		zap.Int("flushWorkerNum", m.cfg.FlushWorkerNum))
-
-	var err error
-	// logErrCh is used to retrieve errors from log flushing goroutines.
-	// if the channel is full, it's better to block subsequent flushing goroutines.
-	logErrCh := make(chan error, 1)
-	// handleErr := func(err error) { logErrCh <- err }
-
-	overseerDuration := time.Second * 5
-	overseerTicker := time.NewTicker(overseerDuration)
-	defer overseerTicker.Stop()
-	var workTimeSlice time.Duration
-	for {
-		select {
-		case <-m.ctx.Done():
-			return m.ctx.Err()
-		case event, ok := <-m.logBuffer:
-			if !ok {
-				return nil // channel closed
-			}
-			// TODO: flushlog when meets too many events
-			err = m.handleEvent(m.ctx, event, &workTimeSlice)
-		case <-overseerTicker.C:
-			// m.metricRedoWorkerBusyRatio.Add(workTimeSlice.Seconds())
-			workTimeSlice = 0
-		case err = <-logErrCh:
-		}
-		if err != nil {
-			log.Warn("redo manager writer meets write or flush fail",
-				zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
-				zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
-				zap.Error(err))
-			return err
-		}
-	}
-}
-
-func (m *Sink) withLock(action func(m *Sink) error) error {
-	m.rwlock.RLock()
-	defer m.rwlock.RUnlock()
-	if atomic.LoadInt32(&m.closed) != 0 {
-		return errors.ErrRedoWriterStopped.GenWithStack("redo manager is closed")
-	}
-	return action(m)
-}
-
-func (m *Sink) close() {
-	m.rwlock.Lock()
-	defer m.rwlock.Unlock()
-	atomic.StoreInt32(&m.closed, 1)
-
-	close(m.logBuffer)
-	if m.ddlWriter != nil {
-		if err := m.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
+	close(s.logBuffer)
+	if s.ddlWriter != nil {
+		if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo manager fails to close ddl writer",
-				zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
-				zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
+				zap.String("namespace", s.cfg.ChangeFeedID.Namespace()),
+				zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
 				zap.Error(err))
 		}
 	}
-	if m.dmlWriter != nil {
-		if err := m.dmlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
+	if s.dmlWriter != nil {
+		if err := s.dmlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo manager fails to close dml writer",
-				zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
-				zap.String("changefeed", m.cfg.ChangeFeedID.Name()),
+				zap.String("namespace", s.cfg.ChangeFeedID.Namespace()),
+				zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
 				zap.Error(err))
 		}
 	}
 	log.Info("redo manager closed",
-		zap.String("namespace", m.cfg.ChangeFeedID.Namespace()),
-		zap.String("changefeed", m.cfg.ChangeFeedID.Name()))
+		zap.String("namespace", s.cfg.ChangeFeedID.Namespace()),
+		zap.String("changefeed", s.cfg.ChangeFeedID.Name()))
 }
