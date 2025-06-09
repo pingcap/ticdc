@@ -190,77 +190,41 @@ func writeColumnFieldValue(
 	switch fieldType.GetType() {
 	case mysql.TypeBit:
 		d := row.GetDatum(idx, &fieldType)
-		if d.IsNull() {
-			writer.WriteNullField("v")
-		} else {
-			dp := &d
-			// Encode bits as integers to avoid pingcap/tidb#10988 (which also affects MySQL itself)
-			value, _ := dp.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
-			writer.WriteUint64Field("v", value)
-		}
+		dp := &d
+		// Encode bits as integers to avoid pingcap/tidb#10988 (which also affects MySQL itself)
+		value, _ := dp.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
+		writer.WriteUint64Field("v", value)
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
 		value := row.GetBytes(idx)
-		if len(value) == 0 {
-			writer.WriteNullField("v")
-		} else {
-			writer.WriteBase64StringField("v", value)
-		}
+		writer.WriteBase64StringField("v", value)
 	case mysql.TypeVarchar, mysql.TypeVarString, mysql.TypeString:
 		value := row.GetBytes(idx)
-		if len(value) == 0 {
-			writer.WriteNullField("v")
+		if mysql.HasBinaryFlag(fieldType.GetFlag()) {
+			str := string(value)
+			str = strconv.Quote(str)
+			str = str[1 : len(str)-1]
+			writer.WriteStringField("v", str)
 		} else {
-			if mysql.HasBinaryFlag(fieldType.GetFlag()) {
-				str := string(value)
-				str = strconv.Quote(str)
-				str = str[1 : len(str)-1]
-				writer.WriteStringField("v", str)
-			} else {
-				writer.WriteStringField("v", string(value))
-			}
+			writer.WriteStringField("v", string(value))
 		}
 	case mysql.TypeEnum, mysql.TypeSet:
 		value := row.GetEnum(idx).Value
-		if value == 0 {
-			writer.WriteNullField("v")
-		} else {
-			writer.WriteUint64Field("v", value)
-		}
+		writer.WriteUint64Field("v", value)
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeNewDate, mysql.TypeTimestamp:
 		value := row.GetTime(idx)
-		if value.IsZero() {
-			writer.WriteNullField("v")
-		} else {
-			writer.WriteStringField("v", value.String())
-		}
+		writer.WriteStringField("v", value.String())
 	case mysql.TypeDuration:
 		value := row.GetDuration(idx, 0)
-		if value.ToNumber().IsZero() {
-			writer.WriteNullField("v")
-		} else {
-			writer.WriteStringField("v", value.String())
-		}
+		writer.WriteStringField("v", value.String())
 	case mysql.TypeJSON:
 		value := row.GetJSON(idx)
-		if value.IsZero() {
-			writer.WriteNullField("v")
-		} else {
-			writer.WriteStringField("v", value.String())
-		}
+		writer.WriteStringField("v", value.String())
 	case mysql.TypeNewDecimal:
 		value := row.GetMyDecimal(idx)
-		if value.IsZero() {
-			writer.WriteNullField("v")
-		} else {
-			writer.WriteStringField("v", value.String())
-		}
+		writer.WriteStringField("v", value.String())
 	case mysql.TypeTiDBVectorFloat32:
 		value := row.GetVectorFloat32(idx).String()
-		if len(value) == 0 {
-			writer.WriteNullField("v")
-		} else {
-			writer.WriteStringField("v", value)
-		}
+		writer.WriteStringField("v", value)
 	default:
 		d := row.GetDatum(idx, &fieldType)
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail

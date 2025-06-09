@@ -91,10 +91,17 @@ func CompareRow(
 		for idx, col := range originTableInfo.GetColumns() {
 			colID := obtainedTableInfo.ForceGetColumnIDByName(col.Name.O)
 			offset := obtainedTableInfo.MustGetColumnOffsetByID(colID)
-			if col.GetType() == mysql.TypeNewDecimal {
+			switch col.GetType() {
+			case mysql.TypeNewDecimal:
 				expected := a[idx].String()
 				actual := b[offset].String()
 				require.Equal(t, expected, actual)
+			case mysql.TypeEnum:
+				require.Equal(t, a[idx].GetMysqlEnum().Value, b[offset].GetMysqlEnum().Value)
+			case mysql.TypeSet:
+				require.Equal(t, a[idx].GetMysqlSet().Value, b[offset].GetMysqlSet().Value)
+			default:
+				require.Equal(t, a[idx].GetValue(), b[offset].GetValue())
 			}
 		}
 	}
@@ -106,10 +113,13 @@ func CompareRow(
 		for idx, col := range originTableInfo.GetColumns() {
 			colID := obtainedTableInfo.ForceGetColumnIDByName(col.Name.O)
 			offset := obtainedTableInfo.MustGetColumnOffsetByID(colID)
-			if col.GetType() == mysql.TypeNewDecimal {
+			switch col.GetType() {
+			case mysql.TypeNewDecimal:
 				expected := a[idx].String()
 				actual := b[offset].String()
 				require.Equal(t, expected, actual)
+			default:
+				require.Equal(t, a[idx].GetValue(), b[offset].GetValue())
 			}
 		}
 	}
